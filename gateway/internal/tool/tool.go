@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
@@ -237,6 +238,8 @@ type Running struct {
 	stderr  *os.File
 	drained chan struct{}
 	report  func(string)
+	// panics gets a panic of the tool's goroutines, under the run's id.
+	panics func(string)
 	// ready says the tool listens, from when its lines are the gateway's to report.
 	mu    sync.Mutex
 	ready bool
@@ -263,10 +266,10 @@ func (s *Set) Close() {
 	var wg sync.WaitGroup
 	for _, t := range s.Tools {
 		wg.Add(1)
-		go func() {
+		routine.Go(t.panics, func() {
 			defer wg.Done()
 			t.stop()
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -314,7 +317,8 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 		return nil, err
 	}
 	cmd.Stderr = w
-	t := &Running{Name: c.Name, Serves: c.Serves, Socket: sock, dir: dir, cmd: cmd, exited: make(chan struct{}), drained: make(chan struct{}), stderr: stderr, report: report}
+	t := &Running{Name: c.Name, Serves: c.Serves, Socket: sock, dir: dir, cmd: cmd, exited: make(chan struct{}), drained: make(chan struct{}), stderr: stderr, report: report,
+		panics: routine.ForRun(report, runID)}
 	err = cmd.Start()
 	w.Close()
 	if err != nil {
@@ -322,11 +326,12 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 		os.RemoveAll(dir)
 		return nil, accesskey.ShownError(err)
 	}
-	go func() {
+	// A panic while the lines are read closes the pipe, so the tool never blocks on it.
+	routine.Go(t.panics, func() {
 		defer close(t.drained)
 		t.lines(stderr)
-	}()
-	go func() {
+	}, stderr)
+	routine.Go(t.panics, func() {
 		t.err = cmd.Wait()
 		close(t.exited)
 		t.mu.Lock()
@@ -335,7 +340,7 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 		if gone {
 			report(fmt.Sprintf("tool %s exited while the run goes on (%v); requests to it fail from now on", accesskey.ShownName(t.Name, false), accesskey.ShownError(t.err)))
 		}
-	}()
+	})
 	if err := t.listens(ctx); err != nil {
 		t.stop()
 		return nil, err

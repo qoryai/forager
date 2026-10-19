@@ -20,6 +20,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/gateway/internal/tool"
@@ -239,6 +240,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
+	g.proxies.ReportPanics(report)
 	g.stream = stream.New(stream.Config{Dir: cfg.Dir, RunDir: cfg.RunDir, Events: cfg.Events, Report: report, CloseWait: cfg.closeWait})
 	g.discovery, _ = json.Marshal(server.LinkDiscovery{
 		Version: 1,
@@ -252,9 +254,9 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.uid != nil {
 		uid = *cfg.uid
 	}
-	g.link = newLinkListener(g.ln, uid)
+	g.link = newLinkListener(g.ln, uid, report)
 	g.http = &http.Server{Handler: g.handler(localSide), ReadHeaderTimeout: link.PreambleWait, ErrorLog: quietLog()}
-	go g.http.Serve(g.link)
+	routine.Go(report, func() { g.http.Serve(g.link) })
 	ok = true
 	return g, nil
 }

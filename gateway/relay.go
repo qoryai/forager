@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 )
@@ -168,8 +169,8 @@ func (g *Gateway) newRelay(addr net.Addr) *relay {
 	// OPTIONS * goes to the handler too, which counts it and answers it 404.
 	rl.http = &http.Server{Handler: rl, ReadHeaderTimeout: link.PreambleWait, ReadTimeout: relayReadWait, WriteTimeout: relayWriteWait,
 		MaxHeaderBytes: relayMaxHeader, IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog()}
-	go rl.http.Serve(rl.queue)
-	go rl.pruneEvery(relayRefill)
+	routine.Go(g.report, func() { rl.http.Serve(rl.queue) })
+	routine.Go(g.report, func() { rl.pruneEvery(relayRefill) })
 	return rl
 }
 

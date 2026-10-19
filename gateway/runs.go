@@ -17,6 +17,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/gateway/internal/tool"
@@ -438,6 +439,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if lr.px, err = proxy.New(pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, pol.Policy.Egress.Deny, lr.observe); err != nil {
 		return fail(err)
 	}
+	lr.px.ReportPanics(routine.ForRun(g.report, req.RunID))
 	if g.cfg.upstreamRoots != nil {
 		lr.px.TrustUpstream(g.cfg.upstreamRoots)
 	}
@@ -633,7 +635,7 @@ func (lr *linkRun) end(e ending) {
 	startedAt := lr.startedAt
 	discarded := lr.discarded
 	lr.mu.Unlock()
-	go func() {
+	routine.Go(routine.ForRun(lr.g.report, lr.id), func() {
 		defer close(lr.done)
 		lr.release()
 		if discarded {
@@ -661,7 +663,7 @@ func (lr *linkRun) end(e ending) {
 			// Flushed: the gateway lets go of it.
 			lr.g.retire(lr)
 		}
-	}()
+	})
 }
 
 // runAnswerDoc is the run answer as the gateway writes it,

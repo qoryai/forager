@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 )
@@ -23,11 +24,13 @@ import (
 // in this process, [linkListener.dial]. Any other is closed unanswered before anything
 // is read of it, and nothing is logged of it.
 type linkListener struct {
-	ln    net.Listener
-	uid   int
-	conns chan net.Conn
-	done  chan struct{}
-	once  sync.Once
+	ln  net.Listener
+	uid int
+	// report gets a panic of the listener's goroutines ([routine.Go]).
+	report func(string)
+	conns  chan net.Conn
+	done   chan struct{}
+	once   sync.Once
 
 	mu      sync.Mutex
 	pending map[net.Conn]struct{}
@@ -35,12 +38,13 @@ type linkListener struct {
 }
 
 // newLinkListener serves the connections of uid's processes on ln, and those made in
-// memory; a nil ln is no socket, and the connections made in memory alone.
-func newLinkListener(ln net.Listener, uid int) *linkListener {
-	l := &linkListener{ln: ln, uid: uid, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
+// memory; a nil ln is no socket, and the connections made in memory alone. report gets
+// a panic of the listener's goroutines.
+func newLinkListener(ln net.Listener, uid int, report func(string)) *linkListener {
+	l := &linkListener{ln: ln, uid: uid, report: report, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
 	if ln != nil {
 		l.wg.Add(1)
-		go l.accept()
+		routine.Go(report, l.accept)
 	}
 	return l
 }
@@ -72,7 +76,7 @@ func (l *linkListener) accept() {
 		l.pending[c] = struct{}{}
 		l.wg.Add(1)
 		l.mu.Unlock()
-		go l.check(c, false)
+		routine.Go(l.report, func() { l.check(c, false) }, c)
 	}
 }
 
@@ -94,7 +98,7 @@ func (l *linkListener) dial(context.Context) (net.Conn, error) {
 	l.pending[served] = struct{}{}
 	l.wg.Add(1)
 	l.mu.Unlock()
-	go l.check(served, true)
+	routine.Go(l.report, func() { l.check(served, true) }, served)
 	return client, nil
 }
 

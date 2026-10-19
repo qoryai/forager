@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/server"
@@ -157,9 +158,9 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 			return ctx
 		}}
 	s.relay = g.newRelay(ln.Addr())
-	go s.edge.Serve(s.edgeQ)
+	routine.Go(g.report, func() { s.edge.Serve(s.edgeQ) })
 	s.wg.Add(1)
-	go s.accept()
+	routine.Go(g.report, s.accept)
 	return s, nil
 }
 
@@ -200,7 +201,7 @@ func (s *service) accept() {
 		s.pending[c] = struct{}{}
 		s.wg.Add(1)
 		s.mu.Unlock()
-		go s.route(c)
+		routine.Go(s.g.report, func() { s.route(c) })
 	}
 }
 

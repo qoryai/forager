@@ -385,6 +385,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- A panic in one of the gateway's goroutines ends that goroutine alone, and closes the
+  connection it served; the gateway serves its other runs on. `gateway.Config.Report`
+  gets "run <id>: a goroutine of the gateway panicked and ended, and the gateway serves
+  on; send the stack below to Forager's maintainers", without "run <id>: " for a
+  goroutine that serves every run, and the stack after it, never the panic's value.
+  Before, such a panic stopped the gateway and every run, and Go printed the panic's
+  value to standard error.
 - A request the gateway's proxy sets a credential on goes to its host over HTTP/1.1,
   so no HTTP/2 header table (HPACK) on the connection keeps a copy of the credential.
   A request without a credential goes on over HTTP/2 where the host offers it. Before,

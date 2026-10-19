@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/server"
@@ -112,7 +113,7 @@ func (l *live) kick() {
 	}
 	l.running = true
 	l.wg.Add(1)
-	go l.loop()
+	routine.Go(routine.ForRun(l.report, l.runID), l.loop)
 }
 
 // stale reports whether what the server said is in force differs from what the run

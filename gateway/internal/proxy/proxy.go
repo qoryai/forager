@@ -63,6 +63,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 )
@@ -156,6 +157,8 @@ type Proxy struct {
 	// stopped ends with Close, and with it the requests a terminated tunnel sends on.
 	stopped context.Context
 	stop    context.CancelFunc
+	// panics, when set, gets a panic of the proxy's goroutines ([Proxy.ReportPanics]).
+	panics atomic.Pointer[func(string)]
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
@@ -310,10 +313,24 @@ func unzoned(host string) net.IP {
 // serve serves the proxy's connections from ln until Close.
 func (p *Proxy) serve(ln net.Listener) {
 	p.wg.Add(1)
-	go func() {
+	routine.Go(p.reportPanic, func() {
 		defer p.wg.Done()
 		p.srv.Serve(ln)
-	}()
+	})
+}
+
+// ReportPanics sets where a panic of the proxy's goroutines is reported: the gateway
+// passes its report under the run's id. Unset, the report goes to standard error.
+func (p *Proxy) ReportPanics(report func(string)) { p.panics.Store(&report) }
+
+// reportPanic reports a panic of the proxy's goroutines where [Proxy.ReportPanics] set
+// when the panic came.
+func (p *Proxy) reportPanic(line string) {
+	if r := p.panics.Load(); r != nil {
+		(*r)(line)
+		return
+	}
+	routine.Stderr(line)
 }
 
 // Addr is the address the proxy listens on, host:port, or empty for a proxy [New]
@@ -835,7 +852,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		upstream.Close()
 		return
 	}
-	relay(client, upstream, buf.Reader.Buffered(), buf.Reader)
+	relay(p.reportPanic, client, upstream, buf.Reader.Buffered(), buf.Reader)
 }
 
 // sent is the host of an authority as sent: without user information, port and
@@ -848,23 +865,24 @@ func sent(authority string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(authority, "["), "]")
 }
 
-// relay copies both ways and closes both ends when either side closes.
-func relay(client, upstream net.Conn, buffered int, r io.Reader) {
+// relay copies both ways and closes both ends when either side closes. A panic of either
+// copy closes both ends too, and report gets it.
+func relay(report func(string), client, upstream net.Conn, buffered int, r io.Reader) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() {
+	routine.Go(report, func() {
 		defer wg.Done()
 		if buffered > 0 {
 			io.CopyN(upstream, r, int64(buffered))
 		}
 		io.Copy(upstream, client)
 		closeWrite(upstream)
-	}()
-	go func() {
+	}, client, upstream)
+	routine.Go(report, func() {
 		defer wg.Done()
 		io.Copy(client, upstream)
 		closeWrite(client)
-	}()
+	}, client, upstream)
 	wg.Wait()
 	client.Close()
 	upstream.Close()

@@ -30,6 +30,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
@@ -919,6 +920,7 @@ func (r *Run) hold(ctx context.Context, pol *policy.Loaded) (*credential.Held, e
 	if err != nil {
 		return nil, err
 	}
+	held.ReportPanics(routine.ForRun(r.cfg.Report, r.cfg.RunID))
 	if r.cfg.Passes != nil {
 		for _, name := range held.Placeholders {
 			if r.cfg.Passes(name) {

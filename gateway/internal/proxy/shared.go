@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 )
 
@@ -59,6 +60,9 @@ type Listener struct {
 	pending map[net.Conn]struct{}
 	closed  bool
 	wg      sync.WaitGroup
+	// panics, when set, gets a panic of the listener's goroutines
+	// ([Listener.ReportPanics]).
+	panics atomic.Pointer[func(string)]
 }
 
 // registered is a run the listener serves: its secret, compared in full in constant
@@ -81,8 +85,22 @@ func NewListener(addr string, report func(string)) (*Listener, error) {
 	l := &Listener{ln: ln, report: report, runs: map[[sha256.Size]byte]*registered{}, pending: map[net.Conn]struct{}{}}
 	l.wait.Store(int64(preambleWait))
 	l.wg.Add(1)
-	go l.accept()
+	routine.Go(l.reportPanic, l.accept)
 	return l, nil
+}
+
+// ReportPanics sets where a panic of the listener's goroutines is reported. Unset, the
+// report goes to standard error.
+func (l *Listener) ReportPanics(report func(string)) { l.panics.Store(&report) }
+
+// reportPanic reports a panic of the listener's goroutines where [Listener.ReportPanics]
+// set when the panic came.
+func (l *Listener) reportPanic(line string) {
+	if r := l.panics.Load(); r != nil {
+		(*r)(line)
+		return
+	}
+	routine.Stderr(line)
 }
 
 // Addr is the address the listener listens on, host:port.
@@ -151,7 +169,7 @@ func (l *Listener) Serve(c net.Conn, guardedOnly bool) {
 	l.pending[c] = struct{}{}
 	l.wg.Add(1)
 	l.mu.Unlock()
-	go l.dispatch(c, guardedOnly)
+	routine.Go(l.reportPanic, func() { l.dispatch(c, guardedOnly) }, c)
 }
 
 // Lookup is the proxy of the live run whose secret is secret, or nil: the secret's
@@ -203,7 +221,7 @@ func (l *Listener) accept() {
 		l.pending[c] = struct{}{}
 		l.wg.Add(1)
 		l.mu.Unlock()
-		go l.dispatch(c, false)
+		routine.Go(l.reportPanic, func() { l.dispatch(c, false) }, c)
 	}
 }
 
