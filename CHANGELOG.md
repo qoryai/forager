@@ -264,7 +264,8 @@ release may change what an existing document does, and says so under Upgrading.
 - `dev.qory.run.policy_applied`'s `credentials` carry, as the argument, the value of the
   run's label a gateway's selection took it from.
 - `wall:echo-method` covers a host of every credential, the machine's included, and
-  its denial is a `405`. The contract's §Credentials has The answer: what the proxy
+  its denial is a `405`. `dev.qory.run.egress` takes the rule `wall:plain-request`, a
+  plain request to a host that gets a credential, denied in either mode. The contract's §Credentials has The answer: what the proxy
   replaces in an answer from a host that gets a credential, and what it does not.
 
 #### Fixed
@@ -321,9 +322,15 @@ release may change what an existing document does, and says so under Upgrading.
   the rule `wall:echo-method`, as one to a host of a credential from Qory Apiary was.
   The denial is a `405` whose first line is "qory: use a method other than TRACE or
   TRACK on this host."; before, a `403`. Use another method.
-- A request to a host that gets a credential goes to the host with `Accept-Encoding:
-  identity`, and without `Range`, `If-Range`, `Upgrade` and `Connection`, and its
-  answer has no `Content-Length`. If the host compresses its answer anyway, the agent
+- A plain request to a host that gets a credential, `http://` or an absolute-form
+  `https://` sent without `CONNECT`, is now denied with the rule `wall:plain-request`
+  in either mode, and nothing reaches the host. The denial is a `403` whose first line
+  is "qory: send requests to this host as https:// through CONNECT."; before, the
+  request went on without the credential, and its answer was passed on as the host
+  sent it. Send such requests as `https://` through `CONNECT`.
+- A request through `CONNECT` to a host that gets a credential goes to the host with
+  `Accept-Encoding: identity`, and without `Range`, `If-Range`, `Upgrade` and
+  `Connection`, and its answer has no `Content-Length`. If the host compresses its answer anyway, the agent
   gets a `502` whose first line is "qory: remove this host's credential from the
   policy, or serve the host through a tool."; a `101` is a `502` too. Before, the
   answer was passed on as the host sent it.

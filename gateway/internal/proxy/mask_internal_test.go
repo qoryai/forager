@@ -1,13 +1,16 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
@@ -36,12 +39,13 @@ type echoed struct {
 }
 
 // echoOrigin is a TLS origin, under a certificate of up, that sends the credential it
-// received back in its headers, its body, a 1xx and its trailer, on each path a way.
-func echoOrigin(t *testing.T, up *CA) (*httptest.Server, func() []echoed) {
+// received back in its headers, its body, a 1xx and its trailer, on each path a way,
+// and a plain origin of the same handler.
+func echoOrigin(t *testing.T, up *CA) (*httptest.Server, *httptest.Server, func() []echoed) {
 	t.Helper()
 	var mu sync.Mutex
 	var got []echoed
-	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization") + r.Header.Get("X-Api-Key")
 		mu.Lock()
 		got = append(got, echoed{r.Method, auth, r.Header.Get("Accept-Encoding"), r.Header.Get("Range"), r.Header.Get("Upgrade")})
@@ -103,11 +107,13 @@ func echoOrigin(t *testing.T, up *CA) (*httptest.Server, func() []echoed) {
 		default:
 			io.WriteString(w, "value "+fakeKey)
 		}
-	}))
+	})
+	origin := httptest.NewUnstartedServer(handler)
 	origin.Config.ErrorLog = log.New(io.Discard, "", 0)
 	origin.TLS = &tls.Config{GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) { return up.leaf(hello.ServerName) }}
 	origin.StartTLS()
-	return origin, func() []echoed {
+	plain := httptest.NewServer(handler)
+	return origin, plain, func() []echoed {
 		mu.Lock()
 		defer mu.Unlock()
 		out := got
@@ -118,22 +124,32 @@ func echoOrigin(t *testing.T, up *CA) (*httptest.Server, func() []echoed) {
 
 // maskedProxy is a proxy that terminates, against an echo origin, a host of a stored
 // bearer, a host of a machine's basic token, and a host with a path rule and no
-// credential.
+// credential, in observe mode.
 func maskedProxy(t *testing.T) (*http.Client, *decisions, func() []echoed) {
+	t.Helper()
+	client, _, seen, take := maskedProxyIn(t, policy.Observe)
+	return client, seen, take
+}
+
+// maskedProxyIn is maskedProxy in the mode given, which under enforce allows the three
+// hosts and other.example, a host the proxy does not terminate. A plain request goes
+// to the plain echo origin.
+func maskedProxyIn(t *testing.T, mode policy.Mode) (*http.Client, *Proxy, *decisions, func() []echoed) {
 	t.Helper()
 	up, err := NewCA("upstream")
 	if err != nil {
 		t.Fatal(err)
 	}
-	origin, take := echoOrigin(t, up)
+	origin, plain, take := echoOrigin(t, up)
 	t.Cleanup(origin.Close)
+	t.Cleanup(plain.Close)
 	seen := &decisions{}
-	p, err := Listen("", policy.Observe, nil, nil, seen.observe)
+	p, err := Listen("", mode, []string{"bearer.example", "basic.example", "plain.example", "other.example"}, nil, seen.observe)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { p.Close() })
-	p.dial = (&dials{plain: origin.Listener.Addr().String(), secure: origin.Listener.Addr().String()}).dial
+	p.dial = (&dials{plain: plain.Listener.Addr().String(), secure: origin.Listener.Addr().String()}).dial
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(up.PEM())
 	p.TrustUpstream(roots)
@@ -153,7 +169,89 @@ func maskedProxy(t *testing.T) (*http.Client, *decisions, func() []echoed) {
 		Transport:     &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}, DisableCompression: true},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	return client, seen, take
+	return client, p, seen, take
+}
+
+// TestAPlainRequestToAKeyedHostIsRefused pins a plain request to a host that gets a
+// credential, in either mode: a plain GET, a plain TRACE and an absolute-form https://
+// sent without CONNECT each get a 403 whose first line is the fix, reach no origin,
+// and are recorded with the rule wall:plain-request. A plain request to a host without
+// a credential goes on as before.
+func TestAPlainRequestToAKeyedHostIsRefused(t *testing.T) {
+	for _, mode := range []policy.Mode{policy.Observe, policy.Enforce} {
+		client, p, seen, take := maskedProxyIn(t, mode)
+		want := func(method, host, path string) string {
+			return "qory: send requests to this host as https:// through CONNECT.\n" +
+				"qory: " + method + " " + host + path + " denied by the gateway: the gateway sets this host's credential, and masks it in answers, only on https:// requests through CONNECT\n"
+		}
+		for _, c := range []struct{ method, host string }{
+			{http.MethodGet, "bearer.example"}, {"TRACE", "bearer.example"}, {http.MethodGet, "basic.example"},
+		} {
+			req, _ := http.NewRequest(c.method, "http://"+c.host+"/keys", nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || string(b) != want(c.method, c.host, "/keys") {
+				t.Errorf("%s: plain %s %s: %d %q", mode, c.method, c.host, resp.StatusCode, b)
+			}
+		}
+		// An absolute-form https:// target sent to the proxy as a plain request.
+		conn, err := net.Dial("tcp", strings.TrimPrefix(p.URL(), "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		fmt.Fprintf(conn, "GET https://bearer.example/keys HTTP/1.1\r\nHost: bearer.example\r\nConnection: close\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		conn.Close()
+		if resp.StatusCode != http.StatusForbidden || string(b) != want("GET", "bearer.example", "/keys") {
+			t.Errorf("%s: an absolute-form https://: %d %q", mode, resp.StatusCode, b)
+		}
+		if first, _, _ := strings.Cut(want("GET", "x", "/"), "\n"); len(first) > 100 {
+			t.Errorf("the first line has %d characters", len(first))
+		}
+		if got := take(); len(got) != 0 {
+			t.Errorf("%s: a plain request to a keyed host reached the origin: %+v", mode, got)
+		}
+		seen.mu.Lock()
+		n := 0
+		for _, d := range seen.seen {
+			if d.Rule != PlainRequest {
+				continue
+			}
+			n++
+			if d.Allowed || d.Outcome != Refused || d.Method != "HTTP" || d.Path != "/keys" || d.Credential != "" {
+				t.Errorf("%s: the refused plain request's decision %+v", mode, d)
+			}
+		}
+		seen.mu.Unlock()
+		if n != 4 {
+			t.Errorf("%s: %d decisions with %s, want 4", mode, n, PlainRequest)
+		}
+		// A host without a credential: plain, and with path rules.
+		for _, host := range []string{"other.example", "plain.example"} {
+			resp, err := client.Get("http://" + host + "/other")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || string(b) != "value "+fakeKey {
+				t.Errorf("%s: a plain request to %s: %d %q", mode, host, resp.StatusCode, b)
+			}
+		}
+		if got := take(); len(got) != 2 {
+			t.Errorf("%s: the origin got %+v", mode, got)
+		}
+	}
 }
 
 // TestAKeyedHostRefusesTraceWith405 pins TRACE and TRACK on a host that gets a

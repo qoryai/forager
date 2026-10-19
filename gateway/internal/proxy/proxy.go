@@ -87,7 +87,8 @@ type Decision struct {
 	Method  string
 	Allowed bool
 	// Rule is the deny or allow entry that matched, the guard's rule when the guard
-	// refused, or empty when none did.
+	// refused, [HostForm] or [PlainRequest] when the proxy refused, or empty when none
+	// did.
 	Rule string
 	// Mode is the policy mode the decision was made under.
 	Mode policy.Mode
@@ -175,6 +176,12 @@ const GuardRule = "wall:own-address"
 // HostForm is the rule a denial names when the host has no form [policy.Host] gives: not
 // an allow or deny entry, the proxy's refusal, in either mode.
 const HostForm = "wall:host-form"
+
+// PlainRequest is the rule a denial names of a plain request, http:// or an
+// absolute-form https:// sent without CONNECT, to a host a credential is for: the proxy
+// sets the credential, and replaces it in answers, only inside a CONNECT it
+// terminates. A refusal of the proxy's, in either mode, before anything is sent.
+const PlainRequest = "wall:plain-request"
 
 // guardError is the guard's refusal at dial time, of a name that resolved to an
 // address the guard does not dial.
@@ -657,6 +664,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	d := p.decide("HTTP", host, port)
 	d.RequestID = newRequestID()
 	term := p.term.Load()
+	if d.Allowed && term.credentialName(d.Host) != "" {
+		clean, ok := policy.CleanPath(r.URL.EscapedPath())
+		if !ok {
+			clean = r.URL.EscapedPath()
+		}
+		d.Allowed, d.Rule, d.Outcome = false, PlainRequest, Refused
+		d.RequestMethod, d.Path = r.Method, clean
+		p.observe(d)
+		deny(w, d)
+		return
+	}
 	if d.Allowed {
 		if clean, rule, ok := term.plainPath(d.Host, r.URL.EscapedPath()); clean != "" {
 			d.RequestMethod, d.Path, d.PathRule, d.Allowed = r.Method, clean, rule, ok
@@ -942,7 +960,8 @@ func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 	return ctx
 }
 
-// deny answers a refused connection: 403 with one line naming the host and the mode.
+// deny answers a refused connection: 403 with one line naming the host and the mode,
+// or, for [PlainRequest], two lines, the fix first.
 func deny(w http.ResponseWriter, d Decision) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
@@ -952,6 +971,12 @@ func deny(w http.ResponseWriter, d Decision) {
 			host = accesskey.ShownValue(d.Host, false)
 		}
 		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: the host is neither a name of ASCII letters, digits, hyphens and dots nor an IP address in canonical form\n", host, d.Port)
+		return
+	}
+	if d.Rule == PlainRequest {
+		fmt.Fprintf(w, "qory: send requests to this host as https:// through CONNECT.\n"+
+			"qory: %s %s%s denied by the gateway: the gateway sets this host's credential, and masks it in answers, only on https:// requests through CONNECT\n",
+			accesskey.ShownValue(d.RequestMethod, false), d.Host, accesskey.ShownValue(d.Path, false))
 		return
 	}
 	if d.Rule == GuardRule {

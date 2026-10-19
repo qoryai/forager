@@ -80,6 +80,10 @@ A host can send back what it received: the answer to a `TRACE`, a debug endpoint
 error page. The proxy replaces a credential's value with its placeholder in every answer
 from a host that gets the credential, before the answer reaches the agent.
 
+- Send each request to such a host as `https://` through `CONNECT`, as an HTTPS client
+  behind a proxy does. A plain request, `http://` or an absolute-form `https://` sent
+  without `CONNECT`, gets a `403` from the gateway and never reaches the host, in either
+  mode, with the rule `wall:plain-request`.
 - A `TRACE` or `TRACK` to such a host gets a `405` from the gateway and never reaches the
   host, in either mode, with the rule `wall:echo-method`. Use another method.
 - The proxy replaces the value in the answer's headers, those of a `1xx` and the

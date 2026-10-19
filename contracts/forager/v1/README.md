@@ -443,14 +443,18 @@ never the reverse, so whoever writes a path writes it as the host does. A path
 that could be read two ways is denied in either mode, with the rule
 `wall:ambiguous-path`: an encoded slash, backslash, dot or percent sign, a backslash, an
 empty segment, a dot segment. On a host that gets a credential, a `TRACE` or `TRACK`
-is denied in either mode with a `405`, with the rule `wall:echo-method`
-(§Credentials, The answer). Under `observe` a path no entry matches is recorded as
+through `CONNECT` is denied in either mode with a `405`, with the rule
+`wall:echo-method` (§Credentials, The answer). Under `observe` a path no entry matches is recorded as
 allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
 as allowed with an empty `rule`, but the credential is set only where the credential's
 paths match: observe mode sends no secret to a path nobody configured. The host
 requested upstream is the one the connection was opened to and decided on, whatever
 `Host` a request contains. A denial of a path is a `403` containing the method, the host and the path.
 A plain request is decided by the same paths, and the proxy never sets a credential on it.
+A plain request to a host that gets a credential, `http://` or an absolute-form
+`https://` sent without `CONNECT`, is denied in either mode with a `403` and the rule
+`wall:plain-request`, before anything is sent: the proxy sets the credential, and
+replaces it in answers, only inside a `CONNECT` it terminates.
 
 *Reading without writing.* Paths define what a run does on a host as well as where. git
 over HTTPS requests three paths of a repository, on any host that serves it:
@@ -565,9 +569,11 @@ credential and no path rule has no authority at all, unless it has a server.
 
 **The answer.** A host can send back what it received: the answer to a `TRACE`, a
 debug endpoint, an error page. On a host that gets a credential, the proxy denies a
-`TRACE` or `TRACK` with a `405` and the rule `wall:echo-method`, in either mode, before
-anything is sent, and replaces the credential's value with the placeholder in every
-answer it passes on, also on a path that gets no credential: in the headers, those of a
+plain request with a `403` and the rule `wall:plain-request` (§The policy, Matching
+a path). Through `CONNECT`, it denies a `TRACE` or `TRACK` with a `405` and the rule
+`wall:echo-method`. Both are denied in either mode, before anything is sent. The proxy
+replaces the credential's value with the placeholder in every answer it passes on, also
+on a path that gets no credential: in the headers, those of a
 `1xx` and the trailer included, in their names and values in any case, and in the body
 as it streams. For `basic` it also replaces the base64 of the username and the value, with or
 without its padding, in the standard and the URL alphabet, with the base64 of the
@@ -756,7 +762,8 @@ the request as the session sent it, its query, headers, body and trailers, place
 included, with the `Host` the connection was decided on. Under `observe` that includes a
 request whose path no rule covers, which is recorded as allowed with an empty
 `path_rule`. A plain request to
-such a host goes the same way. The proxy never dials a host a tool serves, so the host
+such a host goes the same way, unless a credential is for the host:
+`wall:plain-request` denies it. The proxy never dials a host a tool serves, so the host
 need not exist: a tool with no real host serves a name the machine's owner chooses, such
 as one under `.internal`, a domain reserved for private use, and the session reaches it
 like any host. The proxy sets two headers, after removing every header and trailer whose
