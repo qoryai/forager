@@ -34,9 +34,23 @@ release may change what an existing document does, and says so under Upgrading.
   reference: its fetch included unless the engine holds it by that digest.
 - The link's run request has `images.allow`; its answer has `relay_image`, the image the
   relay starts from, and `reference: true` on an `image` the policy names by reference.
+- A run configuration's `credentials`: at most 8 credentials whose values the server
+  stores for the run, each `{name, hosts, paths, auth, placeholders}`, with exact hosts and
+  no value. Forager checks the member against `run-configuration.schema.json`, and a
+  member the schema refuses is `run_configuration_invalid`; Forager sets no value from it.
+- The secrets request, `secrets-request.schema.json`, a signed `POST` to discovery's
+  `secrets.url` for the values of a run configuration's `credentials`; its answer, the
+  envelope of `secrets-answer.schema.json`, sealed with HPKE base mode, X25519,
+  HKDF-SHA256 and AES-256-GCM, to the access key and signed under the server's key; and
+  the plaintext it opens to, `sealed-plaintext.schema.json`. `fixtures/sealed/` contains a
+  sealed answer with its vectors and an envelope refused at each step. Forager sends no
+  secrets request.
 
 #### Changed
 
+- A run configuration's digest, `X-Qory-Run-Configuration`, is `sha256=` and the
+  lower-case hex SHA-256 of the exact bytes of the document as the server sends it; the
+  contract called it opaque before.
 - The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
   `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
 - Enrolment: an access key can belong to an adapter, `node_kind` `adapter` with an

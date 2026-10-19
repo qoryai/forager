@@ -514,6 +514,32 @@ event per request, `method: HTTPS` with `request_method`, `path` without its que
 `path_rule`, and `credential`, the name of the one the proxy set. No event, no report
 and no error contains a secret.
 
+**From the server.** A run configuration may have `credentials`, the credentials whose
+values the server stores for the run, at most 8 (`run-configuration.schema.json`):
+
+```json
+"credentials": [
+  {"name": "model", "hosts": ["api.model.example"], "paths": ["/v1/*"],
+   "auth": {"scheme": "header", "header": "x-api-key"}, "placeholders": ["MODEL_API_KEY"]},
+  {"name": "forge", "hosts": ["git.example", "api.git.example"],
+   "auth": {"scheme": "basic", "username": "x-access-token"}}]
+```
+
+`name` is a credential's name, `^[a-z0-9][a-z0-9_.-]{0,63}$`, each once in the document.
+Each of `hosts` is exact: a lower-case DNS name whose last label starts with a letter, an
+IPv4 address of four decimal parts with no leading zero, or an IPv6 address of lower-case
+hex groups with no leading zero, without brackets or a zone; never a `*.` pattern or a
+port. The server writes an IPv6 address in RFC 5952's form, the form `policy.Host`
+returns: the schema does not check which run of zero groups `::` replaces. `paths` are
+in the policy's path grammar, absent meaning every path, `auth` is one of the closed set
+of schemes, `auth.schema.json`, and `placeholders` are variables for the enclosure to get
+with the placeholder value. An entry has no value and no member beside these five: the
+server seals each value to the access key in the answer to the secrets request (§The
+server, Secrets). This revision defines the member and the request. Forager checks a run
+configuration's `credentials` against the schema, and a run configuration the schema
+refuses is `run_configuration_invalid`; it sends no secrets request, sets no value and
+adds no placeholder for an entry.
+
 ## Tools
 
 A tool is a program of the machine's that serves hosts, for what a run reaches that
@@ -1348,7 +1374,8 @@ run key. A direct node's gateway records its one entry as `workspace`, and `node
 a run's `dev.qory.run.registered`. `apiary_public_key` lists the server's current key,
 and during a rotation the next one, for information: Forager verifies under its pin
 alone. `secrets` is optional, `{url}` with `events.url`'s grammar: present for an access
-key allowed stored secrets, and a server that lists it requires a wall for every run.
+key allowed stored secrets, and a server that lists it requires a wall for every run. Its
+URL is the secrets request's endpoint (§The server, Secrets).
 Discovery lists no key endpoint: keys change through enrolment alone. A `401` is no run,
 `unauthorized`. `events.url` is `https`, or `http` to a loopback address; `events.types`
 is a non-empty list of full type names, or `*` for every type. `run.url` is the run
@@ -1444,9 +1471,13 @@ server's variables for the run, a name and an object with its string `value` eac
 (§Variables). `image` is the image the run starts in, a reference pinned by digest,
 `NAME@sha256:` and 64 lower-case hexadecimal digits, which the machine runs only under
 one of its `images.allow` prefixes. Absent, the run's policy selects the image, as
-before (§Images). A member Forager does not recognise is ignored. The digest is the
-server's and opaque;
-Forager keeps it, sends it back on every POST, and never recomputes it. Forager reads
+before (§Images). A member Forager does not recognise is ignored. The digest,
+`X-Qory-Run-Configuration`, is `sha256=` and the lower-case hex SHA-256 of the exact bytes
+of the document as the server sends it, so that a secrets request contains the digest of
+the document its credentials come from (§The server, Secrets); an attach's answer contains
+the digest of the document a reload of the run answers, without `labels` and `about`
+(§The server, The attach).
+Forager keeps the digest and sends it back on every POST. Forager reads
 the document with a decoder that refuses a member name that appears twice and invalid
 UTF-8, then its `image`, then against the schema and the limits, and its error states
 where in the document and which rule refused it, never a value but the image: an
@@ -1457,6 +1488,88 @@ anything but a signed `200`, or with a document Forager refuses, is no run,
 `run_configuration_invalid` for the latter. On the gateway's link a run opens with a
 `POST` of the session's run request instead, and its answer is the gateway's (§The
 gateway's link).
+
+**Secrets.** `secrets-request.schema.json`, `secrets-answer.schema.json` and
+`sealed-plaintext.schema.json`. The secrets request fetches the values of a run
+configuration's `credentials` (§Credentials), once per run: a signed `POST <secrets.url>`,
+`Content-Type: application/json`, under the access key, signed as every POST is, with the
+body as the request string's last line:
+
+```json
+{"version": 1,
+ "run_id": "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a",
+ "run_configuration": "sha256=<64 hex digits>",
+ "credentials": ["model", "forge"],
+ "timestamp": 1700000000}
+```
+
+`run_configuration` is the digest of the run configuration the credentials come from,
+`credentials` the names of its entries in the document's order, each once, and
+`timestamp` the sender's clock in Unix seconds. A member the schema does not define is
+refused, and so is a member name twice in one object; the body is at most 32 KiB. After
+the shared order of refusals (§The server, Coded refusals), in which a body the schema refuses
+is `400` `invalid_request` and a `timestamp` more than 300 seconds from the server's
+clock, either way, is `401`, the server refuses, in order: an access key not allowed
+stored secrets, with a signed `409` `secrets_not_allowed`; a digest that is not the
+digest of a run configuration it answered the run with, with a signed `410`
+`run_configuration_superseded`; and a `credentials` list other than that run
+configuration's names, with a signed `409` code it defines. Then it seals the value it
+stores for each credential of that run configuration, to the public key of the access key
+the request verified under, its X25519 u-coordinate (`accesskey.PublicKey.X25519`), with
+a fresh ephemeral key, and sets `exp` to its clock plus 600 seconds. The answer is a
+signed `200`, `application/json`, at most 5 MiB, whose body is the envelope:
+
+```json
+{"version": 1,
+ "sealed": {"suite": "x25519-sha256-aes256gcm",
+            "access_key_id": "ak_f1xt0re000000000",
+            "run_id": "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a",
+            "run_configuration": "sha256=<64 hex digits>",
+            "exp": 1700000600,
+            "enc": "<32 bytes, base64url>",
+            "ct": "<ciphertext and tag, base64url>",
+            "sig": "<64 bytes, base64url>"}}
+```
+
+`suite` is RFC 9180's base mode with DHKEM(X25519, HKDF-SHA256) `0x0020`, HKDF-SHA256
+`0x0001` and AES-256-GCM `0x0002`. `enc` is the ephemeral X25519 public key, `ct` the
+ciphertext followed by the 16-byte tag, and `sig` an Ed25519 signature under the server's
+key, each base64url without padding, decoded strictly. `exp` is a JSON integer with no
+sign, fraction or exponent. With lp(x) the length of x as a u16 big-endian followed by x,
+and lp32(x) the same with a u32:
+
+| Input | Bytes |
+|---|---|
+| `info` | `qory secrets v1` ‖ `0x00` ‖ `0x0020` ‖ `0x0001` ‖ `0x0002` ‖ lp(access key id) |
+| `aad` | lp(run id) ‖ lp(access key id) ‖ lp(digest) ‖ lp(`exp` in canonical decimal) |
+| what `sig` signs | lp32(`qory envelope v1`) ‖ lp32(`suite`) ‖ lp32(`access_key_id`) ‖ lp32(`run_id`) ‖ lp32(`run_configuration`) ‖ lp32(`exp` in canonical decimal) ‖ lp32(`enc`, raw) ‖ lp32(`ct`, raw) |
+
+The envelope opens to the sealed plaintext:
+
+```json
+{"version": 1,
+ "run_configuration": "sha256=<64 hex digits>",
+ "credentials": ["forge", "model"],
+ "values": [{"credential": "forge", "value": "<the value>"},
+            {"credential": "model", "value": "<the value>"}]}
+```
+
+`credentials` is the request's list, sorted, and `values` has one value for each,
+sorted by credential: UTF-8 text of 1 to 16384 bytes with no NUL, and, for a value set in
+a header, no control character other than tab and no leading or trailing space or tab.
+Whoever opens the envelope checks, in order: the answer against its schema, with a suite
+other than this one refused before the signature; `sig` under the pinned
+`apiary_public_key`; `access_key_id`, `run_id` and `run_configuration` against the id
+of its access key, the request's run id and the digest it computed of the run configuration
+it received; `exp` against its clock, refusing an `exp` more than 300 seconds past or more
+than 900 seconds ahead; the open, with `info` and `aad` built from those values, never the envelope's;
+and the plaintext: against its schema, with a value of more than 16384 bytes refused
+there too, then a credential with two values, its digest and its credentials against the
+request, their order, a value for a credential the request did not ask for, and a value
+missing. The rule for a value set in a header is checked where the value is set. `fixtures/sealed/` contains a sealed answer to the fixture access key, signed
+under the fixture signing key, with its vectors and an envelope refused at each step
+(§Fixtures). This revision defines the request, its answer and the plaintext; Forager
+sends no secrets request and opens no envelope.
 
 **Through a gateway.** Each node or node pool records one of three choices: `direct`,
 `default`, or a named gateway, `ng_` followed by 16 lower-case Crockford base32
@@ -3222,6 +3335,7 @@ the option experimental.
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, and one with `interrupted` and `failed`, and a run configuration whose `image` has a tag and one whose `image` is the machine's name for one, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited`, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
 | `fixtures/enrolment/` | enrolment requests with a node's code, `qecn_`, one carrying one fingerprint and one carrying two, and a gateway's request with a gateway's code, `qecg_`, under the fixture gateway key, the answer, the answer to the gateway's request, the answer for an adapter's key, `answer-adapter.json`, unsigned, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, the gateway's under the fixture gateway key, each answer's and refusal's signature under the fixture signing key, `answer-adapter.json` being checked against the schema alone |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `attach-run-configuration.json`, `discovery-gateway.json`, `outcome.json` and `outcome-answer.json`, and, for a fixed exporter value, a binding and an answer of the gateway on its link, signed under the fixture gateway key (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
+| `fixtures/sealed/` | the secrets request's fixture: `run-configuration.json`, a run configuration with two credentials; `secrets-request.json`, the request for them; `secrets-answer.json`, its envelope, sealed to the fixture access key with a fixed ephemeral key, bytes 33 to 64, and signed under the fixture signing key; `sealed-plaintext.json`, what it opens to; `vectors.json`, its `info`, `aad`, lengths and hashes and the refused cases; and under `invalid/` envelopes each refused at one step, a wrong `aad`, a wrong `info`, a bad signature, an `exp` past the window, an `exp` too far ahead, another digest, another run id, an unknown suite and a value for a credential not requested, and `plaintext-other-digest.json` and `plaintext-not-requested.json`, the plaintexts the cases of another digest and of a value not requested were sealed from | each file against its schema, and `invalid/` against `secrets-answer.schema.json`, which refuses only the unknown suite; each envelope sealed again with the standard library, its signature verified and signed again, and opened with `crypto/hpke`; each refused one at its step and at no step before |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 
 After a change to the body of a `POST`, a batch's or a registration's, Forager's module

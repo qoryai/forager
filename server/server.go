@@ -302,7 +302,7 @@ func (rc *RunConfiguration) Values() map[string]string {
 
 // Digests are what an answer says is in force: the server's digest of the
 // configuration document and of the run's run configuration, each empty when the answer
-// did not say. They are opaque: compared byte for byte, never recomputed.
+// did not say. Forager compares them byte for byte and does not recompute them.
 type Digests struct {
 	Configuration    string
 	RunConfiguration string

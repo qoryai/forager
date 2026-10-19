@@ -1,0 +1,1 @@
+{"version":1,"run_configuration":"sha256=7e6c5561f13ed14e2e2db21e172e96537417e8a9ec89329f5946bacf4e234527","credentials":["forge","model"],"values":[{"credential":"forge","value":"fixture-forge-token-not-a-real-one"},{"credential":"model","value":"fixture-model-key-not-a-real-one"}]}
