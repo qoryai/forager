@@ -273,6 +273,22 @@ func shown(v string) string {
 	return strconv.Quote(v)
 }
 
+// ShownName is a name as a message prints it: quoted when quote is true, bare when it is
+// false, and, when it contains qak_ or qrk_ in any case, a phrase in its place, so a
+// secret pasted where a name belongs never reaches the message. A name that contains
+// both gets the access key secret's phrase, as with shown.
+func ShownName(v string, quote bool) string {
+	switch {
+	case containsAccessKeySecret(v):
+		return "(a name that contains an access key secret)"
+	case containsRunKey(v):
+		return "(a name that contains a run key)"
+	case quote:
+		return strconv.Quote(v)
+	}
+	return v
+}
+
 // ContainsSecret reports whether a value contains what starts an access key secret,
 // qak_, or a run key, qrk_, in any case. A reader of a document a secret does not
 // belong in, such as the server document or a pin, refuses one that contains it with a

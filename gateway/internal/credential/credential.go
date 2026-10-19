@@ -116,11 +116,11 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 	for _, sel := range selected {
 		i := slices.IndexFunc(defs, func(d Definition) bool { return d.Name == sel.Name })
 		if i < 0 {
-			return nil, fmt.Errorf("the policy selects the credential %q, which this machine does not define", sel.Name)
+			return nil, fmt.Errorf("the policy selects the credential %s, which this machine does not define", accesskey.ShownName(sel.Name, true))
 		}
 		def := defs[i]
 		if slices.ContainsFunc(out.all, func(h *held) bool { return h.def.Name == def.Name }) {
-			return nil, fmt.Errorf("the policy selects the credential %q twice", def.Name)
+			return nil, fmt.Errorf("the policy selects the credential %s twice", accesskey.ShownName(def.Name, true))
 		}
 		if err := def.check(sel.Argument); err != nil {
 			return nil, err
@@ -129,7 +129,7 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 		answer, err := h.ask(ctx)
 		if err != nil {
 			out.Close()
-			return nil, fmt.Errorf("credential %s: %w", def.Name, err)
+			return nil, fmt.Errorf("credential %s: %w", accesskey.ShownName(def.Name, false), err)
 		}
 		h.set(answer)
 		h.shape = answer.shape()
@@ -170,7 +170,7 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 				continue
 			}
 			if !slices.ContainsFunc(allow, func(entry string) bool { return policy.Covers(entry, host) }) {
-				return fmt.Errorf("the credential %s is for %s, which the run's allow list does not cover", u.Name, host)
+				return fmt.Errorf("the credential %s is for %s, which the run's allow list does not cover", accesskey.ShownName(u.Name, false), host)
 			}
 		}
 	}
@@ -186,7 +186,7 @@ var (
 // Check refuses a definition that cannot be one, before any run selects it.
 func (d Definition) Check() error {
 	if !nameShape.MatchString(d.Name) {
-		return fmt.Errorf("the credential name %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", d.Name)
+		return fmt.Errorf("the credential name %s is not 1 to 64 of a-z, 0-9, underscore, dot and dash", accesskey.ShownName(d.Name, true))
 	}
 	sources := 0
 	for _, set := range []bool{d.Env != "", d.File != "", len(d.Adapter) > 0} {
@@ -195,16 +195,16 @@ func (d Definition) Check() error {
 		}
 	}
 	if sources != 1 {
-		return fmt.Errorf("credential %s: exactly one of env, file and adapter says where the token comes from", d.Name)
+		return fmt.Errorf("credential %s: exactly one of env, file and adapter says where the token comes from", accesskey.ShownName(d.Name, false))
 	}
 	if d.Argument != "" {
 		if _, err := wholeMatch(d.Argument); err != nil {
-			return fmt.Errorf("credential %s: argument: %w", d.Name, err)
+			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), err)
 		}
 	}
 	for _, p := range d.Placeholders {
 		if !envShape.MatchString(p) {
-			return fmt.Errorf("credential %s: the placeholder %q is not a variable's name", d.Name, p)
+			return fmt.Errorf("credential %s: the placeholder %s is not a variable's name", accesskey.ShownName(d.Name, false), accesskey.ShownName(p, true))
 		}
 	}
 	if len(d.Adapter) > 0 {

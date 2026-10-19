@@ -90,6 +90,20 @@ release may change what an existing document does, and says so under Upgrading.
   and checked there: every run keeps them whatever the caller's `Config` holds
   afterwards.
 
+#### Fixed
+
+- Eight of the gateway's credential messages printed a credential's name or a
+  placeholder as written, so a secret pasted in place of one reached the error: the two
+  about the policy's selection, a name the machine does not define and a name selected
+  twice; the token that cannot be read; the allow-list check; and `Definition.Check`'s
+  name, source, argument and placeholder checks. In these eight, a name or placeholder
+  that contains `qak_` in any case now prints as `(a name that contains an access key
+  secret)`, and one that contains `qrk_` and no `qak_` as `(a name that contains a run
+  key)`. The rest of each message prints as before, and so does a name with neither.
+  The reason quoted after the name, such as an adapter's error output or a regular
+  expression's error, is unchanged and can still contain either prefix.
+  `accesskey.ShownName` holds the rule.
+
 ### Wall
 
 #### Added
