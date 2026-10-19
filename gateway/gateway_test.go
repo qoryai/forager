@@ -634,8 +634,9 @@ func seq(n int) string { return fmt.Sprintf("%010d", n) }
 // TestAWalledRunWithACredential pins what a run behind a wall is given: the run's
 // authority, the credential's placeholder, the variable it is read from as reserved,
 // the image the policy resolves to, and in applied the credential and the terminated
-// host; a placeholder the run passes is placeholder_conflict, and the same policy
-// without a wall wall_required, each a 403 from the gateway.
+// host; a placeholder the run passes is placeholder_conflict, a 403 from the gateway.
+// The same policy without a wall starts as well, brokered: the run's authority, the
+// placeholder and the credential in applied, and no image.
 func TestAWalledRunWithACredential(t *testing.T) {
 	t.Setenv("GATEWAY_TEST_SECRET", "s3cret-value-of-the-test")
 	ref := "registry.example/agents/base@sha256:" + strings.Repeat("0", 64)
@@ -665,21 +666,56 @@ func TestAWalledRunWithACredential(t *testing.T) {
 	if _, err := h.tryOpen(server.LinkRunRequest{Wall: true, Images: images, Passes: []string{"API_TOKEN"}}); !errors.As(err, &r) || r.Code != "placeholder_conflict" || r.Status != http.StatusForbidden || r.From != "gateway" || !slices.Equal(r.Names, []string{"API_TOKEN"}) {
 		t.Errorf("a placeholder the run passes: %v", err)
 	}
-	if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &r) || r.Code != "wall_required" || r.Status != http.StatusForbidden || r.From != "gateway" || !slices.Equal(r.Names, []string{"credentials"}) {
-		t.Errorf("no wall: %v", err)
+	u := h.open(server.LinkRunRequest{Passes: []string{"HOME"}})
+	if !strings.HasPrefix(u.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || !slices.Equal(u.Placeholders, []string{"API_TOKEN"}) ||
+		!slices.Equal(u.Reserved, []string{"GATEWAY_TEST_SECRET"}) || u.Image != nil || u.RelayImage != "" {
+		t.Errorf("no wall: the answer %+v", u)
 	}
+	members = nil
+	json.Unmarshal(u.Applied, &members)
+	if creds, _ := members["credentials"].([]any); len(creds) != 1 || !slices.Equal(anyStrings(members["terminated"]), []string{"api.example"}) {
+		t.Errorf("no wall: applied %s", u.Applied)
+	}
+	h.post(exited(u.RunID))
 	// Each message is today's session's error text.
 	want := "API_TOKEN is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside: placeholder_conflict: API_TOKEN"
 	body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: event.NewRunID(), Wall: true, Images: images, Passes: []string{"API_TOKEN"}})
 	if _, got := h.refusalOf("/v1/run-configuration", string(body)); got["message"] != want {
 		t.Errorf("placeholder_conflict's message %q", got["message"])
 	}
-	want = "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"
-	if _, got := h.refusalOf("/v1/run-configuration", openBody(event.NewRunID())); got["message"] != want {
-		t.Errorf("wall_required's message %q", got["message"])
-	}
 	h.post(exited(a.RunID))
 	h.close()
+}
+
+// TestWhatNeedsAWallStillDoes pins wall_required, a 403 from the gateway, for a run
+// without a wall whose policy selects an image or has path rules beside a credential:
+// the names are those that still need a wall, and the message is the session's text.
+func TestWhatNeedsAWallStillDoes(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_SECRET", "s3cret-value-of-the-test")
+	creds := []gateway.Credential{{Name: "api", Env: "GATEWAY_TEST_SECRET", Hosts: []string{"api.example"}, Scheme: "bearer", Placeholders: []string{"API_TOKEN"}}}
+	for name, c := range map[string]struct {
+		policy  *gateway.Policy
+		names   []string
+		message string
+	}{
+		"an image": {&gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "observe"}, Image: "base", Credentials: []gateway.PolicyCredential{{Name: "api"}}},
+			[]string{"image=base"}, `the policy selects the image "base", which needs a wall: without one the runtime is this machine's process`},
+		"path rules": {&gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}, Paths: map[string][]string{"api.example": {"/v1/*"}}}, Credentials: []gateway.PolicyCredential{{Name: "api"}}},
+			[]string{"paths"}, "run it with a wall: the policy selects tools or has path rules, and without a wall a program that ignores the proxy is bound by neither"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := start(t, gateway.Config{Credentials: creds, Policy: c.policy})
+			h.secrets = append(h.secrets, "s3cret-value-of-the-test")
+			var r *accesskey.Refusal
+			if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &r) || r.Code != "wall_required" || r.Status != http.StatusForbidden || r.From != "gateway" || !slices.Equal(r.Names, c.names) {
+				t.Errorf("no wall: %v", err)
+			}
+			if _, got := h.refusalOf("/v1/run-configuration", openBody(event.NewRunID())); got["message"] != c.message {
+				t.Errorf("wall_required's message %q", got["message"])
+			}
+			h.close()
+		})
+	}
 }
 
 // TestTheRunAnswerHasTheHostsOfEachCredential pins credential_hosts in the run answer,

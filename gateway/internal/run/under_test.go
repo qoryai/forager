@@ -192,7 +192,7 @@ func TestUnderKeepsTheCeilingsPathsBesideThePolicys(t *testing.T) {
 		}
 		bare := &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: modes[1], Allow: []string{pathHost}}}
 		_, err := run.Decide(run.Config{RunID: runID, Node: bare.Under(ceiling)})
-		if err == nil || !strings.Contains(err.Error(), "need a wall") {
+		if err == nil || !strings.Contains(err.Error(), "run it with a wall") {
 			t.Errorf("ceiling %s, run %s: the ceiling's paths without a wall: %v", modes[0], modes[1], err)
 		}
 		var nw *refusal.NeedsWall

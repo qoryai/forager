@@ -156,15 +156,15 @@ func ofTypes(evs []map[string]any, among []string) []string {
 }
 
 // TestARealGatewayRefusesARunThatNeedsAWall pins wall_required end to end: a machine
-// policy with path rules and a run without a wall is no run, with the error such a run
-// always had, word for word, and no run at the gateway.
+// policy with path rules and a run without a wall is no run, with the refusal's text
+// word for word, and no run at the gateway.
 func TestARealGatewayRefusesARunThatNeedsAWall(t *testing.T) {
 	sp := spec(t)
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 	startGateway(t, &sp, gateway.Config{Policy: &gateway.Policy{Version: 1,
 		Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}, Paths: map[string][]string{"api.example": {"/v1/*"}}}}})
 	_, err := session.Run(context.Background(), sp)
-	const want = "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"
+	const want = "run it with a wall: the policy selects tools or has path rules, and without a wall a program that ignores the proxy is bound by neither"
 	if err == nil || err.Error() != want {
 		t.Fatalf("%v, want %q", err, want)
 	}

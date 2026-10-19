@@ -3,6 +3,7 @@ package run_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/gateway/internal/run"
-	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/sealed"
 )
 
@@ -56,12 +56,24 @@ func (s *secrets) fetch(_ context.Context, digest string, names []string) (seale
 // called once, with the digest Forager computed and not the header's, and the names in
 // the document's order; the use has the opened value; a reload with the same
 // credentials and another policy calls it no more and keeps the value; one with other
-// credentials is refused and the policy in force stays; Close clears the value.
+// credentials is refused and the policy in force stays; Close clears the value. A run
+// without a wall opens them as a walled run does, and has the run's authority.
 func TestARunOpensItsCredentialsOnceUnderTheComputedDigest(t *testing.T) {
+	for _, wall := range []bool{true, false} {
+		t.Run(fmt.Sprintf("wall %v", wall), func(t *testing.T) { opensOnce(t, wall) })
+	}
+}
+
+// opensOnce is TestARunOpensItsCredentialsOnceUnderTheComputedDigest for a run with a
+// wall or without one.
+func opensOnce(t *testing.T, wall bool) {
 	s := &secrets{value: "opened-value"}
-	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, storedDoc, digest('1')), Secrets: s.fetch})
+	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: wall, Server: true, Fetched: computed(t, storedDoc, digest('1')), Secrets: s.fetch})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !r.NeedsCA() {
+		t.Error("the run has no authority")
 	}
 	if len(s.calls) != 1 || !slices.Equal(s.calls[0], []string{digest('c'), "model"}) {
 		t.Fatalf("Secrets calls %v", s.calls)
@@ -108,8 +120,8 @@ func TestARunOpensItsCredentialsOnceUnderTheComputedDigest(t *testing.T) {
 }
 
 // TestCredentialsFromTheServerAreRefusedBeforeTheyOpen pins what refuses a run whose
-// run configuration has credentials, before Secrets is called: no wall, no secrets
-// endpoint, a name twice and a reserved header; and after it: an error of Secrets, and
+// run configuration has credentials, before Secrets is called: no secrets endpoint, a
+// name twice and a reserved header; and after it: an error of Secrets, and
 // a value a header cannot hold, whose message has the name and not the value.
 func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
 	twice := strings.Replace(storedDoc, `]}]}`, `]},{"name":"model","hosts":["b.example"],"auth":{"scheme":"bearer"}}]}`, 1)
@@ -122,7 +134,6 @@ func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
 		want   string
 		called bool
 	}{
-		"no wall":           {storedDoc, false, &secrets{value: "v"}, "", "run it with a wall: the run configuration from Qory Apiary has credentials", false},
 		"no secrets":        {storedDoc, true, nil, "run_configuration_invalid", "enrol an access key allowed stored secrets", false},
 		"a name twice":      {twice, true, &secrets{value: "v"}, "run_configuration_invalid", `list the credential "model" once`, false},
 		"a reserved header": {reserved, true, &secrets{value: "v"}, "run_configuration_invalid", `in another header than "Proxy-Authorization"`, false},
@@ -142,10 +153,6 @@ func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
 			if err == nil {
 				r.Close()
 				t.Fatal("the run opened")
-			}
-			var w *refusal.NeedsWall
-			if !c.wall && !errors.As(err, &w) {
-				t.Errorf("no wall: %v is no wall_required", err)
 			}
 			if code, _ := refusalOf(err); (c.code != "" && code != c.code) || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "opened") {
 				t.Errorf("%v (%s); want %s with %q", err, code, c.code, c.want)

@@ -178,34 +178,34 @@ func TestAServerThatSelectsACredentialKeepsItsSelection(t *testing.T) {
 	}
 }
 
-// TestAnUnwalledRunBehindASeparateGatewayGetsNoSelection pins a run without a wall: it
-// gets no credential, runs, and the gateway says so once. That a reload says nothing
-// more is the run package's to pin.
-func TestAnUnwalledRunBehindASeparateGatewayGetsNoSelection(t *testing.T) {
+// TestAnUnwalledRunBehindASeparateGatewayGetsTheSelection pins a run without a wall:
+// it gets the gateway's selection as a walled run does, github with the run's
+// repository label as its argument and model, the proxy sets both, and the run answer
+// has the run's authority. The guard applies to it, as to every run behind a separate
+// gateway, and a TRACE through its proxy is refused.
+func TestAnUnwalledRunBehindASeparateGatewayGetsTheSelection(t *testing.T) {
 	s := newSelecting(t)
 	r := selectedRemote(t, s, selectedPolicy, map[string]string{"repository": "example/repo", "forge": "github.com"}, gateway.Config{})
 	runID := event.NewRunID()
 	e := r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
-	if got := members(e.a.Applied)["credentials"]; got != nil {
-		t.Errorf("applied credentials %v", got)
+	if got := members(e.a.Applied)["credentials"]; !reflect.DeepEqual(got, bothSelected) {
+		t.Errorf("applied credentials %v, want %v", got, bothSelected)
+	}
+	want := map[string]string{"github": "minted-for-example/repo", "model": "model-value-of-the-test"}
+	if got := gateway.Tokens(r.g, runID); !reflect.DeepEqual(got, want) {
+		t.Errorf("the proxy sets %v, want %v", got, want)
+	}
+	if !strings.HasPrefix(e.a.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || e.a.Image != nil {
+		t.Errorf("the answer: authority %q, image %+v", e.a.CertificateAuthority, e.a.Image)
+	}
+	if !gateway.Guarded(r.g, runID) {
+		t.Error("the run's proxy is not guarded")
+	}
+	if got := s.asked(t); !reflect.DeepEqual(got, []string{"example/repo"}) {
+		t.Errorf("the adapter was asked for %v", got)
 	}
 	if got := e.post(t, heartbeat(runID), exited(runID)); got.status != http.StatusAccepted {
 		t.Errorf("the last batch: %d %s", got.status, got.body)
-	}
-	line := "run " + runID + ": the gateway selects credentials for a walled run alone: this run has no wall and gets none"
-	r.mu.Lock()
-	n := 0
-	for _, l := range r.reports {
-		if l == line {
-			n++
-		}
-	}
-	r.mu.Unlock()
-	if n != 1 {
-		t.Errorf("the line %q %d times in %v", line, n, r.reports)
-	}
-	if got := s.asked(t); got != nil {
-		t.Errorf("the adapter was asked for %v", got)
 	}
 }
 

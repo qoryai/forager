@@ -22,6 +22,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 )
 
@@ -240,42 +241,48 @@ func TestSettledIsWhatTheServerAnsweredAndForagerRefused(t *testing.T) {
 	}
 }
 
-// From session_test.go TestAReloadIsAsStrictAsAStart: without a wall, path rules the
-// proxy cannot hold take their hosts out of the allow list and the user is told; a
-// policy that selects credentials fails the reload and the policy in force stays; and
-// a run configuration that is the one in force is not put in force again.
+// From session_test.go TestAReloadIsAsStrictAsAStart: an unwalled run with a server
+// has the run's authority from the start; a reload that brings path rules, which need
+// a wall, fails, and the policy in force stays, though the run has an authority; a
+// reload that selects a credential puts it in force; and a run configuration that is
+// the one in force is not put in force again.
 func TestAReloadIsAsStrictAsAStart(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
 	var said reports
-	r := open(t, run.Config{RunID: runID, Server: true, Report: said.report, Fetched: served(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, digest('1'))})
-	if r.NeedsCA() {
-		t.Fatal("an unwalled run with nothing to terminate has an authority")
+	r := open(t, run.Config{RunID: runID, Server: true, Report: said.report, Fetched: served(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, digest('1')),
+		Credentials: []run.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.example"}, Scheme: "bearer"}}})
+	if !r.NeedsCA() {
+		t.Fatal("an unwalled run with a server has no authority")
 	}
 
 	paths := `{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1","api.example"],"paths":{"127.0.0.1":["/ok/*"]}}}`
-	d, err := reload(t, r, served(paths, digest('2')))
-	if err != nil {
-		t.Fatal(err)
+	_, err := reload(t, r, served(paths, digest('2')))
+	var nw *refusal.NeedsWall
+	if !errors.As(err, &nw) || !slices.Equal(nw.Names, []string{"paths"}) || !strings.Contains(err.Error(), "run it with a wall") ||
+		!strings.Contains(err.Error(), "run configuration "+runURL+": ") || !strings.HasSuffix(err.Error(), "; the policy in force stays") {
+		t.Errorf("path rules without a wall: %v", err)
 	}
-	if fmt.Sprint(d.Policy.Policy.Egress.Allow) != "[api.example]" || d.Policy.Policy.Egress.Paths != nil || d.Policy.RunConfiguration != digest('2') || len(d.Uses) != 0 {
-		t.Errorf("the decision %+v", d.Policy.Policy)
-	}
-	if !said.reported("path rules, which need a wall") {
-		t.Error("nobody was told the path rules are not held")
-	}
-	r.Commit(d)
-
-	_, err = reload(t, r, served(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]},"credentials":[{"name":"model"}]}`, digest('3')))
-	if err == nil || !strings.Contains(err.Error(), "selects credentials, which need a wall") || !strings.Contains(err.Error(), "run configuration "+runURL+": ") || !strings.HasSuffix(err.Error(), "; the policy in force stays") {
-		t.Errorf("credentials without a wall: %v", err)
-	}
-	if r.RunConfiguration() != digest('2') || fmt.Sprint(r.Policy().Policy.Egress.Allow) != "[api.example]" {
+	if r.RunConfiguration() != digest('1') || fmt.Sprint(r.Policy().Policy.Egress.Allow) != "[127.0.0.1]" {
 		t.Errorf("the policy in force after a failed reload %+v", r.Policy())
 	}
 
+	creds := `{"version":1,"egress":{"mode":"enforce","allow":["api.example"]},"credentials":[{"name":"model"}]}`
+	d, err := reload(t, r, served(creds, digest('3')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.CredentialsChanged || len(d.Uses) != 1 || d.Uses[0].Name != "model" || d.Policy.RunConfiguration != digest('3') {
+		t.Errorf("a credential without a wall: changed %v, uses %v", d.CredentialsChanged, d.Uses)
+	}
+	r.Commit(d)
+
 	// The document in force, under its own digest: nothing is put in force.
-	d, err = reload(t, r, served(paths, digest('2')))
+	d, err = reload(t, r, served(creds, digest('3')))
 	if err != nil || !d.Unchanged {
 		t.Errorf("the run configuration in force: %+v, %v", d, err)
+	}
+	if len(said.said) != 0 {
+		t.Errorf("the user was told %v", said.said)
 	}
 }
 
@@ -305,7 +312,7 @@ func TestARunWhoseToolsCannotHoldDoesNotStart(t *testing.T) {
 		want   string
 		code   string
 	}{
-		"no wall":                      {func(c *run.Config) { c.Wall = false }, "need a wall", ""},
+		"no wall":                      {func(c *run.Config) { c.Wall = false }, "run it with a wall", ""},
 		"a tool nobody defined":        {func(c *run.Config) { c.Tools = nil }, "does not define", "tool_unknown"},
 		"an argument not provided for": {func(c *run.Config) { c.Node.Tools[0].Argument = "acme/shop/x" }, "not one the machine provides for", ""},
 		"a host a credential is for": {func(c *run.Config) {
@@ -681,7 +688,7 @@ func TestPassingIsTheNamesTheRunPasses(t *testing.T) {
 func TestTheNodesPathsBesideAServersPolicy(t *testing.T) {
 	node := &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "observe", Paths: map[string][]string{"git.example.com": {"/acme/*"}}}}
 	fetched := served(`{"version":1,"egress":{"mode":"observe"}}`, digest('1'))
-	if _, err := run.Decide(run.Config{Node: node, Fetched: fetched}); err == nil || !strings.Contains(err.Error(), "need a wall") {
+	if _, err := run.Decide(run.Config{Node: node, Fetched: fetched}); err == nil || !strings.Contains(err.Error(), "run it with a wall") {
 		t.Errorf("the node's paths without a wall: %v", err)
 	}
 	r := open(t, run.Config{RunID: runID, Node: node, Wall: true, Fetched: fetched})

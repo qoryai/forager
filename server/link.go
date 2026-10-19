@@ -195,8 +195,8 @@ type LinkRunAnswer struct {
 	// connection to the gateway's proxy after the relay's preamble. A separate gateway
 	// gives none: the run key opens its proxy connections.
 	ProxySecret string `json:"proxy_secret,omitempty"`
-	// CertificateAuthority is the run's certificate authority, PEM, when the run has a
-	// wall and the gateway reads inside HTTPS for it.
+	// CertificateAuthority is the run's certificate authority, PEM, when the gateway
+	// reads inside HTTPS for the run, with or without a wall.
 	CertificateAuthority string `json:"certificate_authority,omitempty"`
 	// Placeholders are the variables the agent sees in place of a credential or a
 	// tool's secret.

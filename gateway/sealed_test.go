@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"io/fs"
 	"log"
@@ -147,22 +146,24 @@ func TestARunConfigurationWithoutCredentialsIsUnchanged(t *testing.T) {
 	h.close()
 }
 
-// TestCredentialsNeedAWall pins an unwalled run whose run configuration has
-// credentials: wall_required with server_credentials, its text, and no secrets
-// request.
-func TestCredentialsNeedAWall(t *testing.T) {
+// TestAnUnwalledRunGetsTheServersCredentials pins an unwalled run whose run
+// configuration has credentials: it starts, brokered as a walled run is. The gateway
+// sends one secrets request, the proxy sets the opened value, and the run answer has
+// the run's authority and the credential's placeholder, and no image.
+func TestAnUnwalledRunGetsTheServersCredentials(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
-	var r *accesskey.Refusal
-	if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &r) || r.Code != "wall_required" || r.Status != http.StatusForbidden || !slices.Equal(r.Names, []string{"server_credentials", "credentials"}) && !slices.Equal(r.Names, []string{"credentials", "server_credentials"}) {
-		t.Errorf("no wall: %v", err)
+	a := h.open(server.LinkRunRequest{})
+	if got, want := gateway.Tokens(h.g, a.RunID), map[string]string{"model": sealedValue}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the proxy sets %v, want %v", got, want)
 	}
-	want := "run it with a wall: the run configuration from Qory Apiary has credentials, and the gateway sets their values only for a run behind a wall"
-	if _, got := h.refusalOf("/v1/run-configuration", openBody(event.NewRunID())); got["message"] != want {
-		t.Errorf("wall_required's message %q", got["message"])
+	if reqs := c.requests(t); len(reqs) != 1 || reqs[0].RunID != a.RunID || !slices.Equal(reqs[0].Credentials, []string{"model"}) {
+		t.Errorf("the secrets requests %+v; want one for the run and model", reqs)
 	}
-	if reqs := c.requests(t); len(reqs) != 0 {
-		t.Errorf("%d secrets requests, want none", len(reqs))
+	if !strings.HasPrefix(a.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || !slices.Equal(a.Placeholders, []string{"MODEL_API_KEY"}) || a.Image != nil {
+		t.Errorf("the answer: authority %q, placeholders %v, image %+v", a.CertificateAuthority, a.Placeholders, a.Image)
 	}
+	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
+	h.close()
 }
 
 // walledBody is a walled run request of a new run id.
@@ -433,16 +434,19 @@ func TestAnAttachedRunTakesItsCredentialsFromAReload(t *testing.T) {
 // a request to an HTTPS origin on this machine, whose certificate the proxy verifies,
 // reaches it with the opened value in the credential's header, the session's stand-in
 // replaced, when the node's policy names the origin's host; a TRACE gets the gateway's
-// 403 and never reaches it. Without the node's policy, a name on this machine is not the
-// server's to open, sealed credential or not: the dial is refused and the origin gets
-// nothing.
+// 403 and never reaches it, with or without a wall. Without the node's policy, a name
+// on this machine is not the server's to open to a walled run, sealed credential or
+// not: the dial is refused and the origin gets nothing.
 func TestASealedKeyReachesATLSOrigin(t *testing.T) {
+	localhost := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
 	for name, c := range map[string]struct {
 		node    *gateway.Policy
+		wall    bool
 		reached bool
 	}{
-		"the node's policy names localhost": {&gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}, true},
-		"no node's policy":                  {nil, false},
+		"the node's policy names localhost":          {localhost, true, true},
+		"no node's policy":                           {nil, true, false},
+		"no wall, the node's policy names localhost": {localhost, false, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			certFile, keyFile, roots := testCertificate(t, t.TempDir())
@@ -474,7 +478,7 @@ func TestASealedKeyReachesATLSOrigin(t *testing.T) {
 			gateway.SetUpstreamRoots(&cfg, roots)
 			h := start(t, cfg)
 			h.secrets = append(h.secrets, sealedValue)
-			a := h.open(server.LinkRunRequest{Wall: true})
+			a := h.open(server.LinkRunRequest{Wall: c.wall})
 
 			trusted := x509.NewCertPool()
 			trusted.AppendCertsFromPEM([]byte(a.CertificateAuthority))

@@ -132,33 +132,24 @@ func ByGateway(code string, names []string, format string, a ...any) *accesskey.
 
 // WallRequired is the gateway's link's code, and the link's alone, of a run without a
 // wall whose policy in force selects what needs one: a 403 from the gateway whose names
-// are credentials, tools and paths, each one the policy selects, or image=<name>, and
-// [ServerCredentials] for a run configuration that has credentials. It is
-// not one of [Decides] and never appears in an event: the session turns it back into
-// the error it gives today, [NeedsWall].
+// are tools and paths, each one the policy selects, or image=<name>. A credential needs
+// no wall. It is not one of [Decides] and never appears in an event: the session turns
+// it back into the error it gives today, [NeedsWall].
 const WallRequired = "wall_required"
 
 // NeedsWall is a run without a wall whose policy selects what needs one, with the names
-// of [WallRequired]: credentials, tools and paths, each one the policy selects, and
-// image=<name> for an image it selects, and [ServerCredentials]. Its Error is the text a
-// run refused for it has always had, word for word, the credentials' before the
-// image's; with ServerCredentials among the names, the text for those credentials.
+// of [WallRequired]: tools and paths, each one the policy selects, and image=<name> for
+// an image it selects. Its Error starts with the fix for tools and paths, and is the
+// image's text, word for word as it has always been, for an image alone.
 type NeedsWall struct {
 	Names []string
 }
 
-// ServerCredentials is the name of [WallRequired] for a run configuration that has
-// credentials, whose values the gateway sets only for a run behind a wall.
-const ServerCredentials = "server_credentials"
-
 func (e *NeedsWall) Error() string {
-	if slices.Contains(e.Names, ServerCredentials) {
-		return "run it with a wall: the run configuration from Qory Apiary has credentials, and the gateway sets their values only for a run behind a wall"
-	}
 	for _, n := range e.Names {
 		if image, ok := strings.CutPrefix(n, "image="); ok && len(e.Names) == 1 {
 			return fmt.Sprintf("the policy selects the image %s, which needs a wall: without one the runtime is this machine's process", accesskey.ShownName(image, !accesskey.IsNamePhrase(image)))
 		}
 	}
-	return "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"
+	return "run it with a wall: the policy selects tools or has path rules, and without a wall a program that ignores the proxy is bound by neither"
 }
