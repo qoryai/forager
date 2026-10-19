@@ -393,9 +393,9 @@ release may change what an existing document does, and says so under Upgrading.
   address or the machine's address reads "qory: egress to <host>:<port> denied by the
   gateway: to reach the gateway's machine, list the host itself, not a *. pattern, in
   the allow list of the node's policy, and allow it in the run's policy; the gateway
-  reaches its machine only for such a host, and never a link-local address". Two
-  credentials that claim one host are refused with "claim <host> in only one of the
-  credentials <a> and <b>; both claim it, and a host has one".
+  reaches its machine only for such a host, and never a link-local or cloud metadata
+  address". Two credentials that claim one host are refused with "claim <host> in only
+  one of the credentials <a> and <b>; both claim it, and a host has one".
 - The proxy sets a credential on a private host only through a `hosts` entry equal to
   the host, never through a `*.` pattern. A private host is an IP literal in
   `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `fc00::/7`, a name of one label,
@@ -404,6 +404,25 @@ release may change what an existing document does, and says so under Upgrading.
   list `litellm.local` in the credential's hosts. `policy.CredentialFor` holds the rule.
   `dev.qory.run.policy_applied`'s `terminated` leaves out a credential's `*.` pattern
   that is for no host under the rule, such as `*.local`.
+- Behind a wall or behind a separate gateway, the gateway's proxy refuses the cloud
+  metadata addresses outside `169.254.0.0/16` and `fe80::/10`, as it refuses
+  `169.254.169.254`: `100.100.100.200` (Alibaba Cloud), `192.0.0.192` (Oracle Cloud
+  Compute Classic), `fd00:ec2::254` (AWS over IPv6), `fd20:ce::254` (Google Cloud
+  over IPv6), `168.63.129.16` (Azure WireServer), `fd00:ec2::23` (AWS EKS Pod
+  Identity Agent over IPv6), `fd00:a9fe:a9fe::1` (Akamai over IPv6) and `fd00:42::42`
+  (Scaleway over IPv6), and an IPv6 address that contains one of these IPv4 addresses
+  in its last 32 bits (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`). An exact
+  `egress.allow` entry of the node's policy does not open them. The guard's error for
+  one reads "Use another host: the gateway refuses the cloud metadata address
+  <address>". The errors for a host that does not read as an address, for a
+  link-local address and for the machine's address end "the gateway refuses it",
+  where they ended "the wall refuses it", and the error for the machine's address
+  reads "no allow entry lists the host by name", where it read "no allow entry names
+  the host". A `403` page for a refused
+  address ends "the gateway reaches its machine only for such a host, and never a
+  link-local or cloud metadata address". The private ranges `10/8`, `172.16/12`,
+  `192.168/16` and `100.64/10` stay open. Before, a request to `100.100.100.200` was
+  dialled.
 - A run holds a copy of the path rules `gateway.Policy.Under` adds, taken and checked
   when it starts: the proxy and `ceiling_paths` keep them for the run whatever the
   caller's `Policy` holds afterwards.
@@ -655,7 +674,12 @@ release may change what an existing document does, and says so under Upgrading.
   cannot check, so the run does not start." and the texts for the other two. An `--mcp-config` or
   `--agents` file is checked as the `--settings` file is and passed as a copy in the run
   directory, `mcp-config-<n>.json` or `agents-<n>.json`; a value Claude Code takes as
-  JSON passes unchanged. A `--plugin-dir` or `--plugin-dir-no-mcp` directory that lies
+  JSON passes unchanged. A text shows a value of `--mcp-config`, `--agents` or
+  `--settings` that contains `{` or `[`, or starts with white space or a format
+  character such as U+FEFF, as `(an --mcp-config value)`, `(an --agents value)` or `(a
+  --settings value)`, and the reason after "failed:" as `it is no file`, `it cannot be
+  read` or `it is no JSON object`, because such a value may be JSON with a token in it;
+  for `--settings` in an unwalled launch too. A `--plugin-dir` or `--plugin-dir-no-mcp` directory that lies
   in, is reached through or contains a place a walled run can write, that holds a link
   leading into one or a file with more than one name, or that has more than 10,000
   entries, does not start; a `.zip` is checked as a file. An `--add-dir` directory is
@@ -679,7 +703,17 @@ release may change what an existing document does, and says so under Upgrading.
   as its names, as for a link inside a writable place of the run's.
 - `catalog.Lookup` read a descriptor in `dir` through a link, of any size. It now reads
   one only when its last part is no link, it is a regular file and it holds at most
-  1 MiB, and refuses one otherwise with "the descriptor <path>: " and the reason.
+  1 MiB, and refuses one otherwise with "Make the runtime descriptor <path> a readable regular file of at most 1 MiB, or remove it. It could not be read: " and the reason.
+- A `--settings` file whose content is `null` stopped the session with a panic. It now
+  does not start, with "runtime claude: Make the file /a/settings.json a JSON object.
+  The check of --settings /a/settings.json failed: it is null", as other settings that
+  are no JSON object.
+- A walled launch's `--add-dir` passed with a regular file, though Claude Code adds
+  only a directory. It now does not start, with "runtime claude: Pass an --add-dir path
+  to a directory. This launch passes --add-dir /home/notes.md, and that file is not a
+  directory, so the run does not start." A FIFO or other file that is not a regular
+  one, and a link to such a file or to a regular file, now get the same text. Before,
+  they were refused with "that file is not a regular file" or "that file is a link".
 
 #### Changed
 

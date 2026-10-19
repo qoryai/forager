@@ -65,14 +65,14 @@ func writeFile(t *testing.T, path, content string) string {
 
 // mcpInWork is the refusal of an --mcp-config file in a place a walled run can write.
 func mcpInWork(file, place string) string {
-	return "Move " + file + " to a directory no walled run writes, or pass the servers as a JSON string. " +
+	return "Move " + file + " to a directory no walled run can write, or pass the servers as a JSON string. " +
 		"This launch passes --mcp-config " + file + ", which lies in " + place +
 		", a place a walled run can write, so the run does not start."
 }
 
 // agentsInWork is the refusal of an --agents file in a place a walled run can write.
 func agentsInWork(file, place string) string {
-	return "Move " + file + " to a directory no walled run writes, or pass the agents as a JSON object. " +
+	return "Move " + file + " to a directory no walled run can write, or pass the agents as a JSON object. " +
 		"This launch passes --agents " + file + ", which lies in " + place +
 		", a place a walled run can write, so the run does not start."
 }
@@ -123,7 +123,7 @@ func TestAWalledLaunchsFileReachedThroughAWrittenPlaceIsRefused(t *testing.T) {
 		Launch: runtimes.Launch{Args: []string{"--mcp-config", file}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
 		Walled: true, Readable: through,
 	})
-	want := "Move " + file + " to a directory no walled run writes, or pass the servers as a JSON string. " +
+	want := "Move " + file + " to a directory no walled run can write, or pass the servers as a JSON string. " +
 		"This launch passes --mcp-config " + file + ", which is reached through /work, a place a walled run can write, " +
 		"so the run does not start."
 	if err == nil || err.Error() != want {
@@ -171,6 +171,10 @@ func TestAWalledLaunchsInlineJSONPassesAsItIs(t *testing.T) {
 		return "Replace " + v + " with an absolute path outside the workspace. This launch passes " + flag + " " + v +
 			", a relative path that Claude Code reads from the workspace, which a walled run can write, so the run does not start."
 	}
+	// The values that contain "{" or "[" or start with white space, which the text shows
+	// as a phrase.
+	phrase := map[[2]string]bool{{"--mcp-config", "{"}: true, {"--mcp-config", "  {"}: true,
+		{"--mcp-config", "\u00a0{}"}: true, {"--agents", " null"}: true}
 	for _, c := range []struct {
 		flag, value string
 		inline      bool
@@ -203,7 +207,11 @@ func TestAWalledLaunchsInlineJSONPassesAsItIs(t *testing.T) {
 			args := []string{"-p", "hi", c.flag, c.value}
 			got, _, err := walled(t, f, args)
 			if !c.inline {
-				if want := relative(c.flag, c.value); err == nil || err.Error() != want {
+				shown := c.value
+				if phrase[[2]string{c.flag, c.value}] {
+					shown = "(an " + c.flag + " value)"
+				}
+				if want := relative(c.flag, shown); err == nil || err.Error() != want {
 					t.Errorf("got %v, want %q", err, want)
 				}
 				return
@@ -303,7 +311,7 @@ func TestAWalledLaunchsPromptFileInAWrittenPlaceIsRefused(t *testing.T) {
 	ok := writeFile(t, filepath.Join(t.TempDir(), "ok.md"), "# ok")
 	bad := writeFile(t, filepath.Join(work, "p.md"), "# prompt")
 	refusal := func(flag, how, place string) string {
-		return "Move " + bad + " to a directory no walled run writes, or pass the text with " + promptFlags[flag] + ". " +
+		return "Move " + bad + " to a directory no walled run can write, or pass the text with " + promptFlags[flag] + ". " +
 			"This launch passes " + flag + " " + bad + ", which " + how + " " + place +
 			", a place a walled run can write, so the run does not start."
 	}
@@ -389,6 +397,47 @@ func TestAWalledLaunchsPromptFilesAreCopiedUnchanged(t *testing.T) {
 	})
 }
 
+// TestAWalledLaunchsJSONPathIsAPhrase pins that a value of --mcp-config or --agents
+// taken as a path that contains "{" or "[", or starts with white space or a format
+// character, is shown as a phrase, so a token in it is not printed.
+func TestAWalledLaunchsJSONPathIsAPhrase(t *testing.T) {
+	tok := `"Authorization":"Bearer fake-token-123"`
+	for _, c := range []struct{ flag, value string }{
+		{"--mcp-config", `{"headers":{` + tok + `},}`},
+		{"--mcp-config", ` [{"headers":{` + tok + `}},]`},
+		{"--mcp-config", "\ufeff" + `{"headers":{` + tok + `}}`},
+		{"--mcp-config", "\u200b" + `{"headers":{` + tok + `}}`},
+		{"--agents", `[{"x":{` + tok + `}},]`},
+		{"--agents", "\ufeff" + `{"x":{` + tok + `}}`},
+	} {
+		for _, args := range [][]string{{c.flag, c.value}, {c.flag + "=" + c.value}} {
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				shown := "(an " + c.flag + " value)"
+				want := "Replace " + shown + " with an absolute path outside the workspace. This launch passes " +
+					c.flag + " " + shown + ", a relative path that Claude Code reads from the workspace, " +
+					"which a walled run can write, so the run does not start."
+				_, _, err := walled(t, &fakeWritten{written: t.TempDir()}, args)
+				if err == nil || err.Error() != want || strings.Contains(err.Error(), "fake-token-123") {
+					t.Errorf("got %v, want %q", err, want)
+				}
+			})
+		}
+	}
+	// An absolute path with "{" in it reaches the check of the file: the reason is a
+	// phrase too, since the system's error contains the path.
+	value := "/nowhere/{" + tok + "}.json"
+	for _, args := range [][]string{{"--mcp-config", value}, {"--mcp-config=" + value}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			want := "Pass a --mcp-config path that exists on this machine. The check of --mcp-config " +
+				"(an --mcp-config value) failed: it is no file"
+			_, _, err := walled(t, &fakeWritten{written: t.TempDir()}, args)
+			if err == nil || err.Error() != want || strings.Contains(err.Error(), "fake-token-123") {
+				t.Errorf("got %v, want %q", err, want)
+			}
+		})
+	}
+}
+
 // TestAWalledLaunchsPathsFollowThePathRules pins that a path value of any of the flags
 // that starts with "~", is relative or has a ".." part is refused before it is read.
 func TestAWalledLaunchsPathsFollowThePathRules(t *testing.T) {
@@ -448,7 +497,7 @@ func TestAWalledLaunchsFileIsReadAsTheSettingsAre(t *testing.T) {
 		}{
 			{"a link", link, nil, "is a link", "Pass the path of the file that " + link + " links to."},
 			{"a directory", sub, nil, "is not a regular file", "Pass a " + flag + " path to a regular file."},
-			{"larger than 1 MiB", big, nil, "is larger than 1048576 bytes", "Pass a " + flag + " file of at most 1048576 bytes."},
+			{"larger than 1 MiB", big, nil, "is larger than 1048576 bytes", "Pass a " + flag + " file of at most 1048576 bytes (1 MiB)."},
 			{"not the file judged", plain, other, "changed while it was checked",
 				"Start the run again when no process is writing " + plain + "."},
 		} {

@@ -100,8 +100,9 @@ type Spec struct {
 	// only their placeholders.
 	Wall wall.Wall
 	// CAEnv are the variables that point a program at the run's bundle when the run has
-	// no Wall and the gateway gives it an authority: qory's wall.ca_env. Nil means
-	// [wall.DefaultCAEnv]. Behind a Wall the wall sets its names for the bundle instead.
+	// no Wall and the gateway gives it an authority; qory is to set it from wall.ca_env.
+	// Nil means [wall.DefaultCAEnv]. Behind a Wall the wall sets its names for the
+	// bundle instead.
 	CAEnv []string
 	// Preparation is the run's preparation, the program and then its arguments, which
 	// the session runs inside the wall before the runtime: after the runtime's

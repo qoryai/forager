@@ -382,8 +382,9 @@ A program that needs custom code implements the interface.
   run's certificate. The session writes the bundle when the gateway's answer has an
   authority. Nil means `wall.DefaultCAEnv`: `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
   `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `AWS_CA_BUNDLE`.
-  `qory` sets it from `wall.ca_env`. Behind a `Wall`, the wall sets the names for the
-  enclosure's bundle instead.
+  Forager takes the names from `CAEnv` alone. The caller sets it: `qory` is to set it
+  from `wall.ca_env`. Behind a `Wall`, the wall sets the names for the enclosure's
+  bundle instead.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go). A walled
   run needs `Exec`, the command that calls `session.Exec` inside the enclosure, which
   the launch starts through when the run has names to unset.

@@ -154,7 +154,7 @@ func TestSettingsReadsOnlyAPlainFileItIsLetRead(t *testing.T) {
 		{"a FIFO", p("fifo.json"), nil, "Pass a --settings path to a regular file. This launch passes --settings " +
 			p("fifo.json") + ", and that file is not a regular file, so the run does not start."},
 		{"a file of 1 MiB", p("edge.json"), nil, ""},
-		{"a file larger than 1 MiB", p("big.json"), nil, "Pass a --settings file of at most 1048576 bytes. This launch passes " +
+		{"a file larger than 1 MiB", p("big.json"), nil, "Pass a --settings file of at most 1048576 bytes (1 MiB). This launch passes " +
 			"--settings " + p("big.json") + ", and that file is larger than 1048576 bytes, so the run does not start."},
 		{"a document", ` {"permissions":{}}`, refuseAll, ""},
 	} {
@@ -331,15 +331,22 @@ func TestSettingsRefusesAWalledLaunchThatPassesProjectConfigRoot(t *testing.T) {
 // TestSettingsThatAreNoJSONObjectComeWithAFix pins the fix that leads the text of a
 // settings file whose content is no JSON object.
 func TestSettingsThatAreNoJSONObjectComeWithAFix(t *testing.T) {
-	f := filepath.Join(t.TempDir(), "settings.json")
-	if err := os.WriteFile(f, []byte("[1]"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-		Launch: runtimes.Launch{Args: []string{"--settings", f}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
-	})
-	prefix := "Make the file " + f + " a JSON object. The check of --settings " + f + " failed: json: cannot unmarshal array"
-	if err == nil || !strings.HasPrefix(err.Error(), prefix) {
-		t.Errorf("got %v, want the prefix %q", err, prefix)
+	for content, reason := range map[string]string{
+		"[1]":  "json: cannot unmarshal array",
+		"null": "it is null",
+	} {
+		t.Run(content, func(t *testing.T) {
+			f := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+				Launch: runtimes.Launch{Args: []string{"--settings", f}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+			})
+			prefix := "Make the file " + f + " a JSON object. The check of --settings " + f + " failed: " + reason
+			if err == nil || !strings.HasPrefix(err.Error(), prefix) {
+				t.Errorf("got %v, want the prefix %q", err, prefix)
+			}
+		})
 	}
 }

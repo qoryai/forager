@@ -271,6 +271,15 @@ func TestGuardRefusesThisMachineAndLinkLocal(t *testing.T) {
 		{"http://localhost" + port, 403, proxy.GuardRule},
 		{"http://169.254.169.254/latest/meta-data/", 403, proxy.GuardRule},
 		{"http://[::1]" + port, 403, proxy.GuardRule},
+		// The cloud metadata addresses outside the link-local ranges.
+		{"http://100.100.100.200/latest/meta-data/", 403, proxy.GuardRule},
+		{"http://192.0.0.192/2007-08-29/meta-data", 403, proxy.GuardRule},
+		{"http://[fd00:ec2::254]/latest/meta-data/", 403, proxy.GuardRule},
+		{"http://[fd20:ce::254]/computeMetadata/v1", 403, proxy.GuardRule},
+		{"http://168.63.129.16/?comp=versions", 403, proxy.GuardRule},
+		{"http://[fd00:ec2::23]/v1/credentials", 403, proxy.GuardRule},
+		{"http://[fd00:a9fe:a9fe::1]/v1/instance", 403, proxy.GuardRule},
+		{"http://[fd00:42::42]/conf", 403, proxy.GuardRule},
 		// A name that resolves to loopback passes the decision and is refused when
 		// dialled, recorded then as the wall's denial.
 		{"http://localtest.me" + port, 403, proxy.GuardRule},
@@ -293,10 +302,46 @@ func TestGuardRefusesThisMachineAndLinkLocal(t *testing.T) {
 	}
 }
 
+// TestGuardRefusesAMetadataAddressInAConnect pins that a CONNECT to a cloud metadata
+// address outside the link-local ranges is refused at the decision, before any dial,
+// with the wall's rule and the page that names the metadata addresses, whatever the
+// allow list contains.
+func TestGuardRefusesAMetadataAddressInAConnect(t *testing.T) {
+	var o observer
+	metadata := []string{"100.100.100.200", "fd00:ec2::254", "168.63.129.16", "fd00:ec2::23", "fd00:a9fe:a9fe::1", "fd00:42::42"}
+	p, err := proxy.Listen("", policy.Observe, metadata, nil, o.observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.Guard(metadata)
+	for _, target := range []string{"100.100.100.200:443", "[fd00:ec2::254]:443", "168.63.129.16:443", "[fd00:ec2::23]:443", "[fd00:a9fe:a9fe::1]:443", "[fd00:42::42]:443"} {
+		c, err := net.Dial("tcp", p.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+		resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+		if err != nil {
+			t.Fatalf("CONNECT %s: %v", target, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		c.Close()
+		d := o.last(t)
+		if resp.StatusCode != 403 || !strings.HasSuffix(string(body), "and never a link-local or cloud metadata address\n") {
+			t.Errorf("CONNECT %s: %d %q", target, resp.StatusCode, body)
+		}
+		if d.Method != "CONNECT" || d.Rule != proxy.GuardRule || d.Allowed || d.Outcome != proxy.Refused {
+			t.Errorf("CONNECT %s: decision %+v", target, d)
+		}
+	}
+}
+
 // TestGuardOpensThisMachineToAHostThePolicyNames pins the other half: an allow entry
 // that names the host itself reaches this machine through a guarded proxy, in observe
 // mode as well, recorded with that entry as its rule; a *. suffix over the host does
-// not, and no entry opens the link-local range.
+// not, and no entry opens the link-local range or a cloud metadata address.
 func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "the local server") }))
 	defer origin.Close()
@@ -305,11 +350,11 @@ func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 		var o observer
 		// Only a host the policy names itself opens this machine, not one under a
 		// suffix it lists.
-		p, err := proxy.Listen("", mode, []string{"127.0.0.1", "app.localtest.me", "169.254.169.254"}, nil, o.observe)
+		p, err := proxy.Listen("", mode, []string{"127.0.0.1", "app.localtest.me", "169.254.169.254", "100.100.100.200", "192.0.0.192", "fd00:ec2::254", "fd20:ce::254", "168.63.129.16", "fd00:ec2::23", "fd00:a9fe:a9fe::1", "fd00:42::42"}, nil, o.observe)
 		if err != nil {
 			t.Fatal(err)
 		}
-		p.Guard([]string{"127.0.0.1", "*.localtest.me", "169.254.169.254"})
+		p.Guard([]string{"127.0.0.1", "*.localtest.me", "169.254.169.254", "100.100.100.200", "192.0.0.192", "fd00:ec2::254", "fd20:ce::254", "168.63.129.16", "fd00:ec2::23", "fd00:a9fe:a9fe::1", "fd00:42::42"})
 		resp, err := through(t, p, nil).Get(origin.URL)
 		if err != nil {
 			t.Fatal(err)
@@ -319,7 +364,7 @@ func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 		if d := o.last(t); string(body) != "the local server" || !d.Allowed || d.Rule != "127.0.0.1" {
 			t.Errorf("%s: a named host: %q, decision %+v", mode, body, d)
 		}
-		for _, u := range []string{"http://app.localtest.me" + port, "http://169.254.169.254/"} {
+		for _, u := range []string{"http://app.localtest.me" + port, "http://169.254.169.254/", "http://100.100.100.200/", "http://192.0.0.192/", "http://[fd00:ec2::254]/", "http://[fd20:ce::254]/", "http://168.63.129.16/", "http://[fd00:ec2::23]/", "http://[fd00:a9fe:a9fe::1]/", "http://[fd00:42::42]/"} {
 			resp, err := through(t, p, nil).Get(u)
 			if err != nil {
 				t.Fatal(err)

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/hostfile"
@@ -225,7 +227,7 @@ func truthy(v any) bool {
 
 // pathRules refuses a path value that starts with "~", is relative or has a ".." name.
 func pathRules(v flagValue) error {
-	shown := accesskey.ShownValue(v.value, false)
+	shown, _ := shownPath(v)
 	switch {
 	case strings.HasPrefix(v.value, "~"):
 		return fmt.Errorf("Replace %s with an absolute path. This launch passes %s %s, and inside the wall ~ is "+
@@ -240,9 +242,44 @@ func pathRules(v flagValue) error {
 	return nil
 }
 
+// jsonPhrases are the phrases a refusal shows in place of a value of a flag that takes
+// inline JSON, for a value of which [mayBeJSON] reports true.
+var jsonPhrases = map[string]string{
+	mcpConfigFlag: "(an --mcp-config value)",
+	agentsFlag:    "(an --agents value)",
+	settingsFlag:  "(a --settings value)",
+}
+
+// mayBeJSON reports whether a value may be JSON with a token in it that
+// [accesskey.ShownValue] does not hide: it contains "{" or "[", or it starts with
+// white space or a format character, such as U+FEFF or U+200B.
+func mayBeJSON(value string) bool {
+	r, _ := utf8.DecodeRuneInString(value)
+	return strings.ContainsAny(value, "{[") || value != "" && (unicode.IsSpace(r) || unicode.Is(unicode.Cf, r))
+}
+
+// shownPath is the value of v as a refusal shows it, and whether that is a phrase: the
+// phrase of [jsonPhrases] for a flag that takes inline JSON and a value of which
+// [mayBeJSON] reports true, and [accesskey.ShownValue]'s text for any other.
+func shownPath(v flagValue) (string, bool) {
+	if phrase, ok := jsonPhrases[v.flag]; ok && mayBeJSON(v.value) {
+		return phrase, true
+	}
+	return accesskey.ShownValue(v.value, false), false
+}
+
+// phrasedReason is the reason a refusal shows in place of err for a value that
+// [shownPath] shows as a phrase, since an error of the file system contains the path.
+func phrasedReason(err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return errors.New("it is no file")
+	}
+	return errors.New("it cannot be read")
+}
+
 // dotDot is the refusal of a path value of v that has a ".." part.
 func dotDot(v flagValue) error {
-	shown := accesskey.ShownValue(v.value, false)
+	shown, _ := shownPath(v)
 	return fmt.Errorf(`Pass the path %s without "..". This launch passes %s %s, and the path has a ".." part, `+
 		`so the run does not start.`, shown, v.flag, shown)
 }
@@ -277,7 +314,7 @@ func readCopy(v flagValue, a runtimes.Attach) ([]byte, error) {
 // the file itself, such as "it is a link", the fix for it and that refusal; and
 // otherwise [checkFailed]'s text.
 func fileRefused(v flagValue, err error) error {
-	shown := accesskey.ShownValue(v.value, false)
+	shown, _ := shownPath(v)
 	var written *runtimes.WrittenError
 	if errors.As(err, &written) {
 		what := "the servers as a JSON string"
@@ -288,7 +325,7 @@ func fileRefused(v flagValue, err error) error {
 		} else if text, ok := promptText[v.flag]; ok {
 			what = "the text with " + text
 		}
-		return fmt.Errorf("Move %s to a directory no walled run writes, or pass %s. This launch passes %s %s, "+
+		return fmt.Errorf("Move %s to a directory no walled run can write, or pass %s. This launch passes %s %s, "+
 			"which %s %s, a place a walled run can write, so the run does not start.",
 			shown, what, v.flag, shown, written.How, written.Place)
 	}
@@ -303,14 +340,14 @@ func fileRefused(v flagValue, err error) error {
 // "it ", is rest: a link, a file that is not a regular one, one larger than maxSettings
 // bytes, or one that changed while it was checked.
 func readFix(v flagValue, rest string) string {
-	shown := accesskey.ShownValue(v.value, false)
+	shown, _ := shownPath(v)
 	switch {
 	case rest == "is a link":
 		return "Pass the path of the file that " + shown + " links to."
 	case rest == "is not a regular file":
 		return "Pass a " + v.flag + " path to a regular file."
 	case strings.HasPrefix(rest, "is larger than "):
-		return fmt.Sprintf("Pass a %s file of at most %d bytes.", v.flag, maxSettings)
+		return fmt.Sprintf("Pass a %s file of at most %d bytes (1 MiB).", v.flag, maxSettings)
 	case rest == "changed while it was checked":
 		return "Start the run again when no process is writing " + shown + "."
 	}
@@ -318,10 +355,15 @@ func readFix(v flagValue, rest string) string {
 }
 
 // checkFailed is the refusal of a value of v for any other reason, a file that does
-// not exist say: the fix of [checkFix], then the flag, the value and the reason.
+// not exist say: the fix of [checkFix], then the flag, the value and the reason, both
+// a phrase for a value that [shownPath] shows as one.
 func checkFailed(v flagValue, err error) error {
-	return fmt.Errorf("%s The check of %s %s failed: %w", checkFix(v, err), v.flag,
-		accesskey.ShownValue(v.value, false), accesskey.ShownError(err))
+	shown, phrase := shownPath(v)
+	reason := accesskey.ShownError(err)
+	if phrase {
+		reason = phrasedReason(err)
+	}
+	return fmt.Errorf("%s The check of %s %s failed: %w", checkFix(v, err), v.flag, shown, reason)
 }
 
 // checkFix is the fix for err, the reason the check of v failed: for a value that does
@@ -339,8 +381,11 @@ func checkFix(v flagValue, err error) string {
 			return "Pass a " + v.flag + " path that exists on this machine."
 		}
 	case errors.Is(err, fs.ErrPermission):
-		return "Give the user that runs Forager access to " + accesskey.ShownValue(path, false) +
-			", or pass another " + v.flag + " path."
+		shown := accesskey.ShownValue(path, false)
+		if s, phrase := shownPath(v); phrase {
+			shown = s
+		}
+		return "Give the user that runs Forager access to " + shown + ", or pass another " + v.flag + " path."
 	}
 	return "Fix the error at the end of this message, or pass another " + v.flag + " path."
 }

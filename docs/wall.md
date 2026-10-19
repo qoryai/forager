@@ -161,9 +161,30 @@ Two flags change one run:
 
 ## The guard
 
-Behind a wall, the proxy is guarded:
+Behind a wall or behind a separate gateway, the proxy is guarded:
 
-- It never dials link-local addresses, the cloud metadata service among them.
+- It never dials link-local addresses, the cloud metadata service among them, or these
+  cloud metadata addresses outside that range, whatever the allow list contains:
+  - `100.100.100.200`, Alibaba Cloud ECS:
+    <https://www.alibabacloud.com/help/en/ecs/user-guide/view-instance-metadata>
+  - `192.0.0.192`, Oracle Cloud Compute Classic:
+    <https://docs.oracle.com/en/cloud/cloud-at-customer/occ-get-started/retrieve-predefined-instance-metadata.html>
+  - `fd00:ec2::254`, AWS EC2 over IPv6:
+    <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html>
+  - `fd20:ce::254`, Google Compute Engine over IPv6:
+    <https://docs.cloud.google.com/compute/docs/metadata/querying-metadata>
+  - `168.63.129.16`, Azure WireServer:
+    <https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16>
+  - `fd00:ec2::23`, AWS EKS Pod Identity Agent over IPv6:
+    <https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html>
+  - `fd00:a9fe:a9fe::1`, Akamai (Linode) Metadata service over IPv6:
+    <https://techdocs.akamai.com/cloud-computing/docs/access-the-metadata-service-api>
+  - `fd00:42::42`, Scaleway Instance metadata API over IPv6:
+    <https://www.scaleway.com/en/developers/api/instance/>
+
+  It also refuses an IPv6 address that contains `100.100.100.200`, `192.0.0.192` or
+  `168.63.129.16` in its last 32 bits (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`). The private ranges
+  `10/8`, `172.16/12`, `192.168/16` and `100.64/10` stay open.
 - It dials the node itself only for a host that an `egress.allow` entry of the node's
   policy lists by its name, and that the run's policy allows. A `*.` entry above that
   host is not enough, and an entry of a server's policy never opens the node.
@@ -347,8 +368,9 @@ up in its parent, so two binds of one root are allowed.
   choose the directory of this machine that is bound. `Names` holds the place as
   passed, the link, absolute and clean, and the writable place as passed. The link is
   the last one inside the writable place on the way to the place, the one that leads
-  out of it. Its sentence reads: "/work/home is reached through the link /work/home
-  inside /work, which a walled agent can change: list the link's target itself". A
+  out of it. Its sentence reads: "List the path that /work/home resolves to, in place
+  of /work/home. /work/home is reached through the link /work/home inside /work, which
+  a walled agent can change". A
   place whose link leads back into the writable place lies inside it and is reached
   through it, and nothing is bound through the link. A link on the way to a place that
   lies inside no writable place of the run's is followed by the engine as it binds.
@@ -356,9 +378,10 @@ up in its parent, so two binds of one root are allowed.
   The same holds of a link inside a place of `Spec.Written`, the places the caller
   records as written by walled runs, though no walled run that wrote it is still
   going: `Names` holds the place, the link and the written place as passed. Its
-  sentence reads: "/code/repo/.claude/worktrees/wt is reached through the link
-  /code/repo/.claude/worktrees/wt inside /code/repo, which a walled agent can change:
-  list the link's target itself".
+  sentence reads: "List the path that /code/repo/.claude/worktrees/wt resolves to, in
+  place of /code/repo/.claude/worktrees/wt. /code/repo/.claude/worktrees/wt is reached
+  through the link /code/repo/.claude/worktrees/wt inside /code/repo, which a walled
+  agent can change".
 - **Forager's files.** A writable place that contains a directory a name on the way
   to one of Forager's files is looked up in, such as a runs directory that is a link
   inside the checkout, is `mount_contains_forager_files`: the agent could point the link
@@ -537,12 +560,18 @@ unwalled launch passes them unchecked.
   workspace, which a walled run can write, so the run does not start." A value with a
   `..` part is refused: "Pass the path /a/../b.json without "..". This launch passes
   --mcp-config /a/../b.json, and the path has a ".." part, so the run does not start."
+  A text shows a value of `--mcp-config`, `--agents` or `--settings` that contains `{`
+  or `[`, or starts with white space or a format character such as U+FEFF, as `(an
+  --mcp-config value)`, `(an --agents value)` or `(a --settings value)`, because such a
+  value may be JSON with a token in it. The reason after "failed:" is then `it is no
+  file`, `it cannot be read` or `it is no JSON object`. For `--settings` this holds in
+  an unwalled launch too.
 - **`--mcp-config` and `--agents` files** are checked and read as the settings file is,
   and Claude Code is passed a copy in the run directory, `mcp-config-<n>.json` or
   `agents-<n>.json`, numbered from 1 in the order the files appear. For a run whose
   workspace is at `/workspace` inside, a copy that is JSON has every string written as
   the enclosure sees it. A file in such a place is refused: "Move /work/mcp.json to a
-  directory no walled run writes, or pass the servers as a JSON string. This launch
+  directory no walled run can write, or pass the servers as a JSON string. This launch
   passes --mcp-config /work/mcp.json, which lies in /work, a place a walled run can
   write, so the run does not start." A file whose path is looked up in such a place
   gets the text with "is reached through /work", and the fix for an `--agents` file
@@ -550,8 +579,8 @@ unwalled launch passes them unchecked.
   shows the reason after the fix, such as "Pass the path of the file that /a/mcp.json
   links to. This launch passes --mcp-config /a/mcp.json, and that file is a link, so
   the run does not start." The other fixes are "Pass a --mcp-config path to a regular
-  file.", "Pass a --mcp-config file of at most 1048576 bytes." and "Start the run again
-  when no process is writing /a/mcp.json." No copy is written before every value has
+  file.", "Pass a --mcp-config file of at most 1048576 bytes (1 MiB)." and "Start the run
+  again when no process is writing /a/mcp.json." No copy is written before every value has
   passed.
 - **`--plugin-dir` and `--plugin-dir-no-mcp` directories** may not lie in, be reached
   through, or contain such a place, by whole names and regardless of case: "Move the
@@ -596,14 +625,18 @@ unwalled launch passes them unchecked.
     in or be reached through such a place, must be no link, a regular file, and have
     one name. A link gets "Pass the path of the file that /home/link.zip links to.",
     and any other file that is not a regular one "Pass a --plugin-dir path to a
-    directory or a regular file.", each before the reason. For `--add-dir` that fix is
-    "Pass an --add-dir path to a directory."
+    directory or a regular file.", each before the reason.
 - **`--add-dir` directories** are checked as `--plugin-dir`'s, with the entries read
   only at `<dir>/.claude`, and under it, and at `<dir>/CLAUDE.md`: "Remove --add-dir
   /work/ref, or add a directory no walled run writes. This launch passes --add-dir
   /work/ref, and that directory lies in /work, which a walled run can write, so the run
   does not start." A directory in a read-only mount passes. A link under `.claude`, or
-  `.claude` itself, that leads back to the directory reads all of the directory.
+  `.claude` itself, that leads back to the directory reads all of the directory. Claude
+  Code adds only a directory, so a value that exists and is no directory, or a link to
+  such a value, is refused after the `/workspace` check: "Pass an --add-dir path to a
+  directory. This launch passes --add-dir /home/notes.md, and that file is not a
+  directory, so the run does not start." A value that does not exist, or a link that
+  leads nowhere, gets the text for any other reason.
 - **Any other reason**, a file that does not exist say, is a fix, then the flag, the
   value and the reason: "runtime claude: Pass a --mcp-config path that exists on this
   machine. The check of --mcp-config /a/mcp.json failed: stat /a/mcp.json: no such file

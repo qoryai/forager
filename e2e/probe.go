@@ -327,17 +327,27 @@ func probeKeys(r *report) {
 	}
 }
 
-// send posts a body to u through the proxy of HTTP_PROXY, with the headers
-// written in lower case, as Node writes them, and trusting the run's bundle and the
-// suite's authority; an answer that contains a key is noted in r.
+// send posts a body to u as postAnswer does; an answer that contains a key is noted in r.
 func send(r *report, u string, header ...string) (int, string) {
+	code, answer, err := postAnswer(u, header...)
+	if strings.Contains(answer, keyMark) {
+		r.KeySeen = append(r.KeySeen, "the answer of "+u)
+	}
+	return code, err
+}
+
+// postAnswer posts a body to u through the proxy of HTTP_PROXY, with the headers
+// written in lower case, as Node writes them, and trusting the run's bundle and the
+// suite's authority. It returns the status, the answer's headers and body as text, and
+// the error of a request that failed.
+func postAnswer(u string, header ...string) (int, string, string) {
 	proxyURL, err := url.Parse(os.Getenv("HTTP_PROXY"))
 	if err != nil || proxyURL.Host == "" {
-		return 0, "HTTP_PROXY is " + os.Getenv("HTTP_PROXY")
+		return 0, "", "HTTP_PROXY is " + os.Getenv("HTTP_PROXY")
 	}
 	roots, err := x509.SystemCertPool()
 	if err != nil {
-		return 0, err.Error()
+		return 0, "", err.Error()
 	}
 	if der, err := base64.StdEncoding.DecodeString(os.Getenv(recordersCAVar)); err == nil {
 		if cert, err := x509.ParseCertificate(der); err == nil {
@@ -347,21 +357,18 @@ func send(r *report, u string, header ...string) (int, string) {
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots}}, Timeout: 10 * time.Second}
 	req, err := http.NewRequest("POST", u, strings.NewReader(`{"model":"walltest","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
-		return 0, err.Error()
+		return 0, "", err.Error()
 	}
 	for i := 0; i+1 < len(header); i += 2 {
 		req.Header[header[i]] = []string{header[i+1]}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, err.Error()
+		return 0, "", err.Error()
 	}
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if strings.Contains(string(b), keyMark) || strings.Contains(fmt.Sprint(resp.Header), keyMark) {
-		r.KeySeen = append(r.KeySeen, "the answer of "+u)
-	}
-	return resp.StatusCode, ""
+	return resp.StatusCode, fmt.Sprint(resp.Header) + "\n" + string(b), ""
 }
 
 // dial reports the error of connecting, or nothing when the connection opened.

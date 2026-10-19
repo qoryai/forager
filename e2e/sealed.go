@@ -38,8 +38,12 @@ type sealedReport struct {
 // It prints one line, sealedPrefix and the report as JSON, and exits 0.
 func sealedProbe() int {
 	r := sealedReport{Placeholder: os.Getenv(sealedPlaceholder)}
-	var keys report
-	r.Status, r.Err = send(&keys, "https://"+net.JoinHostPort(os.Getenv(sealedHostVar), recorderTLS)+modelPath, "x-api-key", r.Placeholder)
+	u := "https://" + net.JoinHostPort(os.Getenv(sealedHostVar), recorderTLS) + modelPath
+	var answer string
+	r.Status, answer, r.Err = postAnswer(u, "x-api-key", r.Placeholder)
+	if strings.Contains(answer, sealedMark) {
+		r.Seen = append(r.Seen, "the answer of "+u)
+	}
 	for _, kv := range os.Environ() {
 		if name, value, _ := strings.Cut(kv, "="); strings.Contains(value, sealedMark) {
 			r.Seen = append(r.Seen, name)
