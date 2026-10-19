@@ -108,6 +108,50 @@ func (p *Proxy) Terminated() []string {
 	if t == nil {
 		return nil
 	}
+	return t.hosts()
+}
+
+// Terminating reports the hosts [Proxy.Terminated] reports once [Proxy.Terminate] is
+// called with the credentials, the paths and the tools, after [Proxy.NodePaths]: the
+// hosts the run's authority is made for.
+func (p *Proxy) Terminating(creds []Credential, paths map[string][]string, tools []Tool) []string {
+	return (&terminator{p: p, creds: creds, paths: paths, node: p.node, tools: tools}).hosts()
+}
+
+// Outside reports the first host the proxy would terminate under the paths and the
+// credentials, as [Proxy.SetPolicy] sets them, that the authority's certificates are not
+// good for, by [CA.Permits], and whether a credential is for it. It reports the
+// credentials' hosts first; empty when there is none, or the proxy terminates nothing.
+func (p *Proxy) Outside(paths map[string][]string, creds []Credential) (host string, credential bool) {
+	t := p.term.Load()
+	if t == nil || t.ca == nil {
+		return "", false
+	}
+	nt := *t
+	nt.paths, nt.creds = paths, creds
+	inCreds := map[string]bool{}
+	for _, c := range creds {
+		for _, h := range c.Hosts {
+			inCreds[h] = true
+		}
+	}
+	var first string
+	for _, h := range nt.hosts() {
+		if t.ca.Permits(h) {
+			continue
+		}
+		if inCreds[h] {
+			return h, true
+		}
+		if first == "" {
+			first = h
+		}
+	}
+	return first, false
+}
+
+// hosts are the hosts, as configured, the terminator terminates TLS for.
+func (t *terminator) hosts() []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, c := range t.creds {

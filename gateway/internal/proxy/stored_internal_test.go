@@ -25,7 +25,7 @@ import (
 // as a machine's credential does. A TRACE whose path contains qak_ has the value's
 // phrase in place of the path.
 func TestACredentialFromTheServerSetsItsValue(t *testing.T) {
-	up, err := NewCA("upstream")
+	up, err := upstreamCA()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,20 +52,21 @@ func TestACredentialFromTheServerSetsItsValue(t *testing.T) {
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(up.PEM())
 	p.TrustUpstream(roots)
-	ca, err := NewCA("test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	value := []byte("stored-value-0001")
 	stored := func() []byte { return slices.Clone(value) }
-	p.Terminate(ca, []Credential{
+	creds := []Credential{
 		{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Value: stored, Stored: true},
 		{Name: "basic", Hosts: []string{"basic.example"}, Scheme: "basic", Username: "x-access-token", Value: stored, Stored: true},
 		{Name: "header", Hosts: []string{"header.example"}, Scheme: "header", Header: "X-Api-Key", Value: stored, Stored: true},
 		{Name: "machine", Hosts: []string{"machine.example"}, Scheme: "bearer", Token: func() string { return "machine-0001" }},
 		{Name: "pattern", Hosts: []string{"*.local"}, Scheme: "bearer", Value: stored, Stored: true},
 		{Name: "exact", Hosts: []string{"y.lan"}, Scheme: "bearer", Value: stored, Stored: true},
-	}, nil, nil)
+	}
+	ca, err := NewCA("test", p.Terminating(creds, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Terminate(ca, creds, nil, nil)
 
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())

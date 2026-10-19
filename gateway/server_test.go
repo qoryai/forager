@@ -432,6 +432,121 @@ func TestTheGatewayReloadsARun(t *testing.T) {
 	}
 }
 
+// TestAReloadSetsNoCredentialOutsideTheRunsAuthority pins the run's authority, good
+// only for the hosts terminated when the run started: a reload with the same hosts is
+// put in force, one that selects a credential for another host fails, the user is
+// told, and the policy and the credentials in force stay.
+func TestAReloadSetsNoCredentialOutsideTheRunsAuthority(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_A_KEY", "a-value")
+	t.Setenv("GATEWAY_TEST_B_KEY", "b-value")
+	creds := []gateway.Credential{
+		{Name: "a", Env: "GATEWAY_TEST_A_KEY", Hosts: []string{"a.example"}, Scheme: "bearer"},
+		{Name: "b", Env: "GATEWAY_TEST_B_KEY", Hosts: []string{"b.example"}, Scheme: "bearer"},
+	}
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"}]}`, 'a')
+	h := start(t, gateway.Config{Server: c.server(), Credentials: creds})
+	a := h.open(server.LinkRunRequest{Wall: true})
+	runID := a.RunID
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example"]},"credentials":[{"name":"a"}]}`, 'b')
+	h.post(logged(runID))
+	var reloaded *server.LinkReloadAnswer
+	eventually(t, "the reload with the same hosts", func() bool {
+		h.post(heartbeat(runID))
+		r, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
+		if err == nil && r.Digest != a.Digest {
+			reloaded = r
+			return true
+		}
+		return false
+	})
+	if d := h.post(applied(runID, reloaded.Applied)); !d.Accepted() {
+		t.Errorf("the reload's policy_applied: %+v", d)
+	}
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"},{"name":"b"}]}`, 'c')
+	h.post(logged(runID))
+	line := "start a new run to set a credential on b.example; the run's certificate covers only the hosts it terminated when it started and the names under them; the policy in force stays"
+	eventually(t, "the refused reload's report", func() bool {
+		h.post(heartbeat(runID))
+		return h.reported(line)
+	})
+	again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
+	if err != nil || again.Digest != reloaded.Digest {
+		t.Errorf("after a refused reload: %v %+v", err, again)
+	}
+	if got, want := gateway.Tokens(h.g, runID), map[string]string{"a": "a-value"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("after a refused reload the proxy sets %v, want %v", got, want)
+	}
+	// Path rules for another host: refused as well, with their own text.
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"],"paths":{"b.example":["/v1/*"]}},"credentials":[{"name":"a"}]}`, 'd')
+	h.post(logged(runID))
+	line = "start a new run to set path rules on b.example; the run's certificate covers only the hosts it terminated when it started and the names under them; the policy in force stays"
+	eventually(t, "the refused reload's report of path rules", func() bool {
+		h.post(heartbeat(runID))
+		return h.reported(line)
+	})
+	if again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID); err != nil || again.Digest != reloaded.Digest {
+		t.Errorf("after a refused reload of path rules: %v %+v", err, again)
+	}
+	h.post(exited(runID))
+	h.close()
+}
+
+// TestARefusedReloadStopsTheRenewalsItStarted pins the credentials a reload outside the
+// run's authority resolved: their renewals stop when it is refused. The adapter of b,
+// which only the refused reload selects, answers a token that expires in 5 minutes and
+// 1 second, so a renewal that went on would ask it again once the 30 seconds between
+// two askings pass.
+func TestARefusedReloadStopsTheRenewalsItStarted(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "a-token")
+	if err := os.WriteFile(token, []byte("a-value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	asked := filepath.Join(dir, "b-asked")
+	adapter := filepath.Join(dir, "b-adapter")
+	expires := time.Now().Add(5*time.Minute + time.Second).UTC().Format(time.RFC3339)
+	script := "#!/bin/sh\necho asked >> '" + asked + "'\n" +
+		`printf '{"version":1,"token":"b-value","expires_at":"` + expires + `","apply":[{"hosts":["b.example"],"scheme":"bearer"}]}\n'` + "\n"
+	if err := os.WriteFile(adapter, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	creds := []gateway.Credential{
+		{Name: "a", File: token, Hosts: []string{"a.example"}, Scheme: "bearer"},
+		{Name: "b", Adapter: []string{adapter}, Hosts: []string{"b.example"}},
+	}
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"}]}`, 'a')
+	h := start(t, gateway.Config{Server: c.server(), Credentials: creds})
+	a := h.open(server.LinkRunRequest{Wall: true})
+	runID := a.RunID
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"},{"name":"b"}]}`, 'b')
+	h.post(logged(runID))
+	eventually(t, "the refused reload's report", func() bool {
+		h.post(heartbeat(runID))
+		return h.reported("start a new run to set a credential on b.example")
+	})
+	count := func() int {
+		b, _ := os.ReadFile(asked)
+		return strings.Count(string(b), "asked")
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("b's adapter was asked %d times by the reload, want 1", n)
+	}
+	time.Sleep(35 * time.Second)
+	if n := count(); n != 1 {
+		t.Errorf("b's adapter was asked %d times; the refused reload's renewal went on", n)
+	}
+	h.post(exited(runID))
+	h.close()
+}
+
 // TestARunUnderACeilingRecordsItsPaths pins ceiling_paths: a walled run whose policy
 // file is put under a ceiling with path rules has them in applied at the start, and
 // again in the reload's, where the server's new policy leaves them as they were; the
