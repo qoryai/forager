@@ -28,8 +28,8 @@
 // the names from the node's policy alone: a local MCP server or model endpoint is
 // reached through the proxy like everything else, decided and recorded, in either
 // mode, when the node's policy names it and the run's allow list allows it. Under a
-// session's narrowing of a policy that observes, the gateway passes no name, and
-// nothing on this machine is reached. Without the guard the way around a wall is
+// session's narrowing of a policy that observes, the gateway passes no name, and none
+// of this machine's addresses is reached. Without the guard the way around a wall is
 // through the proxy.
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
