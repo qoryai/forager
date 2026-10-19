@@ -827,9 +827,10 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 	if len(chosen) > 0 {
 		used := make([]map[string]any, len(chosen))
 		for i, c := range chosen {
-			used[i] = map[string]any{"name": c.Name, "hosts": c.Serves}
+			// As the credentials' name and argument.
+			used[i] = map[string]any{"name": accesskey.ShownName(c.Name, false), "hosts": c.Serves}
 			if c.Argument != "" {
-				used[i]["argument"] = c.Argument
+				used[i]["argument"] = accesskey.ShownName(c.Argument, false)
 			}
 		}
 		a["tools"] = used

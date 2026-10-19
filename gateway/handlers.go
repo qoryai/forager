@@ -600,7 +600,7 @@ func (lr *linkRun) accepted(evs []event.Event) bool {
 }
 
 // sameLabels reports whether a run.started's labels, as its data decodes, are the
-// run's: absent is none.
+// run's: absent is none. A value may be accesskey.ShownName's phrase of the run's.
 func sameLabels(v any, labels map[string]string) bool {
 	got, _ := v.(map[string]any)
 	if v != nil && got == nil {
@@ -610,7 +610,9 @@ func sameLabels(v any, labels map[string]string) bool {
 		return false
 	}
 	for k, want := range labels {
-		if s, ok := got[k].(string); !ok || s != want {
+		// The session sends a value that contains qak_ or qrk_ as its phrase; a session
+		// of before sends it as it is.
+		if s, ok := got[k].(string); !ok || (s != want && s != accesskey.ShownName(want, false)) {
 			return false
 		}
 	}

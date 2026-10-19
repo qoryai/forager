@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -606,5 +607,132 @@ func TestAppliedVariablesSendAPhraseForASecret(t *testing.T) {
 		if env[name] != value {
 			t.Errorf("%s=%q, want %q", name, env[name], value)
 		}
+	}
+}
+
+// TestARefusalOfAnyCodeSendsAPhraseForASecret pins the names of a run.refused of codes
+// other than placeholder_conflict, the session's own variable_reserved and a gateway's
+// tool_unknown: a name that contains qak_ or qrk_ in any case is sent as the name's
+// phrase, each phrase once, the event validates against its schema, and a clean name
+// is sent as it is.
+func TestARefusalOfAnyCodeSendsAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	for _, c := range []struct {
+		names []string
+		want  []any
+	}{
+		{[]string{"QORY_QAK_X"}, []any{ak}},
+		{[]string{"QORY_A", "QORY_QAK_X", "QORY_QAK_Y", "QORY_QRK_Z"}, []any{"QORY_A", ak, rk}},
+		{[]string{"QORY_A"}, []any{"QORY_A"}},
+	} {
+		t.Run("variable_reserved "+strings.Join(c.names, ","), func(t *testing.T) {
+			sp, _ := specGateway(t)
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			for _, n := range c.names {
+				sp.Variables.Run = append(sp.Variables.Run, n+"=a-value")
+			}
+			_, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "variable_reserved" {
+				t.Fatalf("%v, want variable_reserved", err)
+			}
+			if got := refusedNames(t, sp); !slices.Equal(got, c.want) {
+				t.Errorf("names %q, want %q", got, c.want)
+			}
+		})
+	}
+	for _, c := range []struct {
+		names []string
+		want  []any
+	}{
+		{[]string{"qak_tool"}, []any{ak}},
+		{[]string{"files", "qak_a", "qrk_b", "qak_c"}, []any{"files", ak, rk}},
+		{[]string{"files"}, []any{"files"}},
+	} {
+		t.Run("tool_unknown "+strings.Join(c.names, ","), func(t *testing.T) {
+			sp, g := specGateway(t)
+			sleeps(&sp, 0)
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			g.OnRun(func(server.LinkRunRequest) linktest.Reply {
+				return linktest.Reply{Status: 403, Body: linktest.Refusal("tool_unknown", "gateway", c.names...)}
+			})
+			_, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "tool_unknown" {
+				t.Fatalf("%v, want tool_unknown", err)
+			}
+			if got := refusedNames(t, sp); !slices.Equal(got, c.want) {
+				t.Errorf("names %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestARunStartedSendsAPhraseForASecret pins run.started's members of the run's: the
+// directory, the image and its name, a label's value, and what the run is about's kind,
+// title and subjects' titles, each sent as the name's phrase when it contains qak_ or
+// qrk_ in any case, and the event validates against its schema; a label's key, a
+// subject's type and ref, and a clean value are sent as they are, and the wall and the
+// agent have every value as it is.
+func TestARunStartedSendsAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	for name, c := range map[string]struct {
+		dir, image, ref, label, kind, title, subject string
+		shown                                        map[string]any
+	}{
+		"prefixes": {"QAK_dir", "qak_base", "example.com/agent:qrk_1", "acme/qAk_x", "QRK_kind", "qrk_x qak_y", "QRK_t",
+			map[string]any{"dir": ak, "image": rk, "image_name": ak, "label": ak, "kind": rk, "title": ak, "subject": rk}},
+		"clean": {"work", "base", "example.com/agent:1", "acme/shop", "fix", "A title", "An issue",
+			map[string]any{"image": "example.com/agent:1", "image_name": "base", "label": "acme/shop", "kind": "fix", "title": "A title", "subject": "An issue"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := &openWall{}
+			sp, g := specGateway(t, "FAKE_EXIT=0")
+			selecting(g, "")
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			sp.Dir = filepath.Join(t.TempDir(), c.dir)
+			if err := os.Mkdir(sp.Dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if c.shown["dir"] == nil {
+				c.shown["dir"] = sp.Dir
+			}
+			sp.Wall, sp.Image, sp.Images = w, c.image, []session.Image{{Name: c.image, Ref: c.ref}}
+			sp.Labels = map[string]string{"repository": c.label, "issue": "7"}
+			sp.About = &session.About{Kind: c.kind, Title: c.title, Subjects: []session.Subject{{Type: "issue", Ref: "qak_ref", Title: c.subject}}}
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			started := data(ofType(events(t, res), "dev.qory.run.started")[0])
+			schema, err := contracts.Compile("events/run.started.schema.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := schema.Validate(started); err != nil {
+				t.Errorf("the run.started does not validate: %v", err)
+			}
+			labels, _ := started["labels"].(map[string]any)
+			about, _ := started["about"].(map[string]any)
+			subjects, _ := about["subjects"].([]any)
+			var subject map[string]any
+			if len(subjects) == 1 {
+				subject, _ = subjects[0].(map[string]any)
+			}
+			got := map[string]any{
+				"dir": started["dir"], "image": started["image"], "image_name": started["image_name"],
+				"label": labels["repository"], "kind": about["kind"], "title": about["title"], "subject": subject["title"],
+			}
+			if !reflect.DeepEqual(got, c.shown) {
+				t.Errorf("run.started %v, want %v", got, c.shown)
+			}
+			if labels["issue"] != "7" || subject["type"] != "issue" || subject["ref"] != "qak_ref" {
+				t.Errorf("run.started labels %v, subject %v", labels, subject)
+			}
+			if w.req.Image != c.ref || w.got.Dir != sp.Dir {
+				t.Errorf("the wall was asked for %q in %q", w.req.Image, w.got.Dir)
+			}
+		})
 	}
 }

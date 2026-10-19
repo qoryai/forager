@@ -10,6 +10,7 @@ import (
 
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/gateway/internal/credential"
+	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
 )
 
@@ -95,4 +96,44 @@ func stringOf(v any) string {
 		return b.String()
 	}
 	return ""
+}
+
+// TestAppliedToolsSendAPhraseForASecret pins run.policy_applied's tools: a tool's name
+// or argument that contains qak_ or qrk_ in any case is sent as the name's phrase, the
+// access key secret's when it contains both, the members validate against the event's
+// schema, and a clean name and argument are sent as they are.
+func TestAppliedToolsSendAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	schema, err := contracts.Compile("events/run.policy_applied.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol := &policy.Loaded{Policy: policy.Policy{Version: 1, Egress: policy.Egress{Mode: policy.Observe}}, Source: "none"}
+	for _, c := range []struct {
+		name, argument    string
+		wantName, wantArg string
+	}{
+		{"qak_x", "acme/shop", ak, "acme/shop"},
+		{"a.qrk_b", "acme/shop", rk, "acme/shop"},
+		{"qrk_x.qak_y", "acme/shop", ak, "acme/shop"},
+		{"files", "QAK_x", "files", ak},
+		{"files", "acme/qRk_shop", "files", rk},
+		{"files", "QRK_x/QAK_y", "files", ak},
+		{"files", "acme/shop", "files", "acme/shop"},
+	} {
+		chosen := []tool.Chosen{{Definition: tool.Definition{Name: c.name, Serves: []string{"files.tools.internal"}}, Argument: c.argument}}
+		a := appliedOf(pol, nil, nil, chosen, nil)
+		if err := schema.Validate(a); err != nil {
+			t.Errorf("%s, %s: the members do not validate: %v", c.name, c.argument, err)
+		}
+		want := []any{map[string]any{"name": c.wantName, "argument": c.wantArg, "hosts": []any{"files.tools.internal"}}}
+		if !reflect.DeepEqual(a["tools"], want) {
+			t.Errorf("%s, %s: tools %v, want %v", c.name, c.argument, a["tools"], want)
+		}
+		if c.wantName != c.name || c.wantArg != c.argument {
+			if s := strings.ToLower(stringOf(a["tools"])); strings.Contains(s, "qak_") || strings.Contains(s, "qrk_") {
+				t.Errorf("%s, %s: a secret's prefix in tools: %v", c.name, c.argument, a["tools"])
+			}
+		}
+	}
 }

@@ -133,6 +133,16 @@ release may change what an existing document does, and says so under Upgrading.
   `run.policy_applied.schema.json` admits the two name phrases as a variable's name.
   `accesskey.ShownValue` holds the rule for a value, and `accesskey.ShownNames` for a
   list of names.
+- More run events sent a value of the run's as written, and now send `(a name that
+  contains an access key secret)` in place of one that contains `qak_` in any case, and
+  `(a name that contains a run key)` in place of one that contains `qrk_` and no `qak_`:
+  `run.policy_applied`'s `tools` `name` and `argument`; the `names` of a `run.refused`
+  of every code, each phrase once; and `run.started`'s `dir`, `image`, `image_name`,
+  each label's value, and `about`'s `kind`, `title` and each subject's `title`. A
+  label's key, a subject's `type`, `ref` and `url`, and `about`'s `details` are sent as
+  they are. `run.started.schema.json` admits the two phrases as `image_name`. The
+  gateway takes a `run.started` label value that is the phrase of the run's value,
+  beside the value as it is. The wall and the agent get every value as it is.
 
 ### Wall
 

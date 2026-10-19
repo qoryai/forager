@@ -643,7 +643,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		case errors.As(err, &r) && refusal.Decides(r.Code):
 			data := map[string]any{"code": r.Code}
 			if len(r.Names) > 0 {
-				data["names"] = eventNames(r.Code, r.Names)
+				data["names"] = eventNames(r.Names)
 			}
 			write(event.RunRefused, data)
 		}
@@ -895,12 +895,15 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(errRunClosed)
 	}
 	start := time.Now()
+	// A value of the run's that contains qak_ or qrk_ in any case is sent as
+	// accesskey.ShownName's phrase in its place: the directory, the image, its name, the
+	// labels' values, and what the run is about's kind, title and subjects' titles.
 	started := map[string]any{
 		"opened_by": event.OpenedBySession, "runtime": rt.Name(), "command": command, "args": args,
-		"dir": spec.Dir, "interactive": interactive, "forager_version": spec.ForagerVersion, "host": hostname(),
+		"dir": accesskey.ShownName(spec.Dir, false), "interactive": interactive, "forager_version": spec.ForagerVersion, "host": hostname(),
 	}
 	if byReference {
-		started["dir"] = shown.Dir
+		started["dir"] = accesskey.ShownName(shown.Dir, false)
 	}
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = v
@@ -918,9 +921,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	if spec.Wall != nil {
 		started["wall"] = spec.Wall.Name()
-		started["image"] = img.Ref
+		started["image"] = accesskey.ShownName(img.Ref, false)
 		if img.Name != "" {
-			started["image_name"] = img.Name
+			started["image_name"] = accesskey.ShownName(img.Name, false)
 		}
 		if img.Runtime != "" {
 			started["container_runtime"] = img.Runtime
@@ -938,10 +941,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// neither they nor what the run is about are the session's: the starter's
 	// registration holds them.
 	if len(answer.Labels) > 0 && remote == nil {
-		started["labels"] = answer.Labels
+		started["labels"] = shownLabels(answer.Labels)
 	}
 	if about := server.ReportedAbout(spec.About); about != nil && remote == nil {
-		started["about"] = about
+		started["about"] = shownAbout(about)
 	}
 	write(event.RunStarted, started)
 	// policyApplied is the policy_applied event of the members the gateway decides, for
@@ -1104,7 +1107,7 @@ func refused(err error, fail, quit func(error) (*Result, error), own func(string
 		r.Detail = "the gateway"
 		data := map[string]any{"code": r.Code}
 		if len(r.Names) > 0 {
-			data["names"] = eventNames(r.Code, r.Names)
+			data["names"] = eventNames(r.Names)
 		}
 		if r.From == accesskey.FromApiary && r.Status != 0 {
 			data["status"] = r.Status
@@ -1296,13 +1299,30 @@ func shownVariables(applied []variables.Entry) []variables.Entry {
 	return out
 }
 
-// eventNames are a refusal's names as its dev.qory.run.refused sends them. The names of
-// a placeholder_conflict are sent as accesskey.ShownName shows a name, bare, and a
-// phrase two names give is sent once, as the schema holds the names unique. The names
-// of any other code are sent as they are.
-func eventNames(code string, names []string) []string {
-	if code != refusal.PlaceholderConflict {
-		return names
+// eventNames are a refusal's names as its dev.qory.run.refused sends them: as
+// accesskey.ShownNames lists them, so a phrase two names give is sent once, as the
+// schema holds the names unique.
+func eventNames(names []string) []string { return accesskey.ShownNames(names) }
+
+// shownLabels are the run's labels as its dev.qory.run.started sends them: each key as
+// it is, and each value as accesskey.ShownName shows it, bare.
+func shownLabels(labels map[string]string) map[string]string {
+	out := make(map[string]string, len(labels))
+	for k, v := range labels {
+		out[k] = accesskey.ShownName(v, false)
 	}
-	return accesskey.ShownNames(names)
+	return out
+}
+
+// shownAbout is what the run is about as its dev.qory.run.started sends it: its kind,
+// its title and each subject's title as accesskey.ShownName shows them, bare, and the
+// rest as it is.
+func shownAbout(a *server.About) *server.About {
+	out := *a
+	out.Kind, out.Title = accesskey.ShownName(a.Kind, false), accesskey.ShownName(a.Title, false)
+	out.Subjects = slices.Clone(a.Subjects)
+	for i := range out.Subjects {
+		out.Subjects[i].Title = accesskey.ShownName(out.Subjects[i].Title, false)
+	}
+	return &out
 }

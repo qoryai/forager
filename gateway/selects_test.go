@@ -380,3 +380,28 @@ func TestALinksFilePrintsAPhraseForASecretInAName(t *testing.T) {
 		h.close()
 	}
 }
+
+// TestARunStartedMayCarryALabelsPhrase pins the gateway's check of the session's
+// run.started labels: a value that contains qak_ or qrk_ may be the name's phrase, as
+// the session sends it, or the value as it is, as a session of before sends it; any
+// other value is not the run's.
+func TestARunStartedMayCarryALabelsPhrase(t *testing.T) {
+	labels := map[string]string{"repository": "acme/qak_x", "issue": "7"}
+	h := start(t, gateway.Config{})
+	for _, c := range []struct {
+		sent     map[string]string
+		accepted bool
+	}{
+		{map[string]string{"repository": accessKeyNamePhrase, "issue": "7"}, true},
+		{labels, true},
+		{map[string]string{"repository": runKeyNamePhrase, "issue": "7"}, false},
+		{map[string]string{"repository": accessKeyNamePhrase, "issue": "8"}, false},
+	} {
+		a := h.open(server.LinkRunRequest{Labels: labels})
+		d := h.post(started(a.RunID, c.sent))
+		if c.accepted != d.Accepted() {
+			t.Errorf("%v: %+v, want accepted %v", c.sent, d, c.accepted)
+		}
+	}
+	h.close()
+}
