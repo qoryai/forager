@@ -64,17 +64,42 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 }
 
 // errSettingsMoreThanOnce refuses a walled launch that passes --settings more than once.
-var errSettingsMoreThanOnce = errors.New("This launch passes --settings more than once, and Claude Code " +
-	"reads only the last one, so the run does not start. Pass one --settings file.")
+var errSettingsMoreThanOnce = errors.New("Pass one --settings file. This launch passes --settings more than once, " +
+	"and Claude Code reads only the last one, so the run does not start.")
+
+// settingsFlag is the flag whose file or document Claude Code reads its settings from.
+const settingsFlag = "--settings"
+
+// settingsRefused is the refusal of the settings file at path, which could not be
+// read, in the form of the other flags' files: the fix first, then the reason. A path
+// with a ".." part gets the text of [pathRules].
+func settingsRefused(path string, err error) error {
+	v := flagValue{flag: settingsFlag, value: path}
+	if errors.Is(err, hostfile.ErrDotDot) {
+		return dotDot(v)
+	}
+	return fileRefused(v, err)
+}
+
+// notAnObject is the refusal of settings, a file's path or a document, that are not
+// a JSON object: the fix first, then the reason.
+func notAnObject(value string, err error) error {
+	shown := accesskey.ShownValue(value, false)
+	fix := "Make the file " + shown + " a JSON object."
+	if strings.HasPrefix(strings.TrimSpace(value), "{") {
+		fix = "Pass a valid JSON object to --settings."
+	}
+	return fmt.Errorf("%s The check of --settings %s failed: %w", fix, shown, accesskey.ShownError(err))
+}
 
 // projectConfigRootFlag is the flag whose directory Claude Code reads project settings,
 // .mcp.json and the .claude trees from, in place of the working directory.
 const projectConfigRootFlag = "--project-config-root"
 
 // errProjectConfigRoot refuses a walled launch that passes --project-config-root.
-var errProjectConfigRoot = errors.New("This launch passes --project-config-root, and Claude Code reads project settings, " +
-	".mcp.json and the .claude trees from that directory, which Forager does not check, so the run does not start. " +
-	"Remove --project-config-root from the walled launch.")
+var errProjectConfigRoot = errors.New("Remove --project-config-root from the walled launch. This launch passes " +
+	"--project-config-root, and Claude Code reads project settings, .mcp.json and the .claude trees from that " +
+	"directory, which Forager does not check, so the run does not start.")
 
 // flagCount counts the arguments that are flag or start with flag and "=", wherever
 // they are: after --, and as the value of another option, though Claude Code reads
@@ -112,10 +137,10 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		if strings.HasPrefix(strings.TrimSpace(args[at]), "{") {
 			b = []byte(args[at])
 		} else if b, err = readSettings(args[at], readable); err != nil {
-			return nil, fmt.Errorf("settings %s: %w", accesskey.ShownValue(args[at], false), accesskey.ShownError(err))
+			return nil, settingsRefused(args[at], err)
 		}
 		if err := json.Unmarshal(b, &settings); err != nil {
-			return nil, fmt.Errorf("settings %s: %w", accesskey.ShownValue(args[at], false), accesskey.ShownError(err))
+			return nil, notAnObject(args[at], err)
 		}
 		if inside != nil {
 			settings = insideValues(settings, inside).(map[string]any)

@@ -370,17 +370,19 @@ release may change what an existing document does, and says so under Upgrading.
   not a regular file or is larger than 1 MiB. The path is made absolute once and that
   path is checked and opened. The open does not follow a link as the path's last part,
   and the file opened must be the one the path resolved to when it was checked. The run
-  then stops before the runtime starts, with "runtime claude: settings <path>: " and the
-  reason. Settings passed as a document are not checked, as before. The places also hold
-  the writable binds of the other walled runs in the registry, with or without a wall
-  for this run, and are worked out only when a settings file is to be read.
+  then stops before the runtime starts, with "runtime claude: ", the fix, and the
+  reason, such as "Pass the path of the file that <path> links to. This launch passes
+  --settings <path>, and that file is a link, so the run does not start." Settings
+  passed as a document are not checked, as before. The places also hold the writable
+  binds of the other walled runs in the registry, with or without a wall for this run,
+  and are worked out only when a settings file is to be read.
 - The `claude-settings` installer copied and checked only the first `--settings` of a
   launch, and Claude Code reads only the last: a walled launch that passed two started
   without Forager's hooks and with a file the session had not checked. A walled launch
   that passes `--settings` more than once, in either form and anywhere in its
-  arguments, now does not start, with "runtime claude: This launch passes --settings
-  more than once, and Claude Code reads only the last one, so the run does not start.
-  Pass one --settings file." In a walled launch whose last argument is a bare
+  arguments, now does not start, with "runtime claude: Pass one --settings file. This
+  launch passes --settings more than once, and Claude Code reads only the last one, so
+  the run does not start." In a walled launch whose last argument is a bare
   `--settings`, the session gives that flag the path of the run's settings, so the
   launch passes one `--settings`. `runtimes.Attach.Walled` is set for a walled run. An
   unwalled launch starts as before.
@@ -389,18 +391,18 @@ release may change what an existing document does, and says so under Upgrading.
   Claude Code could load servers, agents, plugins or settings that an agent of a walled
   run had written, and start the programs they name. In a walled launch, a path value
   of these flags that starts with `~`, is relative or has a `..` part now does not
-  start, with "runtime claude: This launch passes --add-dir ~/ref, and inside the wall
-  ~ is the home of the wall's user, which Forager cannot check, so the run does not
-  start. Pass an absolute path." and the texts for the other two. An `--mcp-config` or
+  start, with "runtime claude: Replace ~/ref with an absolute path. This launch passes
+  --add-dir ~/ref, and inside the wall ~ is the home of the wall's user, which Forager
+  cannot check, so the run does not start." and the texts for the other two. An `--mcp-config` or
   `--agents` file is checked as the `--settings` file is and passed as a copy in the run
   directory, `mcp-config-<n>.json` or `agents-<n>.json`; a value Claude Code takes as
   JSON passes unchanged. A `--plugin-dir` or `--plugin-dir-no-mcp` directory that lies
   in, is reached through or contains a place a walled run can write, that holds a link
   leading into one or a file with more than one name, or that has more than 10,000
   entries, does not start; a `.zip` is checked as a file. An `--add-dir` directory is
-  checked the same way, with only `<dir>/.claude` and `<dir>/CLAUDE.md` read. The wall
-  docs, § "No file read from a place an agent can write", have each text. An unwalled
-  launch starts as before.
+  checked the same way, with only `<dir>/.claude` and `<dir>/CLAUDE.md` read. Each text
+  starts with the fix, and the wall docs, § "No file read from a place an agent can
+  write", have each text. An unwalled launch starts as before.
 - Claude Code loads plugin directories from `CLAUDE_CODE_PLUGIN_DIRS` and adds
   directories from `CLAUDE_RELAUNCH_SESSION_ADD_DIRS`, so a value set for a run went
   past the checks of `--plugin-dir` and `--add-dir`. The Claude descriptor's `denies`

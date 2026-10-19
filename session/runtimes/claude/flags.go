@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -227,16 +228,23 @@ func pathRules(v flagValue) error {
 	shown := accesskey.ShownValue(v.value, false)
 	switch {
 	case strings.HasPrefix(v.value, "~"):
-		return fmt.Errorf("This launch passes %s %s, and inside the wall ~ is the home of the wall's user, "+
-			"which Forager cannot check, so the run does not start. Pass an absolute path.", v.flag, shown)
+		return fmt.Errorf("Replace %s with an absolute path. This launch passes %s %s, and inside the wall ~ is "+
+			"the home of the wall's user, which Forager cannot check, so the run does not start.", shown, v.flag, shown)
 	case !filepath.IsAbs(v.value):
-		return fmt.Errorf("This launch passes %s %s, a relative path that Claude Code reads from the workspace, "+
-			"which a walled run can write, so the run does not start. Pass an absolute path outside the workspace.", v.flag, shown)
+		return fmt.Errorf("Replace %s with an absolute path outside the workspace. This launch passes %s %s, "+
+			"a relative path that Claude Code reads from the workspace, which a walled run can write, "+
+			"so the run does not start.", shown, v.flag, shown)
 	case hostfile.DotDot(v.value):
-		return fmt.Errorf(`This launch passes %s %s, and the path has a ".." part, so the run does not start. `+
-			`Pass the path without "..".`, v.flag, shown)
+		return dotDot(v)
 	}
 	return nil
+}
+
+// dotDot is the refusal of a path value of v that has a ".." part.
+func dotDot(v flagValue) error {
+	shown := accesskey.ShownValue(v.value, false)
+	return fmt.Errorf(`Pass the path %s without "..". This launch passes %s %s, and the path has a ".." part, `+
+		`so the run does not start.`, shown, v.flag, shown)
 }
 
 // readCopy checks and reads the file of v as [readSettings] reads the settings, and
@@ -264,10 +272,10 @@ func readCopy(v flagValue, a runtimes.Attach) ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
-// fileRefused is the refusal of a walled launch whose file of v could not be read: for
-// a place a walled run can write, what to do instead; for a refusal of the file itself,
-// such as "it is a link", that refusal; and otherwise the reason after the flag and the
-// value, as the settings' refusals are.
+// fileRefused is the refusal of a walled launch whose file of v could not be read, the
+// fix first: for a place a walled run can write, what to do instead; for a refusal of
+// the file itself, such as "it is a link", the fix for it and that refusal; and
+// otherwise [checkFailed]'s text.
 func fileRefused(v flagValue, err error) error {
 	shown := accesskey.ShownValue(v.value, false)
 	var written *runtimes.WrittenError
@@ -275,15 +283,64 @@ func fileRefused(v flagValue, err error) error {
 		what := "the servers as a JSON string"
 		if v.flag == agentsFlag {
 			what = "the agents as a JSON object"
+		} else if v.flag == settingsFlag {
+			what = "the settings as a JSON object"
 		} else if text, ok := promptText[v.flag]; ok {
 			what = "the text with " + text
 		}
-		return fmt.Errorf("This launch passes %s %s, and that file %s %s, which a walled run can write, "+
-			"so the run does not start. Move the file to a directory no walled run writes, or pass %s.",
-			v.flag, shown, written.How, written.Place, what)
+		return fmt.Errorf("Move %s to a directory no walled run writes, or pass %s. This launch passes %s %s, "+
+			"which %s %s, a place a walled run can write, so the run does not start.",
+			shown, what, v.flag, shown, written.How, written.Place)
 	}
 	if rest, ok := strings.CutPrefix(err.Error(), "it "); ok {
-		return fmt.Errorf("This launch passes %s %s, and that file %s, so the run does not start.", v.flag, shown, rest)
+		return fmt.Errorf("%s This launch passes %s %s, and that file %s, so the run does not start.",
+			readFix(v, rest), v.flag, shown, rest)
 	}
-	return fmt.Errorf("%s %s: %w", v.flag, shown, accesskey.ShownError(err))
+	return checkFailed(v, err)
+}
+
+// readFix is the fix for the refusal of the file of v by the read, whose reason, after
+// "it ", is rest: a link, a file that is not a regular one, one larger than maxSettings
+// bytes, or one that changed while it was checked.
+func readFix(v flagValue, rest string) string {
+	shown := accesskey.ShownValue(v.value, false)
+	switch {
+	case rest == "is a link":
+		return "Pass the path of the file that " + shown + " links to."
+	case rest == "is not a regular file":
+		return "Pass a " + v.flag + " path to a regular file."
+	case strings.HasPrefix(rest, "is larger than "):
+		return fmt.Sprintf("Pass a %s file of at most %d bytes.", v.flag, maxSettings)
+	case rest == "changed while it was checked":
+		return "Start the run again when no process is writing " + shown + "."
+	}
+	return "Pass another " + v.flag + " path."
+}
+
+// checkFailed is the refusal of a value of v for any other reason, a file that does
+// not exist say: the fix of [checkFix], then the flag, the value and the reason.
+func checkFailed(v flagValue, err error) error {
+	return fmt.Errorf("%s The check of %s %s failed: %w", checkFix(v, err), v.flag,
+		accesskey.ShownValue(v.value, false), accesskey.ShownError(err))
+}
+
+// checkFix is the fix for err, the reason the check of v failed: for a value that does
+// not exist, a path that does; for a path the check had no permission for, access to
+// it; and otherwise the reason itself, or another path.
+func checkFix(v flagValue, err error) string {
+	path := v.value
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		path = pe.Path
+	}
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		if _, statErr := os.Stat(v.value); errors.Is(statErr, fs.ErrNotExist) {
+			return "Pass a " + v.flag + " path that exists on this machine."
+		}
+	case errors.Is(err, fs.ErrPermission):
+		return "Give the user that runs Forager access to " + accesskey.ShownValue(path, false) +
+			", or pass another " + v.flag + " path."
+	}
+	return "Fix the error at the end of this message, or pass another " + v.flag + " path."
 }

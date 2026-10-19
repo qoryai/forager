@@ -98,9 +98,9 @@ func TestSettingsKeepsWhatTheLaunchPassedAndAddsTheForwarder(t *testing.T) {
 }
 
 // TestSettingsReadsOnlyAPlainFileItIsLetRead pins what the installer reads of a file
-// the launch names: only one Readable passes, never through a link as its last part,
-// only a regular file and at most 1 MiB; a refusal names the file. A document the
-// launch holds is no file, and Readable is not asked of it.
+// whose path the launch passes: only one Readable passes, never through a link as its
+// last part, only a regular file and at most 1 MiB; a refusal shows the file. A
+// document passed in the launch is no file, and Readable is not asked of it.
 func TestSettingsReadsOnlyAPlainFileItIsLetRead(t *testing.T) {
 	dir := t.TempDir()
 	p := func(name string) string { return filepath.Join(dir, name) }
@@ -142,13 +142,20 @@ func TestSettingsReadsOnlyAPlainFileItIsLetRead(t *testing.T) {
 	}{
 		{"a plain file", p("plain.json"), nil, ""},
 		{"a plain file Readable passes", p("plain.json"), pass, ""},
-		{"a file other than the one Readable judged", p("plain.json"), other, "settings " + p("plain.json") + ": it changed while it was checked"},
-		{"a file Readable refuses", p("plain.json"), refuseAll, "settings " + p("plain.json") + ": refused here"},
-		{"a link as its last part", p("link.json"), nil, "settings " + p("link.json") + ": it is a link"},
-		{"a directory", p("dir.json"), nil, "settings " + p("dir.json") + ": it is not a regular file"},
-		{"a FIFO", p("fifo.json"), nil, "settings " + p("fifo.json") + ": it is not a regular file"},
+		{"a file other than the one Readable judged", p("plain.json"), other, "Start the run again when no process is writing " +
+			p("plain.json") + ". This launch passes --settings " + p("plain.json") + ", and that file changed while it was checked, " +
+			"so the run does not start."},
+		{"a file Readable refuses", p("plain.json"), refuseAll, "Fix the error at the end of this message, or pass another " +
+			"--settings path. The check of --settings " + p("plain.json") + " failed: refused here"},
+		{"a link as its last part", p("link.json"), nil, "Pass the path of the file that " + p("link.json") + " links to. " +
+			"This launch passes --settings " + p("link.json") + ", and that file is a link, so the run does not start."},
+		{"a directory", p("dir.json"), nil, "Pass a --settings path to a regular file. This launch passes --settings " +
+			p("dir.json") + ", and that file is not a regular file, so the run does not start."},
+		{"a FIFO", p("fifo.json"), nil, "Pass a --settings path to a regular file. This launch passes --settings " +
+			p("fifo.json") + ", and that file is not a regular file, so the run does not start."},
 		{"a file of 1 MiB", p("edge.json"), nil, ""},
-		{"a file larger than 1 MiB", p("big.json"), nil, "settings " + p("big.json") + ": it is larger than 1048576 bytes"},
+		{"a file larger than 1 MiB", p("big.json"), nil, "Pass a --settings file of at most 1048576 bytes. This launch passes " +
+			"--settings " + p("big.json") + ", and that file is larger than 1048576 bytes, so the run does not start."},
 		{"a document", ` {"permissions":{}}`, refuseAll, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -168,8 +175,8 @@ func TestSettingsReadsOnlyAPlainFileItIsLetRead(t *testing.T) {
 
 // settingsMoreThanOnce is the refusal of a walled launch that passes --settings more
 // than once.
-const settingsMoreThanOnce = "This launch passes --settings more than once, and Claude Code reads only the last one, " +
-	"so the run does not start. Pass one --settings file."
+const settingsMoreThanOnce = "Pass one --settings file. This launch passes --settings more than once, " +
+	"and Claude Code reads only the last one, so the run does not start."
 
 // TestSettingsRefusesAWalledLaunchThatPassesSettingsMoreThanOnce pins that a walled
 // launch whose arguments pass --settings more than once, in either form, after -- or
@@ -270,9 +277,9 @@ func TestSettingsRefusesAWalledLaunchThatPassesSettingsMoreThanOnce(t *testing.T
 }
 
 // projectConfigRoot is the refusal of a walled launch that passes --project-config-root.
-const projectConfigRoot = "This launch passes --project-config-root, and Claude Code reads project settings, " +
-	".mcp.json and the .claude trees from that directory, which Forager does not check, so the run does not start. " +
-	"Remove --project-config-root from the walled launch."
+const projectConfigRoot = "Remove --project-config-root from the walled launch. This launch passes " +
+	"--project-config-root, and Claude Code reads project settings, .mcp.json and the .claude trees from that " +
+	"directory, which Forager does not check, so the run does not start."
 
 // TestSettingsRefusesAWalledLaunchThatPassesProjectConfigRoot pins that a walled launch
 // that passes --project-config-root, in either form, after --, as the value of another
@@ -319,4 +326,20 @@ func TestSettingsRefusesAWalledLaunchThatPassesProjectConfigRoot(t *testing.T) {
 			t.Errorf("launch %q, %v", got.Args, err)
 		}
 	})
+}
+
+// TestSettingsThatAreNoJSONObjectComeWithAFix pins the fix that leads the text of a
+// settings file whose content is no JSON object.
+func TestSettingsThatAreNoJSONObjectComeWithAFix(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(f, []byte("[1]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+		Launch: runtimes.Launch{Args: []string{"--settings", f}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+	})
+	prefix := "Make the file " + f + " a JSON object. The check of --settings " + f + " failed: json: cannot unmarshal array"
+	if err == nil || !strings.HasPrefix(err.Error(), prefix) {
+		t.Errorf("got %v, want the prefix %q", err, prefix)
+	}
 }
