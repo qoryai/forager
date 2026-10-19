@@ -314,8 +314,8 @@ release may change what an existing document does, and says so under Upgrading.
 - A separate gateway refuses a run key whose instance id contains `qak_` or `qrk_` in
   any case: the attach is answered `run_key_invalid`, 400. Before, the run attached and
   `run.registered` sent the instance id as it was.
-- `gateway.Start` keeps the memory of the process that calls it out of a core dump and
-  away from a debugger, for the life of the process. On Linux it calls
+- `gateway.Start` limits core dumps of the process that calls it and debugger access to
+  it, for the life of the process. On Linux it calls
   `prctl(PR_SET_DUMPABLE, 0)`, so that a process of the same user without
   `CAP_SYS_PTRACE` can no longer attach to the gateway's process or read it under
   `/proc/<pid>/`. On macOS it calls `ptrace(PT_DENY_ATTACH)`, so a gateway's process

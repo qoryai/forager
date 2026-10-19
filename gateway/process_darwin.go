@@ -10,7 +10,8 @@ import (
 
 // denyDumps sets the core size limit, RLIMIT_CORE, soft and hard, to 0, so that the
 // kernel writes no core dump of this process, and calls ptrace(PT_DENY_ATTACH), so that
-// no debugger attaches to it. A process that a debugger traces when it calls
+// no debugger attaches to it with ptrace. Root, or a program with the task_for_pid
+// entitlement, can still read its memory through its task port. A process that a debugger traces when it calls
 // PT_DENY_ATTACH exits at once, with status 45 (ENOTSUP). A program this process starts
 // keeps the limit of 0.
 func denyDumps() error {

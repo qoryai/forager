@@ -120,15 +120,18 @@ that needs more than a credential in a header.
 ## The gateway's process
 
 The gateway holds each credential's secret and the access key in memory. Before it
-starts anything, `gateway.Start` keeps that memory out of a core dump and away from a
-debugger:
+starts anything, `gateway.Start` limits core dumps of the process and debugger access
+to it:
 
-- **Linux**: `prctl(PR_SET_DUMPABLE, 0)`, so that the kernel writes no core dump of
-  the process, and a process of the same user without `CAP_SYS_PTRACE` can neither
-  attach to it with `ptrace` nor read its memory or its environment under
-  `/proc/<pid>/`; and `RLIMIT_CORE` 0, soft and hard.
+- **Linux**: `prctl(PR_SET_DUMPABLE, 0)`, so that a process of the same user without
+  `CAP_SYS_PTRACE` can neither attach to it with `ptrace` nor read its memory or its
+  environment under `/proc/<pid>/`; and `RLIMIT_CORE` 0, soft and hard, so that the
+  kernel writes no core file of it. With `fs.suid_dumpable` set to 2 and a
+  `kernel.core_pattern` that pipes to a program, such as apport on Ubuntu, that program
+  can still get a core dump of the process.
 - **macOS**: `RLIMIT_CORE` 0, soft and hard; and `ptrace(PT_DENY_ATTACH)`, so that no
-  debugger attaches to the process.
+  debugger attaches to the process with `ptrace`. Root, or a program with the
+  `task_for_pid` entitlement, can still read its memory through its task port.
 - **Other systems**: nothing.
 
 The settings stay for the life of the process, after `Close` too. In `qory run` the
@@ -143,7 +146,7 @@ session runs in that process, so the settings apply to it as well.
 - If a call fails, `Start` returns an error that starts with the fix, and the gateway
   does not start:
   - Linux: `allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: <reason>`
-  - Linux: `allow setrlimit in the gateway's seccomp profile: RLIMIT_CORE 0 failed: <reason>`
+  - Linux: `allow prlimit64 in the gateway's seccomp profile: RLIMIT_CORE 0 failed: <reason>`
   - macOS: `allow setrlimit in the gateway's sandbox: RLIMIT_CORE 0 failed: <reason>`
   - macOS: `allow ptrace in the gateway's sandbox: PT_DENY_ATTACH failed: <reason>`
 
@@ -183,6 +186,17 @@ and each page mapped later.
   raise RLIMIT_MEMLOCK to unlimited: LimitMEMLOCK=infinity in a systemd unit, or ulimit -l unlimited
   gateway.lock_memory is true, and mlockall failed with RLIMIT_MEMLOCK at 8388608 bytes: cannot allocate memory; in Docker, pass --ulimit memlock=-1, or set gateway.lock_memory to false
   ```
+
+  If `RLIMIT_MEMLOCK` is already unlimited, the limit is not the cause: a seccomp
+  filter or a security module refused the call. The error is then:
+
+  ```text
+  allow mlockall in the gateway's seccomp profile, or set gateway.lock_memory to false
+  gateway.lock_memory is true, and mlockall failed with RLIMIT_MEMLOCK unlimited: operation not permitted
+  ```
+
+  If `RLIMIT_MEMLOCK` does not read either, the first line is
+  `raise RLIMIT_MEMLOCK to unlimited, or allow mlockall and prlimit64 in the gateway's seccomp profile`.
 
 - On macOS and other systems, `true` stops the gateway:
   `set gateway.lock_memory to false: Forager locks memory only on Linux, and this system is darwin`.

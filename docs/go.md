@@ -99,8 +99,8 @@ configuration again, or end the run. `gateway.Start` with `gateway.Config.NoLink
 serves no socket, only the link in memory, to a session in the same process as the
 gateway.
 
-`gateway.Start` keeps the memory of the process that calls it out of a core dump and
-away from a debugger, and with `gateway.Config.LockMemory`, on Linux, out of swap. The
+`gateway.Start` limits core dumps of the process that calls it and debugger access to
+it, and with `gateway.Config.LockMemory`, on Linux, out of swap. The
 settings stay for the life of the process. See
 [the gateway's process](credentials.md#the-gateways-process).
 

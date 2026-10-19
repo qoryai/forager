@@ -124,8 +124,8 @@ type Gateway struct {
 // discovery is read, a Listen whose access key is not a gateway's, whose node id is not
 // ng_, and a gateway's access key, ng_, without a Listen.
 //
-// Before it starts anything, Start keeps the keys of this process out of a core dump
-// and away from a debugger: on Linux it makes the process non-dumpable,
+// Before it starts anything, Start limits core dumps of this process and debugger
+// access to it: on Linux it makes the process non-dumpable,
 // PR_SET_DUMPABLE 0, and on macOS it calls ptrace(PT_DENY_ATTACH); on both it sets
 // RLIMIT_CORE to 0, soft and hard. A test binary gets none of these. With
 // [Config.LockMemory], on Linux, it locks the process's memory out of swap. What it sets

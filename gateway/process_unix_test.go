@@ -20,21 +20,33 @@ import (
 // dumps, lock, lock-none or start.
 const envHarden = "GATEWAY_TEST_HARDEN"
 
-// memlockFix is the first line of lockAll's failure on Linux.
-const memlockFix = "raise RLIMIT_MEMLOCK to unlimited: LimitMEMLOCK=infinity in a systemd unit, or ulimit -l unlimited"
+// memlockFix is the first line of lockAll's failure on Linux under a finite
+// RLIMIT_MEMLOCK, and mlockallFix under RLIMIT_MEMLOCK unlimited.
+const (
+	memlockFix  = "raise RLIMIT_MEMLOCK to unlimited: LimitMEMLOCK=infinity in a systemd unit, or ulimit -l unlimited"
+	mlockallFix = "allow mlockall in the gateway's seccomp profile, or set gateway.lock_memory to false"
+	// unreadFix is the first line when RLIMIT_MEMLOCK does not read either.
+	unreadFix = "raise RLIMIT_MEMLOCK to unlimited, or allow mlockall and prlimit64 in the gateway's seccomp profile"
+)
+
+// seccompFilter is the Seccomp of /proc/self/status under a seccomp filter.
+const seccompFilter = 2
 
 // hardenPrefix starts the one line on which TestHardenChild reports.
 const hardenPrefix = "harden-result: "
 
 // hardenResult is what a child reports after the calls: the error, the core size
-// limit, PR_GET_DUMPABLE on Linux and -1 elsewhere, and the kB of VmLck on Linux and -1
+// limit or why it did not read, PR_GET_DUMPABLE on Linux, the kB of VmLck on Linux, and
+// the Seccomp mode of /proc/self/status on Linux; -1 for each of the last three
 // elsewhere.
 type hardenResult struct {
 	Err      string
 	CoreCur  uint64
 	CoreMax  uint64
+	CoreErr  string
 	Dumpable int
 	LockedKB int64
+	Seccomp  int64
 }
 
 // TestHardenChild makes, in a child that runHardenChild starts, the calls that
@@ -69,13 +81,13 @@ func TestHardenChild(t *testing.T) {
 	default:
 		t.Fatalf("%s=%s is none of dumps, lock, lock-none and start", envHarden, os.Getenv(envHarden))
 	}
-	r := hardenResult{Dumpable: dumpable(), LockedKB: lockedKB()}
+	r := hardenResult{Dumpable: dumpable(), LockedKB: statusField("VmLck"), Seccomp: statusField("Seccomp")}
 	if err != nil {
 		r.Err = err.Error()
 	}
 	var c unix.Rlimit
 	if err := unix.Getrlimit(unix.RLIMIT_CORE, &c); err != nil {
-		t.Fatal(err)
+		r.CoreErr = err.Error()
 	}
 	r.CoreCur, r.CoreMax = uint64(c.Cur), uint64(c.Max)
 	b, _ := json.Marshal(r)
@@ -106,11 +118,25 @@ func runHardenChild(t *testing.T, what string) hardenResult {
 }
 
 // TestDenyDumpsLeavesNoCoreDump pins denyDumps: the core size limit is 0, soft and
-// hard, and on Linux the process is not dumpable.
+// hard, and on Linux the process is not dumpable. Under a seccomp filter that refuses
+// prctl or prlimit64, it pins the failure's fix instead.
 func TestDenyDumpsLeavesNoCoreDump(t *testing.T) {
 	r := runHardenChild(t, "dumps")
 	if r.Err != "" {
+		if r.Seccomp == seccompFilter {
+			for _, fix := range []string{
+				"allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: ",
+				"allow prlimit64 in the gateway's seccomp profile: RLIMIT_CORE 0 failed: ",
+			} {
+				if strings.HasPrefix(r.Err, fix) {
+					t.Skipf("a seccomp filter refuses the call here, and denyDumps fails with the fix: %s", r.Err)
+				}
+			}
+		}
 		t.Fatalf("denyDumps: %s", r.Err)
+	}
+	if r.CoreErr != "" {
+		t.Fatalf("RLIMIT_CORE does not read: %s", r.CoreErr)
 	}
 	if r.CoreCur != 0 || r.CoreMax != 0 {
 		t.Errorf("RLIMIT_CORE is %d, hard %d; want 0 and 0", r.CoreCur, r.CoreMax)
@@ -125,7 +151,7 @@ func TestDenyDumpsLeavesNoCoreDump(t *testing.T) {
 func TestAStartedTestBinaryKeepsItsDumps(t *testing.T) {
 	var before unix.Rlimit
 	if err := unix.Getrlimit(unix.RLIMIT_CORE, &before); err != nil {
-		t.Fatal(err)
+		t.Skipf("RLIMIT_CORE does not read here: %v", err)
 	}
 	g, err := Start(context.Background(), Config{Dir: t.TempDir(), NoLinkSocket: true})
 	if err != nil {
@@ -155,10 +181,14 @@ func TestStartWithLockMemory(t *testing.T) {
 	}
 	if r.Err != "" {
 		first, _, _ := strings.Cut(r.Err, "\n")
-		if first != memlockFix {
-			t.Errorf("Start: %q; want the first line %q", r.Err, memlockFix)
+		filtered := r.Seccomp == seccompFilter && (first == mlockallFix || first == unreadFix)
+		if first != memlockFix && !filtered {
+			t.Errorf("Start: %q; want the first line %q, or %q or %q under a seccomp filter", r.Err, memlockFix, mlockallFix, unreadFix)
 		}
-		t.Skipf("Start failed with the fix, since RLIMIT_MEMLOCK is finite here; docker run --ulimit memlock=-1 locks: %s", r.Err)
+		if len(first) > 100 {
+			t.Errorf("the first line is %d characters; want at most 100", len(first))
+		}
+		t.Skipf("Start failed with the fix, since RLIMIT_MEMLOCK is finite here or a seccomp filter refuses mlockall: %s", r.Err)
 	}
 	if r.LockedKB <= 0 {
 		t.Errorf("VmLck is %d kB after Start; want more than 0", r.LockedKB)
