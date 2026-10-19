@@ -38,12 +38,17 @@ type Limits struct {
 	// most and gains RequestsPerSecond tokens a second. Every request takes one token: a
 	// CONNECT, a plain request, and a request inside a terminated tunnel, before the
 	// policy decides it. A request waits up to [RateWait] for a token, then is refused
-	// with 429.
+	// with 429. While Connections requests wait, the next that needs a token is refused
+	// with 429 at once.
 	RequestsPerSecond, Burst int
 }
 
 // errRate says a request waited [RateWait] and got no token.
 var errRate = errors.New("the run's rate limit refused the request")
+
+// errCrowded says a request needed to wait for a token while as many of the run's
+// requests as [Limits.Connections] already waited, and was refused at once.
+var errCrowded = errors.New("the run's rate limit refused the request: too many wait")
 
 // limiter holds one run's counters: the connections open, the tokens of the bucket,
 // and when each limit's last refusal was recorded.
@@ -55,6 +60,9 @@ type limiter struct {
 
 	mu   sync.Mutex
 	open int
+	// waiting counts the requests that wait for a token, or wait out [RateWait] before
+	// their refusal.
+	waiting int
 	// tokens is below zero while requests wait: each waiting request took one ahead.
 	tokens float64
 	at     time.Time
@@ -110,6 +118,12 @@ func (p *Proxy) take(ctx context.Context) error {
 	rate := float64(lm.l.RequestsPerSecond)
 	lm.mu.Lock()
 	lm.refill()
+	// A run has at most as many requests waiting as it may have connections open, so
+	// that it cannot pile up waiting requests on the gateway.
+	if lm.tokens < 1 && lm.waiting >= max(lm.l.Connections, 1) {
+		lm.mu.Unlock()
+		return errCrowded
+	}
 	lm.tokens--
 	var wait time.Duration
 	if lm.tokens < 0 {
@@ -120,7 +134,17 @@ func (p *Proxy) take(ctx context.Context) error {
 		lm.tokens++
 		wait = RateWait
 	}
+	if wait > 0 {
+		lm.waiting++
+	}
 	lm.mu.Unlock()
+	if wait > 0 {
+		defer func() {
+			lm.mu.Lock()
+			lm.waiting--
+			lm.mu.Unlock()
+		}()
+	}
 	if wait > 0 && !lm.wait(ctx, wait) {
 		if !refused {
 			// The token goes back for the next request.
@@ -194,7 +218,7 @@ func (lm *limiter) recordable(rule string) bool {
 // [RateLimit]: 429 with Retry-After: 1 and one line that says when to retry and which
 // limit refused it. The refusal is d, denied and refused with rule, recorded when
 // [limiter.recordable] allows.
-func (p *Proxy) limited(w http.ResponseWriter, d Decision, rule string) {
+func (p *Proxy) limited(w http.ResponseWriter, d Decision, rule string, why error) {
 	lm := p.limits.Load()
 	d.Allowed, d.Rule, d.Outcome, d.Status, d.Credential, d.Tool = false, rule, Refused, 0, "", ""
 	if lm.recordable(rule) {
@@ -205,6 +229,10 @@ func (p *Proxy) limited(w http.ResponseWriter, d Decision, rule string) {
 	w.WriteHeader(http.StatusTooManyRequests)
 	if rule == ConnectionLimit {
 		fmt.Fprintf(w, "qory: retry once one of this run's connections closes. The run has %d connections open through the gateway, the most gateway.run_limits.connections allows.\n", lm.l.Connections)
+		return
+	}
+	if errors.Is(why, errCrowded) {
+		fmt.Fprintf(w, "qory: retry in 1 second. This run's requests came faster than %d a second, the most gateway.run_limits.requests_per_second allows, and %d of its requests were already waiting.\n", lm.l.RequestsPerSecond, max(lm.l.Connections, 1))
 		return
 	}
 	fmt.Fprintf(w, "qory: retry in 1 second. This run's requests came faster than %d a second, the most gateway.run_limits.requests_per_second allows, and this request waited %d seconds.\n", lm.l.RequestsPerSecond, int(RateWait/time.Second))

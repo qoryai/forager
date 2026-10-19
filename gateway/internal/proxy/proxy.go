@@ -684,7 +684,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if rated != nil {
-		p.limited(w, d, RateLimit)
+		p.limited(w, d, RateLimit, rated)
 		return
 	}
 	// Only a request the policy allows is a connection in flight.
@@ -694,7 +694,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !p.hold() {
-		p.limited(w, d, ConnectionLimit)
+		p.limited(w, d, ConnectionLimit, nil)
 		return
 	}
 	defer p.release()
@@ -767,7 +767,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	rated := p.take(r.Context())
 	d := p.decide(http.MethodConnect, host, port)
 	if rated != nil {
-		p.limited(w, d, RateLimit)
+		p.limited(w, d, RateLimit, rated)
 		return
 	}
 	if !d.Allowed {
@@ -777,7 +777,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	// The tunnel is one of the run's connections until it closes, blind or terminated.
 	if !p.hold() {
-		p.limited(w, d, ConnectionLimit)
+		p.limited(w, d, ConnectionLimit, nil)
 		return
 	}
 	defer p.release()

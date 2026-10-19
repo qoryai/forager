@@ -128,7 +128,8 @@ type RunLimits struct {
 	// CONNECT, plain request and request inside a terminated tunnel takes one token of
 	// a bucket that gains RequestsPerSecond tokens a second. From 1 to 10000; zero means
 	// 50. A request waits up to 5 seconds for a token, then is refused with 429 Too Many
-	// Requests and Retry-After: 1.
+	// Requests and Retry-After: 1. While Connections requests of the run wait, the next
+	// that needs a token is refused at once, the same way.
 	RequestsPerSecond int
 	// Burst is the most tokens the bucket holds: how many requests a run sends at once
 	// after a pause. From 1 to 100000; zero means 200.

@@ -127,7 +127,8 @@ tunnels and plain HTTP requests in flight. The next one gets `429 Too Many Reque
 Each run can send `requests_per_second` requests a second, and up to `burst` at once
 after a pause. Every `CONNECT`, plain request and request inside a tunnel the gateway
 terminates counts. A request past the limit waits up to 5 seconds, then gets `429 Too Many
-Requests` with `Retry-After: 1`.
+Requests` with `Retry-After: 1`. While `connections` requests of the run already wait, the
+next request past the limit gets the `429` at once.
 
 The body of each `429` says which limit refused the request and its value, such as:
 

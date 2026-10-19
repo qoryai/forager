@@ -308,7 +308,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			req.Tool = tl.Name
 		}
 		if rated != nil {
-			t.p.limited(w, req, RateLimit)
+			t.p.limited(w, req, RateLimit, rated)
 			return
 		}
 		c := t.credential(d.Host)

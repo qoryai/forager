@@ -500,6 +500,12 @@ denies takes one too. The bucket holds `Burst` tokens at most and gains
   `qory: retry in 1 second. This run's requests came faster than 50 a second, the most
   gateway.run_limits.requests_per_second allows, and this request waited 5 seconds.`,
   with the run's limit in place of 50.
+- **While as many requests wait as the run may have connections open**, the next
+  request that needs a token is refused at once, so a run cannot pile up waiting
+  requests on the gateway: `429 Too Many Requests`, `Retry-After: 1`, and the
+  `text/plain` body `qory: retry in 1 second. This run's requests came faster than 50 a
+  second, the most gateway.run_limits.requests_per_second allows, and 256 of its
+  requests were already waiting.`, with the run's limits in place of 50 and 256.
 
 A refusal is a `dev.qory.run.egress` with `decision: denied`, `outcome: refused` and the
 rule `wall:connection-limit` or `wall:rate-limit`, in either mode. At most one refusal

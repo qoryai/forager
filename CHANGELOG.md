@@ -331,7 +331,9 @@ release may change what an existing document does, and says so under Upgrading.
   `429` and `Retry-After: 1`. `RequestsPerSecond`, 1 to 10000, default 50, and `Burst`,
   1 to 100000, default 200, are a token bucket every CONNECT, plain request and request
   inside a terminated tunnel takes from; a request waits up to 5 seconds for a token,
-  then is refused with `429` and `Retry-After: 1`. Each run has counters of its own.
+  then is refused with `429` and `Retry-After: 1`. While `Connections` requests of the
+  run already wait, the next that needs a token is refused at once, with `429` and
+  `Retry-After: 1`. Each run has counters of its own.
   Start refuses a field outside its range: `Set RunLimits.Connections to a number from
   1 to 65536, or 0 for the default of 256. It is -3.`
 - `gateway.Config.Selects`: behind a separate gateway, when the server's policy selects

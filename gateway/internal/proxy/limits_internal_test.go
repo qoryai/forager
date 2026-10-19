@@ -584,3 +584,56 @@ func TestACloseDuringTheWaitAnswersNothing(t *testing.T) {
 		t.Errorf("a request waiting as the proxy closed got %d %q", resp.StatusCode, b)
 	}
 }
+
+// TestWaitingRequestsAreBounded pins the bound on waiting requests: with a limit of 2
+// connections, while 2 requests wait for a token, the next that needs a wait is refused
+// at once with 429 and the text with the count, with no wait.
+func TestWaitingRequestsAreBounded(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	p, err := Listen("", policy.Enforce, []string{"127.0.0.1"}, nil, (&decisions{}).observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	release := make(chan struct{})
+	started := make(chan struct{}, 10)
+	var mu sync.Mutex
+	waits := 0
+	p.limits.Store(newLimiter(Limits{Connections: 2, RequestsPerSecond: 1, Burst: 1}, newFakeTime().now, func(ctx context.Context, _ time.Duration) bool {
+		mu.Lock()
+		waits++
+		mu.Unlock()
+		started <- struct{}{}
+		select {
+		case <-release:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}))
+	if a := get(t, p.Addr(), origin.URL); a.status != http.StatusOK {
+		t.Fatalf("the first request: %+v", a)
+	}
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			get(t, p.Addr(), origin.URL)
+		}()
+		<-started
+	}
+	a := get(t, p.Addr(), origin.URL)
+	text := "qory: retry in 1 second. This run's requests came faster than 1 a second, the most gateway.run_limits.requests_per_second allows, and 2 of its requests were already waiting.\n"
+	if a.status != http.StatusTooManyRequests || a.retryAfter != "1" || a.body != text {
+		t.Errorf("a request past the waiting bound: %+v", a)
+	}
+	mu.Lock()
+	if waits != 2 {
+		t.Errorf("%d waits, want 2: the refused request waited", waits)
+	}
+	mu.Unlock()
+	close(release)
+	wg.Wait()
+}
