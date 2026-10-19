@@ -74,8 +74,10 @@ secrets:
 # effort frontmatter, and the base URL in ANTHROPIC_BASE_URL. denies still lists
 # ANTHROPIC_BASE_URL, so the session leaves the server's value of it out. overrides lists
 # the variables Claude Code reads a model id, an effort value or an extra request body
-# from, beside what a composer writes. Behind a wall the session leaves their values out
-# and unsets them inside; without a wall they reach Claude Code as before.
+# from, beside what a composer writes. Behind a wall the session leaves out the server's,
+# the run's, the machine's and the harness's values of them, the harness's computed
+# values included, and unsets inside each one that nothing else sets; without a wall
+# they reach Claude Code as before.
 model:
   formats: [anthropic-messages]
   model: {flag: --model}

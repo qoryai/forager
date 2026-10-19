@@ -21,9 +21,9 @@ release may change what an existing document does, and says so under Upgrading.
 - A descriptor's `model` may list `overrides`, the variables that would override the
   model id or effort value a composer writes. Behind a wall the session leaves out the
   server's, the run's, the machine's and the harness's value of each, the harness's
-  computed value included, records it as `denied` and unsets the name inside; without
-  a wall nothing changes. The Claude
-  Code descriptor lists 12, among them `ANTHROPIC_MODEL` and `CLAUDE_CODE_EFFORT_LEVEL`.
+  computed value included, records it as `denied`, and unsets the name inside when
+  nothing else sets it; without a wall nothing changes. The Claude Code descriptor
+  lists 12, among them `ANTHROPIC_MODEL` and `CLAUDE_CODE_EFFORT_LEVEL`.
 - `dev.qory.run.started` has `preparation`, the run's preparation as the caller gave it,
   when the run has one.
 - The server's variables may set `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, the
