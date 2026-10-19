@@ -164,9 +164,9 @@ func walledPaths(args []string, a runtimes.Attach) ([]string, error) {
 
 // inline reports whether Claude Code takes the value of the flag as JSON, not as a
 // path: for --mcp-config a value that parses as JSON whose value is truthy, and for
-// --agents one that starts with "{" after white space or parses as JSON. The white
-// space taken off is JSON's alone, so a value is never taken for JSON that Claude Code
-// reads as a path.
+// --agents one that starts with "{" after white space or parses as JSON other than
+// null, which Claude Code takes for no JSON. The white space taken off is JSON's alone,
+// so a value is never taken for JSON that Claude Code reads as a path.
 func inline(flag, value string) bool {
 	trimmed := strings.Trim(value, jsonWhitespace)
 	switch flag {
@@ -179,7 +179,7 @@ func inline(flag, value string) bool {
 		var v any
 		return d.Decode(&v) == nil && truthy(v)
 	case agentsFlag:
-		return strings.HasPrefix(trimmed, "{") || json.Valid([]byte(trimmed))
+		return strings.HasPrefix(trimmed, "{") || (json.Valid([]byte(trimmed)) && trimmed != "null")
 	}
 	return false
 }

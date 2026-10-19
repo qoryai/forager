@@ -231,29 +231,52 @@ func entries(t *testing.T, dir string, n int) string {
 // TestAWalledLaunchsPluginLinkIntoTheWorkspaceInsideIsRefused pins that, for a run
 // whose workspace is at /workspace inside, a link under a plugin directory that leads
 // to /workspace, directly, through another link or after a name that does not exist
-// here, is refused, though no such path is a place of this machine's.
+// here, is refused, though no such path is a place of this machine's; and that a link
+// that cannot be followed is refused with the reason.
 func TestAWalledLaunchsPluginLinkIntoTheWorkspaceInsideIsRefused(t *testing.T) {
 	inside := func(s string) string { return s }
-	for name, to := range map[string]string{
-		"a link to /workspace":            "/workspace",
-		"a link below /workspace":         "/workspace/skills/x",
-		"a link past a name that is none": "/absent/../workspace/x",
-		"a link through another link":     "hop",
+	for name, c := range map[string]struct {
+		to  func(home string) string
+		hop string
+	}{
+		"a link to /workspace":            {to: func(string) string { return "/workspace" }},
+		"a link below /workspace":         {to: func(string) string { return "/workspace/skills/x" }},
+		"a link past a name that is none": {to: func(string) string { return "/absent/../workspace/x" }},
+		"a link through another link": {
+			to:  func(home string) string { return filepath.Join(home, "hop") },
+			hop: "/workspace/y",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			home := t.TempDir()
 			p := plugin(t, filepath.Join(home, "p"))
-			symlink(t, "/workspace/y", filepath.Join(p, "skills", "hop"))
-			symlink(t, to, filepath.Join(p, "skills", "x"))
+			if c.hop != "" {
+				// hop lies outside the plugin directory, so the scan meets it only
+				// through x.
+				symlink(t, c.hop, filepath.Join(home, "hop"))
+			}
+			symlink(t, c.to(home), filepath.Join(p, "skills", "x"))
 			_, err := walledDirs(t, &fakeWritten{written: t.TempDir()}, inside, []string{"--plugin-dir", p})
-			want := "This launch passes --plugin-dir " + p + ", and its link " + filepath.Join(p, "skills") + "/"
-			if err == nil || !strings.HasPrefix(err.Error(), want) ||
-				!strings.HasSuffix(err.Error(), " leads into /workspace, which a walled run can write, so the run does not start. "+
-					"Replace the link with a copy, or move what it leads to out of /workspace.") {
-				t.Errorf("got %v", err)
+			want := "This launch passes --plugin-dir " + p + ", and its link " + filepath.Join(p, "skills", "x") +
+				" leads into /workspace, which a walled run can write, so the run does not start. " +
+				"Replace the link with a copy, or move what it leads to out of /workspace."
+			if err == nil || err.Error() != want {
+				t.Errorf("got %v, want %q", err, want)
 			}
 		})
 	}
+	t.Run("a link loop", func(t *testing.T) {
+		home := t.TempDir()
+		p := plugin(t, filepath.Join(home, "p"))
+		symlink(t, filepath.Join(home, "b"), filepath.Join(home, "a"))
+		symlink(t, filepath.Join(home, "a"), filepath.Join(home, "b"))
+		symlink(t, filepath.Join(home, "a"), filepath.Join(p, "skills", "x"))
+		_, err := walledDirs(t, &fakeWritten{written: t.TempDir()}, inside, []string{"--plugin-dir", p})
+		want := "--plugin-dir " + p + ": " + filepath.Join(p, "skills", "x") + ": too many links"
+		if err == nil || err.Error() != want {
+			t.Errorf("got %v, want %q", err, want)
+		}
+	})
 	t.Run("without Inside", func(t *testing.T) {
 		home := t.TempDir()
 		p := plugin(t, filepath.Join(home, "p"))
@@ -262,6 +285,98 @@ func TestAWalledLaunchsPluginLinkIntoTheWorkspaceInsideIsRefused(t *testing.T) {
 			t.Errorf("refused: %v", err)
 		}
 	})
+}
+
+// TestAWalledLaunchsValueInTheWorkspaceInsideIsRefused pins that, for a run whose
+// workspace is at /workspace inside, a value of --plugin-dir, --plugin-dir-no-mcp or
+// --add-dir whose path reaches /workspace, as written or through a link of this
+// machine's, is refused before it is looked at here: the enclosure reads it from the
+// workspace. A .zip is a file in the text.
+func TestAWalledLaunchsValueInTheWorkspaceInsideIsRefused(t *testing.T) {
+	inside := func(s string) string { return s }
+	home := t.TempDir()
+	symlink(t, "/workspace/plug", filepath.Join(home, "plug"))
+	symlink(t, "/workspace/p.zip", filepath.Join(home, "w.zip"))
+	plugins := "Move the plugin to a directory no walled run writes."
+	for _, flag := range []string{"--plugin-dir", "--plugin-dir-no-mcp", "--add-dir"} {
+		for value, what := range map[string]string{
+			"/workspace/plug":            "directory",
+			"/workspace":                 "directory",
+			filepath.Join(home, "plug"):  "directory",
+			"/workspace/p.zip":           "file",
+			filepath.Join(home, "w.zip"): "file",
+		} {
+			t.Run(flag+" "+value, func(t *testing.T) {
+				fix := plugins
+				if flag == "--add-dir" {
+					fix = "Remove --add-dir " + value + ", or add a directory no walled run writes."
+				}
+				want := "This launch passes " + flag + " " + value + ", and that " + what + " lies in /workspace, " +
+					"which a walled run can write, so the run does not start. " + fix
+				_, err := walledDirs(t, &fakeWritten{written: t.TempDir()}, inside, []string{flag, value})
+				if err == nil || err.Error() != want {
+					t.Errorf("got %v, want %q", err, want)
+				}
+			})
+		}
+	}
+	t.Run("a .zip outside /workspace", func(t *testing.T) {
+		zip := writeFile(t, filepath.Join(home, "p.zip"), "PK")
+		if _, err := walledDirs(t, &fakeWritten{written: t.TempDir()}, inside, []string{"--plugin-dir", zip}); err != nil {
+			t.Errorf("refused: %v", err)
+		}
+	})
+}
+
+// TestAWalledLaunchsPluginLinkTextSaysWhereItLeads pins the text of a link that leads
+// to a directory that contains a place a walled run can write, and of one whose path
+// goes through such a place.
+func TestAWalledLaunchsPluginLinkTextSaysWhereItLeads(t *testing.T) {
+	home := t.TempDir()
+	p := plugin(t, filepath.Join(home, "p"))
+	other := mkdir(t, filepath.Join(home, "other"))
+	work := mkdir(t, filepath.Join(other, "work"))
+	symlink(t, other, filepath.Join(p, "skills", "x"))
+	_, err := walledDirs(t, &fakeWritten{written: work}, nil, []string{"--plugin-dir", p})
+	target, _ := filepath.EvalSymlinks(other)
+	want := "This launch passes --plugin-dir " + p + ", and its link " + filepath.Join(p, "skills", "x") + " leads to " + target +
+		", and " + target + " contains " + work + ", which a walled run can write, so the run does not start. " +
+		"Replace the link with a copy, or link to a directory that contains no place a walled run writes."
+	if err == nil || err.Error() != want {
+		t.Errorf("contains: got %v, want %q", err, want)
+	}
+
+	q := plugin(t, filepath.Join(home, "q"))
+	symlink(t, filepath.Join(home, "elsewhere"), filepath.Join(q, "skills", "y"))
+	through := func(path string) (string, error) {
+		if strings.HasSuffix(path, "/skills/y") {
+			return "", &runtimes.WrittenError{How: "is reached through", Place: "/work"}
+		}
+		return filepath.EvalSymlinks(path)
+	}
+	_, err = claude.Settings([]string{"Stop"}, runtimes.Attach{
+		Launch: runtimes.Launch{Args: []string{"--plugin-dir", q}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+		Walled: true, Readable: through, ReadableDir: through,
+	})
+	want = "This launch passes --plugin-dir " + q + ", and its link " + filepath.Join(q, "skills", "y") + " leads through /work, " +
+		"which a walled run can write, so the run does not start. Replace the link with a copy, or point it at a path that " +
+		"does not go through /work."
+	if err == nil || err.Error() != want {
+		t.Errorf("reached through: got %v, want %q", err, want)
+	}
+}
+
+// TestAWalledLaunchsPluginDirectoriesAreReadOnce pins that a directory of the plugin
+// reached again through a link is not read and counted again: a plugin whose entries
+// are within 10,000 only when each directory is read once passes.
+func TestAWalledLaunchsPluginDirectoriesAreReadOnce(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p")
+	entries(t, filepath.Join(p, "big"), 9_000)
+	symlink(t, filepath.Join(p, "big"), filepath.Join(p, "alias"))
+	symlink(t, filepath.Join(p, "big", "d0001"), filepath.Join(p, "big", "d0000", "sub"))
+	if _, err := walledDirs(t, &fakeWritten{written: t.TempDir()}, nil, []string{"--plugin-dir", p}); err != nil {
+		t.Errorf("refused: %v", err)
+	}
 }
 
 // TestAWalledLaunchsAddDirIsChecked pins the check of an --add-dir value: the

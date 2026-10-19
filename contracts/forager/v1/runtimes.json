@@ -25,7 +25,9 @@
         "CLAUDE_CONFIG_DIR",
         "CLAUDE_CODE_CLIENT_CERT",
         "CLAUDE_CODE_CLIENT_KEY",
-        "CLAUDE_CODE_CERT_STORE"
+        "CLAUDE_CODE_CERT_STORE",
+        "CLAUDE_CODE_PLUGIN_DIRS",
+        "CLAUDE_RELAUNCH_SESSION_ADD_DIRS"
       ],
       "credential_files": [
         "~/.claude/.credentials.json"

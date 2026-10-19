@@ -506,9 +506,13 @@ unwalled launch passes them unchecked.
   longer than one character. The list ends at a `--`, unless the word before that `--`
   starts with `-` and is not a `--name=value` word: that option may take the `--` as its
   value, so the words after it are listed too.
-- **JSON passes unchanged.** An `--mcp-config` value that parses as JSON and is not
-  `null`, `false`, `0` or `""` is servers, not a path. An `--agents` value that starts
-  with `{` after white space, or parses as JSON, is agents, not a path.
+- **JSON passes unchanged.** Only JSON's white space, space, tab, newline and carriage
+  return, is taken off a value before it is judged. An `--mcp-config` value that is then
+  JSON is servers, not a path, unless it is `null`, `false`, `""`, or a number that is
+  0 or does not fit a 64-bit float, such as `1e400`. An `--agents` value that then
+  starts with `{`, or is JSON other than `null`, is agents, not a path. Every other
+  value is a path, so a value padded with other white space, such as a no-break space,
+  `1e400` for `--mcp-config` and `null` for `--agents` are refused as relative paths.
 - **Path rules.** Every other value is a path. A value that starts with `~` is refused:
   "This launch passes --add-dir ~/ref, and inside the wall ~ is the home of the wall's
   user, which Forager cannot check, so the run does not start. Pass an absolute path." A
@@ -541,11 +545,25 @@ unwalled launch passes them unchecked.
   - A link must not lead into such a place: "This launch passes --plugin-dir /home/p,
     and its link /home/p/skills/x leads into /work, which a walled run can write, so the
     run does not start. Replace the link with a copy, or move what it leads to out of
-    /work." A link to a directory is checked as the directory is, and the entries under
-    the directory it leads to are read the same way, each once.
+    /work." A link whose path goes through such a place says so: "This launch passes
+    --plugin-dir /home/p, and its link /home/p/skills/x leads through /work, which a
+    walled run can write, so the run does not start. Replace the link with a copy, or
+    point it at a path that does not go through /work."
+  - A link to a directory is checked as the directory is: "This launch passes
+    --plugin-dir /home/p, and its link /home/p/skills/x leads to /h/other, and /h/other
+    contains /h/other/work, which a walled run can write, so the run does not start.
+    Replace the link with a copy, or link to a directory that contains no place a
+    walled run writes." The entries under the directory it leads to are read the same
+    way. Each directory is read once, by its device and inode: one reached again,
+    through a link or as an entry, counts as one entry and is not read again.
   - For a run whose workspace is at `/workspace` inside, a link whose path, followed a
     name at a time on this machine, reaches `/workspace` is refused the same way, with
-    `/workspace` as the place.
+    `/workspace` as the place. So is a value whose path reaches `/workspace`, before it
+    is looked at on this machine: "This launch passes --plugin-dir /workspace/plug, and
+    that directory lies in /workspace, which a walled run can write, so the run does not
+    start. Move the plugin to a directory no walled run writes." A value named `.zip`
+    says "that file". A path with more than 40 links on the way is refused with the
+    reason, "--plugin-dir /home/p: /home/p/skills/x: too many links".
   - A regular file, or a file a link leads to, with more than one name is refused:
     "This launch passes --plugin-dir /home/p, and /home/p/agents/a.md has more than one
     hard link, so a walled run could change it under another name, and the run does
@@ -564,7 +582,10 @@ unwalled launch passes them unchecked.
 
 A refusal stops the run before the wall is prepared, with the prefix `runtime claude: `.
 The programs a checked file or plugin starts, such as a server's command, are not
-checked.
+checked. Claude Code also loads plugin directories named in `CLAUDE_CODE_PLUGIN_DIRS`
+and adds the directories named in `CLAUDE_RELAUNCH_SESSION_ADD_DIRS`. The Claude
+descriptor denies both, so no value of the server's, the run's or the machine's
+reaches the enclosure, and a walled run has them unset.
 
 ### The helper
 

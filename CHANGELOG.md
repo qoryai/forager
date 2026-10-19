@@ -401,6 +401,12 @@ release may change what an existing document does, and says so under Upgrading.
   checked the same way, with only `<dir>/.claude` and `<dir>/CLAUDE.md` read. The wall
   docs, § "No file read from a place an agent can write", have each text. An unwalled
   launch starts as before.
+- Claude Code loads plugin directories from `CLAUDE_CODE_PLUGIN_DIRS` and adds
+  directories from `CLAUDE_RELAUNCH_SESSION_ADD_DIRS`, so a value set for a run went
+  past the checks of `--plugin-dir` and `--add-dir`. The Claude descriptor's `denies`
+  now lists both, and `contracts/forager/v1/runtimes.json` with it: a value of the
+  server's, the run's or the machine's no longer reaches the run, and a walled run has
+  them unset.
 - A walled run bound a mount or a workspace through a link that an agent of an earlier
   walled run, already ended, had left in a place it could write: the engine followed
   the link, so the run could bind any directory of this machine, writable. A place whose

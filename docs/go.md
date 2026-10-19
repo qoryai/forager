@@ -387,9 +387,11 @@ A program that needs custom code implements the interface.
   walled run, and behind a `Wall` when it lies in a writable bind of this run's, the
   workspace among them. Behind a `Wall`, Claude Code's `--mcp-config`, `--agents`,
   `--plugin-dir`, `--plugin-dir-no-mcp` and `--add-dir` values are checked against the
-  same places: a file is passed as a copy in the run directory, and a directory may not
-  lie in or contain one of them, nor hold a link that leads into one. Behind a `Wall`, a place whose path goes through a link inside
-  one of them and does not resolve into it is no run, `mount_through_link`. See
+  same places. An `--mcp-config` or `--agents` file is passed as a copy in the run
+  directory. A directory may not lie in or contain one of them, nor hold a link that
+  leads into one, and a `.zip` may not lie in one; both are passed as they are. Behind a
+  `Wall`, a place whose path goes through a link inside one of them and does not
+  resolve into it is no run, `mount_through_link`. See
   [no file read from a place an agent can write](wall.md#no-file-read-from-a-place-an-agent-can-write).
 - `Preparation` is the run's preparation, the program and then its arguments: the
   session runs it inside the wall before the runtime, through the run's proxy, and

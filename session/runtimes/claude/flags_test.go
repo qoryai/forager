@@ -163,7 +163,8 @@ func TestAWalledLaunchsValuesAreReadAsClaudeCodeReadsThem(t *testing.T) {
 // TestAWalledLaunchsInlineJSONPassesAsItIs pins that a value Claude Code takes as JSON
 // passes unchanged and is not asked of Readable, and which values those are: for
 // --mcp-config a value that parses as JSON and is truthy, for --agents one that starts
-// with "{" after white space or parses as JSON. Any other value is a path.
+// with "{" after white space or parses as JSON other than null. Any other value is a
+// path.
 func TestAWalledLaunchsInlineJSONPassesAsItIs(t *testing.T) {
 	relative := func(flag, v string) string {
 		return "This launch passes " + flag + " " + v + ", a relative path that Claude Code reads from the workspace, " +
@@ -182,12 +183,18 @@ func TestAWalledLaunchsInlineJSONPassesAsItIs(t *testing.T) {
 		{"--mcp-config", "0", false},
 		{"--mcp-config", `""`, false},
 		{"--mcp-config", "false", false},
-		{"--mcp-config", " {}", false},
+		{"--mcp-config", "\u00a0{}", false},
+		{"--mcp-config", "1e400", false},
+		{"--mcp-config", "1", true},
+		{"--mcp-config", "-0.0", false},
 		{"--agents", `{"reviewer":{"description":"d","prompt":"p"}}`, true},
 		{"--agents", "{", true},
 		{"--agents", "  {", true},
 		{"--agents", "[1]", true},
-		{"--agents", "null", true},
+		{"--agents", "null", false},
+		{"--agents", " null", false},
+		{"--agents", "null\n", false},
+		{"--agents", `"null"`, true},
 		{"--agents", "agents.json", false},
 	} {
 		t.Run(c.flag+" "+c.value, func(t *testing.T) {

@@ -88,7 +88,7 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 	}
 	if !reflect.DeepEqual(s.Reserves, []string{"ANTHROPIC_AUTH_TOKEN"}) ||
 		!reflect.DeepEqual(s.CredentialFiles, []string{"~/.claude/.credentials.json"}) ||
-		len(s.Denies) != 18 || s.Denies[0] != "ANTHROPIC_BASE_URL" {
+		len(s.Denies) != 20 || s.Denies[0] != "ANTHROPIC_BASE_URL" {
 		t.Errorf("reserves %v, credential_files %v, denies %v", s.Reserves, s.CredentialFiles, s.Denies)
 	}
 }

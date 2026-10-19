@@ -291,3 +291,28 @@ func TestANameTheWallSetsWithAnAuthorityIsUnsetWithoutOne(t *testing.T) {
 		}
 	}
 }
+
+// TestAVariableThatAddsPluginsOrDirectoriesIsDenied pins CLAUDE_CODE_PLUGIN_DIRS and
+// CLAUDE_RELAUNCH_SESSION_ADD_DIRS, which load plugin directories and add directories
+// as --plugin-dir and --add-dir do, past their checks: the Claude runtime denies them,
+// so a value of the server's, the run's or the machine's never reaches the wall, and
+// the name is unset inside.
+func TestAVariableThatAddsPluginsOrDirectoriesIsDenied(t *testing.T) {
+	for _, name := range []string{"CLAUDE_CODE_PLUGIN_DIRS", "CLAUDE_RELAUNCH_SESSION_ADD_DIRS"} {
+		t.Run(name, func(t *testing.T) {
+			w := &openWall{}
+			sp, g := specGateway(t)
+			sp.Wall, sp.Image = w, "example.com/agent:1"
+			answerVariables(g, `{"variables":{"`+name+`":{"value":"/server/plugins"}}}`)
+			sp.Variables.Run = []string{name + "=/run/plugins"}
+			sp.Variables.Machine = []string{name + "=/machine/plugins"}
+			if _, err := session.Run(context.Background(), sp); err != nil {
+				t.Fatal(err)
+			}
+			names, _ := unsetIn(t, w.got)
+			if got := entriesOf(w.got.Env, name); !slices.Contains(names, name) || len(got) != 0 {
+				t.Errorf("unset %q, the wall's environment %q; want it unset alone", names, got)
+			}
+		})
+	}
+}
