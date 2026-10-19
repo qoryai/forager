@@ -72,7 +72,12 @@ secrets:
 # Claude Code sends Anthropic's Messages format. A composer writes the run's model id as
 # --model and its effort value as --effort, an agent's effort value in the agent file's
 # effort frontmatter, and the base URL in ANTHROPIC_BASE_URL. denies still lists
-# ANTHROPIC_BASE_URL, so the session leaves the server's value of it out.
+# ANTHROPIC_BASE_URL, so the session leaves the server's value of it out. overrides lists
+# the variables Claude Code reads a model id, an effort value or an extra request body
+# from, beside what a composer writes. Behind a wall the session leaves out the server's,
+# the run's, the machine's and the harness's values of them, the harness's computed
+# values included, and unsets inside each one that nothing else sets; without a wall
+# they reach Claude Code as before.
 model:
   formats: [anthropic-messages]
   model: {flag: --model}
@@ -80,6 +85,11 @@ model:
     run: {flag: --effort, values: [low, medium, high, xhigh, max]}
     agent: {frontmatter: effort, values: [low, medium, high, xhigh, max]}
   endpoint: {variable: ANTHROPIC_BASE_URL}
+  overrides: [ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
+              ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL,
+              ANTHROPIC_DEFAULT_FABLE_MODEL, ANTHROPIC_SMALL_FAST_MODEL,
+              CLAUDE_CODE_SUBAGENT_MODEL, CLAUDE_CODE_SUBAGENT_MODEL_FORCE,
+              CLAUDE_CODE_AUTO_MODE_MODEL, CLAUDE_CODE_EFFORT_LEVEL, CLAUDE_CODE_EXTRA_BODY]
 rules:
   - source: hooks
     match: {hook_event_name: SessionStart}

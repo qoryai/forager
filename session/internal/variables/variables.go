@@ -10,9 +10,10 @@
 // [Resolve] refuses first what must stay outside the enclosure, [Check], over every
 // value the node passes. The deny list then leaves out a value of the server, the run,
 // the machine or the harness's defaults; its built-in entries apply to the harness's
-// computed values too. What loses never stops the run, and [Resolved.Applied] lists
-// each name with its source and its losses, as dev.qory.run.policy_applied reports
-// them.
+// computed values too. Behind a wall, the runtime's overrides join the deny list and
+// apply to the harness's computed values as well. What loses never stops the run, and
+// [Resolved.Applied] lists each name with its source and its losses, as
+// dev.qory.run.policy_applied reports them.
 //
 // The deny list is the contract's denied-variables.json, the run's runtime's denies
 // and the node's own entries. An entry is a name or a pattern in which * matches any
@@ -103,6 +104,10 @@ type Inputs struct {
 	Deny []string
 	// RuntimeDenies is the run's runtime's denies.
 	RuntimeDenies []string
+	// Overrides is the run's runtime's model overrides: the variables that would
+	// override the model id or effort value a composer writes. Only a walled run
+	// applies them.
+	Overrides []string
 	// Runtime is the variables the run's runtime declares or reserves.
 	Runtime []string
 	// Placeholders is the names of the run's placeholders.
@@ -157,8 +162,10 @@ type Loss struct {
 // list leave it out, not the built-in list. A value of the run, the
 // machine or the harness's defaults is left out when the deny list matches it. A value
 // of the harness's computed ones is left out when the built-in list matches it; the
-// runtime's denies and the node's entries leave it in. The inherited environment's
-// values are not matched against the deny list.
+// runtime's denies and the node's entries leave it in. Behind a wall, the runtime's
+// overrides are entries of the deny list, and a value of the harness's computed ones
+// whose name is one of them is left out too. The inherited environment's values are
+// not matched against the deny list.
 func Resolve(in Inputs) (Resolved, error) {
 	if err := CheckDeny(in.Deny); err != nil {
 		return Resolved{}, err
@@ -171,13 +178,22 @@ func Resolve(in Inputs) (Resolved, error) {
 		return Resolved{}, err
 	}
 	added := append(slices.Clone(in.Deny), in.RuntimeDenies...)
+	// Behind a wall, the runtime's overrides apply to every source the deny list
+	// covers, and to the harness's computed values.
+	var overrides []string
+	if in.Walled {
+		overrides = in.Overrides
+	}
+	added = append(added, overrides...)
 	deny, err := List(added)
 	if err != nil {
 		return Resolved{}, err
 	}
 	// The server's two QORY_ names are matched against the entries the run adds alone.
 	serverDeny := entriesOf(added)
-	builtin, err := List(nil)
+	// The harness's computed values are matched against the built-in list and the
+	// overrides that apply.
+	computed, err := List(overrides)
 	if err != nil {
 		return Resolved{}, err
 	}
@@ -189,7 +205,7 @@ func Resolve(in Inputs) (Resolved, error) {
 	deniedFixed := map[string]bool{}
 	for _, kv := range in.Fixed {
 		name, _, _ := strings.Cut(kv, "=")
-		if builtin.Matches(name) {
+		if computed.Matches(name) {
 			deniedFixed[name] = true
 			continue
 		}

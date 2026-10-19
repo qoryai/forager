@@ -35,13 +35,15 @@ type runtimeEntry struct {
 }
 
 // modelEntry is the model section of a runtime in [RuntimesFile], in the descriptor's
-// shape: formats, model and endpoint always, effort when the descriptor has it, and in
-// effort agent when it has that. A place has only the member that is set.
+// shape: formats, model and endpoint always, effort and overrides when the descriptor
+// has them, and in effort agent when it has that. A place has only the member that is
+// set.
 type modelEntry struct {
-	Formats  []string `json:"formats"`
-	Model    Place    `json:"model"`
-	Effort   *Effort  `json:"effort,omitempty"`
-	Endpoint Endpoint `json:"endpoint"`
+	Formats   []string `json:"formats"`
+	Model     Place    `json:"model"`
+	Effort    *Effort  `json:"effort,omitempty"`
+	Endpoint  Endpoint `json:"endpoint"`
+	Overrides []string `json:"overrides,omitempty"`
 }
 
 // declarationEntry is one declaration of a runtime in [RuntimesFile]; paths is absent
@@ -132,7 +134,7 @@ func entry(d *Descriptor) runtimeEntry {
 		e.OneOf = append(e.OneOf, groupEntry{ID: g.ID, Required: g.Required, Of: list(g.Of)})
 	}
 	if m := d.Model; m != nil {
-		e.Model = &modelEntry{Formats: m.Formats, Model: m.Model, Effort: m.Effort, Endpoint: m.Endpoint}
+		e.Model = &modelEntry{Formats: m.Formats, Model: m.Model, Effort: m.Effort, Endpoint: m.Endpoint, Overrides: m.Overrides}
 	}
 	return e
 }

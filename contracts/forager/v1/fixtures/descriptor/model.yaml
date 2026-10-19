@@ -1,5 +1,6 @@
 # A model section with each kind of place: the model id in a setting, the run's effort
-# in a variable, an agent's effort in the agent file's frontmatter, and two formats.
+# in a variable, an agent's effort in the agent file's frontmatter, two formats, and two
+# variables in overrides.
 version: 1
 runtime: amp
 runtime_version: "1"
@@ -12,3 +13,4 @@ model:
     run: {variable: AMP_EFFORT, values: [low, medium, high]}
     agent: {frontmatter: reasoning-effort, values: [low, high]}
   endpoint: {variable: AMP_BASE_URL}
+  overrides: [AMP_MODEL, AMP_EFFORT_LEVEL]
