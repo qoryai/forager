@@ -74,6 +74,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -226,11 +227,11 @@ type Run struct {
 	AccessKeyID, InstanceID string
 	// ID is the run id.
 	ID string
-	// Labels are the run's labels, empty when the registration sent none; a copy the
-	// hook may keep.
+	// Labels are the run's labels, empty when the registration sent none, as
+	// server.ShownLabels gives them; a copy the hook may keep.
 	Labels map[string]string
-	// About is what the run is about, as the registration sent it, nil when it sent
-	// none. It is for display: it never selects or changes a security policy.
+	// About is what the run is about, as server.ShownAbout gives the registration's,
+	// nil when it sent none. It is for display: it never selects or changes a security policy.
 	About json.RawMessage
 	// Node is the node or node pool that registered the run, as its access key names
 	// it, empty for an access key with no node; Workspace is its workspace, empty when
@@ -636,7 +637,22 @@ func readRegistration(body []byte) (*registrationBody, error) {
 		if err := server.CheckAbout(&a); err != nil {
 			return nil, err
 		}
+		// Kept as run.started sends it, so the attach's answer, and with it the
+		// gateway's run.registered, contains no value that contains qak_ or qrk_. An
+		// about without one is kept as the body has it.
+		if shown := server.ShownAbout(&a); !reflect.DeepEqual(*shown, a) {
+			reg.About = nil
+			if !shown.Empty() {
+				b, err := json.Marshal(shown)
+				if err != nil {
+					return nil, err
+				}
+				reg.About = b
+			}
+		}
 	}
+	// As run.started sends them, as about is.
+	reg.Labels = server.ShownLabels(reg.Labels)
 	return &reg, nil
 }
 
@@ -1263,7 +1279,7 @@ func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 		}
 	}
 	if h.Log != nil {
-		h.Log("delivery for run " + subject + ": " + itoa(stored) + " stored, " + itoa(dup) + " duplicates")
+		h.Log("delivery for run " + accesskey.ShownValue(subject, false) + ": " + itoa(stored) + " stored, " + itoa(dup) + " duplicates")
 	}
 	h.digests(w, v, reg)
 	var answer []byte
@@ -1304,11 +1320,12 @@ type File struct {
 }
 
 // OpenFile opens or creates the file and reads the ids it already holds, so a
-// restarted receiver still deduplicates.
+// restarted receiver still deduplicates. An error whose text contains qak_ or qrk_,
+// such as one that quotes the path, prints as accesskey.ShownError prints it.
 func OpenFile(path string) (*File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	seen := map[string]bool{}
 	s := bufio.NewScanner(f)
@@ -1323,11 +1340,11 @@ func OpenFile(path string) (*File, error) {
 	}
 	if err := s.Err(); err != nil {
 		f.Close()
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		f.Close()
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	return &File{f: f, seen: seen}, nil
 }
@@ -1344,7 +1361,7 @@ func (s *File) Append(id string, line []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.f.Write(append(append([]byte(nil), line...), '\n')); err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	s.seen[id] = true
 	return nil
@@ -1361,5 +1378,5 @@ func (s *File) Count() int {
 func (s *File) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return errors.Join(s.f.Sync(), s.f.Close())
+	return accesskey.ShownError(errors.Join(s.f.Sync(), s.f.Close()))
 }

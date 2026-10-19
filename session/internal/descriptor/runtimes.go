@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"path"
 	"sort"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // RuntimesFile is the path, in the contract directory, of the file that lists the
@@ -77,10 +79,10 @@ func Runtimes(fsys fs.FS) ([]byte, error) {
 			return nil, err
 		}
 		if d.Runtime != dir.Name() {
-			return nil, fmt.Errorf("%s describes %q; want the directory's name", p, d.Runtime)
+			return nil, fmt.Errorf("%s describes %q; want the directory's name", accesskey.ShownValue(p, false), d.Runtime)
 		}
 		if d.Title == "" {
-			return nil, fmt.Errorf("%s has no title; %s lists one for every runtime", p, RuntimesFile)
+			return nil, fmt.Errorf("%s has no title; %s lists one for every runtime", accesskey.ShownValue(p, false), RuntimesFile)
 		}
 		doc.Runtimes = append(doc.Runtimes, entry(d))
 	}

@@ -131,7 +131,8 @@ The hosts the harness's modules declare are reported. They decide nothing. The p
 list decides.
 
 The spec's `Declared` is the egress the harness declared. The record reports it as
-`harness_hosts`. `nil` means no declaration.
+`harness_hosts`, a host that contains `qak_` or `qrk_` as the value's phrase in its
+place. `nil` means no declaration.
 
 ## Behind a wall
 

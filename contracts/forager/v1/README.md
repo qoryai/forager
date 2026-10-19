@@ -314,7 +314,8 @@ no run.
 Only `dev.qory.run.started` contains `about` among the events. Toward the server, the
 run's registration contains it (§The server, The run endpoint); on the gateway's link
 the run request contains it (§The gateway's link). It is for display: it never selects
-or changes a security policy. An empty `about` is left out.
+or changes a security policy. An empty `about` is left out, and one whose every member
+is left out for a secret is sent as `{}`.
 
 ## The policy
 

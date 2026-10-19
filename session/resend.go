@@ -111,11 +111,11 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 		return ResendResult{}, err
 	}
 	if _, err := os.Lstat(filepath.Join(spec.Dir, sink.EventsFile)); err == nil {
-		return ResendResult{}, &fs.PathError{Op: "open", Path: filepath.Join(spec.Dir, sink.EventsFile), Err: syscall.EEXIST}
+		return ResendResult{}, accesskey.ShownError(&fs.PathError{Op: "open", Path: filepath.Join(spec.Dir, sink.EventsFile), Err: syscall.EEXIST})
 	}
 	file := filepath.Join(spec.Dir, sink.SessionFile)
 	if _, err := os.Stat(file); err != nil {
-		return ResendResult{}, err
+		return ResendResult{}, accesskey.ShownError(err)
 	}
 	unlock, err := lock(spec.Dir)
 	if err != nil {
@@ -126,7 +126,7 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 		// The link's sink never started: the run never opened at the gateway.
 		return ResendResult{NotOpened: true}, nil
 	} else if err != nil {
-		return ResendResult{}, err
+		return ResendResult{}, accesskey.ShownError(err)
 	}
 	lines, err := sessionRecord(file)
 	if err != nil {
@@ -142,14 +142,14 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	}
 	// The record owes the gateway: the run key reaches it.
 	if spec.Gateway.RunKey == "" {
-		return ResendResult{}, fmt.Errorf("resend %s: the run key is needed to send to its gateway; set QORY_RUN_KEY", spec.Dir)
+		return ResendResult{}, fmt.Errorf("resend %s: the run key is needed to send to its gateway; set QORY_RUN_KEY", pathShown(spec.Dir))
 	}
 	key, err := spec.Gateway.key()
 	if err != nil {
 		return ResendResult{}, err
 	}
 	if runID := filepath.Base(spec.Dir); key.RunID != runID {
-		return ResendResult{}, fmt.Errorf("resend %s: QORY_RUN_KEY names the run %s, not this one", spec.Dir, key.RunID)
+		return ResendResult{}, fmt.Errorf("resend %s: QORY_RUN_KEY names the run %s, not this one", pathShown(spec.Dir), key.RunID)
 	}
 	// How the run ended, as far as the record says.
 	state, reason := exitOf(lines)
@@ -170,7 +170,7 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	// What was spooled is in session.jsonl as well, and is spooled again if the
 	// gateway still does not take it.
 	if err := os.RemoveAll(filepath.Join(spec.Dir, sink.UndeliveredDir)); err != nil {
-		return ResendResult{}, err
+		return ResendResult{}, accesskey.ShownError(err)
 	}
 	sendCtx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -312,7 +312,7 @@ func exitOf(lines []recordedLine) (state, reason string) {
 func sessionRecord(file string) ([]recordedLine, error) {
 	f, err := os.Open(file)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	defer f.Close()
 	var out []recordedLine
@@ -373,9 +373,9 @@ const GatewayMark = "separate-gateway"
 func markBehindGateway(dir string) error {
 	f, err := os.OpenFile(filepath.Join(dir, GatewayMark), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
-	return f.Close()
+	return accesskey.ShownError(f.Close())
 }
 
 // BehindGateway reports whether the run directory dir holds a record a session made
@@ -389,7 +389,7 @@ func BehindGateway(dir string) (bool, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	} else if err != nil {
-		return false, err
+		return false, accesskey.ShownError(err)
 	}
 	return info.Mode().IsRegular(), nil
 }

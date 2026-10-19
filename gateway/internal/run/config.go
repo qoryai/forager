@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
@@ -352,13 +353,13 @@ type Image struct {
 // configuration says so before any run selects it.
 func (i Image) Check() error {
 	if !imageNameShape.MatchString(i.Name) {
-		return fmt.Errorf("the image name %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", i.Name)
+		return fmt.Errorf("the image name %s is not 1 to 64 of a-z, 0-9, underscore, dot and dash", accesskey.ShownName(i.Name, true))
 	}
 	if i.Ref == "" {
-		return fmt.Errorf("image %s: the reference is empty", i.Name)
+		return fmt.Errorf("image %s: the reference is empty", accesskey.ShownName(i.Name, false))
 	}
 	if i.Docker && i.Runtime == "" {
-		return fmt.Errorf("image %s: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc", i.Name)
+		return fmt.Errorf("image %s: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc", accesskey.ShownName(i.Name, false))
 	}
 	return nil
 }
@@ -392,7 +393,7 @@ func (im Images) check() error {
 	seen := map[string]bool{}
 	for _, d := range im.Defined {
 		if seen[d.Name] {
-			return fmt.Errorf("the image %s is defined twice", d.Name)
+			return fmt.Errorf("the image %s is defined twice", accesskey.ShownName(d.Name, false))
 		}
 		seen[d.Name] = true
 	}
@@ -420,8 +421,8 @@ func (im Images) resolve(selected string) (Image, error) {
 	}
 	if policy.ImageReference(selected) {
 		if _, ok := policy.ImageAllowed(im.Allow, selected); !ok {
-			return Image{}, refusal.New(refusal.ImageNotAllowed, []string{selected},
-				"the image %s is under none of the machine's allowed prefixes (images.allow)", selected)
+			return Image{}, refusal.New(refusal.ImageNotAllowed, []string{accesskey.ShownName(selected, false)},
+				"the image %s is under none of the machine's allowed prefixes (images.allow)", accesskey.ShownName(selected, false))
 		}
 		def := im.defaultImage()
 		return Image{Ref: selected, Runtime: def.Runtime, Reference: true}, nil
@@ -432,7 +433,7 @@ func (im Images) resolve(selected string) (Image, error) {
 	if i := slices.IndexFunc(im.Defined, func(d Image) bool { return d.Name == selected }); i >= 0 {
 		return im.Defined[i], nil
 	}
-	return Image{}, refusal.New(refusal.ImageUnknown, []string{selected}, "the policy selects the image %q, which this machine does not define", selected)
+	return Image{}, refusal.New(refusal.ImageUnknown, []string{accesskey.ShownName(selected, false)}, "the policy selects the image %s, which this machine does not define", accesskey.ShownName(selected, true))
 }
 
 // defaultImage is the image a run starts in when its policy selects none: the

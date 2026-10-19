@@ -35,6 +35,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/sink"
 )
@@ -152,7 +153,7 @@ func (s *Stream) Open(runID string) (*Run, error) {
 	}
 	dir := s.Dir(runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	unlock, err := lock(dir, lockFile)
 	if err != nil {
@@ -161,7 +162,7 @@ func (s *Stream) Open(runID string) (*Run, error) {
 	rec, err := os.OpenFile(filepath.Join(dir, sink.EventsFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		unlock()
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	newID := s.newID
 	if newID == nil {
@@ -506,16 +507,16 @@ func (r *Run) write(ev *event.Event) {
 		return
 	}
 	if _, err := r.record.Write(append(line, '\n')); err != nil {
-		r.s.cfg.Report(fmt.Sprintf("run %s: the record: %v", r.id, err))
+		r.s.cfg.Report(fmt.Sprintf("run %s: the record: %v", r.id, accesskey.ShownError(err)))
 	}
 	if r.server != nil {
 		if err := r.server.Write(ev); err != nil {
-			r.s.cfg.Report(fmt.Sprintf("run %s: the server: %v", r.id, err))
+			r.s.cfg.Report(fmt.Sprintf("run %s: the server: %v", r.id, accesskey.ShownError(err)))
 		}
 	}
 	if r.s.events != nil {
 		if err := r.s.events.Write(ev); err != nil {
-			r.s.cfg.Report(fmt.Sprintf("run %s: the events: %v", r.id, err))
+			r.s.cfg.Report(fmt.Sprintf("run %s: the events: %v", r.id, accesskey.ShownError(err)))
 		}
 	}
 }
@@ -554,7 +555,7 @@ func (r *Run) Close(ctx context.Context) (Result, error) {
 		cancel()
 		r.result = Result{Undelivered: srv.Undelivered()}
 	}
-	errs = append(errs, rec.Sync(), rec.Close())
+	errs = append(errs, accesskey.ShownError(rec.Sync()), accesskey.ShownError(rec.Close()))
 	r.unlock()
 	r.s.mu.Lock()
 	delete(r.s.runs, r.id)
@@ -579,18 +580,18 @@ func (r *Run) MarkAnswered() error {
 	}
 	f, err := os.OpenFile(filepath.Join(r.dir, answeredFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	if err := errors.Join(f.Sync(), f.Close()); err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	for _, dir := range []string{r.dir, filepath.Dir(r.dir)} {
 		d, err := os.Open(dir)
 		if err != nil {
-			return err
+			return accesskey.ShownError(err)
 		}
 		if err := errors.Join(d.Sync(), d.Close()); err != nil {
-			return err
+			return accesskey.ShownError(err)
 		}
 	}
 	return nil
@@ -604,7 +605,7 @@ func (r *Run) Discard(ctx context.Context) error {
 	_, err := r.Close(ctx)
 	errs := []error{err}
 	for _, name := range []string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir, answeredFile, lockFile} {
-		errs = append(errs, os.RemoveAll(filepath.Join(r.dir, name)))
+		errs = append(errs, accesskey.ShownError(os.RemoveAll(filepath.Join(r.dir, name))))
 	}
 	// Left in place when it holds anything else, a session's own files on one machine.
 	os.Remove(r.dir)
@@ -632,7 +633,7 @@ func (s *Stream) Reclaim(runID string) (bool, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
-		return false, err
+		return false, accesskey.ShownError(err)
 	}
 	unlock, err := lock(dir, lockFile)
 	if err != nil {
@@ -643,14 +644,14 @@ func (s *Stream) Reclaim(runID string) (bool, error) {
 	}
 	defer unlock()
 	if _, err := os.Stat(filepath.Join(dir, answeredFile)); !errors.Is(err, os.ErrNotExist) {
-		return false, err
+		return false, accesskey.ShownError(err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, sink.EventsFile))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
-		return false, err
+		return false, accesskey.ShownError(err)
 	}
 	n := 0
 	for _, line := range bytes.Split(b, []byte("\n")) {
@@ -666,7 +667,7 @@ func (s *Stream) Reclaim(runID string) (bool, error) {
 	}
 	var errs []error
 	for _, name := range []string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir} {
-		errs = append(errs, os.RemoveAll(filepath.Join(dir, name)))
+		errs = append(errs, accesskey.ShownError(os.RemoveAll(filepath.Join(dir, name))))
 	}
 	return true, errors.Join(errs...)
 }
@@ -704,7 +705,7 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 func checkRunID(id string) error {
 	if !runIDShape.MatchString(id) {
-		return fmt.Errorf("the run id %q is not a UUID in the canonical lower-case form", id)
+		return fmt.Errorf("the run id %s is not a UUID in the canonical lower-case form", accesskey.ShownValue(id, true))
 	}
 	return nil
 }

@@ -87,14 +87,15 @@ func runKeyInvalid() *accesskey.Refusal {
 // refusal of the attach would give, attach <run.url>/<run_id>: <code> (status <status>).
 func (g *Gateway) attachRefused(code string, status int, runID string) *accesskey.Refusal {
 	conf, _ := g.config()
-	return &accesskey.Refusal{Code: code, Status: status, Detail: "attach " + conf.Run.URL + "/" + runID, From: accesskey.FromGateway}
+	return &accesskey.Refusal{Code: code, Status: status, Detail: "attach " + accesskey.ShownValue(conf.Run.URL+"/"+runID, false), From: accesskey.FromGateway}
 }
 
 // admitRunKey decides the bearer value of a request on the one address, in order: no
-// value, or one that is no run key that verifies under the server's pin, is
-// run_key_invalid, 400; then, in the server's order of the attach, a run key past its
-// attach_by plus the skew of [server.Window], 300 s, by the gateway's clock, of a run
-// the gateway holds nothing of, never attached here, is run_key_expired, 409; one that
+// value, or one that is no run key that verifies under the server's pin, or whose
+// instance id [accesskey.CheckInstanceID] refuses, is run_key_invalid, 400; then, in
+// the server's order of the attach, a run key past its attach_by plus the skew of
+// [server.Window], 300 s, by the gateway's clock, of a run the gateway holds nothing
+// of, never attached here, is run_key_expired, 409; one that
 // names another gateway than the one discovery lists of the access key is
 // wrong_gateway, 409. A run key past its attach_by within the skew goes on as one
 // before it, and the server decides its attach. The run's workspace is the run key's:
@@ -107,6 +108,11 @@ func (g *Gateway) admitRunKey(value string, ok bool) (runkey.Key, *accesskey.Ref
 	}
 	k, err := runkey.Verify(value, g.cfg.Server.ApiaryPublicKey)
 	if err != nil {
+		return runkey.Key{}, runKeyInvalid()
+	}
+	// The instance id goes into run.registered as it is, so one that contains qak_ or
+	// qrk_ in any case is refused, as a registration's is ([accesskey.CheckInstanceID]).
+	if accesskey.CheckInstanceID(k.InstanceID) != nil {
 		return runkey.Key{}, runKeyInvalid()
 	}
 	conf, _ := g.config()
@@ -214,12 +220,15 @@ func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID 
 	var labels map[string]string
 	if ans != nil {
 		rc = ans.RunConfiguration
+		// The record's run.registered goes to Qory Apiary: labels and about as
+		// run.started sends them. The run is decided by the labels as the answer gives
+		// them.
 		if len(ans.Labels) > 0 {
-			registered["labels"] = ans.Labels
+			registered["labels"] = server.ShownLabels(ans.Labels)
 			labels = maps.Clone(ans.Labels)
 		}
-		if ans.About != nil {
-			registered["about"] = ans.About
+		if about := server.ShownAbout(ans.About); !about.Empty() {
+			registered["about"] = about
 		}
 	}
 	return rc, digest, registered, labels, err

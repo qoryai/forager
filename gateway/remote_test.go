@@ -1784,3 +1784,19 @@ func TestARunConfigurationNamesAnImageByReference(t *testing.T) {
 		}
 	}
 }
+
+// TestARunKeyWhoseInstanceIDContainsASecretIsInvalid pins a run key whose signed
+// instance id contains qak_ or qrk_ in any case: the instance id would reach
+// run.registered as it is, so every request with the run key is 400 run_key_invalid,
+// and nothing is attached.
+func TestARunKeyWhoseInstanceIDContainsASecretIsInvalid(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	for _, instance := range []string{"qak_FAKE", "i.QRK_FAKE"} {
+		key := runKeyFor(t, event.NewRunID(), func(k *runkey.Key) { k.InstanceID = instance })
+		refused(t, instance+" configuration", r.do(t, key, http.MethodGet, "/qory-link/configuration", nil), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
+		refused(t, instance+" run request", r.tryOpen(t, key, server.LinkRunRequest{}), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
+	}
+	if n := len(r.c.attached()); n != 0 {
+		t.Errorf("%d attaches", n)
+	}
+}

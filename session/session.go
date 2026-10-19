@@ -26,6 +26,7 @@ import (
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/socket"
+	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/sink"
 	"github.com/qoryai/forager/wall"
@@ -156,7 +157,8 @@ type Spec struct {
 	// run, mount_through_link. A relative path is taken from the working directory.
 	Written []string
 	// Declared is the egress the harness declared, nil when nothing was. It is
-	// reported in dev.qory.run.policy_applied as harness_hosts and decides nothing:
+	// reported in dev.qory.run.policy_applied as harness_hosts, a host that contains
+	// qak_ or qrk_ in any case as accesskey.ShownValue's phrase, and decides nothing:
 	// the policy alone decides.
 	Declared []string
 	// RunsDir holds the run directories; empty means Dir/.qory/runs. It is one of
@@ -313,7 +315,7 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // form. [Run] checks it; a command checks it first to call it a mistake of its user's.
 func CheckRunID(id string) error {
 	if !runIDShape.MatchString(id) {
-		return fmt.Errorf("the run id %q is not a UUID in the canonical lower-case form", id)
+		return fmt.Errorf("the run id %s is not a UUID in the canonical lower-case form", accesskey.ShownName(id, true))
 	}
 	return nil
 }
@@ -491,7 +493,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	interactive := spec.Interactive && !rt.Headless(spec.Args)
 	leave := rt.Stop()
 	if err := CheckStopSignal(leave.Signal); err != nil {
-		return nil, fmt.Errorf("runtime %s: %w", rt.Name(), err)
+		return nil, fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), err)
 	}
 	if spec.StopSignal == "" {
 		spec.StopSignal = leave.Signal
@@ -553,7 +555,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The local link's proxy is on loopback; a separate gateway's is its one address,
 	// which the link's discovery checked.
 	if err == nil && local != nil && !loopback(disc.Proxy.Address) {
-		err = fmt.Errorf("the gateway's discovery names the proxy %q, which is no address on loopback: the local link's proxy is on this machine", disc.Proxy.Address)
+		err = fmt.Errorf("the gateway's discovery names the proxy %s, which is no address on loopback: the local link's proxy is on this machine", accesskey.ShownValue(disc.Proxy.Address, true))
 	}
 	if err == nil && disc.Events.IntervalSeconds < 1 {
 		err = errors.New("the link's discovery names no heartbeat interval")
@@ -564,7 +566,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// A run id that has a record is no run, as it always was: the run's stream, which
 	// the gateway writes beside the session's record, is checked first.
 	if _, err := os.Lstat(filepath.Join(dir, sink.EventsFile)); err == nil {
-		return nil, &fs.PathError{Op: "open", Path: filepath.Join(dir, sink.EventsFile), Err: syscall.EEXIST}
+		return nil, accesskey.ShownError(&fs.PathError{Op: "open", Path: filepath.Join(dir, sink.EventsFile), Err: syscall.EEXIST})
 	}
 	discovered := time.Now()
 	interval := time.Duration(disc.Events.IntervalSeconds) * time.Second
@@ -642,7 +644,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		case errors.As(err, &r) && refusal.Decides(r.Code):
 			data := map[string]any{"code": r.Code}
 			if len(r.Names) > 0 {
-				data["names"] = r.Names
+				data["names"] = eventNames(r.Names)
 			}
 			write(event.RunRefused, data)
 		}
@@ -731,7 +733,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		attach.Inside = inside
 	}
 	if prepared, err = rt.Prepare(attach); err != nil {
-		return fail(fmt.Errorf("runtime %s: %w", rt.Name(), err))
+		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
 	// The run's preparation runs inside, after the runtime's, and starts the launch as
 	// the runtime prepared it.
@@ -775,7 +777,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		defer func() {
 			// The run's context may be what ended the run; the wall is removed regardless.
 			if err := enclosure.Close(context.WithoutCancel(ctx)); err != nil {
-				spec.Report("removing the wall: " + err.Error())
+				spec.Report("removing the wall: " + accesskey.ShownError(err).Error())
 				// Its containers may outlive the run: the entry stays, and is the run's
 				// while one of them exists.
 				listed.keep()
@@ -830,7 +832,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			write(typ, data)
 		}
 	}
-	go sock.Serve(records, func(err error) { spec.Report("socket: " + err.Error()) })
+	go sock.Serve(records, func(err error) { spec.Report("socket: " + accesskey.ShownError(err).Error()) })
 	closeSocket := sync.OnceFunc(func() { sock.Close() })
 	defer closeSocket()
 
@@ -885,7 +887,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			ProxyToken: relayToken,
 		})
 		if err != nil {
-			return fail(err)
+			return fail(accesskey.ShownError(err))
 		}
 	}
 
@@ -895,18 +897,23 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(errRunClosed)
 	}
 	start := time.Now()
+	// A value of the run's that contains qak_ or qrk_ in any case is sent as a phrase in
+	// its place: accesskey.ShownName's for the runtime, the host, the wall, the image,
+	// its name and its container runtime; accesskey.ShownValue's for the directory, the
+	// command, each argument, the runtime's version and each word of the preparation;
+	// and server.ShownLabels' and server.ShownAbout's for the labels and about.
 	started := map[string]any{
-		"opened_by": event.OpenedBySession, "runtime": rt.Name(), "command": command, "args": args,
-		"dir": spec.Dir, "interactive": interactive, "forager_version": spec.ForagerVersion, "host": hostname(),
+		"opened_by": event.OpenedBySession, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(command, false), "args": shownValues(args),
+		"dir": accesskey.ShownValue(spec.Dir, false), "interactive": interactive, "forager_version": spec.ForagerVersion, "host": accesskey.ShownName(hostname(), false),
 	}
 	if byReference {
-		started["dir"] = shown.Dir
+		started["dir"] = accesskey.ShownValue(shown.Dir, false)
 	}
 	if v := rt.Version(); v != "" {
-		started["runtime_version"] = v
+		started["runtime_version"] = accesskey.ShownValue(v, false)
 	}
 	if len(spec.Preparation) > 0 {
-		started["preparation"] = spec.Preparation
+		started["preparation"] = shownValues(spec.Preparation)
 	}
 	// The pseudo-terminal's size is in the record, so a replay can lay the redraws of
 	// a full-screen program over each other: the size it starts with here, each change
@@ -917,13 +924,13 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		started["terminal"] = map[string]any{"cols": cols, "rows": rows}
 	}
 	if spec.Wall != nil {
-		started["wall"] = spec.Wall.Name()
-		started["image"] = img.Ref
+		started["wall"] = accesskey.ShownName(spec.Wall.Name(), false)
+		started["image"] = accesskey.ShownName(img.Ref, false)
 		if img.Name != "" {
-			started["image_name"] = img.Name
+			started["image_name"] = accesskey.ShownName(img.Name, false)
 		}
 		if img.Runtime != "" {
-			started["container_runtime"] = img.Runtime
+			started["container_runtime"] = accesskey.ShownName(img.Runtime, false)
 		}
 		if img.Docker {
 			started["docker"] = true
@@ -938,10 +945,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// neither they nor what the run is about are the session's: the starter's
 	// registration holds them.
 	if len(answer.Labels) > 0 && remote == nil {
-		started["labels"] = answer.Labels
+		started["labels"] = server.ShownLabels(answer.Labels)
 	}
 	if about := server.ReportedAbout(spec.About); about != nil && remote == nil {
-		started["about"] = about
+		started["about"] = server.ShownAbout(about)
 	}
 	write(event.RunStarted, started)
 	// policyApplied is the policy_applied event of the members the gateway decides, for
@@ -953,9 +960,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if a == nil {
 			a = map[string]any{}
 		}
-		a["variables"] = vars.Applied
+		a["variables"] = shownVariables(vars.Applied)
 		if spec.Declared != nil {
-			a["harness_hosts"] = spec.Declared
+			a["harness_hosts"] = shownValues(spec.Declared)
 		} else {
 			delete(a, "harness_hosts")
 		}
@@ -1073,7 +1080,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	closeCtx, cancel := context.WithTimeout(context.Background(), closeWait)
 	defer cancel()
 	if err := closeSinks(closeCtx); err != nil {
-		spec.Report("closing the sinks: " + err.Error())
+		spec.Report("closing the sinks: " + accesskey.ShownError(err).Error())
 	}
 	res.Undelivered = posts.Undelivered()
 	return res, nil
@@ -1104,7 +1111,7 @@ func refused(err error, fail, quit func(error) (*Result, error), own func(string
 		r.Detail = "the gateway"
 		data := map[string]any{"code": r.Code}
 		if len(r.Names) > 0 {
-			data["names"] = r.Names
+			data["names"] = eventNames(r.Names)
 		}
 		if r.From == accesskey.FromApiary && r.Status != 0 {
 			data["status"] = r.Status
@@ -1115,7 +1122,7 @@ func refused(err error, fail, quit func(error) (*Result, error), own func(string
 	var status *server.StatusError
 	if errors.As(err, &status) && status.Status >= 500 {
 		if status.Message != "" {
-			return quit(errors.New(status.Message))
+			return quit(errors.New(accesskey.ShownValue(status.Message, false)))
 		}
 		return quit(fmt.Errorf("the gateway answered the run request with status %d", status.Status))
 	}
@@ -1281,4 +1288,32 @@ func loopback(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// shownVariables are the run's variables as its dev.qory.run.policy_applied sends them:
+// each entry as it is, with its name as accesskey.ShownName shows it, bare, in the
+// order of the names before. Two names that give one phrase are two entries with that
+// phrase.
+func shownVariables(applied []variables.Entry) []variables.Entry {
+	out := make([]variables.Entry, len(applied))
+	for i, e := range applied {
+		out[i] = e
+		out[i].Name = accesskey.ShownName(e.Name, false)
+	}
+	return out
+}
+
+// eventNames are a refusal's names as its dev.qory.run.refused sends them: as
+// accesskey.ShownNames lists them, so a phrase two names give is sent once, as the
+// schema holds the names unique.
+func eventNames(names []string) []string { return accesskey.ShownNames(names) }
+
+// shownValues are values as an event sends them: each as accesskey.ShownValue shows it,
+// in order. A nil list is an empty one, as the event's arrays are never null.
+func shownValues(values []string) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = accesskey.ShownValue(v, false)
+	}
+	return out
 }

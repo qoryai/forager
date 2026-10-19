@@ -657,3 +657,96 @@ func TestHostPathsTakesTheMostSpecificEntry(t *testing.T) {
 		t.Error("no rules hold a host")
 	}
 }
+
+// TestANarrowingRefusalPrintsAPhraseForASecret pins the two refusals of a server's
+// selection the node's policy does not list, of tools and of credentials: a name that
+// contains qak_ or qrk_ in any case prints the name's phrase, in the text and in a
+// refusal's names, each phrase once, and a clean name prints as it is.
+func TestANarrowingRefusalPrintsAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	read := func(doc string) *policy.Loaded {
+		t.Helper()
+		l, err := policy.Read("x.json", []byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	node := read(`{"version":1,"egress":{"mode":"observe","allow":[]},"tools":[],"credentials":[]}`)
+	for _, c := range []struct {
+		names   []string
+		shown   string
+		refused []string
+	}{
+		{[]string{"qak_a"}, ak, []string{ak}},
+		{[]string{"a.qrk_b"}, rk, []string{rk}},
+		{[]string{"qrk_a.qak_b"}, ak, []string{ak}},
+		{[]string{"files", "qak_a", "qak_b", "qrk_c"}, "files, " + ak + ", " + rk, []string{rk, ak, "files"}},
+		{[]string{"files", "more"}, "files, more", []string{"files", "more"}},
+	} {
+		var entries []string
+		for _, n := range c.names {
+			entries = append(entries, `{"name":"`+n+`"}`)
+		}
+		list := "[" + strings.Join(entries, ",") + "]"
+		_, err := policy.Narrowed(read(`{"version":1,"egress":{"mode":"observe","allow":[]},"tools":`+list+`}`), node)
+		var r *accesskey.Refusal
+		if want := "the server's policy selects the tools " + c.shown + ", which the node's policy does not list: tool_unknown: " + strings.Join(c.refused, ", "); !errors.As(err, &r) || err.Error() != want {
+			t.Errorf("tools %v:\n got %v\nwant %s", c.names, err, want)
+			continue
+		}
+		if !slices.Equal(r.Names, c.refused) {
+			t.Errorf("tools %v: the names %q, want %q", c.names, r.Names, c.refused)
+		}
+		tools := err.Error()
+		_, err = policy.Narrowed(read(`{"version":1,"egress":{"mode":"observe","allow":[]},"credentials":`+list+`}`), node)
+		if want := "the server's policy selects the credentials " + c.shown + ", which the node's policy does not list"; err == nil || err.Error() != want {
+			t.Errorf("credentials %v:\n got %v\nwant %s", c.names, err, want)
+			continue
+		}
+		for _, text := range []string{tools, err.Error()} {
+			if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+				t.Errorf("%v: a secret's prefix in %s", c.names, text)
+			}
+		}
+	}
+}
+
+// TestAnImageRefusalOfANarrowingPrintsAPhraseForASecret pins the image_unknown of a
+// server's policy whose image is not the node's: an image that contains qak_ or qrk_ in
+// any case prints the name's phrase in the detail and the names, and a clean image
+// prints as it is.
+func TestAnImageRefusalOfANarrowingPrintsAPhraseForASecret(t *testing.T) {
+	read := func(image string) *policy.Loaded {
+		t.Helper()
+		l, err := policy.Read("x.json", []byte(`{"version":1,"egress":{"mode":"observe"},"image":"`+image+`"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	for _, c := range []struct{ server, node, want string }{
+		{"qak_a", "base", "the server's policy selects the image (a name that contains an access key secret) and the node's policy the image base: image_unknown: (a name that contains an access key secret)"},
+		{"base", "a.qrk_b", "the server's policy selects the image base and the node's policy the image (a name that contains a run key): image_unknown: base"},
+		{"base", "other", "the server's policy selects the image base and the node's policy the image other: image_unknown: base"},
+	} {
+		_, err := policy.Narrowed(read(c.server), read(c.node))
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s, %s:\n got %v\nwant %s", c.server, c.node, err, c.want)
+		}
+	}
+}
+
+// TestAPolicyErrorPrintsAPhraseForASecret pins a policy document's error: a name or an
+// error's text that contains qak_ or qrk_ in any case prints the value's phrase, and
+// the error still wraps its cause.
+func TestAPolicyErrorPrintsAPhraseForASecret(t *testing.T) {
+	_, err := policy.Read("qak_policy.json", []byte(`{"version":1,"egress":{"mode":"observe"},"qrk_x":1}`))
+	if want := "policy (a value that contains an access key secret): (a value that contains a run key)"; err == nil || err.Error() != want {
+		t.Errorf("Read = %v, want %s", err, want)
+	}
+	cause := errors.New("no")
+	if e := (&policy.Error{Name: "p.json", Err: cause}); e.Error() != "policy p.json: no" || !errors.Is(e, cause) {
+		t.Errorf("a clean error: %v", e)
+	}
+}

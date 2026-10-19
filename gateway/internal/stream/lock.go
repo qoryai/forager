@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // The locks in a run's record directory. The kernel holds each for as long as its
@@ -22,14 +24,14 @@ const (
 func lock(dir, name string) (func(), error) {
 	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, ErrRunning
 		}
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	return func() { f.Close() }, nil
 }

@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // Canonical returns the RFC 8785 serialisation of the one JSON value in b.
@@ -33,7 +35,7 @@ func Canonical(b []byte) ([]byte, error) {
 	if _, err := dec.ReadToken(); err == nil {
 		return nil, errors.New("jcs: more than one JSON value")
 	} else if !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("jcs: %w", err)
+		return nil, fmt.Errorf("jcs: %w", accesskey.ShownError(err))
 	}
 	return out.Bytes(), nil
 }
@@ -42,7 +44,7 @@ func Canonical(b []byte) ([]byte, error) {
 func value(dec *jsontext.Decoder, out *bytes.Buffer) error {
 	tok, err := dec.ReadToken()
 	if err != nil {
-		return fmt.Errorf("jcs: %w", err)
+		return fmt.Errorf("jcs: %w", accesskey.ShownError(err))
 	}
 	switch tok.Kind() {
 	case 'n':
@@ -70,7 +72,7 @@ func value(dec *jsontext.Decoder, out *bytes.Buffer) error {
 			}
 		}
 		if _, err := dec.ReadToken(); err != nil {
-			return fmt.Errorf("jcs: %w", err)
+			return fmt.Errorf("jcs: %w", accesskey.ShownError(err))
 		}
 		out.WriteByte(']')
 	case '{':
@@ -83,7 +85,7 @@ func value(dec *jsontext.Decoder, out *bytes.Buffer) error {
 		for dec.PeekKind() != '}' {
 			name, err := dec.ReadToken()
 			if err != nil {
-				return fmt.Errorf("jcs: %w", err)
+				return fmt.Errorf("jcs: %w", accesskey.ShownError(err))
 			}
 			// What ReadToken returns is the decoder's until its next call.
 			n := name.String()
@@ -94,7 +96,7 @@ func value(dec *jsontext.Decoder, out *bytes.Buffer) error {
 			members = append(members, member{n, utf16.Encode([]rune(n)), v.Bytes()})
 		}
 		if _, err := dec.ReadToken(); err != nil {
-			return fmt.Errorf("jcs: %w", err)
+			return fmt.Errorf("jcs: %w", accesskey.ShownError(err))
 		}
 		slices.SortFunc(members, func(a, b member) int { return slices.Compare(a.units, b.units) })
 		out.WriteByte('{')
@@ -154,7 +156,7 @@ func writeString(out *bytes.Buffer, s string) {
 // beyond the double's range, as NaN and the infinities have no literal.
 func Number(literal string) (string, error) {
 	if v := jsontext.Value(literal); !v.IsValid() || v.Kind() != '0' {
-		return "", fmt.Errorf("jcs: %q is not a JSON number", literal)
+		return "", fmt.Errorf("jcs: %s is not a JSON number", accesskey.ShownValue(literal, true))
 	}
 	f, err := strconv.ParseFloat(literal, 64)
 	if err != nil {

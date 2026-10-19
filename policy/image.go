@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/refusal"
 )
 
@@ -78,8 +79,8 @@ func CheckImagePrefix(entry string) error {
 			(ImageReference(entry+digest) || ImageReference(entry+"/x"+digest)):
 		return nil
 	}
-	return fmt.Errorf("images.allow holds %q, which is not the start of a reference pinned by digest in lower case, "+
-		"up to a whole part of it: a registry, a name or a path ending in a slash, or a name and its @", entry)
+	return fmt.Errorf("images.allow holds %s, which is not the start of a reference pinned by digest in lower case, "+
+		"up to a whole part of it: a registry, a name or a path ending in a slash, or a name and its @", accesskey.ShownValue(entry, true))
 }
 
 // ImageAllowed returns the first entry of allow that covers ref, and whether one does.

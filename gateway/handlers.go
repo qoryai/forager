@@ -1,16 +1,20 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -195,7 +199,7 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		// again keeps it, and the run request that comes again is run_attached.
 		if err := lr.st.MarkAnswered(); err != nil {
 			g.discard(lr)
-			refuseOpen(w, fmt.Errorf("run %s: marking its record answered: %w", req.RunID, err))
+			refuseOpen(w, fmt.Errorf("run %s: marking its record answered: %w", req.RunID, accesskey.ShownError(err)))
 			return
 		}
 		if g.cfg.marked != nil {
@@ -259,12 +263,12 @@ func refuseOpen(w http.ResponseWriter, err error) {
 	err = codeless(err)
 	var wall *refusal.NeedsWall
 	if errors.As(err, &wall) {
-		refuse(w, http.StatusForbidden, refusal.WallRequired, wall.Names, accesskey.FromGateway, err.Error())
+		refuse(w, http.StatusForbidden, refusal.WallRequired, shownWallNames(wall.Names), accesskey.FromGateway, err.Error())
 		return
 	}
 	var ref *accesskey.Refusal
 	if !errors.As(err, &ref) {
-		refuse(w, http.StatusInternalServerError, codeInternal, nil, accesskey.FromGateway, err.Error())
+		refuse(w, http.StatusInternalServerError, codeInternal, nil, accesskey.FromGateway, accesskey.ShownError(err).Error())
 		return
 	}
 	from := ref.From
@@ -279,7 +283,20 @@ func refuseOpen(w http.ResponseWriter, err error) {
 		// A refusal of an answer that came without one, answer_unsigned to a 2xx say.
 		status = http.StatusBadGateway
 	}
-	refuse(w, status, ref.Code, ref.Names, from, err.Error())
+	refuse(w, status, ref.Code, accesskey.ShownNames(ref.Names), from, err.Error())
+}
+
+// shownWallNames are a [refusal.NeedsWall]'s names as the link sends them: the image of
+// image=<name> as [accesskey.ShownName] shows it, the other names as they are.
+func shownWallNames(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		if image, ok := strings.CutPrefix(n, "image="); ok {
+			n = "image=" + accesskey.ShownName(image, false)
+		}
+		out[i] = n
+	}
+	return out
 }
 
 // codeless turns a server's 410 to a request the gateway makes as a run opens, signed
@@ -290,7 +307,7 @@ func refuseOpen(w http.ResponseWriter, err error) {
 func codeless(err error) error {
 	var uncoded *server.AnswerError
 	if errors.As(err, &uncoded) && uncoded.Status == http.StatusGone {
-		return errors.New(uncoded.Error())
+		return errors.New(accesskey.ShownError(uncoded).Error())
 	}
 	var ref *accesskey.Refusal
 	if !errors.As(err, &ref) || ref.Status != http.StatusGone {
@@ -435,6 +452,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		refused(why)
 		return
 	}
+	shownStarted(evs)
 	if _, err := lr.st.Accept(evs); err != nil {
 		if end, ended := lr.gone(); ended {
 			gone(w, end)
@@ -599,13 +617,107 @@ func (lr *linkRun) accepted(evs []event.Event) bool {
 	return final
 }
 
+// shownStarted phrases each dev.qory.run.started in evs, a batch [linkRun.check]
+// accepted, as a session phrases one, so a session that sends a value as it is passes
+// no value that contains qak_ or qrk_ in any case through the gateway: the members of
+// startedNames as [accesskey.ShownName] shows them, those of startedValues and each
+// entry of startedLists as [accesskey.ShownValue] does, the labels as
+// [server.ShownLabels] gives them and about as [server.ShownAbout] does. Data with no
+// such value is left byte for byte.
+func shownStarted(evs []event.Event) {
+	for i, ev := range evs {
+		if ev.Type != event.RunStarted {
+			continue
+		}
+		raw, ok := ev.Data.(json.RawMessage)
+		if !ok {
+			continue
+		}
+		var data map[string]json.RawMessage
+		if json.Unmarshal(raw, &data) != nil {
+			continue
+		}
+		changed := false
+		set := func(member string, v any) {
+			if b, err := unescaped(v); err == nil {
+				data[member], changed = b, true
+			}
+		}
+		for _, members := range []struct {
+			names []string
+			shown func(string, bool) string
+		}{{startedNames, accesskey.ShownName}, {startedValues, accesskey.ShownValue}} {
+			for _, m := range members.names {
+				var v string
+				if json.Unmarshal(data[m], &v) == nil && accesskey.ContainsSecret(v) {
+					set(m, members.shown(v, false))
+				}
+			}
+		}
+		for _, m := range startedLists {
+			var vs []string
+			if json.Unmarshal(data[m], &vs) == nil && slices.ContainsFunc(vs, accesskey.ContainsSecret) {
+				shown := make([]string, len(vs))
+				for k, v := range vs {
+					shown[k] = accesskey.ShownValue(v, false)
+				}
+				set(m, shown)
+			}
+		}
+		var labels map[string]string
+		if json.Unmarshal(data["labels"], &labels) == nil {
+			if shown := server.ShownLabels(labels); !maps.Equal(shown, labels) {
+				set("labels", shown)
+			}
+		}
+		var about server.About
+		if json.Unmarshal(data["about"], &about) == nil {
+			if shown := server.ShownAbout(&about); !reflect.DeepEqual(*shown, about) {
+				set("about", shown)
+			}
+		}
+		if !changed {
+			continue
+		}
+		if b, err := unescaped(data); err == nil {
+			evs[i].Data = json.RawMessage(b)
+		}
+	}
+}
+
+// The members of dev.qory.run.started a session phrases: startedNames as names,
+// startedValues as values, and each entry of startedLists as a value.
+var (
+	startedNames  = []string{"runtime", "host", "wall", "image", "image_name", "container_runtime"}
+	startedValues = []string{"dir", "command", "runtime_version"}
+	startedLists  = []string{"args", "preparation"}
+)
+
+// unescaped is v as JSON without HTML escaping, so the rest of an event's data keeps
+// its characters.
+func unescaped(v any) (json.RawMessage, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
+}
+
 // sameLabels reports whether a run.started's labels, as its data decodes, are the
-// run's: absent is none.
+// run's: absent is none. They may be the run's as server.ShownLabels gives them, which
+// the session sends; a session of before sends them as they are.
 func sameLabels(v any, labels map[string]string) bool {
 	got, _ := v.(map[string]any)
 	if v != nil && got == nil {
 		return false
 	}
+	return equalLabels(got, labels) || equalLabels(got, server.ShownLabels(labels))
+}
+
+// equalLabels reports whether got, a JSON object as it decodes, is labels.
+func equalLabels(got map[string]any, labels map[string]string) bool {
 	if len(got) != len(labels) {
 		return false
 	}

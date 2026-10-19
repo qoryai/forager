@@ -263,14 +263,23 @@ func (p PublicKey) Fixture() bool {
 // shown is a value as an error quotes it: quoted, or, when it contains what starts an
 // access key secret or a run key, a secret pasted where another value belongs say, a
 // phrase in its place, so an error never contains a secret.
-func shown(v string) string {
+func shown(v string) string { return ShownValue(v, true) }
+
+// ShownValue is a value as a message prints it: quoted when quote is true, bare when it
+// is false, and, when it contains qak_ or qrk_ in any case, a phrase in its place. A
+// message passes it a whole part that is not a name, such as a path, or the text of an
+// error or of a program's error output, so that part never prints either prefix. A
+// value that contains both gets the access key secret's phrase.
+func ShownValue(v string, quote bool) string {
 	switch {
 	case containsAccessKeySecret(v):
 		return "(a value that contains an access key secret)"
 	case containsRunKey(v):
 		return "(a value that contains a run key)"
+	case quote:
+		return strconv.Quote(v)
 	}
-	return strconv.Quote(v)
+	return v
 }
 
 // ShownName is a name as a message prints it: quoted when quote is true, bare when it is
@@ -288,6 +297,47 @@ func ShownName(v string, quote bool) string {
 	}
 	return v
 }
+
+// IsNamePhrase reports whether v is one of the phrases [ShownName] gives in place of a
+// name: what a reader of shown names, labels say, gets for a value that contains qak_
+// or qrk_ in any case.
+func IsNamePhrase(v string) bool {
+	return v == ShownName(SecretPrefix, false) || v == ShownName(runKeyPrefix, false)
+}
+
+// ShownNames are names as a message or an event lists them: each as [ShownName] shows
+// it bare, in order, with each phrase once, so two names that give one phrase list it
+// once. A name without either prefix is listed as it is, as often as it is given.
+func ShownNames(names []string) []string {
+	var out []string
+	for _, n := range names {
+		shown := ShownName(n, false)
+		if shown != n && slices.Contains(out, shown) {
+			continue
+		}
+		out = append(out, shown)
+	}
+	return out
+}
+
+// ShownError is err as a message wraps it: err itself, nil among them, or, when its
+// text contains qak_ or qrk_ in any case, an error that still wraps err and whose text
+// is [ShownValue]'s phrase in place of all of err's text.
+func ShownError(err error) error {
+	if err == nil || !ContainsSecret(err.Error()) {
+		return err
+	}
+	return phrasedError{err}
+}
+
+// phrasedError is an error whose text is a phrase in place of the text of the error it
+// wraps.
+type phrasedError struct{ err error }
+
+func (p phrasedError) Error() string { return ShownValue(p.err.Error(), false) }
+
+// Unwrap returns the error the phrase stands in for.
+func (p phrasedError) Unwrap() error { return p.err }
 
 // ContainsSecret reports whether a value contains what starts an access key secret,
 // qak_, or a run key, qrk_, in any case. A reader of a document a secret does not

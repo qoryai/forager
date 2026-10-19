@@ -162,7 +162,7 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 			for _, other := range h.Uses[:i] {
 				for _, theirs := range other.Hosts {
 					if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
-						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", other.Name, u.Name, host)
+						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false), accesskey.ShownValue(host, false))
 					}
 				}
 			}
@@ -170,7 +170,7 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 				continue
 			}
 			if !slices.ContainsFunc(allow, func(entry string) bool { return policy.Covers(entry, host) }) {
-				return fmt.Errorf("the credential %s is for %s, which the run's allow list does not cover", accesskey.ShownName(u.Name, false), host)
+				return fmt.Errorf("the credential %s is for %s, which the run's allow list does not cover", accesskey.ShownName(u.Name, false), accesskey.ShownValue(host, false))
 			}
 		}
 	}
@@ -199,7 +199,7 @@ func (d Definition) Check() error {
 	}
 	if d.Argument != "" {
 		if _, err := wholeMatch(d.Argument); err != nil {
-			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), err)
+			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), accesskey.ShownError(err))
 		}
 	}
 	for _, p := range d.Placeholders {
@@ -209,15 +209,15 @@ func (d Definition) Check() error {
 	}
 	if len(d.Adapter) > 0 {
 		if d.Scheme != "" || d.Username != "" || d.Header != "" {
-			return fmt.Errorf("credential %s: an adapter says how its token is used; the scheme is not the definition's to give", d.Name)
+			return fmt.Errorf("credential %s: an adapter says how its token is used; the scheme is not the definition's to give", accesskey.ShownName(d.Name, false))
 		}
 		return nil
 	}
 	if d.Argument != "" {
-		return fmt.Errorf("credential %s: an argument is an adapter's; env and file take none", d.Name)
+		return fmt.Errorf("credential %s: an argument is an adapter's; env and file take none", accesskey.ShownName(d.Name, false))
 	}
 	if len(d.Hosts) == 0 {
-		return fmt.Errorf("credential %s: a token from env or file needs the hosts it is for", d.Name)
+		return fmt.Errorf("credential %s: a token from env or file needs the hosts it is for", accesskey.ShownName(d.Name, false))
 	}
 	return apply{Hosts: d.Hosts, Scheme: d.Scheme, Username: d.Username, Header: d.Header}.check()
 }
@@ -229,14 +229,14 @@ func (d Definition) check(argument string) error {
 	}
 	switch {
 	case d.Argument == "" && argument != "":
-		return fmt.Errorf("credential %s takes no argument and the policy gives %q", d.Name, argument)
+		return fmt.Errorf("credential %s takes no argument and the policy gives %s", accesskey.ShownName(d.Name, false), accesskey.ShownName(argument, true))
 	case d.Argument != "":
 		re, err := wholeMatch(d.Argument)
 		if err != nil {
-			return fmt.Errorf("credential %s: argument: %w", d.Name, err)
+			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), accesskey.ShownError(err))
 		}
 		if !re.MatchString(argument) {
-			return fmt.Errorf("credential %s: the argument %q is not one the machine provides for", d.Name, argument)
+			return fmt.Errorf("credential %s: the argument %s is not one the machine provides for", accesskey.ShownName(d.Name, false), accesskey.ShownName(argument, true))
 		}
 	}
 	return nil
@@ -283,7 +283,7 @@ func (a apply) check() error {
 			return errors.New("the scheme header needs a header's name")
 		}
 	default:
-		return fmt.Errorf("the scheme %q is not bearer, basic or header", a.Scheme)
+		return fmt.Errorf("the scheme %s is not bearer, basic or header", accesskey.ShownValue(a.Scheme, true))
 	}
 	return nil
 }
@@ -397,9 +397,9 @@ func (h *held) renew() {
 		cancel()
 		switch {
 		case err != nil:
-			h.report(fmt.Sprintf("credential %s was not renewed: %v", h.def.Name, err))
+			h.report(fmt.Sprintf("credential %s was not renewed: %v", accesskey.ShownName(h.def.Name, false), err))
 		case a.shape() != h.shape:
-			h.report(fmt.Sprintf("credential %s was not renewed: the adapter answered with other hosts, schemes or paths than when the run started", h.def.Name))
+			h.report(fmt.Sprintf("credential %s was not renewed: the adapter answered with other hosts, schemes or paths than when the run started", accesskey.ShownName(h.def.Name, false)))
 		default:
 			h.set(a)
 			continue
@@ -425,7 +425,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 	case d.File != "":
 		b, err := os.ReadFile(d.File)
 		if err != nil {
-			return nil, err
+			return nil, accesskey.ShownError(err)
 		}
 		return static(strings.TrimSpace(string(b)))
 	}
@@ -435,6 +435,8 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 	for i, a := range d.Adapter[1:] {
 		args[i] = strings.ReplaceAll(a, "${argument}", h.argument)
 	}
+	// The adapter's path as a message prints it.
+	path := accesskey.ShownValue(d.Adapter[0], false)
 	cmd := exec.CommandContext(ctx, d.Adapter[0], args...)
 	// The access key's variables are Forager's, and no credential program's.
 	cmd.Env = accesskey.WithoutVariables(os.Environ())
@@ -444,43 +446,43 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		// What an adapter prints is its own to word, and a line of it is worth the
 		// reader's time; its output is never the token, which goes to stdout.
 		line, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n")
-		return nil, fmt.Errorf("the adapter %s: %w: %s", d.Adapter[0], err, line)
+		return nil, fmt.Errorf("the adapter %s: %w: %s", path, accesskey.ShownError(err), accesskey.ShownValue(line, false))
 	}
 	doc, err := contracts.Decode("answer.json", stdout.Bytes())
 	if err != nil {
-		return nil, fmt.Errorf("the adapter %s did not print a JSON document: %w", d.Adapter[0], err)
+		return nil, fmt.Errorf("the adapter %s did not print a JSON document: %w", path, accesskey.ShownError(err))
 	}
 	schema, err := contracts.Compile("credential.schema.json")
 	if err != nil {
 		return nil, err
 	}
 	if err := schema.Validate(doc); err != nil {
-		return nil, fmt.Errorf("the adapter %s: %w", d.Adapter[0], err)
+		return nil, fmt.Errorf("the adapter %s: %w", path, accesskey.ShownError(err))
 	}
 	var a answer
 	if err := json.Unmarshal(stdout.Bytes(), &a); err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	for _, u := range a.Apply {
 		if err := u.check(); err != nil {
-			return nil, fmt.Errorf("the adapter %s: %w", d.Adapter[0], err)
+			return nil, fmt.Errorf("the adapter %s: %w", path, err)
 		}
 		if u.Token == "" && a.Token == "" {
-			return nil, fmt.Errorf("the adapter %s gave no token for %v", d.Adapter[0], u.Hosts)
+			return nil, fmt.Errorf("the adapter %s gave no token for %v", path, u.Hosts)
 		}
 		// What the machine's definition says is the most an adapter may claim.
 		for _, host := range u.Hosts {
 			if len(d.Hosts) > 0 && !slices.ContainsFunc(d.Hosts, func(entry string) bool { return policy.Covers(entry, host) }) {
-				return nil, fmt.Errorf("the adapter %s claims %s, above the hosts the machine gives it", d.Adapter[0], host)
+				return nil, fmt.Errorf("the adapter %s claims %s, above the hosts the machine gives it", path, host)
 			}
 		}
 		if len(d.Paths) > 0 {
 			if u.Paths == nil {
-				return nil, fmt.Errorf("the adapter %s claims every path of %v, above the paths the machine gives it", d.Adapter[0], u.Hosts)
+				return nil, fmt.Errorf("the adapter %s claims every path of %v, above the paths the machine gives it", path, u.Hosts)
 			}
 			for _, p := range u.Paths {
 				if !slices.ContainsFunc(d.Paths, func(entry string) bool { return policy.CoversPath(entry, p) }) {
-					return nil, fmt.Errorf("the adapter %s claims the path %s, above the paths the machine gives it", d.Adapter[0], p)
+					return nil, fmt.Errorf("the adapter %s claims the path %s, above the paths the machine gives it", path, accesskey.ShownValue(p, false))
 				}
 			}
 		}

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/hostfile"
 	"github.com/qoryai/forager/session/runtimes"
 )
@@ -88,10 +89,10 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		if strings.HasPrefix(strings.TrimSpace(args[at]), "{") {
 			b = []byte(args[at])
 		} else if b, err = readSettings(args[at], readable); err != nil {
-			return nil, fmt.Errorf("settings %s: %w", args[at], err)
+			return nil, fmt.Errorf("settings %s: %w", accesskey.ShownValue(args[at], false), accesskey.ShownError(err))
 		}
 		if err := json.Unmarshal(b, &settings); err != nil {
-			return nil, fmt.Errorf("settings %s: %w", args[at], err)
+			return nil, fmt.Errorf("settings %s: %w", accesskey.ShownValue(args[at], false), accesskey.ShownError(err))
 		}
 		if inside != nil {
 			settings = insideValues(settings, inside).(map[string]any)
@@ -113,7 +114,7 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 	}
 	path := filepath.Join(dir, "settings.json")
 	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	if at >= 0 {
 		args = append([]string(nil), args...)
@@ -165,7 +166,7 @@ func readSettings(path string, readable func(string) (string, error)) ([]byte, e
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	resolve := filepath.EvalSymlinks
 	if readable != nil {
@@ -173,13 +174,14 @@ func readSettings(path string, readable func(string) (string, error)) ([]byte, e
 	}
 	resolved, err := resolve(abs)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	judged, err := os.Stat(resolved)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
-	return hostfile.Read(abs, maxSettings, judged)
+	b, err := hostfile.Read(abs, maxSettings, judged)
+	return b, accesskey.ShownError(err)
 }
 
 // shellLine quotes a command for a shell, since a command hook runs under sh -c.

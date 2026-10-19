@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/session/internal/hostfile"
 	"github.com/qoryai/forager/session/runtimes"
@@ -32,7 +33,7 @@ var name = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 // and it holds at most 1 MiB.
 func Lookup(runtime, dir string) (runtimes.Runtime, error) {
 	if !name.MatchString(runtime) {
-		return nil, fmt.Errorf("runtime %q is not a name: a lower-case letter, then up to 63 lower-case letters, digits and dashes", runtime)
+		return nil, fmt.Errorf("runtime %s is not a name: a lower-case letter, then up to 63 lower-case letters, digits and dashes", accesskey.ShownName(runtime, true))
 	}
 	if dir != "" {
 		p := filepath.Join(dir, runtime+".yaml")
@@ -41,7 +42,7 @@ func Lookup(runtime, dir string) (runtimes.Runtime, error) {
 			return described(p, runtime, b)
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("the descriptor %s: %w", p, err)
+			return nil, fmt.Errorf("the descriptor %s: %w", accesskey.ShownValue(p, false), accesskey.ShownError(err))
 		}
 	}
 	p := "runtimes/" + runtime + "/descriptor.yaml"
@@ -57,7 +58,7 @@ func described(path, runtime string, b []byte) (runtimes.Runtime, error) {
 		return nil, err
 	}
 	if rt.Name() != runtime {
-		return nil, fmt.Errorf("%s describes %q, not %q", path, rt.Name(), runtime)
+		return nil, fmt.Errorf("%s describes %q, not %q", accesskey.ShownValue(path, false), rt.Name(), runtime)
 	}
 	return rt, nil
 }

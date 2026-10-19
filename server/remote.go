@@ -59,11 +59,11 @@ func (r RemoteTLS) config(host string) (*tls.Config, error) {
 	if r.CAFile != "" {
 		b, err := os.ReadFile(r.CAFile)
 		if err != nil {
-			return nil, fmt.Errorf("the gateway's certificate authorities: %w", err)
+			return nil, fmt.Errorf("the gateway's certificate authorities: %w", accesskey.ShownError(err))
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(b) {
-			return nil, fmt.Errorf("the gateway's certificate authorities %s hold no PEM certificate", r.CAFile)
+			return nil, fmt.Errorf("the gateway's certificate authorities %s hold no PEM certificate", accesskey.ShownValue(r.CAFile, false))
 		}
 		cfg.RootCAs = pool
 	}
@@ -135,7 +135,7 @@ func NewRemoteLink(runKey string, trust RemoteTLS, userAgent string, digests fun
 		keys: slices.Clone(key.GatewayKeys), runKey: runKey,
 	}
 	k := &Link{
-		userAgent: userAgent, origin: g.url, name: "the gateway at " + g.url, digests: digests,
+		userAgent: userAgent, origin: g.url, name: "the gateway at " + accesskey.ShownValue(g.url, false), digests: digests,
 		runID: new(atomic.Pointer[string]), remote: g,
 	}
 	k.http = &http.Client{
@@ -182,9 +182,9 @@ type GatewayKeyError struct {
 
 func (e *GatewayKeyError) Error() string {
 	if e.Unproven {
-		return "the gateway at " + e.URL + " could not prove it holds a key the run key names"
+		return "the gateway at " + accesskey.ShownValue(e.URL, false) + " could not prove it holds a key the run key names"
 	}
-	return "the gateway at " + e.URL + " answered under a key the run key does not name"
+	return "the gateway at " + accesskey.ShownValue(e.URL, false) + " answered under a key the run key does not name"
 }
 
 // dialTimeout is how long a connection to a separate gateway has to open, its TLS
@@ -212,7 +212,7 @@ func (g *remoteGateway) dial(ctx context.Context) (*boundConn, error) {
 	d := &tls.Dialer{NetDialer: &net.Dialer{}, Config: g.tls}
 	c, err := d.DialContext(ctx, "tcp", g.address)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	tc := c.(*tls.Conn)
 	cs := tc.ConnectionState()
@@ -299,12 +299,12 @@ func (k *Link) DialProxy(ctx context.Context) (net.Conn, error) {
 	}
 	c, err := k.remote.dial(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("the gateway's proxy %s: %w", k.remote.address, err)
+		return nil, fmt.Errorf("the gateway's proxy %s: %w", accesskey.ShownValue(k.remote.address, false), accesskey.ShownError(err))
 	}
 	c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
 	if _, err := io.WriteString(c, link.RelayLine(k.remote.runKey)); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("the gateway's proxy %s: the preamble: %w", k.remote.address, err)
+		return nil, fmt.Errorf("the gateway's proxy %s: the preamble: %w", accesskey.ShownValue(k.remote.address, false), accesskey.ShownError(err))
 	}
 	c.SetWriteDeadline(time.Time{})
 	return c, nil

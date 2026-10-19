@@ -58,6 +58,48 @@ among the signed lines. Every answer is signed with the server's key and bound t
 request, and the gateway reads an answer only once it verifies under the pin. The
 server decides which labels identify what the run works on.
 
+### Names and values that contain a key's prefix
+
+`qak_` starts every access key secret and `qrk_` every run key. Forager sends and prints
+a phrase in place of a name or a value that contains either, in any case:
+
+- A name, such as a credential's, a tool's, a variable's, an image or a label's key or
+  value, is `(a name that contains an access key secret)` when it contains `qak_`, and
+  `(a name that contains a run key)` when it contains `qrk_` and no `qak_`.
+- A value of free text, such as a path, a command, an argument, a URL, a program's
+  output or an error's text, is `(a value that contains an access key secret)` or `(a
+  value that contains a run key)` the same way. `run.started`'s `dir` is a path.
+- In a `run.refused`'s `names`, every entry is the name's phrase, a path among them;
+  the refusal's `detail` prints a path as the value's phrase.
+
+The phrases apply to the events, the registration, the outcome and Forager's messages
+and log lines. An operating system's or a network's error that quotes a path, an
+address or a name the caller passed prints as the value's phrase, and still wraps the
+error, so `errors.Is` and `errors.As` find it. A fixed reason that names a prefix, such
+as a run key's "it does not start with qrk_", prints as it is. In the registration and
+`run.started`:
+
+- Of two labels whose keys become the same phrase, the one whose key sorts first is
+  sent.
+- A subject whose `type` or `ref` contains a prefix is left out, since neither form can
+  hold a phrase, and so is a subject's `url` that contains one.
+- In `about.details`, a string is the value's phrase and a member name the name's. Of
+  two members whose names become the same, the first is sent. Details that grow past
+  8192 bytes are left out.
+
+A separate gateway takes a credential's argument from the labels the attach answer
+contains, where a label's value that contains a prefix is the name's phrase. A label's
+value that is either name phrase gives no argument, whatever the selection's pattern
+admits. The gateway phrases a `run.started` as a session does, its labels as
+`server.ShownLabels` gives them and its `about` as `server.ShownAbout` does, also when
+a session sent its values as they are. A separate gateway refuses a run key whose
+instance id contains a prefix as `run_key_invalid`.
+
+`server.Client.Discover` refuses a configuration document whose `run.url` contains a
+prefix, since `run.policy_applied` sends `run.url` as a URI. What the agent writes, in
+`run.log` and in the events of its records, is sent as it wrote it, and so are the
+server's codes. The wall and the agent get every value as it is.
+
 `gateway.Server` holds what identifies the run to the server:
 
 - `AccessKey` is the access key, an `*accesskey.Key` held from its secret, which the
@@ -185,10 +227,12 @@ does. Set by the node, they are `QORY_` names like any other.
 
 The record lists every variable by name, never a value: `dev.qory.run.policy_applied`'s
 `variables` contains each name, `from`, the source that applies, and `lost`, each value
-that lost with its source and why: `overridden`, `denied`, `fixed` or `unwalled`. A
-fixed name, and a name the run inherits, is listed only beside a value of the server,
-the run, the machine or the harness's defaults. `Spec.OnVariables` receives the same
-list, as `session.Applied`.
+that lost with its source and why: `overridden`, `denied`, `fixed` or `unwalled`. A name
+that contains `qak_` or `qrk_` in any case is sent as `(a name that contains an access
+key secret)`, or `(a name that contains a run key)` when it contains `qrk_` and no
+`qak_`. A fixed name, and a name the run inherits, is listed only beside a value of the
+server, the run, the machine or the harness's defaults. `Spec.OnVariables` receives the
+same list, as `session.Applied`, with each name as it is.
 
 ## A control plane
 

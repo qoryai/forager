@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/hostfile"
 )
 
@@ -50,15 +51,15 @@ func readable(places func() ([]string, error)) func(string) (string, error) {
 		}
 		at, err := split(path, 0)
 		if err != nil {
-			return "", fmt.Errorf("cannot resolve it: %w", err)
+			return "", fmt.Errorf("cannot resolve it: %w", accesskey.ShownError(err))
 		}
 		abs, err := filepath.Abs(path)
 		if err != nil {
-			return "", fmt.Errorf("cannot resolve it: %w", err)
+			return "", fmt.Errorf("cannot resolve it: %w", accesskey.ShownError(err))
 		}
 		looks, err := lookups(path)
 		if err != nil {
-			return "", fmt.Errorf("cannot resolve it: %w", err)
+			return "", fmt.Errorf("cannot resolve it: %w", accesskey.ShownError(err))
 		}
 		all, err := once()
 		if err != nil {
@@ -68,11 +69,11 @@ func readable(places func() ([]string, error)) func(string) (string, error) {
 		for _, p := range all {
 			in, err := split(p, 0)
 			if err != nil {
-				return "", fmt.Errorf("cannot resolve the place %s: %w", p, err)
+				return "", fmt.Errorf("cannot resolve the place %s: %w", pathShown(p), accesskey.ShownError(err))
 			}
 			given, err := filepath.Abs(p)
 			if err != nil {
-				return "", fmt.Errorf("cannot resolve the place %s: %w", p, err)
+				return "", fmt.Errorf("cannot resolve the place %s: %w", pathShown(p), accesskey.ShownError(err))
 			}
 			ok, _ := holds(in, at)
 			for _, place := range [][]string{parts(given), parts(in.String())} {
@@ -81,10 +82,10 @@ func readable(places func() ([]string, error)) func(string) (string, error) {
 				}
 			}
 			if ok {
-				return "", fmt.Errorf("it lies in %s, which a walled run can write", p)
+				return "", fmt.Errorf("it lies in %s, which a walled run can write", pathShown(p))
 			}
 			if _, through := lookedUpIn(in, looks); through {
-				return "", fmt.Errorf("it is reached through %s, which a walled run can write", p)
+				return "", fmt.Errorf("it is reached through %s, which a walled run can write", pathShown(p))
 			}
 		}
 		return at.String(), nil

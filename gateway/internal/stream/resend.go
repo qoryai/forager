@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/sink"
 )
@@ -95,6 +96,14 @@ type ResendResult struct {
 // NotOpened: every record is completed, as any other, and one that holds no event is
 // left as it is. dev.qory.run.registered is never sent.
 func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
+	// The record directory's path, which the caller passed, is in the text of a file's
+	// error: the phrase stands in for one that contains qak_ or qrk_ in any case.
+	res, err := resend(ctx, cfg)
+	return res, accesskey.ShownError(err)
+}
+
+// resend is [Resend], its errors as they are made.
+func resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if cfg.Report == nil {
 		cfg.Report = func(string) {}
 	}
@@ -125,7 +134,7 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 		return nil, err
 	}
 	if res.Torn = rec.torn; res.Torn > 0 {
-		cfg.Report(fmt.Sprintf(ResendTorn, res.Torn, file))
+		cfg.Report(fmt.Sprintf(ResendTorn, res.Torn, accesskey.ShownValue(file, false)))
 	}
 	if res.NotOpened, res.NoServer, err = notOpened(cfg.Dir, rec); err != nil {
 		return nil, err
@@ -148,7 +157,7 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 			// Nothing to complete, and nothing is sent.
 			return res, nil
 		}
-		return nil, fmt.Errorf("%s holds no event", file)
+		return nil, fmt.Errorf("%s holds no event", accesskey.ShownValue(file, false))
 	}
 	accepted, stopped, err := sink.Delivered(cfg.Dir)
 	if err != nil {

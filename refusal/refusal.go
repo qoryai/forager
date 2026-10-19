@@ -131,7 +131,7 @@ type NeedsWall struct {
 func (e *NeedsWall) Error() string {
 	for _, n := range e.Names {
 		if image, ok := strings.CutPrefix(n, "image="); ok && len(e.Names) == 1 {
-			return fmt.Sprintf("the policy selects the image %q, which needs a wall: without one the runtime is this machine's process", image)
+			return fmt.Sprintf("the policy selects the image %s, which needs a wall: without one the runtime is this machine's process", accesskey.ShownName(image, !accesskey.IsNamePhrase(image)))
 		}
 	}
 	return "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"

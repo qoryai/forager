@@ -282,7 +282,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		lr.release()
 		err = codeless(err)
 		if _, cerr := st.Close(g.base); cerr != nil {
-			g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, cerr))
+			g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(cerr)))
 		}
 		cancel()
 		return nil, true, err
@@ -304,7 +304,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			}
 			lr.release()
 			if derr := st.Discard(g.base); derr != nil {
-				g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, derr))
+				g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(derr)))
 			}
 			cancel()
 			return nil, false, err
@@ -334,7 +334,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 				// attaches it again, which the server answers alike for the same gateway.
 				lr.release()
 				if derr := st.Discard(g.base); derr != nil {
-					g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, derr))
+					g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(derr)))
 				}
 				cancel()
 				return nil, false, codeless(regErr)
@@ -633,7 +633,7 @@ func (lr *linkRun) end(e ending) {
 		lr.release()
 		if discarded {
 			if err := lr.st.Discard(lr.g.base); err != nil {
-				lr.g.report(fmt.Sprintf("run %s: closing its record: %v", lr.id, err))
+				lr.g.report(fmt.Sprintf("run %s: closing its record: %v", lr.id, accesskey.ShownError(err)))
 			}
 			lr.cancel()
 			return
@@ -794,30 +794,40 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 		a["digest"] = pol.Digest
 	}
 	if pol.URL != "" {
+		// server.Client.Discover refuses a run.url that contains qak_ or qrk_, which no
+		// phrase can stand in for: the schema's url is a URI.
 		a["url"], a["run_configuration"] = pol.URL, pol.RunConfiguration
 	}
 	if pol.Node != nil {
 		np := map[string]any{"digest": pol.Node.Digest}
 		if len(pol.Node.Paths) > 0 {
-			np["paths"] = pol.Node.Paths
+			np["paths"] = shownPaths(pol.Node.Paths)
 		}
 		a["node_policy"] = np
 	}
 	if len(pol.Policy.Egress.Paths) > 0 {
-		a["paths"] = pol.Policy.Egress.Paths
+		a["paths"] = shownPaths(pol.Policy.Egress.Paths)
 	}
 	if len(beside) > 0 {
-		a["ceiling_paths"] = beside
+		sides := make([]map[string][]string, len(beside))
+		for i, side := range beside {
+			sides[i] = shownPaths(side)
+		}
+		a["ceiling_paths"] = sides
 	}
 	if held != nil && len(held.Uses) > 0 {
 		uses := make([]map[string]any, len(held.Uses))
 		for i, u := range held.Uses {
-			uses[i] = map[string]any{"name": u.Name, "hosts": u.Hosts, "scheme": u.Scheme}
+			// A name or an argument that contains qak_ or qrk_ in any case is sent as
+			// accesskey.ShownName's phrase in its place.
+			// A host or a path is accesskey.ShownValue's phrase in place of one that
+			// contains either.
+			uses[i] = map[string]any{"name": accesskey.ShownName(u.Name, false), "hosts": shownValues(u.Hosts), "scheme": u.Scheme}
 			if u.Argument != "" {
-				uses[i]["argument"] = u.Argument
+				uses[i]["argument"] = accesskey.ShownName(u.Argument, false)
 			}
 			if u.Paths != nil {
-				uses[i]["paths"] = u.Paths
+				uses[i]["paths"] = shownValues(u.Paths)
 			}
 		}
 		a["credentials"] = uses
@@ -825,22 +835,43 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 	if len(chosen) > 0 {
 		used := make([]map[string]any, len(chosen))
 		for i, c := range chosen {
-			used[i] = map[string]any{"name": c.Name, "hosts": c.Serves}
+			// As the credentials' name and argument.
+			used[i] = map[string]any{"name": accesskey.ShownName(c.Name, false), "hosts": c.Serves}
 			if c.Argument != "" {
-				used[i]["argument"] = c.Argument
+				used[i]["argument"] = accesskey.ShownName(c.Argument, false)
 			}
 		}
 		a["tools"] = used
 	}
 	if pol.Policy.Image != "" {
-		a["image"] = pol.Policy.Image
+		a["image"] = accesskey.ShownName(pol.Policy.Image, false)
 	}
 	if len(terminated) > 0 {
-		a["terminated"] = terminated
+		a["terminated"] = shownValues(terminated)
 	}
 	b, _ := json.Marshal(a)
 	var out map[string]any
 	json.Unmarshal(b, &out)
+	return out
+}
+
+// shownValues are values as an event sends them: each as accesskey.ShownValue shows it,
+// in order.
+func shownValues(values []string) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = accesskey.ShownValue(v, false)
+	}
+	return out
+}
+
+// shownPaths are path rules by host as an event sends them: each path as
+// accesskey.ShownValue shows it. A host's form has no underscore, so it is as it is.
+func shownPaths(paths map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(paths))
+	for host, p := range paths {
+		out[host] = shownValues(p)
+	}
 	return out
 }
 
