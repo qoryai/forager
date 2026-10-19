@@ -502,14 +502,23 @@ func TestASealedKeyReachesATLSOrigin(t *testing.T) {
 
 // TestARefusalAnswerShowsNoSecretInAName pins the gateway's answer to a run whose run
 // configuration lists a credential whose name contains qak_ twice: no qak_ anywhere in
-// the answer's body, its names included.
+// the answer's body, the phrase as its one name, and the body valid under
+// link-refusal.schema.json.
 func TestARefusalAnswerShowsNoSecretInAName(t *testing.T) {
 	entry := strings.Replace(modelEntry, `"name":"model"`, `"name":"x-qak_not-a-real-secret"`, 1)
 	_, h := sealedGateway(t, `{"version":1,"credentials":[`+entry+`,`+entry+`]}`, map[string]string{"model": sealedValue})
 	status, got := h.refusalOf("/v1/run-configuration", walledBody())
 	b, _ := json.Marshal(got)
-	if status != http.StatusForbidden || got["error"] != "run_configuration_invalid" || strings.Contains(strings.ToLower(string(b)), "qak_") {
+	if status != http.StatusForbidden || got["error"] != "run_configuration_invalid" || strings.Contains(strings.ToLower(string(b)), "qak_") ||
+		!reflect.DeepEqual(got["names"], []any{"(a name that contains an access key secret)"}) {
 		t.Errorf("%d %s", status, b)
+	}
+	schema, err := contracts.Compile("link-refusal.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(got); err != nil {
+		t.Errorf("the answer does not validate: %v\n%s", err, b)
 	}
 }
 
@@ -535,4 +544,52 @@ func TestASealedModelReplacesForagerYamlsModel(t *testing.T) {
 	}
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
 	h.close()
+}
+
+// TestASecretsURLWithASecretIsAPhrase pins the refusals of a run whose discovery lists
+// a secrets URL that contains qak_: a fixture pin, a fixture access key, an answer
+// that does not open, and the server's refusal. Each message has the value's phrase in
+// place of the URL, and no qak_ is in the answer.
+func TestASecretsURLWithASecretIsAPhrase(t *testing.T) {
+	keys := fixtureKeys(t)
+	expired := func(c *control) func(server.SecretsRequest, string) (int, []byte) {
+		return func(req server.SecretsRequest, _ string) (int, []byte) {
+			return http.StatusOK, c.seal(req, map[string]string{"model": sealedValue}, uint64(time.Now().Unix())-1000)
+		}
+	}
+	refused := func(*control) func(server.SecretsRequest, string) (int, []byte) {
+		return func(server.SecretsRequest, string) (int, []byte) {
+			return http.StatusConflict, []byte(`{"error":"secrets_not_allowed"}`)
+		}
+	}
+	for name, c := range map[string]struct {
+		accessKey, signer *accesskey.Key
+		answer            func(*control) func(server.SecretsRequest, string) (int, []byte)
+		want              string
+	}{
+		"a fixture pin":                {testAccessKey, keys.signer, nil, "pin Qory Apiary's signing key"},
+		"a fixture access key":         {keys.accessKey, testSigner, nil, "enrol another access key"},
+		"an answer that does not open": {testAccessKey, testSigner, expired, "set this machine's clock to the right time"},
+		"the server's refusal":         {testAccessKey, testSigner, refused, "secrets_not_allowed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctl := newControlWith(t, c.accessKey, c.signer)
+			ctl.serveDocument(sealedDoc, 'a')
+			ctl.mu.Lock()
+			ctl.secrets = map[string]string{"model": sealedValue}
+			ctl.secretsURL = ctl.srv.URL + secretsPath + "?for=qak_not-a-real-secret"
+			if c.answer != nil {
+				ctl.secretsAnswer = c.answer(ctl)
+			}
+			ctl.mu.Unlock()
+			t.Setenv("GATEWAY_TEST_MODEL_KEY", machineValue)
+			h := start(t, gateway.Config{Server: ctl.server(), Credentials: []gateway.Credential{machineModel}})
+			_, got := h.refusalOf("/v1/run-configuration", walledBody())
+			b, _ := json.Marshal(got)
+			msg, _ := got["message"].(string)
+			if strings.Contains(strings.ToLower(string(b)), "qak_") || !strings.Contains(msg, "secrets (a value that contains an access key secret)") || !strings.Contains(string(b), c.want) {
+				t.Errorf("%s", b)
+			}
+		})
+	}
 }

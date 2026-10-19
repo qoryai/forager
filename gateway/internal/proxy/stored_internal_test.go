@@ -23,7 +23,8 @@ import (
 // read again for every request. A TRACE or a TRACK on its host is refused with a 403
 // whose rule is wall:echo-method and reaches no origin, and a TRACE on a host of a
 // machine's credential goes on as before. A private name gets the value through an
-// exact entry alone, as a machine's credential does.
+// exact entry alone, as a machine's credential does. A TRACE whose path contains qak_
+// has the value's phrase in place of the path.
 func TestACredentialFromTheServerSetsItsValue(t *testing.T) {
 	up, err := NewCA("upstream")
 	if err != nil {
@@ -154,4 +155,15 @@ func TestACredentialFromTheServerSetsItsValue(t *testing.T) {
 		t.Errorf("the machine's TRACE: the origin got %q", got)
 	}
 	mu.Unlock()
+	// A path that contains qak_ is the value's phrase in the denial.
+	req, _ := http.NewRequest("TRACE", "https://header.example/v1/qak_not-a-real-secret", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if want := "qory: TRACE header.example(a value that contains an access key secret) denied by the gateway: use another method; TRACE and TRACK send the request's headers back, and this host gets a credential from Qory Apiary\n"; resp.StatusCode != http.StatusForbidden || string(b) != want {
+		t.Errorf("a TRACE of a path with qak_: %d %q", resp.StatusCode, b)
+	}
 }

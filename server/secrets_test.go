@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 )
@@ -124,8 +126,8 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 }
 
 // TestARefusedCredentialShowsNoSecretInItsName pins a refusal of a credential whose
-// name contains qak_: the phrase in the text, and no name among the refusal's names,
-// since they reach its text and the answer that carries it.
+// name contains qak_: the phrase in the text, and the phrase as the refusal's one name,
+// which run.refused.schema.json's names accept.
 func TestARefusedCredentialShowsNoSecretInItsName(t *testing.T) {
 	const name = "x-qak_not-a-real-secret"
 	entry := `{"name":"` + name + `","hosts":["api.model.example"],"auth":{"scheme":"header","header":"Host"}}`
@@ -138,10 +140,12 @@ func TestARefusedCredentialShowsNoSecretInItsName(t *testing.T) {
 		v.runDoc = doc
 		_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
 		var r *accesskey.Refusal
-		if !errors.As(err, &r) || r.Code != "run_configuration_invalid" || len(r.Names) != 0 ||
+		if !errors.As(err, &r) || r.Code != "run_configuration_invalid" || !slices.Equal(r.Names, []string{"(a name that contains an access key secret)"}) ||
 			strings.Contains(strings.ToLower(err.Error()), "qak_") || !strings.Contains(err.Error(), "(a name that contains an access key secret)") {
 			t.Errorf("%s: %v, names %v", what, err, r)
+			continue
 		}
+		validNames(t, r.Names)
 	}
 }
 
@@ -171,5 +175,43 @@ func TestAPlaceholderTheDenyListCoversIsRefused(t *testing.T) {
 	}
 	if !server.ReservedHeader("Expect") || !server.ReservedHeader("expect") {
 		t.Error("Expect is not reserved")
+	}
+}
+
+// validNames fails the test unless names validate against run.refused.schema.json's
+// names, which a link refusal's names refer to.
+func validNames(t *testing.T, names []string) {
+	t.Helper()
+	schema, err := contracts.Compile("events/run.refused.schema.json#/properties/names")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := make([]any, len(names))
+	for i, n := range names {
+		doc[i] = n
+	}
+	if err := schema.Validate(doc); err != nil {
+		t.Errorf("the names %q do not validate: %v", names, err)
+	}
+}
+
+// TestASecretsURLWithASecretIsAPhrase pins Secrets' error for a secrets URL that
+// contains qak_, a refusal and a failed transport: the value's phrase after "secrets"
+// in place of the URL.
+func TestASecretsURLWithASecretIsAPhrase(t *testing.T) {
+	v := newVerified(t)
+	body, err := server.SecretsRequest{Version: 1, RunID: runID, RunConfiguration: "sha256=" + strings.Repeat("a", 64), Credentials: []string{"model"}, Timestamp: 1}.Body()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.secretsStatus, v.secretsBody = 409, `{"error":"secrets_not_allowed"}`
+	for what, url := range map[string]string{
+		"a refusal":          v.srv.URL + "/v1/secrets?for=qak_not-a-real-secret",
+		"a failed transport": "http://127.0.0.1:1/v1/secrets?for=qak_not-a-real-secret",
+	} {
+		_, err := v.client().Secrets(context.Background(), url, body)
+		if err == nil || strings.Contains(strings.ToLower(err.Error()), "qak_") || !strings.HasPrefix(err.Error(), "secrets (a value that contains an access key secret)") {
+			t.Errorf("%s: %v", what, err)
+		}
 	}
 }

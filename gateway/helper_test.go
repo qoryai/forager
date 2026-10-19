@@ -150,6 +150,9 @@ type control struct {
 	secrets         map[string]string
 	secretsAnswer   func(req server.SecretsRequest, sig string) (int, []byte)
 	secretsRequests [][]byte
+	// secretsURL, when set, is the secrets endpoint's URL discovery lists, in place of
+	// the control's secretsPath; a query after the path still reaches answerSecrets.
+	secretsURL string
 	// attachedRuns are the runs whose attach the control answered.
 	attachedRuns map[string]bool
 }
@@ -340,7 +343,11 @@ func (c *control) configuration() ([]byte, string) {
 	doc += `,"run":{"url":"` + runURL + `"}`
 	c.mu.Lock()
 	if c.secrets != nil || c.secretsAnswer != nil {
-		doc += `,"secrets":{"url":"` + c.srv.URL + secretsPath + `"}`
+		secretsURL := c.srv.URL + secretsPath
+		if c.secretsURL != "" {
+			secretsURL = c.secretsURL
+		}
+		doc += `,"secrets":{"url":"` + secretsURL + `"}`
 	}
 	c.mu.Unlock()
 	doc += `}`

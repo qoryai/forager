@@ -162,13 +162,24 @@ func TestAServerErrorPrintsAPhraseForASecret(t *testing.T) {
 }
 
 // TestALinkRunAnswerPrintsAPhraseForASecret pins a run answer as fmt and log/slog
-// print it: no name or value of it that contains qak_ or qrk_ in any case prints.
+// print it and encoding/json writes it: no name or value of it that contains qak_ or
+// qrk_ in any case prints, credential_hosts included, and a credential's empty
+// placeholders stay an empty list.
 func TestALinkRunAnswerPrintsAPhraseForASecret(t *testing.T) {
 	a := server.LinkRunAnswer{Version: 1, RunID: gatewayRunID, Labels: map[string]string{"qak_k": "qrk_v"},
 		Variables: map[string]server.Variable{"QAK_N": {Value: "v"}, "N": {Value: "qrk_v"}}, Placeholders: []string{"QRK_P"}, Reserved: []string{"QAK_R"},
-		Policy: json.RawMessage(`{"egress":{"paths":{"a.example":["/qak_x"]}}}`), Image: &server.LinkImage{Name: "qak_i", Ref: "registry.example/qrk_x:1"}, RelayImage: "qak_relay"}
+		Policy: json.RawMessage(`{"egress":{"paths":{"a.example":["/qak_x"]}}}`), Image: &server.LinkImage{Name: "qak_i", Ref: "registry.example/qrk_x:1"}, RelayImage: "qak_relay",
+		CredentialHosts: []server.LinkCredentialHosts{{Name: "qak_c", Hosts: []string{"qrk_h.example"}, Placeholders: []string{"QAK_PH"}}, {Name: "clean", Hosts: []string{"a.example"}, Placeholders: []string{}}}}
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
 		noSecretPrefix(t, verb, fmt.Sprintf(verb, a))
+	}
+	b, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noSecretPrefix(t, "json", string(b))
+	if !strings.Contains(string(b), `{"name":"clean","hosts":["a.example"],"placeholders":[]}`) {
+		t.Errorf("a clean credential prints %s", b)
 	}
 	if s := fmt.Sprintf("%v", server.LinkRunAnswer{Version: 1, RunID: gatewayRunID, Labels: map[string]string{"issue": "7"}}); !strings.Contains(s, "issue:7") {
 		t.Errorf("a clean answer prints %s", s)

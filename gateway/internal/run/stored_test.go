@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/sealed"
@@ -206,13 +207,60 @@ func TestAValueIsNeverReadWhileTheRunClearsIt(t *testing.T) {
 }
 
 // TestAValueRefusalShowsNoSecretInTheName pins the refusal of a value a header cannot
-// hold for a credential whose name contains qak_: the phrase in the text and no name.
+// hold for a credential whose name contains qak_: the phrase in the text and as the
+// refusal's one name, which run.refused.schema.json's names accept.
 func TestAValueRefusalShowsNoSecretInTheName(t *testing.T) {
 	doc := strings.Replace(storedDoc, `"name":"model"`, `"name":"x-qak_not-a-real-secret"`, 1)
 	s := &secrets{value: "opened\nvalue"}
 	_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Secrets: s.fetch})
 	code, names := refusalOf(err)
-	if code != "run_configuration_invalid" || len(names) != 0 || strings.Contains(strings.ToLower(err.Error()), "qak_") || !strings.Contains(err.Error(), "(a name that contains an access key secret)") {
+	if code != "run_configuration_invalid" || !slices.Equal(names, []string{"(a name that contains an access key secret)"}) || strings.Contains(strings.ToLower(err.Error()), "qak_") || !strings.Contains(err.Error(), "(a name that contains an access key secret)") {
 		t.Errorf("%v, names %v", err, names)
 	}
+	schema, err := contracts.Compile("events/run.refused.schema.json#/properties/names")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := make([]any, len(names))
+	for i, n := range names {
+		listed[i] = n
+	}
+	if err := schema.Validate(listed); err != nil {
+		t.Errorf("the names %q do not validate: %v", names, err)
+	}
+}
+
+// TestARunConfigurationURLWithASecretIsAPhrase pins the four refusals of a run
+// configuration with credentials whose URL contains qak_: no secrets endpoint, a value
+// a header cannot hold, a credential twice, and a reload with other credentials. Each
+// text has the value's phrase in place of the URL.
+func TestARunConfigurationURLWithASecretIsAPhrase(t *testing.T) {
+	const secretURL = "https://apiary.example/v1/qak_not-a-real-secret/run-configuration"
+	const phrase = "run configuration (a value that contains an access key secret): "
+	at := func(f *run.Fetched) *run.Fetched {
+		f.URL = secretURL
+		return f
+	}
+	check := func(want string, err error) {
+		t.Helper()
+		if err == nil || strings.Contains(strings.ToLower(err.Error()), "qak_") || !strings.HasPrefix(err.Error(), phrase) || !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q: %v", want, err)
+		}
+	}
+	_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: at(computed(t, storedDoc, digest('1')))})
+	check("enrol an access key allowed stored secrets", err)
+	_, err = run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: at(computed(t, storedDoc, digest('1'))), Secrets: (&secrets{value: "opened\nvalue"}).fetch})
+	check("which a header value cannot have", err)
+	entry := `{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"}}`
+	twice := `{"version":1,"credentials":[` + entry + `,` + entry + `]}`
+	_, err = run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: at(computed(t, twice, digest('1'))), Secrets: (&secrets{value: "opened-value"}).fetch})
+	check(`list the credential "model" once`, err)
+	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, storedDoc, digest('1')), Secrets: (&secrets{value: "opened-value"}).fetch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	other := strings.Replace(storedDoc, `"scheme":"bearer"`, `"scheme":"basic","username":"x"`, 1)
+	_, err = reload(t, r, at(computed(t, other, digest('2'))))
+	check("start a new run to use other credentials", err)
 }

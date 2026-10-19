@@ -75,7 +75,7 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 	}
 	for name, v := range rc.Variables {
 		if len(v.Value) > MaxVariableValue {
-			return nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name), "the document is refused: the variable %s holds more than %d bytes", accesskey.ShownName(name, false), MaxVariableValue)
+			return nil, refusal.New(refusal.RunConfigurationInvalid, []string{accesskey.ShownName(name, false)}, "the document is refused: the variable %s holds more than %d bytes", accesskey.ShownName(name, false), MaxVariableValue)
 		}
 	}
 	if err := CheckCredentials(rc.Credentials); err != nil {
@@ -88,7 +88,7 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 
 // CheckCredentials refuses what the schema cannot state of a run configuration's
 // credentials, each [refusal.RunConfigurationInvalid] with the credential's name, a
-// name that contains a secret left out ([refusal.Shown]): a name twice, a header
+// name that contains a secret as its phrase ([refusal.Shown]): a name twice, a header
 // [ReservedHeader] reports, and a placeholder [DeniedPlaceholder] reports. The reader
 // of a document calls it, and so does whoever holds a document not read from bytes.
 func CheckCredentials(creds []RunCredential) error {

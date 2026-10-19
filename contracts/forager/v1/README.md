@@ -573,7 +573,7 @@ configuration's `credentials` against the schema, then refuses a name twice and 
 `_` read as `-`. It also refuses a placeholder that an entry of the built-in deny list,
 `denied-variables.json`, covers, case ignored, such as `GIT_SSL_CAINFO`, `HTTPS_PROXY` or
 one of Forager's `QORY_` names. Each is `run_configuration_invalid`, and a name that
-contains an access key secret or a run key is shown as a phrase and left out of the
+contains an access key secret or a run key is shown as a phrase, in the text and in the
 refusal's `names`.
 
 The gateway sets these credentials for a walled run alone. A run configuration with
