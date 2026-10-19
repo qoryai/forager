@@ -108,8 +108,9 @@ func takesValue(w string) bool {
 // A file of --mcp-config or --agents is then checked and read as the settings are, and
 // copied into the run directory, as mcp-config-<n>.json or agents-<n>.json, with its
 // strings written as the enclosure sees them when [runtimes.Attach.Inside] is set; the
-// argument is given the copy's path. Every value is checked before a copy is written,
-// so a refused launch leaves none.
+// argument is given the copy's path. A value of --plugin-dir, --plugin-dir-no-mcp or
+// --add-dir is checked as [checkDir] checks it, and passes as it is. Every value is
+// checked before a copy is written, so a refused launch leaves none.
 func walledPaths(args []string, a runtimes.Attach) ([]string, error) {
 	type copied struct {
 		v       flagValue
@@ -132,6 +133,9 @@ func walledPaths(args []string, a runtimes.Attach) ([]string, error) {
 		case agentsFlag:
 			name = agentsCopy
 		default:
+			if err := checkDir(v, a); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		b, err := readCopy(v, a)

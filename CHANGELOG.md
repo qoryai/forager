@@ -306,6 +306,13 @@ release may change what an existing document does, and says so under Upgrading.
   absolute path, before `Prepare` reads it, and which the session sets: it returns where
   the path resolves through every link, the file `Prepare` may read, and refuses a file
   a walled run could have written and a path with a `..` name.
+- `runtimes.Attach.ReadableDir`, which a runtime asks of a directory of this machine
+  before `Prepare` passes it to the program, and which the session sets: it refuses
+  what `Readable` refuses, and a directory that is or contains, as given or resolved,
+  by whole names and regardless of case, a place a walled run could have written.
+  `Readable` and `ReadableDir` refuse a path for such a place with a
+  `*runtimes.WrittenError`, whose `How` is `lies in`, `is reached through` or
+  `contains`, and whose `Place` is the place; its text is as before.
 - `session.RunsBinding(ctx, d, p)`, the walled runs still going on this machine whose
   writable binds overlap p, an absolute path, by the registry's rule, each a
   `session.WalledRun` of its run id and the absolute path of its entry. A bind overlaps
@@ -377,6 +384,23 @@ release may change what an existing document does, and says so under Upgrading.
   `--settings`, the session gives that flag the path of the run's settings, so the
   launch passes one `--settings`. `runtimes.Attach.Walled` is set for a walled run. An
   unwalled launch starts as before.
+- The `claude-settings` installer passed a walled launch's `--mcp-config`, `--agents`,
+  `--plugin-dir`, `--plugin-dir-no-mcp` and `--add-dir` to Claude Code unchecked, so
+  Claude Code could load servers, agents, plugins or settings that an agent of a walled
+  run had written, and start the programs they name. In a walled launch, a path value
+  of these flags that starts with `~`, is relative or has a `..` part now does not
+  start, with "runtime claude: This launch passes --add-dir ~/ref, and inside the wall
+  ~ is the home of the wall's user, which Forager cannot check, so the run does not
+  start. Pass an absolute path." and the texts for the other two. An `--mcp-config` or
+  `--agents` file is checked as the `--settings` file is and passed as a copy in the run
+  directory, `mcp-config-<n>.json` or `agents-<n>.json`; a value Claude Code takes as
+  JSON passes unchanged. A `--plugin-dir` or `--plugin-dir-no-mcp` directory that lies
+  in, is reached through or contains a place a walled run can write, that holds a link
+  leading into one or a file with more than one name, or that has more than 10,000
+  entries, does not start; a `.zip` is checked as a file. An `--add-dir` directory is
+  checked the same way, with only `<dir>/.claude` and `<dir>/CLAUDE.md` read. The wall
+  docs, § "No file read from a place an agent can write", have each text. An unwalled
+  launch starts as before.
 - A walled run bound a mount or a workspace through a link that an agent of an earlier
   walled run, already ended, had left in a place it could write: the engine followed
   the link, so the run could bind any directory of this machine, writable. A place whose

@@ -208,6 +208,17 @@ One run, on a developer machine, with a server configured:
    places are the ones the caller records as written by walled runs, the writable binds
    of the other walled runs in the registry and, behind a wall, the run's writable
    binds.
+   A walled launch's `--mcp-config`, `--agents`, `--plugin-dir`, `--plugin-dir-no-mcp`
+   and `--add-dir` values are checked against the same places, and the run does not
+   start when one fails. A value that starts with `~`, is relative or has a `..` part is
+   refused. A value of `--mcp-config` or `--agents` that Claude Code takes as JSON
+   passes unchanged; a file is checked as the settings file is and passed as a copy in
+   the run directory, `mcp-config-<n>.json` or `agents-<n>.json`. A `--plugin-dir` or
+   `--plugin-dir-no-mcp` directory must not lie in, be reached through or contain such
+   a place, and no link under it may lead into one, no file under it may have more than
+   one name, and it may have at most 10,000 entries; a `.zip` is checked as a file. An
+   `--add-dir` directory is checked the same way, with only `<dir>/.claude` and
+   `<dir>/CLAUDE.md` read. An unwalled launch passes these flags unchecked.
 7. It emits `dev.qory.run.started` and `dev.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when the caller is interactive and no argument the
    descriptor lists as headless is among the runtime's, on pipes otherwise.

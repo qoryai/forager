@@ -385,7 +385,10 @@ A program that needs custom code implements the interface.
   file the runtime reads from this machine, the one Claude Code is passed with
   `--settings`, is refused when it lies in one of them or in a writable bind of another
   walled run, and behind a `Wall` when it lies in a writable bind of this run's, the
-  workspace among them. Behind a `Wall`, a place whose path goes through a link inside
+  workspace among them. Behind a `Wall`, Claude Code's `--mcp-config`, `--agents`,
+  `--plugin-dir`, `--plugin-dir-no-mcp` and `--add-dir` values are checked against the
+  same places: a file is passed as a copy in the run directory, and a directory may not
+  lie in or contain one of them, nor hold a link that leads into one. Behind a `Wall`, a place whose path goes through a link inside
   one of them and does not resolve into it is no run, `mount_through_link`. See
   [no file read from a place an agent can write](wall.md#no-file-read-from-a-place-an-agent-can-write).
 - `Preparation` is the run's preparation, the program and then its arguments: the

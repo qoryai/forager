@@ -287,3 +287,26 @@ func TestTheServersImageByReferenceIsTheOneTheWallPulls(t *testing.T) {
 		}
 	}
 }
+
+// TestAPluginLinkToTheWorkspaceInsideIsNoRun pins that a run whose workspace is at
+// /workspace inside refuses a plugin directory with a link that leads to /workspace,
+// which no place of this machine's is, before the wall is asked.
+func TestAPluginLinkToTheWorkspaceInsideIsNoRun(t *testing.T) {
+	w := &targetWall{}
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	byReference(g)
+	plugin := mkdirs(t, filepath.Join(t.TempDir(), "plugin", "skills"))
+	plugin = filepath.Dir(plugin)
+	symlink(t, "/workspace/harness/skills/review", filepath.Join(plugin, "skills", "review"))
+	sp.Args = append(sp.Args, "--plugin-dir", plugin)
+	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = w, "base", images, []string{"registry.example/agents/"}
+	want := "runtime claude: This launch passes --plugin-dir " + plugin + ", and its link " + filepath.Join(plugin, "skills", "review") +
+		" leads into /workspace, which a walled run can write, so the run does not start. " +
+		"Replace the link with a copy, or move what it leads to out of /workspace."
+	if _, err := session.Run(context.Background(), sp); err == nil || err.Error() != want {
+		t.Errorf("the run: %v, want %q", err, want)
+	}
+	if w.req.RunID != "" {
+		t.Errorf("the wall was asked: %+v", w.req)
+	}
+}
