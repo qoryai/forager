@@ -295,7 +295,7 @@ func TestASealedModelKeyWithoutItsPrefixIsNoRun(t *testing.T) {
 	h.secrets = append(h.secrets, other)
 	status, got := h.refusalOf("/v1/run-configuration", walledBody())
 	msg, _ := got["message"].(string)
-	want := "run configuration " + ctl.srv.URL + runsPath + `: store a value of the credential "model" that starts with sk-ant- in Qory Apiary: the stored value starts with none of its key_prefixes: run_configuration_invalid: model`
+	want := "run configuration " + ctl.srv.URL + runsPath + `: store a value of the credential "model" that starts with sk-ant- in the control plane: the stored value starts with none of its key_prefixes: run_configuration_invalid: model`
 	if status != http.StatusForbidden || got["error"] != "run_configuration_invalid" || !slices.Equal(anyStrings(got["names"]), []string{"model"}) || msg != want {
 		t.Errorf("%d %v\nwant the message %s", status, got, want)
 	}

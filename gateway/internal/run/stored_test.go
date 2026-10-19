@@ -147,7 +147,7 @@ func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
 		"not UTF-8":         {storedDoc, true, &secrets{value: "opened\xffvalue"}, "", "UTF-8", true},
 		"an empty value":    {storedDoc, true, &secrets{value: ""}, "", "", true},
 		"a value without a key prefix": {prefixed, true, &secrets{value: "opened-value"}, "run_configuration_invalid",
-			`run configuration ` + runURL + `: store a value of the credential "model" that starts with sk-ant-api or sk-ant-oat in Qory Apiary: the stored value starts with none of its key_prefixes: run_configuration_invalid: model`, true},
+			`run configuration ` + runURL + `: store a value of the credential "model" that starts with sk-ant-api or sk-ant-oat in the control plane: the stored value starts with none of its key_prefixes: run_configuration_invalid: model`, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := run.Config{RunID: runID, Wall: c.wall, Server: true, Fetched: computed(t, c.doc, digest('1'))}
