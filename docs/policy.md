@@ -98,6 +98,10 @@ gateway:
     mode: enforce                       # or observe: record everything, deny only what deny names
     allow: [api.anthropic.com, "*.github.com"]
     deny: [gist.github.com]             # denied in either mode, whatever allow says
+  run_limits:                           # optional; the same for every run on this gateway
+    connections: 256                    # open at once, 1 to 65536
+    requests_per_second: 50             # 1 to 10000
+    burst: 200                          # requests at once after a pause, 1 to 100000
   server:                               # optional
     url: https://qory.example
     access_key_id: ak_f1xt0re000000000  # or QORY_ACCESS_KEY_ID in the environment
@@ -110,6 +114,31 @@ gateway:
   [where the policy comes from](#where-the-policy-comes-from).
 - Without `gateway.egress`, and with no other policy, everything is allowed and recorded.
 - `gateway.server` defines the server Forager reports to. See [the server](server.md).
+- `gateway.run_limits` limits each run on the gateway, so that one run cannot slow down
+  the others. Each run has counters of its own. A field you leave out is its default.
+  See [run limits](#run-limits).
+
+## Run limits
+
+Each run on a gateway can have at most `connections` connections open at once: `CONNECT`
+tunnels and plain HTTP requests in flight. The next one gets `429 Too Many Requests` with
+`Retry-After: 1` at once.
+
+Each run can send `requests_per_second` requests a second, and up to `burst` at once
+after a pause. Every `CONNECT`, plain request and request inside a tunnel the gateway
+terminates counts. A request past the limit waits up to 5 seconds, then gets `429 Too Many
+Requests` with `Retry-After: 1`.
+
+The body of each `429` says which limit refused the request and its value, such as:
+
+```
+qory: retry in 1 second. This run's requests came faster than 50 a second, the most gateway.run_limits.requests_per_second allows, and this request waited 5 seconds.
+```
+
+The record has a `dev.qory.run.egress` with `decision: denied` and the rule
+`wall:connection-limit` or `wall:rate-limit`, at most one per limit per second. The
+details: the contract's
+[policy section](../contracts/forager/v1/README.md#the-policy).
 
 ## A denied connection
 

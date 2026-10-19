@@ -472,6 +472,43 @@ and guarantees nothing about the rest. The rest is bounded by the credential's s
 by what serves the host, and whoever writes the policy for a host that accepts such
 requests checks them there or leaves the host out.
 
+**Run limits.** Each run on a gateway has two limits, so that one run cannot slow down
+the other runs on the gateway. The gateway's operator sets them for every run alike:
+`gateway.RunLimits` in Go, `gateway.run_limits` in `qory`'s `forager.yaml`. A run's
+policy does not set them. Each run has counters of its own.
+
+| Field, Go | `forager.yaml` | What it limits | Default | Range |
+|---|---|---|---|---|
+| `Connections` | `connections` | the connections open at once | 256 | 1-65536 |
+| `RequestsPerSecond` | `requests_per_second` | the requests a second | 50 | 1-10000 |
+| `Burst` | `burst` | the requests at once after a pause | 200 | 1-100000 |
+
+A connection is a `CONNECT` tunnel, blind or terminated, or a plain request in flight.
+A request is a `CONNECT`, a plain request, or a request inside a terminated tunnel; the
+bytes inside a blind tunnel are not read, so they do not count. Every request takes a
+token from the run's bucket before the policy decides it, so a request the policy
+denies takes one too. The bucket holds `Burst` tokens at most and gains
+`RequestsPerSecond` tokens a second. Only a connection the policy allows counts as open.
+
+- **At the connection limit**, the next connection is refused at once: `429 Too Many
+  Requests`, `Retry-After: 1`, and the `text/plain` body `qory: retry once one of this
+  run's connections closes. The run has 256 connections open through the gateway, the
+  most gateway.run_limits.connections allows.`, with the run's limit in place of 256.
+  Nothing is dialled for it.
+- **At the rate limit**, a request waits up to 5 seconds for a token. With none by then,
+  it is refused: `429 Too Many Requests`, `Retry-After: 1`, and the `text/plain` body
+  `qory: retry in 1 second. This run's requests came faster than 50 a second, the most
+  gateway.run_limits.requests_per_second allows, and this request waited 5 seconds.`,
+  with the run's limit in place of 50.
+
+A refusal is a `dev.qory.run.egress` with `decision: denied`, `outcome: refused` and the
+rule `wall:connection-limit` or `wall:rate-limit`, in either mode. At most one refusal
+per limit is recorded per second for a run, so a run at its limit adds at most two
+events a second to the record, and the record does not show how many requests were
+refused. `gateway.Start` refuses a field outside its range, in the text `Set
+RunLimits.Connections to a number from 1 to 65536, or 0 for the default of 256. It is
+-3.`, with the field, its range, its default and its value.
+
 ## Credentials
 
 A credential is a secret the gateway keeps outside the enclosure and sets on the
@@ -1168,8 +1205,8 @@ those of each ceiling a caller put the run's policy file under with
 value the run applies and the values that lost, with their sources and why (§Variables,
 the record of the variables).
 `dev.qory.run.egress` records what becomes of the connection in `outcome`: `connected`,
-the dial succeeded; `dial_failed`, allowed and the dial failed; `refused`, the policy or
-the wall's guard denied it, or a reload closed it; no address the guard refuses is
+the dial succeeded; `dial_failed`, allowed and the dial failed; `refused`, the policy,
+the wall's guard or one of the run's limits denied it, or a reload closed it; no address the guard refuses is
 dialled. An event that is one request, a plain one or one inside a terminated
 connection, contains the proxy's `request_id` for it, and `status`, the status the host
 or the tool returned, when one did.

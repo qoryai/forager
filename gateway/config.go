@@ -61,6 +61,9 @@ type Config struct {
 	// session sends a heartbeat every interval, and the gateway ends a run whose session
 	// sends nothing for three.
 	Heartbeat time.Duration
+	// RunLimits are the limits of each run on the gateway, the same for every run, so
+	// that one run cannot slow the others down. A field of zero is its default.
+	RunLimits RunLimits
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the
 	// system's choosing: the link for the sessions of other machines, the proxy for
 	// their agents, and the relay of their starters' and keyed machines' requests to the
@@ -109,6 +112,27 @@ type Config struct {
 	// upstreamRoots, when not nil, are the roots every run's proxy verifies a
 	// terminated host's certificate against, in place of this machine's. Tests set them.
 	upstreamRoots *x509.CertPool
+}
+
+// RunLimits are the limits of each run on the gateway's proxy: gateway.run_limits of
+// qory's configuration. Start refuses a field outside its range; zero is the field's
+// default. Each run has counters of its own: one run at its limit refuses nothing of
+// another's.
+type RunLimits struct {
+	// Connections is the most connections a run has open through the gateway at once:
+	// CONNECT tunnels, blind or terminated, and plain HTTP requests in flight. From 1 to
+	// 65536; zero means 256. The next connection is refused at once with 429 Too Many
+	// Requests and Retry-After: 1.
+	Connections int
+	// RequestsPerSecond is how many requests a run sends a second, beyond Burst: every
+	// CONNECT, plain request and request inside a terminated tunnel takes one token of
+	// a bucket that gains RequestsPerSecond tokens a second. From 1 to 10000; zero means
+	// 50. A request waits up to 5 seconds for a token, then is refused with 429 Too Many
+	// Requests and Retry-After: 1.
+	RequestsPerSecond int
+	// Burst is the most tokens the bucket holds: how many requests a run sends at once
+	// after a pause. From 1 to 100000; zero means 200.
+	Burst int
 }
 
 // TLS is the certificate and key a separate gateway serves on its one address, files in

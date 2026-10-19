@@ -305,6 +305,10 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		if tl != nil {
 			req.Tool = tl.Name
 		}
+		if err := t.p.take(r.Context()); err != nil {
+			t.p.refusedBy(w, req, err)
+			return
+		}
 		c := t.credential(d.Host)
 		if c != nil && c.Stored && (strings.EqualFold(r.Method, "TRACE") || strings.EqualFold(r.Method, "TRACK")) {
 			req.Allowed, req.PathRule, req.Outcome = false, EchoMethod, Refused

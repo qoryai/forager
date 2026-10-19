@@ -199,3 +199,12 @@ func WaitingConns(g *Gateway) int {
 	defer g.svc.conns.mu.Unlock()
 	return g.svc.conns.waiting.Len()
 }
+
+// RunLimitsOf are the limits the proxy of g's run of runID has.
+func RunLimitsOf(g *Gateway, runID string) RunLimits {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	l := lr.px.Limits()
+	return RunLimits{Connections: l.Connections, RequestsPerSecond: l.RequestsPerSecond, Burst: l.Burst}
+}
