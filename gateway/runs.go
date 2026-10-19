@@ -812,9 +812,11 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 	if held != nil && len(held.Uses) > 0 {
 		uses := make([]map[string]any, len(held.Uses))
 		for i, u := range held.Uses {
-			uses[i] = map[string]any{"name": u.Name, "hosts": u.Hosts, "scheme": u.Scheme}
+			// A name or an argument that contains qak_ or qrk_ in any case is sent as
+			// accesskey.ShownName's phrase in its place.
+			uses[i] = map[string]any{"name": accesskey.ShownName(u.Name, false), "hosts": u.Hosts, "scheme": u.Scheme}
 			if u.Argument != "" {
-				uses[i]["argument"] = u.Argument
+				uses[i]["argument"] = accesskey.ShownName(u.Argument, false)
 			}
 			if u.Paths != nil {
 				uses[i]["paths"] = u.Paths

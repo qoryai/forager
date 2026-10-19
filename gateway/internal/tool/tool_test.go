@@ -204,3 +204,25 @@ func TestStartRefusesAToolThatDoesNotListen(t *testing.T) {
 		t.Errorf("stopping a stalled tool took %s", time.Since(start))
 	}
 }
+
+// TestAHostAToolAndACredentialClaimPrintsAPhraseForASecret pins the refusal of a host
+// a tool serves and a credential is for: a credential's name that contains qak_ or
+// qrk_ in any case prints the name's phrase, and a clean name prints as it is.
+func TestAHostAToolAndACredentialClaimPrintsAPhraseForASecret(t *testing.T) {
+	chosen, err := Choose([]Definition{def("plain", "", "plain.internal")}, []policy.Selected{{Name: "plain"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, shown := range map[string]string{
+		"qak_x": "(a name that contains an access key secret)", "a.qrk_b": "(a name that contains a run key)",
+		"qrk_x.qak_y": "(a name that contains an access key secret)", "token": "token",
+	} {
+		claimed := func(string) string { return name }
+		err := Check(chosen, policy.Observe, nil, claimed)
+		if want := "the tool plain and the credential " + shown + " both claim plain.internal; a host has one"; err == nil || err.Error() != want {
+			t.Errorf("%s:\n got %v\nwant %s", name, err, want)
+		} else if lower := strings.ToLower(err.Error()); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+			t.Errorf("%s: a secret's prefix in %v", name, err)
+		}
+	}
+}

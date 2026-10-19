@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
@@ -191,7 +192,7 @@ func Check(chosen []Chosen, mode policy.Mode, allow []string, claimed func(host 
 	for _, c := range chosen {
 		for _, host := range c.Serves {
 			if name := claimed(host); name != "" {
-				return fmt.Errorf("the tool %s and the credential %s both claim %s; a host has one", c.Name, name, host)
+				return fmt.Errorf("the tool %s and the credential %s both claim %s; a host has one", c.Name, accesskey.ShownName(name, false), host)
 			}
 			if mode == policy.Enforce && !slices.ContainsFunc(allow, func(entry string) bool { return policy.Covers(entry, host) }) {
 				return fmt.Errorf("the tool %s serves %s, which the run's allow list does not cover", c.Name, host)

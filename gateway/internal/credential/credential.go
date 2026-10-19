@@ -162,7 +162,7 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 			for _, other := range h.Uses[:i] {
 				for _, theirs := range other.Hosts {
 					if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
-						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", other.Name, u.Name, host)
+						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false), host)
 					}
 				}
 			}
@@ -199,7 +199,7 @@ func (d Definition) Check() error {
 	}
 	if d.Argument != "" {
 		if _, err := wholeMatch(d.Argument); err != nil {
-			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), err)
+			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), shownError(err))
 		}
 	}
 	for _, p := range d.Placeholders {
@@ -209,15 +209,15 @@ func (d Definition) Check() error {
 	}
 	if len(d.Adapter) > 0 {
 		if d.Scheme != "" || d.Username != "" || d.Header != "" {
-			return fmt.Errorf("credential %s: an adapter says how its token is used; the scheme is not the definition's to give", d.Name)
+			return fmt.Errorf("credential %s: an adapter says how its token is used; the scheme is not the definition's to give", accesskey.ShownName(d.Name, false))
 		}
 		return nil
 	}
 	if d.Argument != "" {
-		return fmt.Errorf("credential %s: an argument is an adapter's; env and file take none", d.Name)
+		return fmt.Errorf("credential %s: an argument is an adapter's; env and file take none", accesskey.ShownName(d.Name, false))
 	}
 	if len(d.Hosts) == 0 {
-		return fmt.Errorf("credential %s: a token from env or file needs the hosts it is for", d.Name)
+		return fmt.Errorf("credential %s: a token from env or file needs the hosts it is for", accesskey.ShownName(d.Name, false))
 	}
 	return apply{Hosts: d.Hosts, Scheme: d.Scheme, Username: d.Username, Header: d.Header}.check()
 }
@@ -229,18 +229,37 @@ func (d Definition) check(argument string) error {
 	}
 	switch {
 	case d.Argument == "" && argument != "":
-		return fmt.Errorf("credential %s takes no argument and the policy gives %q", d.Name, argument)
+		return fmt.Errorf("credential %s takes no argument and the policy gives %s", accesskey.ShownName(d.Name, false), accesskey.ShownName(argument, true))
 	case d.Argument != "":
 		re, err := wholeMatch(d.Argument)
 		if err != nil {
-			return fmt.Errorf("credential %s: argument: %w", d.Name, err)
+			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), shownError(err))
 		}
 		if !re.MatchString(argument) {
-			return fmt.Errorf("credential %s: the argument %q is not one the machine provides for", d.Name, argument)
+			return fmt.Errorf("credential %s: the argument %s is not one the machine provides for", accesskey.ShownName(d.Name, false), accesskey.ShownName(argument, true))
 		}
 	}
 	return nil
 }
+
+// shownError is err as a message wraps it: err itself, or, when its text contains qak_
+// or qrk_ in any case, an error that still wraps err and whose text is
+// [accesskey.ShownValue]'s phrase in place of all of err's text.
+func shownError(err error) error {
+	if !accesskey.ContainsSecret(err.Error()) {
+		return err
+	}
+	return phrasedError{err}
+}
+
+// phrasedError is an error whose text is a phrase in place of the text of the error it
+// wraps.
+type phrasedError struct{ err error }
+
+func (p phrasedError) Error() string { return accesskey.ShownValue(p.err.Error(), false) }
+
+// Unwrap returns the error the phrase stands in for.
+func (p phrasedError) Unwrap() error { return p.err }
 
 // wholeMatch compiles pattern as a run's argument is matched: anchored, so an argument
 // matches only when the pattern matches all of it. The error of a pattern that does not
@@ -397,9 +416,9 @@ func (h *held) renew() {
 		cancel()
 		switch {
 		case err != nil:
-			h.report(fmt.Sprintf("credential %s was not renewed: %v", h.def.Name, err))
+			h.report(fmt.Sprintf("credential %s was not renewed: %v", accesskey.ShownName(h.def.Name, false), err))
 		case a.shape() != h.shape:
-			h.report(fmt.Sprintf("credential %s was not renewed: the adapter answered with other hosts, schemes or paths than when the run started", h.def.Name))
+			h.report(fmt.Sprintf("credential %s was not renewed: the adapter answered with other hosts, schemes or paths than when the run started", accesskey.ShownName(h.def.Name, false)))
 		default:
 			h.set(a)
 			continue
@@ -444,7 +463,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		// What an adapter prints is its own to word, and a line of it is worth the
 		// reader's time; its output is never the token, which goes to stdout.
 		line, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n")
-		return nil, fmt.Errorf("the adapter %s: %w: %s", d.Adapter[0], err, line)
+		return nil, fmt.Errorf("the adapter %s: %w: %s", accesskey.ShownValue(d.Adapter[0], false), shownError(err), accesskey.ShownValue(line, false))
 	}
 	doc, err := contracts.Decode("answer.json", stdout.Bytes())
 	if err != nil {

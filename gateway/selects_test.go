@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -287,5 +288,95 @@ func TestStartRefusesASelectionItCannotHold(t *testing.T) {
 		if n := c0.fetches.Load(); n != 0 {
 			t.Errorf("%+v: %d requests to the run endpoint", c.sels, n)
 		}
+	}
+}
+
+// The phrases a gateway message prints in place of a name, or of an error's text, that
+// contains qak_ or qrk_ in any case.
+const (
+	accessKeyNamePhrase  = "(a name that contains an access key secret)"
+	runKeyNamePhrase     = "(a name that contains a run key)"
+	accessKeyValuePhrase = "(a value that contains an access key secret)"
+	runKeyValuePhrase    = "(a value that contains a run key)"
+)
+
+// noSecretPrefix fails the test when text contains qak_ or qrk_ in any case.
+func noSecretPrefix(t *testing.T, what, text string) {
+	t.Helper()
+	if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+		t.Errorf("%s: a secret's prefix in %s", what, text)
+	}
+}
+
+// TestStartsSelectionRefusalPrintsAPhraseForASecret pins Start's refusals of Selects:
+// a selection's name that contains qak_ or qrk_ prints the name's phrase, and a
+// pattern whose error quotes it prints the value's phrase in place of the error, with
+// the rest of each sentence word for word. TestStartRefusesASelectionItCannotHold pins
+// the same messages for clean names and patterns.
+func TestStartsSelectionRefusalPrintsAPhraseForASecret(t *testing.T) {
+	s := newSelecting(t)
+	for name, phrase := range map[string]string{"qak_x": accessKeyNamePhrase, "a.qrk_b": runKeyNamePhrase, "qrk_x.qak_y": accessKeyNamePhrase} {
+		creds := append(slices.Clone(s.creds),
+			gateway.Credential{Name: name, Env: "QORY_TEST_SELECT_MODEL", Hosts: []string{"other.model.example"}, Scheme: "bearer"},
+			gateway.Credential{Name: name + "-arg", Adapter: s.creds[0].Adapter, Argument: oneRepository, Hosts: []string{"other.git.example"}})
+		for _, c := range []struct {
+			sels []gateway.Selection
+			text string
+		}{
+			{[]gateway.Selection{{Name: strings.ToUpper(name)}}, "gateway: Selects names " + phrase + ", which is no credential of Credentials"},
+			{[]gateway.Selection{{Name: name}, {Name: name}}, "gateway: Selects names " + phrase + " twice"},
+			{[]gateway.Selection{{Name: name, Label: "repository"}}, "gateway: Selects " + phrase + ": " + phrase + " takes no argument, so Label does not apply"},
+			{[]gateway.Selection{{Name: name + "-arg"}}, "gateway: Selects " + phrase + ": " + phrase + " takes an argument, so it needs Label, Forge and Pattern"},
+			{[]gateway.Selection{{Name: "github", Label: "repository", Forge: "github.com", Pattern: name + "("}}, "gateway: Selects github: the pattern does not compile: " + strings.Replace(phrase, "name", "value", 1)},
+			{[]gateway.Selection{{Name: "github", Label: "repository", Forge: "github.com", Pattern: strings.ToUpper(name) + `\Q`}}, "gateway: Selects github: the pattern does not compile: " + strings.Replace(phrase, "name", "value", 1)},
+		} {
+			c0 := gatewayControl(t)
+			certFile, keyFile, _ := testCertificate(t, t.TempDir())
+			g, err := gateway.Start(context.Background(), gateway.Config{
+				Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, Server: c0.server(),
+				Dir: t.TempDir(), Credentials: creds, Selects: c.sels,
+			})
+			if err == nil {
+				g.Close(context.Background())
+				t.Errorf("%+v: started", c.sels)
+				continue
+			}
+			if err.Error() != c.text {
+				t.Errorf("%+v:\n got %v\nwant %s", c.sels, err, c.text)
+			}
+			noSecretPrefix(t, fmt.Sprintf("%+v", c.sels), err.Error())
+		}
+	}
+}
+
+// TestALinksFilePrintsAPhraseForASecretInAName pins the phrases the link gives a
+// credential's program directory and file by: a credential's name that contains qak_
+// or qrk_ prints the name's phrase, and a clean name prints as it is.
+func TestALinksFilePrintsAPhraseForASecretInAName(t *testing.T) {
+	dir := t.TempDir()
+	program := shell(t, dir, "adapter", "exit 1\n")
+	token := filepath.Join(dir, "token")
+	for name, shown := range map[string]string{"qak_x": accessKeyNamePhrase, "a.qrk_b": runKeyNamePhrase, "qrk_x.qak_y": accessKeyNamePhrase, "model": "model"} {
+		h := start(t, gateway.Config{Credentials: []gateway.Credential{
+			{Name: name, Adapter: []string{program}},
+			{Name: name + "-file", File: token, Hosts: []string{"api.model.example"}, Scheme: "bearer"},
+		}})
+		fileShown := shown
+		if shown == "model" {
+			fileShown = "model-file"
+		}
+		var whats []string
+		for _, f := range h.g.LocalLink().Files {
+			whats = append(whats, f.What)
+		}
+		for _, want := range []string{"the directory of the credential " + shown + "'s program", "the file the credential " + fileShown + " is read from"} {
+			if !slices.Contains(whats, want) {
+				t.Errorf("%s: no %q among %q", name, want, whats)
+			}
+		}
+		for _, w := range whats {
+			noSecretPrefix(t, name, w)
+		}
+		h.close()
 	}
 }

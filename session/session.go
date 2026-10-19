@@ -642,7 +642,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		case errors.As(err, &r) && refusal.Decides(r.Code):
 			data := map[string]any{"code": r.Code}
 			if len(r.Names) > 0 {
-				data["names"] = r.Names
+				data["names"] = eventNames(r.Code, r.Names)
 			}
 			write(event.RunRefused, data)
 		}
@@ -1103,7 +1103,7 @@ func refused(err error, fail, quit func(error) (*Result, error), own func(string
 		r.Detail = "the gateway"
 		data := map[string]any{"code": r.Code}
 		if len(r.Names) > 0 {
-			data["names"] = r.Names
+			data["names"] = eventNames(r.Code, r.Names)
 		}
 		if r.From == accesskey.FromApiary && r.Status != 0 {
 			data["status"] = r.Status
@@ -1280,4 +1280,21 @@ func loopback(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// eventNames are a refusal's names as its dev.qory.run.refused sends them. The names of
+// a placeholder_conflict are sent as accesskey.ShownName shows a name, bare, and a
+// phrase two names give is sent once, as the schema holds the names unique. The names
+// of any other code are sent as they are.
+func eventNames(code string, names []string) []string {
+	if code != refusal.PlaceholderConflict {
+		return names
+	}
+	var out []string
+	for _, n := range names {
+		if shown := accesskey.ShownName(n, false); !slices.Contains(out, shown) {
+			out = append(out, shown)
+		}
+	}
+	return out
 }

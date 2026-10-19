@@ -263,14 +263,23 @@ func (p PublicKey) Fixture() bool {
 // shown is a value as an error quotes it: quoted, or, when it contains what starts an
 // access key secret or a run key, a secret pasted where another value belongs say, a
 // phrase in its place, so an error never contains a secret.
-func shown(v string) string {
+func shown(v string) string { return ShownValue(v, true) }
+
+// ShownValue is a value as a message prints it: quoted when quote is true, bare when it
+// is false, and, when it contains qak_ or qrk_ in any case, a phrase in its place. A
+// message passes it a whole part that is not a name, such as a path, or the text of an
+// error or of a program's error output, so that part never prints either prefix. A
+// value that contains both gets the access key secret's phrase.
+func ShownValue(v string, quote bool) string {
 	switch {
 	case containsAccessKeySecret(v):
 		return "(a value that contains an access key secret)"
 	case containsRunKey(v):
 		return "(a value that contains a run key)"
+	case quote:
+		return strconv.Quote(v)
 	}
-	return strconv.Quote(v)
+	return v
 }
 
 // ShownName is a name as a message prints it: quoted when quote is true, bare when it is

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
@@ -470,5 +471,81 @@ func TestTheServersSystemAndRepositoriesReachTheAgent(t *testing.T) {
 		if _, err := session.Run(context.Background(), sp); refusal(err) != "variable_reserved" {
 			t.Errorf("a node's value: %v, want variable_reserved", err)
 		}
+	}
+}
+
+// refusedNames are the names of the one run.refused the run's record holds, failing the
+// test unless there is one and it validates against run.refused.schema.json.
+func refusedNames(t *testing.T, sp session.Spec) []any {
+	t.Helper()
+	got := ofType(events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)}), "dev.qory.run.refused")
+	if len(got) != 1 {
+		t.Fatalf("run.refused %v, want one", got)
+	}
+	schema, err := contracts.Compile("events/run.refused.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(data(got[0])); err != nil {
+		t.Errorf("the run.refused does not validate: %v", err)
+	}
+	names, _ := data(got[0])["names"].([]any)
+	return names
+}
+
+// TestAPlaceholderConflictSendsAPhraseForASecret pins the names of a
+// placeholder_conflict's run.refused, the session's own and one of the gateway's: a
+// name that contains qak_ or qrk_ in any case is sent as the name's phrase, the access
+// key secret's when it contains both, a phrase two names give once, and the event
+// validates against its schema; a clean name is sent as it is.
+func TestAPlaceholderConflictSendsAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	for _, c := range []struct {
+		placeholders []string
+		want         []any
+	}{
+		{[]string{"QAK_TOKEN"}, []any{ak}},
+		{[]string{"qrk_token"}, []any{rk}},
+		{[]string{"QRK_X_QAK_Y"}, []any{ak}},
+		{[]string{"MODEL_TOKEN", "QAK_OTHER", "QAK_TOKEN", "QRK_TOKEN"}, []any{"MODEL_TOKEN", ak, rk}},
+		{[]string{"MODEL_TOKEN"}, []any{"MODEL_TOKEN"}},
+	} {
+		t.Run("the session's "+strings.Join(c.placeholders, ","), func(t *testing.T) {
+			sp, g := specGateway(t)
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+				a := linktest.RunAnswer(req)
+				a["placeholders"] = c.placeholders
+				return linktest.Reply{Status: 200, Body: a}
+			})
+			for _, p := range c.placeholders {
+				sp.Variables.Run = append(sp.Variables.Run, p+"=a-value")
+			}
+			_, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "placeholder_conflict" {
+				t.Fatalf("%v, want placeholder_conflict", err)
+			}
+			if got := refusedNames(t, sp); !slices.Equal(got, c.want) {
+				t.Errorf("names %q, want %q", got, c.want)
+			}
+		})
+		t.Run("the gateway's "+strings.Join(c.placeholders, ","), func(t *testing.T) {
+			sp, g := specGateway(t)
+			sleeps(&sp, 0)
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			g.OnRun(func(server.LinkRunRequest) linktest.Reply {
+				return linktest.Reply{Status: 403, Body: linktest.Refusal("placeholder_conflict", "gateway", c.placeholders...)}
+			})
+			_, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "placeholder_conflict" {
+				t.Fatalf("%v, want placeholder_conflict", err)
+			}
+			if got := refusedNames(t, sp); !slices.Equal(got, c.want) {
+				t.Errorf("names %q, want %q", got, c.want)
+			}
+		})
 	}
 }

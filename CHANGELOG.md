@@ -100,9 +100,29 @@ release may change what an existing document does, and says so under Upgrading.
   that contains `qak_` in any case now prints as `(a name that contains an access key
   secret)`, and one that contains `qrk_` and no `qak_` as `(a name that contains a run
   key)`. The rest of each message prints as before, and so does a name with neither.
-  The reason quoted after the name, such as an adapter's error output or a regular
-  expression's error, is unchanged and can still contain either prefix.
-  `accesskey.ShownName` holds the rule.
+  This fix left the reason quoted after the name, such as an adapter's error output or
+  a regular expression's error, as it was. `accesskey.ShownName` holds the rule.
+- More gateway messages, and two events' members, printed a credential's name, a
+  placeholder, an argument or a label's value as written. Each now prints `(a name that
+  contains an access key secret)` when it contains `qak_` in any case, and `(a name that
+  contains a run key)` when it contains `qrk_` and no `qak_`: the credential messages
+  about two credentials that claim one host, an adapter with a scheme, an argument for
+  env or file, env or file without hosts, an argument the credential does not take or
+  the machine does not provide for, and the two lines a renewal reports; the refusals of
+  `Config.Selects`; the link's phrases for a credential's program directory and file;
+  the lines a run is told when a selection entry gives it no credential, and the refusal
+  of a selection the node's policy does not list; the detail of a credential's
+  `placeholder_conflict`; the tool check of a host a credential is for;
+  `run.policy_applied`'s `credentials` `name` and `argument`; and the `names` of a
+  `placeholder_conflict`'s `run.refused`, where two names that give one phrase are sent
+  once. An adapter's path, its error and the first line of its error output, an argument
+  pattern's regular expression error, a `Selects` pattern's error and the error of a
+  server's `security_policy` that does not read as a policy each print `(a value that
+  contains an access key secret)` or `(a value that contains a run key)` in place of the
+  whole part. The rest of each message prints as before, and so does a value with
+  neither prefix. `run.policy_applied`'s `variables` are unchanged: the schema holds a
+  variable's name to `^[A-Za-z_][A-Za-z0-9_]{0,127}$`, which the phrase does not match.
+  `accesskey.ShownValue` holds the rule for a value.
 
 ### Wall
 

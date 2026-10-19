@@ -451,7 +451,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	if f.Document != nil && f.Document.SecurityPolicy != nil {
 		var err error
 		if fetched, err = policy.Read("run-configuration", f.Document.SecurityPolicy); err != nil {
-			return nil, refusal.New(refusal.RunConfigurationInvalid, nil, "run configuration %s: %v", f.URL, err)
+			return nil, refusal.New(refusal.RunConfigurationInvalid, nil, "run configuration %s: %s", f.URL, accesskey.ShownValue(err.Error(), false))
 		}
 		fetched.Source = "fetched"
 	}
@@ -522,22 +522,23 @@ func (r *Run) selects(pol *policy.Loaded) error {
 			selected = append(selected, policy.Selected{Name: s.Name})
 			continue
 		}
+		name := accesskey.ShownName(s.Name, false)
 		forge, ok := r.labels["forge"]
 		if !ok {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, s.Name, "forge", s.Name))
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, "forge", name))
 			continue
 		}
 		if forge != s.Forge {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, s.Name, Spaced(s.Forge), Spaced(forge), s.Name))
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, name, Spaced(s.Forge), Spaced(forge), name))
 			continue
 		}
 		value, ok := r.labels[s.Label]
 		if !ok {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, s.Name, Spaced(s.Label), s.Name))
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, Spaced(s.Label), name))
 			continue
 		}
 		if !r.patterns[i].MatchString(value) {
-			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(s.Label), Spaced(value), s.Name, s.Name))
+			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(s.Label), Spaced(accesskey.ShownName(value, false)), name, name))
 			continue
 		}
 		selected = append(selected, policy.Selected{Name: s.Name, Argument: value})
@@ -548,7 +549,7 @@ func (r *Run) selects(pol *policy.Loaded) error {
 			if !slices.ContainsFunc(r.node.Policy.Credentials, func(b policy.Selected) bool {
 				return b.Name == sel.Name && (b.Argument == "" || b.Argument == sel.Argument)
 			}) {
-				out = append(out, sel.Name)
+				out = append(out, accesskey.ShownName(sel.Name, false))
 			}
 		}
 		if len(out) > 0 {
@@ -838,7 +839,7 @@ func (r *Run) choose(held *credential.Held) ([]tool.Chosen, error) {
 }
 
 func credentialConflict(name string) error {
-	return refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", name)
+	return refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", accesskey.ShownName(name, false))
 }
 
 func toolConflict(name string) error {

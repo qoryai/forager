@@ -1429,3 +1429,23 @@ func TestShownName(t *testing.T) {
 		}
 	}
 }
+
+// TestShownValue pins the phrase a value that contains qak_ or qrk_ in any case is shown
+// as, the access key secret's when it contains both, and a clean value quoted or bare.
+func TestShownValue(t *testing.T) {
+	const ak, rk = "(a value that contains an access key secret)", "(a value that contains a run key)"
+	for _, c := range []struct {
+		value string
+		quote bool
+		want  string
+	}{
+		{"qak_x", true, ak}, {"QAK_x", false, ak}, {"x: QaK_y", true, ak},
+		{"qrk_x", false, rk}, {"QRK_x", true, rk}, {"x: qRk_y", false, rk},
+		{"qrk_x qak_y", true, ak}, {"QRK_x QAK_y", false, ak},
+		{"exit status 3", true, `"exit status 3"`}, {"exit status 3", false, "exit status 3"}, {"qak-x", false, "qak-x"},
+	} {
+		if got := accesskey.ShownValue(c.value, c.quote); got != c.want {
+			t.Errorf("ShownValue(%q, %t) = %s, want %s", c.value, c.quote, got, c.want)
+		}
+	}
+}

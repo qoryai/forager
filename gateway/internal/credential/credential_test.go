@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/policy"
 )
@@ -318,6 +319,234 @@ func TestACleanNamePrintsAsItIs(t *testing.T) {
 		}
 		if got, want := err.Error(), m.want(shown[what]); got != want {
 			t.Errorf("%s:\n got %s\nwant %s", what, got, want)
+		}
+	}
+}
+
+// The phrases a credential message prints in place of a value that is not a name, such
+// as an adapter's path, its error or its error output, that contains qak_ or qrk_ in
+// any case.
+const (
+	accessKeyValuePhrase = "(a value that contains an access key secret)"
+	runKeyValuePhrase    = "(a value that contains a run key)"
+)
+
+// phraseMessages are the credential messages that print one part as
+// accesskey.ShownName or accesskey.ShownValue shows it, beside the eight of
+// nameMessages. Each entry is the error for v in that part, the message it gives for p
+// in the part's place, whether the part is a value and not a name, whether v may be in
+// any case or only in lower case, as the name grammar holds a name a check sees after
+// Check, and how the part shows for the clean v "model".
+var phraseMessages = map[string]struct {
+	err     func(t *testing.T, v string) error
+	want    func(p string) string
+	value   bool
+	anyCase bool
+	clean   string
+}{
+	"the first of two credentials that claim one host": {
+		err: func(t *testing.T, v string) error {
+			return resolveError(t, []Definition{envDefinition(v), envDefinition("other")}, []policy.Selected{{Name: v}, {Name: "other"}}, []string{"api.model.example"})
+		},
+		want: func(p string) string {
+			return "the credentials " + p + " and other both claim api.model.example; a host has one"
+		},
+		clean: "model",
+	},
+	"the second of two credentials that claim one host": {
+		err: func(t *testing.T, v string) error {
+			return resolveError(t, []Definition{envDefinition("other"), envDefinition(v)}, []policy.Selected{{Name: "other"}, {Name: v}}, []string{"api.model.example"})
+		},
+		want: func(p string) string {
+			return "the credentials other and " + p + " both claim api.model.example; a host has one"
+		},
+		clean: "model",
+	},
+	"an argument pattern whose error quotes it": {
+		err: func(_ *testing.T, v string) error {
+			d := envDefinition("model")
+			d.Argument = v + "("
+			return d.Check()
+		},
+		want:    func(p string) string { return "credential model: argument: " + p },
+		value:   true,
+		anyCase: true,
+		clean:   "error parsing regexp: missing closing ): `model(`",
+	},
+	"an adapter with a scheme": {
+		err: func(_ *testing.T, v string) error {
+			return Definition{Name: v, Adapter: []string{"/bin/true"}, Scheme: "bearer"}.Check()
+		},
+		want: func(p string) string {
+			return "credential " + p + ": an adapter says how its token is used; the scheme is not the definition's to give"
+		},
+		clean: "model",
+	},
+	"an argument for env": {
+		err: func(_ *testing.T, v string) error {
+			return Definition{Name: v, Env: "MODEL_TOKEN", Argument: "x"}.Check()
+		},
+		want: func(p string) string {
+			return "credential " + p + ": an argument is an adapter's; env and file take none"
+		},
+		clean: "model",
+	},
+	"env without hosts": {
+		err: func(_ *testing.T, v string) error { return Definition{Name: v, Env: "MODEL_TOKEN"}.Check() },
+		want: func(p string) string {
+			return "credential " + p + ": a token from env or file needs the hosts it is for"
+		},
+		clean: "model",
+	},
+	"an argument for a credential that takes none, its name": {
+		err: func(t *testing.T, v string) error {
+			return resolveError(t, []Definition{envDefinition(v)}, []policy.Selected{{Name: v, Argument: "x"}}, nil)
+		},
+		want:  func(p string) string { return "credential " + p + ` takes no argument and the policy gives "x"` },
+		clean: "model",
+	},
+	"an argument for a credential that takes none, the argument": {
+		err: func(t *testing.T, v string) error {
+			return resolveError(t, []Definition{envDefinition("model")}, []policy.Selected{{Name: "model", Argument: v}}, nil)
+		},
+		want:    func(p string) string { return "credential model takes no argument and the policy gives " + p },
+		anyCase: true,
+		clean:   `"model"`,
+	},
+	"an argument the machine does not provide for, its name": {
+		err: func(t *testing.T, v string) error {
+			return resolveError(t, []Definition{{Name: v, Adapter: []string{"/bin/false"}, Argument: `[a-z]+/[a-z]+`}}, []policy.Selected{{Name: v, Argument: "x"}}, nil)
+		},
+		want: func(p string) string {
+			return "credential " + p + `: the argument "x" is not one the machine provides for`
+		},
+		clean: "model",
+	},
+	"an argument the machine does not provide for, the argument": {
+		err: func(t *testing.T, v string) error {
+			return resolveError(t, []Definition{{Name: "product", Adapter: []string{"/bin/false"}, Argument: `[a-z]+/[a-z]+`}}, []policy.Selected{{Name: "product", Argument: v}}, nil)
+		},
+		want: func(p string) string {
+			return "credential product: the argument " + p + " is not one the machine provides for"
+		},
+		anyCase: true,
+		clean:   `"model"`,
+	},
+}
+
+// phrases are the values each prefix is tried in, with the phrase each gives: in lower
+// case and, for a part that may be in any case, in others too, the access key secret's
+// phrase when both are in it.
+func phrases(value, anyCase bool) map[string]string {
+	ak, rk := accessKeyPhrase, runKeyPhrase
+	if value {
+		ak, rk = accessKeyValuePhrase, runKeyValuePhrase
+	}
+	out := map[string]string{"qak_x": ak, "a.qak_b": ak, "x-qak_": ak, "qrk_x": rk, "a.qrk_b": rk, "x-qrk_": rk, "qrk_x.qak_y": ak}
+	if anyCase {
+		maps.Copy(out, map[string]string{"QAK_x": ak, "x-qAk_": ak, "QRK_x": rk, "qRk_x": rk, "QRK_x.QAK_y": ak})
+	}
+	return out
+}
+
+// TestMoreCredentialMessagesPrintAPhraseForASecret pins that the messages of
+// phraseMessages print a phrase in place of a name, an argument or an error's text that
+// contains qak_ or qrk_ in any case, with the rest of the sentence word for word, and
+// the part as before for a clean value.
+func TestMoreCredentialMessagesPrintAPhraseForASecret(t *testing.T) {
+	for what, m := range phraseMessages {
+		for v, phrase := range phrases(m.value, m.anyCase) {
+			err := m.err(t, v)
+			if err == nil {
+				t.Errorf("%s, %s: no error", what, v)
+				continue
+			}
+			if got, want := err.Error(), m.want(phrase); got != want {
+				t.Errorf("%s, %s:\n got %s\nwant %s", what, v, got, want)
+			}
+			noSecretPrefix(t, what+", "+v, err)
+		}
+		err := m.err(t, "model")
+		if err == nil {
+			t.Errorf("%s, model: no error", what)
+		} else if got, want := err.Error(), m.want(m.clean); got != want {
+			t.Errorf("%s, model:\n got %s\nwant %s", what, got, want)
+		}
+	}
+}
+
+// TestAnAdaptersFailurePrintsAPhraseForASecret pins the message of an adapter that
+// fails: its path, its error and the first line of its error output, where the run's
+// argument can be, each print a phrase when they contain qak_ or qrk_ in any case, and
+// print as before when they do not.
+func TestAnAdaptersFailurePrintsAPhraseForASecret(t *testing.T) {
+	echo := adapter(t, `echo "no installation for $1" >&2; exit 3`+"\n")
+	for v, phrase := range phrases(true, true) {
+		err := resolveError(t, []Definition{{Name: "product", Adapter: []string{echo, "${argument}"}, Argument: `.+`}}, []policy.Selected{{Name: "product", Argument: v}}, nil)
+		if want := "credential product: the adapter " + echo + ": exit status 3: " + phrase; err == nil || err.Error() != want {
+			t.Errorf("the run's argument %s in the error output:\n got %v\nwant %s", v, err, want)
+		} else {
+			noSecretPrefix(t, "the run's argument "+v, err)
+		}
+		missing := filepath.Join(t.TempDir(), v)
+		err = resolveError(t, []Definition{{Name: "product", Adapter: []string{missing}}}, []policy.Selected{{Name: "product"}}, nil)
+		if want := "credential product: the adapter " + phrase + ": " + phrase + ": "; err == nil || err.Error() != want {
+			t.Errorf("the path %s:\n got %v\nwant %s", v, err, want)
+		} else {
+			noSecretPrefix(t, "the path "+v, err)
+		}
+	}
+	err := resolveError(t, []Definition{{Name: "product", Adapter: []string{echo, "${argument}"}, Argument: `.+`}}, []policy.Selected{{Name: "product", Argument: "acme/shop"}}, nil)
+	if want := "credential product: the adapter " + echo + ": exit status 3: no installation for acme/shop"; err == nil || err.Error() != want {
+		t.Errorf("a clean argument:\n got %v\nwant %s", err, want)
+	}
+	missing := filepath.Join(t.TempDir(), "model")
+	err = resolveError(t, []Definition{{Name: "product", Adapter: []string{missing}}}, []policy.Selected{{Name: "product"}}, nil)
+	if want := "credential product: the adapter " + missing + ": fork/exec " + missing + ": no such file or directory: "; err == nil || err.Error() != want {
+		t.Errorf("a clean path:\n got %v\nwant %s", err, want)
+	}
+}
+
+// renewReport is the line a renewal of a credential named name reports, with the
+// adapter body and the shape the first answer had.
+func renewReport(t *testing.T, name, body, shape string) string {
+	t.Helper()
+	said := make(chan string, 1)
+	h := &held{
+		def:    Definition{Name: name, Adapter: []string{adapter(t, body)}},
+		report: func(l string) { said <- l },
+		shape:  shape,
+		done:   make(chan struct{}),
+		// Expired, and asked long ago, so the renewal runs at once.
+		expires: time.Now(),
+		asked:   time.Now().Add(-time.Hour),
+	}
+	go h.renew()
+	defer h.stop()
+	select {
+	case l := <-said:
+		return l
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s: no renewal was reported", name)
+	}
+	return ""
+}
+
+// TestARenewalReportPrintsAPhraseForASecretInAName pins the two lines a renewal
+// reports, one that fails and one that answers with another shape: a name that
+// contains qak_ or qrk_ prints the phrase, and a clean name prints as it is.
+func TestARenewalReportPrintsAPhraseForASecretInAName(t *testing.T) {
+	const fails = "echo 'no installation' >&2; exit 3\n"
+	answers := `echo '{"version":1,"token":"t","expires_at":"2099-01-01T00:00:00Z","apply":[{"hosts":["a.example"],"scheme":"bearer"}]}'` + "\n"
+	for name, phrase := range map[string]string{"qak_x": accessKeyPhrase, "a.qrk_b": runKeyPhrase, "qrk_x.qak_y": accessKeyPhrase, "model": "model"} {
+		if l := renewReport(t, name, fails, ""); !strings.HasPrefix(l, "credential "+phrase+" was not renewed: the adapter ") || !strings.HasSuffix(l, ": exit status 3: no installation") {
+			t.Errorf("a renewal of %s that fails: %s", name, l)
+		} else if lower := strings.ToLower(l); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+			t.Errorf("a renewal of %s that fails: a secret's prefix in %s", name, l)
+		}
+		want := "credential " + phrase + " was not renewed: the adapter answered with other hosts, schemes or paths than when the run started"
+		if l := renewReport(t, name, answers, "another shape"); l != want {
+			t.Errorf("a renewal of %s with another shape:\n got %s\nwant %s", name, l, want)
 		}
 	}
 }
