@@ -867,7 +867,7 @@ func TestOnlyTheNodesPolicyOpensTheMachine(t *testing.T) {
 			if reached := resp.StatusCode == 200 && string(body) == "the local server"; reached != opened {
 				t.Errorf("localhost through the guarded proxy: %d %q, want reached %v", resp.StatusCode, body, opened)
 			}
-			if !opened && (resp.StatusCode != 403 || !strings.Contains(string(body), "the gateway's machine only for a host the policy's allow list names")) {
+			if !opened && (resp.StatusCode != 403 || !strings.Contains(string(body), "to reach the gateway's machine, list the host itself, not a *. pattern, in the allow list of the node's policy, and allow it in the run's policy; the gateway reaches its machine only for such a host, and never a link-local address")) {
 				t.Errorf("localhost: %d %q, want the guard's refusal", resp.StatusCode, body)
 			}
 		})

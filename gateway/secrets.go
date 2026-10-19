@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
@@ -56,7 +57,8 @@ func (g *Gateway) secrets(runID string) func(context.Context, string, []string) 
 		// The local clock, never the answer's Date: exp is judged by this machine.
 		values, err := sealed.Open(answer, sealed.AccessKey{ID: s.AccessKeyID, Key: s.AccessKey}, pin, runID, digest, names, time.Now())
 		if err != nil {
-			return sealed.Values{}, &accesskey.Refusal{Code: sealedCode(err), Detail: fmt.Sprintf("secrets %s: %s; the answer does not open: %v", accesskey.ShownValue(u, false), sealedFix(err), err)}
+			fix, cause := sealedFix(err)
+			return sealed.Values{}, &accesskey.Refusal{Code: sealedCode(err), Detail: fmt.Sprintf("secrets %s: %s; %s: %v", accesskey.ShownValue(u, false), fix, cause, err)}
 		}
 		return values, nil
 	}
@@ -73,15 +75,32 @@ func sealedCode(err error) string {
 	return refusal.RunConfigurationInvalid
 }
 
-// sealedFix is the step that fixes a refusal of [sealed.Open], first in its message:
-// for a signature, the pin; for an exp outside the window, this machine's clock; for
-// every other refusal, Qory Apiary, which sealed an answer that is not the request's.
-func sealedFix(err error) string {
+// sealedFix is the step that fixes a refusal of [sealed.Open], first in its message,
+// and the clause before the refusal's text. A request outside the contract's forms is
+// a bug in the gateway, since [server.SecretsRequest.Body] and the client checked the
+// same inputs first, and the gateway does not open the answer; an answer refused while
+// secrets-answer.schema.json does not compile is a bug in that schema. Otherwise the answer
+// does not open: for a signature, the step is the pin; for an exp outside the window,
+// this machine's clock; for every other refusal, Qory Apiary, which sealed an answer
+// that is not the request's.
+func sealedFix(err error) (fix, cause string) {
+	const opens = "the answer does not open"
 	switch {
+	case errors.Is(err, sealed.ErrRequest):
+		return "report this bug in the gateway's secrets request to the Forager maintainers", "the gateway does not open the answer"
+	case errors.Is(err, sealed.ErrAnswer) && !answerSchemaCompiles():
+		return "report this bug in secrets-answer.schema.json to the Forager maintainers", opens
 	case errors.Is(err, sealed.ErrSignature):
-		return "pin Qory Apiary's current signing key in apiary_public_key"
+		return "pin Qory Apiary's current signing key in apiary_public_key", opens
 	case errors.Is(err, sealed.ErrExpired), errors.Is(err, sealed.ErrAhead):
-		return "set this machine's clock to the right time"
+		return "set this machine's clock to the right time", opens
 	}
-	return "report this answer to whoever runs Qory Apiary"
+	return "report this answer to whoever runs Qory Apiary", opens
+}
+
+// answerSchemaCompiles reports whether secrets-answer.schema.json, which [sealed.Open]
+// checks an answer against, compiles. Tests replace it.
+var answerSchemaCompiles = func() bool {
+	_, err := contracts.Compile("secrets-answer.schema.json")
+	return err == nil
 }
