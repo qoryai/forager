@@ -483,6 +483,10 @@ func List(entries []string) (*Deny, error) {
 	return entriesOf(slices.Concat(builtin.Names, builtin.Patterns, entries)), nil
 }
 
+// Entries is the deny list of the entries alone, without the built-in names and
+// patterns.
+func Entries(entries []string) *Deny { return entriesOf(entries) }
+
 // entriesOf is the deny list of the names and patterns given alone, without the
 // built-in ones.
 func entriesOf(list []string) *Deny {

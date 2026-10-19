@@ -346,7 +346,7 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 // endpoint rule leaves out does not reach the runtime: the inherited value counts, or,
 // when there is none, the descriptor's host, and a model credential for it is the
 // run's model key. The text offers a value only of a variable that no credential sets
-// a placeholder in.
+// a placeholder in, that the gateway does not reserve and that the node does not deny.
 func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 	forge := sealed("forge", "api.github.com", "", "", "GITHUB_TOKEN")
 	const keyFix = "a credential with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN"
@@ -356,6 +356,8 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 		run          []string
 		hosts        []map[string]any
 		placeholders []string
+		reserved     []string
+		deny         []string
 		want         string
 	}{
 		{
@@ -381,6 +383,25 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 			want:      "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers, or give the run a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
 		},
 		{
+			what:         "an endpoint with no host Forager reads and every model key a placeholder",
+			inherited:    "http://litellm.internal:4000",
+			hosts:        []map[string]any{sealed("model", "litellm.internal", "", "", modelKeys...)},
+			placeholders: modelKeys,
+			want:         "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
+		},
+		{
+			what:     "a model key the gateway reserves",
+			hosts:    []map[string]any{forge},
+			reserved: []string{authTokenVariable},
+			want:     "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+		},
+		{
+			what:  "a model key the node denies",
+			hosts: []map[string]any{forge},
+			deny:  []string{"claude_code_*"},
+			want:  "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+		},
+		{
 			what:         "a model credential for another host",
 			hosts:        []map[string]any{sealed("model", "llm.example", "", "", apiKeyVariable)},
 			placeholders: []string{apiKeyVariable},
@@ -400,8 +421,18 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 			}
 			sp, g := specGateway(t, env...)
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-			sp.Variables.Run = tc.run
-			answeringWith(g, tc.hosts, tc.placeholders)
+			sp.Variables.Run, sp.Variables.Deny = tc.run, tc.deny
+			g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+				a := linktest.RunAnswer(req)
+				a["credential_hosts"] = tc.hosts
+				if tc.placeholders != nil {
+					a["placeholders"] = tc.placeholders
+				}
+				if tc.reserved != nil {
+					a["reserved"] = tc.reserved
+				}
+				return linktest.Reply{Status: 200, Body: a}
+			})
 			_, err := session.Run(context.Background(), sp)
 			var r *session.Refusal
 			if !errors.As(err, &r) || r.Code != "model_key_missing" || !slices.Equal(r.Names, modelKeys) {

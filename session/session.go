@@ -753,7 +753,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err := checkModelKey(harness, rt, credentialHosts, placeholderNames, vars, prepared); err != nil {
+	if err := checkModelKey(harness, rt, credentialHosts, placeholderNames, reserved, vars, prepared); err != nil {
 		return fail(err)
 	}
 	if spec.OnVariables != nil {

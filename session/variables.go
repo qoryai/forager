@@ -325,10 +325,12 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 // without a wall, or whose answer has no credential_hosts, is not checked: its key may
 // come from what the session does not see, such as a login of the developer's, a
 // mount or an image. The refusal is [refusal.ModelKeyMissing] with the model keys'
-// variables. Its text offers a value only of a model key's variable that is not among
-// placeholderNames or a credential's placeholders, since a value of one of those is
-// refused as [refusal.PlaceholderConflict].
-func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, placeholderNames []string, vars variables.Resolved, prepared runtimes.Launch) error {
+// variables. Its text offers a value only of a model key's variable that a value can
+// reach the runtime in: one not among placeholderNames or a credential's placeholders,
+// whose value is refused as [refusal.PlaceholderConflict]; not among reserved, whose
+// value is refused as [refusal.VariableReserved]; and not matched by spec's
+// Variables.Deny, whose value is left out.
+func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, placeholderNames, reserved []string, vars variables.Resolved, prepared runtimes.Launch) error {
 	if spec.Wall == nil || len(credentials) == 0 {
 		return nil
 	}
@@ -365,10 +367,13 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	if slices.ContainsFunc(keys, func(k string) bool { return reaches[k] != "" }) {
 		return nil
 	}
-	// A value the run may pass: one of a variable no credential sets a placeholder in.
+	// A value the run may pass: one of a variable that no credential sets a placeholder
+	// in, that is not reserved and that the node does not deny.
+	deny := variables.Entries(spec.Variables.Deny)
 	var free []string
 	for _, k := range keys {
-		if !slices.Contains(placeholderNames, k) && !slices.ContainsFunc(credentials, func(c server.LinkCredentialHosts) bool { return slices.Contains(c.Placeholders, k) }) {
+		placeholder := slices.Contains(placeholderNames, k) || slices.ContainsFunc(credentials, func(c server.LinkCredentialHosts) bool { return slices.Contains(c.Placeholders, k) })
+		if !placeholder && !slices.Contains(reserved, k) && !deny.Matches(k) {
 			free = append(free, k)
 		}
 	}
