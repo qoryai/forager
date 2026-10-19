@@ -93,6 +93,11 @@ release may change what an existing document does, and says so under Upgrading.
   contract called it opaque before.
 - The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
   `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
+- The Claude Code descriptor no longer requires a model key: its `secrets` have no
+  `one_of` group, and its `one_of` in `runtimes.json` is `[]`, no longer `model_key`,
+  required, of `api_key` and `oauth_token`. The descriptor requires neither, because no
+  server supplies the model key; the run's model key comes from the machine, as before.
+  A descriptor may still define `one_of` groups.
 - Enrolment: an access key can belong to an adapter, `node_kind` `adapter` with an
   `na_` id.
 - Enrolment: an enrolment code's prefix names the kind of key it enrols, `qecn_` a

@@ -60,8 +60,8 @@ func TestMatchIsEqualityOrPresenceOnly(t *testing.T) {
 
 // TestClaudeDeclaresItsModelCredential pins that the secrets of the contract's Claude
 // Code descriptor decode: the API key on x-api-key, the OAuth credential as a bearer,
-// both on api.anthropic.com under /v1/, one of the two required, and the reserved,
-// denied and credential file lists.
+// both on api.anthropic.com under /v1/, no one_of group, and the reserved, denied and
+// credential file lists.
 func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
 	if err != nil {
@@ -84,13 +84,61 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 			t.Errorf("declares[%d] = %+v; want %+v", i, s.Declares[i], w)
 		}
 	}
-	if g := s.OneOf; len(g) != 1 || g[0].ID != "model_key" || !g[0].Required || !reflect.DeepEqual(g[0].Of, []string{"api_key", "oauth_token"}) {
-		t.Errorf("one_of = %+v", g)
+	if len(s.OneOf) != 0 {
+		t.Errorf("one_of = %+v; want none", s.OneOf)
 	}
 	if !reflect.DeepEqual(s.Reserves, []string{"ANTHROPIC_AUTH_TOKEN"}) ||
 		!reflect.DeepEqual(s.CredentialFiles, []string{"~/.claude/.credentials.json"}) ||
 		len(s.Denies) != 18 || s.Denies[0] != "ANTHROPIC_BASE_URL" {
 		t.Errorf("reserves %v, credential_files %v, denies %v", s.Reserves, s.CredentialFiles, s.Denies)
+	}
+}
+
+// TestClaudeRequiresNoModelKey pins that the Claude Code descriptor has no one_of
+// group and that its entry in runtimes.json has one_of, empty. The descriptor requires
+// neither key, because no server supplies the model key.
+func TestClaudeRequiresNoModelKey(t *testing.T) {
+	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := descriptor.Parse("descriptor.yaml", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Secrets == nil {
+		t.Fatal("the claude descriptor has no secrets")
+	}
+	if len(d.Secrets.OneOf) != 0 {
+		t.Errorf("the claude descriptor has one_of %+v; want none", d.Secrets.OneOf)
+	}
+	j, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Runtimes []struct {
+			Name  string            `json:"name"`
+			OneOf []json.RawMessage `json:"one_of"`
+		} `json:"runtimes"`
+	}
+	if err := json.Unmarshal(j, &doc); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range doc.Runtimes {
+		if r.Name != "claude" {
+			continue
+		}
+		found = true
+		if r.OneOf == nil {
+			t.Error("runtimes.json has no one_of list for the claude runtime; want []")
+		} else if len(r.OneOf) != 0 {
+			t.Errorf("runtimes.json has %d one_of groups for the claude runtime; want []", len(r.OneOf))
+		}
+	}
+	if !found {
+		t.Error("runtimes.json has no claude runtime")
 	}
 }
 
