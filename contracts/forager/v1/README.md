@@ -3471,11 +3471,19 @@ the engine's defaults. They are no guarantee of the wall's: they keep one run fr
 starving a machine, not an agent inside.
 
 The proxy is part of the list, because it dials from outside on behalf of what is
-inside: behind a wall it is **guarded**, and what is on Forager's machine is not
+inside: behind a wall or behind a separate gateway it is **guarded**, and what is on Forager's machine is not
 reached by default. Two rules, in either mode, observe included:
 
 - The link-local range, where a cloud keeps its metadata service, is refused whatever
-  the allow list contains.
+  the allow list contains. So are the metadata addresses outside that range:
+  `100.100.100.200` (Alibaba Cloud), `192.0.0.192` (Oracle Cloud Compute Classic),
+  `fd00:ec2::254` (AWS, over IPv6), `fd20:ce::254` (Google Cloud, over IPv6),
+  `168.63.129.16` (Azure WireServer), `fd00:ec2::23` (AWS EKS Pod Identity Agent, over
+  IPv6), `fd00:a9fe:a9fe::1` (Akamai, over IPv6) and `fd00:42::42` (Scaleway, over
+  IPv6), and an IPv6 address that contains one of the three IPv4 addresses in its last
+  32 bits
+  (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`). The private ranges `10/8`,
+  `172.16/12`, `192.168/16` and `100.64/10` are not refused.
 - Forager's machine, loopback and every address it has, is refused unless an
   `egress.allow` entry of the node's policy lists the host itself and the run's policy
   allows the host. A `*.` suffix over it does not count, and neither does a name a

@@ -19,13 +19,60 @@ type carriedCase struct {
 
 // carriedCases are the addresses that carry an IPv4 address, and those that do not,
 // with the guard's judgement of each: the link-local 169.254.169.254 refused whatever
-// the policy says, 127.0.0.1 and each IPv4 address this machine's interfaces hold
-// refused unless the host is named, and an ordinary address let through. ::1 and ::
-// keep their judgement as this machine's addresses, and an address outside the ranges
-// is judged as itself alone.
+// the policy says, as are the cloud metadata addresses outside that range; 127.0.0.1
+// and each IPv4 address this machine's interfaces hold refused unless the host is
+// named, and an ordinary address let through. ::1 and :: keep their judgement as this
+// machine's addresses, and an address outside the ranges is judged as itself alone.
 func carriedCases(t *testing.T) []carriedCase {
 	t.Helper()
 	cases := []carriedCase{
+		// The cloud metadata addresses outside the link-local ranges are refused
+		// whatever the policy says, as 169.254.169.254 is: the literal address, each
+		// way an IPv6 address carries an IPv4 one, and with a zone.
+		{"100.100.100.200", true, true},
+		{"192.0.0.192", true, true},
+		{"fd00:ec2::254", true, true},
+		{"fd20:ce::254", true, true},
+		{"fd00:ec2:0:0:0:0:0:254", true, true},
+		{"::ffff:100.100.100.200", true, true},
+		{"::ffff:192.0.0.192", true, true},
+		{"::6464:64c8", true, true},
+		{"::ffff:0:6464:64c8", true, true},
+		{"64:ff9b::6464:64c8", true, true},
+		{"64:ff9b::100.100.100.200", true, true},
+		{"::c000:c0", true, true},
+		{"::ffff:0:c000:c0", true, true},
+		{"64:ff9b::c000:c0", true, true},
+		{"fd00:ec2::254%eth0", true, true},
+		{"::6464:64c8%lo0", true, true},
+		{"168.63.129.16", true, true},
+		{"::ffff:168.63.129.16", true, true},
+		{"::a83f:8110", true, true},
+		{"::ffff:0:a83f:8110", true, true},
+		{"64:ff9b::a83f:8110", true, true},
+		{"fd00:ec2::23", true, true},
+		{"fd00:a9fe:a9fe::1", true, true},
+		{"fd00:42::42", true, true},
+		// The addresses next to them, and the private ranges, stay open.
+		{"100.100.100.201", false, false},
+		{"100.100.100.199", false, false},
+		{"192.0.0.193", false, false},
+		{"fd00:ec2::255", false, false},
+		{"fd00:ec2::253", false, false},
+		{"fd20:ce::255", false, false},
+		{"168.63.129.15", false, false},
+		{"168.63.129.17", false, false},
+		{"fd00:ec2::24", false, false},
+		{"fd00:a9fe:a9fe::2", false, false},
+		{"fd00:42::43", false, false},
+		{"10.0.0.1", false, false},
+		{"172.16.0.1", false, false},
+		{"192.168.0.1", false, false},
+		{"100.64.0.1", false, false},
+		{"::ffff:10.0.0.1", false, false},
+		{"::ffff:100.64.0.1", false, false},
+		{"64:ff9b::a00:1", false, false},
+		{"64:ff9b::6440:1", false, false},
 		{"::a9fe:a9fe", true, true},
 		{"::169.254.169.254", true, true},
 		{"::ffff:0:a9fe:a9fe", true, true},
