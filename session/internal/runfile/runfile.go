@@ -4,25 +4,32 @@
 package runfile
 
 import (
+	"errors"
+	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
-// Replace writes b to path with mode perm. It creates a new file beside path, mode 0600
-// and with O_EXCL, sets perm on it, writes b, syncs it to disk and renames it to path.
-// A link at path is replaced, not followed, so the write reaches no file outside path's
-// directory, and a file of mode 0600 is never readable by others. On an error the new
-// file is removed and path is as it was.
+// tries is how many names [Replace] tries for its new file before it returns the
+// error of the last one that existed, as os.CreateTemp does.
+const tries = 10000
+
+// Replace writes b to path with mode perm less the process's umask, as os.WriteFile
+// sets the mode of a file it creates. It creates a new file beside path with O_EXCL,
+// in that mode from its creation, writes b, syncs the file, renames it to path and
+// syncs the directory. A link at path is replaced, not followed, so the write reaches
+// no file outside path's directory. If an error comes before the rename, the new file
+// is removed and path is as it was; an error of the directory's sync comes after it.
 func Replace(path string, b []byte, perm os.FileMode) error {
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	dir := filepath.Dir(path)
+	f, err := create(dir, "."+filepath.Base(path)+"-", perm)
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
-	err = f.Chmod(perm)
-	if err == nil {
-		_, err = f.Write(b)
-	}
+	_, err = f.Write(b)
 	if err == nil {
 		err = f.Sync()
 	}
@@ -34,6 +41,27 @@ func Replace(path string, b []byte, perm os.FileMode) error {
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = d.Sync()
+	if cerr := d.Close(); err == nil {
+		err = cerr
 	}
 	return err
+}
+
+// create creates a file in dir whose name is prefix and a random number, with O_EXCL
+// and mode perm less the umask, trying another number while the name exists.
+func create(dir, prefix string, perm os.FileMode) (*os.File, error) {
+	for try := 1; ; try++ {
+		name := filepath.Join(dir, prefix+strconv.FormatUint(uint64(rand.Uint32()), 10))
+		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
+		if err == nil || !errors.Is(err, fs.ErrExist) || try == tries {
+			return f, err
+		}
+	}
 }

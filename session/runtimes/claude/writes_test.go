@@ -50,14 +50,19 @@ func TestSettingsWritesPrintAPhraseForASecretInTheRunDirectory(t *testing.T) {
 var runFiles = []string{"settings.json", claude.ApproveScript, "mcp-config-1.json", "agents-1.json", "system-prompt-file-1.md"}
 
 // settingsWithFiles calls Settings for that launch in run, with its files in a new
-// directory, and returns the files' content by the name of their copy.
-func settingsWithFiles(t *testing.T, run string) (map[string]string, error) {
+// directory, of mode perm, and returns the files' content by the name of their copy.
+func settingsWithFiles(t *testing.T, run string, perm os.FileMode) (map[string]string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	from := map[string]string{
 		"mcp-config-1.json":       writeFile(t, filepath.Join(dir, "mcp.json"), `{"mcpServers":{}}`),
 		"agents-1.json":           writeFile(t, filepath.Join(dir, "agents.json"), `{"r":{"description":"d","prompt":"p"}}`),
 		"system-prompt-file-1.md": writeFile(t, filepath.Join(dir, "prompt.md"), "the prompt\n"),
+	}
+	for _, p := range from {
+		if err := os.Chmod(p, perm); err != nil {
+			t.Fatal(err)
+		}
 	}
 	f := &fakeWritten{written: t.TempDir()}
 	_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
@@ -80,6 +85,7 @@ func settingsWithFiles(t *testing.T, run string) (map[string]string, error) {
 // points at keeps its content, and the run directory has a regular file of mode 0644
 // with the run's content.
 func TestSettingsReplacesALinkAtEachRunFile(t *testing.T) {
+	umask(t, 0o022)
 	run, scratch := t.TempDir(), t.TempDir()
 	for _, name := range runFiles {
 		target := writeFile(t, filepath.Join(scratch, name), "the target's content")
@@ -87,7 +93,7 @@ func TestSettingsReplacesALinkAtEachRunFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	content, err := settingsWithFiles(t, run)
+	content, err := settingsWithFiles(t, run, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +127,7 @@ func TestSettingsLeavesNoNewFileOnAFailedWrite(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(run, name), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := settingsWithFiles(t, run); !errors.Is(err, syscall.EEXIST) {
+		if _, err := settingsWithFiles(t, run, 0o644); !errors.Is(err, syscall.EEXIST) {
 			t.Errorf("a directory at %s: Settings returned %v; want EEXIST", name, err)
 		}
 		entries, err := os.ReadDir(run)
@@ -134,4 +140,44 @@ func TestSettingsLeavesNoNewFileOnAFailedWrite(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestSettingsRunFilesTakeTheirMode pins the modes of the run files: a copy has its
+// file's permission bits within 0644, and every run file loses the umask's bits, so
+// under umask 077 each is 0600 and a copy of a file of mode 0600 is 0600 under any
+// umask.
+func TestSettingsRunFilesTakeTheirMode(t *testing.T) {
+	for _, c := range []struct {
+		mask         int
+		source, copy os.FileMode
+		other        os.FileMode
+	}{
+		{0o022, 0o600, 0o600, 0o644},
+		{0o022, 0o640, 0o640, 0o644},
+		{0o022, 0o755, 0o644, 0o644},
+		{0o077, 0o644, 0o600, 0o600},
+	} {
+		umask(t, c.mask)
+		run := t.TempDir()
+		content, err := settingsWithFiles(t, run, c.source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range runFiles {
+			want := c.other
+			if _, copied := content[name]; copied {
+				want = c.copy
+			}
+			if fi, err := os.Lstat(filepath.Join(run, name)); err != nil || fi.Mode() != want {
+				t.Errorf("umask %o, files of mode %o: %s is %v, %v; want mode %v", c.mask, c.source, name, fi, err, want)
+			}
+		}
+	}
+}
+
+// umask sets the process's umask to mask for the rest of the test.
+func umask(t *testing.T, mask int) {
+	t.Helper()
+	old := syscall.Umask(mask)
+	t.Cleanup(func() { syscall.Umask(old) })
 }

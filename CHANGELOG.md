@@ -385,6 +385,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- The gateway opened a run directory's `gateway.lock`, and the session's `lock` for
+  `gateway.Resend`, through a symbolic link at their path, and the open made the file
+  the link points at when it did not exist. Both are now opened with O_NOFOLLOW, and a
+  link there fails with the fix first: "Remove the symbolic link at
+  /runs/<id>/gateway.lock. The gateway opens a run directory's lock only as a regular
+  file, not through a link."
+
 - More of the gateway's messages and event members printed or sent a value as written,
   and now print or send a phrase in place of one that contains `qak_` or `qrk_` in any
   case. The name's phrase: an image in `image_unknown` and `image_not_allowed`, their
@@ -566,11 +573,22 @@ release may change what an existing document does, and says so under Upgrading.
 - The session wrote `preparation.sh`, and Claude Code's runtime `settings.json`,
   `approve-key.sh` and the copies of a walled launch's `--mcp-config`, `--agents` and
   system-prompt files, in place in the run directory, so a link at one of those paths
-  made the write reach the file the link points at. Each, and `ca-bundle.pem`, is now
-  written to a new file beside it, mode 0600 until its mode is set, synced and renamed
-  over the path: a link there is replaced, not followed. A directory at
-  such a path now fails the write with `file exists` (EEXIST) where it failed with
-  `is a directory` (EISDIR), and a failed write leaves no new file.
+  made the write reach the file the link points at. Each is now written to a new file
+  beside it, with O_EXCL and its mode from creation, synced, renamed over the path, and
+  the directory synced: a link there is replaced, not followed, and a failed write
+  leaves no new file. `ca-bundle.pem` already went through a new file and a rename; the
+  sync, and its mode set from creation, are new for it. Each file's mode is 0644 less
+  the umask, as before; `ca-bundle.pem` was 0644 under any umask and now loses the
+  umask's bits too. A copy now has its file's permission bits within 0644, less the
+  umask, so a file only its owner reads gives a copy only its owner reads; before, a
+  copy was 0644 less the umask. A directory at such a path now fails the write with
+  `file exists` (EEXIST) where it failed with `is a directory` (EISDIR).
+
+- The run directory's lock and the lock of the registry of walled runs were opened
+  through a symbolic link at their path, and the open made the file the link points at
+  when it did not exist. Both are now opened with O_NOFOLLOW, and a link there fails
+  with the fix first: "Remove the symbolic link at /runs/<id>/lock. The session opens
+  the run directory's lock only as a regular file, not through a link."
 
 - More of the session's messages and `run.started`'s members printed or sent a value as
   written, and now print or send a phrase in place of one that contains `qak_` or `qrk_`

@@ -15,6 +15,7 @@ import (
 // followed: the file the link points at keeps its content and mode, and the path is a
 // regular file with the content and the mode given, 0644 or 0600.
 func TestReplaceReplacesALinkAtThePath(t *testing.T) {
+	umask(t, 0o022)
 	for _, perm := range []os.FileMode{0o644, 0o600} {
 		dir := t.TempDir()
 		target := filepath.Join(t.TempDir(), "target")
@@ -37,6 +38,7 @@ func TestReplaceReplacesALinkAtThePath(t *testing.T) {
 // TestReplaceReplacesAFile pins that a regular file at the path is replaced with the
 // content and the mode given.
 func TestReplaceReplacesAFile(t *testing.T) {
+	umask(t, 0o022)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file")
 	if err := os.WriteFile(path, []byte("an older and longer content"), 0o600); err != nil {
@@ -47,6 +49,21 @@ func TestReplaceReplacesAFile(t *testing.T) {
 	}
 	regular(t, path, "new", 0o644)
 	alone(t, dir, "file")
+}
+
+// TestReplaceTakesTheUmaskOff pins that the mode given loses the umask's bits, as
+// os.WriteFile's does: under umask 077 a file of mode 0644 is 0600, and under umask 027
+// 0640.
+func TestReplaceTakesTheUmaskOff(t *testing.T) {
+	for mask, want := range map[int]os.FileMode{0o077: 0o600, 0o027: 0o640} {
+		umask(t, mask)
+		dir := t.TempDir()
+		path := filepath.Join(dir, "file")
+		if err := runfile.Replace(path, []byte("content"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		regular(t, path, "content", want)
+	}
 }
 
 // TestReplaceLeavesNoNewFileOnAnError pins that a failed write leaves the directory as
@@ -117,4 +134,11 @@ func alone(t *testing.T, dir string, names ...string) {
 	for n := range got {
 		t.Errorf("%s contains %s; want no other file", dir, n)
 	}
+}
+
+// umask sets the process's umask to mask for the rest of the test.
+func umask(t *testing.T, mask int) {
+	t.Helper()
+	old := syscall.Umask(mask)
+	t.Cleanup(func() { syscall.Umask(old) })
 }

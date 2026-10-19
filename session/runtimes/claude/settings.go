@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,7 +143,7 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		var err error
 		if strings.HasPrefix(strings.TrimSpace(args[at]), "{") {
 			b = []byte(args[at])
-		} else if b, err = readSettings(args[at], readable); err != nil {
+		} else if b, _, err = readSettings(args[at], readable); err != nil {
 			return nil, settingsRefused(args[at], err)
 		}
 		if err := json.Unmarshal(b, &settings); err != nil {
@@ -218,13 +219,14 @@ func insideValues(v any, inside func(string) string) any {
 // opened must be the one there when it was judged. It is read as [hostfile.Read] reads
 // one: never through a link as its last part, only a regular file, and at most
 // maxSettings bytes. Without readable, the file judged is the one the path resolves to.
-func readSettings(path string, readable func(string) (string, error)) ([]byte, error) {
+// It returns the file's content and its permission bits.
+func readSettings(path string, readable func(string) (string, error)) ([]byte, fs.FileMode, error) {
 	if hostfile.DotDot(path) {
-		return nil, hostfile.ErrDotDot
+		return nil, 0, hostfile.ErrDotDot
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, accesskey.ShownError(err)
+		return nil, 0, accesskey.ShownError(err)
 	}
 	resolve := filepath.EvalSymlinks
 	if readable != nil {
@@ -232,14 +234,14 @@ func readSettings(path string, readable func(string) (string, error)) ([]byte, e
 	}
 	resolved, err := resolve(abs)
 	if err != nil {
-		return nil, accesskey.ShownError(err)
+		return nil, 0, accesskey.ShownError(err)
 	}
 	judged, err := os.Stat(resolved)
 	if err != nil {
-		return nil, accesskey.ShownError(err)
+		return nil, 0, accesskey.ShownError(err)
 	}
 	b, err := hostfile.Read(abs, maxSettings, judged)
-	return b, accesskey.ShownError(err)
+	return b, judged.Mode().Perm(), accesskey.ShownError(err)
 }
 
 // shellLine quotes a command for a shell, since a command hook runs under sh -c.

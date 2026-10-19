@@ -135,12 +135,15 @@ func takesValue(w string) bool {
 // read the same way and copied as it was read, as <flag>-<n>.md without the leading
 // "--". A value of --plugin-dir, --plugin-dir-no-mcp or --add-dir is checked as
 // [checkDir] checks it, and passes as it is. Every value is checked before a copy is
-// written, so a refused launch leaves none.
+// written, so a refused launch leaves none. A copy has its file's permission bits
+// within 0644, less the umask: a file only its owner reads gives a copy only its owner
+// reads.
 func walledPaths(args []string, a runtimes.Attach) ([]string, error) {
 	type copied struct {
 		v       flagValue
 		path    string
 		content []byte
+		perm    fs.FileMode
 	}
 	var copies []copied
 	n := map[string]int{}
@@ -159,23 +162,24 @@ func walledPaths(args []string, a runtimes.Attach) ([]string, error) {
 			continue
 		}
 		var b []byte
+		var perm fs.FileMode
 		var err error
 		if _, prompt := promptText[v.flag]; prompt {
-			if b, err = readSettings(v.value, a.Readable); err != nil {
+			if b, perm, err = readSettings(v.value, a.Readable); err != nil {
 				return nil, fileRefused(v, err)
 			}
-		} else if b, err = readCopy(v, a); err != nil {
+		} else if b, perm, err = readCopy(v, a); err != nil {
 			return nil, err
 		}
 		n[v.flag]++
-		copies = append(copies, copied{v, filepath.Join(a.RunDir, fmt.Sprintf(name, n[v.flag])), b})
+		copies = append(copies, copied{v, filepath.Join(a.RunDir, fmt.Sprintf(name, n[v.flag])), b, perm & 0o644})
 	}
 	if len(copies) == 0 {
 		return args, nil
 	}
 	args = append([]string(nil), args...)
 	for _, c := range copies {
-		if err := runfile.Replace(c.path, c.content, 0o644); err != nil {
+		if err := runfile.Replace(c.path, c.content, c.perm); err != nil {
 			return nil, accesskey.ShownError(err)
 		}
 		if c.v.joined {
@@ -288,26 +292,27 @@ func dotDot(v flagValue) error {
 // readCopy checks and reads the file of v as [readSettings] reads the settings, and
 // returns what its copy holds. With [runtimes.Attach.Inside] set, a file that is JSON
 // is copied with every string in it as the enclosure sees it; any other is copied as it
-// was read, and Claude Code reports what is wrong with it.
-func readCopy(v flagValue, a runtimes.Attach) ([]byte, error) {
-	b, err := readSettings(v.value, a.Readable)
+// was read, and Claude Code reports what is wrong with it. It returns the file's
+// permission bits too.
+func readCopy(v flagValue, a runtimes.Attach) ([]byte, fs.FileMode, error) {
+	b, perm, err := readSettings(v.value, a.Readable)
 	if err != nil {
-		return nil, fileRefused(v, err)
+		return nil, 0, fileRefused(v, err)
 	}
 	if a.Inside == nil {
-		return b, nil
+		return b, perm, nil
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.UseNumber()
 	var doc any
 	if d.Decode(&doc) != nil || d.More() {
-		return b, nil
+		return b, perm, nil
 	}
 	out, err := json.MarshalIndent(insideValues(doc, a.Inside), "", "  ")
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return append(out, '\n'), nil
+	return append(out, '\n'), perm, nil
 }
 
 // fileRefused is the refusal of a walled launch whose file of v could not be read, the
