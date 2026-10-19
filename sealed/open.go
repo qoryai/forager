@@ -154,7 +154,7 @@ func readEnvelope(answer []byte) (*Envelope, error) {
 	}
 	schema, err := answerSchema()
 	if err != nil {
-		return nil, err
+		return nil, refuse(ErrAnswer, "secrets-answer.schema.json does not compile: %v", err)
 	}
 	doc, err := contracts.Decode("secrets-answer.json", answer)
 	if err != nil || schema.Validate(doc) != nil {

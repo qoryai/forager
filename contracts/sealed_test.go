@@ -369,7 +369,7 @@ func TestSealedFixture(t *testing.T) {
 	}
 }
 
-// refusedAt runs the checks a gateway makes of an envelope, in their order, with the
+// refusedAt runs the checks whoever opens an envelope makes, in their order, with the
 // request's run id, digest and credentials and the access key's id, at now, and
 // returns the name of the first one that refuses it, or "" when none does: suite,
 // signature, run_id, run_configuration, expired (exp more than 300 seconds past),
@@ -420,7 +420,7 @@ func refusedAt(t *testing.T, f sealedFixture, e sealedEnvelope, now uint64) stri
 // is sealed again from the plaintext, the info and the aad its case lists, with the
 // fixed ephemeral key, and its enc and ct are the file's; a sig is the fixture signing
 // key's over the envelope's members, the bad signature's case apart; and the checks of
-// a gateway, in order, refuse it at the step its case names and at no step before. The
+// whoever opens it, in order, refuse it at the step its case names and at no step before. The
 // accepted answer passes every check, and the cases cover every step but the access
 // key's, which the run id's and the digest's stand for.
 func TestSealedInvalidVectors(t *testing.T) {

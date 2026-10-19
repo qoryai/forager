@@ -538,9 +538,9 @@ credential: `api_key` for an API key, or `access_token` for an access token from
 subscription login. The runtime's descriptor is to use it with `auth` to choose the
 variable that receives the placeholder; no Forager component reads it in this revision.
 `placeholders` are variables for the enclosure to get with the placeholder value. An entry
-has no value and no member beside these six: the server seals each value to the access key in the answer
-to the secrets request (§The server, Secrets). This revision defines the member and the
-request. Forager checks a run
+has no value and no member beside these six: the server seals each value to the access
+key in the answer to the secrets request (§The server, Secrets). This revision defines
+the member, the secrets request, its answer and the plaintext. Forager checks a run
 configuration's `credentials` against the schema, and a run configuration the schema
 refuses is `run_configuration_invalid`; it sends no secrets request, sets no value and
 adds no placeholder for an entry.
@@ -1182,7 +1182,8 @@ line in `fixtures/known-answers/signatures.json`:
   `fixtures/known-answers/registration.json`, 357 bytes:
   `6IKFHBaK2bZgvqTdylVxM_G2Nueq2crrZ4PjVSE7LQ3MdkJt06YgxcIWBE9mEEwnThWwvMGKC130M1JhPJIqCQ`.
 
-**A signed POST** is a batch, a run's registration, its attach or its outcome. A batch, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers):
+**A signed POST** is a batch, a run's registration, its attach, its outcome or a secrets
+request. A batch, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers):
 one `POST` per batch to the events URL, with the headers above and:
 
 | Header | Value |
@@ -1478,10 +1479,10 @@ server's variables for the run, a name and an object with its string `value` eac
 one of its `images.allow` prefixes. Absent, the run's policy selects the image, as
 before (§Images). A member Forager does not recognise is ignored. The digest,
 `X-Qory-Run-Configuration`, is `sha256=` and the lower-case hex SHA-256 of the exact bytes
-of the document as the server sends it, so that a secrets request contains the digest of
-the document its credentials come from (§The server, Secrets); an attach's answer contains
-the digest of the document a reload of the run answers, without `labels` and `about`
-(§The server, The attach).
+of the document as the server sends it. For an attached run, it is the digest of the
+document a reload of the run answers, without `labels` and `about`, and not of the attach
+answer's body (§The server, The attach). A secrets request contains this digest for the
+run configuration whose `credentials` it fetches (§The server, Secrets).
 Forager keeps the digest and sends it back on every POST. Forager reads
 the document with a decoder that refuses a member name that appears twice and invalid
 UTF-8, then its `image`, then against the schema and the limits, and its error states
@@ -1564,15 +1565,18 @@ sorted by credential: UTF-8 text of 1 to 16384 bytes with no NUL, and, for a val
 a header, no control character other than tab and no leading or trailing space or tab.
 Whoever opens the envelope checks, in order: the answer against its schema, with a suite
 other than this one refused before the signature; `sig` under the pinned
-`apiary_public_key`; `access_key_id`, `run_id` and `run_configuration` against the id
-of its access key, the request's run id and the digest it computed of the run configuration
-it received; `exp` against its clock, refusing an `exp` more than 300 seconds past or more
-than 900 seconds ahead; the open, with `info` and `aad` built from those values, never the envelope's;
+`apiary_public_key`; `access_key_id`, `run_id` and `run_configuration` against the id of
+its access key, the request's run id and the digest of the run configuration whose
+`credentials` it applies, as §The server, The run endpoint, defines that digest; `exp`
+against its clock, refusing an `exp` more than 300 seconds past or more than 900 seconds
+ahead; the open, with `info` and `aad` built from those values, never the envelope's;
 and the plaintext: against its schema, with a value of more than 16384 bytes refused
 there too, then a credential with two values, its digest and its credentials against the
 request, their order, a value for a credential the request did not ask for, and a value
-missing. The rule for a value set in a header is checked where the value is set. `fixtures/sealed/` contains a sealed answer to the fixture access key, signed
-under the fixture signing key, with its vectors and an envelope refused at each step
+missing.
+The rule for a value set in a header is checked where the value is set.
+`fixtures/sealed/` contains a sealed answer to the fixture access key, signed under the
+fixture signing key, with its vectors and an envelope refused at each step
 (§Fixtures). This revision defines the request, its answer and the plaintext. Package
 `sealed` implements both sides: `sealed.Open` makes the checks of whoever opens the
 envelope, in that order, all but the rule for a value set in a header, and returns the
@@ -3334,7 +3338,7 @@ the option experimental.
 | `fixtures/run-attach-answer/` | attach answers: a run configuration of no policy, and one with variables and labels | `run-attach-answer.schema.json` |
 | `fixtures/run-outcome/` | outcomes: with no state, with a state alone, and with a reason that is no code, which the server drops | `run-outcome.schema.json` |
 | `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
-| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy | `run-configuration.schema.json` |
+| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy; `credentials.json`, with a model credential on a name, an IPv4 and an IPv6 host; `credentials-forge.json`, with a model credential and a forge credential that has no `key_form` | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: a first batch, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.run.exited` of a session's run whose starter gave no outcome, `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json`; and the `dev.qory.run.policy_applied` of a walled run whose policy file was put under a ceiling with path rules, with its `ceiling_paths`, `policy-applied-ceiling-paths.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one behind a wall in an image its policy names by reference, with its workspace at `/workspace` and the fetch's time | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that every `dev.qory.run.exited` contains `state` and `exit_code` |

@@ -15,10 +15,20 @@
 //
 // What opens is [Values]: each value by its credential's name, stored as bytes and
 // never as a Go string, since a Go string cannot be overwritten. A Values formats as
-// its count whatever the verb, and marshals as text to the same, so a log line, an
-// event or an error that prints one contains no value; [Values.Clear] overwrites every
-// byte. This package cannot clear the JSON decoder's buffers or the HPKE context's copy
-// of the key.
+// its count whatever the verb, and marshals as text to the same. Its map is reached
+// only through a func-typed field, which fmt prints as an address, so a Values printed
+// by reflection, as an unexported field of a struct say, contains no value either.
+// [Value] and [Sealing] are built the same way. [Values.Clear] overwrites every byte.
+//
+// This package clears every buffer it allocates for a value: the plaintext the open
+// returns and the raw JSON of each value when [Open] returns, each value's bytes when
+// [Values.Clear] runs, and the plaintext [Seal] builds, which [Sealing.Plaintext] sizes
+// up front so that append never copies it. Copies outside this package remain
+// uncleared: the bytes the caller passes in (the answer to Open, which contains only
+// ciphertext, and each value to [NewValue]) and any copy the caller makes; the access
+// key's X25519 scalar inside crypto/ecdh's private key and the key schedule of the
+// crypto/hpke context, including the AEAD key; and any buffer encoding/json/v2
+// allocates while it decodes the plaintext.
 //
 // [Seal] is the server's side, for a receiver and the tests: it seals the values to an
 // access key's public key with a fresh ephemeral key and signs the envelope.
@@ -117,10 +127,10 @@ func refuse(err error, format string, a ...any) error {
 
 // Values are the values an envelope opened to, by credential name, stored as bytes. A
 // Values formats as its count whatever the verb, and marshals as text to the same. The
-// map is stored through a pointer, so fmt printing a Values by reflection, as an
-// unexported field of a struct, prints an address alone. The zero Values has none.
+// map is returned by a func, so fmt printing a Values by reflection, as an unexported
+// field of a struct, prints the func's address alone. The zero Values has none.
 type Values struct {
-	m *map[string][]byte
+	m func() map[string][]byte
 }
 
 // Value returns the value of a credential and whether the envelope had one. The bytes
@@ -130,7 +140,7 @@ func (v Values) Value(credential string) ([]byte, bool) {
 	if v.m == nil {
 		return nil, false
 	}
-	b, ok := (*v.m)[credential]
+	b, ok := v.m()[credential]
 	return b, ok
 }
 
@@ -139,8 +149,8 @@ func (v Values) Credentials() []string {
 	if v.m == nil {
 		return nil
 	}
-	out := make([]string, 0, len(*v.m))
-	for name := range *v.m {
+	out := make([]string, 0, len(v.m()))
+	for name := range v.m() {
 		out = append(out, name)
 	}
 	slices.Sort(out)
@@ -152,7 +162,7 @@ func (v Values) Len() int {
 	if v.m == nil {
 		return 0
 	}
-	return len(*v.m)
+	return len(v.m())
 }
 
 // Clear overwrites every value's bytes with zeros and drops them.
@@ -160,9 +170,10 @@ func (v Values) Clear() {
 	if v.m == nil {
 		return
 	}
-	for name, b := range *v.m {
+	m := v.m()
+	for name, b := range m {
 		clear(b)
-		delete(*v.m, name)
+		delete(m, name)
 	}
 }
 

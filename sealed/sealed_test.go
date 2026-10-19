@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -228,7 +229,7 @@ func TestSealIsTheFixture(t *testing.T) {
 	s := Sealing{AccessKeyID: f.key.ID, PublicKey: f.key.Key.PublicKey(), RunID: f.runID, RunConfiguration: f.digest,
 		Credentials: f.requested, Exp: Expiry(f.now)}
 	for name, value := range values(t, f.plaintext) {
-		s.Values = append(s.Values, Value{Credential: name, Value: []byte(value)})
+		s.Values = append(s.Values, NewValue(name, []byte(value)))
 	}
 	pt, err := s.Plaintext()
 	if err != nil || !bytes.Equal(pt, f.plaintext) {
@@ -445,7 +446,7 @@ func TestSealThenOpen(t *testing.T) {
 	now := time.Unix(1800000000, 0)
 	s := Sealing{AccessKeyID: id, PublicKey: key.PublicKey(), RunID: runID, RunConfiguration: digest,
 		Credentials: []string{"model", "forge", "a.b_c-d"}, Exp: Expiry(now),
-		Values: []Value{{"model", []byte("generated-model-value")}, {"forge", odd}, {"a.b_c-d", big}}}
+		Values: []Value{NewValue("model", []byte("generated-model-value")), NewValue("forge", odd), NewValue("a.b_c-d", big)}}
 	pin := accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}
 	answer, err := Seal(s, signer)
 	if err != nil {
@@ -460,7 +461,7 @@ func TestSealThenOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range s.Values {
-		if b, ok := v.Value(want.Credential); !ok || !bytes.Equal(b, want.Value) {
+		if b, ok := v.Value(want.Credential); !ok || !bytes.Equal(b, want.bytes()) {
 			t.Errorf("the value of %s did not round-trip", want.Credential)
 		}
 	}
@@ -471,20 +472,20 @@ func TestSealThenOpen(t *testing.T) {
 	}{
 		"a value missing": {func() Sealing { c := s; c.Values = s.Values[:2]; return c }(), ErrRequest},
 		"a value twice":   {func() Sealing { c := s; c.Values = []Value{s.Values[0], s.Values[0], s.Values[1]}; return c }(), ErrRequest},
-		"an empty value":  {func() Sealing { c := s; c.Values = []Value{{"model", nil}, s.Values[1], s.Values[2]}; return c }(), ErrValue},
+		"an empty value":  {func() Sealing { c := s; c.Values = []Value{NewValue("model", nil), s.Values[1], s.Values[2]}; return c }(), ErrValue},
 		"a NUL": {func() Sealing {
 			c := s
-			c.Values = []Value{{"model", []byte("a\x00b")}, s.Values[1], s.Values[2]}
+			c.Values = []Value{NewValue("model", []byte("a\x00b")), s.Values[1], s.Values[2]}
 			return c
 		}(), ErrValue},
 		"invalid UTF-8": {func() Sealing {
 			c := s
-			c.Values = []Value{{"model", []byte("a\xffb")}, s.Values[1], s.Values[2]}
+			c.Values = []Value{NewValue("model", []byte("a\xffb")), s.Values[1], s.Values[2]}
 			return c
 		}(), ErrValue},
 		"16385 bytes": {func() Sealing {
 			c := s
-			c.Values = []Value{{"model", append(bytes.Clone(big), 'x')}, s.Values[1], s.Values[2]}
+			c.Values = []Value{NewValue("model", append(bytes.Clone(big), 'x')), s.Values[1], s.Values[2]}
 			return c
 		}(), ErrValue},
 		"a name upper":     {func() Sealing { c := s; c.Credentials = []string{"Model", "forge", "a.b_c-d"}; return c }(), ErrRequest},
@@ -496,9 +497,58 @@ func TestSealThenOpen(t *testing.T) {
 	}
 }
 
+// forms are the ways a value can reach text: the verbs, inside a struct with an
+// exported and with an unexported field, through a pointer to such a struct, inside a
+// slice and a map, and in an error that wraps a pointer to the struct.
+func forms(t *testing.T, x any) []string {
+	t.Helper()
+	type exported struct {
+		Run string
+		X   any
+	}
+	type unexported struct {
+		run string
+		x   any
+	}
+	holders := []any{x, exported{"r", x}, unexported{"r", x}, &exported{"r", x}, &unexported{"r", x}, []any{x}, map[string]any{"k": x}}
+	var out []string
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d"} {
+		for _, h := range holders {
+			out = append(out, fmt.Sprintf(verb, h))
+		}
+	}
+	state := unexported{"r", x}
+	out = append(out, fmt.Errorf("run %s", &state).Error(), fmt.Errorf("run %v: %w", state, errors.New("e")).Error(),
+		fmt.Sprint(x), fmt.Sprintln(x))
+	for _, marshal := range []func(any) ([]byte, error){json.Marshal, func(a any) ([]byte, error) { return jsonv2.Marshal(a) }} {
+		for _, h := range []any{x, exported{"r", x}} {
+			if b, err := marshal(h); err == nil {
+				out = append(out, string(b))
+			}
+		}
+	}
+	return out
+}
+
+// shows reports whether s contains a value: as text, as hex in either case, as the
+// decimal bytes fmt prints for a []byte, or as the 0x bytes of %#v.
+func shows(s, value string) bool {
+	b := []byte(value)[:8]
+	dec := make([]string, len(b))
+	goHex := make([]string, len(b))
+	for i, c := range b {
+		dec[i] = strconv.Itoa(int(c))
+		goHex[i] = fmt.Sprintf("0x%x", c)
+	}
+	low := strings.ToLower(s)
+	return strings.Contains(s, value) || strings.Contains(low, hex.EncodeToString([]byte(value))[:16]) ||
+		strings.Contains(s, strings.Join(dec, " ")) || strings.Contains(low, strings.Join(goHex, ", "))
+}
+
 // TestValuesShowNoValue pins that a Values prints, marshals and formats as its count
-// alone, with every verb, inside a struct, a pointer and a slice, and that Clear
-// overwrites the bytes Value returned.
+// alone, with every verb, as an exported or an unexported field of a struct, through a
+// pointer, in a slice, a map and an error, and that Clear overwrites the bytes Value
+// returned.
 func TestValuesShowNoValue(t *testing.T) {
 	f := load(t)
 	v, err := Open(f.answer, f.key, f.pin, f.runID, f.digest, f.requested, f.now)
@@ -506,30 +556,12 @@ func TestValuesShowNoValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	secrets := values(t, f.plaintext)
-	holder := struct {
-		Values Values
-		Ptr    *Values
-	}{v, &v}
-	var out []string
-	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d", "%T"} {
-		out = append(out, fmt.Sprintf(verb, v), fmt.Sprintf(verb, holder), fmt.Sprintf(verb, []Values{v}), fmt.Sprintf(verb, &v))
-	}
-	out = append(out, fmt.Sprint(v), fmt.Sprintln(v), v.String(), v.GoString())
-	for _, marshal := range []func(any) ([]byte, error){json.Marshal, func(a any) ([]byte, error) { return jsonv2.Marshal(a) }} {
-		for _, a := range []any{v, holder} {
-			b, err := marshal(a)
-			if err != nil {
-				t.Fatal(err)
-			}
-			out = append(out, string(b))
-		}
-	}
 	if b, err := v.MarshalText(); err != nil || string(b) != "2 sealed values" {
 		t.Errorf("MarshalText %q, %v", b, err)
 	}
-	for _, s := range out {
+	for _, s := range forms(t, v) {
 		for _, value := range secrets {
-			if strings.Contains(s, value) || strings.Contains(s, hex.EncodeToString([]byte(value))) || strings.Contains(strings.ToLower(s), hex.EncodeToString([]byte(value))) {
+			if shows(s, value) {
 				t.Errorf("%q shows a value", s)
 			}
 		}
@@ -546,6 +578,103 @@ func TestValuesShowNoValue(t *testing.T) {
 	zero.Clear()
 	if zero.Len() != 0 || zero.String() != "0 sealed values" || zero.Credentials() != nil {
 		t.Errorf("the zero Values: %v", zero)
+	}
+}
+
+// TestValueAndSealingShowNoValue pins that a Value and a Sealing print no byte of a
+// value in any of the forms TestValuesShowNoValue checks.
+func TestValueAndSealingShowNoValue(t *testing.T) {
+	const secret = "generated-value-no-text-shows"
+	key, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := NewValue("model", []byte(secret))
+	s := Sealing{AccessKeyID: "ak_0123456789abcdef", PublicKey: key.PublicKey(), RunID: "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a",
+		RunConfiguration: "sha256=" + strings.Repeat("ab", 32), Credentials: []string{"model"}, Values: []Value{v}, Exp: 1}
+	for _, x := range []any{v, s, []Value{v}} {
+		for _, out := range forms(t, x) {
+			if shows(out, secret) {
+				t.Errorf("%q shows the value", out)
+			}
+		}
+	}
+	if got := fmt.Sprint(v); got != `the sealed value of "model"` {
+		t.Errorf("a Value prints %q", got)
+	}
+	if got := fmt.Sprint(s); got != `a sealing of 1 values for the run "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a"` {
+		t.Errorf("a Sealing prints %q", got)
+	}
+}
+
+// TestPlaintextIsBuiltInOneBuffer pins that Sealing.Plaintext allocates its buffer once
+// at plaintextSize, so append leaves no other copy of a value, for a value whose every
+// byte JSON escapes in 6 bytes.
+func TestPlaintextIsBuiltInOneBuffer(t *testing.T) {
+	control := make([]byte, 0, MaxValueBytes)
+	for len(control) < MaxValueBytes {
+		control = append(control, 0x01+byte(len(control)%0x1e))
+	}
+	key, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, values := range [][]Value{
+		{NewValue("a", control)},
+		{NewValue("a", []byte("x")), NewValue("b", []byte(`"\`)), NewValue("c", []byte("é\u2028"))},
+	} {
+		var names []string
+		for _, v := range values {
+			names = append(names, v.Credential)
+		}
+		s := Sealing{AccessKeyID: "ak_0123456789abcdef", PublicKey: key.PublicKey(), RunID: "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a",
+			RunConfiguration: "sha256=" + strings.Repeat("ab", 32), Credentials: names, Values: values, Exp: 1}
+		pt, err := s.Plaintext()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := plaintextSize(s.RunConfiguration, names, values); cap(pt) != want || len(pt) > want {
+			t.Errorf("the plaintext of %d bytes has a buffer of %d; want %d, allocated once", len(pt), cap(pt), want)
+		}
+		got, err := Plaintext(pt, s.RunConfiguration, names)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range values {
+			if b, ok := got.Value(v.Credential); !ok || !bytes.Equal(b, v.bytes()) {
+				t.Errorf("the value of %s did not read back", v.Credential)
+			}
+		}
+		got.Clear()
+	}
+}
+
+// TestErrorsShowNamesAsShownName pins that a credential name with qak_ or qrk_ in it
+// reaches no error as written: in a value refused, a value twice, a value not
+// requested, a value missing and a request refused.
+func TestErrorsShowNamesAsShownName(t *testing.T) {
+	d := "sha256=" + strings.Repeat("0", 64)
+	doc := func(credentials, values string) []byte {
+		return []byte(`{"version":1,"run_configuration":"` + d + `","credentials":` + credentials + `,"values":` + values + `}`)
+	}
+	for name, tc := range map[string]struct {
+		pt        []byte
+		requested []string
+	}{
+		"an empty value": {doc(`["qak_model"]`, `[{"credential":"qak_model","value":""}]`), []string{"qak_model"}},
+		"a value twice":  {doc(`["qrk_model"]`, `[{"credential":"qrk_model","value":"x"},{"credential":"qrk_model","value":"x"}]`), []string{"qrk_model"}},
+		"not requested":  {doc(`["a"]`, `[{"credential":"a","value":"x"},{"credential":"qak_x","value":"x"}]`), []string{"a"}},
+		"missing":        {doc(`["a","qak_x"]`, `[{"credential":"a","value":"x"}]`), []string{"a", "qak_x"}},
+		"credentials":    {doc(`["qak_x"]`, `[{"credential":"qak_x","value":"x"}]`), []string{"a"}},
+		"a request":      {doc(`["a"]`, `[{"credential":"a","value":"x"}]`), []string{"qak_x", "qak_x"}},
+	} {
+		_, err := Plaintext(tc.pt, d, tc.requested)
+		if err == nil || strings.Contains(err.Error(), "qak_") || strings.Contains(err.Error(), "qrk_") {
+			t.Errorf("%s: %v; want an error that shows no name as written", name, err)
+		}
+	}
+	if _, err := Plaintext(doc(`["a"]`, `[{"credential":"a","value":"x"}]`), "qak_digest", []string{"a"}); !only(err, ErrRequest) || strings.Contains(err.Error(), "qak_") {
+		t.Errorf("a digest outside its form: %v; want ErrRequest", err)
 	}
 }
 

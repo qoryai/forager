@@ -37,9 +37,9 @@ release may change what an existing document does, and says so under Upgrading.
 - A run configuration's `credentials`: at most 8 credentials whose values the server
   stores for the run, each `{name, hosts, paths, auth, key_form, placeholders}`, with
   exact hosts and no value. `key_form`, optional, is the form of the key for a model
-  credential, `api_key` or `access_token`. Forager checks the member against `run-configuration.schema.json`,
-  and a member the schema refuses is `run_configuration_invalid`; Forager sets no value
-  from it and reads no `key_form`.
+  credential, `api_key` or `access_token`. Forager checks the member against
+  `run-configuration.schema.json`, and a member the schema refuses is
+  `run_configuration_invalid`; Forager sets no value from it and reads no `key_form`.
 - The secrets request, `secrets-request.schema.json`, a signed `POST` to discovery's
   `secrets.url` for the values of a run configuration's `credentials`; its answer, the
   envelope of `secrets-answer.schema.json`, sealed with HPKE base mode, X25519,
@@ -49,8 +49,9 @@ release may change what an existing document does, and says so under Upgrading.
   secrets request.
 - Package `sealed`: `sealed.Open` checks a secrets answer in the contract's order and
   opens it with an access key, returning the values by credential name as bytes that
-  `Values.Clear` overwrites and that no format verb prints; `sealed.Seal` seals and signs
-  an answer, for a receiver and the tests. Each refusal is one of the package's errors,
+  `Values.Clear` overwrites. A `Values`, a `Value` or a `Sealing` prints no value with
+  any format verb, also as a field of a struct printed by reflection; `sealed.Seal`
+  seals and signs an answer, for a receiver and the tests. Each refusal is one of the package's errors,
   and no error contains a value. No Forager component calls `sealed.Open`.
 
 #### Changed

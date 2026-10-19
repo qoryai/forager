@@ -60,14 +60,16 @@ func readPlaintext(pt []byte) (digest string, credentials, names []string, value
 	}
 	values = make([][]byte, 0, len(raw))
 	for _, v := range raw {
-		b, err := jsontext.AppendUnquote(nil, v.Value)
+		// The unquoted value is shorter than its raw JSON, so AppendUnquote writes into
+		// this buffer and allocates no other copy of the value.
+		b, err := jsontext.AppendUnquote(make([]byte, 0, len(v.Value)), v.Value)
 		if err != nil || len(b) == 0 || len(b) > MaxValueBytes || bytes.IndexByte(b, 0) >= 0 {
 			clear(b)
 			clearAll(values)
 			if err != nil {
 				return "", nil, nil, nil, ErrPlaintext
 			}
-			return "", nil, nil, nil, refuse(ErrValue, "the value of the credential %s", *v.Credential)
+			return "", nil, nil, nil, refuse(ErrValue, "the value of the credential %s", accesskey.ShownName(*v.Credential, true))
 		}
 		values = append(values, b)
 		names = append(names, *v.Credential)
@@ -98,12 +100,21 @@ func clearAll(values [][]byte) {
 // [ErrDigest]; credentials other than the set requested [ErrCredentials]; credentials,
 // or values, not sorted by name [ErrPlaintext]; a value for a credential the request
 // did not ask for [ErrNotRequested]; and a requested credential without a value
-// [ErrMissing]. It does not check the rule for a value set in a header, no control
+// [ErrMissing]. A digest outside its form or a request outside its forms is
+// [ErrRequest], before pt is read. It does not check the rule for a value set in a header, no control
 // character other than tab and no leading or trailing space or tab: Plaintext is not
 // given which values are set in a header, so that check is the caller's. It returns
 // the values by credential; on an error it has cleared every value it read. The caller
 // clears pt.
 func Plaintext(pt []byte, digest string, requested []string) (Values, error) {
+	if !digestShape.MatchString(digest) || len(requested) < 1 || len(requested) > MaxCredentials {
+		return Values{}, refuse(ErrRequest, "the digest is outside its form, or the request lists %d credentials and not 1 to %d", len(requested), MaxCredentials)
+	}
+	for i, name := range requested {
+		if !nameShape.MatchString(name) || slices.Contains(requested[:i], name) {
+			return Values{}, refuse(ErrRequest, "the credential %s is outside the grammar or listed twice", accesskey.ShownName(name, true))
+		}
+	}
 	got, credentials, names, values, err := readPlaintext(pt)
 	if err != nil {
 		return Values{}, err
@@ -141,7 +152,7 @@ func Plaintext(pt []byte, digest string, requested []string) (Values, error) {
 	for i, name := range names {
 		m[name] = values[i]
 	}
-	return Values{m: &m}, nil
+	return Values{m: func() map[string][]byte { return m }}, nil
 }
 
 // shownNames is a list of credential names as an error prints it.

@@ -1,5 +1,5 @@
 {
-  "note": "The sealed fixture. run-configuration.json is the run configuration the server answered; its digest is in secrets-request.json, the gateway's request, and in the envelope of secrets-answer.json, sealed to the fixture access key of known-answers/keys.json with the fixed ephemeral key below, and signed under the fixture signing key. sealed-plaintext.json is what the envelope opens to. info and aad are hex; the signed message's length and SHA-256 are here. Every case of invalid is opened at now, with the run id, the digest and the credentials of secrets-request.json, and refused at the step refused names: suite, signature, run_id, run_configuration, expired, ahead, open or values. Each case lists the plaintext it was sealed from and the info and aad it was sealed with, which may differ from those the envelope's members give.",
+  "note": "The sealed fixture. run-configuration.json is the run configuration the server answered; its digest is in secrets-request.json, the request, and in the envelope of secrets-answer.json, sealed to the fixture access key of known-answers/keys.json with the fixed ephemeral key below, and signed under the fixture signing key. sealed-plaintext.json is what the envelope opens to. info and aad are hex; the signed message's length and SHA-256 are here. Every case of invalid is opened at now, with the run id, the digest and the credentials of secrets-request.json, and refused at the step refused names: suite, signature, run_id, run_configuration, expired, ahead, open or values. Each case lists the plaintext it was sealed from and the info and aad it was sealed with, which may differ from those the envelope's members give.",
   "now": 1700000000,
   "ephemeral_private_key": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A",
   "info": "716f72792073656372657473207631000020000100020013616b5f66317874307265303030303030303030",
@@ -73,7 +73,7 @@
     },
     {
       "file": "fixtures/sealed/invalid/unknown-suite.json",
-      "note": "suite is x25519-sha256-chacha20poly1305, signed: the schema refuses it, and the gateway refuses the envelope before it verifies the sig.",
+      "note": "suite is x25519-sha256-chacha20poly1305, signed: the schema refuses it, and whoever opens it refuses the envelope before it verifies the sig.",
       "refused": "suite",
       "plaintext": "fixtures/sealed/sealed-plaintext.json",
       "info": "716f72792073656372657473207631000020000100020013616b5f66317874307265303030303030303030",

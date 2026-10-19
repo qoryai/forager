@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
+	"io"
 	"slices"
 	"strconv"
 	"time"
@@ -14,15 +16,45 @@ import (
 	"github.com/qoryai/forager/accesskey"
 )
 
-// Value is one value as the server seals it: the credential's name and the value.
+// Value is one value as the server seals it: the credential's name and the value. The
+// value is returned by a func, so a Value printed by reflection, as an unexported field
+// of a struct, prints the func's address and no byte of it; a Value formats as its
+// credential's name alone whatever the verb. Make one with [NewValue].
 type Value struct {
 	Credential string
-	Value      []byte
+	value      func() []byte
 }
+
+// NewValue returns the Value of a credential. It keeps value, not a copy: the caller
+// clears value after [Seal] returns.
+func NewValue(credential string, value []byte) Value {
+	return Value{Credential: credential, value: func() []byte { return value }}
+}
+
+// bytes returns the value, or nil for a Value not made by NewValue.
+func (v Value) bytes() []byte {
+	if v.value == nil {
+		return nil
+	}
+	return v.value()
+}
+
+// String returns the credential's name and nothing of the value.
+func (v Value) String() string {
+	return "the sealed value of " + accesskey.ShownName(v.Credential, true)
+}
+
+// GoString returns what String returns.
+func (v Value) GoString() string { return v.String() }
+
+// Format writes what String returns, whatever the verb.
+func (v Value) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, v.String()) }
 
 // Sealing is what the server seals for one secrets request: to the access key the
 // request verified under, for the run and the digest of its run configuration, the
-// request's credentials and a value for each, with exp.
+// request's credentials and a value for each, with exp. A Sealing formats as its count
+// of values and its run whatever the verb; printed by reflection, its Values print as
+// each Value does.
 type Sealing struct {
 	AccessKeyID string
 	// PublicKey is the access key's Ed25519 public key, whose X25519 u-coordinate the
@@ -36,9 +68,34 @@ type Sealing struct {
 	Exp         uint64
 }
 
+// String returns how many values the sealing has and for which run, and nothing of
+// the values.
+func (s Sealing) String() string {
+	return fmt.Sprintf("a sealing of %d values for the run %s", len(s.Values), accesskey.ShownName(s.RunID, true))
+}
+
+// GoString returns what String returns.
+func (s Sealing) GoString() string { return s.String() }
+
+// Format writes what String returns, whatever the verb.
+func (s Sealing) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, s.String()) }
+
 // Expiry returns exp for an envelope sealed at the server's clock now, in Unix
 // seconds: now plus [Lifetime].
 func Expiry(now time.Time) uint64 { return uint64(now.Unix()) + Lifetime }
+
+// plaintextSize is an upper bound of the plaintext's length: JSON escapes a byte in at
+// most 6 bytes, \u001f say, and every identifier and the digest are ASCII.
+func plaintextSize(digest string, credentials []string, values []Value) int {
+	n := len(`{"version":1,"run_configuration":"","credentials":[],"values":[]}`) + len(digest)
+	for _, c := range credentials {
+		n += len(c) + 3
+	}
+	for _, v := range values {
+		n += len(`{"credential":"","value":""},`) + len(v.Credential) + 6*len(v.bytes())
+	}
+	return n
+}
 
 // Plaintext returns what the envelope seals: compact JSON of version,
 // run_configuration, the credentials sorted, and the values sorted by credential, each
@@ -46,7 +103,8 @@ func Expiry(now time.Time) uint64 { return uint64(now.Unix()) + Lifetime }
 // identifiers are outside their forms, whose credentials are not 1 to
 // [MaxCredentials] names each once, or whose values are not one for each credential;
 // and, with [ErrValue], a value that is not 1 to [MaxValueBytes] bytes of UTF-8 without
-// a NUL. The caller clears what it returns.
+// a NUL. Its buffer is allocated once at [plaintextSize], so append writes the values
+// into no other buffer. The caller clears what it returns.
 func (s Sealing) Plaintext() ([]byte, error) {
 	if accesskey.CheckID(s.AccessKeyID) != nil || !runIDShape.MatchString(s.RunID) || !digestShape.MatchString(s.RunConfiguration) || s.Exp > maxInteger {
 		return nil, refuse(ErrRequest, "the access key id, the run id, the digest or exp is outside its form")
@@ -64,11 +122,13 @@ func (s Sealing) Plaintext() ([]byte, error) {
 		if values[i].Credential != name {
 			return nil, refuse(ErrRequest, "the values are not one for each credential")
 		}
-		if v := values[i].Value; len(v) == 0 || len(v) > MaxValueBytes || bytes.IndexByte(v, 0) >= 0 {
+		if v := values[i].bytes(); len(v) == 0 || len(v) > MaxValueBytes || bytes.IndexByte(v, 0) >= 0 {
 			return nil, refuse(ErrValue, "the value of the credential %s", accesskey.ShownName(name, true))
 		}
 	}
-	b := []byte(`{"version":1,"run_configuration":`)
+	size := plaintextSize(s.RunConfiguration, credentials, values)
+	b := make([]byte, 0, size)
+	b = append(b, `{"version":1,"run_configuration":`...)
 	b, _ = jsontext.AppendQuote(b, s.RunConfiguration)
 	b = append(b, `,"credentials":[`...)
 	for i, name := range credentials {
@@ -86,13 +146,20 @@ func (s Sealing) Plaintext() ([]byte, error) {
 		b, _ = jsontext.AppendQuote(b, v.Credential)
 		b = append(b, `,"value":`...)
 		var err error
-		if b, err = jsontext.AppendQuote(b, v.Value); err != nil {
-			clear(b)
+		if b, err = jsontext.AppendQuote(b, v.bytes()); err != nil {
+			clear(b[:cap(b)])
 			return nil, refuse(ErrValue, "the value of the credential %s", accesskey.ShownName(v.Credential, true))
 		}
 		b = append(b, '}')
 	}
-	return append(b, "]}"...), nil
+	b = append(b, "]}"...)
+	if cap(b) != size {
+		// Unreachable while plaintextSize bounds the length: append moved the buffer,
+		// and the old one, which this package cannot reach, has the values.
+		clear(b[:cap(b)])
+		return nil, errors.New("the plaintext outgrew its buffer")
+	}
+	return b, nil
 }
 
 // sender seals pt to the recipient's X25519 public key with info and aad, returning
