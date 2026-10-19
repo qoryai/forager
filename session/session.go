@@ -786,7 +786,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	passes := func(name string) bool {
 		return reachesFromRun(harness, name, prepared, ownEnv, placeholderNames, try)
 	}
-	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared, passes); err != nil {
+	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared, placeholderNames, passes); err != nil {
 		return fail(err)
 	}
 	if spec.OnVariables != nil {

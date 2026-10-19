@@ -80,8 +80,8 @@ type Config struct {
 	// to check, with [Run.Conflict].
 	Passes func(name string) bool
 	// Report receives one line per thing the run reports to its user: a credential's
-	// renewal that failed, a tool's standard error, a credential the gateway's
-	// selection gives the run none of.
+	// renewal that failed, a tool's standard error, and an entry of the gateway's
+	// selection whose credential the run does not get.
 	// Nil reports nothing.
 	Report func(string)
 	// Secrets fetches the values of the credentials of the run configuration the run

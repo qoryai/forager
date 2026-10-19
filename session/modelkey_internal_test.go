@@ -40,7 +40,7 @@ func TestTheModelKeyTrialRunsOnlyForARefusal(t *testing.T) {
 			vars := variables.Resolved{Env: tc.set}
 			trials := 0
 			passes := func(string) bool { trials++; return true }
-			err := checkModelKey(spec, rt, tc.creds, vars, runtimes.Launch{}, passes)
+			err := checkModelKey(spec, rt, tc.creds, vars, runtimes.Launch{}, nil, passes)
 			if (err != nil) != tc.refused {
 				t.Fatalf("%v, want refused %v", err, tc.refused)
 			}

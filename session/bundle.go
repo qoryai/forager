@@ -30,7 +30,8 @@ func caEnv(spec Spec) []string {
 
 // writeBundle writes [BundleFile] into dir, the run directory: the first file of
 // machineBundles that is a regular file with a certificate in it, then ca, the run's
-// certificate. It returns each variable of names set to the file's path, NAME=path.
+// certificate, through [replaceFile]. It returns each variable of names set to the
+// file's path, NAME=path.
 // A machine with none of the files is no run: the run's tools would trust the gateway
 // for no host.
 func writeBundle(dir string, names []string, ca []byte) ([]string, error) {
@@ -51,7 +52,7 @@ func writeBundle(dir string, names []string, ca []byte) ([]string, error) {
 		roots = append(roots, '\n')
 	}
 	file := filepath.Join(dir, BundleFile)
-	if err := os.WriteFile(file, append(roots, ca...), 0o644); err != nil {
+	if err := replaceFile(file, append(roots, ca...)); err != nil {
 		return nil, accesskey.ShownError(err)
 	}
 	out := make([]string, len(names))
@@ -59,4 +60,29 @@ func writeBundle(dir string, names []string, ca []byte) ([]string, error) {
 		out[i] = n + "=" + file
 	}
 	return out, nil
+}
+
+// replaceFile writes b to a new file beside path, mode 0644, and renames it to path. A
+// link at path is replaced, never followed, so the write reaches no file outside the
+// directory.
+func replaceFile(path string, b []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(b)
+	if err == nil {
+		err = f.Chmod(0o644)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	return err
 }

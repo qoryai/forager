@@ -260,7 +260,7 @@ func placeholdersOnly(t *testing.T, a *server.LinkRunAnswer, o *origin) {
 // run key, then reloads it for the digest of the document's bytes. In each case the
 // receiver is asked for the credential model once; the origin gets the value in
 // x-api-key; the run answer has MODEL_API_KEY as its one placeholder and no value; and
-// no record, report, stored event or log line of the receiver holds the value. A run
+// no record, report, stored event or log line of the receiver contains the value. A run
 // without a wall is brokered the same way, and a request it sends around the proxy
 // reaches the origin with the placeholder alone.
 func TestASealedCredentialFromTheReferenceReceiverReachesTheOrigin(t *testing.T) {

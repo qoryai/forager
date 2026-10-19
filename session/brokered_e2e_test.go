@@ -18,7 +18,7 @@ import (
 )
 
 // The runs of this file are end to end without a wall: a real session.Run speaks to a
-// real gateway that holds a credential of the machine's for the run, on the local link
+// real gateway that has a credential of the machine's for the run, on the local link
 // and behind a separate gateway. That the origin then gets the value through the proxy,
 // and the placeholder around it, is gateway's
 // TestASealedCredentialFromTheReferenceReceiverReachesTheOrigin.
@@ -52,8 +52,9 @@ func brokeredSpec(t *testing.T) (session.Spec, string) {
 
 // checkBrokered checks an unwalled brokered run: the agent got the placeholder in
 // ANTHROPIC_API_KEY, over the value it inherits, and the bundle's variables, the
-// bundle holds the machine's authorities and the run's certificate, and no file of the
-// run directory or the gateway's, the agent's environment among them, holds the value.
+// bundle contains the machine's authorities and the run's certificate, and no file of
+// the run directory or the gateway's, the agent's environment among them, contains the
+// value.
 func checkBrokered(t *testing.T, env string, dirs ...string) {
 	t.Helper()
 	got := envOf(t, env)
@@ -71,13 +72,13 @@ func checkBrokered(t *testing.T, env string, dirs ...string) {
 		t.Errorf("the bundle %q, %v; want the machine's authorities and the run's certificate", b, err)
 	}
 	if e, err := os.ReadFile(env); err != nil || bytes.Contains(e, []byte(brokeredValue)) {
-		t.Errorf("the agent's environment holds the value, or is not there: %v", err)
+		t.Errorf("the agent's environment contains the value, or is not there: %v", err)
 	}
 	for _, dir := range dirs {
 		filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
 			if err == nil && e.Type().IsRegular() {
 				if b, err := os.ReadFile(p); err == nil && bytes.Contains(b, []byte(brokeredValue)) {
-					t.Errorf("%s holds the value", p)
+					t.Errorf("%s contains the value", p)
 				}
 			}
 			return nil

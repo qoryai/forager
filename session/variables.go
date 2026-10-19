@@ -457,7 +457,9 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 // session does not see, such as a login of the developer's, a mount or an image. The refusal is [refusal.ModelKeyMissing] with the model keys'
 // variables. Its text offers a value only of a model key's variable for which passes
 // reports true: a value of it from the run reaches the runtime's environment.
-func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, passes func(name string) bool) error {
+// Without a wall, an inherited value of one of placeholderNames reaches nothing: the
+// placeholder is set over it, so the hosts decide.
+func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, placeholderNames []string, passes func(name string) bool) error {
 	if len(credentials) == 0 {
 		return nil
 	}
@@ -483,8 +485,12 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	}
 	// What reaches the runtime, a later source's value over an earlier one's, as
 	// environment writes the launch's.
+	inherited := spec.Env
+	if spec.Wall == nil {
+		inherited = withoutNames(spec.Env, placeholderNames)
+	}
 	reaches := map[string]string{}
-	for _, kv := range slices.Concat(spec.Env, vars.Env, vars.Fixed, prepared.Env) {
+	for _, kv := range slices.Concat(inherited, vars.Env, vars.Fixed, prepared.Env) {
 		name, value, _ := strings.Cut(kv, "=")
 		reaches[name] = value
 	}

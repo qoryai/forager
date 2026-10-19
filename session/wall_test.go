@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
@@ -239,7 +240,7 @@ const authority = "-----BEGIN CERTIFICATE-----\nMIIBexampleAAAA\n-----END CERTIF
 // TestTheAnswerCrossesAsAnAuthorityAndAPlaceholder pins what a wall is given of the
 // run answer of a run whose gateway holds a credential: the run authority's
 // certificate and a placeholder in place of the credential, and what the record says
-// of it, the members of policy_applied the gateway decides as it gives them.
+// of it, the members of policy_applied the gateway decides, as they are in its answer.
 func TestTheAnswerCrossesAsAnAuthorityAndAPlaceholder(t *testing.T) {
 	w := &openWall{}
 	sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -284,7 +285,7 @@ const machineRoots = "-----BEGIN CERTIFICATE-----\nMIIBmachineROOT\n-----END CER
 // credential: the agent's environment has the credential's placeholder, over a value
 // the run inherits, and the variables of the run's bundle, each of them the path of
 // ca-bundle.pem in the run directory, which contains the machine's authorities and
-// then the run's certificate. Spec.CAEnv names those variables when it is set.
+// then the run's certificate. When Spec.CAEnv is set, it is the list of those variables.
 func TestAnUnwalledRunIsBrokered(t *testing.T) {
 	for name, names := range map[string][]string{"the default variables": nil, "Spec.CAEnv": {"MY_CA_FILE", "SSL_CERT_FILE"}} {
 		t.Run(name, func(t *testing.T) {
@@ -326,7 +327,7 @@ func TestAnUnwalledRunIsBrokered(t *testing.T) {
 
 // TestAnUnwalledRunWithoutABundleDoesNotStart pins a run without a wall that has an
 // authority, on a machine with none of the files Forager reads authorities from: no
-// run, with the text that says which file to install.
+// run, with the text that starts with the file to install.
 func TestAnUnwalledRunWithoutABundleDoesNotStart(t *testing.T) {
 	defer session.SetMachineBundles([]string{filepath.Join(t.TempDir(), "none.pem"), t.TempDir()})()
 	sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -335,6 +336,45 @@ func TestAnUnwalledRunWithoutABundleDoesNotStart(t *testing.T) {
 	const want = "install a CA bundle at /etc/ssl/cert.pem or /etc/ssl/certs/ca-certificates.crt: the run's tools trust the gateway for the credentials' hosts only through a bundle, and this machine has none of the files Forager reads"
 	if err == nil || err.Error() != want {
 		t.Errorf("%v, want %q", err, want)
+	}
+}
+
+// TestTheBundleReplacesALinkAtItsPath pins that a link at the bundle's path in the run
+// directory is replaced, not followed: the file it points at keeps its content, and the
+// run directory has the bundle as a regular file.
+func TestTheBundleReplacesALinkAtItsPath(t *testing.T) {
+	roots := filepath.Join(t.TempDir(), "cert.pem")
+	if err := os.WriteFile(roots, []byte(machineRoots), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer session.SetMachineBundles([]string{roots})()
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	credentialAnswer(g)
+	sp.RunID = event.NewRunID()
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, []byte("the target's content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(sp.RunsDir, sp.RunID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, session.BundleFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(target); err != nil || string(b) != "the target's content" {
+		t.Errorf("the link's target is %q, %v; want its content kept", b, err)
+	}
+	fi, err := os.Lstat(filepath.Join(dir, session.BundleFile))
+	if err != nil || !fi.Mode().IsRegular() {
+		t.Errorf("the bundle %v, %v; want a regular file", fi, err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, session.BundleFile))
+	if !strings.HasPrefix(string(b), machineRoots+"\n") {
+		t.Errorf("the bundle %q; want the machine's authorities first", b)
 	}
 }
 

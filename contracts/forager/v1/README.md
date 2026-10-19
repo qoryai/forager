@@ -111,7 +111,7 @@ Stated so a receiver reads the record for what it is.
 - Without a wall, Forager gives the run only placeholders, but the agent can read every credential the machine already holds; run a brokered run on a machine that holds none.
   An unwalled run inherits the starting process's environment, apart from the
   variables the machine's credentials are read from, and it can read the machine's
-  files. A connection it opens around the proxy carries the placeholder alone, and is
+  files. A connection it opens around the proxy sends only the placeholder, and is
   not recorded.
 - A wall decides which process may connect, not where the machine may connect. A packet
   filter in front of a node cannot distinguish the agent from the gateway, so its list is
@@ -364,7 +364,7 @@ than the server, so on a node connected to a server what the node contributes ca
 take away from the run. The node's policy is the policy document of the launch spec,
 `Spec.Policy` in Go. A fetched `security_policy` and the node's policy combine by
 narrowing. Without a server's `security_policy` the node's policy is the run's. One
-exception: for a walled run behind a separate gateway with a selection of credentials,
+exception: for a run behind a separate gateway, with or without a wall, with a selection of credentials,
 the node policy's `credentials` member only caps that selection (the `credentials` row).
 With a server's policy and no node policy, the server's applies as it is.
 
@@ -375,7 +375,7 @@ With a server's policy and no node policy, the server's applies as it is.
 | `egress.deny` | the union: a host either side's `deny` covers is denied, in either mode, and recorded with that entry as its rule |
 | `egress.paths` | a host either side lists is terminated, and a request to it must match an entry of every side that lists its host. The run's mode decides what a miss does: under `enforce` it is denied; under `observe` it passes; either way it is recorded with an empty `path_rule`. A request every such side matches is recorded with the narrowest entry that matched |
 | `tools` | the server's selection, narrowed by the node's `tools` member: absent, it leaves the selection as it is; present, each selected tool must be listed in it by name, and by argument when the node's entry has one, so `tools: []` allows none. A selected tool outside it is no run, `tool_unknown`, as a tool the node does not define |
-| `credentials` | the server's selection, narrowed by the node's `credentials` member as `tools` is; a selected credential outside it is no run; behind a separate gateway, when the server's selects none, a walled run gets the gateway's selection: a credential that takes an argument takes it from the run's label the selection names, whose value must match whole the pattern it names, and only for a run whose `forge` label is the one it names |
+| `credentials` | the server's selection, narrowed by the node's `credentials` member as `tools` is; a selected credential outside it is no run; behind a separate gateway, when the server's selects none, a run, with or without a wall, gets the gateway's selection: a credential that takes an argument takes it from the run's label the selection names, whose value must match whole the pattern it names, and only for a run whose `forge` label is the one it names |
 | `image` | when both sides select one, it must be the same, else no run, `image_unknown`; when one does, that one; else the node's default |
 | `variables` | the server's, over every source of the node's but the fixed names; the node's apply to the names the server leaves alone (§Variables) |
 
@@ -543,7 +543,7 @@ Keychain, is not trusted. A machine with none of the four files does not start t
 run's tools trust the gateway for the credentials' hosts only through a bundle, and this
 machine has none of the files Forager reads`. The proxy verifies the real host against the machine's
 roots. Every other host stays a tunnel the proxy does not read, and a run with no
-credential and no path rule has no authority at all.
+credential and no path rule has no authority at all, unless it has a server.
 
 **The record.** `dev.qory.run.policy_applied` contains each use, `name`, `argument`,
 `hosts`, `scheme` and `paths`, and the `terminated` hosts. Its `credential_variables` lists the
@@ -880,7 +880,8 @@ the session refuses the run, `model_key_missing` with the model keys' variables,
 one of these holds:
 
 - A value of a model key's variable reaches the runtime: the run's, the machine's, the
-  harness's, the runtime's preparation's or one the run inherits.
+  harness's, the runtime's preparation's or one the run inherits, unless it is a
+  placeholder.
 - A credential of `credential_hosts`, the machine's or the server's, has a model key's
   variable among its `placeholders`, the one chosen from its `key_variables` included,
   and a host
@@ -3055,8 +3056,8 @@ paths of those hosts, in the policy's path grammar; how it is set,
 `basic` with its `username`. The session gives a declaration's variable the placeholder
 of a credential from the server whose `key_variables` list it and whose `auth` is the
 declaration's (§Credentials, The variable of a model key). When the descriptor also has
-a `model` section, its declarations are its model keys, and a walled run whose run
-answer has `credential_hosts` needs one (§Variables, A model key). `one_of` lists groups `{id, required, of}`, `of` being
+a `model` section, its declarations are its model keys, and a run whose run answer has
+`credential_hosts`, with or without a wall, needs one (§Variables, A model key). `one_of` lists groups `{id, required, of}`, `of` being
 declared ids, each in one group at most: groups of declarations of which the runtime
 needs at most one, and exactly one of a `required` group. `reserves` lists variables
 the runtime reads a credential from beside the declared ones; `denies`, variables the

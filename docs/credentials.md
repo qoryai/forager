@@ -74,6 +74,9 @@ A run configuration may list `credentials`: each a name, its hosts, how its valu
 and its placeholders, with no value. Qory Apiary stores the values.
 
 - The run needs no wall: the gateway sets these credentials with or without one.
+  On an unwalled local run the agent can read the gateway's access key, which opens the
+  sealed values. The program that starts the run must refuse stored credentials there,
+  as qory's `key_needs_wall` does.
 - When the run starts, the gateway fetches the values once, sealed to its access key,
   and opens them. The values stay outside the container.
 - On a host that one of these credentials is for, its value replaces the machine's

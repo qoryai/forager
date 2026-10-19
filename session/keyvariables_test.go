@@ -747,3 +747,39 @@ func (p *preparesEmpty) Secrets() runtimes.Declarations {
 func (p *preparesEmpty) Model() (runtimes.ModelPlaces, bool) {
 	return p.Runtime.(runtimes.Model).Model()
 }
+
+// TestAnInheritedPlaceholderIsNoModelKey pins that, without a wall, a value the run
+// inherits of a variable that gets a placeholder is no model key: the placeholder is
+// set over it, so the model credential's hosts decide. With an inherited endpoint on a
+// host no credential covers, the run is model_key_missing; with none, the model
+// credential covers api.anthropic.com and the run starts.
+func TestAnInheritedPlaceholderIsNoModelKey(t *testing.T) {
+	for _, tc := range []struct {
+		what     string
+		endpoint string
+		refused  bool
+	}{
+		{"an endpoint on another host", "https://other.example", true},
+		{"no endpoint", "", false},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			env := []string{"FAKE_EXIT=0", apiKeyVariable + "=sk-fake-inherited"}
+			if tc.endpoint != "" {
+				env = append(env, endpointVariable+"="+tc.endpoint)
+			}
+			sp, g := specGateway(t, env...)
+			answeringWith(g, modelAndForge, []string{apiKeyVariable, "GITHUB_TOKEN"})
+			_, err := session.Run(context.Background(), sp)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("%v, want the run", err)
+				}
+				return
+			}
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "model_key_missing" {
+				t.Fatalf("%v, want model_key_missing", err)
+			}
+		})
+	}
+}

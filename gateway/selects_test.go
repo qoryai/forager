@@ -182,7 +182,7 @@ func TestAServerThatSelectsACredentialKeepsItsSelection(t *testing.T) {
 // it gets the gateway's selection as a walled run does, github with the run's
 // repository label as its argument and model, the proxy sets both, and the run answer
 // has the run's authority. The guard applies to it, as to every run behind a separate
-// gateway, and a TRACE through its proxy is refused.
+// gateway.
 func TestAnUnwalledRunBehindASeparateGatewayGetsTheSelection(t *testing.T) {
 	s := newSelecting(t)
 	r := selectedRemote(t, s, selectedPolicy, map[string]string{"repository": "example/repo", "forge": "github.com"}, gateway.Config{})
