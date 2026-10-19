@@ -339,6 +339,13 @@ release may change what an existing document does, and says so under Upgrading.
   `security_policy`, such as `localhost` or a name that resolves to `127.0.0.1`, no
   longer opens it: list the host in the node's policy. With no server's policy the
   node's policy opens what it names, as before.
+- Two messages start with the step that fixes them. The guard's `403` for a link-local
+  address or the machine's address reads "qory: egress to <host>:<port> denied by the
+  gateway: to reach the gateway's machine, list the host itself, not a *. pattern, in
+  the allow list of the node's policy, and allow it in the run's policy; the gateway
+  reaches its machine only for such a host, and never a link-local address". Two
+  credentials that claim one host are refused with "claim <host> in only one of the
+  credentials <a> and <b>; both claim it, and a host has one".
 - The proxy sets a credential on a private host only through a `hosts` entry equal to
   the host, never through a `*.` pattern. A private host is an IP literal in
   `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `fc00::/7`, a name of one label,

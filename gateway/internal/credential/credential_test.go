@@ -379,7 +379,7 @@ var phraseMessages = map[string]struct {
 			return resolveError(t, []Definition{envDefinition(v), envDefinition("other")}, []policy.Selected{{Name: v}, {Name: "other"}}, []string{"api.model.example"})
 		},
 		want: func(p string) string {
-			return "the credentials " + p + " and other both claim api.model.example; a host has one"
+			return "claim api.model.example in only one of the credentials " + p + " and other; both claim it, and a host has one"
 		},
 		clean: "model",
 	},
@@ -388,7 +388,7 @@ var phraseMessages = map[string]struct {
 			return resolveError(t, []Definition{envDefinition("other"), envDefinition(v)}, []policy.Selected{{Name: "other"}, {Name: v}}, []string{"api.model.example"})
 		},
 		want: func(p string) string {
-			return "the credentials other and " + p + " both claim api.model.example; a host has one"
+			return "claim api.model.example in only one of the credentials other and " + p + "; both claim it, and a host has one"
 		},
 		clean: "model",
 	},
