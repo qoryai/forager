@@ -340,10 +340,10 @@ func (h *Held) startKey(start string) error {
 		h.Start = start
 	case len(keys) == 0:
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"remove model_credential from Qory Apiary's run configuration, or give the run a model key %s: the run has no model key", accesskey.ShownName(start, true))
+			"remove model_credential from the run configuration, or give the run a model key %s: the run has no model key", accesskey.ShownName(start, true))
 	default:
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"set model_credential in Qory Apiary's run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(shown, ", "), accesskey.ShownName(start, true))
+			"set model_credential in the run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(shown, ", "), accesskey.ShownName(start, true))
 	}
 	return nil
 }

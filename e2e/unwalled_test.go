@@ -110,12 +110,12 @@ func sendThroughProxy(res *agentResult) error {
 
 // TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy runs a real session.Run
 // without a wall against a real gateway on its local link, without Docker. The
-// machine's policy selects the credential model: the fake value from unwalledSource, in
-// x-api-key on api.anthropic.com and 127.0.0.1, with ANTHROPIC_API_KEY as its
-// placeholder. The agent sends the value it has in ANTHROPIC_API_KEY to an HTTPS origin
-// on 127.0.0.1 through the run's proxy. The agent has the placeholder in
-// ANTHROPIC_API_KEY, over the value it inherits, and the value in no variable; the
-// origin gets the value in x-api-key, once. No request goes to api.anthropic.com.
+// machine's policy selects the model key model: the fake value from unwalledSource, an
+// Anthropic Messages key in x-api-key whose endpoint is an HTTPS origin on 127.0.0.1.
+// The agent sends the value it has in ANTHROPIC_API_KEY to the origin through the
+// run's proxy. The agent has the key's placeholder in ANTHROPIC_API_KEY, over the value
+// it inherits, the key's endpoint in ANTHROPIC_BASE_URL, and the value in no variable;
+// the origin gets the value in x-api-key, once.
 //
 // The proxy verifies the origin against this machine's roots, which trustRecorders
 // sets through SSL_CERT_FILE; Go reads that variable on Linux alone, so the test is
@@ -138,9 +138,9 @@ func TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy(t *testing.T) {
 	runs := filepath.Join(t.TempDir(), "runs")
 	g, err := gateway.Start(context.Background(), gateway.Config{Version: "test", Heartbeat: time.Second,
 		RunDir: func(id string) string { return filepath.Join(runs, id) },
-		Credentials: []gateway.Credential{{Name: "model", Env: unwalledSource, Hosts: []string{"api.anthropic.com", "127.0.0.1"},
-			Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"}}},
-		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.anthropic.com", "127.0.0.1"}},
+		Credentials: []gateway.Credential{{Name: "model", Env: unwalledSource, Format: "anthropic-messages", Endpoint: "https://" + o.host + "/v1",
+			Scheme: "header", Header: "x-api-key"}},
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}},
 			Credentials: []gateway.PolicyCredential{{Name: "model"}}},
 		Report: func(l string) { t.Log("the gateway reported:", l) }})
 	if err != nil {
@@ -190,8 +190,8 @@ func TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy(t *testing.T) {
 	if got.Err != "" || got.Status != http.StatusOK {
 		t.Errorf("the agent's request: status %d, error %q; want 200", got.Status, got.Err)
 	}
-	if !slices.Contains(got.Env, "ANTHROPIC_API_KEY="+link.Placeholder) {
-		t.Errorf("the agent's ANTHROPIC_API_KEY is not the placeholder: %q", got.Env)
+	if !slices.Contains(got.Env, "ANTHROPIC_API_KEY="+link.KeyPlaceholder("model")) || !slices.Contains(got.Env, "ANTHROPIC_BASE_URL=https://"+o.host+"/v1") {
+		t.Errorf("the agent's ANTHROPIC_API_KEY or ANTHROPIC_BASE_URL is not the key's placeholder or endpoint: %q", got.Env)
 	}
 	if bytes.Contains(b, []byte(unwalledValue)) {
 		t.Errorf("the agent saw the value: %s", b)

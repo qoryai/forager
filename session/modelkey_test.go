@@ -305,7 +305,7 @@ func TestModelCredentialChoosesTheStartKey(t *testing.T) {
 		{"no model_credential", "", nil,
 			`set model_credential to the model key the runtime starts with, or keep one model key in forager.yaml: the run has the model keys model, backup`},
 		{"a name of no model key", "forge", []string{"forge"},
-			`set model_credential in Qory Apiary's run configuration to one of the run's model keys, model, backup: the run has no model key "forge"`},
+			`set model_credential in the run configuration to one of the run's model keys, model, backup: the run has no model key "forge"`},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			sp, g := specGateway(t)
@@ -349,9 +349,9 @@ func TestAPlaceholderGoesOnlyIntoACredentialsVariable(t *testing.T) {
 			func(rt runtimes.Runtime) runtimes.Runtime { return &reservesSession{Runtime: rt} }, []string{"forge"},
 			`remove MODEL_SESSION from the placeholders of the credential "forge" in Qory Apiary's run configuration: the descriptor of the runtime claude lists it in reserves, and a placeholder goes only into a variable for a credential`},
 		{"a model key's variable of a host credential", []map[string]any{sealed("model", "api.anthropic.com", apiKeyVariable)}, []string{apiKeyVariable}, nil, []string{"model"},
-			`remove ANTHROPIC_API_KEY from the placeholders of the credential "model" in Qory Apiary: the runtime claude reads a model key from it, and only a credential with an API sets it`},
+			`remove ANTHROPIC_API_KEY from the placeholders of the credential "model" in the run configuration: the runtime claude reads a model key from it, and only a credential with an API sets it`},
 		{"a second key in another credential", []map[string]any{model(), sealed("forge", "api.github.com", oauthVariable)}, []string{oauthVariable}, nil, []string{"forge"},
-			`remove CLAUDE_CODE_OAUTH_TOKEN from the placeholders of the credential "forge" in Qory Apiary: the runtime claude reads a model key from it, and only a credential with an API sets it`},
+			`remove CLAUDE_CODE_OAUTH_TOKEN from the placeholders of the credential "forge" in the run configuration: the runtime claude reads a model key from it, and only a credential with an API sets it`},
 		{"a model key's variable of a machine credential", []map[string]any{machine("machine-model", apiKeyVariable)}, []string{apiKeyVariable}, nil, []string{"machine-model"},
 			`remove ANTHROPIC_API_KEY from the placeholders of the credential "machine-model" in forager.yaml, and give the model key format, endpoint and auth: the runtime claude reads a model key from it, and only a credential with an API sets it`},
 		{"a key among the run's placeholders", []map[string]any{model()}, []string{oauthVariable}, nil, []string{oauthVariable},
@@ -529,7 +529,7 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 				return
 			}
 			refusedWith(t, err, "model_key_missing", modelKeys,
-				"give the run a model key for the runtime claude, in Qory Apiary or in forager.yaml: the gateway holds credentials for the run, and none of them is a model key; a model key has format, endpoint and auth")
+				"give the run a model key for the runtime claude, in the run configuration or in forager.yaml: the gateway holds credentials for the run, and none of them is a model key; a model key has format, endpoint and auth")
 			if strings.Contains(err.Error(), "sk-ant") {
 				t.Errorf("the refusal quotes a value: %v", err)
 			}

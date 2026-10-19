@@ -700,7 +700,7 @@ secrets request is not. A value with a control character other
 than tab, or a space or tab at its start or end, is `run_configuration_invalid`, and so
 is a model key's value that starts with none of its `key_prefixes`, `run configuration
 https://apiary.example/v1/run-configuration: store a value of the credential "model"
-that starts with sk-ant- in Qory Apiary: the stored value starts with none of its
+that starts with sk-ant- in the control plane: the stored value starts with none of its
 key_prefixes`, and an answer `sealed.Open` refuses, but one whose envelope signature
 does not verify, `answer_unsigned`. No message contains a value. A credential from the
 server replaces each credential of the machine's whose hosts claim one of its hosts, or
@@ -1012,8 +1012,8 @@ of these holds:
   placeholder.
 
 The refusal's text, for Claude Code: `give the run a model key for the runtime claude,
-in Qory Apiary or in forager.yaml: the gateway holds credentials for the run, and none
-of them is a model key; a model key has format, endpoint and auth`. A run whose answer
+in the run configuration or in forager.yaml: the gateway holds credentials for the
+run, and none of them is a model key; a model key has format, endpoint and auth`. A run whose answer
 has no `credential_hosts` is not checked: its runtime may use a login the session does
 not see, such as the developer's, one in a mount or one in the image. Nor is a run
 without a wall none of whose credentials has a model key's variable among its

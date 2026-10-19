@@ -279,7 +279,7 @@ func startKey(credentials []server.LinkCredentialHosts, model string) (int, erro
 			"set model_credential to the model key the runtime starts with, or keep one model key in forager.yaml: the run has the model keys %s", strings.Join(keys, ", "))
 	case model != "" && (start < 0 || credentials[start].Name != model):
 		return -1, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(model),
-			"set model_credential in Qory Apiary's run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(keys, ", "), accesskey.ShownName(model, true))
+			"set model_credential in the run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(keys, ", "), accesskey.ShownName(model, true))
 	}
 	return start, nil
 }
@@ -452,7 +452,7 @@ func checkPlaceholders(rt runtimes.Runtime, credentials []server.LinkCredentialH
 			case c.Auth == nil:
 			case slices.Contains(keys, p):
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"remove %s from the placeholders of the credential %s in Qory Apiary: the runtime %s reads a model key from it, and only a credential with an API sets it",
+					"remove %s from the placeholders of the credential %s in the run configuration: the runtime %s reads a model key from it, and only a credential with an API sets it",
 					accesskey.ShownName(p, false), shown, runtime)
 			case why != "":
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
@@ -552,6 +552,6 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	}
 	runtime := accesskey.ShownName(rt.Name(), false)
 	return refusal.New(refusal.ModelKeyMissing, refusal.Shown(keys...),
-		"give the run a model key for the runtime %s, in Qory Apiary or in forager.yaml: the gateway holds credentials for the run, and none of them is a model key; a model key has format, endpoint and auth",
+		"give the run a model key for the runtime %s, in the run configuration or in forager.yaml: the gateway holds credentials for the run, and none of them is a model key; a model key has format, endpoint and auth",
 		runtime)
 }

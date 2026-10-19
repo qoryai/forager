@@ -226,15 +226,15 @@ func TestAModelKeyStartsTheRunAsModelCredentialSays(t *testing.T) {
 		"a model key of each and no start": {[]Definition{first}, []Stored{server}, "", nil,
 			"set model_credential to the model key the runtime starts with, or keep one model key in forager.yaml: the run has the model keys first, server-model: run_configuration_invalid"},
 		"a start and no model key": {[]Definition{plain}, nil, "first", []string{"first"},
-			`remove model_credential from Qory Apiary's run configuration, or give the run a model key "first": the run has no model key: run_configuration_invalid: first`},
+			`remove model_credential from the run configuration, or give the run a model key "first": the run has no model key: run_configuration_invalid: first`},
 		"a start and no credential": {nil, nil, "first", []string{"first"},
-			`remove model_credential from Qory Apiary's run configuration, or give the run a model key "first": the run has no model key: run_configuration_invalid: first`},
+			`remove model_credential from the run configuration, or give the run a model key "first": the run has no model key: run_configuration_invalid: first`},
 		"a start that names no model key": {[]Definition{first, second}, nil, "third", []string{"third"},
-			`set model_credential in Qory Apiary's run configuration to one of the run's model keys, first, second: the run has no model key "third": run_configuration_invalid: third`},
+			`set model_credential in the run configuration to one of the run's model keys, first, second: the run has no model key "third": run_configuration_invalid: third`},
 		"a start that names a host credential": {[]Definition{first, plain}, nil, "plain", []string{"plain"},
-			`set model_credential in Qory Apiary's run configuration to one of the run's model keys, first: the run has no model key "plain": run_configuration_invalid: plain`},
+			`set model_credential in the run configuration to one of the run's model keys, first: the run has no model key "plain": run_configuration_invalid: plain`},
 		"a start with a secret in its name": {[]Definition{first}, nil, "x-qak_not-a-real-secret", []string{"(a name that contains an access key secret)"},
-			"set model_credential in Qory Apiary's run configuration to one of the run's model keys, first: the run has no model key (a name that contains an access key secret): run_configuration_invalid: (a name that contains an access key secret)"},
+			"set model_credential in the run configuration to one of the run's model keys, first: the run has no model key (a name that contains an access key secret): run_configuration_invalid: (a name that contains an access key secret)"},
 	} {
 		held, err := ResolveWith(context.Background(), c.defs, selected(c.defs), c.stored, c.start, policy.Observe, nil, func(l string) { t.Log(l) })
 		if err == nil {
