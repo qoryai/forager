@@ -21,12 +21,13 @@
 //
 // A proxy that serves an enclosure is guarded ([Proxy.Guard]): it dials from this
 // machine on behalf of something that is not on it, so what is on this machine is not
-// reached by default. The link-local range, which holds a cloud's metadata service, is
-// refused whatever the policy says. This machine's own addresses, loopback and every
-// address an interface holds, are refused unless an allow entry names the host itself,
-// not a *. suffix over it: a local MCP server or model endpoint is reached through the
-// proxy like everything else, decided and recorded, when the policy names it, in either
-// mode. Without the guard the way around a wall is through the proxy.
+// reached by default. The link-local range, which holds a cloud's metadata service, and
+// the cloud metadata addresses outside it ([metadataAddrs]) are refused whatever the
+// policy says. This machine's own addresses, loopback and every address an interface
+// holds, are refused unless an allow entry names the host itself, not a *. suffix over
+// it: a local MCP server or model endpoint is reached through the proxy like everything
+// else, decided and recorded, when the policy names it, in either mode. Without the
+// guard the way around a wall is through the proxy.
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
 // TLS itself, reads each request's path and sets a credential on it, or hands it to the
@@ -50,6 +51,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -240,11 +242,11 @@ func (p *Proxy) guard(ctx context.Context, address string) error {
 	}
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
-		return &guardError{address + " does not read as an address; the wall refuses it"}
+		return &guardError{address + " does not read as an address; the gateway refuses it"}
 	}
 	ip := unzoned(host)
 	if ip == nil {
-		return &guardError{host + " does not read as an address; the wall refuses it"}
+		return &guardError{host + " does not read as an address; the gateway refuses it"}
 	}
 	if err := judge(ctx, host, ip); err != nil {
 		return err
@@ -259,9 +261,11 @@ func (p *Proxy) guard(ctx context.Context, address string) error {
 func judge(ctx context.Context, host string, ip net.IP) error {
 	switch {
 	case linkLocal(ip):
-		return &guardError{host + " is a link-local address; the wall refuses it"}
+		return &guardError{host + " is a link-local address; the gateway refuses it"}
+	case metadata(ip):
+		return &guardError{"Use another host: the gateway refuses the cloud metadata address " + host}
 	case own(ip) && ctx.Value(namedKey{}) == nil:
-		return &guardError{host + " is this machine's address and no allow entry names the host; the wall refuses it"}
+		return &guardError{host + " is this machine's address and no allow entry lists the host by name; the gateway refuses it"}
 	}
 	return nil
 }
@@ -362,11 +366,11 @@ func (p *Proxy) Close() error {
 	return err
 }
 
-// Guard makes the proxy refuse the link-local range, and this machine's own addresses
-// unless the host is one of names: the entries of the policy's allow list, as its
-// owner wrote them. Entries that are *. suffixes are ignored. The session calls
-// Guard once, before it starts anything behind a wall; a policy set later brings its
-// own names.
+// Guard makes the proxy refuse the link-local range and the cloud metadata addresses
+// outside it ([metadataAddrs]), and this machine's own addresses unless the host is
+// one of names: the entries of the policy's allow list, as its owner wrote them.
+// Entries that are *. suffixes are ignored. The session calls Guard once, before it
+// starts anything behind a wall; a policy set later brings its own names.
 func (p *Proxy) Guard(names []string) {
 	r := *p.rules.Load()
 	r.opened = opened(names)
@@ -502,6 +506,32 @@ func linkLocal(ip net.IP) bool {
 	return ip != nil && (ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast())
 }
 
+// metadataAddrs are the addresses outside the link-local ranges where a cloud serves
+// its instance metadata, each from the provider's documentation:
+//   - 100.100.100.200, Alibaba Cloud ECS: alibabacloud.com/help/en/ecs/user-guide/view-instance-metadata
+//   - 192.0.0.192, Oracle Cloud Compute Classic: docs.oracle.com/en/cloud/cloud-at-customer/occ-get-started/retrieve-predefined-instance-metadata.html
+//   - fd00:ec2::254, AWS EC2 over IPv6: docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html
+//   - fd20:ce::254, Google Compute Engine over IPv6: docs.cloud.google.com/compute/docs/metadata/querying-metadata
+//
+// The private ranges around them, 10/8, 172.16/12, 192.168/16 and 100.64/10, stay open.
+var metadataAddrs = []netip.Addr{
+	netip.MustParseAddr("100.100.100.200"),
+	netip.MustParseAddr("192.0.0.192"),
+	netip.MustParseAddr("fd00:ec2::254"),
+	netip.MustParseAddr("fd20:ce::254"),
+}
+
+// metadata reports whether ip is one of [metadataAddrs], which a guarded proxy never
+// dials, whatever the policy lists. An IPv4 address mapped into IPv6 counts as the IPv4
+// address; [carried] covers the other IPv6 forms of one.
+func metadata(ip net.IP) bool {
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	return slices.Contains(metadataAddrs, a.Unmap())
+}
+
 // own reports whether ip is this machine's: loopback, unspecified, or an address one of
 // its interfaces holds.
 func own(ip net.IP) bool {
@@ -544,7 +574,7 @@ func (p *Proxy) decide(method, host string, port int) Decision {
 	if p.guarded.Load() {
 		ip := net.ParseIP(host)
 		local := strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || own(ip)
-		if linkLocal(ip) || (local && !p.named(host, ok)) {
+		if linkLocal(ip) || metadata(ip) || (local && !p.named(host, ok)) {
 			d.Rule, d.Outcome = GuardRule, Refused
 			return d
 		}
@@ -911,7 +941,7 @@ func deny(w http.ResponseWriter, d Decision) {
 		return
 	}
 	if d.Rule == GuardRule {
-		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: link-local addresses are never reached through it, and the gateway's machine only for a host the policy's allow list names\n", d.Host, d.Port)
+		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: to reach the gateway's machine, list the host itself, not a *. pattern, in the allow list of the node's policy, and allow it in the run's policy; the gateway reaches its machine only for such a host, and never a link-local or cloud metadata address\n", d.Host, d.Port)
 		return
 	}
 	fmt.Fprintf(w, "qory: egress to %s:%d denied by policy (mode %s)\n", d.Host, d.Port, d.Mode)

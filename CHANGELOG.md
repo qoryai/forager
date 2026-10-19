@@ -156,6 +156,20 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- Behind a wall or behind a separate gateway, the gateway's proxy refuses the cloud
+  metadata addresses outside `169.254.0.0/16` and `fe80::/10`, as it refuses
+  `169.254.169.254`: `100.100.100.200` (Alibaba Cloud), `192.0.0.192` (Oracle Cloud
+  Compute Classic), `fd00:ec2::254` (AWS over IPv6) and `fd20:ce::254` (Google Cloud
+  over IPv6), and an IPv6 address that contains one of these IPv4 addresses in its last
+  32 bits (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`). An exact `egress.allow` entry
+  of the node's policy does not open them. The guard's error for one reads "Use
+  another host: the gateway refuses the cloud metadata address <address>", and the
+  errors for a link-local address and for the machine's address end "the gateway
+  refuses it", where they ended "the wall refuses it". A `403` page for a refused
+  address ends "the gateway reaches its machine only for such a host, and never a
+  link-local or cloud metadata address". The private ranges `10/8`, `172.16/12`,
+  `192.168/16` and `100.64/10` stay open. Before, a request to `100.100.100.200` was
+  dialled.
 - A run holds a copy of the path rules `gateway.Policy.Under` adds, taken and checked
   when it starts: the proxy and `ceiling_paths` keep them for the run whatever the
   caller's `Policy` holds afterwards.

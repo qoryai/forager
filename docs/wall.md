@@ -156,9 +156,22 @@ Two flags change one run:
 
 ## The guard
 
-Behind a wall, the proxy is guarded:
+Behind a wall or behind a separate gateway, the proxy is guarded:
 
-- It never dials link-local addresses, the cloud metadata service among them.
+- It never dials link-local addresses, the cloud metadata service among them, or these
+  cloud metadata addresses outside that range, whatever the allow list contains:
+  - `100.100.100.200`, Alibaba Cloud ECS:
+    <https://www.alibabacloud.com/help/en/ecs/user-guide/view-instance-metadata>
+  - `192.0.0.192`, Oracle Cloud Compute Classic:
+    <https://docs.oracle.com/en/cloud/cloud-at-customer/occ-get-started/retrieve-predefined-instance-metadata.html>
+  - `fd00:ec2::254`, AWS EC2 over IPv6:
+    <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html>
+  - `fd20:ce::254`, Google Compute Engine over IPv6:
+    <https://docs.cloud.google.com/compute/docs/metadata/querying-metadata>
+
+  It also refuses an IPv6 address that contains `100.100.100.200` or `192.0.0.192` in
+  its last 32 bits (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`). The private ranges
+  `10/8`, `172.16/12`, `192.168/16` and `100.64/10` stay open.
 - It dials the node itself only for a host that an `egress.allow` entry lists by its
   name. A `*.` entry above that host is not enough.
 
