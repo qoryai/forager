@@ -2749,6 +2749,12 @@ Every list is present, empty when the descriptor has none. `go generate ./contra
 writes it from the descriptors, and a test fails while the file differs from what that
 writes.
 
+**`api-format.schema.json`** is the fixed list of the formats a model API uses for its
+requests and answers: `anthropic-messages`, Anthropic's Messages API;
+`openai-responses`, OpenAI's Responses API; `openai-chat`, OpenAI's Chat Completions
+API; and `gemini`, Google's Gemini API. The file has no `$defs`: a schema that uses the
+list, in this contract or in another, refers to the whole file with `$ref`.
+
 ## The local socket
 
 `QORY_RUN_SOCKET` is an address, not a path to open: a path, or `unix:` and a path, is
@@ -3213,6 +3219,7 @@ the option experimental.
 | `fixtures/run-attach-answer/` | attach answers: a run configuration of no policy, and one with variables and labels | `run-attach-answer.schema.json` |
 | `fixtures/run-outcome/` | outcomes: with no state, with a state alone, and with a reason that is no code, which the server drops | `run-outcome.schema.json` |
 | `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
+| `fixtures/api-format/` | each API format of the list, one per file | `api-format.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: a first batch, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.run.exited` of a session's run whose starter gave no outcome, `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json`; and the `dev.qory.run.policy_applied` of a walled run whose policy file was put under a ceiling with path rules, with its `ceiling_paths`, `policy-applied-ceiling-paths.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |
