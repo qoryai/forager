@@ -444,9 +444,10 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 	return out
 }
 
-// checkModelKey refuses a run whose gateway holds credentials for it, with or without a
-// wall, when its runtime has a model section and declares model keys, its
-// declarations, and the run has none: no value of a model key's variable reaches the
+// checkModelKey refuses a run whose gateway holds credentials for it, behind a wall or,
+// without one, when a credential has a model key's variable among its placeholders,
+// when its runtime has a model section and declares model keys, its declarations, and
+// the run has none: no value of a model key's variable reaches the
 // runtime, from what the run inherits, the run, the machine, the harness or the
 // runtime's preparation, and no credential of credentials, after [chosen], has a
 // model key's variable among its placeholders and a host of the runtime's model among
