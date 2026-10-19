@@ -68,10 +68,9 @@ release may change what an existing document does, and says so under Upgrading.
   starts it sends one secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value
   in place of a credential of the machine's that claims one of its hosts, of the same
-  name or another. Without a wall
-  the run is `wall_required` with the name `server_credentials`; without `secrets` in
-  discovery, with a fixture pin or access key, or with a value a header cannot hold, it
-  is `run_configuration_invalid`. A reload with other `credentials` fails, and the policy
+  name or another. Without a wall the run is `wall_required` with the name
+  `server_credentials`; without `secrets` in discovery, with a fixture pin or access
+  key, or with a value a header cannot hold, it is `run_configuration_invalid`. A reload with other `credentials` fails, and the policy
   in force stays. A `TRACE` or `TRACK` to a host that gets one is denied with the rule
   `wall:echo-method`. A run configuration without `credentials` runs as before.
 - The secrets request, `secrets-request.schema.json`, a signed `POST` to discovery's

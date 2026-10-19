@@ -1467,10 +1467,10 @@ run key. A direct node's gateway records its one entry as `workspace`, and `node
 a run's `dev.qory.run.registered`. `apiary_public_key` lists the server's current key,
 and during a rotation the next one, for information: Forager verifies under its pin
 alone. `secrets` is optional, `{url}` with `events.url`'s grammar: present for an access
-key allowed stored secrets. Forager reads it only for a run whose run configuration has
-`credentials`, which needs a wall (§Credentials, From the server); a run whose run
-configuration has none runs with or without a wall, as before. Its URL is the secrets
-request's endpoint (§The server, Secrets).
+key allowed stored secrets. A server that lists it requires a wall for every run (vault
+0088); Forager reads it only for a run whose run configuration has `credentials`, and
+refuses such a run without a wall (§Credentials, From the server). Its URL is the
+secrets request's endpoint (§The server, Secrets).
 Discovery lists no key endpoint: keys change through enrolment alone. A `401` is no run,
 `unauthorized`. `events.url` is `https`, or `http` to a loopback address; `events.types`
 is a non-empty list of full type names, or `*` for every type. `run.url` is the run
