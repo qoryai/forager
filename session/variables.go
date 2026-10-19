@@ -387,27 +387,31 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	if slices.ContainsFunc(keys, func(k string) bool { return reaches[k] != "" }) {
 		return nil
 	}
-	// The variables of which a value from the run reaches the runtime, by trial.
-	var free []string
-	for _, k := range keys {
-		if passes(k) {
-			free = append(free, k)
+	// values is the refusal's words for the variables of which a value from the run
+	// reaches the runtime, by trial, empty for none. Only a refusal calls it, so a run
+	// that starts runs no trial.
+	values := func() string {
+		var free []string
+		for _, k := range keys {
+			if passes(k) {
+				free = append(free, k)
+			}
 		}
-	}
-	values := ""
-	switch {
-	case len(free) == len(keys):
-		values = "one of these variables"
-	case len(free) > 0:
-		values = orList(free, ", ", " or ")
+		switch {
+		case len(free) == len(keys):
+			return "one of these variables"
+		case len(free) > 0:
+			return orList(free, ", ", " or ")
+		}
+		return ""
 	}
 	endpoint := places.Endpoint.Variable
 	if v := reaches[endpoint]; endpoint != "" && v != "" {
 		host, ok := policy.EndpointHost(v)
 		if !ok {
 			give := ""
-			if values != "" {
-				give = ", or give the run a value of " + values + " from the run or the machine"
+			if v := values(); v != "" {
+				give = ", or give the run a value of " + v + " from the run or the machine"
 			}
 			return refusal.New(refusal.ModelKeyMissing, keys,
 				"set %s to an https URL, with no user name or password, whose host a credential with a placeholder of %s covers%s: the value of %s that reaches the runtime %s has no host that Forager reads, so no credential counts as its model key",
@@ -425,8 +429,8 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 		}
 	}
 	give := ""
-	if values != "" {
-		give = ", or a value of " + values + " from the run or the machine"
+	if v := values(); v != "" {
+		give = ", or a value of " + v + " from the run or the machine"
 	}
 	return refusal.New(refusal.ModelKeyMissing, keys,
 		"give the run a model key for the runtime %s: a credential for %s with a placeholder of %s, on this machine or in Qory Apiary's run configuration%s; the gateway holds credentials for the run, and none of them is a model key for %s",
