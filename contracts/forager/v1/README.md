@@ -2086,8 +2086,8 @@ member).
 3. A host the new policy terminates TLS for is terminated on its next connection.
 
 The run's certificate authority is good only for the hosts the run terminated when it
-started, so a reload that selects a credential for another host fails, and the policy
-in force stays.
+started, so a reload that selects a credential or sets path rules for another host
+fails, and the policy in force stays.
 
 What is still undelivered when the run ends is spooled to the run directory's
 `undelivered/` as batch files with their delivery ids, and Forager reports the count

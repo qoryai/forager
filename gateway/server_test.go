@@ -480,6 +480,17 @@ func TestAReloadSetsNoCredentialOutsideTheRunsAuthority(t *testing.T) {
 	if got, want := gateway.Tokens(h.g, runID), map[string]string{"a": "a-value"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("after a refused reload the proxy sets %v, want %v", got, want)
 	}
+	// Path rules for another host: refused as well, with their own text.
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"],"paths":{"b.example":["/v1/*"]}},"credentials":[{"name":"a"}]}`, 'd')
+	h.post(logged(runID))
+	line = "start a new run to set path rules on b.example; the run's certificate covers only the hosts it terminated when it started; the policy in force stays"
+	eventually(t, "the refused reload's report of path rules", func() bool {
+		h.post(heartbeat(runID))
+		return h.reported(line)
+	})
+	if again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID); err != nil || again.Digest != reloaded.Digest {
+		t.Errorf("after a refused reload of path rules: %v %+v", err, again)
+	}
 	h.post(exited(runID))
 	h.close()
 }

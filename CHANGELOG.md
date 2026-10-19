@@ -337,9 +337,10 @@ release may change what an existing document does, and says so under Upgrading.
   address as a /32 and an IPv6 address as a /128; with no address every address is
   excluded, and with no name only `invalid` is permitted. A program that checks the
   constraints rejects a certificate the key makes for any other host. A reload that
-  selects a credential for another host fails with `start a new run to set a credential
-  on <host>`, and the policy in force stays; before, the reload put it in force. A
-  certificate for an address has no common name.
+  selects a credential or sets path rules for another host fails with `start a new run
+  to set a credential on <host>` or `start a new run to set path rules on <host>`, and
+  the policy in force stays; before, the reload put it in force. A certificate for an
+  address has no common name.
 - A reload that brings tools, path rules or an image to a run without a wall fails, and
   the policy in force stays. Before, a reload's path rules for such a run were dropped
   from the policy, and its credentials failed it.

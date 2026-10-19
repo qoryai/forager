@@ -918,9 +918,13 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	}
 	in := d.Policy.Policy.Egress
 	// The run's authority is good only for the hosts terminated when the run started.
-	if host, credential := lr.px.Outside(in.Paths, d.Uses); host != "" && credential {
+	if host, credential := lr.px.Outside(in.Paths, d.Uses); host != "" {
 		d.Discard()
-		return fmt.Errorf("run configuration %s: start a new run to set a credential on %s; the run's certificate covers only the hosts it terminated when it started; the policy in force stays", accesskey.ShownValue(next.URL, false), accesskey.ShownValue(host, false))
+		set := "path rules"
+		if credential {
+			set = "a credential"
+		}
+		return fmt.Errorf("run configuration %s: start a new run to set %s on %s; the run's certificate covers only the hosts it terminated when it started; the policy in force stays", accesskey.ShownValue(next.URL, false), set, accesskey.ShownValue(host, false))
 	}
 	// Every run.egress from here on waits for the session's policy_applied of the new
 	// policy: held before the proxy decides by it, so no connection decided under it is
