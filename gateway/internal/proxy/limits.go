@@ -95,8 +95,10 @@ func (p *Proxy) Limits() Limits {
 
 // take takes one token of the run's bucket for a request: nil at once while the bucket
 // holds one, nil after a wait for the next while that wait is [RateWait] at most, and
-// [errRate] after a wait of [RateWait] otherwise. It returns ctx's error when ctx ends,
-// or the proxy closes, first.
+// [errRate] after a wait of [RateWait] otherwise. When ctx ends, or the proxy closes,
+// during the wait, it panics with [http.ErrAbortHandler], so the server closes the
+// connection with no answer: the request is not served, and gets no 200 with an empty
+// body.
 func (p *Proxy) take(ctx context.Context) error {
 	lm := p.limits.Load()
 	if lm == nil || lm.l.RequestsPerSecond <= 0 {
@@ -127,10 +129,11 @@ func (p *Proxy) take(ctx context.Context) error {
 			lm.tokens = min(lm.tokens+1, float64(max(lm.l.Burst, 1)))
 			lm.mu.Unlock()
 		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return context.Canceled
+		panic(http.ErrAbortHandler)
+	}
+	if ctx.Err() != nil {
+		// The connection closed, or the proxy, as the wait ended.
+		panic(http.ErrAbortHandler)
 	}
 	if refused {
 		return errRate
@@ -205,12 +208,4 @@ func (p *Proxy) limited(w http.ResponseWriter, d Decision, rule string) {
 		return
 	}
 	fmt.Fprintf(w, "qory: retry in 1 second. This run's requests came faster than %d a second, the most gateway.run_limits.requests_per_second allows, and this request waited %d seconds.\n", lm.l.RequestsPerSecond, int(RateWait/time.Second))
-}
-
-// refusedBy answers a request whose token err is not nil: a 429 for [errRate], and
-// nothing when the request ended first.
-func (p *Proxy) refusedBy(w http.ResponseWriter, d Decision, err error) {
-	if errors.Is(err, errRate) {
-		p.limited(w, d, RateLimit)
-	}
 }

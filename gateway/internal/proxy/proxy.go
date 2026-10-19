@@ -661,6 +661,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h := sent(authority); strings.Contains(h, "%") {
 		host = h
 	}
+	// Every request takes a token first, one the policy denies too, so the policy it is
+	// decided by is the one in force once it has its token.
+	rated := p.take(r.Context())
 	d := p.decide("HTTP", host, port)
 	d.RequestID = newRequestID()
 	term := p.term.Load()
@@ -680,12 +683,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			d.Tool = tl.Name
 		}
 	}
-	// Every request takes a token, one the policy denies too; only one it allows is a
-	// connection in flight.
-	if err := p.take(r.Context()); err != nil {
-		p.refusedBy(w, d, err)
+	if rated != nil {
+		p.limited(w, d, RateLimit)
 		return
 	}
+	// Only a request the policy allows is a connection in flight.
 	if !d.Allowed {
 		p.observe(d)
 		deny(w, d)
@@ -760,9 +762,12 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// The token first, then the decision: a reload during the wait is the policy the
+	// tunnel is decided by.
+	rated := p.take(r.Context())
 	d := p.decide(http.MethodConnect, host, port)
-	if err := p.take(r.Context()); err != nil {
-		p.refusedBy(w, d, err)
+	if rated != nil {
+		p.limited(w, d, RateLimit)
 		return
 	}
 	if !d.Allowed {

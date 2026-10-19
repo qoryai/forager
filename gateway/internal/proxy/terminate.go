@@ -297,6 +297,8 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		},
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The token first, then the path's decision.
+		rated := t.p.take(r.Context())
 		clean, rule, allowed, credentialed := t.path(d.Host, r.URL.EscapedPath())
 		req := d
 		req.Method, req.RequestMethod, req.Path, req.PathRule = "HTTPS", r.Method, clean, rule
@@ -305,8 +307,8 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		if tl != nil {
 			req.Tool = tl.Name
 		}
-		if err := t.p.take(r.Context()); err != nil {
-			t.p.refusedBy(w, req, err)
+		if rated != nil {
+			t.p.limited(w, req, RateLimit)
 			return
 		}
 		c := t.credential(d.Host)

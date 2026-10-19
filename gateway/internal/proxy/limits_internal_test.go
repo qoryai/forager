@@ -418,3 +418,169 @@ func TestTwoRunsDoNotShareCounters(t *testing.T) {
 		t.Errorf("B's second tunnel: %+v", a)
 	}
 }
+
+// during is a wait that calls f once, as a request waits for its token, then returns
+// as the real wait would: false once ctx ends, within a second; true otherwise.
+func during(f func()) func(context.Context, time.Duration) bool {
+	var once sync.Once
+	return func(ctx context.Context, _ time.Duration) bool {
+		once.Do(f)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(time.Second):
+			return true
+		}
+	}
+}
+
+// waitThen sets l on p with a stopped clock and a wait that calls f.
+func waitThen(p *Proxy, l Limits, f func()) {
+	p.limits.Store(newLimiter(l, newFakeTime().now, during(f)))
+}
+
+// TestAReloadDuringTheWaitDecidesTheRequest pins that a request is decided once it has
+// its token: a reload that denies the host while a plain request or a CONNECT waits
+// for a token refuses it with 403, and nothing reaches the origin.
+func TestAReloadDuringTheWaitDecidesTheRequest(t *testing.T) {
+	t.Run("plain", func(t *testing.T) {
+		var mu sync.Mutex
+		reached := 0
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			reached++
+			mu.Unlock()
+			io.WriteString(w, "reached")
+		}))
+		defer origin.Close()
+		p, err := Listen("", policy.Enforce, []string{"127.0.0.1"}, nil, (&decisions{}).observe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+		waitThen(p, Limits{Connections: 10, RequestsPerSecond: 1, Burst: 1}, func() { p.SetPolicy(policy.Enforce, nil, nil, nil, nil) })
+		if a := get(t, p.Addr(), origin.URL); a.status != http.StatusOK {
+			t.Fatalf("the first request: %+v", a)
+		}
+		if a := get(t, p.Addr(), origin.URL); a.status != http.StatusForbidden {
+			t.Errorf("a request that waited out a reload denying its host: %+v", a)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if reached != 1 {
+			t.Errorf("the origin was reached %d times, want 1", reached)
+		}
+	})
+	t.Run("connect", func(t *testing.T) {
+		origin := newHolder(t)
+		p, err := Listen("", policy.Enforce, []string{"127.0.0.1"}, nil, (&decisions{}).observe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+		waitThen(p, Limits{Connections: 10, RequestsPerSecond: 1, Burst: 1}, func() { p.SetPolicy(policy.Enforce, nil, nil, nil, nil) })
+		target := origin.ln.Addr().String()
+		a, c := connect(t, p.Addr(), "", target)
+		if a.status != http.StatusOK {
+			t.Fatalf("the first tunnel: %+v", a)
+		}
+		c.Close()
+		if a, _ := connect(t, p.Addr(), "", target); a.status != http.StatusForbidden {
+			t.Errorf("a tunnel that waited out a reload denying its host: %+v", a)
+		}
+		origin.mu.Lock()
+		defer origin.mu.Unlock()
+		if origin.n != 1 {
+			t.Errorf("the origin has %d connections, want 1", origin.n)
+		}
+	})
+}
+
+// TestAReloadDuringTheWaitInsideATunnel pins the same inside a terminated tunnel: a
+// reload that denies the host while a request inside waits for its token closes the
+// tunnel, the request gets no answer, and nothing more reaches the origin.
+func TestAReloadDuringTheWaitInsideATunnel(t *testing.T) {
+	up, err := NewCA("upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	reached := 0
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reached++
+		mu.Unlock()
+		io.WriteString(w, "origin")
+	}))
+	origin.Config.ErrorLog = log.New(io.Discard, "", 0)
+	origin.TLS = &tls.Config{GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) { return up.leaf(hello.ServerName) }}
+	origin.StartTLS()
+	defer origin.Close()
+	p, err := Listen("", policy.Enforce, []string{"api.example"}, nil, (&decisions{}).observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.dial = (&dials{plain: origin.Listener.Addr().String(), secure: origin.Listener.Addr().String()}).dial
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(up.PEM())
+	p.TrustUpstream(roots)
+	ca, err := NewCA("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := []Credential{{Name: "bearer", Hosts: []string{"api.example"}, Scheme: "bearer", Token: func() string { return "t-0001" }}}
+	p.Terminate(ca, creds, nil, nil)
+	waitThen(p, Limits{Connections: 10, RequestsPerSecond: 1, Burst: 2}, func() { p.SetPolicy(policy.Enforce, nil, nil, nil, creds) })
+	trusted := x509.NewCertPool()
+	trusted.AppendCertsFromPEM(ca.PEM())
+	proxyURL, _ := url.Parse(p.URL())
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}, MaxConnsPerHost: 1}}
+	defer client.CloseIdleConnections()
+	// The CONNECT and the first request take the burst; the second request waits.
+	resp, err := client.Get("https://api.example/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the first request: %d", resp.StatusCode)
+	}
+	req, _ := http.NewRequest(http.MethodPost, "https://api.example/v1/models", strings.NewReader("x"))
+	if resp, err := client.Do(req); err == nil {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			t.Errorf("a request that waited out a reload denying its host: %d %q", resp.StatusCode, b)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if reached != 1 {
+		t.Errorf("the origin was reached %d times, want 1", reached)
+	}
+}
+
+// TestACloseDuringTheWaitAnswersNothing pins that a request waiting for a token when
+// the proxy closes gets no answer: its connection closes, with no 200 and no body.
+func TestACloseDuringTheWaitAnswersNothing(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "reached") }))
+	defer origin.Close()
+	p, err := Listen("", policy.Enforce, []string{"127.0.0.1"}, nil, (&decisions{}).observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitThen(p, Limits{Connections: 10, RequestsPerSecond: 1, Burst: 1}, func() { go p.Close() })
+	if a := get(t, p.Addr(), origin.URL); a.status != http.StatusOK {
+		t.Fatalf("the first request: %+v", a)
+	}
+	u, _ := url.Parse("http://" + p.Addr())
+	c := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(u), DisableKeepAlives: true}}
+	resp, err := c.Get(origin.URL)
+	if err == nil {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Errorf("a request waiting as the proxy closed got %d %q", resp.StatusCode, b)
+	}
+}
