@@ -200,7 +200,9 @@ release may change what an existing document does, and says so under Upgrading.
   together, needs it; with one, that one is the start key. A name of a host
   credential, of no model key of the run, and none beside two or more model keys are
   `run_configuration_invalid`. A reload that names another fails, and the policy in
-  force stays. `server.RunConfiguration` has `ModelCredential`, and
+  force stays. A reload whose start key differs from the run's fails too, with or
+  without `model_credential`: `start a new run to change the model key it starts
+  with`. `server.RunConfiguration` has `ModelCredential`, and
   `server.CheckCredentials` takes it.
 - The gateway sets a run configuration's `credentials`, with or without a wall. When the run
   starts it sends one secrets request under the access key, for the digest it computes of

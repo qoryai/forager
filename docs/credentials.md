@@ -175,7 +175,8 @@ values. An entry is one of two kinds:
   (`run_configuration_invalid`). The same holds for the run's placeholders from this
   machine's credentials and tools. A tool's variable, such as `GITHUB_TOKEN`, is fine.
 - The credentials and `model_credential` are fixed for the run. A reload that changes
-  them fails, and the run keeps its policy.
+  them fails, and the run keeps its policy. So does a reload that selects another
+  model key of this machine's as the start key, with or without `model_credential`.
 - Without `credentials`, the run gets the machine's credentials as before.
 
 ## Tools

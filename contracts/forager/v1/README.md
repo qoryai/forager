@@ -787,7 +787,11 @@ host credential gets the variables its `placeholders` list, such as a tool's
 
 The credentials and `model_credential` are fixed when the run starts: a reload whose
 `credentials` differ, or whose `model_credential` names another key, fails, and the
-policy in force stays. A private host gets a value only through an exact entry,
+policy in force stays. So does a reload whose start key differs from the run's, with or
+without `model_credential`: `run configuration <url>: start a new run to change the
+model key it starts with: the run started with "first", and this run configuration
+selects "second"; the policy in force stays`, with `no model key` in place of a quoted
+name when there is none. A private host gets a value only through an exact entry,
 as a credential of the machine's does, and the proxy verifies the host's certificate
 against the gateway machine's trust store. A host on the gateway machine gets a value
 only when the node's policy names it, as for every name on the machine. On a host that

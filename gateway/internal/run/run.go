@@ -894,6 +894,13 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 	if err != nil {
 		return nil, err
 	}
+	// Without model_credential the start key is the run's one model key, and a reload
+	// may select another: the runtime started with the first one's variable and
+	// endpoint, so the start key is fixed as well.
+	if started := startOf(r.Held()); fresh.Start != started {
+		fresh.Close()
+		return nil, fmt.Errorf("start a new run to change the model key it starts with: the run started with %s, and this run configuration selects %s", shownKey(started), shownKey(fresh.Start))
+	}
 	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Allow, claimedBy(fresh)); err != nil {
 		fresh.Close()
 		return nil, err
@@ -1159,4 +1166,20 @@ func Egress(d proxy.Decision) map[string]any {
 		data["status"] = d.Status
 	}
 	return data
+}
+
+// startOf is the start key of held, empty when held is nil or has none.
+func startOf(held *credential.Held) string {
+	if held == nil {
+		return ""
+	}
+	return held.Start
+}
+
+// shownKey is a start key's name as a message shows it, or "no model key".
+func shownKey(name string) string {
+	if name == "" {
+		return "no model key"
+	}
+	return accesskey.ShownName(name, true)
 }

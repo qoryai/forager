@@ -1081,3 +1081,41 @@ func TestAReloadKeepsAnImageByReference(t *testing.T) {
 		}
 	}
 }
+
+// TestAReloadKeepsTheStartKey pins that, without model_credential, a reload that
+// selects another model key of the machine's than the run started with, or none, is
+// refused, and one that selects the same key is accepted.
+func TestAReloadKeepsTheStartKey(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
+	doc := func(key string) string {
+		return `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","api.other-model.example"]},` +
+			`"credentials":[{"name":"` + key + `"}]}}`
+	}
+	cfg := run.Config{
+		RunID: runID, Wall: true, Server: true,
+		Credentials: []run.Credential{
+			{Name: "first", Env: "QORY_TEST_MODEL_TOKEN", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Scheme: "header", Header: "x-api-key"},
+			{Name: "second", Env: "QORY_TEST_MODEL_TOKEN", Format: "openai-responses", Endpoint: "https://api.other-model.example/v1", Scheme: "bearer"},
+		},
+		Fetched: document(t, doc("first"), digest('1')),
+	}
+	r := open(t, cfg)
+	if r.Held().Start != "first" {
+		t.Fatalf("start %q", r.Held().Start)
+	}
+	_, err := reload(t, r, document(t, doc("second"), digest('2')))
+	if want := "run configuration " + runURL + `: start a new run to change the model key it starts with: the run started with "first", and this run configuration selects "second"; the policy in force stays`; err == nil || err.Error() != want {
+		t.Errorf("a reload with another model key:\n got %v\nwant %s", err, want)
+	}
+	if r.RunConfiguration() != digest('1') || r.Held().Start != "first" {
+		t.Errorf("after a refused reload: %q, start %q", r.RunConfiguration(), r.Held().Start)
+	}
+	none := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}}`
+	_, err = reload(t, r, document(t, none, digest('3')))
+	if want := "run configuration " + runURL + `: start a new run to change the model key it starts with: the run started with "first", and this run configuration selects no model key; the policy in force stays`; err == nil || err.Error() != want {
+		t.Errorf("a reload with no model key:\n got %v\nwant %s", err, want)
+	}
+	if _, err := reload(t, r, document(t, doc("first"), digest('4'))); err != nil {
+		t.Errorf("a reload with the same model key: %v", err)
+	}
+}
