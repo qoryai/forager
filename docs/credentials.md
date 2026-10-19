@@ -64,6 +64,8 @@ A credential's secret comes from one of three sources:
 - The gateway keeps each secret in memory, outside the container.
 - For the hosts a credential is for, the proxy ends the container's TLS itself. It uses
   an authority made for the run. The authority's key never leaves the gateway.
+- A request that carries a credential goes to its host over HTTP/1.1, so no HTTP/2
+  header table (HPACK) keeps a copy of the secret. Other requests may use HTTP/2.
 - When the run ends, the gateway closes every idle connection to a credential's host.
   While the run goes on, a connection idle for 90 seconds closes.
 - A placeholder has the value `qory-sets-the-credential-outside-the-enclosure`. The proxy

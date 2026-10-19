@@ -417,7 +417,8 @@ func (c *Credential) header() (string, string, bool) {
 // this builds is cleared before it returns.
 // The header's value is a Go string, since http.Header holds strings: one copy per
 // request that cannot be cleared, and the copies the transport makes as it writes the
-// request, its buffers and, over HTTP/2, the header compression's table.
+// request, in its buffers. The request goes over HTTP/1.1 ([Proxy.upstream]), so no
+// header compression's table keeps one.
 func (c *Credential) storedHeader() (string, string, bool) {
 	v := c.Value()
 	defer clear(v)
@@ -448,19 +449,30 @@ func (c *Credential) storedHeader() (string, string, bool) {
 }
 
 // upstream is the transport to the real hosts of terminated connections: verified
-// against this machine's roots, dialled through the proxy's guarded dialler.
+// against this machine's roots, dialled through the proxy's guarded dialler. A request
+// the proxy set a credential on goes over HTTP/1.1 alone: over HTTP/2 the connection's
+// header table (HPACK) would keep a copy of the credential for as long as it is open.
 func (p *Proxy) upstream() http.RoundTripper {
 	p.upOnce.Do(func() {
-		p.up = &unmark{&http.Transport{Proxy: nil, DialContext: p.dialHost, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS, IdleConnTimeout: idleTimeout}}
+		h1 := new(http.Protocols)
+		h1.SetHTTP1(true)
+		p.up = &unmark{
+			rt:    &http.Transport{Proxy: nil, DialContext: p.dialHost, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS.Clone(), IdleConnTimeout: idleTimeout},
+			keyed: &http.Transport{Proxy: nil, DialContext: p.dialHost, Protocols: h1, DisableCompression: true, TLSClientConfig: p.upstreamTLS.Clone(), IdleConnTimeout: idleTimeout},
+		}
 	})
 	return p.up
 }
 
-// unmark takes the proxy's own mark off a request before it leaves.
-type unmark struct{ rt http.RoundTripper }
+// unmark takes the proxy's own mark off a request before it leaves, and sends a
+// request that has it by keyed.
+type unmark struct{ rt, keyed http.RoundTripper }
 
-// CloseIdleConnections closes the transport's idle connections.
-func (u *unmark) CloseIdleConnections() { closeIdle(u.rt) }
+// CloseIdleConnections closes the idle connections of both transports.
+func (u *unmark) CloseIdleConnections() {
+	closeIdle(u.rt)
+	closeIdle(u.keyed)
+}
 
 // RoundTrip sends the request on without the mark.
 func (u *unmark) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -471,7 +483,7 @@ func (u *unmark) RoundTrip(r *http.Request) (*http.Response, error) {
 	out.Header.Del(setBy)
 	// The trailer is filled once the body is read; a clone's copy would stay empty.
 	out.Trailer = r.Trailer
-	resp, err := u.rt.RoundTrip(out)
+	resp, err := u.keyed.RoundTrip(out)
 	if resp != nil {
 		resp.Request = r
 	}

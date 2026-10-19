@@ -139,7 +139,7 @@ func TestTheRunsEndClosesItsIdleUpstreamConnections(t *testing.T) {
 		t.Errorf("after the run's end, %d connections to the terminated host are open", secureConns.open())
 	}
 
-	for name, rt := range map[string]http.RoundTripper{"upstream": p.upstream().(*unmark).rt, "plain": p.transport()} {
+	for name, rt := range map[string]http.RoundTripper{"upstream": p.upstream().(*unmark).rt, "keyed": p.upstream().(*unmark).keyed, "plain": p.transport()} {
 		if got := rt.(*http.Transport).IdleConnTimeout; got != idleTimeout {
 			t.Errorf("the %s transport's IdleConnTimeout is %s, want %s", name, got, idleTimeout)
 		}

@@ -385,6 +385,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- A request the gateway's proxy sets a credential on goes to its host over HTTP/1.1,
+  so no HTTP/2 header table (HPACK) on the connection keeps a copy of the credential.
+  A request without a credential goes on over HTTP/2 where the host offers it. Before,
+  a request with a credential went over HTTP/2 to a host that offered it.
 - When a run ends, the gateway's proxy closes every idle connection to a host it
   terminates, so a connection that carried the run's credential does not outlive the
   run. While the run goes on, an upstream connection idle for 90 seconds closes, and a
