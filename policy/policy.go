@@ -22,6 +22,7 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -388,6 +389,35 @@ func Host(host string) (string, bool) {
 		}
 	}
 	return h, true
+}
+
+// EndpointHost returns the host of a base URL, such as ANTHROPIC_BASE_URL's value, in
+// the form [Host] gives, and whether the URL has one. A URL has none when [url.Parse]
+// refuses it, when it is opaque or relative, when its scheme is not https (compared
+// without regard to case), when it has user information ("https://a@b/"), when its
+// host is empty, or when [Host] refuses its host. The host is read as url.Parse decodes
+// it, without the brackets of an IPv6 literal. Any port url.Parse accepts is allowed:
+// decimal digits of any value, or none after the colon. The path, query and fragment
+// are not read.
+func EndpointHost(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || !u.IsAbs() || u.Scheme != "https" || u.User != nil || u.Hostname() == "" {
+		return "", false
+	}
+	return Host(u.Hostname())
+}
+
+// CredentialFor reports whether a credential with hosts, entries in the allow list's
+// grammar, is for host: host's form under [Host], matched against hosts by [Match]. A
+// host with no form is in no credential's hosts. The gateway's proxy picks a request's
+// credential by this rule.
+func CredentialFor(hosts []string, host string) bool {
+	h, ok := Host(host)
+	if !ok {
+		return false
+	}
+	_, ok = Match(hosts, h)
+	return ok
 }
 
 // embedded are the IPv6 ranges a host has no form in, each holding an IPv4 address in

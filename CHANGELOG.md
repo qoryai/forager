@@ -25,6 +25,10 @@ release may change what an existing document does, and says so under Upgrading.
   `run_configuration_invalid`, in a node's policy file and in a run configuration alike.
   `policy.CheckImage`, `policy.CheckImagePrefix` and `policy.ImageAllowed` hold the
   grammar and the prefix rule.
+- `policy.EndpointHost` reads the host of an `https` base URL, such as
+  `ANTHROPIC_BASE_URL`'s value, in the form `policy.Host` gives. `policy.CredentialFor`
+  reports whether a credential's hosts are for a host, by the rule the gateway's proxy
+  picks a request's credential by.
 - A run configuration's `image`: the image a run starts in, named by digest beside its
   `security_policy` and run only under the machine's `images.allow`.
 - The refusals `image_not_allowed`, a reference under none of the machine's

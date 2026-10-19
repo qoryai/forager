@@ -151,10 +151,11 @@ func (t *terminator) tool(host string) *Tool {
 	return nil
 }
 
-// credential is the credential that is for the host, if one is.
+// credential is the credential that is for the host, by [policy.CredentialFor], if one
+// is.
 func (t *terminator) credential(host string) *Credential {
 	for i := range t.creds {
-		if _, ok := policy.Match(t.creds[i].Hosts, host); ok {
+		if policy.CredentialFor(t.creds[i].Hosts, host) {
 			return &t.creds[i]
 		}
 	}
