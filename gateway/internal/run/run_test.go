@@ -1084,7 +1084,8 @@ func TestAReloadKeepsAnImageByReference(t *testing.T) {
 
 // TestAReloadKeepsTheStartKey pins that, without model_credential, a reload that
 // selects another model key of the machine's than the run started with, or none, is
-// refused, and one that selects the same key is accepted.
+// refused, one that selects the same key is accepted, and one that selects a model key
+// for a run that started with none is refused.
 func TestAReloadKeepsTheStartKey(t *testing.T) {
 	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
 	doc := func(key string) string {
@@ -1117,5 +1118,14 @@ func TestAReloadKeepsTheStartKey(t *testing.T) {
 	}
 	if _, err := reload(t, r, document(t, doc("first"), digest('4'))); err != nil {
 		t.Errorf("a reload with the same model key: %v", err)
+	}
+	cfg.Fetched = document(t, none, digest('5'))
+	r = open(t, cfg)
+	if r.Held().Start != "" {
+		t.Fatalf("start %q", r.Held().Start)
+	}
+	_, err = reload(t, r, document(t, doc("first"), digest('6')))
+	if want := "run configuration " + runURL + `: start a new run to change the model key it starts with: the run started with no model key, and this run configuration selects "first"; the policy in force stays`; err == nil || err.Error() != want {
+		t.Errorf("a reload that adds a model key:\n got %v\nwant %s", err, want)
 	}
 }

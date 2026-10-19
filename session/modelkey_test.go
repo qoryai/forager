@@ -613,75 +613,94 @@ func variableEntry(t *testing.T, res *session.Result, name string) map[string]an
 	return nil
 }
 
-// TestOtherKeyVariablesDoNotReachTheRuntime pins that, beside a start key in
-// ANTHROPIC_API_KEY, a value of Claude Code's other model-key variables reaches the
-// agent from no source: the server, the run, the machine, the harness's defaults and
-// its computed values, the inherited environment and, behind a wall, the image. Behind
-// a wall the name is unset inside. The record has the value lost as fixed, with no
-// from. Without a wall an inherited value is left out too.
+// TestOtherKeyVariablesDoNotReachTheRuntime pins that, beside a start key, a value of
+// each other model-key variable of Claude Code reaches the agent from no source: the
+// server, the run, the machine, the harness's defaults and its computed values, the
+// inherited environment and, behind a wall, the image. Behind a wall each name is unset
+// inside. The record has each value lost as fixed, with no from. It runs once for a
+// start key in ANTHROPIC_API_KEY, and once for a bearer start key in
+// ANTHROPIC_AUTH_TOKEN, whose others include ANTHROPIC_API_KEY.
 func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 	const value = "sk-fake-dev-token"
-	for _, source := range []string{"apiary", "run", "machine", "harness", "fixed", "shell", "image"} {
-		for _, walled := range []bool{true, false} {
-			if source == "image" && !walled {
-				continue
+	for _, start := range []struct{ auth, variable string }{{"header", apiKeyVariable}, {"bearer", authTokenVariable}} {
+		var others []string
+		for _, k := range modelKeys {
+			if k != start.variable {
+				others = append(others, k)
 			}
-			t.Run(fmt.Sprintf("%s walled %v", source, walled), func(t *testing.T) {
-				var env []string
-				if source == "shell" {
-					env = []string{authTokenVariable + "=" + value}
+		}
+		withValue := func() []string {
+			out := make([]string, len(others))
+			for i, k := range others {
+				out[i] = k + "=" + value
+			}
+			return out
+		}
+		for _, source := range []string{"apiary", "run", "machine", "harness", "fixed", "shell", "image"} {
+			for _, walled := range []bool{true, false} {
+				if source == "image" && !walled {
+					continue
 				}
-				sp, g := specGateway(t, env...)
-				out := dumpsEnv(t, &sp)
-				w := &imageWall{}
-				if source == "image" {
-					w.env = []string{authTokenVariable + "=" + value}
-				}
-				if walled {
-					sp.Wall, sp.Image = w, "example.com/agent:1"
-				}
-				passed := []string{authTokenVariable + "=" + value}
-				var vars map[string]any
-				switch source {
-				case "apiary":
-					vars = map[string]any{authTokenVariable: map[string]any{"value": value}}
-				case "run":
-					sp.Variables.Run = passed
-				case "machine":
-					sp.Variables.Machine = passed
-				case "harness":
-					sp.LaunchDefaults = passed
-				case "fixed":
-					sp.LaunchFixed = passed
-				}
-				answering(g, []map[string]any{model()}, vars)
-				res, err := session.Run(context.Background(), sp)
-				if err != nil {
-					t.Fatal(err)
-				}
-				got := envOf(t, out)
-				if v, ok := got[authTokenVariable]; ok {
-					t.Errorf("%s=%q reached the agent", authTokenVariable, v)
-				}
-				if got[apiKeyVariable] != link.KeyPlaceholder("model") {
-					t.Errorf("%s=%q; want the start key's placeholder", apiKeyVariable, got[apiKeyVariable])
-				}
-				if walled {
-					if names, _ := unsetIn(t, w.got); !slices.Contains(names, authTokenVariable) || slices.Contains(entriesOf(w.got.Env, authTokenVariable), authTokenVariable+"="+value) {
-						t.Errorf("unset %q, the wall's environment %q; want %s unset and not set", names, entriesOf(w.got.Env, authTokenVariable), authTokenVariable)
+				t.Run(fmt.Sprintf("%s start %s walled %v", source, start.auth, walled), func(t *testing.T) {
+					var env []string
+					if source == "shell" {
+						env = withValue()
 					}
-				}
-				if source == "image" {
-					return
-				}
-				b, _ := json.Marshal(variableEntry(t, res, authTokenVariable))
-				if want := `{"lost":[{"from":"` + source + `","why":"fixed"}],"name":"` + authTokenVariable + `"}`; string(b) != want {
-					t.Errorf("the record's entry %s, want %s", b, want)
-				}
-				if strings.Contains(string(b), value) {
-					t.Errorf("the record has the value: %s", b)
-				}
-			})
+					sp, g := specGateway(t, env...)
+					out := dumpsEnv(t, &sp)
+					w := &imageWall{}
+					if source == "image" {
+						w.env = withValue()
+					}
+					if walled {
+						sp.Wall, sp.Image = w, "example.com/agent:1"
+					}
+					var vars map[string]any
+					switch source {
+					case "apiary":
+						vars = map[string]any{}
+						for _, k := range others {
+							vars[k] = map[string]any{"value": value}
+						}
+					case "run":
+						sp.Variables.Run = withValue()
+					case "machine":
+						sp.Variables.Machine = withValue()
+					case "harness":
+						sp.LaunchDefaults = withValue()
+					case "fixed":
+						sp.LaunchFixed = withValue()
+					}
+					answering(g, []map[string]any{apiKey("model", "anthropic-messages", modelEndpoint, start.auth)}, vars)
+					res, err := session.Run(context.Background(), sp)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got := envOf(t, out)
+					if got[start.variable] != link.KeyPlaceholder("model") {
+						t.Errorf("%s=%q; want the start key's placeholder", start.variable, got[start.variable])
+					}
+					var names []string
+					if walled {
+						names, _ = unsetIn(t, w.got)
+					}
+					for _, k := range others {
+						if v, ok := got[k]; ok {
+							t.Errorf("%s=%q reached the agent", k, v)
+						}
+						if walled && (!slices.Contains(names, k) || slices.Contains(entriesOf(w.got.Env, k), k+"="+value)) {
+							t.Errorf("unset %q, the wall's environment %q; want %s unset and not set", names, entriesOf(w.got.Env, k), k)
+						}
+						if source == "image" {
+							continue
+						}
+						b, _ := json.Marshal(variableEntry(t, res, k))
+						if want := `{"lost":[{"from":"` + source + `","why":"fixed"}],"name":"` + k + `"}`; string(b) != want {
+							t.Errorf("the record's entry %s, want %s", b, want)
+						}
+					}
+				})
+			}
 		}
 	}
 }
