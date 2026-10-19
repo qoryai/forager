@@ -451,9 +451,9 @@ paths match: observe mode sends no secret to a path nobody configured. The host
 requested upstream is the one the connection was opened to and decided on, whatever
 `Host` a request contains. A denial of a path is a `403` containing the method, the host and the path.
 A plain request is decided by the same paths, and the proxy never sets a credential on it.
-A plain request to a host that gets a credential, `http://` or an absolute-form
-`https://` sent without `CONNECT`, is denied in either mode with a `403` and the rule
-`wall:plain-request`, before anything is sent: the proxy sets the credential, and
+A plain request to a host that gets a credential and that the policy allows, `http://`
+or an absolute-form `https://` sent without `CONNECT`, is denied in either mode with a
+`403` and the rule `wall:plain-request`, before anything is sent: the proxy sets the credential, and
 replaces it in answers, only inside a `CONNECT` it terminates.
 
 *Reading without writing.* Paths define what a run does on a host as well as where. git
@@ -568,8 +568,8 @@ roots. Every other host stays a tunnel the proxy does not read, and a run with n
 credential and no path rule has no authority at all, unless it has a server.
 
 **The answer.** A host can send back what it received: the answer to a `TRACE`, a
-debug endpoint, an error page. On a host that gets a credential, the proxy denies a
-plain request with a `403` and the rule `wall:plain-request` (§The policy, Matching
+debug endpoint, an error page. On a host that gets a credential and that the policy
+allows, the proxy denies a plain request with a `403` and the rule `wall:plain-request` (§The policy, Matching
 a path). Through `CONNECT`, it denies a `TRACE` or `TRACK` with a `405` and the rule
 `wall:echo-method`. Both are denied in either mode, before anything is sent. The proxy
 replaces the credential's value with the placeholder in every answer it passes on, also
@@ -581,12 +581,13 @@ username and the placeholder. Each form is also looked for percent-encoded and
 JSON-escaped where that changes it. The request goes upstream with `Accept-Encoding:
 identity` and without `Range`, `If-Range`, `Upgrade` and `Connection`; an answer with
 another `Content-Encoding` and a body, or a `101`, is a `502` from the proxy, and the
-record contains the host's status. The answer has no `Content-Length`, since the
-placeholder and the value differ in length. A part of the value, another case of it in
+record contains the host's status. An answer with a body has no `Content-Length` and
+comes chunked, since the placeholder and the value differ in length; an empty answer may
+have `Content-Length: 0`. A part of the value, another case of it in
 the body, another encoding of it, a copy inside a compressed payload such as a zip
-file, and a value from before a renewal are not replaced. Another name or address of
-the same server, one no credential is for, is a tunnel the proxy does not read, so its
-answers are not replaced either. A tool's answers are the tool's.
+file, and a value from before a renewal are not replaced. Nor is anything from another
+name or address of the same server that no credential is for: the proxy replaces the
+value only in answers from a host a credential is for. A tool's answers are the tool's.
 
 **The record.** `dev.qory.run.policy_applied` contains each use, `name`, `argument`,
 `hosts`, `scheme` and `paths`, and the `terminated` hosts. Its `credential_variables` lists the
@@ -707,8 +708,8 @@ and the policy in force stays. A private host gets a value only through an exact
 as a credential of the machine's does, and the proxy verifies the host's certificate
 against the gateway machine's trust store. A host on the gateway machine gets a value
 only when the node's policy names it, as for every name on the machine. On a host that
-gets a credential, from the server or the machine, a `TRACE` or `TRACK` is denied with the rule
-`wall:echo-method` (§Credentials, The answer). The values stay bytes
+gets a credential, from the server or the machine, a `TRACE` or `TRACK` through
+`CONNECT` is denied with the rule `wall:echo-method` (§Credentials, The answer). The values stay bytes
 until the proxy sets the header, and are overwritten when the run ends.
 
 ## Tools
@@ -762,8 +763,7 @@ the request as the session sent it, its query, headers, body and trailers, place
 included, with the `Host` the connection was decided on. Under `observe` that includes a
 request whose path no rule covers, which is recorded as allowed with an empty
 `path_rule`. A plain request to
-such a host goes the same way, unless a credential is for the host:
-`wall:plain-request` denies it. The proxy never dials a host a tool serves, so the host
+such a host goes the same way. The proxy never dials a host a tool serves, so the host
 need not exist: a tool with no real host serves a name the machine's owner chooses, such
 as one under `.internal`, a domain reserved for private use, and the session reaches it
 like any host. The proxy sets two headers, after removing every header and trailer whose

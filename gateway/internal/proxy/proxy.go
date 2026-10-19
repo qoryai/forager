@@ -178,7 +178,8 @@ const GuardRule = "wall:own-address"
 const HostForm = "wall:host-form"
 
 // PlainRequest is the rule a denial names of a plain request, http:// or an
-// absolute-form https:// sent without CONNECT, to a host a credential is for: the proxy
+// absolute-form https:// sent without CONNECT, to a host a credential is for and the
+// policy allows: the proxy
 // sets the credential, and replaces it in answers, only inside a CONNECT it
 // terminates. A refusal of the proxy's, in either mode, before anything is sent.
 const PlainRequest = "wall:plain-request"

@@ -573,6 +573,37 @@ func TestMaskingCatchesAValueAtEverySplit(t *testing.T) {
 	}
 }
 
+// TestAnAbortedAnswerKeepsNoPartOfTheValue pins an answer whose copy ends with a panic,
+// as the reverse proxy's does when the host's connection breaks part way: the bytes
+// kept back, the start of the value, and every find are overwritten.
+func TestAnAbortedAnswerKeepsNoPartOfTheValue(t *testing.T) {
+	m := (&Credential{Scheme: "bearer"}).masker([]byte(fakeKey))
+	finds := slices.Clone(m.pairs)
+	var held []byte
+	aborting := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mw := w.(*masking)
+		mw.Write([]byte("before " + fakeKey[:10]))
+		held = mw.tail
+		panic(http.ErrAbortHandler)
+	})
+	func() {
+		defer func() {
+			if recover() != http.ErrAbortHandler {
+				t.Error("the panic did not reach the server")
+			}
+		}()
+		serveMasked(aborting, httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), m)
+	}()
+	if len(held) != 10 || !bytes.Equal(held, make([]byte, 10)) {
+		t.Errorf("the bytes kept back after the panic: %q", held)
+	}
+	for _, p := range finds {
+		if !bytes.Equal(p.find, make([]byte, len(p.find))) {
+			t.Errorf("a find after the panic: %q", p.find)
+		}
+	}
+}
+
 // TestTheMaskersForms pins the forms looked for: a value of letters, digits and
 // hyphens in one form, a value with / and + also percent-encoded and with / escaped.
 func TestTheMaskersForms(t *testing.T) {

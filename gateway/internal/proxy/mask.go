@@ -356,6 +356,17 @@ func (mw *masking) finish() {
 	mw.m.header(mw.w.Header())
 }
 
+// serveMasked serves r with h through a masking writer of m, then clears the bytes kept
+// back and every find, also when h ends with a panic, as the reverse proxy does when a
+// copy fails part way.
+func serveMasked(h http.Handler, w http.ResponseWriter, r *http.Request, m *masker) {
+	defer m.clear()
+	mw := &masking{w: w, m: m}
+	defer mw.discard()
+	h.ServeHTTP(mw, r)
+	mw.finish()
+}
+
 // encoded is the content coding of an answer with a body, empty when it has none or is
 // identity.
 func encoded(resp *http.Response) string {

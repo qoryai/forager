@@ -81,11 +81,12 @@ error page. The proxy replaces a credential's value with its placeholder in ever
 from a host that gets the credential, before the answer reaches the agent.
 
 - Send each request to such a host as `https://` through `CONNECT`, as an HTTPS client
-  behind a proxy does. A plain request, `http://` or an absolute-form `https://` sent
-  without `CONNECT`, gets a `403` from the gateway and never reaches the host, in either
-  mode, with the rule `wall:plain-request`.
-- A `TRACE` or `TRACK` to such a host gets a `405` from the gateway and never reaches the
-  host, in either mode, with the rule `wall:echo-method`. Use another method.
+  behind a proxy does. If the policy allows the host, a plain request, `http://` or an
+  absolute-form `https://` sent without `CONNECT`, gets a `403` from the gateway and
+  never reaches the host, in either mode, with the rule `wall:plain-request`.
+- A `TRACE` or `TRACK` through `CONNECT` to such a host gets a `405` from the gateway
+  and never reaches the host, in either mode, with the rule `wall:echo-method`. Use
+  another method.
 - The proxy replaces the value in the answer's headers, those of a `1xx` and the
   trailer included, in their names and values in any case, and in the body as it
   streams.
@@ -98,8 +99,9 @@ from a host that gets the credential, before the answer reaches the agent.
 - The request goes to the host with `Accept-Encoding: identity`, and without `Range`,
   `If-Range` and `Upgrade`. If the host compresses its answer anyway, or switches
   protocols, the agent gets a `502` from the gateway.
-- The answer has no `Content-Length` and comes chunked, since the placeholder and the
-  value differ in length.
+- An answer with a body has no `Content-Length` and comes chunked, since the
+  placeholder and the value differ in length; an empty answer may have
+  `Content-Length: 0`.
 
 The proxy does not replace:
 
@@ -108,7 +110,8 @@ The proxy does not replace:
 - a copy inside a compressed file, such as a zip archive;
 - a value the credential had before a renewal;
 - anything from another name or address of the same server that no credential is for,
-  such as its IP address: the connection to it is a tunnel the proxy does not read.
+  such as its IP address: the proxy replaces the value only in answers from a host a
+  credential is for.
 
 A tool's answers are the tool's.
 

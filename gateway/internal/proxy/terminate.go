@@ -375,11 +375,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			rp.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		defer mask.clear()
-		mw := &masking{w: w, m: mask}
-		defer mw.discard()
-		rp.ServeHTTP(mw, r.WithContext(ctx))
-		mw.finish()
+		serveMasked(rp, w, r.WithContext(ctx), mask)
 	})
 	ln := &once{conn: conn, done: make(chan struct{})}
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: t.p.srv.ReadHeaderTimeout, ConnState: func(_ net.Conn, s http.ConnState) {
