@@ -84,10 +84,10 @@ func TestLookupReadsOnlyAPlainDescriptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{
-		"codex": "Make the runtime descriptor " + filepath.Join(dir, "codex.yaml") + " a regular file of at most 1 MiB, or remove it. It could not be read: it is a link",
-		"amp":   "Make the runtime descriptor " + filepath.Join(dir, "amp.yaml") + " a regular file of at most 1 MiB, or remove it. It could not be read: it is not a regular file",
-		"pi":    "Make the runtime descriptor " + filepath.Join(dir, "pi.yaml") + " a regular file of at most 1 MiB, or remove it. It could not be read: it is not a regular file",
-		"big":   "Make the runtime descriptor " + filepath.Join(dir, "big.yaml") + " a regular file of at most 1 MiB, or remove it. It could not be read: it is larger than 1048576 bytes",
+		"codex": "Make the runtime descriptor " + filepath.Join(dir, "codex.yaml") + " a readable regular file of at most 1 MiB, or remove it. It could not be read: it is a link",
+		"amp":   "Make the runtime descriptor " + filepath.Join(dir, "amp.yaml") + " a readable regular file of at most 1 MiB, or remove it. It could not be read: it is not a regular file",
+		"pi":    "Make the runtime descriptor " + filepath.Join(dir, "pi.yaml") + " a readable regular file of at most 1 MiB, or remove it. It could not be read: it is not a regular file",
+		"big":   "Make the runtime descriptor " + filepath.Join(dir, "big.yaml") + " a readable regular file of at most 1 MiB, or remove it. It could not be read: it is larger than 1048576 bytes",
 	} {
 		if _, err := catalog.Lookup(name, dir); err == nil || err.Error() != want {
 			t.Errorf("%s: %v, want %q", name, err, want)

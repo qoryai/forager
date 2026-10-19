@@ -726,9 +726,9 @@ func throughLink(in, out shown) error {
 	return &Refusal{
 		Code:  refusal.MountThroughLink,
 		Names: pathsShown(in.path, link, out.path),
-		Detail: fmt.Sprintf("List the target of the link %s in place of %s. %s is reached "+
+		Detail: fmt.Sprintf("List the path that %s resolves to, in place of %s. %s is reached "+
 			"through the link %s inside %s, which a walled agent can change",
-			pathShown(link), pathShown(in.path), pathShown(in.path), pathShown(link),
+			pathShown(in.path), pathShown(in.path), pathShown(in.path), pathShown(link),
 			pathShown(out.path)),
 	}
 }

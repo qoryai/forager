@@ -91,7 +91,7 @@ func TestABindOverAnotherRunsWayIsNoRun(t *testing.T) {
 func throughLink(t *testing.T, err error, place, link, outer string) {
 	t.Helper()
 	r := refusalOf(t, "mount_through_link", err)
-	want := "List the target of the link " + link + " in place of " + place + ". " + place +
+	want := "List the path that " + place + " resolves to, in place of " + place + ". " + place +
 		" is reached through the link " + link + " inside " + outer + ", which a walled agent can change"
 	if !slices.Equal(r.Names, []string{place, link, outer}) || r.Detail != want {
 		t.Errorf("names %q, detail %q\nwant names %q, detail %q",
@@ -688,8 +688,8 @@ func TestAPlaceThroughALinkInAWrittenPlaceIsNoRun(t *testing.T) {
 
 // TestTheLinkRefusalPutsEachNameInItsPlace pins the sentence of a mount_through_link
 // refusal for a place, a link and a writable place that are three different paths:
-// the fix names the link and then the place, the cause the place, the link and the
-// writable place.
+// the fix names the place twice, the cause the place, the link and the writable
+// place.
 func TestTheLinkRefusalPutsEachNameInItsPlace(t *testing.T) {
 	top := t.TempDir()
 	w, x := mkdirs(t, filepath.Join(top, "w")), mkdirs(t, filepath.Join(top, "x"))
@@ -700,7 +700,7 @@ func TestTheLinkRefusalPutsEachNameInItsPlace(t *testing.T) {
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: place}}, w
 	r := refusalOf(t, "mount_through_link", runErr(sp))
-	want := "List the target of the link " + link + " in place of " + place + ". " + place +
+	want := "List the path that " + place + " resolves to, in place of " + place + ". " + place +
 		" is reached through the link " + link + " inside " + w + ", which a walled agent can change"
 	if r.Detail != want {
 		t.Errorf("detail %q\nwant   %q", r.Detail, want)

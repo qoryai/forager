@@ -338,9 +338,9 @@ up in its parent, so two binds of one root are allowed.
   choose the directory of this machine that is bound. `Names` holds the place as
   passed, the link, absolute and clean, and the writable place as passed. The link is
   the last one inside the writable place on the way to the place, the one that leads
-  out of it. Its sentence reads: "List the target of the link /work/home in place of
-  /work/home. /work/home is reached through the link /work/home inside /work, which a
-  walled agent can change". A
+  out of it. Its sentence reads: "List the path that /work/home resolves to, in place
+  of /work/home. /work/home is reached through the link /work/home inside /work, which
+  a walled agent can change". A
   place whose link leads back into the writable place lies inside it and is reached
   through it, and nothing is bound through the link. A link on the way to a place that
   lies inside no writable place of the run's is followed by the engine as it binds.
@@ -348,7 +348,7 @@ up in its parent, so two binds of one root are allowed.
   The same holds of a link inside a place of `Spec.Written`, the places the caller
   records as written by walled runs, though no walled run that wrote it is still
   going: `Names` holds the place, the link and the written place as passed. Its
-  sentence reads: "List the target of the link /code/repo/.claude/worktrees/wt in
+  sentence reads: "List the path that /code/repo/.claude/worktrees/wt resolves to, in
   place of /code/repo/.claude/worktrees/wt. /code/repo/.claude/worktrees/wt is reached
   through the link /code/repo/.claude/worktrees/wt inside /code/repo, which a walled
   agent can change".
