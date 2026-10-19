@@ -346,8 +346,9 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 // endpoint rule leaves out does not reach the runtime: the inherited value counts, or,
 // when there is none, the descriptor's host, and a model credential for it is the
 // run's model key. The text offers a value only of a variable that no credential sets
-// a placeholder in, that the gateway does not reserve and that the deny list does not
-// match.
+// a placeholder in, that the gateway does not reserve, that the deny list does not
+// match, and that neither the harness nor Forager sets: a value of it from the run
+// reaches the runtime.
 func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 	forge := sealed("forge", "api.github.com", "", "", "GITHUB_TOKEN")
 	const keyFix = "a credential with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN"
@@ -359,7 +360,9 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 		placeholders []string
 		reserved     []string
 		deny         []string
+		fixed        []string
 		runtime      func(runtimes.Runtime) runtimes.Runtime
+		names        []string
 		want         string
 	}{
 		{
@@ -378,11 +381,12 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 		{
 			// The run's https value is not covered, so the endpoint rule leaves it
 			// out, and the inherited value is the one that reaches the runtime.
-			what:      "an inherited endpoint with no host Forager reads and a dropped run value",
-			inherited: "http://litellm.internal:4000",
-			run:       []string{endpointVariable + "=https://evil.example"},
-			hosts:     modelAndForge,
-			want:      "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers, or give the run a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
+			what:         "an inherited endpoint with no host Forager reads and a dropped run value",
+			inherited:    "http://litellm.internal:4000",
+			run:          []string{endpointVariable + "=https://evil.example"},
+			hosts:        modelAndForge,
+			placeholders: []string{apiKeyVariable, "GITHUB_TOKEN"},
+			want:         "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers, or give the run a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
 		},
 		{
 			what:         "an endpoint with no host Forager reads and every model key a placeholder",
@@ -416,6 +420,25 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 		{
+			what:  "a model key the harness sets to empty",
+			hosts: []map[string]any{forge},
+			fixed: []string{authTokenVariable + "="},
+			want:  "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+		},
+		{
+			what:    "a model key the runtime's preparation sets to empty",
+			hosts:   []map[string]any{forge},
+			runtime: func(rt runtimes.Runtime) runtimes.Runtime { return &preparesEmpty{Runtime: rt} },
+			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+		},
+		{
+			what:    "a model key in a variable Forager sets",
+			hosts:   []map[string]any{forge},
+			runtime: func(rt runtimes.Runtime) runtimes.Runtime { return &runIDKey{Runtime: rt} },
+			names:   []string{apiKeyVariable, authTokenVariable, oauthVariable, "QORY_RUN_ID"},
+			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_AUTH_TOKEN or QORY_RUN_ID, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+		},
+		{
 			what:         "a model credential for another host",
 			hosts:        []map[string]any{sealed("model", "llm.example", "", "", apiKeyVariable)},
 			placeholders: []string{apiKeyVariable},
@@ -436,6 +459,7 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 			sp, g := specGateway(t, env...)
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			sp.Variables.Run, sp.Variables.Deny = tc.run, tc.deny
+			sp.LaunchFixed = append(sp.LaunchFixed, tc.fixed...)
 			if tc.runtime != nil {
 				sp.Runtime = tc.runtime(sp.Runtime)
 			}
@@ -452,8 +476,15 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 			})
 			_, err := session.Run(context.Background(), sp)
 			var r *session.Refusal
-			if !errors.As(err, &r) || r.Code != "model_key_missing" || !slices.Equal(r.Names, modelKeys) {
-				t.Fatalf("%v, want model_key_missing for %q", err, modelKeys)
+			names := modelKeys
+			if tc.names != nil {
+				names = tc.names
+			}
+			if !errors.As(err, &r) || r.Code != "model_key_missing" || !slices.Equal(r.Names, names) {
+				t.Fatalf("%v, want model_key_missing for %q", err, names)
+			}
+			if strings.Contains(err.Error(), "probe") {
+				t.Errorf("the refusal quotes the trial's value: %v", err)
 			}
 			if r.Detail != tc.want {
 				t.Errorf("the refusal reads\n %q\nwant\n %q", r.Detail, tc.want)
@@ -529,4 +560,38 @@ func (p *deniesKey) Model() (runtimes.ModelPlaces, bool) {
 		m.Overrides = append(slices.Clone(m.Overrides), authTokenVariable)
 	}
 	return m, ok
+}
+
+// runIDKey is a runtime that declares a model key in QORY_RUN_ID, a variable Forager
+// sets in every run.
+type runIDKey struct{ runtimes.Runtime }
+
+func (p *runIDKey) Secrets() runtimes.Declarations {
+	d := p.Runtime.(runtimes.Secrets).Secrets()
+	d.Declares = append(slices.Clone(d.Declares), runtimes.Declaration{
+		ID: "run-id", Title: "A key in the run's id", Name: "QORY_RUN_ID",
+		Hosts: []string{"api.anthropic.com"}, Auth: runtimes.Auth{Scheme: "bearer"}, KeyForm: "api_key",
+	})
+	return d
+}
+
+func (p *runIDKey) Model() (runtimes.ModelPlaces, bool) {
+	return p.Runtime.(runtimes.Model).Model()
+}
+
+// preparesEmpty is a runtime whose preparation sets ANTHROPIC_AUTH_TOKEN to empty.
+type preparesEmpty struct{ runtimes.Runtime }
+
+func (p *preparesEmpty) Prepare(a runtimes.Attach) (runtimes.Launch, error) {
+	l, err := p.Runtime.Prepare(a)
+	l.Env = append(slices.Clone(l.Env), authTokenVariable+"=")
+	return l, err
+}
+
+func (p *preparesEmpty) Secrets() runtimes.Declarations {
+	return p.Runtime.(runtimes.Secrets).Secrets()
+}
+
+func (p *preparesEmpty) Model() (runtimes.ModelPlaces, bool) {
+	return p.Runtime.(runtimes.Model).Model()
 }

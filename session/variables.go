@@ -197,6 +197,29 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentia
 	return vars, unset, nil
 }
 
+// probeValue is the value a trial of [reachesFromRun] passes. It is not a secret, and
+// no record or log carries it: the trial's resolution is discarded.
+const probeValue = "forager-model-key-probe"
+
+// reachesFromRun reports whether a value of name from the run, with the run's other
+// values as they are, reaches the runtime's environment: try, which resolves spec as
+// [resolve] does for the run, refuses none of the run's values and does not unset name,
+// and the environment the launch writes behind a wall, with ownEnv and the
+// placeholders, has name set to that value.
+func reachesFromRun(spec Spec, name string, prepared runtimes.Launch, ownEnv, placeholderNames []string, try func(Spec) (variables.Resolved, []string, error)) bool {
+	trial := spec
+	trial.Variables.Run = slices.DeleteFunc(slices.Clone(spec.Variables.Run), func(kv string) bool {
+		n, _, _ := strings.Cut(kv, "=")
+		return n == name
+	})
+	trial.Variables.Run = append(trial.Variables.Run, name+"="+probeValue)
+	vars, unset, err := try(trial)
+	if err != nil || slices.Contains(unset, name) {
+		return false
+	}
+	return slices.Contains(environment(trial.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames)), name+"="+probeValue)
+}
+
 // names are the names of NAME=value entries.
 func names(env []string) []string {
 	out := make([]string, 0, len(env))
@@ -325,13 +348,9 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 // without a wall, or whose answer has no credential_hosts, is not checked: its key may
 // come from what the session does not see, such as a login of the developer's, a
 // mount or an image. The refusal is [refusal.ModelKeyMissing] with the model keys'
-// variables. Its text offers a value only of a model key's variable that a value can
-// reach the runtime in: one not among placeholderNames or a credential's placeholders,
-// whose value is refused as [refusal.PlaceholderConflict]; not among reserved, whose
-// value is refused as [refusal.VariableReserved]; and not matched by the deny list
-// that [resolve] applies behind a wall, the built-in list with spec's Variables.Deny,
-// the runtime's denies and its model overrides, whose value is left out.
-func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, placeholderNames, reserved []string, vars variables.Resolved, prepared runtimes.Launch) error {
+// variables. Its text offers a value only of a model key's variable for which passes
+// reports true: a value of it from the run reaches the runtime's environment.
+func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, passes func(name string) bool) error {
 	if spec.Wall == nil || len(credentials) == 0 {
 		return nil
 	}
@@ -368,16 +387,10 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	if slices.ContainsFunc(keys, func(k string) bool { return reaches[k] != "" }) {
 		return nil
 	}
-	// A value the run may pass: one of a variable that no credential sets a placeholder
-	// in, that is not reserved and that the node does not deny.
-	deny, err := variables.List(slices.Concat(spec.Variables.Deny, secretsOf(rt).Denies, places.Overrides))
-	if err != nil {
-		return err
-	}
+	// The variables of which a value from the run reaches the runtime, by trial.
 	var free []string
 	for _, k := range keys {
-		placeholder := slices.Contains(placeholderNames, k) || slices.ContainsFunc(credentials, func(c server.LinkCredentialHosts) bool { return slices.Contains(c.Placeholders, k) })
-		if !placeholder && !slices.Contains(reserved, k) && !deny.Matches(k) {
+		if passes(k) {
 			free = append(free, k)
 		}
 	}

@@ -26,6 +26,7 @@ import (
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/socket"
+	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/sink"
 	"github.com/qoryai/forager/wall"
@@ -749,11 +750,21 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The harness's values are Forager's to write as the enclosure sees them.
 	harness := spec
 	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)
-	vars, unset, err := resolve(harness, rt, answer.Values(), credentialHosts, prepared, placeholderNames, reserved, img.Docker, authority != nil)
+	try := func(s Spec) (variables.Resolved, []string, error) {
+		return resolve(s, rt, answer.Values(), credentialHosts, prepared, placeholderNames, reserved, img.Docker, authority != nil)
+	}
+	vars, unset, err := try(harness)
 	if err != nil {
 		return fail(err)
 	}
-	if err := checkModelKey(harness, rt, credentialHosts, placeholderNames, reserved, vars, prepared); err != nil {
+	ownEnv := []string{EnvRunID + "=" + runID}
+	if spec.HarnessHome != "" {
+		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
+	}
+	passes := func(name string) bool {
+		return reachesFromRun(harness, name, prepared, ownEnv, placeholderNames, try)
+	}
+	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared, passes); err != nil {
 		return fail(err)
 	}
 	if spec.OnVariables != nil {
@@ -854,11 +865,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// what wins here by position is what the record says. Behind a wall the launch
 	// starts through Exec when the run has names to unset, which unsets the runtime's declared, reserved and denied
 	// variables, its model overrides and the node's denied ones that nothing sets, so an image's value for
-	// one does not reach the runtime; the record names the launch without it.
-	ownEnv := []string{EnvRunID + "=" + runID}
-	if spec.HarnessHome != "" {
-		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
-	}
+	// one does not reach the runtime; the record names the launch without it. ownEnv
+	// is set before the variables are checked.
 	launch := wall.Launch{
 		Command: command, Args: args, Dir: spec.Dir,
 		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, fwd.Env(), []string{EnvSocket + "=" + sock.Path()}, ownEnv),
