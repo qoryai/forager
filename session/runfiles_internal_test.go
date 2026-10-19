@@ -98,8 +98,8 @@ func TestALockThatIsALinkIsNotOpened(t *testing.T) {
 				unlock()
 				t.Fatalf("%s: a lock that is a link was taken", c.want)
 			}
-			want := "Remove the symbolic link at " + link + ". The session opens " + c.want +
-				" only as a regular file, not through a link."
+			want := "Remove the symbolic link at " + link + ". The session does not open " + c.want +
+				" through a link."
 			if err.Error() != want || !errors.Is(err, syscall.ELOOP) {
 				t.Errorf("%s: the error is %q, ELOOP %v; want %q", c.want, err, errors.Is(err, syscall.ELOOP), want)
 			}

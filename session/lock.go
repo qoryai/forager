@@ -47,8 +47,8 @@ func lockLink(file, what string, err error) error {
 	if fi, lerr := os.Lstat(file); lerr != nil || fi.Mode()&fs.ModeSymlink == 0 {
 		return nil
 	}
-	return linkError{"Remove the symbolic link at " + pathShown(file) + ". The session opens " + what +
-		" only as a regular file, not through a link.", err}
+	return linkError{"Remove the symbolic link at " + pathShown(file) + ". The session does not open " + what +
+		" through a link.", err}
 }
 
 // linkError is an error whose text is text, and that wraps err.

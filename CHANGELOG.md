@@ -389,8 +389,8 @@ release may change what an existing document does, and says so under Upgrading.
   `gateway.Resend`, through a symbolic link at their path, and the open made the file
   the link points at when it did not exist. Both are now opened with O_NOFOLLOW, and a
   link there fails with the fix first: "Remove the symbolic link at
-  /runs/<id>/gateway.lock. The gateway opens a run directory's lock only as a regular
-  file, not through a link."
+  /runs/<id>/gateway.lock. The gateway does not open the run directory's lock through
+  a link."
 
 - More of the gateway's messages and event members printed or sent a value as written,
   and now print or send a phrase in place of one that contains `qak_` or `qrk_` in any
@@ -508,6 +508,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Session
 
+#### Upgrading
+
+- Give a walled run's `--mcp-config`, `--agents` and system-prompt files the mode its
+  wall's user can read, if that user is not the node's: a copy in the run directory has
+  its file's permission bits within 0644, less the umask, so the copy of a file of mode
+  0600 is 0600, and a wall whose user is another one cannot read it. Before, a copy was
+  0644 less the umask.
+
 #### Added
 
 - A run without a wall gets its credentials' placeholders, set after the environment it
@@ -581,14 +589,21 @@ release may change what an existing document does, and says so under Upgrading.
   the umask, as before; `ca-bundle.pem` was 0644 under any umask and now loses the
   umask's bits too. A copy now has its file's permission bits within 0644, less the
   umask, so a file only its owner reads gives a copy only its owner reads; before, a
-  copy was 0644 less the umask. A directory at such a path now fails the write with
-  `file exists` (EEXIST) where it failed with `is a directory` (EISDIR).
+  copy was 0644 less the umask. These errors of the writes change:
+  - A directory at such a path fails the write with `rename <dir>/.<name>-<n>
+    <dir>/<name>: file exists` (EEXIST) where it failed with `open <dir>/<name>: is a
+    directory` (EISDIR).
+  - A missing run directory fails it with `open <dir>/.<name>-<n>: no such file or
+    directory`, which names the new file, where it named `<dir>/<name>`. For
+    `ca-bundle.pem` the error starts `open` where it started `createtemp`.
+  - The sync of the run directory after the rename can fail the write, with the file
+    already in place. Its ENOTSUP and EINVAL are ignored.
 
 - The run directory's lock and the lock of the registry of walled runs were opened
   through a symbolic link at their path, and the open made the file the link points at
   when it did not exist. Both are now opened with O_NOFOLLOW, and a link there fails
-  with the fix first: "Remove the symbolic link at /runs/<id>/lock. The session opens
-  the run directory's lock only as a regular file, not through a link."
+  with the fix first: "Remove the symbolic link at /runs/<id>/lock. The session does
+  not open the run directory's lock through a link."
 
 - More of the session's messages and `run.started`'s members printed or sent a value as
   written, and now print or send a phrase in place of one that contains `qak_` or `qrk_`

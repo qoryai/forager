@@ -29,7 +29,7 @@ func lock(dir, name string) (func(), error) {
 	if err != nil {
 		if fi, lerr := os.Lstat(file); lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
 			return nil, linkError{"Remove the symbolic link at " + accesskey.ShownValue(file, false) +
-				". The gateway opens a run directory's lock only as a regular file, not through a link.", err}
+				". The gateway does not open the run directory's lock through a link.", err}
 		}
 		return nil, accesskey.ShownError(err)
 	}

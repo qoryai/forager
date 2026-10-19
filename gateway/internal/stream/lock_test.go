@@ -27,7 +27,7 @@ func TestALockThatIsALinkIsNotOpened(t *testing.T) {
 		t.Fatal("a lock that is a link was taken")
 	}
 	want := "Remove the symbolic link at " + link +
-		". The gateway opens a run directory's lock only as a regular file, not through a link."
+		". The gateway does not open the run directory's lock through a link."
 	if err.Error() != want || !errors.Is(err, syscall.ELOOP) {
 		t.Errorf("the error is %q, ELOOP %v; want %q", err, errors.Is(err, syscall.ELOOP), want)
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 )
 
 // tries is how many names [Replace] tries for its new file before it returns the
@@ -22,6 +23,8 @@ const tries = 10000
 // syncs the directory. A link at path is replaced, not followed, so the write reaches
 // no file outside path's directory. If an error comes before the rename, the new file
 // is removed and path is as it was; an error of the directory's sync comes after it.
+// The sync's ENOTSUP and EINVAL are ignored: on macOS it is F_FULLFSYNC, which some
+// network mounts do not support, and the file is in place by then.
 func Replace(path string, b []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	f, err := create(dir, "."+filepath.Base(path)+"-", perm)
@@ -48,6 +51,9 @@ func Replace(path string, b []byte, perm os.FileMode) error {
 		return err
 	}
 	err = d.Sync()
+	if errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EINVAL) {
+		err = nil
+	}
 	if cerr := d.Close(); err == nil {
 		err = cerr
 	}
