@@ -37,8 +37,10 @@ sources:
 # started it, and the result line is read from its standard output.
 headless:
   args: ["-p", "--print"]
-# The model credential is an API key or an OAuth credential, one of the two. Claude Code
-# reads ANTHROPIC_AUTH_TOKEN before either, so it is reserved. The denied variables move
+# The model credential is an API key or an OAuth credential. The descriptor requires
+# neither, because the runtime connection supplies no model key: a server's key
+# reaches the run only as a sealed credential that the run configuration names.
+# Claude Code reads ANTHROPIC_AUTH_TOKEN before either, so it is reserved. The denied variables move
 # where requests and the credential go, add headers, switch to another provider, wrap or
 # replace the shell, move the settings and the credential file, or change the client
 # certificate and the trust of TLS connections; each is in the environment-variable
@@ -57,10 +59,6 @@ secrets:
       hosts: [api.anthropic.com]
       paths: [/v1/*]
       auth: {scheme: bearer}
-  one_of:
-    - id: model_key
-      required: true
-      of: [api_key, oauth_token]
   reserves: [ANTHROPIC_AUTH_TOKEN]
   credential_files: [~/.claude/.credentials.json]
   denies: [ANTHROPIC_BASE_URL, ANTHROPIC_BEDROCK_BASE_URL, ANTHROPIC_BEDROCK_MANTLE_BASE_URL,

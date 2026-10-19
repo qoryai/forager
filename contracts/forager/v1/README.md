@@ -2948,7 +2948,10 @@ source in both modes; its standard output adds the result line, which only the o
 reports. A descriptor records the version it was written against; Forager
 reports that version and does not check the installed one. Its `secrets` declare the
 model credential, an API key set as `x-api-key` or an OAuth credential set as a bearer,
-on `api.anthropic.com` under `/v1/`, one of the two required. Its `model` lists
+on `api.anthropic.com` under `/v1/`, and no `one_of` group. The descriptor requires
+neither, because the runtime connection supplies no model key: a server's key reaches
+the run only as a sealed credential that the run configuration names (§Credentials,
+From the server). Its `model` lists
 `anthropic-messages`; it places the model id as `--model`, the run's effort value as
 `--effort` and an agent's effort value in the `effort` frontmatter, each of the two
 taking `low`, `medium`, `high`, `xhigh` and `max`; it places the endpoint in

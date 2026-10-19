@@ -61,16 +61,7 @@
           ]
         }
       ],
-      "one_of": [
-        {
-          "id": "model_key",
-          "required": true,
-          "of": [
-            "api_key",
-            "oauth_token"
-          ]
-        }
-      ],
+      "one_of": [],
       "model": {
         "formats": [
           "anthropic-messages"
