@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // lockFile is the file in a run directory its session holds locked for as long as it
@@ -20,7 +22,7 @@ var ErrRunning = errors.New("the run is still going")
 func lock(dir string) (func(), error) {
 	f, err := os.OpenFile(filepath.Join(dir, lockFile), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()

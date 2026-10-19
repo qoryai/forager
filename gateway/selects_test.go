@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -288,4 +289,160 @@ func TestStartRefusesASelectionItCannotHold(t *testing.T) {
 			t.Errorf("%+v: %d requests to the run endpoint", c.sels, n)
 		}
 	}
+}
+
+// The phrases a gateway message prints in place of a name, or of an error's text, that
+// contains qak_ or qrk_ in any case.
+const (
+	accessKeyNamePhrase  = "(a name that contains an access key secret)"
+	runKeyNamePhrase     = "(a name that contains a run key)"
+	accessKeyValuePhrase = "(a value that contains an access key secret)"
+	runKeyValuePhrase    = "(a value that contains a run key)"
+)
+
+// noSecretPrefix fails the test when text contains qak_ or qrk_ in any case.
+func noSecretPrefix(t *testing.T, what, text string) {
+	t.Helper()
+	if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+		t.Errorf("%s: a secret's prefix in %s", what, text)
+	}
+}
+
+// TestStartsSelectionRefusalPrintsAPhraseForASecret pins Start's refusals of Selects:
+// a selection's name that contains qak_ or qrk_ prints the name's phrase, and a
+// pattern whose error quotes it prints the value's phrase in place of the error, with
+// the rest of each sentence word for word. TestStartRefusesASelectionItCannotHold pins
+// the same messages for clean names and patterns.
+func TestStartsSelectionRefusalPrintsAPhraseForASecret(t *testing.T) {
+	s := newSelecting(t)
+	for name, phrase := range map[string]string{"qak_x": accessKeyNamePhrase, "a.qrk_b": runKeyNamePhrase, "qrk_x.qak_y": accessKeyNamePhrase} {
+		creds := append(slices.Clone(s.creds),
+			gateway.Credential{Name: name, Env: "QORY_TEST_SELECT_MODEL", Hosts: []string{"other.model.example"}, Scheme: "bearer"},
+			gateway.Credential{Name: name + "-arg", Adapter: s.creds[0].Adapter, Argument: oneRepository, Hosts: []string{"other.git.example"}})
+		for _, c := range []struct {
+			sels []gateway.Selection
+			text string
+		}{
+			{[]gateway.Selection{{Name: strings.ToUpper(name)}}, "gateway: Selects names " + phrase + ", which is no credential of Credentials"},
+			{[]gateway.Selection{{Name: name}, {Name: name}}, "gateway: Selects names " + phrase + " twice"},
+			{[]gateway.Selection{{Name: name, Label: "repository"}}, "gateway: Selects " + phrase + ": " + phrase + " takes no argument, so Label does not apply"},
+			{[]gateway.Selection{{Name: name + "-arg"}}, "gateway: Selects " + phrase + ": " + phrase + " takes an argument, so it needs Label, Forge and Pattern"},
+			{[]gateway.Selection{{Name: "github", Label: "repository", Forge: "github.com", Pattern: name + "("}}, "gateway: Selects github: the pattern does not compile: " + strings.Replace(phrase, "name", "value", 1)},
+			{[]gateway.Selection{{Name: "github", Label: "repository", Forge: "github.com", Pattern: strings.ToUpper(name) + `\Q`}}, "gateway: Selects github: the pattern does not compile: " + strings.Replace(phrase, "name", "value", 1)},
+		} {
+			c0 := gatewayControl(t)
+			certFile, keyFile, _ := testCertificate(t, t.TempDir())
+			g, err := gateway.Start(context.Background(), gateway.Config{
+				Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, Server: c0.server(),
+				Dir: t.TempDir(), Credentials: creds, Selects: c.sels,
+			})
+			if err == nil {
+				g.Close(context.Background())
+				t.Errorf("%+v: started", c.sels)
+				continue
+			}
+			if err.Error() != c.text {
+				t.Errorf("%+v:\n got %v\nwant %s", c.sels, err, c.text)
+			}
+			noSecretPrefix(t, fmt.Sprintf("%+v", c.sels), err.Error())
+		}
+	}
+}
+
+// TestALinksFilePrintsAPhraseForASecretInAName pins the phrases the link gives a
+// credential's program directory and file, and a tool's program directory, by: a
+// credential's or a tool's name that contains qak_ or qrk_ prints the name's phrase,
+// and a clean name prints as it is.
+func TestALinksFilePrintsAPhraseForASecretInAName(t *testing.T) {
+	dir := t.TempDir()
+	program := shell(t, dir, "adapter", "exit 1\n")
+	token := filepath.Join(dir, "token")
+	// The tool's program is in a directory apart, since the link lists a directory once.
+	toolProgram := shell(t, t.TempDir(), "tool", "exit 1\n")
+	for name, shown := range map[string]string{"qak_x": accessKeyNamePhrase, "a.qrk_b": runKeyNamePhrase, "qrk_x.qak_y": accessKeyNamePhrase, "model": "model"} {
+		h := start(t, gateway.Config{Credentials: []gateway.Credential{
+			{Name: name, Adapter: []string{program}},
+			{Name: name + "-file", File: token, Hosts: []string{"api.model.example"}, Scheme: "bearer"},
+		}, Tools: []gateway.Tool{{Name: name, Command: []string{toolProgram}, Serves: []string{"files.tools.internal"}}}})
+		fileShown := shown
+		if shown == "model" {
+			fileShown = "model-file"
+		}
+		var whats []string
+		for _, f := range h.g.LocalLink().Files {
+			whats = append(whats, f.What)
+		}
+		for _, want := range []string{"the directory of the credential " + shown + "'s program", "the file the credential " + fileShown + " is read from", "the directory of the tool " + shown + "'s program"} {
+			if !slices.Contains(whats, want) {
+				t.Errorf("%s: no %q among %q", name, want, whats)
+			}
+		}
+		for _, w := range whats {
+			noSecretPrefix(t, name, w)
+		}
+		h.close()
+	}
+}
+
+// TestARunStartedMayCarryALabelsPhrase pins the gateway's check of the session's
+// run.started labels: a value that contains qak_ or qrk_ may be the name's phrase, as
+// the session sends it, or the value as it is, as a session of before sends it; any
+// other value is not the run's.
+func TestARunStartedMayCarryALabelsPhrase(t *testing.T) {
+	labels := map[string]string{"repository": "acme/qak_x", "issue": "7"}
+	h := start(t, gateway.Config{})
+	for _, c := range []struct {
+		sent     map[string]string
+		accepted bool
+	}{
+		{map[string]string{"repository": accessKeyNamePhrase, "issue": "7"}, true},
+		{labels, true},
+		{map[string]string{"repository": runKeyNamePhrase, "issue": "7"}, false},
+		{map[string]string{"repository": accessKeyNamePhrase, "issue": "8"}, false},
+	} {
+		a := h.open(server.LinkRunRequest{Labels: labels})
+		d := h.post(started(a.RunID, c.sent))
+		if c.accepted != d.Accepted() {
+			t.Errorf("%v: %+v, want accepted %v", c.sent, d, c.accepted)
+		}
+	}
+	h.close()
+}
+
+// TestARunStartedWithRawLabelsGoesOnPhrased pins the labels of a run.started a session
+// sends as they are: the gateway accepts them, and the record and the server get each
+// key and value that contains qak_ or qrk_ in any case as the name's phrase, so no
+// session passes a secret through in its labels.
+func TestARunStartedWithRawLabelsGoesOnPhrased(t *testing.T) {
+	labels := map[string]string{"repository": "acme/qak_FAKE", "qrk_fake": "x", "issue": "7"}
+	want := map[string]any{"repository": accessKeyNamePhrase, runKeyNamePhrase: "x", "issue": "7"}
+	c := newControl(t)
+	h := start(t, gateway.Config{Server: c.server()})
+	a := h.open(server.LinkRunRequest{Labels: labels})
+	if d := h.post(started(a.RunID, labels)); !d.Accepted() {
+		t.Fatalf("the run.started: %+v", d)
+	}
+	if d := h.post(exited(a.RunID)); !d.Accepted() {
+		t.Fatalf("the run.exited: %+v", d)
+	}
+	eventually(t, "the run's exit at the server", func() bool {
+		lines := c.lines(t)
+		return len(lines) > 0 && lines[len(lines)-1].Type == event.RunExited
+	})
+	for what, lines := range map[string][]recorded{"the record": h.record(a.RunID), "the server": c.lines(t)} {
+		n := 0
+		for _, l := range lines {
+			if l.Type != event.RunStarted {
+				continue
+			}
+			n++
+			if !reflect.DeepEqual(l.Data["labels"], want) {
+				t.Errorf("%s: labels %v, want %v", what, l.Data["labels"], want)
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s: %d run.started", what, n)
+		}
+	}
+	h.close()
 }

@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // checkExec refuses an Exec a run cannot have: none behind a wall, one whose program is
@@ -65,23 +67,25 @@ func Exec(args []string, stderr io.Writer) int {
 		os.Unsetenv(name)
 	}
 	path, err := exec.LookPath(argv[0])
+	// program is the program as its messages print it.
+	program := accesskey.ShownValue(argv[0], false)
 	switch {
 	case errors.Is(err, exec.ErrDot):
-		fmt.Fprintf(stderr, "exec: %s: found only through . or an empty entry of PATH, which is not run\n", argv[0])
+		fmt.Fprintf(stderr, "exec: %s: found only through . or an empty entry of PATH, which is not run\n", program)
 		return 127
 	case errors.Is(err, fs.ErrPermission), errors.Is(err, syscall.EISDIR):
-		fmt.Fprintf(stderr, "exec: %s: cannot be executed: %v\n", argv[0], err)
+		fmt.Fprintf(stderr, "exec: %s: cannot be executed: %v\n", program, accesskey.ShownError(err))
 		return 126
 	case err != nil:
-		fmt.Fprintf(stderr, "exec: %s: not found\n", argv[0])
+		fmt.Fprintf(stderr, "exec: %s: not found\n", program)
 		return 127
 	}
 	err = syscall.Exec(path, argv, os.Environ())
 	if errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintf(stderr, "exec: %s: not found: %v\n", argv[0], err)
+		fmt.Fprintf(stderr, "exec: %s: not found: %v\n", program, accesskey.ShownError(err))
 		return 127
 	}
-	fmt.Fprintf(stderr, "exec: %s: cannot be executed: %v\n", argv[0], err)
+	fmt.Fprintf(stderr, "exec: %s: cannot be executed: %v\n", program, accesskey.ShownError(err))
 	return 126
 }
 

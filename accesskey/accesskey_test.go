@@ -13,8 +13,10 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -1426,6 +1428,121 @@ func TestShownName(t *testing.T) {
 	} {
 		if got := accesskey.ShownName(c.name, c.quote); got != c.want {
 			t.Errorf("ShownName(%q, %t) = %s, want %s", c.name, c.quote, got, c.want)
+		}
+	}
+}
+
+// TestShownValue pins the phrase a value that contains qak_ or qrk_ in any case is shown
+// as, the access key secret's when it contains both, and a clean value quoted or bare.
+func TestShownValue(t *testing.T) {
+	const ak, rk = "(a value that contains an access key secret)", "(a value that contains a run key)"
+	for _, c := range []struct {
+		value string
+		quote bool
+		want  string
+	}{
+		{"qak_x", true, ak}, {"QAK_x", false, ak}, {"x: QaK_y", true, ak},
+		{"qrk_x", false, rk}, {"QRK_x", true, rk}, {"x: qRk_y", false, rk},
+		{"qrk_x qak_y", true, ak}, {"QRK_x QAK_y", false, ak},
+		{"exit status 3", true, `"exit status 3"`}, {"exit status 3", false, "exit status 3"}, {"qak-x", false, "qak-x"},
+	} {
+		if got := accesskey.ShownValue(c.value, c.quote); got != c.want {
+			t.Errorf("ShownValue(%q, %t) = %s, want %s", c.value, c.quote, got, c.want)
+		}
+	}
+}
+
+// TestShownNames pins a list of names as a message or an event lists them: each shown
+// as ShownName shows it bare, in order, each phrase once, and a clean name as often as
+// it is given.
+func TestShownNames(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	for _, c := range []struct{ in, want []string }{
+		{nil, nil},
+		{[]string{"files", "QAK_a", "qrk_b", "x.qak_c", "QRK_d"}, []string{"files", ak, rk}},
+		{[]string{"qrk_a.qak_b", "qrk_c"}, []string{ak, rk}},
+		{[]string{"files", "files", "model"}, []string{"files", "files", "model"}},
+	} {
+		if got := accesskey.ShownNames(c.in); !slices.Equal(got, c.want) {
+			t.Errorf("ShownNames(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestShownError pins an error as a message wraps it: the same error when its text
+// contains neither prefix, and otherwise one whose text is the value's phrase and which
+// still wraps it.
+func TestShownError(t *testing.T) {
+	clean := errors.New("exit status 3")
+	if got := accesskey.ShownError(clean); got != clean {
+		t.Errorf("ShownError(%v) = %v, want the error itself", clean, got)
+	}
+	for text, want := range map[string]string{
+		"open /x/qak_y: no such file": "(a value that contains an access key secret)",
+		"QRK_x":                       "(a value that contains a run key)",
+		"qrk_x QaK_y":                 "(a value that contains an access key secret)",
+	} {
+		err := fmt.Errorf("wrapped: %w", errors.New(text))
+		got := accesskey.ShownError(err)
+		if got.Error() != want || !errors.Is(got, err) {
+			t.Errorf("ShownError(%q) = %q, wraps %v; want %q wrapping it", text, got, errors.Is(got, err), want)
+		}
+	}
+}
+
+// TestARefusalPrintsAPhraseForASecretInAName pins a refusal's text: a name the answer
+// gave that contains qak_ or qrk_ in any case prints the name's phrase, each phrase
+// once, and a clean name prints as it is.
+func TestARefusalPrintsAPhraseForASecretInAName(t *testing.T) {
+	r := accesskey.ReadRefusal(409, []byte(`{"error":"tool_unknown","names":["files","qak_x","QAK_y","qrk_z"]}`))
+	if want := "tool_unknown (status 409): files, (a name that contains an access key secret), (a name that contains a run key)"; r == nil || r.Error() != want {
+		t.Errorf("Error = %v, want %s", r, want)
+	}
+	if r.Names[1] != "qak_x" {
+		t.Errorf("the names changed: %q", r.Names)
+	}
+}
+
+// TestAnEnrolmentsDialErrorPrintsAPhraseForASecret pins the error of an enrolment that
+// fails before an answer: when its text contains qak_ or qrk_ in any case, a proxy's
+// address of the caller's client say, the error prints the value's phrase in its place,
+// and still wraps the client's error.
+func TestAnEnrolmentsDialErrorPrintsAPhraseForASecret(t *testing.T) {
+	key, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := accesskey.NewEnrolmentRequest(key, "qecn_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for proxy, phrase := range map[string]string{
+		"http://qak_fake.example:1": "(a value that contains an access key secret)",
+		"http://QRK_FAKE.example:1": "(a value that contains a run key)",
+	} {
+		p, _ := url.Parse(proxy)
+		hc := &http.Client{Transport: &http.Transport{
+			Proxy: http.ProxyURL(p),
+			DialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
+				return nil, fmt.Errorf("dial %s: connection refused", addr)
+			},
+		}}
+		for what, post := range map[string]func() error{
+			"Post": func() error {
+				_, err := r.Post(context.Background(), hc, "https://apiary.example", "qory/test")
+				return err
+			},
+			"PostVia": func() error {
+				_, err := r.PostVia(context.Background(), hc, "https://apiary.example", "https://gateway.example", "qory/test")
+				return err
+			},
+		} {
+			err := post()
+			want := "enrolment https://apiary.example" + accesskey.EnrolmentPath + ": " + phrase
+			var ue *url.Error
+			if err == nil || err.Error() != want || !errors.As(err, &ue) {
+				t.Errorf("%s through %s: %v, want %q wrapping a *url.Error", what, proxy, err, want)
+			}
 		}
 	}
 }

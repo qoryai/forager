@@ -65,6 +65,9 @@ func TestNeedsWallSaysWhatARunAlwaysSaid(t *testing.T) {
 		"image=base":             `the policy selects the image "base", which needs a wall: without one the runtime is this machine's process`,
 		"server_credentials":     server,
 		"server_credentials,credentials,image=base": server,
+		// A name the gateway's link sends as its phrase prints as the image's phrase does.
+		"image=qrk_FAKE":                         `the policy selects the image (a name that contains a run key), which needs a wall: without one the runtime is this machine's process`,
+		"image=(a name that contains a run key)": `the policy selects the image (a name that contains a run key), which needs a wall: without one the runtime is this machine's process`,
 	} {
 		if got := (&NeedsWall{Names: strings.Split(names, ",")}).Error(); got != want {
 			t.Errorf("%s: %s", names, got)

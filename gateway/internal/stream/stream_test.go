@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/sink"
 )
@@ -799,5 +802,78 @@ func TestAnAnsweredRecordIsKept(t *testing.T) {
 	}
 	if err := r.MarkAnswered(); !errors.Is(err, ErrClosed) {
 		t.Errorf("a mark of a closed run: %v", err)
+	}
+}
+
+// TestAFileErrorPrintsAPhraseForASecretInThePath pins the errors of the record's files
+// under a directory whose path contains qak_ or qrk_ in any case: Open, its lock,
+// MarkAnswered, Reclaim and Resend print the value's phrase in place of the error's
+// text, and errors.Is still finds the file system's error.
+func TestAFileErrorPrintsAPhraseForASecretInThePath(t *testing.T) {
+	for _, name := range []string{"qak_FAKE", "x.QRK_FAKE"} {
+		check := func(what string, err, target error) {
+			t.Helper()
+			if err == nil || accesskey.ContainsSecret(err.Error()) || !errors.Is(err, target) {
+				t.Errorf("%s, %s: %v; want a phrase that wraps %v", name, what, err, target)
+			}
+		}
+		// The gateway's directory is a file: the record's directory cannot be made.
+		file := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(file, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := New(Config{Dir: file}).Open(event.NewRunID())
+		check("Open, its directory", err, syscall.ENOTDIR)
+
+		dir := filepath.Join(t.TempDir(), name)
+		s := New(Config{Dir: dir})
+		// The lock is a directory, which cannot be opened for writing.
+		runID := event.NewRunID()
+		if err := os.MkdirAll(filepath.Join(s.Dir(runID), lockFile), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Open(runID)
+		var pe *fs.PathError
+		if !errors.As(err, &pe) {
+			t.Errorf("%s, Open, its lock: %v; want a *fs.PathError", name, err)
+		}
+		check("Open, its lock", err, err)
+		if err := os.WriteFile(filepath.Join(s.Dir(runID), sink.EventsFile), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Reclaim(runID)
+		if !errors.As(err, &pe) {
+			t.Errorf("%s, Reclaim: %v; want a *fs.PathError", name, err)
+		}
+		check("Reclaim", err, err)
+
+		// events.jsonl exists already.
+		runID = event.NewRunID()
+		if err := os.MkdirAll(s.Dir(runID), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(s.Dir(runID), sink.EventsFile), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Open(runID)
+		check("Open, events.jsonl", err, fs.ErrExist)
+
+		// answered exists already.
+		runID = event.NewRunID()
+		r, err := s.Open(runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(s.Dir(runID), answeredFile), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		check("MarkAnswered", r.MarkAnswered(), fs.ErrExist)
+		if _, err := r.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+
+		// A record directory without events.jsonl.
+		_, err = Resend(context.Background(), ResendConfig{Dir: s.Dir(event.NewRunID())})
+		check("Resend", err, fs.ErrNotExist)
 	}
 }

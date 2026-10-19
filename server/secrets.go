@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/sealed"
 )
 
@@ -53,7 +54,7 @@ func (r SecretsRequest) Body() ([]byte, error) {
 // [*accesskey.Refusal]; a signed answer without a code is an [*AnswerError]. The error
 // names the URL, secrets <secretsURL>, and the status.
 func (c *Client) Secrets(ctx context.Context, secretsURL string, body []byte) ([]byte, error) {
-	what := "secrets " + secretsURL
+	what := "secrets " + accesskey.ShownValue(secretsURL, false)
 	a, err := c.send(ctx, http.MethodPost, secretsURL, body, sealed.MaxAnswer, func(h http.Header) {
 		h.Set("Content-Type", RegistrationContentType)
 	})

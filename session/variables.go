@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/variables"
@@ -34,13 +35,13 @@ func checkVariables(v Variables) error {
 			name, value, ok := strings.Cut(kv, "=")
 			switch {
 			case !ok && variableShape.MatchString(name):
-				return fmt.Errorf("the %s's variable %s has no value: each is NAME=value", set.whose, name)
+				return fmt.Errorf("the %s's variable %s has no value: each is NAME=value", set.whose, accesskey.ShownName(name, false))
 			case !ok:
 				return fmt.Errorf("a %s's variable is not NAME=value: each is NAME=value", set.whose)
 			case !variableShape.MatchString(name):
 				return fmt.Errorf("a %s's variable has a name other than letters, digits and underscores, starting with a letter or an underscore, of at most 128", set.whose)
 			case strings.ContainsAny(value, "\x00\r\n"):
-				return fmt.Errorf("the %s's variable %s holds a NUL, a carriage return or a line feed, which a variable's value does not", set.whose, name)
+				return fmt.Errorf("the %s's variable %s holds a NUL, a carriage return or a line feed, which a variable's value does not", set.whose, accesskey.ShownName(name, false))
 			}
 		}
 	}
@@ -48,7 +49,7 @@ func checkVariables(v Variables) error {
 		return err
 	}
 	if u := v.Unwalled; u != "" && u != UnwalledAccept && u != UnwalledIgnore {
-		return fmt.Errorf("variables.unwalled is %q, neither %s nor %s", u, UnwalledAccept, UnwalledIgnore)
+		return fmt.Errorf("variables.unwalled is %s, neither %s nor %s", accesskey.ShownValue(u, true), UnwalledAccept, UnwalledIgnore)
 	}
 	return nil
 }
@@ -62,7 +63,7 @@ func checkHarnessHome(home string) error {
 	case strings.ContainsAny(home, "\x00\r\n"):
 		return errors.New("the harness home holds a NUL, a carriage return or a line feed, which a variable's value does not")
 	case !path.IsAbs(home) && !filepath.IsAbs(home):
-		return fmt.Errorf("the harness home %q is not an absolute path", home)
+		return fmt.Errorf("the harness home %s is not an absolute path", accesskey.ShownValue(home, true))
 	}
 	return nil
 }

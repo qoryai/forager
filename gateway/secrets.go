@@ -35,15 +35,15 @@ func (g *Gateway) secrets(runID string) func(context.Context, string, []string) 
 		}
 		pin, err := accesskey.ParsePin(b)
 		if err != nil {
-			return sealed.Values{}, fmt.Errorf("secrets %s: %w", u, err)
+			return sealed.Values{}, fmt.Errorf("secrets %s: %w", accesskey.ShownValue(u, false), err)
 		}
 		if pin.Fixture() {
 			return sealed.Values{}, refusal.New(refusal.RunConfigurationInvalid, nil,
-				"secrets %s: pin Qory Apiary's signing key: the server document's apiary_public_key lists a published fixture key, under which anyone can sign", u)
+				"secrets %s: pin Qory Apiary's signing key: the server document's apiary_public_key lists a published fixture key, under which anyone can sign", accesskey.ShownValue(u, false))
 		}
 		if s.AccessKey.PublicKey().Fixture() {
 			return sealed.Values{}, refusal.New(refusal.RunConfigurationInvalid, nil,
-				"secrets %s: enrol another access key: this access key is a published fixture key, and anyone can open what is sealed to it", u)
+				"secrets %s: enrol another access key: this access key is a published fixture key, and anyone can open what is sealed to it", accesskey.ShownValue(u, false))
 		}
 		body, err := server.SecretsRequest{Version: 1, RunID: runID, RunConfiguration: digest, Credentials: names, Timestamp: time.Now().Unix()}.Body()
 		if err != nil {
@@ -56,7 +56,7 @@ func (g *Gateway) secrets(runID string) func(context.Context, string, []string) 
 		// The local clock, never the answer's Date: exp is judged by this machine.
 		values, err := sealed.Open(answer, sealed.AccessKey{ID: s.AccessKeyID, Key: s.AccessKey}, pin, runID, digest, names, time.Now())
 		if err != nil {
-			return sealed.Values{}, &accesskey.Refusal{Code: sealedCode(err), Detail: fmt.Sprintf("secrets %s: %s; the answer does not open: %v", u, sealedFix(err), err)}
+			return sealed.Values{}, &accesskey.Refusal{Code: sealedCode(err), Detail: fmt.Sprintf("secrets %s: %s; the answer does not open: %v", accesskey.ShownValue(u, false), sealedFix(err), err)}
 		}
 		return values, nil
 	}

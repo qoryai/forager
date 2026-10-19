@@ -221,7 +221,7 @@ func Resolve(in Inputs) (Resolved, error) {
 		return Resolved{}, err
 	}
 	if in.Unwalled != "" && in.Unwalled != Ignore && in.Unwalled != Accept {
-		return Resolved{}, fmt.Errorf("variables.unwalled is %q, neither %s nor %s", in.Unwalled, Accept, Ignore)
+		return Resolved{}, fmt.Errorf("variables.unwalled is %s, neither %s nor %s", accesskey.ShownValue(in.Unwalled, true), Accept, Ignore)
 	}
 	passed := slices.Concat(in.Fixed, in.Run, in.Machine, in.Defaults, in.Shell)
 	if err := Check(passed, in.Walled, in.Placeholders, in.ReadFrom); err != nil {
@@ -440,14 +440,14 @@ func Check(env []string, walled bool, placeholders, machine []string) error {
 		return out
 	}
 	if walled {
-		if reserved := pick(func(n string) bool {
+		if reserved := accesskey.ShownNames(pick(func(n string) bool {
 			own := strings.HasPrefix(strings.ToUpper(n), "QORY_") && n != envRunID && n != envSocket
 			return own || slices.Contains(machine, n)
-		}); len(reserved) > 0 {
+		})); len(reserved) > 0 {
 			return refusal.New(refusal.VariableReserved, reserved, "the run passes %s into the enclosure, Forager's names or what a value of the machine's is read from", strings.Join(reserved, ", "))
 		}
 	}
-	if conflict := pick(func(n string) bool { return slices.Contains(placeholders, n) }); len(conflict) > 0 {
+	if conflict := accesskey.ShownNames(pick(func(n string) bool { return slices.Contains(placeholders, n) })); len(conflict) > 0 {
 		return refusal.New(refusal.PlaceholderConflict, conflict, "the run passes a value for %s, a placeholder of what the gateway holds outside the enclosure", strings.Join(conflict, ", "))
 	}
 	return nil
@@ -461,7 +461,7 @@ var entryShape = regexp.MustCompile(`^[A-Za-z0-9_*]{1,128}$`)
 func CheckDeny(entries []string) error {
 	for _, e := range entries {
 		if !entryShape.MatchString(e) || strings.Trim(e, "*") == "" {
-			return fmt.Errorf("variables.deny: %q is neither a variable's name nor a pattern of letters, digits, underscores and *", e)
+			return fmt.Errorf("variables.deny: %s is neither a variable's name nor a pattern of letters, digits, underscores and *", accesskey.ShownName(e, true))
 		}
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/server"
@@ -126,7 +127,7 @@ func (l *live) stale() bool {
 // failed reports a reload that failed, unless the run's end is why.
 func (l *live) failed(err error) {
 	if l.ctx.Err() == nil {
-		l.report("the reload failed: " + err.Error())
+		l.report("the reload failed: " + accesskey.ShownError(err).Error())
 	}
 }
 

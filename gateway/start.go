@@ -195,7 +195,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 			}
 		}
 		if cfg.Listen != "" && !strings.HasPrefix(conf.NodeID, "ng_") {
-			return nil, fmt.Errorf("the access key's node %s is not a gateway, ng_: the gateway's address %s needs a gateway's access key", conf.NodeID, cfg.Listen)
+			return nil, fmt.Errorf("the access key's node %s is not a gateway, ng_: the gateway's address %s needs a gateway's access key", conf.NodeID, accesskey.ShownValue(cfg.Listen, false))
 		}
 		if cfg.Listen == "" && strings.HasPrefix(conf.NodeID, "ng_") {
 			return nil, fmt.Errorf("the access key's node %s is a gateway, ng_: a gateway without an address needs a node's access key, nd_ or np_", conf.NodeID)
@@ -271,24 +271,24 @@ func checkSelects(cfg *Config) error {
 	for i, s := range cfg.Selects {
 		j := slices.IndexFunc(cfg.Credentials, func(c Credential) bool { return c.Name == s.Name })
 		if j < 0 {
-			return fmt.Errorf("gateway: Selects names %s, which is no credential of Credentials", s.Name)
+			return fmt.Errorf("gateway: Selects names %s, which is no credential of Credentials", accesskey.ShownName(s.Name, false))
 		}
 		if slices.ContainsFunc(cfg.Selects[:i], func(o Selection) bool { return o.Name == s.Name }) {
-			return fmt.Errorf("gateway: Selects names %s twice", s.Name)
+			return fmt.Errorf("gateway: Selects names %s twice", accesskey.ShownName(s.Name, false))
 		}
 		if cfg.Credentials[j].Argument == "" {
 			for _, f := range []struct{ name, value string }{{"Label", s.Label}, {"Forge", s.Forge}, {"Pattern", s.Pattern}} {
 				if f.value != "" {
-					return fmt.Errorf("gateway: Selects %s: %s takes no argument, so %s does not apply", s.Name, s.Name, f.name)
+					return fmt.Errorf("gateway: Selects %s: %s takes no argument, so %s does not apply", accesskey.ShownName(s.Name, false), accesskey.ShownName(s.Name, false), f.name)
 				}
 			}
 			continue
 		}
 		if s.Label == "" || s.Forge == "" || s.Pattern == "" {
-			return fmt.Errorf("gateway: Selects %s: %s takes an argument, so it needs Label, Forge and Pattern", s.Name, s.Name)
+			return fmt.Errorf("gateway: Selects %s: %s takes an argument, so it needs Label, Forge and Pattern", accesskey.ShownName(s.Name, false), accesskey.ShownName(s.Name, false))
 		}
 		if _, err := run.WholeMatch(s.Pattern); err != nil {
-			return fmt.Errorf("gateway: Selects %s: the pattern does not compile: %v", s.Name, err)
+			return fmt.Errorf("gateway: Selects %s: the pattern does not compile: %s", accesskey.ShownName(s.Name, false), accesskey.ShownValue(err.Error(), false))
 		}
 	}
 	return nil
@@ -332,22 +332,22 @@ func copyTools(tools []Tool) []Tool {
 func (g *Gateway) listenLink() error {
 	dir, err := os.MkdirTemp("", link.LinkDirPrefix)
 	if err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	socket := filepath.Join(dir, link.LinkSocketName)
 	if err := os.Chmod(dir, link.LinkDirMode); err != nil {
 		os.RemoveAll(dir)
-		return err
+		return accesskey.ShownError(err)
 	}
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		os.RemoveAll(dir)
-		return err
+		return accesskey.ShownError(err)
 	}
 	if err := os.Chmod(socket, link.LinkSocketMode); err != nil {
 		ln.Close()
 		os.RemoveAll(dir)
-		return err
+		return accesskey.ShownError(err)
 	}
 	g.dir, g.ln = dir, ln
 	return nil
@@ -420,7 +420,7 @@ func (g *Gateway) String() string {
 	if where == "" {
 		where = "in memory"
 	}
-	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + where + "}"
+	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + accesskey.ShownValue(where, false) + "}"
 }
 
 // Format prints g as String does, under every verb and flag: never its secret.
@@ -445,17 +445,17 @@ func (g *Gateway) files() []link.File {
 	for _, c := range g.cfg.Credentials {
 		if len(c.Adapter) > 0 {
 			for _, d := range program.Dirs(c.Adapter[0]) {
-				out = append(out, link.File{Path: d, What: "the directory of the credential " + c.Name + "'s program"})
+				out = append(out, link.File{Path: d, What: "the directory of the credential " + accesskey.ShownName(c.Name, false) + "'s program"})
 			}
 		}
 		if c.File != "" {
-			out = append(out, link.File{Path: c.File, What: "the file the credential " + c.Name + " is read from"})
+			out = append(out, link.File{Path: c.File, What: "the file the credential " + accesskey.ShownName(c.Name, false) + " is read from"})
 		}
 	}
 	for _, t := range g.cfg.Tools {
 		if len(t.Command) > 0 {
 			for _, d := range program.Dirs(t.Command[0]) {
-				out = append(out, link.File{Path: d, What: "the directory of the tool " + t.Name + "'s program"})
+				out = append(out, link.File{Path: d, What: "the directory of the tool " + accesskey.ShownName(t.Name, false) + "'s program"})
 			}
 		}
 	}
@@ -548,7 +548,7 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	}
 	cancel()
 	if g.dir != "" {
-		errs = append(errs, os.RemoveAll(g.dir))
+		errs = append(errs, accesskey.ShownError(os.RemoveAll(g.dir)))
 	}
 	g.cancel()
 	g.closeErr = errors.Join(errs...)

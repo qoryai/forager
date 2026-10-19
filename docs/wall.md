@@ -493,9 +493,12 @@ file of at most 1 MiB and the same file as the one its path resolved to when it 
 checked, or the run is refused with "it changed while it was checked". A refusal stops
 the run before the runtime starts, with the session's error, such as "runtime claude:
 settings /work/launch-settings.json: it lies in /work, which a walled run can write".
-Settings passed as a document, `--settings '{…}'`, are no file and are not checked. The
-places are worked out only when a file is to be read: a run that passes none does not
-read the registry for them.
+Settings passed as a document, `--settings '{…}'`, are no file and are not checked.
+Claude Code reads only the last `--settings` it is passed, and the session checks only
+the first, so a walled launch that passes `--settings` more than once does not start:
+"This launch passes --settings more than once, and Claude Code reads only the last one,
+so the run does not start. Pass one --settings file." The places are worked out only
+when a file is to be read: a run that passes none does not read the registry for them.
 
 ### The helper
 

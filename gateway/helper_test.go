@@ -120,6 +120,9 @@ type control struct {
 	// workspace unless asGateway made them a gateway key's, with no workspaces.
 	node       string
 	workspaces []string
+	// runURL, when set, is the configuration document's run.url in place of the run
+	// endpoint's.
+	runURL string
 	// attaches are the body of every attach as it came, each try included, and
 	// attachLabels and attachAbout what an attach's answer gives back of the starter's
 	// registration.
@@ -322,8 +325,11 @@ func newControlWith(t *testing.T, accessKey, signer *accesskey.Key) *control {
 // configuration is the control's configuration document and its digest.
 func (c *control) configuration() ([]byte, string) {
 	c.mu.Lock()
-	node, workspaces := c.node, c.workspaces
+	node, workspaces, runURL := c.node, c.workspaces, c.runURL
 	c.mu.Unlock()
+	if runURL == "" {
+		runURL = c.srv.URL + runsPath
+	}
 	pin, _ := json.Marshal(c.pin)
 	doc := `{"version":1,"node_id":"` + node + `"`
 	if workspaces != nil {
@@ -331,7 +337,7 @@ func (c *control) configuration() ([]byte, string) {
 		doc += `,"workspaces":` + string(ws)
 	}
 	doc += `,"apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
-	doc += `,"run":{"url":"` + c.srv.URL + runsPath + `"}`
+	doc += `,"run":{"url":"` + runURL + `"}`
 	c.mu.Lock()
 	if c.secrets != nil || c.secretsAnswer != nil {
 		doc += `,"secrets":{"url":"` + c.srv.URL + secretsPath + `"}`

@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/internal/jcs"
 	"github.com/qoryai/forager/refusal"
@@ -115,7 +116,11 @@ type Error struct {
 	Err  error
 }
 
-func (e *Error) Error() string { return "policy " + e.Name + ": " + e.Err.Error() }
+// Error prints the name and the error's text as accesskey.ShownValue and
+// accesskey.ShownError print them.
+func (e *Error) Error() string {
+	return "policy " + accesskey.ShownValue(e.Name, false) + ": " + accesskey.ShownError(e.Err).Error()
+}
 
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
@@ -254,18 +259,18 @@ func Narrowed(fetched, node *Loaded) (*Loaded, error) {
 		run.Egress.Deny = union(s.Egress.Deny, n.Egress.Deny)
 	}
 	if n.Tools != nil {
-		if out := outside(s.Tools, n.Tools); len(out) > 0 {
+		if out := accesskey.ShownNames(outside(s.Tools, n.Tools)); len(out) > 0 {
 			return nil, refusal.New(refusal.ToolUnknown, out, "the server's policy selects the tools %s, which the node's policy does not list", strings.Join(out, ", "))
 		}
 	}
 	if n.Credentials != nil {
-		if out := outside(s.Credentials, n.Credentials); len(out) > 0 {
+		if out := accesskey.ShownNames(outside(s.Credentials, n.Credentials)); len(out) > 0 {
 			return nil, fmt.Errorf("the server's policy selects the credentials %s, which the node's policy does not list", strings.Join(out, ", "))
 		}
 	}
 	switch {
 	case s.Image != "" && n.Image != "" && s.Image != n.Image:
-		return nil, refusal.New(refusal.ImageUnknown, []string{s.Image}, "the server's policy selects the image %s and the node's policy the image %s", s.Image, n.Image)
+		return nil, refusal.New(refusal.ImageUnknown, []string{accesskey.ShownName(s.Image, false)}, "the server's policy selects the image %s and the node's policy the image %s", accesskey.ShownName(s.Image, false), accesskey.ShownName(n.Image, false))
 	case s.Image == "":
 		run.Image = n.Image
 	}

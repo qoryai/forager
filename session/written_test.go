@@ -143,6 +143,31 @@ func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 	})
 }
 
+// TestAWalledLaunchThatPassesSettingsTwiceIsNoRun pins that a walled run whose launch
+// passes --settings twice, each a file no walled run could write, stops before the
+// wall is prepared, with the runtime's refusal.
+func TestAWalledLaunchThatPassesSettingsTwiceIsNoRun(t *testing.T) {
+	dir := t.TempDir()
+	first, second := filepath.Join(dir, "first.json"), filepath.Join(dir, "second.json")
+	for _, f := range []string{first, second} {
+		if err := os.WriteFile(f, []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := &openWall{}
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	sp.Args = []string{"--settings", first, "--settings=" + second}
+	want := "runtime claude: This launch passes --settings more than once, and Claude Code reads only the last one, " +
+		"so the run does not start. Pass one --settings file."
+	if err := runErr(sp); err == nil || err.Error() != want {
+		t.Errorf("the run: %v, want %q", err, want)
+	}
+	if w.req.RunID != "" || w.wrapped {
+		t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+	}
+}
+
 // TestASettingsFileInAnotherWalledRunsBindIsNoRun pins that the settings a launch
 // passes are refused while they lie in a writable bind of another walled run still
 // going, with or without a wall for this run, and read once that run has ended.

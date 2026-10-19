@@ -185,7 +185,7 @@ func Decide(cfg Config) (*Run, error) {
 		}
 		re, err := WholeMatch(s.Pattern)
 		if err != nil {
-			return nil, err
+			return nil, accesskey.ShownError(err)
 		}
 		r.patterns[i] = re
 	}
@@ -227,7 +227,7 @@ func Decide(cfg Config) (*Run, error) {
 	}
 	if len(r.stored) > 0 && cfg.Secrets == nil {
 		return nil, refusal.New(refusal.RunConfigurationInvalid, nil,
-			"run configuration %s: enrol an access key allowed stored secrets: the document has credentials, and Qory Apiary's configuration document lists no secrets endpoint for this access key", cfg.Fetched.URL)
+			"run configuration %s: enrol an access key allowed stored secrets: the document has credentials, and Qory Apiary's configuration document lists no secrets endpoint for this access key", accesskey.ShownValue(cfg.Fetched.URL, false))
 	}
 	if cfg.Wall {
 		img, err := cfg.Images.resolve(pol.Policy.Image)
@@ -345,7 +345,7 @@ func (r *Run) open(ctx context.Context) error {
 		if v, _ := values.Value(name); !HeaderValue(v) {
 			values.Clear()
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
-				"run configuration %s: store another value of the credential %s in Qory Apiary: its value has a control character, or a space or tab at its start or end, which a header value cannot have", r.cfg.Fetched.URL, accesskey.ShownName(name, true))
+				"run configuration %s: store another value of the credential %s in Qory Apiary: its value has a control character, or a space or tab at its start or end, which a header value cannot have", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true))
 		}
 	}
 	r.mu.Lock()
@@ -545,13 +545,13 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	if f.Document != nil && f.Document.SecurityPolicy != nil {
 		var err error
 		if fetched, err = policy.Read("run-configuration", f.Document.SecurityPolicy); err != nil {
-			return nil, refusal.New(refusal.RunConfigurationInvalid, nil, "run configuration %s: %v", f.URL, err)
+			return nil, refusal.New(refusal.RunConfigurationInvalid, nil, "run configuration %s: %s", accesskey.ShownValue(f.URL, false), accesskey.ShownValue(err.Error(), false))
 		}
 		fetched.Source = "fetched"
 	}
 	if f.Document != nil {
 		if err := server.CheckCredentials(f.Document.Credentials); err != nil {
-			return nil, fmt.Errorf("run configuration %s: %w", f.URL, err)
+			return nil, fmt.Errorf("run configuration %s: %w", accesskey.ShownValue(f.URL, false), err)
 		}
 	}
 	pol, err := inForce(fetched, r.node, f.URL, f.Digest)
@@ -564,7 +564,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		err = r.selects(pol)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("run configuration %s: %w", f.URL, err)
+		return nil, fmt.Errorf("run configuration %s: %w", accesskey.ShownValue(f.URL, false), err)
 	}
 	out := Narrow(pol, r.cfg.Narrowing)
 	r.mu.Lock()
@@ -602,7 +602,7 @@ func nameImage(pol, fetched, node *policy.Loaded, image string) error {
 		pol  *policy.Loaded
 	}{{"server's", fetched}, {"node's", node}} {
 		if side.pol != nil && side.pol.Policy.Image != "" && side.pol.Policy.Image != image {
-			return refusal.New(refusal.ImageUnknown, []string{image}, "the run configuration names the image %s, and the %s policy the image %s", image, side.what, side.pol.Policy.Image)
+			return refusal.New(refusal.ImageUnknown, []string{accesskey.ShownName(image, false)}, "the run configuration names the image %s, and the %s policy the image %s", accesskey.ShownName(image, false), side.what, accesskey.ShownName(side.pol.Policy.Image, false))
 		}
 	}
 	pol.Policy.Image = image
@@ -616,7 +616,8 @@ func nameImage(pol, fetched, node *policy.Loaded, image string) error {
 // not list is no run. An entry for a credential that takes an argument gives none when
 // the run's labels do not satisfy it, and the run's user is told why: a label it takes
 // that the run does not have, the forge label among them, a forge label of another
-// value, or a value outside its pattern. Nothing is resolved here: the policy's
+// value, or a value outside its pattern or that is a name's phrase
+// ([accesskey.IsNamePhrase]). Nothing is resolved here: the policy's
 // credentials are resolved as any are, the argument checked against the definition's
 // pattern before its adapter runs.
 func (r *Run) selects(pol *policy.Loaded) error {
@@ -627,22 +628,25 @@ func (r *Run) selects(pol *policy.Loaded) error {
 			selected = append(selected, policy.Selected{Name: s.Name})
 			continue
 		}
+		name := accesskey.ShownName(s.Name, false)
 		forge, ok := r.labels["forge"]
 		if !ok {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, s.Name, "forge", s.Name))
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, "forge", name))
 			continue
 		}
 		if forge != s.Forge {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, s.Name, Spaced(s.Forge), Spaced(forge), s.Name))
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Forge, false)), Spaced(accesskey.ShownName(forge, false)), name))
 			continue
 		}
 		value, ok := r.labels[s.Label]
 		if !ok {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, s.Name, Spaced(s.Label), s.Name))
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Label, false)), name))
 			continue
 		}
-		if !r.patterns[i].MatchString(value) {
-			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(s.Label), Spaced(value), s.Name, s.Name))
+		// A value that is a name's phrase, as a separate gateway reads the labels from
+		// the attach answer, is no argument, whatever the pattern admits.
+		if accesskey.IsNamePhrase(value) || !r.patterns[i].MatchString(value) {
+			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(accesskey.ShownName(s.Label, false)), Spaced(accesskey.ShownName(value, false)), name, name))
 			continue
 		}
 		selected = append(selected, policy.Selected{Name: s.Name, Argument: value})
@@ -653,7 +657,7 @@ func (r *Run) selects(pol *policy.Loaded) error {
 			if !slices.ContainsFunc(r.node.Policy.Credentials, func(b policy.Selected) bool {
 				return b.Name == sel.Name && (b.Argument == "" || b.Argument == sel.Argument)
 			}) {
-				out = append(out, sel.Name)
+				out = append(out, accesskey.ShownName(sel.Name, false))
 			}
 		}
 		if len(out) > 0 {
@@ -837,14 +841,14 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
 	if !sameCredentials(creds, r.stored) {
-		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from Qory Apiary are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", next.URL)
+		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from Qory Apiary are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false))
 	}
 	d, err := r.decide(ctx, next, named)
 	if d != nil {
 		d.Guard = guard
 	}
 	if err != nil {
-		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", next.URL, err)
+		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", accesskey.ShownValue(next.URL, false), err)
 	}
 	return d, nil
 }
@@ -858,7 +862,7 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 	}
 	if !r.cfg.Wall {
 		if in.Policy.Image != "" {
-			return nil, fmt.Errorf("the run configuration selects the image %q, which needs a wall", in.Policy.Image)
+			return nil, fmt.Errorf("the run configuration selects the image %s, which needs a wall", accesskey.ShownName(in.Policy.Image, true))
 		}
 	} else if named != r.named {
 		return nil, r.imageMoved(named)
@@ -899,10 +903,11 @@ func (r *Run) imageMoved(named string) error {
 	if r.img.Name != "" {
 		started = r.img.Name
 	}
+	started = accesskey.ShownName(started, false)
 	if named == "" {
 		return fmt.Errorf("the run configuration names no image, and the run started in %s, which its run configuration named", started)
 	}
-	return fmt.Errorf("the run configuration names the image %s, and the run started in %s", named, started)
+	return fmt.Errorf("the run configuration names the image %s, and the run started in %s", accesskey.ShownName(named, false), started)
 }
 
 // Commit puts a decision the caller set on the proxy in force: its policy and its
@@ -964,11 +969,13 @@ func (r *Run) choose(held *credential.Held) ([]tool.Chosen, error) {
 }
 
 func credentialConflict(name string) error {
-	return refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", name)
+	shown := accesskey.ShownName(name, false)
+	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", shown)
 }
 
 func toolConflict(name string) error {
-	return refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside", name)
+	shown := accesskey.ShownName(name, false)
+	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside", shown)
 }
 
 // inForce is the policy a run configuration puts in force. Without a security_policy it
@@ -1132,15 +1139,20 @@ func Egress(d proxy.Decision) map[string]any {
 	if d.Allowed {
 		decision = "allowed"
 	}
-	data := map[string]any{"host": d.Host, "port": d.Port, "method": d.Method, "decision": decision, "mode": string(d.Mode), "rule": d.Rule, "outcome": d.Outcome}
+	// The host, the path, its rule and the request's method are as the run sent them or
+	// the policy gives them: a value that contains qak_ or qrk_ in any case is
+	// accesskey.ShownValue's phrase in its place.
+	data := map[string]any{"host": accesskey.ShownValue(d.Host, false), "port": d.Port, "method": d.Method, "decision": decision, "mode": string(d.Mode), "rule": d.Rule, "outcome": d.Outcome}
 	if d.Path != "" {
-		data["request_method"], data["path"], data["path_rule"] = d.RequestMethod, d.Path, d.PathRule
+		data["request_method"], data["path"], data["path_rule"] = accesskey.ShownValue(d.RequestMethod, false), accesskey.ShownValue(d.Path, false), accesskey.ShownValue(d.PathRule, false)
 	}
+	// A credential's or a tool's name that contains qak_ or qrk_ in any case is sent as
+	// accesskey.ShownName's phrase in its place.
 	if d.Credential != "" {
-		data["credential"] = d.Credential
+		data["credential"] = accesskey.ShownName(d.Credential, false)
 	}
 	if d.Tool != "" {
-		data["tool"] = d.Tool
+		data["tool"] = accesskey.ShownName(d.Tool, false)
 	}
 	if d.RequestID != "" {
 		data["request_id"] = d.RequestID

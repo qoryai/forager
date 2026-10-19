@@ -43,7 +43,7 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 	if err := jsonv2.Unmarshal(body, &v); err != nil {
 		var syn *jsontext.SyntacticError
 		if errors.As(err, &syn) && syn.JSONPointer != "" {
-			return nil, invalid("it is not one JSON value in UTF-8 with each member name once, at %s", syn.JSONPointer)
+			return nil, invalid("it is not one JSON value in UTF-8 with each member name once, at %s", accesskey.ShownValue(string(syn.JSONPointer), false))
 		}
 		return nil, invalid("it is not one JSON value in UTF-8 with each member name once")
 	}
@@ -75,7 +75,7 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 	}
 	for name, v := range rc.Variables {
 		if len(v.Value) > MaxVariableValue {
-			return nil, refusal.New(refusal.RunConfigurationInvalid, []string{name}, "the document is refused: the variable %s holds more than %d bytes", name, MaxVariableValue)
+			return nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name), "the document is refused: the variable %s holds more than %d bytes", accesskey.ShownName(name, false), MaxVariableValue)
 		}
 	}
 	if err := CheckCredentials(rc.Credentials); err != nil {
@@ -184,7 +184,10 @@ func CheckConfigurationImage(image string) error {
 		return nil
 	}
 	shown := image
-	if strings.ContainsFunc(image, func(r rune) bool { return r <= ' ' || r > '~' }) || image == "" {
+	switch {
+	case accesskey.ContainsSecret(image):
+		shown = accesskey.ShownName(image, false)
+	case strings.ContainsFunc(image, func(r rune) bool { return r <= ' ' || r > '~' }) || image == "":
 		shown = strconv.Quote(image)
 	}
 	return refusal.New(refusal.RunConfigurationInvalid, nil, "the image %s is not a reference pinned by digest", shown)
@@ -196,10 +199,11 @@ func CheckConfigurationImage(image string) error {
 // one to rely on, as it shares its storage with the locations validated after it.
 func leaves(ve *jsonschema.ValidationError) []string {
 	if pn, ok := ve.ErrorKind.(*kind.PropertyNames); ok {
-		return []string{"the member name " + pn.Property + " (propertyNames)"}
+		return []string{"the member name " + accesskey.ShownName(pn.Property, false) + " (propertyNames)"}
 	}
 	if len(ve.Causes) == 0 {
-		where := "/" + strings.Join(escaped(ve.InstanceLocation), "/")
+		// A member name in the pointer is the document's, as a value is.
+		where := accesskey.ShownValue("/"+strings.Join(escaped(ve.InstanceLocation), "/"), false)
 		keyword := ""
 		if ve.ErrorKind != nil {
 			keyword = strings.Join(ve.ErrorKind.KeywordPath(), "/")

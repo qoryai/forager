@@ -29,6 +29,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 )
 
@@ -206,16 +207,18 @@ const (
 // Parse validates a descriptor document against the schema and decodes it. name is
 // used in messages and chooses YAML or JSON by its extension.
 func Parse(name string, b []byte) (*Descriptor, error) {
+	// shown is name as a message prints it.
+	shown := accesskey.ShownValue(name, false)
 	doc, err := contracts.Decode(name, b)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	schema, err := contracts.Compile("descriptor.schema.json")
 	if err != nil {
 		return nil, err
 	}
 	if err := schema.Validate(doc); err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
+		return nil, fmt.Errorf("%s: %w", shown, accesskey.ShownError(err))
 	}
 	var d Descriptor
 	switch filepath.Ext(name) {
@@ -225,10 +228,10 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 		err = json.Unmarshal(b, &d)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
+		return nil, fmt.Errorf("%s: %w", shown, accesskey.ShownError(err))
 	}
 	if err := d.Secrets.check(); err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
+		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
 	return &d, nil
 }
@@ -243,7 +246,7 @@ func (s *Secrets) check() error {
 	declared := map[string]bool{}
 	for _, d := range s.Declares {
 		if declared[d.ID] {
-			return fmt.Errorf("secrets: %s is declared twice", d.ID)
+			return fmt.Errorf("secrets: %s is declared twice", accesskey.ShownName(d.ID, false))
 		}
 		declared[d.ID] = true
 	}
@@ -251,15 +254,17 @@ func (s *Secrets) check() error {
 	grouped := map[string]string{}
 	for _, g := range s.OneOf {
 		if groups[g.ID] {
-			return fmt.Errorf("secrets: one_of %s is defined twice", g.ID)
+			return fmt.Errorf("secrets: one_of %s is defined twice", accesskey.ShownName(g.ID, false))
 		}
 		groups[g.ID] = true
 		for _, id := range g.Of {
 			if !declared[id] {
-				return fmt.Errorf("secrets: one_of %s lists %s, which no declaration has as its id", g.ID, id)
+				return fmt.Errorf("secrets: one_of %s lists %s, which no declaration has as its id",
+					accesskey.ShownName(g.ID, false), accesskey.ShownName(id, false))
 			}
 			if other, ok := grouped[id]; ok {
-				return fmt.Errorf("secrets: %s is in one_of %s and in %s", id, other, g.ID)
+				return fmt.Errorf("secrets: %s is in one_of %s and in %s", accesskey.ShownName(id, false),
+					accesskey.ShownName(other, false), accesskey.ShownName(g.ID, false))
 			}
 			grouped[id] = g.ID
 		}

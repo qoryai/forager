@@ -133,7 +133,7 @@ func (l *reloader) pass() {
 			return
 		}
 		if l.ctx.Err() == nil {
-			l.report("the reload failed: " + err.Error())
+			l.report("the reload failed: " + accesskey.ShownError(err).Error())
 		}
 		return
 	}

@@ -61,6 +61,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 )
@@ -665,7 +666,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			deny(w, d)
 			return
 		}
-		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
+		http.Error(w, "upstream: "+accesskey.ShownError(err).Error(), http.StatusBadGateway)
 		return
 	}
 	d.Outcome, d.Status = Connected, resp.StatusCode
@@ -747,7 +748,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 			deny(w, d)
 			return
 		}
-		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
+		http.Error(w, "upstream: "+accesskey.ShownError(err).Error(), http.StatusBadGateway)
 		return
 	}
 	d.Outcome = Connected
@@ -908,7 +909,11 @@ func deny(w http.ResponseWriter, d Decision) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
 	if d.Rule == HostForm {
-		fmt.Fprintf(w, "qory: egress to %+q:%d denied by the gateway: the host is neither a name of ASCII letters, digits, hyphens and dots nor an IP address in canonical form\n", d.Host, d.Port)
+		host := strconv.QuoteToASCII(d.Host)
+		if accesskey.ContainsSecret(d.Host) {
+			host = accesskey.ShownValue(d.Host, false)
+		}
+		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: the host is neither a name of ASCII letters, digits, hyphens and dots nor an IP address in canonical form\n", host, d.Port)
 		return
 	}
 	if d.Rule == GuardRule {
@@ -930,7 +935,7 @@ func portOf(text, scheme string) (int, error) {
 	}
 	n, err := strconv.Atoi(text)
 	if err != nil || n < 1 || n > 65535 {
-		return 0, fmt.Errorf("invalid port %q", text)
+		return 0, fmt.Errorf("invalid port %s", accesskey.ShownValue(text, true))
 	}
 	return n, nil
 }

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -667,5 +670,68 @@ func TestALinkSinkResendsTheSessionsLinesWithoutTheirSequence(t *testing.T) {
 	accepted, stopped, err := sink.Delivered(dir)
 	if err != nil || stopped || !accepted[ev.Sequence] || len(accepted) != 1 {
 		t.Errorf("delivered %v, stopped %v, %v", accepted, stopped, err)
+	}
+}
+
+// TestTheFileSinkPrintsAPhraseForASecretInItsDirectory pins the errors of the file sink
+// and of Delivered for a run directory whose path contains qak_ or qrk_: each is the
+// phrase, and each still wraps the error of the file system.
+func TestTheFileSinkPrintsAPhraseForASecretInItsDirectory(t *testing.T) {
+	for _, secret := range []string{"qak_FAKE", "QRK_FAKE"} {
+		base := filepath.Join(t.TempDir(), secret)
+		if err := os.MkdirAll(base, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		check := func(what string, err error, target error) {
+			t.Helper()
+			if err == nil {
+				t.Fatalf("%s %s: no error", secret, what)
+			}
+			if accesskey.ContainsSecret(err.Error()) || !errors.Is(err, target) {
+				t.Errorf("%s %s: %q, want a phrase that wraps %v", secret, what, err, target)
+			}
+		}
+		file := filepath.Join(base, "file")
+		if err := os.WriteFile(file, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := sink.NewFile(filepath.Join(file, "run"))
+		check("a directory under a file", err, syscall.ENOTDIR)
+		taken := filepath.Join(base, "taken")
+		if err := os.MkdirAll(taken, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(taken, sink.EventsFile), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err = sink.NewFile(taken)
+		check("an events file that exists", err, fs.ErrExist)
+		outputTaken := filepath.Join(base, "output")
+		if err := os.MkdirAll(outputTaken, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(outputTaken, sink.OutputFile), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err = sink.NewFile(outputTaken)
+		check("an output file that exists", err, fs.ErrExist)
+
+		f, err := sink.NewFile(filepath.Join(base, "run"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		e := event.NewEmitter(event.NewRunID(), nil)
+		check("a write after close", f.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"})), os.ErrClosed)
+		check("a second close", f.Close(context.Background()), os.ErrClosed)
+
+		delivered := filepath.Join(base, "delivered")
+		if err := os.MkdirAll(filepath.Join(delivered, sink.DeliveredFile), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = sink.Delivered(delivered)
+		check("a delivered.log that is a directory", err, syscall.EISDIR)
 	}
 }

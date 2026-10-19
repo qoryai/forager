@@ -359,7 +359,8 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	}{"without workspaces": {node, "", run, false},
 		"without the run endpoint": {node, workspaces, "", false}, "with a trailing slash": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs/"}`, false},
 		"with a query": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs?x=1"}`, false}, "with a fragment": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs#x"}`, false},
-		"of a gateway's key without workspaces": {gateway, "", run, true}, "of a gateway's key with workspaces": {gateway, workspaces, run, false}} {
+		"of a gateway's key without workspaces": {gateway, "", run, true}, "of a gateway's key with workspaces": {gateway, workspaces, run, false},
+		"with qak_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/qak_FAKE/runs"}`, false}, "with QRK_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/QRK_FAKE"}`, false}} {
 		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			doc := []byte(`{"version":1,"node_id":"` + d.node + `",` + d.workspaces + `"events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + d.run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
 			w.Header().Set(server.HeaderConfiguration, "sha256=c0")

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 )
@@ -310,7 +311,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			t.p.observe(req)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: use another method; TRACE and TRACK send the request's headers back, and this host gets a credential from Qory Apiary\n", r.Method, d.Host, clean)
+			fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: use another method; TRACE and TRACK send the request's headers back, and this host gets a credential from Qory Apiary\n", r.Method, d.Host, accesskey.ShownValue(clean, false))
 			return
 		}
 		r.Header.Del(setBy)
@@ -327,10 +328,10 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusForbidden)
 			if rule == AmbiguousPath {
-				fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: the path could be read two ways\n", r.Method, d.Host, clean)
+				fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: the path could be read two ways\n", accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false))
 				return
 			}
-			fmt.Fprintf(w, "qory: %s %s%s denied by policy (mode %s): no path rule of the run's covers it\n", r.Method, d.Host, clean, req.Mode)
+			fmt.Fprintf(w, "qory: %s %s%s denied by policy (mode %s): no path rule of the run's covers it\n", accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false), req.Mode)
 			return
 		}
 		if tl != nil {
@@ -532,7 +533,7 @@ func (t *terminator) failed(w http.ResponseWriter, r *http.Request, err error) {
 			return
 		}
 	}
-	http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
+	http.Error(w, "upstream: "+accesskey.ShownError(err).Error(), http.StatusBadGateway)
 }
 
 // toTool hands a request the proxy let through to the tool that serves its host, with

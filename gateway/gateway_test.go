@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"net"
@@ -912,5 +913,28 @@ func TestALinkWithNoSocket(t *testing.T) {
 	}
 	if !slices.Equal(names, []string{"runs"}) {
 		t.Errorf("the gateway's directory after Close: %v", names)
+	}
+}
+
+// TestAFileErrorOfTheGatewayPrintsAPhraseForASecret pins Start and Resend under a path
+// that contains qak_ or qrk_ in any case: the link's directory under a temporary
+// directory that is not there, and a record directory without events.jsonl, give
+// errors that print the value's phrase in place of their text, and errors.Is still
+// finds the file system's error.
+func TestAFileErrorOfTheGatewayPrintsAPhraseForASecret(t *testing.T) {
+	for name, phrase := range map[string]string{"qak_FAKE": accessKeyValuePhrase, "x.QRK_FAKE": runKeyValuePhrase} {
+		missing, dir := filepath.Join(t.TempDir(), name), t.TempDir()
+		t.Setenv("TMPDIR", missing)
+		g, err := gateway.Start(context.Background(), gateway.Config{Dir: dir})
+		if g != nil {
+			g.Close(context.Background())
+		}
+		if err == nil || err.Error() != phrase || !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("Start, %s: %v; want %q that wraps %v", name, err, phrase, fs.ErrNotExist)
+		}
+		_, err = gateway.Resend(context.Background(), gateway.ResendConfig{Dir: filepath.Join(missing, event.NewRunID())})
+		if err == nil || err.Error() != phrase || !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("Resend, %s: %v; want %q that wraps %v", name, err, phrase, fs.ErrNotExist)
+		}
 	}
 }

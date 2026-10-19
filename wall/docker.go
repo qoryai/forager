@@ -229,19 +229,19 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 		sys = hostSystem{}
 	}
 	if !runIDShape.MatchString(req.RunID) {
-		return nil, fmt.Errorf("wall docker: the run id %q cannot name a container", req.RunID)
+		return nil, fmt.Errorf("wall docker: the run id %s cannot name a container", accesskey.ShownName(req.RunID, true))
 	}
 	if !imageShape.MatchString(req.Image) {
-		return nil, fmt.Errorf("wall docker: %q is not an image reference", req.Image)
+		return nil, fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(req.Image, true))
 	}
 	if req.RelayImage != "" && !imageShape.MatchString(req.RelayImage) {
-		return nil, fmt.Errorf("wall docker: %q is not an image reference", req.RelayImage)
+		return nil, fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(req.RelayImage, true))
 	}
 	if req.Pull && req.Docker {
 		return nil, errors.New("wall docker: an image a run names by its reference never gets nested Docker")
 	}
 	if req.Runtime != "" && !runtimeShape.MatchString(req.Runtime) {
-		return nil, fmt.Errorf("wall docker: %q is not a container runtime's name", req.Runtime)
+		return nil, fmt.Errorf("wall docker: %s is not a container runtime's name", accesskey.ShownName(req.Runtime, true))
 	}
 	if req.Docker && req.Runtime == "" {
 		return nil, errors.New("wall docker: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc; a privileged container is never an enclosure")
@@ -253,7 +253,7 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 		return nil, errors.New("wall docker: the helper binary and its relay arguments are required")
 	}
 	if err := sys.checkHelper(d.Helper); err != nil {
-		return nil, fmt.Errorf("wall docker: helper %s: %w", d.Helper, err)
+		return nil, fmt.Errorf("wall docker: helper %s: %w", accesskey.ShownValue(d.Helper, false), accesskey.ShownError(err))
 	}
 	user := d.User
 	if user == "" {
@@ -261,7 +261,7 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 		user = fmt.Sprintf("%d:%d", uid, gid)
 	}
 	if !userShape.MatchString(user) {
-		return nil, fmt.Errorf("wall docker: the user %q is not uid[:gid] or a name", user)
+		return nil, fmt.Errorf("wall docker: the user %s is not uid[:gid] or a name", accesskey.ShownName(user, true))
 	}
 	uid, _, _ := strings.Cut(user, ":")
 	if n, err := strconv.Atoi(uid); uid == "root" || (err == nil && n == 0) {
@@ -271,7 +271,7 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	// /etc/passwd and /etc/group, which an image a run names by its reference writes:
 	// such an image runs only under a uid and a gid, neither 0, that it cannot remap.
 	if req.Pull && !numericUser(user) {
-		return nil, fmt.Errorf("wall docker: an image a run names by its reference needs the wall's user as uid:gid in numbers, neither of them 0, not %q, which the image's /etc/passwd or /etc/group would resolve", user)
+		return nil, fmt.Errorf("wall docker: an image a run names by its reference needs the wall's user as uid:gid in numbers, neither of them 0, not %s, which the image's /etc/passwd or /etc/group would resolve", accesskey.ShownName(user, true))
 	}
 	// The relay of a run in an image by reference starts from the machine's image, never
 	// from the run's, which may be anything.
@@ -364,14 +364,14 @@ var engineVersionShape = regexp.MustCompile(`^([0-9]+)\.[0-9]+(\.[0-9]+)?([-+~][
 // anything is made.
 func (e *dockerEnclosure) nestEngine(ctx context.Context) error {
 	if name := e.d.Name(); name != "docker" {
-		return fmt.Errorf("wall docker: nested Docker needs the docker command and Docker Engine 28 or later, not %s", name)
+		return fmt.Errorf("wall docker: nested Docker needs the docker command and Docker Engine 28 or later, not %s", accesskey.ShownValue(name, false))
 	}
 	out, err := e.sys.run(ctx, []string{e.command(), "version", "--format", engineVersion}, e.env)
 	if err != nil {
 		if said := bytes.TrimSpace(out); len(said) > 0 {
-			err = fmt.Errorf("%w: %s", err, said)
+			err = fmt.Errorf("%w: %s", accesskey.ShownError(err), accesskey.ShownValue(string(said), false))
 		}
-		return fmt.Errorf("wall docker: docker version: %w", err)
+		return fmt.Errorf("wall docker: docker version: %w", accesskey.ShownError(err))
 	}
 	version := string(bytes.TrimSpace(out))
 	m := engineVersionShape.FindStringSubmatch(version)
@@ -422,7 +422,7 @@ func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, e
 	argv := append([]string{e.command()}, args...)
 	out, err := e.sys.run(ctx, argv, e.env)
 	if err != nil {
-		return out, fmt.Errorf("wall docker: %s: %w: %s", strings.Join(argv[:min(3, len(argv))], " "), err, bytes.TrimSpace(out))
+		return out, fmt.Errorf("wall docker: %s: %w: %s", accesskey.ShownValue(strings.Join(argv[:min(3, len(argv))], " "), false), accesskey.ShownError(err), accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
 	}
 	return out, nil
 }
@@ -499,8 +499,9 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 		user = config.User
 	}
 	name, _, _ := strings.Cut(strings.TrimSpace(user), ":")
+	image := accesskey.ShownName(e.req.Image, false)
 	root := func() error {
-		return refusal.New(refusal.ImageUserRoot, []string{e.req.Image}, "the image %s runs as root; a run's image runs as the wall's user", e.req.Image)
+		return refusal.New(refusal.ImageUserRoot, []string{image}, "the image %s runs as root; a run's image runs as the wall's user", image)
 	}
 	switch {
 	case name == "" || name == "root":
@@ -512,7 +513,7 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 		return nil
 	}
 	unchecked := func() error {
-		return refusal.New(refusal.ImageUserRoot, []string{e.req.Image}, "the image %s runs as the user %s, which no /etc/passwd of the image maps to a uid, so it cannot be checked for root; a run's image runs as the wall's user", e.req.Image, name)
+		return refusal.New(refusal.ImageUserRoot, []string{image}, "the image %s runs as the user %s, which no /etc/passwd of the image maps to a uid, so it cannot be checked for root; a run's image runs as the wall's user", image, accesskey.ShownName(name, false))
 	}
 	passwd, err := e.imageFile(ctx, "/etc/passwd")
 	if err != nil {
@@ -548,13 +549,13 @@ func (e *dockerEnclosure) held(ctx context.Context) (bool, error) {
 			return false, nil
 		}
 		if exit != nil {
-			return false, fmt.Errorf("wall docker: image inspect %s: %w: %s", e.req.Image, err, said)
+			return false, fmt.Errorf("wall docker: image inspect %s: %w: %s", accesskey.ShownName(e.req.Image, false), accesskey.ShownError(err), accesskey.ShownValue(said, false))
 		}
-		return false, fmt.Errorf("wall docker: image inspect %s: %w", e.req.Image, err)
+		return false, fmt.Errorf("wall docker: image inspect %s: %w", accesskey.ShownName(e.req.Image, false), accesskey.ShownError(err))
 	}
 	var digests []string
 	if err := json.Unmarshal(bytes.TrimSpace(out), &digests); err != nil {
-		return false, fmt.Errorf("wall docker: the repository digests of %s: %w", e.req.Image, err)
+		return false, fmt.Errorf("wall docker: the repository digests of %s: %w", accesskey.ShownName(e.req.Image, false), err)
 	}
 	want := fullReference(e.req.Image)
 	return slices.ContainsFunc(digests, func(d string) bool { return fullReference(d) == want }), nil
@@ -593,7 +594,7 @@ func (e *dockerEnclosure) imageConfig(ctx context.Context) (*struct{ User string
 	argv := []string{e.command(), "image", "inspect", "--format", "{{json .Config}}", e.req.Image}
 	out, err := e.sys.output(ctx, argv, e.env)
 	if err != nil {
-		return nil, fmt.Errorf("wall docker: image inspect: %w", err)
+		return nil, fmt.Errorf("wall docker: image inspect: %w", accesskey.ShownError(err))
 	}
 	var config *struct{ User string }
 	if err := json.Unmarshal(bytes.TrimSpace(out), &config); err != nil {
@@ -715,7 +716,7 @@ func (e *dockerEnclosure) relayImage() string {
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	_, port, err := net.SplitHostPort(l.Proxy)
 	if err != nil {
-		return Launch{}, fmt.Errorf("wall docker: the proxy's address: %w", err)
+		return Launch{}, fmt.Errorf("wall docker: the proxy's address: %w", accesskey.ShownError(err))
 	}
 	mounts, dir, err := e.mounts(l)
 	if err != nil {
@@ -894,7 +895,7 @@ func (e *dockerEnclosure) makeTemp() error {
 	}
 	dir, err := e.sys.tempDir()
 	if err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	e.temp = dir
 	return nil
@@ -927,7 +928,7 @@ func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error)
 		image = append(image, '\n')
 	}
 	if err := os.WriteFile(file, append(image, ca...), 0o644); err != nil {
-		return "", err
+		return "", accesskey.ShownError(err)
 	}
 	return mount(file, BundlePath, true)
 }
@@ -961,24 +962,24 @@ func firstFile(stream []byte) ([]byte, int64, error) {
 // absolute, or that is, holds or lies under the adapter's /qory, is refused.
 func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 	if !filepath.IsAbs(l.Dir) {
-		return nil, "", fmt.Errorf("wall docker: the workspace %q is not an absolute path", l.Dir)
+		return nil, "", fmt.Errorf("wall docker: the workspace %s is not an absolute path", accesskey.ShownValue(l.Dir, true))
 	}
 	var binds []bind
 	host := ""
 	for _, m := range l.Mounts {
 		if !filepath.IsAbs(m.Path) {
-			return nil, "", fmt.Errorf("wall docker: the mount %q is not an absolute path", m.Path)
+			return nil, "", fmt.Errorf("wall docker: the mount %s is not an absolute path", accesskey.ShownValue(m.Path, true))
 		}
 		if e.sys.socket(m.Path) {
-			return nil, "", fmt.Errorf("wall docker: the mount %q is a socket or holds a container runtime's, which an enclosure never gets", m.Path)
+			return nil, "", fmt.Errorf("wall docker: the mount %s is a socket or holds a container runtime's, which an enclosure never gets", accesskey.ShownValue(m.Path, true))
 		}
 		dst := m.Path
 		if m.Target != "" {
 			if !filepath.IsAbs(m.Target) {
-				return nil, "", fmt.Errorf("wall docker: the mount %q is shown at %q, which is not an absolute path", m.Path, m.Target)
+				return nil, "", fmt.Errorf("wall docker: the mount %s is shown at %s, which is not an absolute path", accesskey.ShownValue(m.Path, true), accesskey.ShownValue(m.Target, true))
 			}
 			if under(qoryDir, m.Target) || under(m.Target, qoryDir) {
-				return nil, "", fmt.Errorf("wall docker: the mount %q is shown at %q, which overlaps %s, the wall's", m.Path, m.Target, qoryDir)
+				return nil, "", fmt.Errorf("wall docker: the mount %s is shown at %s, which overlaps %s, the wall's", accesskey.ShownValue(m.Path, true), accesskey.ShownValue(m.Target, true), qoryDir)
 			}
 			dst = filepath.Clean(m.Target)
 		}
@@ -988,8 +989,8 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 		}
 	}
 	if host == "" {
-		return nil, "", fmt.Errorf("wall docker: the workspace %q lies in none of the "+
-			"launch's mounts", l.Dir)
+		return nil, "", fmt.Errorf("wall docker: the workspace %s lies in none of the "+
+			"launch's mounts", accesskey.ShownValue(l.Dir, true))
 	}
 	if l.Socket != "" {
 		binds = append(binds, bind{filepath.Dir(l.Socket), hooksDir, false})
@@ -1023,7 +1024,7 @@ func limits(l Limits) ([]string, error) {
 	var out []string
 	if l.CPUs != "" {
 		if !cpusShape.MatchString(l.CPUs) {
-			return nil, fmt.Errorf("wall docker: the cpus limit %q is not a decimal number", l.CPUs)
+			return nil, fmt.Errorf("wall docker: the cpus limit %s is not a decimal number", accesskey.ShownValue(l.CPUs, true))
 		}
 		out = append(out, "--cpus", l.CPUs)
 	}
@@ -1032,7 +1033,7 @@ func limits(l Limits) ([]string, error) {
 			continue
 		}
 		if !bytesShape.MatchString(f.value) {
-			return nil, fmt.Errorf("wall docker: the %s %q is not a number of bytes with a unit of b, k, m or g", f.name, f.value)
+			return nil, fmt.Errorf("wall docker: the %s %s is not a number of bytes with a unit of b, k, m or g", f.name, accesskey.ShownValue(f.value, true))
 		}
 		out = append(out, f.flag, f.value)
 	}
@@ -1056,7 +1057,7 @@ type bind struct {
 func mount(src, dst string, readonly bool) (string, error) {
 	for _, p := range []string{src, dst} {
 		if strings.ContainsAny(p, ",\"\n") {
-			return "", fmt.Errorf("wall docker: the path %q holds a comma or a quote and cannot be mounted", p)
+			return "", fmt.Errorf("wall docker: the path %s holds a comma or a quote and cannot be mounted", accesskey.ShownValue(p, true))
 		}
 	}
 	m := "type=bind,src=" + src + ",dst=" + dst
@@ -1076,11 +1077,11 @@ func (e *dockerEnclosure) envFile(name string, env []string) (string, error) {
 		// which is this machine's.
 		if !envShape.MatchString(kv) {
 			name, _, _ := strings.Cut(kv, "=")
-			return "", fmt.Errorf("wall docker: the environment entry %q is not NAME=value", name)
+			return "", fmt.Errorf("wall docker: the environment entry %s is not NAME=value", accesskey.ShownName(name, true))
 		}
 		if strings.ContainsAny(kv, "\n\r") {
 			name, _, _ := strings.Cut(kv, "=")
-			return "", fmt.Errorf("wall docker: the value of %s holds a line break and cannot be passed", name)
+			return "", fmt.Errorf("wall docker: the value of %s holds a line break and cannot be passed", accesskey.ShownName(name, false))
 		}
 		b.WriteString(kv + "\n")
 	}
@@ -1088,7 +1089,7 @@ func (e *dockerEnclosure) envFile(name string, env []string) (string, error) {
 		return "", err
 	}
 	file := filepath.Join(e.temp, name)
-	return file, os.WriteFile(file, []byte(b.String()), 0o600)
+	return file, accesskey.ShownError(os.WriteFile(file, []byte(b.String()), 0o600))
 }
 
 // relayListens polls the relay's output for [RelayReady]. A relay that exited instead
@@ -1104,10 +1105,10 @@ func (e *dockerEnclosure) relayListens(ctx context.Context) error {
 			return nil
 		}
 		if state, err := e.docker(ctx, "inspect", "--format", "{{.State.Running}}", e.relay()); err == nil && strings.TrimSpace(string(state)) == "false" {
-			return fmt.Errorf("wall docker: the relay exited: %s", bytes.TrimSpace(out))
+			return fmt.Errorf("wall docker: the relay exited: %s", accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("wall docker: the relay did not listen: %s", bytes.TrimSpace(out))
+			return fmt.Errorf("wall docker: the relay did not listen: %s", accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
 		}
 		select {
 		case <-ctx.Done():
@@ -1134,7 +1135,7 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 	}
 	e.made = nil
 	if e.temp != "" {
-		errs = append(errs, os.RemoveAll(e.temp))
+		errs = append(errs, accesskey.ShownError(os.RemoveAll(e.temp)))
 		e.temp = ""
 	}
 	return errors.Join(errs...)
@@ -1144,7 +1145,7 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 // session that died left behind. The containers go first, since a network in use stays.
 func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
 	if !runIDShape.MatchString(runID) {
-		return 0, fmt.Errorf("wall docker: the run id %q cannot name a container", runID)
+		return 0, fmt.Errorf("wall docker: the run id %s cannot name a container", accesskey.ShownName(runID, true))
 	}
 	sys := d.sys
 	if sys == nil {
@@ -1195,7 +1196,7 @@ func (hostSystem) stdout(ctx context.Context, argv, env []string) (io.ReadCloser
 	}
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	return &piped{r: out, cmd: cmd, cancel: cancel}, nil
 }
@@ -1306,7 +1307,7 @@ func (hostSystem) ids() (int, int) { return os.Getuid(), os.Getgid() }
 func (hostSystem) checkHelper(path string) error {
 	f, err := elf.Open(path)
 	if err != nil {
-		return fmt.Errorf("not a Linux executable: %w", err)
+		return fmt.Errorf("not a Linux executable: %w", accesskey.ShownError(err))
 	}
 	defer f.Close()
 	for _, p := range f.Progs {

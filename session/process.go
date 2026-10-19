@@ -18,6 +18,7 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/chunk"
 	"github.com/qoryai/forager/session/runtimes"
 )
@@ -130,7 +131,7 @@ func (p *process) runPipes(ctx context.Context) (exitStatus, error) {
 	cmd.Stdout = io.MultiWriter(writers...)
 	cmd.Stderr = io.MultiWriter(errs, p.stderr)
 	if err := cmd.Start(); err != nil {
-		return exitStatus{}, fmt.Errorf("%w: %v", ErrNotStarted, err)
+		return exitStatus{}, fmt.Errorf("%w: %v", ErrNotStarted, accesskey.ShownError(err))
 	}
 	err := cmd.Wait()
 	p.observed()
@@ -150,7 +151,7 @@ func (p *process) runPTY(ctx context.Context) (exitStatus, error) {
 	cmd := p.newCmd(ctx)
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(p.cols), Rows: uint16(p.rows)})
 	if err != nil {
-		return exitStatus{}, fmt.Errorf("%w: %v", ErrNotStarted, err)
+		return exitStatus{}, fmt.Errorf("%w: %v", ErrNotStarted, accesskey.ShownError(err))
 	}
 	defer ptmx.Close()
 	log := chunk.NewTerminal(p.logs("terminal"), chunk.Gap)

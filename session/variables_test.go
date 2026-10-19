@@ -5,16 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/wall"
 )
 
 // dumpsEnv makes the spec's runtime write its environment to a file and returns the
@@ -474,6 +478,391 @@ func TestTheServersSystemAndRepositoriesReachTheAgent(t *testing.T) {
 		set(&sp)
 		if _, err := session.Run(context.Background(), sp); refusal(err) != "variable_reserved" {
 			t.Errorf("a node's value: %v, want variable_reserved", err)
+		}
+	}
+}
+
+// refusedNames are the names of the one run.refused the run's record holds, failing the
+// test unless there is one and it validates against run.refused.schema.json.
+func refusedNames(t *testing.T, sp session.Spec) []any {
+	t.Helper()
+	got := ofType(events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)}), "dev.qory.run.refused")
+	if len(got) != 1 {
+		t.Fatalf("run.refused %v, want one", got)
+	}
+	schema, err := contracts.Compile("events/run.refused.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(data(got[0])); err != nil {
+		t.Errorf("the run.refused does not validate: %v", err)
+	}
+	names, _ := data(got[0])["names"].([]any)
+	return names
+}
+
+// TestAPlaceholderConflictSendsAPhraseForASecret pins the names of a
+// placeholder_conflict's run.refused, the session's own and one of the gateway's: a
+// name that contains qak_ or qrk_ in any case is sent as the name's phrase, the access
+// key secret's when it contains both, a phrase two names give once, and the event
+// validates against its schema; a clean name is sent as it is.
+func TestAPlaceholderConflictSendsAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	// want are the names of the gateway's refusal as the event sends them, in the
+	// refusal's order; own are the session's, sorted as its refusal's names are, and
+	// detail the names its refusal's detail lists, in the order of the names before.
+	for _, c := range []struct {
+		placeholders []string
+		want, own    []any
+		detail       string
+	}{
+		{[]string{"QAK_TOKEN"}, []any{ak}, []any{ak}, ak},
+		{[]string{"qrk_token"}, []any{rk}, []any{rk}, rk},
+		{[]string{"QRK_X_QAK_Y"}, []any{ak}, []any{ak}, ak},
+		{[]string{"MODEL_TOKEN", "QAK_OTHER", "QAK_TOKEN", "QRK_TOKEN"}, []any{"MODEL_TOKEN", ak, rk}, []any{rk, ak, "MODEL_TOKEN"}, "MODEL_TOKEN, " + ak + ", " + rk},
+		{[]string{"MODEL_TOKEN"}, []any{"MODEL_TOKEN"}, []any{"MODEL_TOKEN"}, "MODEL_TOKEN"},
+	} {
+		t.Run("the session's "+strings.Join(c.placeholders, ","), func(t *testing.T) {
+			sp, g := specGateway(t)
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+				a := linktest.RunAnswer(req)
+				a["placeholders"] = c.placeholders
+				return linktest.Reply{Status: 200, Body: a}
+			})
+			for _, p := range c.placeholders {
+				sp.Variables.Run = append(sp.Variables.Run, p+"=a-value")
+			}
+			_, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "placeholder_conflict" {
+				t.Fatalf("%v, want placeholder_conflict", err)
+			}
+			if got := refusedNames(t, sp); !slices.Equal(got, c.own) {
+				t.Errorf("names %q, want %q", got, c.own)
+			}
+			// The refusal's text, its detail and its names, holds the phrases too.
+			names := make([]string, len(c.own))
+			for i, n := range c.own {
+				names[i] = n.(string)
+			}
+			if want := "the run passes a value for " + c.detail + ", a placeholder of what the gateway holds outside the enclosure: placeholder_conflict: " + strings.Join(names, ", "); err.Error() != want {
+				t.Errorf("the refusal:\n got %s\nwant %s", err, want)
+			}
+			if !slices.Equal(r.Names, names) {
+				t.Errorf("the refusal's names %q, want %q", r.Names, names)
+			}
+		})
+		t.Run("the gateway's "+strings.Join(c.placeholders, ","), func(t *testing.T) {
+			sp, g := specGateway(t)
+			sleeps(&sp, 0)
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			g.OnRun(func(server.LinkRunRequest) linktest.Reply {
+				return linktest.Reply{Status: 403, Body: linktest.Refusal("placeholder_conflict", "gateway", c.placeholders...)}
+			})
+			_, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "placeholder_conflict" {
+				t.Fatalf("%v, want placeholder_conflict", err)
+			}
+			if got := refusedNames(t, sp); !slices.Equal(got, c.want) {
+				t.Errorf("names %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestAppliedVariablesSendAPhraseForASecret pins the variables of the run's
+// policy_applied: a variable's name that contains qak_ or qrk_ in any case is sent as
+// the name's phrase, the access key secret's when it contains both, in the order of the
+// names, two such names as two entries; the event validates against its schema; a
+// clean name is sent as it is; and OnVariables and the agent's environment have every
+// name as it is.
+func TestAppliedVariablesSendAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	sp := spec(t)
+	out := dumpsEnv(t, &sp)
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp.Variables.Run = []string{"PLAIN_ONE=a", "QAK_ONE=b", "qrk_two=c", "QRK_X_QAK_Y=d"}
+	var calls []session.Applied
+	sp.OnVariables = func(a session.Applied) { calls = append(calls, a) }
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"PLAIN_ONE<-run", ak + "<-run", ak + "<-run", rk + "<-run"}; !slices.Equal(variablesApplied(t, res), want) {
+		t.Errorf("policy_applied variables %q, want %q", variablesApplied(t, res), want)
+	}
+	pa := ofType(events(t, res), "dev.qory.run.policy_applied")
+	schema, err := contracts.Compile("events/run.policy_applied.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(data(pa[0])); err != nil {
+		t.Errorf("the policy_applied does not validate: %v", err)
+	}
+	vars, _ := json.Marshal(data(pa[0])["variables"])
+	if lower := strings.ToLower(string(vars)); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+		t.Errorf("a secret's prefix in the variables: %s", vars)
+	}
+	if want := []string{"PLAIN_ONE<-run", "QAK_ONE<-run", "QRK_X_QAK_Y<-run", "qrk_two<-run"}; len(calls) != 1 || !slices.Equal(lines(calls[0]), want) {
+		t.Errorf("OnVariables received %v, want once %q", calls, want)
+	}
+	env := envOf(t, out)
+	for name, value := range map[string]string{"PLAIN_ONE": "a", "QAK_ONE": "b", "qrk_two": "c", "QRK_X_QAK_Y": "d"} {
+		if env[name] != value {
+			t.Errorf("%s=%q, want %q", name, env[name], value)
+		}
+	}
+}
+
+// TestARefusalOfAnyCodeSendsAPhraseForASecret pins the names of a run.refused of codes
+// other than placeholder_conflict, the session's own variable_reserved and a gateway's
+// tool_unknown: a name that contains qak_ or qrk_ in any case is sent as the name's
+// phrase, each phrase once, the event validates against its schema, and a clean name
+// is sent as it is.
+func TestARefusalOfAnyCodeSendsAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	for _, c := range []struct {
+		names []string
+		want  []any
+	}{
+		{[]string{"QORY_QAK_X"}, []any{ak}},
+		// refusal.New sorts the names it is given, phrases among them.
+		{[]string{"QORY_A", "QORY_QAK_X", "QORY_QAK_Y", "QORY_QRK_Z"}, []any{rk, ak, "QORY_A"}},
+		{[]string{"QORY_A"}, []any{"QORY_A"}},
+	} {
+		t.Run("variable_reserved "+strings.Join(c.names, ","), func(t *testing.T) {
+			sp, _ := specGateway(t)
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			for _, n := range c.names {
+				sp.Variables.Run = append(sp.Variables.Run, n+"=a-value")
+			}
+			_, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "variable_reserved" {
+				t.Fatalf("%v, want variable_reserved", err)
+			}
+			if got := refusedNames(t, sp); !slices.Equal(got, c.want) {
+				t.Errorf("names %q, want %q", got, c.want)
+			}
+			if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") {
+				t.Errorf("the refusal prints a secret's prefix: %v", err)
+			}
+		})
+	}
+	for _, c := range []struct {
+		names []string
+		want  []any
+	}{
+		{[]string{"qak_tool"}, []any{ak}},
+		{[]string{"files", "qak_a", "qrk_b", "qak_c"}, []any{"files", ak, rk}},
+		{[]string{"files"}, []any{"files"}},
+	} {
+		t.Run("tool_unknown "+strings.Join(c.names, ","), func(t *testing.T) {
+			sp, g := specGateway(t)
+			sleeps(&sp, 0)
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			g.OnRun(func(server.LinkRunRequest) linktest.Reply {
+				return linktest.Reply{Status: 403, Body: linktest.Refusal("tool_unknown", "gateway", c.names...)}
+			})
+			_, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "tool_unknown" {
+				t.Fatalf("%v, want tool_unknown", err)
+			}
+			if got := refusedNames(t, sp); !slices.Equal(got, c.want) {
+				t.Errorf("names %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestARunStartedSendsAPhraseForASecret pins run.started's members of the run's: the
+// directory as the value's phrase, and the image and its name, a label's key and value,
+// and what the run is about's kind, title and subjects' titles as the name's phrase,
+// when it contains qak_ or qrk_ in any case; a subject whose ref contains one is left out; the
+// event validates against its schema; a clean value is sent as it is, and the wall and
+// the agent have every value as it is.
+func TestARunStartedSendsAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	for name, c := range map[string]struct {
+		dir, image, ref, label, kind, title, subject string
+		shown                                        map[string]any
+	}{
+		"prefixes": {"QAK_dir", "qak_base", "example.com/agent:qrk_1", "acme/qAk_x", "QRK_kind", "qrk_x qak_y", "QRK_t",
+			map[string]any{"dir": "(a value that contains an access key secret)", "image": rk, "image_name": ak, "label": ak, "kind": rk, "title": ak, "subject": rk}},
+		"clean": {"work", "base", "example.com/agent:1", "acme/shop", "fix", "A title", "An issue",
+			map[string]any{"image": "example.com/agent:1", "image_name": "base", "label": "acme/shop", "kind": "fix", "title": "A title", "subject": "An issue"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := &openWall{}
+			sp, g := specGateway(t, "FAKE_EXIT=0")
+			selecting(g, "")
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			sp.Dir = filepath.Join(t.TempDir(), c.dir)
+			if err := os.Mkdir(sp.Dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if c.shown["dir"] == nil {
+				c.shown["dir"] = sp.Dir
+			}
+			sp.Wall, sp.Image, sp.Images = w, c.image, []session.Image{{Name: c.image, Ref: c.ref}}
+			sp.Labels = map[string]string{"repository": c.label, "issue": "7", "qrk_key": "v"}
+			sp.About = &session.About{Kind: c.kind, Title: c.title, Subjects: []session.Subject{{Type: "issue", Ref: "7", Title: c.subject}, {Type: "issue", Ref: "qak_ref"}}}
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			started := data(ofType(events(t, res), "dev.qory.run.started")[0])
+			schema, err := contracts.Compile("events/run.started.schema.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := schema.Validate(started); err != nil {
+				t.Errorf("the run.started does not validate: %v", err)
+			}
+			labels, _ := started["labels"].(map[string]any)
+			about, _ := started["about"].(map[string]any)
+			subjects, _ := about["subjects"].([]any)
+			var subject map[string]any
+			if len(subjects) == 1 {
+				subject, _ = subjects[0].(map[string]any)
+			}
+			got := map[string]any{
+				"dir": started["dir"], "image": started["image"], "image_name": started["image_name"],
+				"label": labels["repository"], "kind": about["kind"], "title": about["title"], "subject": subject["title"],
+			}
+			if !reflect.DeepEqual(got, c.shown) {
+				t.Errorf("run.started %v, want %v", got, c.shown)
+			}
+			if labels["issue"] != "7" || labels[rk] != "v" || len(labels) != 3 || subject["type"] != "issue" || subject["ref"] != "7" {
+				t.Errorf("run.started labels %v, subject %v", labels, subject)
+			}
+			if w.req.Image != c.ref || w.got.Dir != sp.Dir {
+				t.Errorf("the wall was asked for %q in %q", w.req.Image, w.got.Dir)
+			}
+		})
+	}
+}
+
+// TestARunStartedSendsAPhraseForASecretInAnArgument pins run.started's command and
+// arguments: an argument that contains qak_ or qrk_ in any case is sent as the value's
+// phrase, the event validates against its schema, and a clean argument is sent as it
+// is; the runtime gets every argument as it is.
+func TestARunStartedSendsAPhraseForASecretInAnArgument(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	selecting(g, "")
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp.Args = append(sp.Args, "--name", "qrk_arg")
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := data(ofType(events(t, res), "dev.qory.run.started")[0])
+	schema, err := contracts.Compile("events/run.started.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(started); err != nil {
+		t.Errorf("the run.started does not validate: %v", err)
+	}
+	args, _ := started["args"].([]any)
+	if !slices.Contains(args, any("(a value that contains a run key)")) || !slices.Contains(args, any("--name")) {
+		t.Errorf("run.started args %v", args)
+	}
+	b, _ := json.Marshal(started)
+	if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") {
+		t.Errorf("run.started contains a secret's prefix: %s", b)
+	}
+}
+
+// TestThePolicyAppliedSendsAPhraseForASecretInAHarnessHost pins policy_applied's
+// harness_hosts: a host that contains qak_ or qrk_ in any case is sent as the value's
+// phrase, in the record and in the batch, the event validates against its schema, and a
+// clean host is sent as it is.
+func TestThePolicyAppliedSendsAPhraseForASecretInAHarnessHost(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp.Declared = []string{"api.example", "qak_FAKE.example", "QRK_FAKE.example"}
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := contracts.Compile("events/run.policy_applied.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []any{"api.example", "(a value that contains an access key secret)", "(a value that contains a run key)"}
+	for where, evs := range map[string][]map[string]any{"record": events(t, res), "batch": g.Events()} {
+		pa := ofType(evs, "dev.qory.run.policy_applied")
+		if len(pa) == 0 {
+			t.Fatalf("%s: no policy_applied", where)
+		}
+		applied := data(pa[0])
+		if err := schema.Validate(applied); err != nil {
+			t.Errorf("%s: the policy_applied does not validate: %v", where, err)
+		}
+		if hosts, _ := applied["harness_hosts"].([]any); !slices.Equal(hosts, want) {
+			t.Errorf("%s: harness_hosts %v, want %v", where, applied["harness_hosts"], want)
+		}
+	}
+}
+
+// TestARunStartedSendsAnAboutThatPhrasingEmpties pins run.started's about when every
+// member of it contains qak_ or qrk_ in a form that holds no phrase: it is sent, empty,
+// as an about the caller passed is, and the event validates against its schema.
+func TestARunStartedSendsAnAboutThatPhrasingEmpties(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	selecting(g, "")
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp.About = &session.About{Subjects: []session.Subject{{Type: "issue", Ref: "qak_FAKE"}}}
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := data(ofType(events(t, res), "dev.qory.run.started")[0])
+	schema, err := contracts.Compile("events/run.started.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(started); err != nil {
+		t.Errorf("the run.started does not validate: %v", err)
+	}
+	if about, ok := started["about"].(map[string]any); !ok || len(about) != 0 {
+		t.Errorf("run.started about %v, want an empty object", started["about"])
+	}
+}
+
+// wrapFails is an open wall whose Wrap fails with err.
+type wrapFails struct {
+	openWall
+	err error
+}
+
+func (w *wrapFails) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *wrapFails) Wrap(context.Context, wall.Launch) (wall.Launch, error) {
+	return wall.Launch{}, w.err
+}
+
+// TestAWrapThatFailsPrintsAPhraseForASecretInAPath pins the error of a run whose wall
+// cannot wrap the launch: an error that contains qak_ or qrk_ is the phrase, and still
+// wraps the wall's error.
+func TestAWrapThatFailsPrintsAPhraseForASecretInAPath(t *testing.T) {
+	for _, p := range []string{"/tmp/qak_FAKE/env", "/tmp/QRK_FAKE/env"} {
+		w := &wrapFails{err: &fs.PathError{Op: "open", Path: p, Err: fs.ErrPermission}}
+		_, err := session.Run(context.Background(), walledSpec(t, w))
+		if err == nil {
+			t.Fatalf("%s: the run started", p)
+		}
+		if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("%s: %q, want a phrase that wraps fs.ErrPermission", p, err)
 		}
 	}
 }
