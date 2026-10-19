@@ -132,12 +132,13 @@ needs a wall and has none returns the error of [`wall_required`](../contracts/fo
 as the session words it, and so does a run the gateway could not open for a reason
 without a code.
 
-A panic in one of the gateway's goroutines ends that goroutine alone: the connection it
-served closes, and the gateway serves its other runs on. `gateway.Config.Report` gets
-"run <id>: a goroutine of the gateway panicked and ended, and the gateway serves on;
-send the stack below to Forager's maintainers", without "run <id>: " for a goroutine
-that serves every run, and the stack on the lines after it. The report never contains
-the panic's value, which may contain a request's header or a credential.
+A panic in one of the gateway's goroutines, request handlers or accept loops ends that
+goroutine, request or accepted connection alone: the connection closes, an accept loop
+accepts the next connection, and the gateway serves its other runs on.
+`gateway.Config.Report` gets "run <id>: the gateway recovered from a panic and serves
+on; send the stack below to Forager's maintainers", without "run <id>: " where the
+panic is in no one run, and the stack on the lines after it. Neither the report nor any
+log contains the panic's value, which may contain a request's header or a credential.
 
 ## A separate gateway
 

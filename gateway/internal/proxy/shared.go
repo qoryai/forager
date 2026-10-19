@@ -199,30 +199,28 @@ func (l *Listener) find(secret []byte, guardedOnly bool) *Proxy {
 // holds up no one else.
 func (l *Listener) accept() {
 	defer l.wg.Done()
-	var backoff time.Duration
-	for {
-		c, err := l.ln.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			// What http.Server does for a failed accept, such as one out of descriptors.
-			backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
-			time.Sleep(backoff)
-			continue
-		}
-		backoff = 0
-		l.mu.Lock()
-		if l.closed {
-			l.mu.Unlock()
-			c.Close()
-			return
-		}
-		l.pending[c] = struct{}{}
-		l.wg.Add(1)
-		l.mu.Unlock()
-		routine.Go(l.reportPanic, func() { l.dispatch(c, false) }, c)
+	routine.Accept(l.reportPanic, l.take)
+}
+
+// take accepts one connection into *c and reads its preamble in its own goroutine, for
+// [routine.Accept], which waits after a failed accept, such as one out of descriptors,
+// as http.Server does.
+func (l *Listener) take(c *net.Conn) (more, failed bool) {
+	conn, err := l.ln.Accept()
+	if err != nil {
+		return !errors.Is(err, net.ErrClosed), true
 	}
+	*c = conn
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		conn.Close()
+		return false, false
+	}
+	l.pending[conn] = struct{}{}
+	l.wg.Add(1)
+	routine.Go(l.reportPanic, func() { l.dispatch(conn, false) }, conn)
+	return true, false
 }
 
 // dispatch reads c's preamble and hands c to the run it names, or closes it.

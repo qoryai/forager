@@ -255,7 +255,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		uid = *cfg.uid
 	}
 	g.link = newLinkListener(g.ln, uid, report)
-	g.http = &http.Server{Handler: g.handler(localSide), ReadHeaderTimeout: link.PreambleWait, ErrorLog: quietLog()}
+	g.http = &http.Server{Handler: routine.Handler(report, g.handler(localSide)), ReadHeaderTimeout: link.PreambleWait, ErrorLog: quietLog()}
 	routine.Go(report, func() { g.http.Serve(g.link) })
 	ok = true
 	return g, nil

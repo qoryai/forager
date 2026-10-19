@@ -233,7 +233,8 @@ func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*
 	}}
 	p.dial = d.DialContext
 	p.hosts = hostsFile
-	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 30 * time.Second}
+	// A panic is reported without its value, which net/http would log.
+	p.srv = &http.Server{Handler: routine.Handler(p.reportPanic, p), ReadHeaderTimeout: 30 * time.Second}
 	return p, nil
 }
 
@@ -798,6 +799,8 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		// net/http does not close a hijacked connection, after a panic either.
+		defer client.Close()
 		// Tracked before the client hears 200: a reload that lands once the client has
 		// the line, and before the tunnel is on the list, would otherwise miss it.
 		t := p.track(d, true, client)
@@ -841,6 +844,9 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		upstream.Close()
 		return
 	}
+	// Closed after a panic too, as above.
+	defer client.Close()
+	defer upstream.Close()
 	// Tracked before the client hears 200, for the same reason as above.
 	t := p.track(d, false, client, upstream)
 	defer p.untrack(t)

@@ -149,7 +149,7 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 	s.tls = &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{*cert}, NextProtos: []string{"http/1.1"}}
 	// OPTIONS * goes to the handler too, which refuses it for its run key: no request
 	// without one keeps a connection open.
-	s.edge = &http.Server{Handler: g.edgeHandler(s.side), ReadHeaderTimeout: link.PreambleWait, ReadTimeout: edgeReadWait, MaxHeaderBytes: edgeMaxHeader,
+	s.edge = &http.Server{Handler: routine.Handler(g.report, g.edgeHandler(s.side)), ReadHeaderTimeout: link.PreambleWait, ReadTimeout: edgeReadWait, MaxHeaderBytes: edgeMaxHeader,
 		IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog(),
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if b, ok := c.(*boundConn); ok {
@@ -174,35 +174,33 @@ func (s *service) addr() string { return s.ln.Addr().String() }
 // once.
 func (s *service) accept() {
 	defer s.wg.Done()
-	var backoff time.Duration
-	for {
-		c, err := s.ln.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
-			time.Sleep(backoff)
-			continue
-		}
-		backoff = 0
-		h := s.conns.hold(c, sourceOf(c.RemoteAddr()))
-		if h == nil {
-			c.Close()
-			continue
-		}
-		c = h
-		s.mu.Lock()
-		if s.closed {
-			s.mu.Unlock()
-			c.Close()
-			return
-		}
-		s.pending[c] = struct{}{}
-		s.wg.Add(1)
-		s.mu.Unlock()
-		routine.Go(s.g.report, func() { s.route(c) })
+	routine.Accept(s.g.report, s.take)
+}
+
+// take accepts one connection into *c and routes it in its own goroutine, for
+// [routine.Accept].
+func (s *service) take(c *net.Conn) (more, failed bool) {
+	raw, err := s.ln.Accept()
+	if err != nil {
+		return !errors.Is(err, net.ErrClosed), true
 	}
+	*c = raw
+	h := s.conns.hold(raw, sourceOf(raw.RemoteAddr()))
+	if h == nil {
+		raw.Close()
+		return true, false
+	}
+	*c = h
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		h.Close()
+		return false, false
+	}
+	s.pending[h] = struct{}{}
+	s.wg.Add(1)
+	routine.Go(s.g.report, func() { s.route(h) })
+	return true, false
 }
 
 // route reads c's first bytes within [link.PreambleWait], the TLS handshake among

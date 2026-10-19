@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/routine"
@@ -53,31 +52,29 @@ func newLinkListener(ln net.Listener, uid int, report func(string)) *linkListene
 // checked holds up no one else.
 func (l *linkListener) accept() {
 	defer l.wg.Done()
-	var backoff time.Duration
-	for {
-		c, err := l.ln.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
-			time.Sleep(backoff)
-			continue
-		}
-		backoff = 0
-		l.mu.Lock()
-		select {
-		case <-l.done:
-			l.mu.Unlock()
-			c.Close()
-			return
-		default:
-		}
-		l.pending[c] = struct{}{}
-		l.wg.Add(1)
-		l.mu.Unlock()
-		routine.Go(l.report, func() { l.check(c, false) }, c)
+	routine.Accept(l.report, l.take)
+}
+
+// take accepts one connection into *c and checks it in its own goroutine, for
+// [routine.Accept].
+func (l *linkListener) take(c *net.Conn) (more, failed bool) {
+	conn, err := l.ln.Accept()
+	if err != nil {
+		return !errors.Is(err, net.ErrClosed), true
 	}
+	*c = conn
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	select {
+	case <-l.done:
+		conn.Close()
+		return false, false
+	default:
+	}
+	l.pending[conn] = struct{}{}
+	l.wg.Add(1)
+	routine.Go(l.report, func() { l.check(conn, false) }, conn)
+	return true, false
 }
 
 // dial opens a connection to the link in this process's memory, one end of a

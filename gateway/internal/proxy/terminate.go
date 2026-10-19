@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 )
@@ -345,7 +346,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		rp.ServeHTTP(w, r.WithContext(ctx))
 	})
 	ln := &once{conn: conn, done: make(chan struct{})}
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: t.p.srv.ReadHeaderTimeout, ConnState: func(_ net.Conn, s http.ConnState) {
+	srv := &http.Server{Handler: routine.Handler(t.p.reportPanic, handler), ReadHeaderTimeout: t.p.srv.ReadHeaderTimeout, ConnState: func(_ net.Conn, s http.ConnState) {
 		if s == http.StateClosed || s == http.StateHijacked {
 			ln.Close()
 		}

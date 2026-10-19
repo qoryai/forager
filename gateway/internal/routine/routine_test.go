@@ -1,6 +1,7 @@
 package routine_test
 
 import (
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -62,5 +63,44 @@ func TestAPanicEndsItsGoroutineAlone(t *testing.T) {
 	case line := <-reports:
 		t.Errorf("a goroutine without a panic reported %q", line)
 	default:
+	}
+}
+
+// conn is a connection that records that it was closed.
+type conn struct {
+	net.Conn
+	closed chan struct{}
+}
+
+func (c *conn) Close() error {
+	close(c.closed)
+	return nil
+}
+
+// TestAcceptGoesOnAfterAPanic pins that a panic in one step of Accept closes the
+// connection the step took, is reported without its value, and that Accept calls the
+// next step, until a step returns more false.
+func TestAcceptGoesOnAfterAPanic(t *testing.T) {
+	var reports []string
+	taken := &conn{closed: make(chan struct{})}
+	steps := 0
+	routine.Accept(func(line string) { reports = append(reports, line) }, func(c *net.Conn) (more, failed bool) {
+		steps++
+		if steps == 1 {
+			*c = taken
+			panic("Authorization: Bearer fake-key-0001")
+		}
+		return false, false
+	})
+	if steps != 2 {
+		t.Errorf("Accept called %d steps, want 2", steps)
+	}
+	select {
+	case <-taken.closed:
+	default:
+		t.Error("the connection of the step that panicked is open")
+	}
+	if len(reports) != 1 || !strings.HasPrefix(reports[0], routine.Panicked+"\n") || strings.Contains(reports[0], "fake-key-0001") {
+		t.Errorf("the reports: %q", reports)
 	}
 }
