@@ -32,9 +32,10 @@ const (
 	brokeredSource = "SESSION_TEST_BROKERED_VALUE"
 )
 
-// brokeredCredential is the machine's model key for Claude Code, set in place of the
-// placeholder of ANTHROPIC_API_KEY.
-var brokeredCredential = gateway.Credential{Name: "model", Env: brokeredSource, Hosts: []string{"api.anthropic.com"}, Scheme: "bearer", Placeholders: []string{"ANTHROPIC_API_KEY"}}
+// brokeredCredential is the machine's model key for Claude Code, an API key in the
+// header x-api-key, set in place of the key's placeholder in ANTHROPIC_API_KEY.
+var brokeredCredential = gateway.Credential{Name: "model", Env: brokeredSource, Format: "anthropic-messages", Endpoint: "https://api.anthropic.com",
+	Scheme: "header", Header: "x-api-key", KeyPrefixes: []string{"fake-model-"}}
 
 // brokeredSpec is a spec whose agent writes its environment to the file it returns,
 // that inherits a value of ANTHROPIC_API_KEY, on a machine whose authorities are in a
@@ -52,16 +53,17 @@ func brokeredSpec(t *testing.T) (session.Spec, string) {
 	return sp, dumpsEnv(t, &sp)
 }
 
-// checkBrokered checks an unwalled brokered run: the agent got the placeholder in
-// ANTHROPIC_API_KEY, over the value it inherits, and the bundle's variables, the
+// checkBrokered checks an unwalled brokered run: the agent got the model key's
+// placeholder in ANTHROPIC_API_KEY, over the value it inherits, the key's endpoint in
+// ANTHROPIC_BASE_URL, and the bundle's variables, the
 // bundle contains the machine's authorities and the run's certificate, and no file of
 // the run directory or the gateway's, the agent's environment among them, contains the
 // value.
 func checkBrokered(t *testing.T, env string, dirs ...string) {
 	t.Helper()
 	got := envOf(t, env)
-	if got["ANTHROPIC_API_KEY"] != link.Placeholder {
-		t.Errorf("ANTHROPIC_API_KEY is %q, want the placeholder", got["ANTHROPIC_API_KEY"])
+	if got["ANTHROPIC_API_KEY"] != link.KeyPlaceholder("model") || got["ANTHROPIC_BASE_URL"] != "https://api.anthropic.com" {
+		t.Errorf("ANTHROPIC_API_KEY is %q and ANTHROPIC_BASE_URL %q, want the model key's placeholder and endpoint", got["ANTHROPIC_API_KEY"], got["ANTHROPIC_BASE_URL"])
 	}
 	bundle := filepath.Join(dirs[0], session.BundleFile)
 	for _, n := range wall.DefaultCAEnv {

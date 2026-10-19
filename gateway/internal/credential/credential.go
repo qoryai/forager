@@ -35,10 +35,12 @@ import (
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
 )
 
 // Definition is one credential as the machine defines it. Exactly one of Env, File and
-// Adapter says where the token comes from.
+// Adapter says where the token comes from. A model key has Format, Endpoint and the
+// scheme in place of Hosts and Placeholders.
 type Definition struct {
 	Name string
 	// Env is the name of a variable of Forager's own environment that holds the
@@ -60,6 +62,17 @@ type Definition struct {
 	Paths                    []string
 	// Placeholders are variables the enclosure gets with a value that is no credential.
 	Placeholders []string
+	// Format is a model key's API format, one of api-format.schema.json; empty for any
+	// other credential.
+	Format string
+	// Endpoint is the base URL of a model key's API: the key is set on every path of its
+	// host alone.
+	Endpoint string
+	// OAuth marks a model key set as a bearer as an OAuth token.
+	OAuth bool
+	// KeyPrefixes are the prefixes a model key's token must start with; nil for any
+	// token.
+	KeyPrefixes []string
 }
 
 // Use is one way a held token is used: what the proxy needs to know, and what the
@@ -75,11 +88,12 @@ type Use struct {
 	// Stored says the credential is the server's, a run configuration's credentials
 	// entry, whose value Qory Apiary sealed to the access key.
 	Stored bool
-	// KeyVariables are the run configuration entry's key_variables, of a credential
-	// from the server; nil for every other.
-	KeyVariables []string
-	held         *held
-	index        int
+	// Format, Endpoint and OAuth are a model key's, from the server or the machine;
+	// empty for every other credential.
+	Format, Endpoint string
+	OAuth            bool
+	held             *held
+	index            int
 }
 
 // Stored is a credential whose value Qory Apiary stores for the run: an entry of the
@@ -91,8 +105,9 @@ type Stored struct {
 	// Paths are nil for every path.
 	Paths        []string
 	Placeholders []string
-	// KeyVariables are the entry's key_variables; nil when it has none.
-	KeyVariables []string
+	// Format, Endpoint and OAuth are an API credential's; empty for a host credential.
+	Format, Endpoint string
+	OAuth            bool
 	// Value returns a copy of the opened value's bytes, which the caller clears once it
 	// has set them; empty once the run has ended.
 	Value func() []byte
@@ -132,10 +147,12 @@ const (
 	retryWait = 30 * time.Second
 )
 
-// Held are a run's credentials, resolved.
+// Held are a run's credentials, resolved. Start is the name of the model key the
+// runtime starts with, the one model key the proxy sets; empty when the run has none.
 type Held struct {
 	Uses         []*Use
 	Placeholders []string
+	Start        string
 	all          []*held
 	// panics, when set, gets a panic of the renewals' goroutines ([Held.ReportPanics]).
 	panics atomic.Pointer[func(string)]
@@ -157,15 +174,17 @@ func (h *Held) reportPanic(line string) {
 
 // Credential is one credential a run holds: its name, the hosts of its uses in their
 // order, as the proxy matches them, and the variables the enclosure gets a placeholder in
-// for it, each once. Of a credential from the server, Stored is true, Scheme, Username
-// and Header are how its value is set, and KeyVariables are its entry's key_variables.
+// for it, each once. Of a credential from the server, Stored is true. Of a model key,
+// from the server or the machine, Format, Endpoint and OAuth are set. Of both, Scheme,
+// Username and Header are how its value is set.
 type Credential struct {
 	Name                     string
 	Hosts                    []string
 	Placeholders             []string
 	Stored                   bool
 	Scheme, Username, Header string
-	KeyVariables             []string
+	Format, Endpoint         string
+	OAuth                    bool
 }
 
 // Credentials are the run's credentials, one each, in the order the policy selects
@@ -180,7 +199,11 @@ func (h *Held) Credentials() []Credential {
 			if u.held == c {
 				cred.Hosts = append(cred.Hosts, u.Hosts...)
 				if u.Stored {
-					cred.Stored, cred.Scheme, cred.Username, cred.Header, cred.KeyVariables = true, u.Scheme, u.Username, u.Header, u.KeyVariables
+					cred.Stored = true
+				}
+				if u.Stored || u.Format != "" {
+					cred.Scheme, cred.Username, cred.Header = u.Scheme, u.Username, u.Header
+					cred.Format, cred.Endpoint, cred.OAuth = u.Format, u.Endpoint, u.OAuth
 				}
 			}
 		}
@@ -202,7 +225,7 @@ func (h *Held) Close() {
 // under enforce, a claim above the definition's own. report hears of a renewal that
 // failed.
 func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
-	return ResolveWith(ctx, defs, selected, nil, mode, allow, report)
+	return ResolveWith(ctx, defs, selected, nil, "", mode, allow, report)
 }
 
 // ResolveWith is [Resolve] beside the credentials from the server, stored, which come
@@ -212,8 +235,10 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 // is dropped, with no renewal; the adapter has run all the same. A credential of the
 // machine's that it replaces may have its name. A credential from the server with the
 // name of a credential of the machine's that stays is refused, so the record lists
-// each once. The checks of Resolve then cover all of them.
-func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
+// each once. The checks of Resolve then cover all of them. start is the run
+// configuration's model_credential, the name of the model key the runtime starts with,
+// empty when it names none ([Held.startKey]).
+func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, start string, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
 	out := &Held{}
 	replaced := func(hosts []string) bool {
 		for _, s := range stored {
@@ -240,7 +265,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 			out.Close()
 			return nil, err
 		}
-		if len(def.Adapter) == 0 && replaced(def.Hosts) {
+		if len(def.Adapter) == 0 && replaced(def.hosts()) {
 			continue
 		}
 		h := &held{def: def, argument: sel.Argument, report: report, done: make(chan struct{})}
@@ -259,7 +284,8 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		h.set(answer)
 		h.shape = answer.shape()
 		for i, a := range answer.Apply {
-			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, held: h, index: i})
+			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths,
+				Format: def.Format, Endpoint: def.Endpoint, OAuth: def.OAuth, held: h, index: i})
 		}
 		for _, p := range slices.Concat(def.Placeholders, answer.Placeholders) {
 			if !slices.Contains(h.placeholders, p) {
@@ -281,7 +307,8 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 	}
 	for _, s := range stored {
 		h := &held{def: Definition{Name: s.Name}, value: s.Value, done: make(chan struct{})}
-		out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: s.Hosts, Scheme: s.Scheme, Username: s.Username, Header: s.Header, Paths: s.Paths, Stored: true, KeyVariables: s.KeyVariables, held: h})
+		out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: s.Hosts, Scheme: s.Scheme, Username: s.Username, Header: s.Header, Paths: s.Paths, Stored: true,
+			Format: s.Format, Endpoint: s.Endpoint, OAuth: s.OAuth, held: h})
 		for _, p := range s.Placeholders {
 			if !slices.Contains(h.placeholders, p) {
 				h.placeholders = append(h.placeholders, p)
@@ -296,6 +323,10 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		out.Close()
 		return nil, err
 	}
+	if err := out.startKey(start); err != nil {
+		out.Close()
+		return nil, err
+	}
 	for _, h := range out.all {
 		h.panics = out.reportPanic
 		routine.Go(h.panics, h.renew)
@@ -303,13 +334,50 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 	return out, nil
 }
 
-// check refuses two uses that claim a host together and, under enforce, a host the
-// run's allow list does not cover: a credential for a host the run never reaches is a
+// startKey sets Start: start when it names a model key of the run, or the run's one
+// model key when start is empty. It refuses a start that names no model key of the
+// run, and an empty one beside two or more model keys, each run_configuration_invalid.
+func (h *Held) startKey(start string) error {
+	var keys []string
+	for _, c := range h.Credentials() {
+		if c.Format != "" {
+			keys = append(keys, c.Name)
+		}
+	}
+	shown := make([]string, len(keys))
+	for i, k := range keys {
+		shown[i] = accesskey.ShownName(k, false)
+	}
+	switch {
+	case start == "" && len(keys) == 0:
+	case start == "" && len(keys) == 1:
+		h.Start = keys[0]
+	case start == "" && len(keys) > 1:
+		return refusal.New(refusal.RunConfigurationInvalid, nil,
+			"set model_credential in the run configuration, or give the run one model key: the run has the model keys %s", strings.Join(shown, ", "))
+	case slices.Contains(keys, start):
+		h.Start = start
+	case len(keys) == 0:
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
+			"remove model_credential from the run configuration, or give the run a model key %s: the run has no model key", accesskey.ShownName(start, true))
+	default:
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
+			"set model_credential in the run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(shown, ", "), accesskey.ShownName(start, true))
+	}
+	return nil
+}
+
+// check refuses two uses that claim a host together, unless both are model keys, which
+// the proxy tells apart by their placeholders, and, under enforce, a host the run's
+// allow list does not cover, a model key's host being its endpoint's: a credential for a host the run never reaches is a
 // mistake to hear of before the run, not during it.
 func (h *Held) check(mode policy.Mode, allow []string) error {
 	for i, u := range h.Uses {
 		for _, host := range u.Hosts {
 			for _, other := range h.Uses[:i] {
+				if u.Format != "" && other.Format != "" {
+					continue
+				}
 				for _, theirs := range other.Hosts {
 					if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
 						return fmt.Errorf("claim %s in only one of the credentials %s and %s; both claim it, and a host has one", accesskey.ShownValue(host, false), accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false))
@@ -320,7 +388,8 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 				continue
 			}
 			if !slices.ContainsFunc(allow, func(entry string) bool { return policy.Covers(entry, host) }) {
-				return fmt.Errorf("the credential %s is for %s, which the run's allow list does not cover", accesskey.ShownName(u.Name, false), accesskey.ShownValue(host, false))
+				name, shown := accesskey.ShownName(u.Name, false), accesskey.ShownValue(host, false)
+				return fmt.Errorf("add %s to the run's egress allow list, or remove the credential %s: the credential %s is for %s, which no allow entry covers", shown, name, name, shown)
 			}
 		}
 	}
@@ -331,7 +400,71 @@ var (
 	nameShape   = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 	headerShape = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 	envShape    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	// prefixShape is a key prefix's form: 1 to 32 characters of printable ASCII
+	// without a space.
+	prefixShape = regexp.MustCompile(`^[!-~]{1,32}$`)
 )
+
+// hosts are the hosts a token from Env or File is set on, and the most an adapter may
+// claim: a model key's endpoint host, or the definition's Hosts.
+func (d Definition) hosts() []string {
+	if d.Format == "" {
+		return d.Hosts
+	}
+	if host, ok := policy.EndpointHost(d.Endpoint); ok {
+		return []string{host}
+	}
+	return nil
+}
+
+// KeyMatches reports whether a model key's value starts with one of prefixes, or
+// prefixes is empty.
+func KeyMatches(prefixes []string, value []byte) bool {
+	return len(prefixes) == 0 || slices.ContainsFunc(prefixes, func(p string) bool { return bytes.HasPrefix(value, []byte(p)) })
+}
+
+// checkModelKey refuses a model key's definition that cannot be one: a format outside
+// api-format.schema.json, an endpoint from which [policy.EndpointHost] reads no host,
+// hosts, paths or placeholders beside the endpoint, a scheme the proxy does not
+// implement, oauth beside another scheme than bearer, and key prefixes other than 1 to
+// 4 of 1 to 32 characters of printable ASCII without a space, each once.
+func (d Definition) checkModelKey() error {
+	name := accesskey.ShownName(d.Name, false)
+	schema, err := contracts.Compile("api-format.schema.json")
+	if err != nil {
+		return err
+	}
+	if err := schema.Validate(d.Format); err != nil {
+		return fmt.Errorf("credential %s: set format to anthropic-messages, openai-responses, openai-chat or gemini: %s is no API format Forager knows", name, accesskey.ShownValue(d.Format, true))
+	}
+	if _, ok := policy.EndpointHost(d.Endpoint); !ok {
+		return fmt.Errorf("credential %s: set endpoint to an https URL with a host and no user, query or fragment: Forager reads no host from it", name)
+	}
+	if strings.ContainsAny(d.Endpoint, "?#") {
+		return fmt.Errorf("credential %s: set endpoint to an https URL with a host and no user, query or fragment: the endpoint has a query or a fragment", name)
+	}
+	if len(d.Hosts) > 0 || len(d.Paths) > 0 || len(d.Placeholders) > 0 {
+		return fmt.Errorf("credential %s: remove hosts, paths and placeholders from the model key: the key is set on its endpoint's host, and the session gives the runtime the key's variable", name)
+	}
+	if err := (apply{Scheme: d.Scheme, Username: d.Username, Header: d.Header}).check(); err != nil {
+		return fmt.Errorf("credential %s: %w", name, err)
+	}
+	if d.OAuth && d.Scheme != "bearer" {
+		return fmt.Errorf("credential %s: remove oauth, or set the scheme to bearer: oauth marks a bearer alone", name)
+	}
+	if d.KeyPrefixes != nil && (len(d.KeyPrefixes) < 1 || len(d.KeyPrefixes) > 4) {
+		return fmt.Errorf("credential %s: list 1 to 4 key prefixes, or none: the model key lists %d", name, len(d.KeyPrefixes))
+	}
+	for i, p := range d.KeyPrefixes {
+		switch {
+		case !prefixShape.MatchString(p):
+			return fmt.Errorf("credential %s: write each key prefix as 1 to 32 characters of printable ASCII without a space: %s is not", name, accesskey.ShownValue(p, true))
+		case slices.Contains(d.KeyPrefixes[:i], p):
+			return fmt.Errorf("credential %s: list the key prefix %s once: the model key lists it twice", name, accesskey.ShownValue(p, true))
+		}
+	}
+	return nil
+}
 
 // Check refuses a definition that cannot be one, before any run selects it.
 func (d Definition) Check() error {
@@ -346,6 +479,20 @@ func (d Definition) Check() error {
 	}
 	if sources != 1 {
 		return fmt.Errorf("credential %s: exactly one of env, file and adapter says where the token comes from", accesskey.ShownName(d.Name, false))
+	}
+	if d.Format != "" {
+		if d.Argument != "" && len(d.Adapter) == 0 {
+			return fmt.Errorf("credential %s: an argument is an adapter's; env and file take none", accesskey.ShownName(d.Name, false))
+		}
+		if d.Argument != "" {
+			if _, err := wholeMatch(d.Argument); err != nil {
+				return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), accesskey.ShownError(err))
+			}
+		}
+		return d.checkModelKey()
+	}
+	if d.Endpoint != "" || d.OAuth || d.KeyPrefixes != nil {
+		return fmt.Errorf("credential %s: add format to the credential, or remove endpoint, oauth and key_prefixes: only a model key has them", accesskey.ShownName(d.Name, false))
 	}
 	if d.Argument != "" {
 		if _, err := wholeMatch(d.Argument); err != nil {
@@ -477,8 +624,10 @@ func (h *held) token(i int) string {
 	defer h.mu.Unlock()
 	if h.def.File != "" {
 		// A file is read when it is used: whatever rotates it needs to tell no one.
+		// A model key's token that starts with none of its prefixes is not taken: the
+		// token read before stays.
 		if b, err := os.ReadFile(h.def.File); err == nil {
-			if t := strings.TrimSpace(string(b)); t != "" {
+			if t := strings.TrimSpace(string(b)); t != "" && KeyMatches(h.def.KeyPrefixes, []byte(t)) {
 				return t
 			}
 		}
@@ -578,6 +727,16 @@ func (h *held) renewals() {
 	}
 }
 
+// prefixError is the error of a model key's token that starts with none of its
+// prefixes. It never contains the token.
+func (d Definition) prefixError() error {
+	shown := make([]string, len(d.KeyPrefixes))
+	for i, p := range d.KeyPrefixes {
+		shown[i] = accesskey.ShownValue(p, true)
+	}
+	return fmt.Errorf("give the model key %s a token that starts with %s, its key_prefixes: the token starts with none of them", accesskey.ShownName(d.Name, false), strings.Join(shown, " or "))
+}
+
 // ask gets the token from where the definition says.
 func (h *held) ask(ctx context.Context) (*answer, error) {
 	d := h.def
@@ -585,7 +744,10 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		if token == "" {
 			return nil, errors.New("the token is empty")
 		}
-		return &answer{Version: 1, Token: token, Apply: []apply{{Hosts: d.Hosts, Scheme: d.Scheme, Username: d.Username, Header: d.Header, Paths: d.Paths}}}, nil
+		if !KeyMatches(d.KeyPrefixes, []byte(token)) {
+			return nil, d.prefixError()
+		}
+		return &answer{Version: 1, Token: token, Apply: []apply{{Hosts: d.hosts(), Scheme: d.Scheme, Username: d.Username, Header: d.Header, Paths: d.Paths}}}, nil
 	}
 	switch {
 	case d.Env != "":
@@ -631,6 +793,9 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 	if err := json.Unmarshal(stdout.Bytes(), &a); err != nil {
 		return nil, accesskey.ShownError(err)
 	}
+	if d.Format != "" && len(a.Placeholders) > 0 {
+		return nil, fmt.Errorf("remove placeholders from the answer of the adapter %s: the model key %s takes none, since the session gives the runtime the key's variable", path, accesskey.ShownName(d.Name, false))
+	}
 	for _, u := range a.Apply {
 		if err := u.check(); err != nil {
 			return nil, fmt.Errorf("the adapter %s: %w", path, err)
@@ -638,9 +803,23 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		if u.Token == "" && a.Token == "" {
 			return nil, fmt.Errorf("the adapter %s gave no token for %v", path, u.Hosts)
 		}
+		if d.Format != "" {
+			// A model key is set as its definition says, which the session chooses the
+			// runtime's variable by.
+			if u.Scheme != d.Scheme || u.Username != d.Username || !strings.EqualFold(u.Header, d.Header) {
+				return nil, fmt.Errorf("set the model key %s in the answer of the adapter %s with the scheme, header and username of its definition: the answer has others", accesskey.ShownName(d.Name, false), path)
+			}
+			token := u.Token
+			if token == "" {
+				token = a.Token
+			}
+			if !KeyMatches(d.KeyPrefixes, []byte(token)) {
+				return nil, d.prefixError()
+			}
+		}
 		// What the machine's definition says is the most an adapter may claim.
 		for _, host := range u.Hosts {
-			if len(d.Hosts) > 0 && !slices.ContainsFunc(d.Hosts, func(entry string) bool { return policy.Covers(entry, host) }) {
+			if hosts := d.hosts(); len(hosts) > 0 && !slices.ContainsFunc(hosts, func(entry string) bool { return policy.Covers(entry, host) }) {
 				return nil, fmt.Errorf("the adapter %s claims %s, above the hosts the machine gives it", path, host)
 			}
 		}

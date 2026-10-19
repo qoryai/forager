@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -16,8 +17,9 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// credentialDoc is a run configuration with one credential.
-const credentialDoc = `{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"header","header":"x-api-key"},"key_variables":["MODEL_API_KEY"],"placeholders":["MODEL_API_KEY"]}]}`
+// credentialDoc is a run configuration with two credentials: an API credential and a
+// host credential.
+const credentialDoc = `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"key_prefixes":["sk-ant-"]},{"name":"forge","hosts":["git.example"],"auth":{"scheme":"basic","username":"x-access-token"},"placeholders":["FORGE_TOKEN"]}],"model_credential":"model"}`
 
 // TestARunConfigurationsCredentialsAndItsComputedDigest pins the reading of
 // credentials: each entry decoded, and Computed the SHA-256 of the bytes as they came,
@@ -30,9 +32,17 @@ func TestARunConfigurationsCredentialsAndItsComputedDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256([]byte(credentialDoc))
-	want := server.RunCredential{Name: "model", Hosts: []string{"api.model.example"}, Auth: server.Auth{Scheme: "header", Header: "x-api-key"}, KeyVariables: []string{"MODEL_API_KEY"}, Placeholders: []string{"MODEL_API_KEY"}}
-	if len(rc.Credentials) != 1 || rc.Credentials[0].Name != want.Name || rc.Credentials[0].Auth != want.Auth || !slices.Equal(rc.Credentials[0].KeyVariables, want.KeyVariables) {
-		t.Errorf("credentials %+v", rc.Credentials)
+	want := []server.RunCredential{
+		{Name: "model", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "bearer", OAuth: true}, KeyPrefixes: []string{"sk-ant-"}},
+		{Name: "forge", Hosts: []string{"git.example"}, Auth: server.Auth{Scheme: "basic", Username: "x-access-token"}, Placeholders: []string{"FORGE_TOKEN"}},
+	}
+	if !reflect.DeepEqual(rc.Credentials, want) || rc.ModelCredential != "model" {
+		t.Errorf("credentials %+v, model_credential %q", rc.Credentials, rc.ModelCredential)
+	}
+	for i, w := range []struct{ hosts, paths []string }{{[]string{"api.model.example"}, nil}, {[]string{"git.example"}, nil}} {
+		if hosts, paths := rc.Credentials[i].Applies(); !slices.Equal(hosts, w.hosts) || paths != nil {
+			t.Errorf("%s applies to %v %v; want %v and every path", rc.Credentials[i].Name, hosts, paths, w.hosts)
+		}
 	}
 	if rc.Computed != "sha256="+hex.EncodeToString(sum[:]) || rc.Computed == d {
 		t.Errorf("computed %s, the header's %s", rc.Computed, d)
@@ -44,14 +54,22 @@ func TestARunConfigurationsCredentialsAndItsComputedDigest(t *testing.T) {
 
 // TestARunConfigurationsCredentialsAreRefused pins what Forager refuses of
 // credentials, beside the schema, each run_configuration_invalid with the name: a name
-// twice, and a header that frames the request or that the proxy sets, in any case and
-// with underscores for dashes.
+// twice, a header that frames the request or that the proxy sets, in any case and
+// with underscores for dashes, an endpoint whose host Forager does not read, and a
+// model_credential that names a host credential. Two API credentials without a
+// model_credential are refused with no name.
 func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 	entry := func(name, header string) string {
 		return `{"name":"` + name + `","hosts":["api.model.example"],"auth":{"scheme":"header","header":"` + header + `"}}`
 	}
 	cases := map[string]struct{ doc, want string }{
 		"a name twice": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `,` + entry("model", "x-other-key") + `]}`, `list the credential "model" once; the document lists it twice`},
+		"an endpoint's host": {`{"version":1,"credentials":[{"name":"model","format":"openai-chat","endpoint":"https://bad_host.example/v1","auth":{"scheme":"bearer"}}]}`,
+			`give the credential "model" an endpoint whose host is a DNS name or an IP address, port 1 to 65535: Forager reads no host from its endpoint`},
+		"an endpoint's port": {`{"version":1,"credentials":[{"name":"model","format":"openai-chat","endpoint":"https://api.model.example:99999","auth":{"scheme":"bearer"}}]}`,
+			`give the credential "model" an endpoint whose host is a DNS name or an IP address, port 1 to 65535`},
+		"a host credential as the start key": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `],"model_credential":"model"}`,
+			`set model_credential to an API credential, one with format: the credential "model" has none, so it is no model key`},
 	}
 	for _, h := range []string{"Host", "content-length", "Transfer-Encoding", "Connection", "TE", "Trailer", "Upgrade", "Keep-Alive", "Cookie", "Proxy-Authorization", "proxy_authorization", "X-Qory-Credential-Set", "x_qory_credential_set", "Qory-Anything"} {
 		cases["the header "+h] = struct{ doc, want string }{`{"version":1,"credentials":[` + entry("model", h) + `]}`, `set the credential "model" in another header than "` + h + `"; that header frames the request, or the proxy sets it`}
@@ -63,6 +81,24 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != "run_configuration_invalid" || len(r.Names) != 1 || r.Names[0] != "model" || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+	api := func(name string) string {
+		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://api.model.example","auth":{"scheme":"header","header":"x-api-key"}}`
+	}
+	v.runDoc = `{"version":1,"credentials":[` + api("model") + `,` + api("backup") + `]}`
+	_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
+	if want := "set model_credential to the model key the runtime starts with: the document lists the model keys model, backup"; code(err) != "run_configuration_invalid" || !strings.Contains(err.Error(), want) {
+		t.Errorf("two model keys without model_credential: %v; want %q", err, want)
+	}
+	for _, doc := range []string{
+		`{"version":1,"credentials":[` + api("model") + `,` + api("backup") + `],"model_credential":"backup"}`,
+		`{"version":1,"credentials":[` + api("model") + `]}`,
+		`{"version":1,"credentials":[` + api("model") + `],"model_credential":"machine-model"}`,
+	} {
+		v.runDoc = doc
+		if _, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID); err != nil {
+			t.Errorf("%s: %v", doc, err)
 		}
 	}
 	for _, h := range []string{"x-api-key", "Authorization", "X-Model-Key", "api_key"} {

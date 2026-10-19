@@ -151,7 +151,8 @@ type Declarations = descriptor.Secrets
 type Declaration = descriptor.Declaration
 
 // Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
-// the header of header, Username the fixed user of basic.
+// the header of header, Username the fixed user of basic, and OAuth marks a bearer as
+// an OAuth token.
 type Auth = descriptor.Auth
 
 // Group is a set of declarations of which the runtime needs one at most, and exactly
@@ -172,9 +173,14 @@ type Model interface {
 // runtime sends its requests in, from the contract's api-format.schema.json; Model,
 // where a run's model id goes; Effort, where an effort value goes, nil when the runtime
 // has no place for one; Endpoint, the variable the runtime reads the base URL of its
-// model API from; and Overrides, the variables that would override the model id or
-// effort value a composer writes, which a walled run leaves out and unsets inside.
+// model API from; Keys, the variables it reads a model key from, one per API format
+// and auth; and Overrides, the variables that would override the model id or effort
+// value a composer writes, which a walled run leaves out and unsets inside.
 type ModelPlaces = descriptor.Model
+
+// Key is one variable a runtime reads a model key from: Format, the API format the key
+// is for; Auth, how the runtime sends it; and Variable.
+type Key = descriptor.Key
 
 // Place is where a value goes, exactly one of its fields set: Flag, an argument the
 // runtime is started with, which takes the value; Setting, a dotted key in the JSON
@@ -358,7 +364,7 @@ func (r *described) Model() (ModelPlaces, bool) {
 	if m == nil {
 		return ModelPlaces{}, false
 	}
-	out := ModelPlaces{Formats: slices.Clone(m.Formats), Model: m.Model, Endpoint: m.Endpoint, Overrides: slices.Clone(m.Overrides)}
+	out := ModelPlaces{Formats: slices.Clone(m.Formats), Model: m.Model, Endpoint: m.Endpoint, Keys: slices.Clone(m.Keys), Overrides: slices.Clone(m.Overrides)}
 	if e := m.Effort; e != nil {
 		effort := Effort{Run: e.Run}
 		effort.Run.Values = slices.Clone(e.Run.Values)

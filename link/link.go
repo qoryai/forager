@@ -65,6 +65,16 @@ const (
 // reads it, and is no credential anywhere.
 const Placeholder = "qory-sets-the-credential-outside-the-enclosure"
 
+// KeyPlaceholder is the value of the placeholder variable of the model key name: qory-,
+// the name, and the rest of [Placeholder], such as
+// qory-model-sets-the-credential-outside-the-enclosure. The proxy sets a model key only
+// on a request that carries its placeholder, so two model keys of a run have two
+// values. It ends as Placeholder does, so a runtime that approves a key by its end, as
+// Claude Code does by its last 20 characters, approves each the same way.
+func KeyPlaceholder(name string) string {
+	return "qory-" + name + Placeholder[len("qory"):]
+}
+
 // LinkDirPrefix begins the name of the private directory the gateway makes, in the
 // system's temporary directory, for the local link's socket. Every such directory on
 // the machine is one of Forager's files, which no walled run binds.

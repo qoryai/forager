@@ -32,6 +32,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/tool"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/sealed"
@@ -146,14 +147,23 @@ type Run struct {
 	images    map[*policy.Loaded]string
 	held      *credential.Held
 	runDigest string
-	// creds are the credentials of each run configuration Read read that a reload has
-	// not decided yet.
-	creds map[*policy.Loaded][]server.RunCredential
+	// creds are the credentials and the model_credential of each run configuration Read
+	// read that a reload has not decided yet.
+	creds map[*policy.Loaded]storedSet
 
 	// stored are the credentials of the run configuration the run started with, and
 	// values their values as they opened, fixed for the run and cleared by Close.
-	stored []server.RunCredential
-	values sealed.Values
+	// storedModel is its model_credential, empty when it names none.
+	stored      []server.RunCredential
+	storedModel string
+	values      sealed.Values
+}
+
+// storedSet is what a run configuration says of the run's credentials: its credentials
+// and its model_credential.
+type storedSet struct {
+	creds []server.RunCredential
+	model string
 }
 
 // Decide is the policy a run starts under, and refuses a run that cannot have it: the
@@ -213,7 +223,8 @@ func Decide(cfg Config) (*Run, error) {
 			return nil, err
 		}
 		pol = fetched
-		r.guard, r.named, r.stored = r.takeGuard(fetched), r.takeNamed(fetched), r.takeCreds(fetched)
+		set := r.takeCreds(fetched)
+		r.guard, r.named, r.stored, r.storedModel = r.takeGuard(fetched), r.takeNamed(fetched), set.creds, set.model
 		if cfg.Fetched.Document != nil {
 			r.served = cfg.Fetched.Document.Values()
 		}
@@ -320,7 +331,8 @@ func (r *Run) Close() {
 
 // open fetches and opens the values of the start's run configuration's credentials,
 // under the digest Forager computed of the document's bytes, and refuses a value a
-// header cannot hold.
+// header cannot hold and a model key's value that starts with none of its
+// key_prefixes.
 func (r *Run) open(ctx context.Context) error {
 	names := make([]string, len(r.stored))
 	for i, c := range r.stored {
@@ -334,11 +346,21 @@ func (r *Run) open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
-		if v, _ := values.Value(name); !HeaderValue(v) {
+	for i, name := range names {
+		v, _ := values.Value(name)
+		if !HeaderValue(v) {
 			values.Clear()
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
 				"run configuration %s: store another value of the credential %s in Qory Apiary: its value has a control character, or a space or tab at its start or end, which a header value cannot have", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true))
+		}
+		if prefixes := r.stored[i].KeyPrefixes; !credential.KeyMatches(prefixes, v) {
+			values.Clear()
+			shown := make([]string, len(prefixes))
+			for j, p := range prefixes {
+				shown[j] = accesskey.ShownValue(p, true)
+			}
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
+				"run configuration %s: store in the control plane a value of the credential %s that starts with %s: the stored value starts with none of its key_prefixes", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true), strings.Join(shown, " or "))
 		}
 	}
 	r.mu.Lock()
@@ -544,7 +566,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		fetched.Source = "fetched"
 	}
 	if f.Document != nil {
-		if err := server.CheckCredentials(f.Document.Credentials); err != nil {
+		if err := server.CheckCredentials(f.Document.Credentials, f.Document.ModelCredential); err != nil {
 			return nil, fmt.Errorf("run configuration %s: %w", accesskey.ShownValue(f.URL, false), err)
 		}
 	}
@@ -566,11 +588,11 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		r.read = map[*policy.Loaded][]string{}
 	}
 	r.read[out] = GuardNames(r.node, pol, r.cfg.Narrowing)
-	if f.Document != nil && len(f.Document.Credentials) > 0 {
+	if f.Document != nil && (len(f.Document.Credentials) > 0 || f.Document.ModelCredential != "") {
 		if r.creds == nil {
-			r.creds = map[*policy.Loaded][]server.RunCredential{}
+			r.creds = map[*policy.Loaded]storedSet{}
 		}
-		r.creds[out] = f.Document.Credentials
+		r.creds[out] = storedSet{f.Document.Credentials, f.Document.ModelCredential}
 	}
 	if named != "" {
 		if r.images == nil {
@@ -681,9 +703,9 @@ func (r *Run) takeGuard(p *policy.Loaded) []string {
 	return names
 }
 
-// takeCreds is the credentials of the run configuration of a policy [Run.Read] made,
-// nil when it has none, and forgets them.
-func (r *Run) takeCreds(p *policy.Loaded) []server.RunCredential {
+// takeCreds is the credentials and the model_credential of the run configuration of a
+// policy [Run.Read] made, empty when it has neither, and forgets them.
+func (r *Run) takeCreds(p *policy.Loaded) storedSet {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	c := r.creds[p]
@@ -830,8 +852,11 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 	if next.RunConfiguration == r.RunConfiguration() {
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
-	if !sameCredentials(creds, r.stored) {
+	if !sameCredentials(creds.creds, r.stored) {
 		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from Qory Apiary are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false))
+	}
+	if creds.model != r.storedModel {
+		return nil, fmt.Errorf("run configuration %s: start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays", accesskey.ShownValue(next.URL, false))
 	}
 	d, err := r.decide(ctx, next, named)
 	if d != nil {
@@ -869,6 +894,13 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 	fresh, err := r.hold(ctx, &in)
 	if err != nil {
 		return nil, err
+	}
+	// Without model_credential the start key is the run's one model key, and a reload
+	// may select another: the runtime started with the first one's variable and
+	// endpoint, so the start key is fixed as well.
+	if started := startOf(r.Held()); fresh.Start != started {
+		fresh.Close()
+		return nil, fmt.Errorf("start a new run to change the model key it starts with: the run started with %s, and this run configuration selects %s", shownKey(started), shownKey(fresh.Start))
 	}
 	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Allow, claimedBy(fresh)); err != nil {
 		fresh.Close()
@@ -916,7 +948,7 @@ func (r *Run) Commit(d *Decision) {
 // credential that claims one of their hosts, and refuses a placeholder the run passes
 // a value for: at the start and at every reload alike.
 func (r *Run) hold(ctx context.Context, pol *policy.Loaded) (*credential.Held, error) {
-	held, err := credential.ResolveWith(ctx, r.defs, pol.Policy.Credentials, r.storedUses(), pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, r.cfg.Report)
+	held, err := credential.ResolveWith(ctx, r.defs, pol.Policy.Credentials, r.storedUses(), r.storedModel, pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, r.cfg.Report)
 	if err != nil {
 		return nil, err
 	}
@@ -1036,8 +1068,9 @@ func (r *Run) storedUses() []credential.Stored {
 	out := make([]credential.Stored, len(r.stored))
 	for i, c := range r.stored {
 		name := c.Name
-		out[i] = credential.Stored{Name: name, Hosts: c.Hosts, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header,
-			Paths: c.Paths, Placeholders: c.Placeholders, KeyVariables: c.KeyVariables, Value: func() []byte {
+		hosts, paths := c.Applies()
+		out[i] = credential.Stored{Name: name, Hosts: hosts, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header,
+			Paths: paths, Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth, Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				b, _ := r.values.Value(name)
@@ -1071,20 +1104,29 @@ func sameSelection(a, b []policy.Selected) bool {
 	return slices.Equal(order(a), order(b))
 }
 
-// ProxyUses are held credentials as the proxy sets them.
+// ProxyUses are held credentials as the proxy sets them. Of the model keys, the start
+// key alone, [credential.Held.Start], is among them, with its placeholder's value: the
+// gateway holds the others and sets none of them.
 func ProxyUses(held *credential.Held) []proxy.Credential {
 	if held == nil {
 		return nil
 	}
-	uses := make([]proxy.Credential, len(held.Uses))
-	for i, u := range held.Uses {
-		uses[i] = proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths}
+	uses := make([]proxy.Credential, 0, len(held.Uses))
+	for _, u := range held.Uses {
+		if u.Format != "" && u.Name != held.Start {
+			continue
+		}
+		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths}
+		if u.Format != "" {
+			c.Placeholder = link.KeyPlaceholder(u.Name)
+		}
 		if u.Stored {
 			// The server's value: no renewal, and no Token, so it stays bytes.
-			uses[i].Value, uses[i].Stored = u.Value, true
+			c.Value, c.Stored = u.Value, true
 		} else {
-			uses[i].Token, uses[i].Rejected = u.Token, u.Rejected
+			c.Token, c.Rejected = u.Token, u.Rejected
 		}
+		uses = append(uses, c)
 	}
 	return uses
 }
@@ -1126,4 +1168,20 @@ func Egress(d proxy.Decision) map[string]any {
 		data["status"] = d.Status
 	}
 	return data
+}
+
+// startOf is the start key of held, empty when held is nil or has none.
+func startOf(held *credential.Held) string {
+	if held == nil {
+		return ""
+	}
+	return held.Start
+}
+
+// shownKey is a start key's name as a message shows it, or "no model key".
+func shownKey(name string) string {
+	if name == "" {
+		return "no model key"
+	}
+	return accesskey.ShownName(name, true)
 }

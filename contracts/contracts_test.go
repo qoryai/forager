@@ -286,7 +286,11 @@ const beyondLinkSchema = "-beyond-schema-"
 // or a trailing slash, a batch that holds a
 // run.registered, a run registration with a member it does not define, with an interval over
 // 300 seconds or with a time that is not UTC in whole seconds, a run configuration
-// whose image has a tag or is the machine's name for one, a run.registered whose
+// whose image has a tag or is the machine's name for one, whose API credential has
+// hosts or placeholders, no endpoint, an endpoint that is not https or has a user, a
+// query or a fragment, a format outside the list, oauth beside a header or set to
+// false, or key prefixes that are none, five, with a space or of 33 characters, or
+// whose model_credential is no credential's name, a run.registered whose
 // interval is over 300 seconds or without its workspace, an event with an unpadded sequence, a run.started without opened_by,
 // with an unknown one, or opened by a session without its command,
 // a run.exited without state, with a state other than the three, with a reason that is
@@ -294,14 +298,16 @@ const beyondLinkSchema = "-beyond-schema-"
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
 // status, a descriptor with an expression, a descriptor whose model section has a
 // format outside the list, a place of two kinds or of none, an empty list of values,
-// no formats, a member it does not define, an endpoint that is no variable, or
+// no formats, a member it does not define, an endpoint that is no variable,
 // overrides that are empty, list a name twice or list something other than a
-// variable's name, a link run request
+// variable's name, or keys that are empty, read from HOME, of a format outside the
+// list, without a variable or with oauth beside a header, a descriptor that declares a
+// secret read from LD_PRELOAD, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that passes a value with a name or whose image has no reference, a link run
 // answer without applied, with a proxy secret too short, whose image has no reference
-// or whose credential_hosts entry has a member it does not define, no hosts or no
-// placeholders, a link reload answer with the proxy secret or the certificate
+// or whose credential_hosts entry has a member it does not define, no hosts, no
+// placeholders, a format without an endpoint or an endpoint without a format, a link reload answer with the proxy secret or the certificate
 // authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
 // run.registered or a run.egress, a run.started opened by a gateway, a run.exited with one of Forager's reasons
 // other than timeout, its old names among them, or with timeout and a state other than cancelled, or a run.refused with a gateway's code,

@@ -33,7 +33,7 @@ import (
 // value Qory Apiary seals.
 const (
 	sealedPolicy = `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"machine-model"}]}`
-	modelEntry   = `{"name":"model","hosts":["api.model.example"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"key_variables":["MODEL_API_KEY"],"placeholders":["MODEL_API_KEY"]}`
+	modelEntry   = `{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`
 	sealedDoc    = `{"version":1,"security_policy":` + sealedPolicy + `,"credentials":[` + modelEntry + `]}`
 	sealedValue  = "sealed-value-of-the-test"
 	machineValue = "machine-value-of-the-test"
@@ -83,8 +83,9 @@ func (c *control) requests(t *testing.T) []server.SecretsRequest {
 // whose run configuration has credentials: the gateway sends one secrets request, for
 // the run, the digest it computed of the document's bytes, not the header's, and the
 // credentials' names; the proxy sets the opened value in place of forager.yaml's key,
-// whose credential claims the same host; and the run answer has model's hosts and
-// placeholder, its key_variables and its auth, and applied.credentials neither.
+// whose credential claims the same host; and the run answer has model's endpoint host,
+// no placeholder, its format, endpoint and auth, model_credential model, and
+// applied.credentials its host and scheme.
 func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{Wall: true})
@@ -102,12 +103,12 @@ func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 	if r := reqs[0]; r.Version != 1 || r.RunID != a.RunID || r.RunConfiguration != digestOf(sealedDoc) || !slices.Equal(r.Credentials, []string{"model"}) {
 		t.Errorf("the secrets request %+v; want the run, %s and model", r, digestOf(sealedDoc))
 	}
-	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_API_KEY"},
-		KeyVariables: []string{"MODEL_API_KEY"}, Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
-	if !reflect.DeepEqual(a.CredentialHosts, want) || !slices.Equal(a.Placeholders, []string{"MODEL_API_KEY"}) {
-		t.Errorf("credential hosts %+v, placeholders %v; want %+v", a.CredentialHosts, a.Placeholders, want)
+	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{},
+		Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
+	if !reflect.DeepEqual(a.CredentialHosts, want) || len(a.Placeholders) != 0 || a.ModelCredential != "model" {
+		t.Errorf("credential hosts %+v, placeholders %v, model_credential %q; want %+v and model", a.CredentialHosts, a.Placeholders, a.ModelCredential, want)
 	}
-	if got := members(a.Applied)["credentials"]; !reflect.DeepEqual(got, []any{map[string]any{"name": "model", "hosts": []any{"api.model.example"}, "scheme": "header", "paths": []any{"/v1/*"}}}) {
+	if got := members(a.Applied)["credentials"]; !reflect.DeepEqual(got, []any{map[string]any{"name": "model", "hosts": []any{"api.model.example"}, "scheme": "header"}}) {
 		t.Errorf("applied credentials %v", got)
 	}
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
@@ -149,7 +150,7 @@ func TestARunConfigurationWithoutCredentialsIsUnchanged(t *testing.T) {
 // TestAnUnwalledRunGetsTheServersCredentials pins an unwalled run whose run
 // configuration has credentials: it starts, brokered as a walled run is. The gateway
 // sends one secrets request, the proxy sets the opened value, and the run answer has
-// the run's authority and the credential's placeholder, and no image.
+// the run's authority and the model key as its model_credential, and no image.
 func TestAnUnwalledRunGetsTheServersCredentials(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{})
@@ -159,7 +160,7 @@ func TestAnUnwalledRunGetsTheServersCredentials(t *testing.T) {
 	if reqs := c.requests(t); len(reqs) != 1 || reqs[0].RunID != a.RunID || !slices.Equal(reqs[0].Credentials, []string{"model"}) {
 		t.Errorf("the secrets requests %+v; want one for the run and model", reqs)
 	}
-	if !strings.HasPrefix(a.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || !slices.Equal(a.Placeholders, []string{"MODEL_API_KEY"}) || a.Image != nil {
+	if !strings.HasPrefix(a.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || len(a.Placeholders) != 0 || a.ModelCredential != "model" || a.Image != nil {
 		t.Errorf("the answer: authority %q, placeholders %v, image %+v", a.CertificateAuthority, a.Placeholders, a.Image)
 	}
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
@@ -279,6 +280,41 @@ func TestASealedAnswerThatDoesNotOpenIsNoRun(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestASealedModelKeyWithoutItsPrefixIsNoRun pins a model key from the server with
+// key_prefixes: a stored value that starts with none of them is run_configuration_invalid,
+// a 403 from the gateway with the credential's name and the text word for word, opens
+// no run and has no value in the message; a value that starts with one opens the run,
+// and the proxy sets it.
+func TestASealedModelKeyWithoutItsPrefixIsNoRun(t *testing.T) {
+	entry := `{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]}`
+	doc := `{"version":1,"security_policy":` + sealedPolicy + `,"credentials":[` + entry + `]}`
+	const other, matching = "other-fake-value", "sk-ant-fake-value"
+	ctl, h := sealedGateway(t, doc, map[string]string{"model": other})
+	h.secrets = append(h.secrets, other)
+	status, got := h.refusalOf("/v1/run-configuration", walledBody())
+	msg, _ := got["message"].(string)
+	want := "run configuration " + ctl.srv.URL + runsPath + `: store in the control plane a value of the credential "model" that starts with "sk-ant-": the stored value starts with none of its key_prefixes: run_configuration_invalid: model`
+	if status != http.StatusForbidden || got["error"] != "run_configuration_invalid" || !slices.Equal(anyStrings(got["names"]), []string{"model"}) || msg != want {
+		t.Errorf("%d %v\nwant the message %s", status, got, want)
+	}
+	if strings.Contains(msg, other) {
+		t.Errorf("the message holds the value: %s", msg)
+	}
+	if n, _ := gateway.Held(h.g); n != 0 {
+		t.Errorf("%d runs held", n)
+	}
+	ctl.mu.Lock()
+	ctl.secrets = map[string]string{"model": matching}
+	ctl.mu.Unlock()
+	h.secrets = append(h.secrets, matching)
+	a := h.open(server.LinkRunRequest{Wall: true})
+	if got, want := gateway.Tokens(h.g, a.RunID), map[string]string{"model": matching}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the proxy sets %v, want %v", got, want)
+	}
+	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
+	h.close()
 }
 
 // TestAFixtureKeyGetsNoValue pins a pin, or an access key, that is a published fixture

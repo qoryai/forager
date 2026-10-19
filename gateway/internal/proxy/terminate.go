@@ -49,6 +49,11 @@ type Credential struct {
 	// says the credential is the server's.
 	Value  func() []byte
 	Stored bool
+	// Placeholder, for a model key, is its placeholder's value: the proxy sets the key
+	// only on a request that carries it where the key goes, the header and the scheme
+	// the key is set with. Empty for every other credential, which the proxy sets on
+	// every request to its hosts.
+	Placeholder string
 }
 
 // Tool is a program of the machine's that serves hosts: the proxy hands every request
@@ -395,7 +400,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		var mask *masker
 		if allowed && c != nil && tl == nil {
 			v := c.secret()
-			if credentialed {
+			if credentialed && c.carries(r.Header) {
 				if name, value, ok := c.header(v); ok {
 					r.Header.Set(name, value)
 					r.Header.Set(setBy, c.Name)
@@ -492,6 +497,16 @@ func settle(r *http.Request, resp *http.Response, err error) (Decision, bool) {
 // setBy marks, on the way upstream only, a request the proxy set a credential on; the
 // transport takes it off again.
 const setBy = "X-Qory-Credential-Set"
+
+// carries reports whether a request's headers carry the credential's placeholder as
+// the credential sets its token, or the credential has none.
+func (c *Credential) carries(h http.Header) bool {
+	if c.Placeholder == "" {
+		return true
+	}
+	name, value, ok := c.header([]byte(c.Placeholder))
+	return ok && h.Get(name) == value
+}
 
 // secret is a copy of the credential's value as it is now, which the caller clears:
 // a credential from the server's opened value, or the token. It is empty when there is

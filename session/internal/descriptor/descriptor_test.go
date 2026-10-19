@@ -59,10 +59,8 @@ func TestMatchIsEqualityOrPresenceOnly(t *testing.T) {
 }
 
 // TestClaudeDeclaresItsModelCredential pins that the secrets of the contract's Claude
-// Code descriptor decode: the API key on x-api-key, the OAuth credential as a bearer,
-// the API key as a bearer in ANTHROPIC_AUTH_TOKEN, each on api.anthropic.com under
-// /v1/; no one_of group, no reserved variable, and the denied and credential file
-// lists.
+// Code descriptor decode: no declaration, since its model keys are in model.keys, no
+// one_of group, no reserved variable, and the denied and credential file lists.
 func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
 	if err != nil {
@@ -73,18 +71,8 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := d.Secrets
-	if d.Title != "Claude Code" || s == nil || len(s.Declares) != 3 {
+	if d.Title != "Claude Code" || s == nil || len(s.Declares) != 0 {
 		t.Fatalf("title %q, secrets %+v", d.Title, s)
-	}
-	want := []descriptor.Declaration{
-		{ID: "api_key", Title: "Anthropic API key", Name: "ANTHROPIC_API_KEY", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "header", Header: "x-api-key"}},
-		{ID: "oauth_token", Title: "Claude OAuth token", Name: "CLAUDE_CODE_OAUTH_TOKEN", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "bearer"}},
-		{ID: "auth_token", Title: "Anthropic API key as a bearer", Name: "ANTHROPIC_AUTH_TOKEN", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "bearer"}},
-	}
-	for i, w := range want {
-		if !reflect.DeepEqual(s.Declares[i], w) {
-			t.Errorf("declares[%d] = %+v; want %+v", i, s.Declares[i], w)
-		}
 	}
 	if len(s.OneOf) != 0 {
 		t.Errorf("one_of = %+v; want none", s.OneOf)
@@ -149,7 +137,9 @@ func TestClaudeRequiresNoModelKey(t *testing.T) {
 // TestClaudeDescribesWhereItsModelGoes pins the model section of the contract's Claude
 // Code descriptor as it decodes: Anthropic's Messages format, the model id as --model,
 // the run's effort as --effort with low to max, an agent's effort in the agent file's
-// effort frontmatter with low to max, the endpoint in ANTHROPIC_BASE_URL, and the 12
+// effort frontmatter with low to max, the endpoint in ANTHROPIC_BASE_URL, the API key
+// in ANTHROPIC_API_KEY as x-api-key, the API key as a bearer in ANTHROPIC_AUTH_TOKEN and
+// the OAuth token as a bearer with oauth in CLAUDE_CODE_OAUTH_TOKEN, and the 12
 // variables that would override the model or effort in overrides.
 func TestClaudeDescribesWhereItsModelGoes(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
@@ -169,6 +159,11 @@ func TestClaudeDescribesWhereItsModelGoes(t *testing.T) {
 			Agent: &descriptor.AgentPlace{Frontmatter: "effort", Values: efforts},
 		},
 		Endpoint: descriptor.Endpoint{Variable: "ANTHROPIC_BASE_URL"},
+		Keys: []descriptor.Key{
+			{Format: "anthropic-messages", Auth: descriptor.Auth{Scheme: "header", Header: "x-api-key"}, Variable: "ANTHROPIC_API_KEY"},
+			{Format: "anthropic-messages", Auth: descriptor.Auth{Scheme: "bearer"}, Variable: "ANTHROPIC_AUTH_TOKEN"},
+			{Format: "anthropic-messages", Auth: descriptor.Auth{Scheme: "bearer", OAuth: true}, Variable: "CLAUDE_CODE_OAUTH_TOKEN"},
+		},
 		Overrides: []string{
 			"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
 			"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
@@ -210,7 +205,12 @@ func TestModelDecodesFromYAMLAndJSON(t *testing.T) {
 			Run:   descriptor.ValuedPlace{Place: descriptor.Place{Variable: "AMP_EFFORT"}, Values: []string{"low", "medium", "high"}},
 			Agent: &descriptor.AgentPlace{Frontmatter: "reasoning-effort", Values: []string{"low", "high"}},
 		},
-		Endpoint:  descriptor.Endpoint{Variable: "AMP_BASE_URL"},
+		Endpoint: descriptor.Endpoint{Variable: "AMP_BASE_URL"},
+		Keys: []descriptor.Key{
+			{Format: "openai-responses", Auth: descriptor.Auth{Scheme: "bearer"}, Variable: "AMP_API_KEY"},
+			{Format: "openai-responses", Auth: descriptor.Auth{Scheme: "bearer", OAuth: true}, Variable: "AMP_OAUTH_TOKEN"},
+			{Format: "openai-chat", Auth: descriptor.Auth{Scheme: "header", Header: "api-key"}, Variable: "AMP_API_KEY"},
+		},
 		Overrides: []string{"AMP_MODEL", "AMP_EFFORT_LEVEL"},
 	}
 	for name, d := range map[string]*descriptor.Descriptor{"yaml": fromYAML, "json": fromJSON} {
@@ -257,6 +257,47 @@ func TestModelIsChecked(t *testing.T) {
 	if n < 8 {
 		t.Errorf("%d invalid model fixtures; want one per rule: an unknown format, two places, "+
 			"empty values, no formats, an extra member, and overrides empty, with a duplicate or with a non-name", n)
+	}
+}
+
+// TestModelKeysAreChecked pins what Parse holds a model section's keys to beyond the
+// schema, each refusal starting with its fix: no key, nor a declared secret, read from
+// HOME, LD_PRELOAD, NODE_OPTIONS or BASH_ENV in any case; each key's format one of
+// formats; each pair of format and auth once; no key in a variable of denies,
+// overrides or the endpoint; and a key in a declared variable with the declaration's
+// auth.
+func TestModelKeysAreChecked(t *testing.T) {
+	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
+	const model = "model:\n  formats: [openai-chat]\n  model: {flag: --model}\n  endpoint: {variable: AMP_BASE_URL}\n  overrides: [AMP_MODEL]\n"
+	ok := head + "secrets:\n  denies: [AMP_URL]\n  declares: [{id: key, title: Key, name: AMP_API_KEY, hosts: [api.example.com], auth: {scheme: bearer}}]\n" +
+		model + "  keys: [{format: openai-chat, auth: {scheme: bearer}, variable: AMP_API_KEY}, {format: openai-chat, auth: {scheme: bearer, oauth: true}, variable: AMP_OAUTH}]\n"
+	if _, err := descriptor.Parse("amp.yaml", []byte(ok)); err != nil {
+		t.Errorf("a descriptor with keys: %v", err)
+	}
+	for _, tc := range []struct{ what, doc, want string }{
+		{"a key in home, lower case", head + model + "  keys: [{format: openai-chat, auth: {scheme: bearer}, variable: home}]\n",
+			"amp.yaml: model.keys: read the key from another variable than home: a key may not be read from HOME, LD_PRELOAD, NODE_OPTIONS or BASH_ENV"},
+		{"a declared secret in node_options", head + "secrets:\n  declares: [{id: key, title: Key, name: node_options, hosts: [api.example.com], auth: {scheme: bearer}}]\n",
+			"amp.yaml: secrets.declares: read the secret key from another variable than node_options: a secret may not be read from HOME, LD_PRELOAD, NODE_OPTIONS or BASH_ENV"},
+		{"a format outside formats", head + model + "  keys: [{format: gemini, auth: {scheme: bearer}, variable: AMP_KEY}]\n",
+			"amp.yaml: model.keys: add gemini to model.formats, or remove its keys: model.formats lists only openai-chat"},
+		{"a pair twice", head + model + "  keys: [{format: openai-chat, auth: {scheme: header, header: x-key}, variable: AMP_KEY}, {format: openai-chat, auth: {scheme: header, header: X-Key}, variable: AMP_OTHER}]\n",
+			"amp.yaml: model.keys: list openai-chat with the header X-Key once: two keys have it"},
+		{"a key in denies", head + "secrets:\n  denies: [AMP_URL]\n" + model + "  keys: [{format: openai-chat, auth: {scheme: bearer}, variable: AMP_URL}]\n",
+			"amp.yaml: model.keys: read the key from a variable outside denies, overrides and the endpoint: AMP_URL is in denies"},
+		{"a key in overrides", head + model + "  keys: [{format: openai-chat, auth: {scheme: bearer}, variable: AMP_MODEL}]\n",
+			"amp.yaml: model.keys: read the key from a variable outside denies, overrides and the endpoint: AMP_MODEL is in overrides"},
+		{"a key in the endpoint", head + model + "  keys: [{format: openai-chat, auth: {scheme: bearer}, variable: AMP_BASE_URL}]\n",
+			"amp.yaml: model.keys: read the key from a variable outside denies, overrides and the endpoint: AMP_BASE_URL is the endpoint"},
+		{"another auth than the declaration's", head + "secrets:\n  declares: [{id: key, title: Key, name: AMP_API_KEY, hosts: [api.example.com], auth: {scheme: bearer}}]\n" +
+			model + "  keys: [{format: openai-chat, auth: {scheme: header, header: x-key}, variable: AMP_API_KEY}]\n",
+			"amp.yaml: model.keys: give AMP_API_KEY the auth of its secrets.declares entry: the two differ"},
+	} {
+		_, err := descriptor.Parse("amp.yaml", []byte(tc.doc))
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("%s: %v; want %q", tc.what, err, tc.want)
+		}
 	}
 }
 
@@ -497,8 +538,16 @@ func TestRuntimesJSONShape(t *testing.T) {
 			strs("of", gr["of"])
 		}
 		if m, ok := rt["model"]; ok {
-			model := members("model", m, []string{"formats", "model", "endpoint"}, "effort", "overrides")
+			model := members("model", m, []string{"formats", "model", "endpoint"}, "effort", "keys", "overrides")
 			strs("formats", model["formats"])
+			keys, _ := model["keys"].([]any)
+			for _, k := range keys {
+				key := members("key", k, []string{"format", "auth", "variable"})
+				members("auth", key["auth"], []string{"scheme"}, "header", "username", "oauth")
+			}
+			if len(keys) == 0 && rt["name"] == "claude" {
+				t.Error("the claude runtime's model has no keys")
+			}
 			if o, ok := model["overrides"]; ok {
 				strs("overrides", o)
 			} else if rt["name"] == "claude" {

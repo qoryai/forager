@@ -765,6 +765,39 @@ func TestTheRunAnswerHasTheHostsOfEachCredential(t *testing.T) {
 	h.close()
 }
 
+// TestAModelKeyOfTheMachineReachesTheRunAnswer pins a model key of forager.yaml's,
+// one with format and endpoint, through the gateway: the run answer, read through the
+// session's link client, which holds it to the schema, has its credential_hosts entry
+// with the endpoint's host, no placeholder, its format, endpoint and auth, and its name
+// as model_credential; the run has no placeholder variable, and the proxy sets the key.
+// applied.credentials lists the key on the endpoint's host.
+func TestAModelKeyOfTheMachineReachesTheRunAnswer(t *testing.T) {
+	const key = "sk-ant-fake-value-of-the-test"
+	t.Setenv("GATEWAY_TEST_SECRET", key)
+	ref := "registry.example/agents/base@sha256:" + strings.Repeat("0", 64)
+	h := start(t, gateway.Config{
+		Credentials: []gateway.Credential{{Name: "model", Env: "GATEWAY_TEST_SECRET", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic",
+			Scheme: "header", Header: "x-api-key", KeyPrefixes: []string{"sk-ant-"}}},
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.model.example"}}, Credentials: []gateway.PolicyCredential{{Name: "model"}}},
+	})
+	h.secrets = append(h.secrets, key, ref)
+	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: ref, Runtime: "sysbox-runc"}}}
+	a := h.open(server.LinkRunRequest{Wall: true, Images: images})
+	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{},
+		Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
+	if !reflect.DeepEqual(a.CredentialHosts, want) || a.ModelCredential != "model" || len(a.Placeholders) != 0 {
+		t.Errorf("credential hosts %+v, model_credential %q, placeholders %v; want %+v and model", a.CredentialHosts, a.ModelCredential, a.Placeholders, want)
+	}
+	if got, want := gateway.Tokens(h.g, a.RunID), map[string]string{"model": key}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the proxy sets %v, want %v", got, want)
+	}
+	if got := members(a.Applied)["credentials"]; !reflect.DeepEqual(got, []any{map[string]any{"name": "model", "hosts": []any{"api.model.example"}, "scheme": "header"}}) {
+		t.Errorf("applied credentials %v", got)
+	}
+	h.post(exited(a.RunID))
+	h.close()
+}
+
 // TestAWalledRunInAnImageByReference pins the answer to a run whose policy names its
 // image by its reference under one of images.allow: the image marked as a reference,
 // under the default's runtime, and the default's reference as the relay's image; and

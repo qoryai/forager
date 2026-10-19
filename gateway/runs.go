@@ -695,6 +695,7 @@ type runAnswerDoc struct {
 	Placeholders         []string                     `json:"placeholders,omitempty"`
 	Reserved             []string                     `json:"reserved,omitempty"`
 	CredentialHosts      []server.LinkCredentialHosts `json:"credential_hosts,omitempty"`
+	ModelCredential      string                       `json:"model_credential,omitempty"`
 	Image                *server.LinkImage            `json:"image,omitempty"`
 	RelayImage           string                       `json:"relay_image,omitempty"`
 	Applied              map[string]any               `json:"applied"`
@@ -739,6 +740,9 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 		ProxySecret: lr.secret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
 		CredentialHosts: credentialHosts(lr.r.Held()), Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	}
+	if held := lr.r.Held(); held != nil {
+		a.ModelCredential = held.Start
+	}
 	if lr.wall {
 		a.RelayImage = lr.r.RelayImage()
 	}
@@ -752,17 +756,18 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 }
 
 // credentialHosts are the run answer's credential_hosts: one entry per credential held,
-// from the same uses as appliedOf's credentials, with the auth and key_variables of a
-// credential from the server; nil when the run holds none.
+// from the same uses as appliedOf's credentials, with the auth of a credential from the
+// server and of a model key, and the format and endpoint of a model key; nil when the
+// run holds none.
 func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
 	if held == nil {
 		return nil
 	}
 	var out []server.LinkCredentialHosts
 	for _, c := range held.Credentials() {
-		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, KeyVariables: c.KeyVariables}
-		if c.Stored {
-			e.Auth = &server.Auth{Scheme: c.Scheme, Header: c.Header, Username: c.Username}
+		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint}
+		if c.Stored || c.Format != "" {
+			e.Auth = &server.Auth{Scheme: c.Scheme, Header: c.Header, Username: c.Username, OAuth: c.OAuth}
 		}
 		out = append(out, e)
 	}

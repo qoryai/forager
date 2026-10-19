@@ -134,11 +134,11 @@
             "properties": {
               "id": {"description": "The declaration's id, unique among the declarations.", "$ref": "#/$defs/declared"},
               "title": {"description": "What the secret is, for a person choosing one.", "type": "string", "minLength": 1, "maxLength": 128},
-              "name": {"description": "The variable the runtime reads the secret from.", "$ref": "#/$defs/name"},
+              "name": {"description": "The variable the runtime reads the secret from.", "$ref": "#/$defs/key_variable"},
               "hosts": {"description": "The hosts the value is set on: exact DNS names, no wildcard, no IP literal.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/exact_host"}},
               "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
               "auth": {
-                "description": "How the value is set on a request, a scheme from the closed set. The session gives this variable the placeholder of a credential from the server whose key_variables name it only when the credential's auth has the same scheme and, for a header, the same header name.",
+                "description": "How the value is set on a request, a scheme from the closed set. A variable that is also a key's in model.keys has the same auth there.",
                 "$ref": "auth.schema.json"
               }
             }
@@ -183,7 +183,7 @@
       }
     },
     "model": {
-      "description": "The model API formats the runtime sends its requests in, and where a composer writes a run's model id, effort value and model endpoint for the runtime. runtimes.json lists it for every descriptor that has one.",
+      "description": "The model API formats the runtime sends its requests in, where a composer writes a run's model id, effort value and model endpoint for the runtime, and the variables it reads a model key from. runtimes.json lists it for every descriptor that has one.",
       "type": "object",
       "additionalProperties": false,
       "required": ["formats", "model", "endpoint"],
@@ -213,6 +213,22 @@
           "required": ["variable"],
           "properties": {
             "variable": {"description": "The variable the runtime reads the base URL from.", "$ref": "#/$defs/name"}
+          }
+        },
+        "keys": {
+          "description": "The variables the runtime reads a model key from, one per API format and auth: the session gives an API credential's placeholder to the variable of the key whose format is the credential's and whose auth has the credential's scheme, the same header name, case ignored, and the same oauth. Each format is one of formats, each pair of format and auth appears once, and a variable is none of denies, overrides and the endpoint's variable.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["format", "auth", "variable"],
+            "properties": {
+              "format": {"description": "The API format the key is for.", "$ref": "api-format.schema.json"},
+              "auth": {"description": "How the runtime sends the key.", "$ref": "auth.schema.json"},
+              "variable": {"description": "The variable the runtime reads the key from.", "$ref": "#/$defs/key_variable"}
+            }
           }
         },
         "overrides": {
@@ -351,6 +367,10 @@
     "values": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
       "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"}},
     "declared": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+    "key_variable": {
+      "description": "A variable a runtime reads a key from: a variable's name other than HOME, LD_PRELOAD, NODE_OPTIONS and BASH_ENV, which change what runs. The schema refuses them in upper case; Forager refuses them in any letter case.",
+      "allOf": [{"$ref": "#/$defs/name"}, {"not": {"enum": ["HOME", "LD_PRELOAD", "NODE_OPTIONS", "BASH_ENV"]}}]
+    },
     "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
     "exact_host": {"type": "string", "maxLength": 253,
       "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"}

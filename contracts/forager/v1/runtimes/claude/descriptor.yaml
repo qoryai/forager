@@ -37,38 +37,12 @@ sources:
 # started it, and the result line is read from its standard output.
 headless:
   args: ["-p", "--print"]
-# The model credential is an API key or an OAuth credential. The descriptor requires
-# neither, because a server's model key reaches the run only as a sealed credential
-# that the run configuration names, and otherwise the run's model key is a credential
-# the machine defines. Claude Code reads an API key from ANTHROPIC_API_KEY, which it
-# sends as x-api-key, or from ANTHROPIC_AUTH_TOKEN, which it sends as a bearer and reads
-# before the others, and a subscription login's key from CLAUDE_CODE_OAUTH_TOKEN, as a
-# bearer. The session gives a sealed credential's placeholder to the one of the three
-# that its key_variables list, when that declaration's auth is the credential's. The
-# denied variables move where requests and the credential go, add headers, switch to
-# another provider, wrap or replace the shell, move the settings and the credential
-# file, or change the client certificate and the trust of TLS connections; each is in
-# the environment-variable reference and in the 2.1.288 binary.
+# Claude Code reads its model key from the variables of model.keys, below. The denied
+# variables move where requests and the credential go, add headers, switch to another
+# provider, wrap or replace the shell, move the settings and the credential file, or
+# change the client certificate and the trust of TLS connections; each is in the
+# environment-variable reference and in the 2.1.288 binary.
 secrets:
-  declares:
-    - id: api_key
-      title: Anthropic API key
-      name: ANTHROPIC_API_KEY
-      hosts: [api.anthropic.com]
-      paths: [/v1/*]
-      auth: {scheme: header, header: x-api-key}
-    - id: oauth_token
-      title: Claude OAuth token
-      name: CLAUDE_CODE_OAUTH_TOKEN
-      hosts: [api.anthropic.com]
-      paths: [/v1/*]
-      auth: {scheme: bearer}
-    - id: auth_token
-      title: Anthropic API key as a bearer
-      name: ANTHROPIC_AUTH_TOKEN
-      hosts: [api.anthropic.com]
-      paths: [/v1/*]
-      auth: {scheme: bearer}
   credential_files: [~/.claude/.credentials.json]
   denies: [ANTHROPIC_BASE_URL, ANTHROPIC_BEDROCK_BASE_URL, ANTHROPIC_BEDROCK_MANTLE_BASE_URL,
            ANTHROPIC_VERTEX_BASE_URL, ANTHROPIC_FOUNDRY_BASE_URL, ANTHROPIC_AWS_BASE_URL,
@@ -81,16 +55,20 @@ secrets:
            CLAUDE_CODE_MANAGED_SETTINGS_PATH]
 # Claude Code sends Anthropic's Messages format. A composer writes the run's model id as
 # --model and its effort value as --effort, an agent's effort value in the agent file's
-# effort frontmatter, and the base URL in ANTHROPIC_BASE_URL. denies lists
-# ANTHROPIC_BASE_URL. Behind a wall the session keeps a value of it only when its host is
-# a host of the run's model credential, and leaves any other value out in place of
-# denies; it does not check the value the run inherits. Without a wall denies applies
-# to it as to any other name. overrides lists
-# the variables Claude Code reads a model id, an effort value or an extra request body
-# from, beside what a composer writes. Behind a wall the session leaves out the server's,
-# the run's, the machine's and the harness's values of them, the harness's computed
-# values included, and unsets inside each one that nothing else sets; without a wall
-# they reach Claude Code as before.
+# effort frontmatter, and the base URL in ANTHROPIC_BASE_URL. Claude Code reads an API
+# key from ANTHROPIC_API_KEY, which it sends as x-api-key, or from ANTHROPIC_AUTH_TOKEN,
+# which it sends as a bearer and reads before the others, and a subscription login's key
+# from CLAUDE_CODE_OAUTH_TOKEN, as a bearer. The session gives an API credential's
+# placeholder to the key of its format and auth, and sets ANTHROPIC_BASE_URL to the
+# credential's endpoint in place of every other value. denies lists ANTHROPIC_BASE_URL.
+# Without an API credential, behind a wall the session keeps a value of it only when its
+# host is a host of a run's credential whose placeholder this descriptor declares; it
+# declares none, so it leaves every value out in place of denies, and it does not check
+# the value the run inherits. Without a wall denies applies to it as to any other name. overrides lists the variables Claude Code reads a model
+# id, an effort value or an extra request body from, beside what a composer writes.
+# Behind a wall the session leaves out the server's, the run's, the machine's and the
+# harness's values of them, the harness's computed values included, and unsets inside
+# each one that nothing else sets; without a wall they reach Claude Code as before.
 model:
   formats: [anthropic-messages]
   model: {flag: --model}
@@ -98,6 +76,10 @@ model:
     run: {flag: --effort, values: [low, medium, high, xhigh, max]}
     agent: {frontmatter: effort, values: [low, medium, high, xhigh, max]}
   endpoint: {variable: ANTHROPIC_BASE_URL}
+  keys:
+    - {format: anthropic-messages, auth: {scheme: header, header: x-api-key}, variable: ANTHROPIC_API_KEY}
+    - {format: anthropic-messages, auth: {scheme: bearer}, variable: ANTHROPIC_AUTH_TOKEN}
+    - {format: anthropic-messages, auth: {scheme: bearer, oauth: true}, variable: CLAUDE_CODE_OAUTH_TOKEN}
   overrides: [ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
               ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL,
               ANTHROPIC_DEFAULT_FABLE_MODEL, ANTHROPIC_SMALL_FAST_MODEL,

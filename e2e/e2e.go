@@ -75,9 +75,9 @@ const (
 // ExecArgs are the arguments that make the helper run [session.Exec].
 var ExecArgs = []string{modeExec}
 
-// imageDeniedVar is a name the Claude runtime denies, which the suite's image by
-// reference sets in its ENV: the run sees it unset.
-const imageDeniedVar = "ANTHROPIC_BASE_URL"
+// imageDeniedVar is a name the Claude runtime denies and no run of the suite sets,
+// which the suite's image by reference sets in its ENV: the run sees it unset.
+const imageDeniedVar = "ANTHROPIC_BEDROCK_BASE_URL"
 
 // RelayArgs are the arguments that make the helper run the relay.
 var RelayArgs = []string{modeRelay}
@@ -104,18 +104,19 @@ const (
 	credentialPath = "/inside-the-paths"
 )
 
-// What a runtime's credentials are in the suite: Claude Code's API key, set in
-// x-api-key, and its OAuth credential, set as a bearer, each a fake key in the suite's
-// own environment for a recorder of its own, with the variable Claude Code reads it
-// from inside as its stand-in. keyMark is in both keys and nowhere else: the full keys
-// are made when the suite runs, so they exist only in the suite's environment while it
-// runs.
+// What a runtime's credentials are in the suite: Claude Code's API key, a model key
+// of the machine's whose endpoint is the first recorder, set in x-api-key in place of
+// the key's placeholder in ANTHROPIC_API_KEY; and a bearer for the second recorder, a
+// host credential whose stand-in is in PROBE_OAUTH_TOKEN, a variable no model key is
+// read from. Each is a fake key in the suite's environment. keyMark is in both keys and
+// nowhere else: the full keys are made when the suite runs, so they exist only in the
+// suite's environment while it runs.
 const (
 	keyMark        = "-REAL-not-a-secret-"
 	apiKeyVar      = "QORY_WALLTEST_API_KEY"
 	oauthVar       = "QORY_WALLTEST_OAUTH_KEY"
 	apiKeyStandIn  = "ANTHROPIC_API_KEY"
-	oauthStandIn   = "CLAUDE_CODE_OAUTH_TOKEN"
+	oauthStandIn   = "PROBE_OAUTH_TOKEN"
 	apiKeyHeader   = "X-Api-Key"
 	modelPath      = "/v1/messages"
 	apiKeyCred     = "runtime-api-key"
@@ -123,16 +124,17 @@ const (
 	recordersCAVar = "PROBE_RECORDERS_CA"
 )
 
-// What the run's model key is: a fake key in the suite's environment, with keyMark,
-// for Claude Code's model host, with a variable Claude Code reads a model key from as
-// its stand-in. A walled run whose gateway holds credentials needs one, and the
-// recorders stand in for no model host. The allow list has the host, as it must for a
-// credential's host; the probe sends nothing to it.
+// What the run's model key is without the recorders: a fake key in the suite's
+// environment, with keyMark, a model key of the machine's whose endpoint is Claude
+// Code's model host, sent as a bearer, so the session sets its placeholder in
+// ANTHROPIC_AUTH_TOKEN. A walled run whose gateway holds credentials needs a model
+// key. With the recorders, the API key is the run's one model key, since a run with no
+// control plane has no model_credential to choose between two. The allow list has the
+// host, as it must for a model key's endpoint host; the probe sends nothing to it.
 const (
-	modelKeyVar  = "QORY_WALLTEST_MODEL_KEY"
-	modelStandIn = "ANTHROPIC_AUTH_TOKEN"
-	modelHost    = "api.anthropic.com"
-	modelCred    = "runtime-model"
+	modelKeyVar = "QORY_WALLTEST_MODEL_KEY"
+	modelHost   = "api.anthropic.com"
+	modelCred   = "runtime-model"
 )
 
 // What the suite's tool is: the test binary on this machine, serving a name that
@@ -540,7 +542,7 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 		}
 		for name, vs := range h {
 			for _, v := range vs {
-				if strings.Contains(v, link.Placeholder) {
+				if strings.Contains(v, link.Placeholder) || strings.Contains(v, link.KeyPlaceholder(apiKeyCred)) {
 					t.Errorf("the stand-in reached the host in %s: %q", name, v)
 				}
 			}
@@ -560,7 +562,7 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 		arrived(t, 1, "Authorization", "Bearer "+keys.oauth, oauthCred, p.OAuthHost, p.OAuthHostErr)
 	})
 	t.Run(names[2], func(t *testing.T) {
-		if p.APIKeyStandIn != link.Placeholder || p.OAuthStandIn != link.Placeholder || len(p.KeySeen) != 0 || p.Environs == 0 {
+		if p.APIKeyStandIn != link.KeyPlaceholder(apiKeyCred) || p.OAuthStandIn != link.Placeholder || len(p.KeySeen) != 0 || p.Environs == 0 {
 			t.Errorf("%s is %q and %s is %q; a key was seen in %v; %d environments were read", apiKeyStandIn, p.APIKeyStandIn, oauthStandIn, p.OAuthStandIn, p.KeySeen, p.Environs)
 		}
 	})
@@ -571,7 +573,7 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 		reached := map[bool]bool{}
 		for _, req := range got[2] {
 			reached[req.TLS] = true
-			if req.Header.Get("Authorization") != "Bearer "+link.Placeholder || req.Header.Get(apiKeyHeader) != link.Placeholder {
+			if req.Header.Get("Authorization") != "Bearer "+link.Placeholder || req.Header.Get(apiKeyHeader) != link.KeyPlaceholder(apiKeyCred) {
 				t.Errorf("the other host got Authorization %q and %s %q, want the stand-ins", req.Header.Get("Authorization"), apiKeyHeader, req.Header.Get(apiKeyHeader))
 			}
 		}
@@ -888,9 +890,12 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	if o.Docker {
 		env = append(env, "PROBE_DOCKER=1")
 	}
-	policyCreds := []gateway.PolicyCredential{{Name: "suite"}, {Name: modelCred}}
-	creds := []gateway.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}},
-		{Name: modelCred, Env: modelKeyVar, Hosts: []string{modelHost}, Scheme: "bearer", Paths: []string{"/v1/*"}, Placeholders: []string{modelStandIn}}}
+	policyCreds := []gateway.PolicyCredential{{Name: "suite"}}
+	creds := []gateway.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}}
+	if len(h.recorders) != 3 {
+		policyCreds = append(policyCreds, gateway.PolicyCredential{Name: modelCred})
+		creds = append(creds, gateway.Credential{Name: modelCred, Env: modelKeyVar, Format: "anthropic-messages", Endpoint: "https://" + modelHost, Scheme: "bearer"})
+	}
 	if len(h.recorders) == 3 {
 		cert, _ := authority()
 		env = append(env, "PROBE_API_KEY_HOST="+h.recorders[0], "PROBE_OAUTH_HOST="+h.recorders[1], "PROBE_OTHER_HOST="+h.recorders[2],
@@ -898,7 +903,8 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		allow = append(allow, h.recorders...)
 		policyCreds = append(policyCreds, gateway.PolicyCredential{Name: apiKeyCred}, gateway.PolicyCredential{Name: oauthCred})
 		creds = append(creds,
-			gateway.Credential{Name: apiKeyCred, Env: apiKeyVar, Hosts: []string{h.recorders[0]}, Scheme: "header", Header: apiKeyHeader, Paths: []string{"/v1/*"}, Placeholders: []string{apiKeyStandIn}},
+			gateway.Credential{Name: apiKeyCred, Env: apiKeyVar, Format: "anthropic-messages", Endpoint: "https://" + net.JoinHostPort(h.recorders[0], recorderTLS),
+				Scheme: "header", Header: apiKeyHeader, KeyPrefixes: []string{"sk-ant-"}},
 			gateway.Credential{Name: oauthCred, Env: oauthVar, Hosts: []string{h.recorders[1]}, Scheme: "bearer", Paths: []string{"/v1/*"}, Placeholders: []string{oauthStandIn}})
 	}
 	// With a runtime or a Docker the machine defines the image and the policy selects
