@@ -137,6 +137,21 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- Behind a wall, and behind a separate gateway, only the node's policy opens the
+  gateway's machine: the guard reaches the machine's addresses only for an
+  `egress.allow` entry of `gateway.Config.Policy` that names the host itself and that
+  the run's policy allows, at the start and at each reload. An entry of a server's
+  `security_policy`, such as `localhost` or a name that resolves to `127.0.0.1`, no
+  longer opens it: list the host in the node's policy. With no server's policy the
+  node's policy opens what it names, as before.
+- The proxy sets a credential on a private host only through a `hosts` entry equal to
+  the host, never through a `*.` pattern. A private host is an IP literal in
+  `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `fc00::/7`, a name of one label,
+  or a name that ends in `.local`, `.internal` or `.home.arpa`. A `forager.yaml`
+  credential whose hosts are `["*.local"]` no longer sets its key on `litellm.local`:
+  list `litellm.local` in the credential's hosts. `policy.CredentialFor` holds the rule.
+  `dev.qory.run.policy_applied`'s `terminated` leaves out a credential's `*.` pattern
+  that is for no host under the rule, such as `*.local`.
 - A run holds a copy of the path rules `gateway.Policy.Under` adds, taken and checked
   when it starts: the proxy and `ceiling_paths` keep them for the run whatever the
   caller's `Policy` holds afterwards.

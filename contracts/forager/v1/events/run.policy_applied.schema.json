@@ -46,7 +46,7 @@
       }
     },
     "image": {"description": "The image the policy or the run configuration selects, which the run started in: the machine's name for it, or its reference pinned by digest. Absent when neither selects one and the machine's default was used. Fixed for the run.", "$ref": "../policy.schema.json#/properties/image"},
-    "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read. A credential's *. entry is not for a name under it that ends in .local, .internal or .home.arpa, such as x.home.arpa under *.arpa: the credential is for such a name only through an entry equal to it. A credential's *. entry under which every name has one of these endings, such as *.local, is not listed for the credential; it is listed when a tool serves it or it has path rules.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "harness_hosts": {"description": "The egress the harness declared, as passed to Forager, when present. Information only: it decides nothing.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "node_policy": {
       "description": "The node's policy, when the run has both a fetched policy and a policy the command passes, which narrows it, so the record shows the path rules of the server's policy and of the node's.",
