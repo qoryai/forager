@@ -41,15 +41,17 @@ var errTooManyLinks = errors.New("too many links")
 // part, be a regular file and have one name. For a run that sees its workspace at
 // /workspace, a value whose path reaches /workspace is refused first, since the
 // enclosure reads it from the workspace, not from where this machine has it. Each
-// directory is read once, by the file it is.
+// directory is read once, by the file it is. An --add-dir directory is not counted as
+// read, since only part of it is: a link that leads back to it reads all of it.
 func checkDir(v flagValue, a runtimes.Attach) error {
 	if a.Inside != nil {
 		through, err := throughWorkspace(v.value)
 		if err != nil {
-			return dirRefused(v, fmt.Errorf("%s: %w", accesskey.ShownValue(v.value, false), err))
+			return dirRefused(v, err)
 		}
 		if through {
-			// The value may not exist here: a value named .zip is taken for a file.
+			// The value may not exist here: a value whose name ends in .zip is taken
+			// for a file.
 			info, err := os.Stat(v.value)
 			file := err == nil && !info.IsDir() || err != nil && strings.EqualFold(filepath.Ext(v.value), ".zip")
 			return writtenValue(v, file, &runtimes.WrittenError{How: "lies in", Place: workspaceInside})
@@ -71,10 +73,10 @@ func checkDir(v flagValue, a runtimes.Attach) error {
 		return dirRefused(v, err)
 	}
 	s := &scan{v: v, a: a, seen: map[fileID]bool{}}
-	if _, err := s.enter(real); err != nil {
-		return err
-	}
 	if v.flag != addDirFlag {
+		if _, err := s.enter(real); err != nil {
+			return err
+		}
 		err = s.dir(real, v.value)
 	} else {
 		for _, name := range []string{".claude", "CLAUDE.md"} {

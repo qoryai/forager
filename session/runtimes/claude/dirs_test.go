@@ -277,6 +277,16 @@ func TestAWalledLaunchsPluginLinkIntoTheWorkspaceInsideIsRefused(t *testing.T) {
 			t.Errorf("got %v, want %q", err, want)
 		}
 	})
+	t.Run("a value that is a link loop", func(t *testing.T) {
+		home := t.TempDir()
+		symlink(t, filepath.Join(home, "b"), filepath.Join(home, "a"))
+		symlink(t, filepath.Join(home, "a"), filepath.Join(home, "b"))
+		value := filepath.Join(home, "a")
+		_, err := walledDirs(t, &fakeWritten{written: t.TempDir()}, inside, []string{"--plugin-dir", value})
+		if want := "--plugin-dir " + value + ": too many links"; err == nil || err.Error() != want {
+			t.Errorf("got %v, want %q", err, want)
+		}
+	})
 	t.Run("without Inside", func(t *testing.T) {
 		home := t.TempDir()
 		p := plugin(t, filepath.Join(home, "p"))
@@ -290,8 +300,8 @@ func TestAWalledLaunchsPluginLinkIntoTheWorkspaceInsideIsRefused(t *testing.T) {
 // TestAWalledLaunchsValueInTheWorkspaceInsideIsRefused pins that, for a run whose
 // workspace is at /workspace inside, a value of --plugin-dir, --plugin-dir-no-mcp or
 // --add-dir whose path reaches /workspace, as written or through a link of this
-// machine's, is refused before it is looked at here: the enclosure reads it from the
-// workspace. A .zip is a file in the text.
+// machine's, is refused before Forager checks the path here: the enclosure reads it
+// from the workspace. A .zip is a file in the text.
 func TestAWalledLaunchsValueInTheWorkspaceInsideIsRefused(t *testing.T) {
 	inside := func(s string) string { return s }
 	home := t.TempDir()
@@ -418,6 +428,21 @@ func TestAWalledLaunchsAddDirIsChecked(t *testing.T) {
 		"a CLAUDE.md link into the place": {
 			make: func(t *testing.T, ref string) string { return linked(t, ref, "CLAUDE.md") },
 			want: func(ref string) string { return linkText(ref, "CLAUDE.md") },
+		},
+		"a .claude link back to the directory": {
+			make: func(t *testing.T, ref string) string {
+				symlink(t, ref, filepath.Join(ref, ".claude"))
+				return linked(t, ref, "settings.json")
+			},
+			want: func(ref string) string { return linkText(ref, ".claude/settings.json") },
+		},
+		"a link under .claude back to the directory": {
+			make: func(t *testing.T, ref string) string {
+				mkdir(t, filepath.Join(ref, ".claude"))
+				symlink(t, ref, filepath.Join(ref, ".claude", "skills"))
+				return linked(t, ref, "evil/SKILL.md")
+			},
+			want: func(ref string) string { return linkText(ref, ".claude/skills/evil/SKILL.md") },
 		},
 		"a link into the place outside .claude": {
 			make: func(t *testing.T, ref string) string { return linked(t, ref, "src/settings.json") },

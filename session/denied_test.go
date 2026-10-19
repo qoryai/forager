@@ -292,13 +292,16 @@ func TestANameTheWallSetsWithAnAuthorityIsUnsetWithoutOne(t *testing.T) {
 	}
 }
 
-// TestAVariableThatAddsPluginsOrDirectoriesIsDenied pins CLAUDE_CODE_PLUGIN_DIRS and
-// CLAUDE_RELAUNCH_SESSION_ADD_DIRS, which load plugin directories and add directories
-// as --plugin-dir and --add-dir do, past their checks: the Claude runtime denies them,
-// so a value of the server's, the run's or the machine's never reaches the wall, and
-// the name is unset inside.
+// TestAVariableThatAddsPluginsOrDirectoriesIsDenied pins the variables that lead
+// Claude Code's plugin or settings loaders to a directory or a file past the checks of
+// --plugin-dir and --add-dir: CLAUDE_CODE_PLUGIN_DIRS, CLAUDE_RELAUNCH_SESSION_ADD_DIRS,
+// CLAUDE_CODE_PLUGIN_SEED_DIR, CLAUDE_CODE_PLUGIN_CACHE_DIR and
+// CLAUDE_CODE_MANAGED_SETTINGS_PATH. The Claude runtime denies them, so a value of the
+// server's, the run's or the machine's never reaches the wall, and the name is unset
+// inside.
 func TestAVariableThatAddsPluginsOrDirectoriesIsDenied(t *testing.T) {
-	for _, name := range []string{"CLAUDE_CODE_PLUGIN_DIRS", "CLAUDE_RELAUNCH_SESSION_ADD_DIRS"} {
+	for _, name := range []string{"CLAUDE_CODE_PLUGIN_DIRS", "CLAUDE_RELAUNCH_SESSION_ADD_DIRS",
+		"CLAUDE_CODE_PLUGIN_SEED_DIR", "CLAUDE_CODE_PLUGIN_CACHE_DIR", "CLAUDE_CODE_MANAGED_SETTINGS_PATH"} {
 		t.Run(name, func(t *testing.T) {
 			w := &openWall{}
 			sp, g := specGateway(t)

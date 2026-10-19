@@ -407,6 +407,9 @@ release may change what an existing document does, and says so under Upgrading.
   now lists both, and `contracts/forager/v1/runtimes.json` with it: a value of the
   server's, the run's or the machine's no longer reaches the run, and a walled run has
   them unset.
+- `CLAUDE_CODE_PLUGIN_SEED_DIR`, `CLAUDE_CODE_PLUGIN_CACHE_DIR` and
+  `CLAUDE_CODE_MANAGED_SETTINGS_PATH` lead Claude Code's plugin and settings loaders to
+  a directory or a file no check covers; the Claude descriptor now denies them too.
 - A walled run bound a mount or a workspace through a link that an agent of an earlier
   walled run, already ended, had left in a place it could write: the engine followed
   the link, so the run could bind any directory of this machine, writable. A place whose
