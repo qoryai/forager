@@ -181,7 +181,7 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 // whose env or file use claims one is not read, and an adapter's answer that claims one
 // is dropped, with no renewal; the adapter has run all the same. A credential of the
 // machine's that it replaces may have its name. A credential from the server with the
-// name of a credential of the machine's that stays is refused, so the record names
+// name of a credential of the machine's that stays is refused, so the record lists
 // each once. The checks of Resolve then cover all of them.
 func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
 	out := &Held{}
@@ -246,7 +246,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 	for _, s := range stored {
 		if slices.ContainsFunc(out.all, func(h *held) bool { return h.def.Name == s.Name }) {
 			out.Close()
-			return nil, fmt.Errorf("rename the run configuration's credential %s or this machine's credential of that name; the machine's is for other hosts, so it stays, and the record names each credential once", accesskey.ShownName(s.Name, true))
+			return nil, fmt.Errorf("rename the run configuration's credential %s or this machine's credential of that name; the machine's is for other hosts, so it stays, and the record lists each credential once", accesskey.ShownName(s.Name, true))
 		}
 	}
 	for _, s := range stored {
