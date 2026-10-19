@@ -58,8 +58,9 @@ release may change what an existing document does, and says so under Upgrading.
 - A run without a wall whose gateway holds credentials for it now gets the rules a
   walled run gets: the `key_variables` choice, the endpoint rule and
   `credential_variables` in `dev.qory.run.policy_applied`. It is `model_key_missing`
-  only when a credential has a placeholder of a model key's variable and no such
-  credential covers the runtime's model host. A Claude Code run without a wall whose
+  only when a credential has a placeholder of a model key's variable, no such
+  credential covers the runtime's model host, and no value of a model key's variable
+  reaches the runtime. A Claude Code run without a wall whose
   only credential is a forge's starts, and Claude Code can use the machine's Claude
   login.
 

@@ -439,7 +439,7 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 		{"unwalled, a model key's placeholder for another host", false, []map[string]any{forge, sealed("model", "10.0.0.5", "", "", apiKeyVariable)}, nil, true},
 		{"unwalled, no credential_hosts", false, nil, nil, false},
 		{"unwalled, a machine credential", false, modelAndForge, nil, false},
-		{"unwalled, a value the run inherits", false, []map[string]any{forge}, func(sp *session.Spec) {
+		{"unwalled, a value the run inherits", false, []map[string]any{forge, sealed("model", "10.0.0.5", "", "", authTokenVariable)}, func(sp *session.Spec) {
 			sp.Env = append(sp.Env, apiKeyVariable+"=sk-ant-a-key-of-the-test")
 		}, false},
 		{"walled, no credential_hosts", true, nil, nil, false},
