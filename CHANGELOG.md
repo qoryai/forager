@@ -21,9 +21,9 @@ release may change what an existing document does, and says so under Upgrading.
   placeholder than one of the four.
 - Return an empty digest from a `receiver.Handler.RunConfiguration` hook, or `sha256=`
   and the lower-case hex SHA-256 of the document's bytes. The reference receiver
-  computes the digest itself, and a hook's digest in another form gets a signed `500`
-  in place of the answer to the registration, the attach or the reload, and no digest
-  on a batch's answer. Before, the receiver served the hook's digest as it was.
+  computes the digest itself. For any other digest from the hook, it answers a signed
+  `500` in place of the registration's, the attach's or the reload's answer, and no
+  digest on a batch's answer. Before, the receiver served the hook's digest as it was.
 
 #### Added
 

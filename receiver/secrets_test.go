@@ -341,6 +341,43 @@ func TestTheSecretsRequestRefusesInItsOrder(t *testing.T) {
 	ss.noValueKept()
 }
 
+// TestTheSecretsRequestTakesTheRunConfigurationsRefusal pins step 4 of the refusal
+// order: when the RunConfiguration hook refuses the run at its secrets request, the
+// request is answered the hook's refusal, signed, before the digest and the credentials
+// are checked, and the Secrets hook is not called.
+func TestTheSecretsRequestTakesTheRunConfigurationsRefusal(t *testing.T) {
+	ss := newSecretsStand(t)
+	digest, names := digestOf(credentialsDoc), []string{"model", "forge"}
+	direct, attached := ss.direct(), ss.attached()
+	var refusal *receiver.Refusal
+	ss.h.RunConfiguration = func(receiver.Run) ([]byte, string, *receiver.Refusal) {
+		if refusal != nil {
+			return nil, "", refusal
+		}
+		return ss.doc, "", nil
+	}
+	for _, c := range []struct {
+		name, id, runID string
+		refusal         receiver.Refusal
+	}{
+		{"a coded refusal of a direct run", directKey, direct, receiver.Refusal{Status: http.StatusConflict, Code: "run_closed"}},
+		{"a refusal with no code of an attached run", gwKey, attached, receiver.Refusal{Status: http.StatusGone}},
+	} {
+		refusal = &c.refusal
+		req, rec := ss.secrets(c.id, inst, ss.secretsBody(c.runID, digest, names...))
+		ss.expect(c.name, req, rec, c.refusal.Status, c.refusal.Code)
+		req, rec = ss.secrets(c.id, inst, ss.secretsBody(c.runID, "sha256="+strings.Repeat("0", 64), "other"))
+		ss.expect(c.name+", with a digest never served and other credentials", req, rec, c.refusal.Status, c.refusal.Code)
+	}
+	if len(ss.handed) != 0 {
+		t.Errorf("the Secrets hook was called %d times, want none", len(ss.handed))
+	}
+	refusal = nil
+	req, rec := ss.secrets(directKey, inst, ss.secretsBody(direct, digest, names...))
+	ss.open(directKey, direct, digest, names, req, rec)
+	ss.noValueKept()
+}
+
 // TestDiscoveryListsSecretsForAnAllowedKey pins discovery of a configuration whose
 // document lists secrets: a key allowed stored secrets gets it, and a key not allowed
 // gets the document without it, its digest sha256= and the hex SHA-256 of the document

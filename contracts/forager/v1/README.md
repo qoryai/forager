@@ -2041,14 +2041,14 @@ labels, `about` and the run's placement, its node, workspace and gateway, and re
 the run's run configuration, or refuses the run with a status and a code or with no
 code; `about` is for display and never selects a policy. It asks the hook at the
 registration, at the attach, at each reload and at each secrets request, and computes
-the digest of the bytes it serves: a digest the hook returns in another form is a signed
-`500`. Without a hook it answers every run `{"version": 1}`, no policy. A second hook
-returns the values of a run's credentials for a secrets request it accepted, which it
-seals to the access key the request verified under and then overwrites with zeros. It
-answers a secrets request, after `secrets_not_allowed`, as a reload of the run is
-answered: a signed `404` to a key that may not reload the run, `410`
-`workspace_not_served`, and `410` for a run it wants nothing more of. A digest that is
-not the one in force, or not one it answered the run with, is a signed `410`
+the digest of the bytes it serves: the hook returns an empty digest or that one, and any
+other digest is a signed `500`. Without a hook it answers every run `{"version": 1}`, no
+policy. A second hook returns the values of a run's credentials for a secrets request it
+accepted, which it seals to the access key the request verified under and then
+overwrites with zeros. It answers a secrets request, after `secrets_not_allowed`, as a
+reload of the run is answered: a signed `404` to a key that may not reload the run,
+`410` `workspace_not_served`, and `410` for a run it wants nothing more of. A digest
+that is not the one in force, or not one it answered the run with, is a signed `410`
 `run_configuration_superseded`, and a `credentials` list other than that run
 configuration's names in its order is a signed `409` `credentials_differ`. A hook
 decides whether an instance may start a run, the instance limit. It keeps each

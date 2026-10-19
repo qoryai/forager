@@ -243,6 +243,9 @@ func (r sealedRun) check(t *testing.T, attached bool) {
 	var closeGateway func()
 	recordOf := func(*session.Result) string { return "" }
 	if attached {
+		// The gateway's record comes before the gateway starts, as its discovery makes
+		// it a gateway; its URL is known once it listens, before any run registers.
+		ref.h.Gateways = map[string]receiver.Gateway{sealedGateway: {Workspace: sealedWorkspace, AccessKeys: []string{sealedGatewayKey}}}
 		g, url := separate(t, gateway.Config{
 			RunDir:  func(id string) string { return filepath.Join(records, id) },
 			Server:  &gateway.Server{Version: 1, URL: ref.srv.URL, AccessKeyID: sealedGatewayKey, ApiaryPublicKey: pin, AccessKey: accessKey, InstanceID: "i_walltest_gateway"},
@@ -255,7 +258,7 @@ func (r sealedRun) check(t *testing.T, attached bool) {
 			defer cancel()
 			g.Close(ctx)
 		}
-		ref.h.Gateways = map[string]receiver.Gateway{sealedGateway: {URL: url, Workspace: sealedWorkspace, AccessKeys: []string{sealedGatewayKey}}}
+		ref.h.Gateways[sealedGateway] = receiver.Gateway{URL: url, Workspace: sealedWorkspace, AccessKeys: []string{sealedGatewayKey}}
 		spec.RunID = event.NewRunID()
 		c := &server.Client{Config: &server.Config{Version: 1, URL: ref.srv.URL, AccessKeyID: sealedPoolKey, ApiaryPublicKey: pin}, Key: poolKey,
 			InstanceID: "i_walltest_pool", UserAgent: "qory-forager/walltest"}
@@ -299,9 +302,9 @@ func (r sealedRun) check(t *testing.T, attached bool) {
 	if !found {
 		t.Fatalf("the probe reported nothing; exit %d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, out.String(), errs.String())
 	}
-	if p.Placeholder != link.Placeholder || len(p.Seen) != 0 || p.Environs == 0 || p.Err != "" {
-		t.Errorf("inside, %s is %q, the value is seen in %v, %d environments read, the request's error %q; want the placeholder and the value nowhere",
-			sealedPlaceholder, p.Placeholder, p.Seen, p.Environs, p.Err)
+	if p.Placeholder != link.Placeholder || len(p.Seen) != 0 || p.Environs == 0 || p.Err != "" || p.Status != 200 {
+		t.Errorf("inside, %s is %q, the value is seen in %v, %d environments read, the request's status %d and error %q; want the placeholder, the value nowhere and 200",
+			sealedPlaceholder, p.Placeholder, p.Seen, p.Environs, p.Status, p.Err)
 	}
 
 	after, err := exec.Command(r.command, "exec", r.recorder, "cat", RecorderFile).Output()
