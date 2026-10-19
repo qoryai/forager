@@ -170,8 +170,9 @@ and for each name the run takes the value of the highest that sets it:
   defaults. The list is the contract's
   [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
   `denies`, and `Spec.Variables.Deny`. It holds the session's names, the proxy's, the
-  trust store's, Docker's and `PATH`. The built-in list leaves out a value the harness
-  computes as well; the runtime's `denies` and `Variables.Deny` leave those in.
+  trust store's, Docker's, `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` and
+  `HOME`. The built-in list leaves out a value the harness computes as well; the
+  runtime's `denies` and `Variables.Deny` leave those in.
 - A value of a fixed name from any other source is left out.
 - The server's value of a variable the runtime declares or reserves, or one a
   credential is read from, is left out. A node's value of a declared one reaches the
@@ -225,9 +226,28 @@ server's `QORY_` value is denied in any run, apart from `QORY_RUN_SYSTEM` and
 which the server's variables may set and which reach the agent as any server variable
 does. Set by the node, they are `QORY_` names like any other.
 
+Before it resolves the variables, the session refuses a placeholder that goes into a
+variable for no credential, `run_configuration_invalid`: one of the run's placeholders,
+from this machine's credentials and tools in forager.yaml or from Qory Apiary's, that the
+runtime's descriptor lists in `denies` or in its model `overrides`, or that is its model
+endpoint's variable; a variable the runtime declares or reserves that no credential
+has among its placeholders; or a placeholder of a credential from Qory Apiary in a
+variable the runtime declares or reserves, other than the one its `key_variables`
+chose.
+
+After it resolves the variables, the session refuses a walled run whose gateway holds
+credentials for it and that has no model key for its runtime, `model_key_missing`. The
+run has one when a credential has a placeholder of a model key's variable on the
+runtime's model host, or when a value of one reaches the runtime from `Env`,
+`LaunchFixed`, `LaunchDefaults`, `Variables.Run`, `Variables.Machine` or the runtime's
+preparation.
+
 The record lists every variable by name, never a value: `dev.qory.run.policy_applied`'s
 `variables` contains each name, `from`, the source that applies, and `lost`, each value
-that lost with its source and why: `overridden`, `denied`, `fixed` or `unwalled`. A name
+that lost with its source and why: `overridden`, `denied`, `fixed`, `unwalled`,
+`endpoint_uncovered` or `endpoint_unreadable`; behind a wall, the entry of the runtime's
+model endpoint variable has `kept`, with the model credential's name, when the value
+that applies is one the endpoint rule kept. A name
 that contains `qak_` or `qrk_` in any case is sent as `(a name that contains an access
 key secret)`, or `(a name that contains a run key)` when it contains `qrk_` and no
 `qak_`. A fixed name, and a name the run inherits, is listed only beside a value of the

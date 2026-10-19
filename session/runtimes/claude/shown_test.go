@@ -19,10 +19,11 @@ func TestSettingsPrintsAPhraseForASecret(t *testing.T) {
 		{filepath.Join(base, "qak_x", "absent.json"),
 			"Pass a --settings path that exists on this machine. The check of --settings (a value that contains " +
 				"an access key secret) failed: (a value that contains an access key secret)"},
-		{`{"hooks": QRK_y}`, "Pass a valid JSON object to --settings. The check of --settings (a value that contains a run key) " +
-			"failed: invalid character 'Q' looking for beginning of value"},
-		{`{"hooks": nothing}`, `Pass a valid JSON object to --settings. The check of --settings {"hooks": nothing} failed: ` +
-			`invalid character 'o' in literal null (expecting 'u')`},
+		{filepath.Join(base, "QRK_y", "absent.json"),
+			"Pass a --settings path that exists on this machine. The check of --settings (a value that contains " +
+				"a run key) failed: (a value that contains a run key)"},
+		{`{"hooks": QRK_y}`, "Pass a valid JSON object to --settings. The check of --settings (a --settings value) " +
+			"failed: it is no JSON object"},
 		// The reason of a clean path is the system's, which names the path as resolved.
 		{clean, "Pass a --settings path that exists on this machine. The check of --settings " + clean + " failed: "},
 	} {
@@ -40,6 +41,31 @@ func TestSettingsPrintsAPhraseForASecret(t *testing.T) {
 		}
 		if err != nil && strings.Contains(strings.ToLower(err.Error()), "qak_") {
 			t.Errorf("%s: %v", c.settings, err)
+		}
+	}
+}
+
+// TestSettingsJSONValueIsAPhrase pins that a --settings value that contains "{" or "[",
+// or starts with white space or a format character, is shown as a phrase, and so is the
+// reason, in either form, so a token in it is not printed.
+func TestSettingsJSONValueIsAPhrase(t *testing.T) {
+	tok := `"Authorization":"Bearer fake-token-123"`
+	noObject := "Pass a valid JSON object to --settings. The check of --settings (a --settings value) failed: it is no JSON object"
+	noFile := "Pass a --settings path that exists on this machine. The check of --settings (a --settings value) failed: it is no file"
+	for _, c := range []struct{ value, want string }{
+		{`{"env":{` + tok + `},}`, noObject},
+		{`{"env": nothing, ` + tok + `}`, noObject},
+		{`[{"env":{` + tok + `}}]`, noFile},
+		{"\ufeff" + `{"env":{` + tok + `}}`, noFile},
+		{"\u200b" + `{"env":{` + tok + `}}`, noFile},
+	} {
+		for _, args := range [][]string{{"--settings", c.value}, {"--settings=" + c.value}} {
+			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+				Launch: runtimes.Launch{Args: args}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+			})
+			if err == nil || err.Error() != c.want || strings.Contains(err.Error(), "fake-token-123") {
+				t.Errorf("%q: %v, want %q", args, err, c.want)
+			}
 		}
 	}
 }

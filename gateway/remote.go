@@ -195,7 +195,10 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func
 // returns the run's run configuration with its digest, the record's first line,
 // dev.qory.run.registered: the run key's workspace, node and instance, what the attach
 // announced, and the labels and about the attach's answer gives back of the starter's
-// registration; and those labels, nil when it gives none. A run configuration Forager
+// registration; and those labels, nil when it gives none. When the answer's run
+// configuration has credentials, the run configuration and its digest are a reload's
+// instead, fetched with the same tries, so the credentials and the digest Forager
+// computes come from the bytes of the document a reload answers. A run configuration Forager
 // refuses is a [*server.DocumentError] with the first line, an attach the server
 // accepted; any other failure has none.
 func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID string, how opening) (*server.RunConfiguration, string, map[string]any, map[string]string, error) {
@@ -212,6 +215,22 @@ func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID 
 	var refused *server.DocumentError
 	if err != nil && !errors.As(err, &refused) {
 		return nil, "", nil, nil, err
+	}
+	if err == nil && ans != nil && len(ans.RunConfiguration.Credentials) > 0 {
+		// The attach answer's body is the run configuration with labels and about, so
+		// its bytes are not the document whose digest the values are sealed under: the
+		// run takes its run configuration from a reload, whose bytes are, and reads the
+		// credentials and computes the digest from them.
+		var rc *server.RunConfiguration
+		var reloaded string
+		err = g.tries(ctx, how.deadline, func() (err error) {
+			rc, reloaded, err = g.client.RunConfiguration(ctx, conf.Run.URL, runID)
+			return err
+		})
+		if err != nil && !errors.As(err, &refused) {
+			return nil, "", nil, nil, err
+		}
+		ans.RunConfiguration, digest = rc, reloaded
 	}
 	k := how.key
 	registered := map[string]any{"workspace": k.Workspace, "node_id": k.NodeID, "instance_id": k.InstanceID, "forager_version": g.cfg.Version,

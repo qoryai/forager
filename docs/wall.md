@@ -159,13 +159,17 @@ Two flags change one run:
 Behind a wall, the proxy is guarded:
 
 - It never dials link-local addresses, the cloud metadata service among them.
-- It dials the node itself only for a host that an `egress.allow` entry lists by its
-  name. A `*.` entry above that host is not enough.
+- It dials the node itself only for a host that an `egress.allow` entry of the node's
+  policy lists by its name, and that the run's policy allows. A `*.` entry above that
+  host is not enough, and an entry of a server's policy never opens the node.
+
+The node's policy is the one the command passes, `gateway.Config.Policy` in Go. In
+`qory` it is the `gateway.egress` section of `~/.config/qory/forager.yaml`.
 
 A model endpoint or MCP server on the node is reached through the proxy. The session
-reaches it by the node's host name, listed in `egress`, as the hosts file or a name
-server gives it; no search domain is added. `localhost` inside the container is the
-container.
+reaches it by the node's host name, listed in the node's policy's `egress`, as the
+hosts file or a name server gives it; no search domain is added. `localhost` inside the
+container is the container.
 
 ## From Go
 
@@ -528,6 +532,12 @@ unwalled launch passes them unchecked.
   workspace, which a walled run can write, so the run does not start." A value with a
   `..` part is refused: "Pass the path /a/../b.json without "..". This launch passes
   --mcp-config /a/../b.json, and the path has a ".." part, so the run does not start."
+  A text shows a value of `--mcp-config`, `--agents` or `--settings` that contains `{`
+  or `[`, or starts with white space or a format character such as U+FEFF, as `(an
+  --mcp-config value)`, `(an --agents value)` or `(a --settings value)`, because such a
+  value may be JSON with a token in it. The reason after "failed:" is then `it is no
+  file`, `it cannot be read` or `it is no JSON object`. For `--settings` this holds in
+  an unwalled launch too.
 - **`--mcp-config` and `--agents` files** are checked and read as the settings file is,
   and Claude Code is passed a copy in the run directory, `mcp-config-<n>.json` or
   `agents-<n>.json`, numbered from 1 in the order the files appear. For a run whose

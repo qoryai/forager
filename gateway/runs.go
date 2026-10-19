@@ -22,6 +22,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/runkey"
+	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/sink"
 )
@@ -406,10 +407,14 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		// The gateway's selection is for a run that attached with a run key alone.
 		selects = g.cfg.Selects
 	}
+	var secrets func(context.Context, string, []string) (sealed.Values, error)
+	if g.client != nil {
+		secrets = g.secrets(req.RunID)
+	}
 	r, err := run.Decide(run.Config{
 		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
 		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: run.Passing(req.Passes), Report: g.report,
-		Narrowing: narrowing,
+		Narrowing: narrowing, Secrets: secrets,
 	})
 	if err != nil {
 		return fail(err)
@@ -433,11 +438,14 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if lr.px, err = proxy.New(pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, pol.Policy.Egress.Deny, lr.observe); err != nil {
 		return fail(err)
 	}
+	if g.cfg.upstreamRoots != nil {
+		lr.px.TrustUpstream(g.cfg.upstreamRoots)
+	}
 	if req.Wall || remote {
 		// The proxy serves something that is not on this machine, so this machine's own
 		// addresses are not its to reach: an enclosure, or another machine.
-		// The names are the policy's own, never a session's narrowing's, which only
-		// narrows: a narrowing opens none of this machine's addresses.
+		// The names are entries of the node's policy, never of a server's policy or a
+		// session's narrowing: neither opens any of this machine's addresses.
 		lr.px.Guard(r.GuardNames())
 	}
 	// The node's path rules, beside a server's, and those put beside the node's policy:
@@ -663,19 +671,20 @@ func (lr *linkRun) end(e ending) {
 // contracts/forager/v1/link-run-answer.schema.json: on the one address without the
 // labels and the proxy secret.
 type runAnswerDoc struct {
-	Version              int                        `json:"version"`
-	RunID                string                     `json:"run_id"`
-	Labels               map[string]string          `json:"labels,omitzero"`
-	Policy               json.RawMessage            `json:"policy,omitempty"`
-	Digest               string                     `json:"digest,omitempty"`
-	Variables            map[string]server.Variable `json:"variables,omitempty"`
-	ProxySecret          string                     `json:"proxy_secret,omitempty"`
-	CertificateAuthority string                     `json:"certificate_authority,omitempty"`
-	Placeholders         []string                   `json:"placeholders,omitempty"`
-	Reserved             []string                   `json:"reserved,omitempty"`
-	Image                *server.LinkImage          `json:"image,omitempty"`
-	RelayImage           string                     `json:"relay_image,omitempty"`
-	Applied              map[string]any             `json:"applied"`
+	Version              int                          `json:"version"`
+	RunID                string                       `json:"run_id"`
+	Labels               map[string]string            `json:"labels,omitzero"`
+	Policy               json.RawMessage              `json:"policy,omitempty"`
+	Digest               string                       `json:"digest,omitempty"`
+	Variables            map[string]server.Variable   `json:"variables,omitempty"`
+	ProxySecret          string                       `json:"proxy_secret,omitempty"`
+	CertificateAuthority string                       `json:"certificate_authority,omitempty"`
+	Placeholders         []string                     `json:"placeholders,omitempty"`
+	Reserved             []string                     `json:"reserved,omitempty"`
+	CredentialHosts      []server.LinkCredentialHosts `json:"credential_hosts,omitempty"`
+	Image                *server.LinkImage            `json:"image,omitempty"`
+	RelayImage           string                       `json:"relay_image,omitempty"`
+	Applied              map[string]any               `json:"applied"`
 }
 
 // reloadAnswerDoc is the reload answer as the gateway writes it,
@@ -715,7 +724,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	a := runAnswerDoc{
 		Version: 1, RunID: lr.id, Labels: lr.labels, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
 		ProxySecret: lr.secret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
-		Image: lr.image(), Applied: lr.given[len(lr.given)-1],
+		CredentialHosts: credentialHosts(lr.r.Held()), Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	}
 	if lr.wall {
 		a.RelayImage = lr.r.RelayImage()
@@ -727,6 +736,24 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	}
 	b, _ := json.Marshal(a)
 	return b
+}
+
+// credentialHosts are the run answer's credential_hosts: one entry per credential held,
+// from the same uses as appliedOf's credentials, with the auth and key_variables of a
+// credential from the server; nil when the run holds none.
+func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
+	if held == nil {
+		return nil
+	}
+	var out []server.LinkCredentialHosts
+	for _, c := range held.Credentials() {
+		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, KeyVariables: c.KeyVariables}
+		if c.Stored {
+			e.Auth = &server.Auth{Scheme: c.Scheme, Header: c.Header, Username: c.Username}
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // image is the image the run gets, behind a wall, when it has a reference.
@@ -777,8 +804,8 @@ func images(li *server.LinkImages) run.Images {
 }
 
 // appliedOf is what dev.qory.run.policy_applied records of a policy that the gateway
-// decides, as today's session writes it: every member but the variables and the
-// harness's hosts, which are the session's. beside are the sides of path rules
+// decides, as today's session writes it: every member but the variables, the
+// credential variables and the harness's hosts, which are the session's. beside are the sides of path rules
 // [Policy.Under] put beside the run's policy, its ceiling_paths. It is in JSON's types,
 // as an event's data decodes.
 func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credential.Held, chosen []tool.Chosen, terminated []string) map[string]any {
@@ -935,7 +962,7 @@ func appliedIs(a map[string]any) func(*event.Event) bool {
 func decided(data map[string]any) map[string]any {
 	own := map[string]any{}
 	for k, v := range data {
-		if k != "harness_hosts" && k != "variables" {
+		if k != "harness_hosts" && k != "variables" && k != "credential_variables" {
 			own[k] = v
 		}
 	}

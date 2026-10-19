@@ -45,9 +45,9 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // environment, the caller's binary running it inside the enclosure in a hidden mode,
 // as it runs [Forward]: the session starts the launch through it, Spec.Exec, when the
 // run has names that nothing sets and wins with, the runtime's declared, reserved and
-// denied names and the node's denied ones, so a value the image gives one never
-// reaches the runtime, and neither does an empty one, which a program may read as
-// set. It removes the names from its environment and executes the program, found in
+// denied names, its model overrides and the node's denied ones, so a value the image
+// gives one never reaches the runtime, and neither does an empty one, which a program
+// may read as set. It removes the names from its environment and executes the program, found in
 // PATH by [exec.LookPath], in its place, with every other variable as it is: a program
 // found only through . or an empty entry of PATH, which LookPath refuses, is not run.
 //

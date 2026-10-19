@@ -161,6 +161,22 @@ type LinkImage struct {
 	Reference bool   `json:"reference,omitempty"`
 }
 
+// LinkCredentialHosts is one credential the gateway holds for a run, as the run answer's
+// credential_hosts has it: its name, its hosts as the proxy matches them, which are the
+// hosts applied.credentials lists for it, and the variables the session sets to a
+// placeholder for it. For a credential from the server, Auth is how the proxy sets its
+// value and KeyVariables its run configuration entry's key_variables, among which the
+// session chooses one more variable for the placeholder by the run's runtime's
+// declarations and Auth; both are empty for a credential of the machine's. Names and
+// hosts alone, never a secret.
+type LinkCredentialHosts struct {
+	Name         string   `json:"name"`
+	Hosts        []string `json:"hosts"`
+	Placeholders []string `json:"placeholders"`
+	Auth         *Auth    `json:"auth,omitempty"`
+	KeyVariables []string `json:"key_variables,omitempty"`
+}
+
 // LinkRunAnswer is what the gateway answers a run request it accepts,
 // contracts/forager/v1/link-run-answer.schema.json. A member Forager does not know is
 // ignored. Its ProxySecret is never printed: fmt, log/slog and encoding/json show it as
@@ -189,6 +205,10 @@ type LinkRunAnswer struct {
 	// a walled run that passes one is refused with variable_reserved, and an unwalled
 	// run has its value left out.
 	Reserved []string `json:"reserved,omitempty"`
+	// CredentialHosts are the hosts and placeholders of each credential the gateway
+	// holds for the run, so the session can tell which hosts the run's credentials
+	// cover. Empty when the gateway holds none, or sends no credential_hosts.
+	CredentialHosts []LinkCredentialHosts `json:"credential_hosts,omitempty"`
 	// Image is the image the run gets, when it has a wall.
 	Image *LinkImage `json:"image,omitempty"`
 	// RelayImage is the reference of the machine's default image, which the wall starts
@@ -198,8 +218,8 @@ type LinkRunAnswer struct {
 	// Labels are the run's labels as the gateway holds them, which run.started reports.
 	Labels map[string]string `json:"labels,omitempty"`
 	// Applied are the members of dev.qory.run.policy_applied the gateway decides for
-	// the policy in force, a JSON object: every member but harness_hosts and variables,
-	// which the session adds. The gateway refuses a policy_applied whose other members
+	// the policy in force, a JSON object: every member but harness_hosts, variables and
+	// credential_variables, which the session adds. The gateway refuses a policy_applied whose other members
 	// are not these. Nil when the answer has none.
 	Applied json.RawMessage `json:"applied,omitzero"`
 }
@@ -232,6 +252,23 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	}
 	s.Policy, s.Applied = shownDocument(a.Policy), shownDocument(a.Applied)
 	s.Placeholders, s.Reserved = accesskey.ShownNames(a.Placeholders), accesskey.ShownNames(a.Reserved)
+	if a.CredentialHosts != nil {
+		s.CredentialHosts = make([]LinkCredentialHosts, len(a.CredentialHosts))
+		for i, c := range a.CredentialHosts {
+			hosts := make([]string, len(c.Hosts))
+			for j, h := range c.Hosts {
+				hosts[j] = accesskey.ShownValue(h, false)
+			}
+			placeholders := accesskey.ShownNames(c.Placeholders)
+			if placeholders == nil && c.Placeholders != nil {
+				placeholders = []string{}
+			}
+			s.CredentialHosts[i] = LinkCredentialHosts{Name: accesskey.ShownName(c.Name, false), Hosts: hosts, Placeholders: placeholders, KeyVariables: accesskey.ShownNames(c.KeyVariables)}
+			if c.Auth != nil {
+				s.CredentialHosts[i].Auth = &Auth{Scheme: c.Auth.Scheme, Header: accesskey.ShownValue(c.Auth.Header, false), Username: accesskey.ShownValue(c.Auth.Username, false)}
+			}
+		}
+	}
 	if a.Image != nil {
 		img := *a.Image
 		img.Name, img.Ref, img.Runtime = accesskey.ShownName(img.Name, false), accesskey.ShownName(img.Ref, false), accesskey.ShownName(img.Runtime, false)

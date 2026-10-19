@@ -172,8 +172,9 @@ type Spec struct {
 	// mode. Behind a wall the session starts the launch through it when the run has
 	// names to unset, in front of everything else the launch starts, after the wall's
 	// programs, with the names the run has that nothing sets
-	// and wins with, the runtime's declared, reserved and denied names and the node's
-	// denied ones, so the runtime sees them unset, never as the image's values or empty.
+	// and wins with, the runtime's declared, reserved and denied names, its model
+	// overrides and the node's denied ones, so the runtime sees them unset, never as the
+	// image's values or empty.
 	// dev.qory.run.started reports the launch without it. A Wall needs one.
 	Exec []string
 	// ForagerVersion is reported in the events.
@@ -709,6 +710,13 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(err)
 	}
 	reserved := slices.Concat(answer.Reserved, reservedOf(spec.Gateway))
+	// The runtime chooses, among a credential's key_variables, the variable that gets the placeholder
+	// of each credential from the server with key_variables: from here on it is one of the
+	// credential's placeholders and of the run's.
+	credentialHosts, placeholderNames, err := chosen(rt, answer.CredentialHosts, answer.Placeholders)
+	if err != nil {
+		return fail(err)
+	}
 	var authority []byte
 	if spec.Wall != nil && answer.CertificateAuthority != "" {
 		authority = []byte(answer.CertificateAuthority)
@@ -728,7 +736,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
 		Readable: readable(written), ReadableDir: readableDir(written)}
 	if spec.Wall != nil {
-		attach.Walled, attach.Placeholders = true, slices.Clone(answer.Placeholders)
+		attach.Walled, attach.Placeholders = true, slices.Clone(placeholderNames)
 	}
 	if byReference {
 		attach.Inside = inside
@@ -745,8 +753,21 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The harness's values are Forager's to write as the enclosure sees them.
 	harness := spec
 	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)
-	vars, unset, err := resolve(harness, rt, answer.Values(), prepared, answer.Placeholders, reserved, img.Docker, authority != nil)
+	try := func(s Spec) (variables.Resolved, []string, error) {
+		return resolve(s, rt, answer.Values(), credentialHosts, prepared, placeholderNames, reserved, img.Docker, authority != nil)
+	}
+	vars, unset, err := try(harness)
 	if err != nil {
+		return fail(err)
+	}
+	ownEnv := []string{EnvRunID + "=" + runID}
+	if spec.HarnessHome != "" {
+		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
+	}
+	passes := func(name string) bool {
+		return reachesFromRun(harness, name, prepared, ownEnv, placeholderNames, try)
+	}
+	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared, passes); err != nil {
 		return fail(err)
 	}
 	if spec.OnVariables != nil {
@@ -846,12 +867,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// wall the placeholders. The resolution has left out every value of a fixed name, so
 	// what wins here by position is what the record says. Behind a wall the launch
 	// starts through Exec when the run has names to unset, which unsets the runtime's declared, reserved and denied
-	// variables and the node's denied ones that nothing sets, so an image's value for
-	// one does not reach the runtime; the record names the launch without it.
-	ownEnv := []string{EnvRunID + "=" + runID}
-	if spec.HarnessHome != "" {
-		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
-	}
+	// variables, its model overrides and the node's denied ones that nothing sets, so an image's value for
+	// one does not reach the runtime; the record names the launch without it. ownEnv
+	// is set before the variables are checked.
 	launch := wall.Launch{
 		Command: command, Args: args, Dir: spec.Dir,
 		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, fwd.Env(), []string{EnvSocket + "=" + sock.Path()}, ownEnv),
@@ -882,7 +900,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(answer.Placeholders)),
+			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames)),
 			CA:    authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: relayToken,
@@ -955,13 +973,23 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// policyApplied is the policy_applied event of the members the gateway decides, for
 	// the policy in force at the start and for each one a reload puts in its place:
 	// those members as the gateway gives them, and the session's own, the run's
-	// variables as resolved at the start and the harness's hosts.
+	// variables as resolved at the start, behind a wall the variables its credentials'
+	// placeholders are in, and the harness's hosts.
+	var credentialVars []map[string]string
+	if spec.Wall != nil {
+		credentialVars = credentialVariables(credentialHosts)
+	}
 	policyApplied := func(members map[string]any) map[string]any {
 		a := maps.Clone(members)
 		if a == nil {
 			a = map[string]any{}
 		}
 		a["variables"] = shownVariables(vars.Applied)
+		if credentialVars != nil {
+			a["credential_variables"] = credentialVars
+		} else {
+			delete(a, "credential_variables")
+		}
 		if spec.Declared != nil {
 			a["harness_hosts"] = shownValues(spec.Declared)
 		} else {

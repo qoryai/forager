@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/run-configuration.schema.json",
   "title": "Run configuration",
-  "description": "What a server answers, a signed 200, to a run's registration, the signed POST to its run endpoint, and to a reload by the run's id, the signed GET of the run endpoint followed by a slash and the run id: the server's policy for the run, the image it starts in and the variables the agent's process receives, chosen by the server for the run, by the labels its registration sent. The registration's about never selects or changes a security policy. {\"version\": 1} is an answer of no policy. The digest the server sends beside it is the server's, and opaque to Forager. A member Forager does not recognise is ignored.",
+  "description": "What a server answers, a signed 200, to a run's registration, the signed POST to its run endpoint, and to a reload by the run's id, the signed GET of the run endpoint followed by a slash and the run id: the server's policy for the run, the image it starts in and the variables the agent's process receives, chosen by the server for the run, by the labels its registration sent. The registration's about never selects or changes a security policy. {\"version\": 1} is an answer of no policy. The digest the server sends beside it, X-Qory-Run-Configuration, is sha256= and the lower-case hex SHA-256 of the exact bytes of this document as the server sends it; an attach answer contains the digest of the document a reload of the run answers, without labels and about. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version"],
@@ -20,11 +20,18 @@
       "$ref": "policy.schema.json#/$defs/image_reference"
     },
     "variables": {
-      "description": "The variables the agent's process receives, by name, as the server resolved them among its levels: an object with the value each. The server's value of a name wins over every value the node passes for it; the run's fixed names win over the server's. Forager leaves out a name its deny list matches, whose built-in QORY_* entry leaves in QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, the system and the repositories a run's preparation may use, by these names exactly; a name it, the wall, the runtime's preparation, a placeholder or the harness's computed values set; a name the run's runtime declares or reserves; a name a value of the machine's is read from, such as a credential's variable; and, in an unwalled run, every one unless the node accepts them. A value is at most 4096 bytes of UTF-8 and contains no NUL, carriage return or line feed.",
+      "description": "The variables the agent's process receives, by name, as the server resolved them among its levels: an object with the value each. The server's value of a name wins over every value the node passes for it; the run's fixed names win over the server's. Forager leaves out a name its deny list matches, whose built-in QORY_* entry leaves in QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, the system and the repositories a run's preparation may use, by these names exactly; a name it, the wall, the runtime's preparation, a placeholder or the harness's computed values set; a name the run's runtime declares or reserves; a name a value of the machine's is read from, such as a credential's variable; and, in an unwalled run, every one unless the node accepts them. Behind a wall, the runtime's denies do not leave out the value of the runtime's model endpoint variable: Forager leaves it out when it is not an https URL with a host Forager reads, or its host is none of the hosts of the run's model credential. A value is at most 4096 bytes of UTF-8 and contains no NUL, carriage return or line feed.",
       "type": "object",
       "maxProperties": 128,
       "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
       "additionalProperties": {"$ref": "#/$defs/variable"}
+    },
+    "credentials": {
+      "description": "The credentials whose values the server stores for the run, at most 8, each name once. The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it once, when a walled run starts, and sets each value in place of a credential of the machine's that claims one of its hosts; the credentials are fixed for the run.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {"$ref": "#/$defs/credential"}
     }
   },
   "$defs": {
@@ -36,6 +43,43 @@
       "properties": {
         "value": {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00\\r\\n]*$"}
       }
+    },
+    "credential": {
+      "description": "One credential whose value the server stores: its name, where its value is set and how. The run configuration does not contain the value: the server seals it to the access key in its answer to the secrets request, secrets-answer.schema.json.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "hosts", "auth"],
+      "properties": {
+        "name": {"description": "The credential's name, unique among the entries.", "$ref": "#/$defs/credential_name"},
+        "hosts": {"description": "The hosts the value is set on, each exact: a DNS name or an IP literal, never a *. pattern.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/credential_host"}},
+        "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
+        "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},
+        "key_variables": {"description": "The environment variables from which a runtime reads this credential's key, such as ANTHROPIC_API_KEY for Claude Code. The session chooses the one name among them that the run's runtime's descriptor declares, and gives it the credential's placeholder. A run whose runtime declares none of them or more than one, or whose declaration's auth differs from this credential's in the scheme or, for a header, the header's name, is run_configuration_invalid. A placeholder goes only into a variable for a credential: placeholders that list a variable the runtime's descriptor denies, lists in its model overrides or reserves, its model endpoint's variable, or a declared variable not chosen from key_variables are run_configuration_invalid. Absent, placeholders alone set the variables.", "$ref": "#/$defs/key_variables"},
+        "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}}
+      }
+    },
+    "key_variables": {
+      "description": "The names of the environment variables from which a runtime reads a credential's key: 1 to 16, none twice.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,127}$"}
+    },
+    "credential_name": {
+      "description": "A credential's name: 1 to 64 of a-z, 0-9, underscore, dot and dash, starting with a letter or a digit.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
+    },
+    "credential_host": {
+      "description": "An exact host: a lower-case DNS name whose last label starts with a letter, an IPv4 address of four decimal parts with no leading zero, or an IPv6 address of lower-case hex groups with no leading zero, without brackets or a zone. The server writes an IPv6 address in RFC 5952's form; the pattern does not check which run of zero groups :: replaces.",
+      "type": "string",
+      "maxLength": 253,
+      "anyOf": [
+        {"pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"},
+        {"pattern": "^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$"},
+        {"pattern": "^(((0|[1-9a-f][0-9a-f]{0,3}):){7}(0|[1-9a-f][0-9a-f]{0,3})|((0|[1-9a-f][0-9a-f]{0,3}):){1,7}:|((0|[1-9a-f][0-9a-f]{0,3}):){1,6}:(0|[1-9a-f][0-9a-f]{0,3})|((0|[1-9a-f][0-9a-f]{0,3}):){1,5}(:(0|[1-9a-f][0-9a-f]{0,3})){1,2}|((0|[1-9a-f][0-9a-f]{0,3}):){1,4}(:(0|[1-9a-f][0-9a-f]{0,3})){1,3}|((0|[1-9a-f][0-9a-f]{0,3}):){1,3}(:(0|[1-9a-f][0-9a-f]{0,3})){1,4}|((0|[1-9a-f][0-9a-f]{0,3}):){1,2}(:(0|[1-9a-f][0-9a-f]{0,3})){1,5}|(0|[1-9a-f][0-9a-f]{0,3}):(:(0|[1-9a-f][0-9a-f]{0,3})){1,6}|:((:(0|[1-9a-f][0-9a-f]{0,3})){1,7}|:))$"}
+      ]
     }
   }
 }

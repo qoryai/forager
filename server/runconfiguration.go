@@ -1,17 +1,21 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
+	"io/fs"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
-	"github.com/qoryai/forager/accesskey"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
@@ -24,7 +28,9 @@ const MaxVariableValue = 4096
 // readRunConfiguration reads a run configuration document: through encoding/json/v2
 // first, which refuses a member name that appears twice and invalid UTF-8, then its
 // image ([CheckConfigurationImage]), then against the schema, then against the limits
-// the schema cannot state. Every refusal is a refusal with
+// the schema cannot state: a variable's size, and a credential's name twice or its
+// header one [ReservedHeader] reports. It sets [RunConfiguration.Computed] to the
+// digest of body. Every refusal is a refusal with
 // [refusal.RunConfigurationInvalid] whose message contains where in the document it is
 // and which rule refused it, and never a value but the image's: a variable's value may
 // be anything the server holds, and no decoder's message is wrapped, since those quote
@@ -72,7 +78,100 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 			return nil, refusal.New(refusal.RunConfigurationInvalid, []string{accesskey.ShownName(name, false)}, "the document is refused: the variable %s holds more than %d bytes", accesskey.ShownName(name, false), MaxVariableValue)
 		}
 	}
+	if err := CheckCredentials(rc.Credentials); err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(body)
+	rc.Computed = "sha256=" + hex.EncodeToString(sum[:])
 	return &rc, nil
+}
+
+// CheckCredentials refuses what the schema cannot state of a run configuration's
+// credentials, each [refusal.RunConfigurationInvalid] with the credential's name, a
+// name that contains a secret as its phrase ([refusal.Shown]): a name twice, a header
+// [ReservedHeader] reports, and a placeholder [DeniedPlaceholder] reports. The reader
+// of a document calls it, and so does whoever holds a document not read from bytes.
+func CheckCredentials(creds []RunCredential) error {
+	for i, c := range creds {
+		name := accesskey.ShownName(c.Name, true)
+		if slices.ContainsFunc(creds[:i], func(o RunCredential) bool { return o.Name == c.Name }) {
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name), "the document is refused: list the credential %s once; the document lists it twice", name)
+		}
+		if c.Auth.Scheme == "header" && ReservedHeader(c.Auth.Header) {
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"the document is refused: set the credential %s in another header than %s; that header frames the request, or the proxy sets it", name, accesskey.ShownName(c.Auth.Header, true))
+		}
+		for _, p := range c.Placeholders {
+			if DeniedPlaceholder(p) {
+				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+					"the document is refused: give the credential %s another placeholder than %s; the built-in deny list, denied-variables.json, covers that variable", name, accesskey.ShownName(p, true))
+			}
+		}
+	}
+	return nil
+}
+
+// denied is the contract's built-in deny list, denied-variables.json: its names and
+// its patterns, upper case.
+var denied = sync.OnceValue(func() (list struct {
+	Names    []string `json:"names"`
+	Patterns []string `json:"patterns"`
+}) {
+	b, err := fs.ReadFile(contracts.FS, "denied-variables.json")
+	if err != nil {
+		panic("denied-variables.json: " + err.Error())
+	}
+	if err := jsonv2.Unmarshal(b, &list, jsonv2.RejectUnknownMembers(false)); err != nil {
+		panic("denied-variables.json: " + err.Error())
+	}
+	return list
+})
+
+// DeniedPlaceholder reports whether a credential from the server may not have the
+// variable name as a placeholder: an entry of the built-in deny list,
+// denied-variables.json, covers it, case ignored, as the session's deny list does.
+// Forager's names, QORY_, are among its patterns.
+func DeniedPlaceholder(name string) bool {
+	n := strings.ToUpper(name)
+	list := denied()
+	return slices.Contains(list.Names, n) || slices.ContainsFunc(list.Patterns, func(p string) bool { return glob(p, n) })
+}
+
+// glob reports whether pattern, in which * matches any run of characters, the empty
+// run included, matches the whole of name.
+func glob(pattern, name string) bool {
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return pattern == name
+	}
+	if !strings.HasPrefix(name, parts[0]) {
+		return false
+	}
+	name = name[len(parts[0]):]
+	last := parts[len(parts)-1]
+	for _, part := range parts[1 : len(parts)-1] {
+		i := strings.Index(name, part)
+		if i < 0 {
+			return false
+		}
+		name = name[i+len(part):]
+	}
+	return len(name) >= len(last) && strings.HasSuffix(name, last)
+}
+
+// ReservedHeader reports whether a credential from the server may not be set in the
+// header name: a header that frames the request or is hop-by-hop, Host,
+// Content-Length, Transfer-Encoding, Connection, TE, Trailer, Upgrade, Keep-Alive and
+// Expect; any Proxy- header; Cookie; and the headers the proxy sets, X-Qory- and
+// Qory-. Case is ignored, and an underscore counts as a dash, which some servers read
+// as the same name.
+func ReservedHeader(name string) bool {
+	n := strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	switch n {
+	case "host", "content-length", "transfer-encoding", "connection", "te", "trailer", "upgrade", "keep-alive", "expect", "cookie":
+		return true
+	}
+	return strings.HasPrefix(n, "proxy-") || strings.HasPrefix(n, "x-qory-") || strings.HasPrefix(n, "qory-")
 }
 
 // CheckConfigurationImage refuses a run configuration's image that is not a reference

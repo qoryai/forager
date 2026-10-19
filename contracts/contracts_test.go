@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -90,13 +91,16 @@ func TestEverySchemaCompiles(t *testing.T) {
 }
 
 // TestDocumentFixturesValidate pins that every policy, server, configuration, run
-// registration, run configuration, attach answer, outcome and batch answer fixture
-// passes its schema.
+// registration, run configuration, attach answer, outcome, batch answer, API format and
+// descriptor fixture passes its schema.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json",
-		"run-attach-answer.schema.json", "run-outcome.schema.json", "batch-answer.schema.json")
+		"run-attach-answer.schema.json", "run-outcome.schema.json", "batch-answer.schema.json",
+		"api-format.schema.json", "descriptor.schema.json")
 	dirs := map[string]string{
+		"fixtures/api-format":        "api-format.schema.json",
+		"fixtures/descriptor":        "descriptor.schema.json",
 		"fixtures/run-attach-answer": "run-attach-answer.schema.json",
 		"fixtures/run-outcome":       "run-outcome.schema.json",
 		"fixtures/batch-answer":      "batch-answer.schema.json",
@@ -115,6 +119,41 @@ func TestDocumentFixturesValidate(t *testing.T) {
 			if err := s[schema].Validate(doc); err != nil {
 				t.Errorf("%s: %v", f, err)
 			}
+		}
+	}
+}
+
+// TestAPIFormatsAreTheFixedList pins api-format.schema.json, which another contract
+// refers to by its $id, one $ref per item: a string schema at that $id, without $defs,
+// whose enum is the four formats in this order.
+func TestAPIFormatsAreTheFixedList(t *testing.T) {
+	s := compile(t, "api-format.schema.json")["api-format.schema.json"]
+	b, err := fs.ReadFile(contracts.FS, "api-format.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["$id"] != contracts.Base+"/api-format.schema.json" || doc["type"] != "string" {
+		t.Errorf("$id %v, type %v; want %s/api-format.schema.json and string", doc["$id"], doc["type"], contracts.Base)
+	}
+	if _, ok := doc["$defs"]; ok {
+		t.Error("api-format.schema.json has $defs; a reference to it is to the whole file")
+	}
+	want := []any{"anthropic-messages", "openai-responses", "openai-chat", "gemini"}
+	if !reflect.DeepEqual(doc["enum"], want) {
+		t.Errorf("enum %v; want %v", doc["enum"], want)
+	}
+	for _, v := range want {
+		if err := s.Validate(v); err != nil {
+			t.Errorf("%v: %v", v, err)
+		}
+	}
+	for _, v := range []any{"", "anthropic", "Anthropic-Messages", "openai-completions", json.Number("1"), nil} {
+		if s.Validate(v) == nil {
+			t.Errorf("%v passed; want a failure", v)
 		}
 	}
 }
@@ -148,8 +187,8 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // of the gateway's link its name starts with: the discovery of the local link and of a
 // separate gateway, each with its proxy address, a run request without a wall, one with a
 // wall, the names it passes and its images, and one with a narrowing as well, a run
-// answer with a wall, its placeholders, reserved names, image, applied and certificate
-// authority, one with a wall and an image but no certificate authority, one without a
+// answer with a wall, its placeholders, reserved names, credential hosts, image, applied
+// and certificate authority, one with a wall and an image but no certificate authority, one without a
 // wall and one without a policy, a reload answer with and without a policy and one whose
 // applied has ceiling_paths, a batch of a session's events without sequence, a batch of
 // a run.refused with a session's own code, a batch of a run.exited with timeout, and
@@ -252,11 +291,16 @@ const beyondLinkSchema = "-beyond-schema-"
 // a run.exited without state, with a state other than the three, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
-// status, a descriptor with an expression, a link run request
+// status, a descriptor with an expression, a descriptor whose model section has a
+// format outside the list, a place of two kinds or of none, an empty list of values,
+// no formats, a member it does not define, an endpoint that is no variable, or
+// overrides that are empty, list a name twice or list something other than a
+// variable's name, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that passes a value with a name or whose image has no reference, a link run
-// answer without applied, with a proxy secret too short or whose image has no
-// reference, a link reload answer with the proxy secret or the certificate
+// answer without applied, with a proxy secret too short, whose image has no reference
+// or whose credential_hosts entry has a member it does not define, no hosts or no
+// placeholders, a link reload answer with the proxy secret or the certificate
 // authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
 // run.registered or a run.egress, a run.started opened by a gateway, a run.exited with one of Forager's reasons
 // other than timeout, its old names among them, or with timeout and a state other than cancelled, or a run.refused with a gateway's code,
@@ -264,18 +308,20 @@ const beyondLinkSchema = "-beyond-schema-"
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or
 // workspaces or has no heartbeat interval or proxy, and a link refusal without from, with a control
 // character other than tab and newline in its message, C0, DEL or C1, or with a state
-// other than the three. A fixture whose name holds -beyond-schema- breaks a
+// other than the three, and an API format outside the list, in upper case or as an
+// object. A fixture whose name holds -beyond-schema- breaks a
 // rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
 // the schema, so run-configuration-variable-value-not-string is held to the run
 // configuration and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json", "event.schema.json", "batch.schema.json",
-		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
+		"api-format.schema.json", "descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
 		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
 		"run-key.schema.json", "run-registration-answer.schema.json",
 		"run-attach.schema.json", "run-attach-answer.schema.json", "run-outcome.schema.json",
-		"run-outcome-answer.schema.json", "batch-answer.schema.json")
+		"run-outcome-answer.schema.json", "batch-answer.schema.json",
+		"secrets-request.schema.json", "secrets-answer.schema.json", "sealed-plaintext.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
 		kind := namedSchema(s, f)
 		schema, ok := s[kind+".schema.json"]

@@ -10,9 +10,12 @@
 // [Resolve] refuses first what must stay outside the enclosure, [Check], over every
 // value the node passes. The deny list then leaves out a value of the server, the run,
 // the machine or the harness's defaults; its built-in entries apply to the harness's
-// computed values too. What loses never stops the run, and [Resolved.Applied] lists
-// each name with its source and its losses, as dev.qory.run.policy_applied reports
-// them.
+// computed values too. Behind a wall, the runtime's overrides join the deny list and
+// apply to the harness's computed values as well. Behind a wall, the endpoint rule
+// takes the place of the runtime's denies for the variable the runtime reads its model
+// endpoint from: a value applies only when its host is a host of the run's model
+// credential. What loses never stops the run, and [Resolved.Applied] lists each name
+// with its source and its losses, as dev.qory.run.policy_applied reports them.
 //
 // The deny list is the contract's denied-variables.json, the run's runtime's denies
 // and the node's own entries. An entry is a name or a pattern in which * matches any
@@ -33,6 +36,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
 )
 
@@ -71,14 +75,22 @@ const (
 )
 
 // Why a source's value of a name lost: another source's value won, the deny list
-// matched it, the name is one of the run's fixed names, or the run has no wall and
-// takes none of the server's.
+// matched it, the name is one of the run's fixed names, the run has no wall and takes
+// none of the server's, or, of the endpoint's variable behind a wall, the value's host
+// is none of the hosts of the run's model credential or the value is not an https URL
+// with a host [policy.EndpointHost] reads.
 const (
-	WhyOverridden = "overridden"
-	WhyDenied     = "denied"
-	WhyFixed      = "fixed"
-	WhyUnwalled   = "unwalled"
+	WhyOverridden         = "overridden"
+	WhyDenied             = "denied"
+	WhyFixed              = "fixed"
+	WhyUnwalled           = "unwalled"
+	WhyEndpointUncovered  = "endpoint_uncovered"
+	WhyEndpointUnreadable = "endpoint_unreadable"
 )
+
+// KeptEndpointCovered is why a value of the endpoint's variable applies behind a wall:
+// its host is a host of the run's model credential.
+const KeptEndpointCovered = "endpoint_covered"
 
 // Inputs is what the resolution of one run's variables takes. Each list of values is
 // NAME=value; within one list a later value replaces an earlier one of the same name.
@@ -104,6 +116,10 @@ type Inputs struct {
 	Deny []string
 	// RuntimeDenies is the run's runtime's denies.
 	RuntimeDenies []string
+	// Overrides is the run's runtime's model overrides: the variables that would
+	// override the model id or effort value a composer writes. Only a walled run
+	// applies them.
+	Overrides []string
 	// Runtime is the variables the run's runtime declares or reserves.
 	Runtime []string
 	// Placeholders is the names of the run's placeholders.
@@ -113,6 +129,22 @@ type Inputs struct {
 	// Own is the names Forager, the wall and the runtime's preparation set: with
 	// the placeholders and Fixed, the run's fixed names.
 	Own []string
+	// Endpoint is the variable the run's runtime reads the base URL of its model API
+	// from, its descriptor's model.endpoint.variable; empty when it has none. Only a
+	// walled run applies the endpoint rule to it.
+	Endpoint string
+	// Credentials is each credential the gateway holds for the run, as the run
+	// answer's credential_hosts lists them. A model credential is one with a
+	// placeholder among Runtime.
+	Credentials []Credential
+}
+
+// Credential is one credential the gateway holds for a run: its name, the hosts the
+// gateway's proxy sets it on, and the variables set to a placeholder for it.
+type Credential struct {
+	Name         string
+	Hosts        []string
+	Placeholders []string
 }
 
 // Resolved is what a run applies of the variables, and the record of it.
@@ -131,11 +163,21 @@ type Resolved struct {
 
 // Entry is one name of the record: the source whose value the run applies, empty when
 // none, and the values that lost, the highest rung first. A fixed name's From is
-// [FromFixed].
+// [FromFixed]. Kept is set when the value that applies is a value of the endpoint's
+// variable that the endpoint rule checked.
 type Entry struct {
 	Name string `json:"name"`
 	From string `json:"from,omitempty"`
 	Lost []Loss `json:"lost"`
+	Kept *Kept  `json:"kept,omitempty"`
+}
+
+// Kept is why the endpoint rule kept a value: [KeptEndpointCovered], and the name of
+// the model credential whose hosts include the value's host, as [accesskey.ShownName]
+// prints it unquoted.
+type Kept struct {
+	Why        string `json:"why"`
+	Credential string `json:"credential"`
 }
 
 // Loss is one source's value that lost, and why.
@@ -158,8 +200,22 @@ type Loss struct {
 // list leave it out, not the built-in list. A value of the run, the
 // machine or the harness's defaults is left out when the deny list matches it. A value
 // of the harness's computed ones is left out when the built-in list matches it; the
-// runtime's denies and the node's entries leave it in. The inherited environment's
-// values are not matched against the deny list.
+// runtime's denies and the node's entries leave it in. Behind a wall, the runtime's
+// overrides are entries of the deny list, and a value of the harness's computed ones
+// whose name is one of them is left out too. The inherited environment's values are
+// not matched against the deny list.
+//
+// Behind a wall, the endpoint rule applies to each value of in.Endpoint of the server,
+// the run, the machine, the harness's defaults and the harness's computed ones, in
+// place of the runtime's denies. The other entries of the deny list that cover the
+// source, and the rules for the server's value, apply first, as for any name. Every
+// computed value of the name is checked: when one is left out, all of them are, with
+// the first one's reason, and when none is, the last one alone stays in Fixed. A value
+// from which [policy.EndpointHost] reads no host is left out as
+// [WhyEndpointUnreadable], and one whose host is in no model credential's hosts by
+// [policy.CredentialFor] as [WhyEndpointUncovered]; another is not left out, and when
+// it applies, the entry's Kept has the first model credential whose hosts include it.
+// A value left out lets the next source's value apply, as a denied one does.
 func Resolve(in Inputs) (Resolved, error) {
 	if err := CheckDeny(in.Deny); err != nil {
 		return Resolved{}, err
@@ -172,33 +228,93 @@ func Resolve(in Inputs) (Resolved, error) {
 		return Resolved{}, err
 	}
 	added := append(slices.Clone(in.Deny), in.RuntimeDenies...)
+	// Behind a wall, the runtime's overrides apply to every source the deny list
+	// covers, and to the harness's computed values.
+	var overrides []string
+	if in.Walled {
+		overrides = in.Overrides
+	}
+	added = append(added, overrides...)
 	deny, err := List(added)
 	if err != nil {
 		return Resolved{}, err
 	}
 	// The server's two QORY_ names are matched against the entries the run adds alone.
 	serverDeny := entriesOf(added)
-	builtin, err := List(nil)
+	// The harness's computed values are matched against the built-in list and the
+	// overrides that apply.
+	computed, err := List(overrides)
 	if err != nil {
 		return Resolved{}, err
+	}
+	// Behind a wall, the endpoint's variable is matched against the deny list without
+	// the runtime's denies, and then checked by the endpoint rule.
+	var endpoint string
+	endpointDeny := deny
+	if in.Walled && in.Endpoint != "" {
+		endpoint = in.Endpoint
+		if endpointDeny, err = List(slices.Concat(in.Deny, overrides)); err != nil {
+			return Resolved{}, err
+		}
+	}
+	covers := endpointRule(in.Credentials, in.Runtime)
+	// left is why the deny list, or for the endpoint's variable the endpoint rule,
+	// leaves a value of the run, the machine or the harness's defaults out, and the
+	// model credential whose hosts include a kept endpoint's host.
+	left := func(name, v string) (why, credential string) {
+		switch {
+		case name != endpoint:
+			if deny.Matches(name) {
+				return WhyDenied, ""
+			}
+			return "", ""
+		case endpointDeny.Matches(name):
+			return WhyDenied, ""
+		}
+		return covers(v)
 	}
 	out := Resolved{Env: []string{}, Fixed: []string{}, Applied: []Entry{}}
 	fixed := map[string]bool{}
 	for _, name := range slices.Concat(in.Own, in.Placeholders) {
 		fixed[name] = true
 	}
-	deniedFixed := map[string]bool{}
-	for _, kv := range in.Fixed {
+	// Why the built-in list or the endpoint rule leaves the harness's computed value of
+	// a name out, by name. The endpoint rule checks every computed value of the
+	// endpoint's variable: when it leaves one out, all of them are left out, with the
+	// first one's reason; otherwise the last one alone stays, lastEndpoint its index,
+	// and keptFixed is the model credential whose hosts include its host.
+	deniedFixed := map[string]string{}
+	keptFixed, lastEndpoint := "", -1
+	if endpoint != "" && !computed.Matches(endpoint) {
+		for i, kv := range in.Fixed {
+			name, v, _ := strings.Cut(kv, "=")
+			if name != endpoint {
+				continue
+			}
+			why, credential := covers(v)
+			if why != "" {
+				deniedFixed[endpoint], keptFixed, lastEndpoint = why, "", -1
+				break
+			}
+			keptFixed, lastEndpoint = credential, i
+		}
+	}
+	for i, kv := range in.Fixed {
 		name, _, _ := strings.Cut(kv, "=")
-		if builtin.Matches(name) {
-			deniedFixed[name] = true
+		if computed.Matches(name) {
+			deniedFixed[name] = WhyDenied
+		}
+		if deniedFixed[name] != "" || (endpoint != "" && name == endpoint && i != lastEndpoint) {
 			continue
 		}
 		out.Fixed = append(out.Fixed, kv)
 		fixed[name] = true
 	}
 	run, machine, defaults, shell := byName(in.Run), byName(in.Machine), byName(in.Defaults), byName(in.Shell)
-	names := maps.Clone(deniedFixed)
+	names := map[string]bool{}
+	for name := range deniedFixed {
+		names[name] = true
+	}
 	for _, m := range []map[string]string{in.Server, run, machine, defaults} {
 		for name := range m {
 			names[name] = true
@@ -207,14 +323,17 @@ func Resolve(in Inputs) (Resolved, error) {
 	setOtherwise := slices.Concat(in.Runtime, in.ReadFrom)
 	for _, name := range slices.Sorted(maps.Keys(names)) {
 		e := Entry{Name: name, Lost: []Loss{}}
-		if deniedFixed[name] {
-			e.Lost = append(e.Lost, Loss{FromFixed, WhyDenied})
+		if why := deniedFixed[name]; why != "" {
+			e.Lost = append(e.Lost, Loss{FromFixed, why})
 		}
 		if fixed[name] {
 			e.From = FromFixed
+			if name == endpoint && keptFixed != "" {
+				e.Kept = &Kept{KeptEndpointCovered, keptFixed}
+			}
 		}
 		value := ""
-		take := func(from string, v string, ok bool, why string) {
+		take := func(from string, v string, ok bool, why, credential string) {
 			switch {
 			case !ok:
 			case why != "":
@@ -225,10 +344,13 @@ func Resolve(in Inputs) (Resolved, error) {
 				e.Lost = append(e.Lost, Loss{from, WhyOverridden})
 			default:
 				e.From, value = from, v
+				if credential != "" {
+					e.Kept = &Kept{KeptEndpointCovered, credential}
+				}
 			}
 		}
 		v, ok := in.Server[name]
-		why := ""
+		why, credential := "", ""
 		switch {
 		case !in.Walled && in.Unwalled != Accept:
 			why = WhyUnwalled
@@ -238,23 +360,20 @@ func Resolve(in Inputs) (Resolved, error) {
 			if serverDeny.Matches(name) {
 				why = WhyDenied
 			}
-		case deny.Matches(name):
-			why = WhyDenied
+		default:
+			why, credential = left(name, v)
 		}
-		take(FromApiary, v, ok, why)
+		take(FromApiary, v, ok, why, credential)
 		for _, s := range []struct {
 			from string
 			m    map[string]string
 		}{{FromRun, run}, {FromMachine, machine}, {FromHarness, defaults}} {
 			v, ok := s.m[name]
-			why := ""
-			if deny.Matches(name) {
-				why = WhyDenied
-			}
-			take(s.from, v, ok, why)
+			why, credential := left(name, v)
+			take(s.from, v, ok, why, credential)
 		}
 		v, ok = shell[name]
-		take(FromShell, v, ok, "")
+		take(FromShell, v, ok, "", "")
 		switch e.From {
 		case FromApiary, FromRun, FromMachine, FromHarness:
 			out.Env = append(out.Env, name+"="+value)
@@ -262,6 +381,31 @@ func Resolve(in Inputs) (Resolved, error) {
 		out.Applied = append(out.Applied, e)
 	}
 	return out, nil
+}
+
+// endpointRule returns the endpoint rule for a run's credentials, of which the model
+// credentials are those with a placeholder among runtime, the variables the runtime
+// declares or reserves. For a value, it returns why the rule leaves the value out, or
+// the shown name of the first model credential whose hosts include the value's host.
+func endpointRule(credentials []Credential, runtime []string) func(v string) (why, credential string) {
+	var model []Credential
+	for _, c := range credentials {
+		if slices.ContainsFunc(c.Placeholders, func(p string) bool { return slices.Contains(runtime, p) }) {
+			model = append(model, c)
+		}
+	}
+	return func(v string) (string, string) {
+		host, ok := policy.EndpointHost(v)
+		if !ok {
+			return WhyEndpointUnreadable, ""
+		}
+		for _, c := range model {
+			if policy.CredentialFor(c.Hosts, host) {
+				return "", accesskey.ShownName(c.Name, false)
+			}
+		}
+		return WhyEndpointUncovered, ""
+	}
 }
 
 // byName are NAME=value entries by name, a later one replacing an earlier one.

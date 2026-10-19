@@ -82,14 +82,19 @@ func settingsRefused(path string, err error) error {
 }
 
 // notAnObject is the refusal of settings, a file's path or a document, that are not
-// a JSON object: the fix first, then the reason.
+// a JSON object: the fix first, then the reason, a phrase for a value that [shownPath]
+// shows as one.
 func notAnObject(value string, err error) error {
-	shown := accesskey.ShownValue(value, false)
+	shown, phrase := shownPath(flagValue{flag: settingsFlag, value: value})
 	fix := "Make the file " + shown + " a JSON object."
 	if strings.HasPrefix(strings.TrimSpace(value), "{") {
 		fix = "Pass a valid JSON object to --settings."
 	}
-	return fmt.Errorf("%s The check of --settings %s failed: %w", fix, shown, accesskey.ShownError(err))
+	reason := accesskey.ShownError(err)
+	if phrase {
+		reason = errors.New("it is no JSON object")
+	}
+	return fmt.Errorf("%s The check of --settings %s failed: %w", fix, shown, reason)
 }
 
 // projectConfigRootFlag is the flag whose directory Claude Code reads project settings,

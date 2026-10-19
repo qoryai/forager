@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"slices"
 	"strings"
@@ -182,6 +183,98 @@ func TestAFixedValueOfADeniedNameStays(t *testing.T) {
 			t.Errorf("%s: unset %q, the wall's environment %q; want %q once", tc.what, names, got, tc.fixed)
 		}
 	}
+}
+
+// claudeOverrides is the Claude Code descriptor's model overrides: the variables that
+// would override the model or effort a composer writes.
+var claudeOverrides = []string{
+	"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+	"CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_AUTO_MODE_MODEL",
+	"CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_EXTRA_BODY",
+}
+
+// TestAWalledRunDropsTheModelOverrides pins Claude Code's model overrides end to end:
+// behind a wall, a value of each from the server, the run (--env), the machine
+// (wall.env), the harness's defaults or its computed values does not reach the agent,
+// the record lists it as denied, and the name is unset inside, so the image's value
+// does not reach the agent either. Without a wall, --env ANTHROPIC_MODEL reaches the
+// agent as before.
+func TestAWalledRunDropsTheModelOverrides(t *testing.T) {
+	for _, source := range []string{"apiary", "run", "machine", "harness", "fixed"} {
+		t.Run(source, func(t *testing.T) {
+			var image []string
+			for _, name := range claudeOverrides {
+				image = append(image, name+"=from-the-image")
+			}
+			w := &imageWall{env: image}
+			sp, g := specGateway(t)
+			out := dumpsEnv(t, &sp)
+			sp.Wall, sp.Image = w, "example.com/agent:1"
+			var passed []string
+			vars := map[string]any{}
+			for _, name := range claudeOverrides {
+				passed = append(passed, name+"=passed-by-"+source)
+				vars[name] = map[string]any{"value": "passed-by-" + source}
+			}
+			switch source {
+			case "apiary":
+				doc, _ := json.Marshal(map[string]any{"variables": vars})
+				answerVariables(g, string(doc))
+			case "run":
+				sp.Variables.Run = passed
+			case "machine":
+				sp.Variables.Machine = passed
+			case "harness":
+				sp.LaunchDefaults = passed
+			case "fixed":
+				sp.LaunchFixed = passed
+			}
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.ExitCode != 0 {
+				t.Fatalf("exit %d", res.ExitCode)
+			}
+			var want []string
+			for _, name := range slices.Sorted(slices.Values(claudeOverrides)) {
+				want = append(want, name+" "+source+":denied")
+			}
+			if got := variablesApplied(t, res); !slices.Equal(got, want) {
+				t.Errorf("policy_applied variables\n%q\nwant\n%q", got, want)
+			}
+			names, _ := unsetIn(t, w.got)
+			env := envOf(t, out)
+			for _, name := range claudeOverrides {
+				if !slices.Contains(names, name) {
+					t.Errorf("%s is not unset: %q", name, names)
+				}
+				if got := entriesOf(w.got.Env, name); len(got) != 0 {
+					t.Errorf("the wall's environment has %q for %s", got, name)
+				}
+				if value, ok := env[name]; ok {
+					t.Errorf("%s=%q reached the agent", name, value)
+				}
+			}
+		})
+	}
+	t.Run("unwalled", func(t *testing.T) {
+		sp := spec(t)
+		out := dumpsEnv(t, &sp)
+		sp.Variables.Run = []string{"ANTHROPIC_MODEL=x", "CLAUDE_CODE_EFFORT_LEVEL=low"}
+		res, err := session.Run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := envOf(t, out)
+		if env["ANTHROPIC_MODEL"] != "x" || env["CLAUDE_CODE_EFFORT_LEVEL"] != "low" {
+			t.Errorf("ANTHROPIC_MODEL=%q, CLAUDE_CODE_EFFORT_LEVEL=%q; want the run's values", env["ANTHROPIC_MODEL"], env["CLAUDE_CODE_EFFORT_LEVEL"])
+		}
+		if got, want := variablesApplied(t, res), []string{"ANTHROPIC_MODEL<-run", "CLAUDE_CODE_EFFORT_LEVEL<-run"}; !slices.Equal(got, want) {
+			t.Errorf("policy_applied variables %q, want %q", got, want)
+		}
+	})
 }
 
 // TestExecIsAWallsAlone pins that a walled run needs the helper's exec, refused before

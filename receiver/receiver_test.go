@@ -71,8 +71,8 @@ func fixture(t *testing.T, name string) []byte {
 	return b
 }
 
-// digestOf is a receiver's digest of a document: any string, opaque to Forager;
-// here the hex sha256 of the bytes.
+// digestOf is the contract's digest of a document: sha256= and the hex SHA-256 of its
+// bytes.
 func digestOf(b []byte) string {
 	sum := sha256.Sum256(b)
 	return "sha256=" + hex.EncodeToString(sum[:])

@@ -4,9 +4,7 @@
     {
       "name": "claude",
       "title": "Claude Code",
-      "reserves": [
-        "ANTHROPIC_AUTH_TOKEN"
-      ],
+      "reserves": [],
       "denies": [
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_BEDROCK_BASE_URL",
@@ -64,18 +62,70 @@
           "paths": [
             "/v1/*"
           ]
-        }
-      ],
-      "one_of": [
+        },
         {
-          "id": "model_key",
-          "required": true,
-          "of": [
-            "api_key",
-            "oauth_token"
+          "id": "auth_token",
+          "title": "Anthropic API key as a bearer",
+          "name": "ANTHROPIC_AUTH_TOKEN",
+          "hosts": [
+            "api.anthropic.com"
+          ],
+          "auth": {
+            "scheme": "bearer"
+          },
+          "paths": [
+            "/v1/*"
           ]
         }
-      ]
+      ],
+      "one_of": [],
+      "model": {
+        "formats": [
+          "anthropic-messages"
+        ],
+        "model": {
+          "flag": "--model"
+        },
+        "effort": {
+          "run": {
+            "flag": "--effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "agent": {
+            "frontmatter": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
+        "endpoint": {
+          "variable": "ANTHROPIC_BASE_URL"
+        },
+        "overrides": [
+          "ANTHROPIC_MODEL",
+          "ANTHROPIC_DEFAULT_MODEL",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+          "ANTHROPIC_DEFAULT_FABLE_MODEL",
+          "ANTHROPIC_SMALL_FAST_MODEL",
+          "CLAUDE_CODE_SUBAGENT_MODEL",
+          "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
+          "CLAUDE_CODE_AUTO_MODE_MODEL",
+          "CLAUDE_CODE_EFFORT_LEVEL",
+          "CLAUDE_CODE_EXTRA_BODY"
+        ]
+      }
     }
   ]
 }

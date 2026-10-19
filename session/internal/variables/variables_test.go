@@ -48,6 +48,9 @@ func record(applied []variables.Entry) []string {
 		for _, l := range e.Lost {
 			line += " " + l.From + ":" + l.Why
 		}
+		if e.Kept != nil {
+			line += " " + e.Kept.Why + ":" + e.Kept.Credential
+		}
 		out = append(out, line)
 	}
 	return out
@@ -140,6 +143,36 @@ func TestTheDenyListCoversEverySourceBelowTheFixedNames(t *testing.T) {
 	})
 }
 
+// TestTheLoadersAndHomeAreDenied pins the built-in entries NODE_OPTIONS, LD_PRELOAD,
+// BASH_ENV and HOME: a value of each from the server, the run (--env), the machine
+// (wall.env), the harness's defaults or the harness's computed values is left out and
+// recorded as denied, and the inherited environment's value then applies.
+func TestTheLoadersAndHomeAreDenied(t *testing.T) {
+	for _, name := range []string{"NODE_OPTIONS", "LD_PRELOAD", "BASH_ENV", "HOME", "home"} {
+		for _, tc := range []struct {
+			source string
+			set    func(in *variables.Inputs)
+		}{
+			{"apiary", func(in *variables.Inputs) { in.Server = map[string]string{name: "/x"} }},
+			{"run", func(in *variables.Inputs) { in.Run = []string{name + "=/x"} }},
+			{"machine", func(in *variables.Inputs) { in.Machine = []string{name + "=/x"} }},
+			{"harness", func(in *variables.Inputs) { in.Defaults = []string{name + "=/x"} }},
+			{"fixed", func(in *variables.Inputs) { in.Fixed = []string{name + "=/x"} }},
+		} {
+			t.Run(name+" from "+tc.source, func(t *testing.T) {
+				in := claude
+				in.Walled = true
+				tc.set(&in)
+				in.Shell = []string{name + "=/inherited"}
+				got := resolve(t, in)
+				want(t, "env", got.Env, nil)
+				want(t, "fixed", got.Fixed, nil)
+				want(t, "record", record(got.Applied), []string{name + "<-shell " + tc.source + ":denied"})
+			})
+		}
+	}
+}
+
 // TestTheHarnesssComputedValuesTakeTheBuiltinListAlone pins the deny list on the
 // values the harness computes: an entry of denied-variables.json leaves one out, and
 // the record lists it as a fixed value denied; the runtime's denies and the node's own
@@ -159,6 +192,65 @@ func TestTheHarnesssComputedValuesTakeTheBuiltinListAlone(t *testing.T) {
 		"LEGACY_SETTING<-fixed apiary:denied",
 		"NODE_EXTRA_CA_CERTS fixed:denied",
 	})
+}
+
+// overrides is what the Claude Code descriptor's model section lists in overrides: the
+// variables that would override the model or effort a composer writes.
+var overrides = []string{
+	"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+	"CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_AUTO_MODE_MODEL",
+	"CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_EXTRA_BODY",
+}
+
+// TestAWalledRunLeavesTheOverridesOut pins the runtime's overrides behind a wall: each
+// name's value from the server, the run, the machine, the harness's defaults and the
+// harness's computed values is left out and recorded as denied, and the inherited
+// environment's value, which no entry matches against, then applies. Without a wall
+// the overrides leave nothing out: the run's value applies, and under accept the
+// server's.
+func TestAWalledRunLeavesTheOverridesOut(t *testing.T) {
+	for _, name := range overrides {
+		for _, tc := range []struct {
+			source string
+			set    func(in *variables.Inputs)
+		}{
+			{"apiary", func(in *variables.Inputs) { in.Server = map[string]string{name: "x"} }},
+			{"run", func(in *variables.Inputs) { in.Run = []string{name + "=x"} }},
+			{"machine", func(in *variables.Inputs) { in.Machine = []string{name + "=x"} }},
+			{"harness", func(in *variables.Inputs) { in.Defaults = []string{name + "=x"} }},
+			{"fixed", func(in *variables.Inputs) { in.Fixed = []string{name + "=x"} }},
+		} {
+			t.Run(name+" from "+tc.source, func(t *testing.T) {
+				in := claude
+				in.Overrides = overrides
+				in.Walled = true
+				tc.set(&in)
+				got := resolve(t, in)
+				want(t, "env", got.Env, nil)
+				want(t, "fixed", got.Fixed, nil)
+				want(t, "record", record(got.Applied), []string{name + " " + tc.source + ":denied"})
+
+				in.Shell = []string{name + "=inherited"}
+				got = resolve(t, in)
+				want(t, "env with the inherited value", got.Env, nil)
+				want(t, "record with the inherited value", record(got.Applied), []string{name + "<-shell " + tc.source + ":denied"})
+			})
+		}
+	}
+	in := claude
+	in.Overrides = overrides
+	in.Run = []string{"ANTHROPIC_MODEL=from-the-run", "CLAUDE_CODE_EFFORT_LEVEL=low"}
+	in.Fixed = []string{"ANTHROPIC_SMALL_FAST_MODEL=computed"}
+	got := resolve(t, in)
+	want(t, "unwalled env", got.Env, []string{"ANTHROPIC_MODEL=from-the-run", "CLAUDE_CODE_EFFORT_LEVEL=low"})
+	want(t, "unwalled fixed", got.Fixed, []string{"ANTHROPIC_SMALL_FAST_MODEL=computed"})
+	want(t, "unwalled record", record(got.Applied), []string{"ANTHROPIC_MODEL<-run", "CLAUDE_CODE_EFFORT_LEVEL<-run"})
+	in.Unwalled = variables.Accept
+	in.Server = map[string]string{"ANTHROPIC_MODEL": "from-the-server"}
+	got = resolve(t, in)
+	want(t, "unwalled env under accept", got.Env, []string{"ANTHROPIC_MODEL=from-the-server", "CLAUDE_CODE_EFFORT_LEVEL=low"})
+	want(t, "unwalled record under accept", record(got.Applied), []string{"ANTHROPIC_MODEL<-apiary run:overridden", "CLAUDE_CODE_EFFORT_LEVEL<-run"})
 }
 
 // TestAnUnwalledRun pins variables.unwalled: under ignore, the default, every server
@@ -390,4 +482,183 @@ func TestCheckRefusesWhatStaysOutside(t *testing.T) {
 			t.Errorf("the error quotes a value: %v", err)
 		}
 	}
+}
+
+// endpointCredentials are a run's credentials as the gateway's run answer lists them:
+// the model credential, whose placeholder the Claude Code runtime declares, and a
+// forge credential, whose placeholder it does not.
+var endpointCredentials = []variables.Credential{
+	{Name: "model", Hosts: []string{"api.anthropic.com"}, Placeholders: []string{"ANTHROPIC_API_KEY"}},
+	{Name: "forge", Hosts: []string{"api.github.com"}, Placeholders: []string{"GITHUB_TOKEN"}},
+}
+
+// TestTheEndpointRule pins the endpoint's variable behind a wall, from each source the
+// deny list covers and from the harness's computed values: a value whose host is a
+// host of a model credential applies, with kept and that credential's name; a value
+// whose host is none of them, a forge credential's host among them, is left out as
+// endpoint_uncovered; and a value that is not an https URL with a host is left out as
+// endpoint_unreadable. The runtime's denies list the name, and leave none of these
+// values out. A run whose gateway sends no credential hosts covers no host.
+func TestTheEndpointRule(t *testing.T) {
+	const name = "ANTHROPIC_BASE_URL"
+	sources := []struct {
+		source string
+		set    func(in *variables.Inputs, value string)
+	}{
+		{"apiary", func(in *variables.Inputs, v string) { in.Server = map[string]string{name: v} }},
+		{"run", func(in *variables.Inputs, v string) { in.Run = []string{name + "=" + v} }},
+		{"machine", func(in *variables.Inputs, v string) { in.Machine = []string{name + "=" + v} }},
+		{"harness", func(in *variables.Inputs, v string) { in.Defaults = []string{name + "=" + v} }},
+		{"fixed", func(in *variables.Inputs, v string) { in.Fixed = []string{name + "=" + v} }},
+	}
+	for _, tc := range []struct {
+		what, value string
+		creds       []variables.Credential
+		why         string
+	}{
+		{"covered", "https://api.anthropic.com", endpointCredentials, ""},
+		{"covered, with a path and a port", "https://API.anthropic.com:443/v1", endpointCredentials, ""},
+		{"uncovered", "https://evil.example", endpointCredentials, variables.WhyEndpointUncovered},
+		{"a forge credential's host", "https://api.github.com", endpointCredentials, variables.WhyEndpointUncovered},
+		{"no credential hosts", "https://api.anthropic.com", nil, variables.WhyEndpointUncovered},
+		{"http", "http://api.anthropic.com", endpointCredentials, variables.WhyEndpointUnreadable},
+		{"user information", "https://a@api.anthropic.com", endpointCredentials, variables.WhyEndpointUnreadable},
+		{"no URL", "api.anthropic.com", endpointCredentials, variables.WhyEndpointUnreadable},
+	} {
+		for _, s := range sources {
+			t.Run(tc.what+" from "+s.source, func(t *testing.T) {
+				in := claude
+				in.Walled, in.Endpoint, in.Credentials = true, name, tc.creds
+				s.set(&in, tc.value)
+				// A computed value is listed beside another source's alone, so the run
+				// passes one the computed value wins over or loses to.
+				if s.source == "fixed" {
+					in.Run = []string{name + "=https://evil.example"}
+				}
+				got := resolve(t, in)
+				var env, fixed, rec []string
+				switch {
+				case tc.why != "" && s.source == "fixed":
+					rec = []string{name + " fixed:" + tc.why + " run:" + variables.WhyEndpointUncovered}
+				case tc.why != "":
+					rec = []string{name + " " + s.source + ":" + tc.why}
+				case s.source == "fixed":
+					fixed = []string{name + "=" + tc.value}
+					rec = []string{name + "<-fixed run:" + variables.WhyEndpointUncovered + " endpoint_covered:model"}
+				default:
+					env = []string{name + "=" + tc.value}
+					rec = []string{name + "<-" + s.source + " endpoint_covered:model"}
+				}
+				want(t, "env", got.Env, env)
+				want(t, "fixed", got.Fixed, fixed)
+				want(t, "record", record(got.Applied), rec)
+			})
+		}
+	}
+}
+
+// TestTheEndpointRuleKeepsThePrecedence pins how the rule meets the order of the
+// sources: each source's value is checked where the deny list would match it, a value
+// left out lets the next source's apply, a value below the one that applies is
+// recorded as overridden or fixed when its host is covered, the inherited environment
+// is matched against nothing, and the node's deny entry for the name still leaves
+// every value out.
+func TestTheEndpointRuleKeepsThePrecedence(t *testing.T) {
+	const name = "ANTHROPIC_BASE_URL"
+	walled := claude
+	walled.Walled, walled.Endpoint, walled.Credentials = true, name, endpointCredentials
+	for _, tc := range []struct {
+		what   string
+		set    func(in *variables.Inputs)
+		env    []string
+		record []string
+	}{
+		{"an uncovered run's value lets the machine's apply", func(in *variables.Inputs) {
+			in.Run = []string{name + "=https://evil.example"}
+			in.Machine = []string{name + "=https://api.anthropic.com"}
+		}, []string{name + "=https://api.anthropic.com"}, []string{name + "<-machine run:endpoint_uncovered endpoint_covered:model"}},
+		{"a covered value below the one that applies is overridden", func(in *variables.Inputs) {
+			in.Server = map[string]string{name: "https://api.anthropic.com/v1"}
+			in.Defaults = []string{name + "=https://api.anthropic.com"}
+		}, []string{name + "=https://api.anthropic.com/v1"}, []string{name + "<-apiary harness:overridden endpoint_covered:model"}},
+		{"below a covered computed value, a covered value is fixed", func(in *variables.Inputs) {
+			in.Fixed = []string{name + "=https://api.anthropic.com"}
+			in.Run = []string{name + "=https://api.anthropic.com/v1"}
+		}, nil, []string{name + "<-fixed run:fixed endpoint_covered:model"}},
+		{"the inherited environment applies below a value left out", func(in *variables.Inputs) {
+			in.Run = []string{name + "=https://evil.example"}
+			in.Shell = []string{name + "=https://inherited.example"}
+		}, nil, []string{name + "<-shell run:endpoint_uncovered"}},
+		{"the node's deny entry", func(in *variables.Inputs) {
+			in.Deny = []string{name}
+			in.Run = []string{name + "=https://api.anthropic.com"}
+			in.Server = map[string]string{name: "https://api.anthropic.com"}
+		}, nil, []string{name + " apiary:denied run:denied"}},
+		{"a model credential named with qak_", func(in *variables.Inputs) {
+			in.Credentials = []variables.Credential{{Name: "qak_model", Hosts: []string{"*.anthropic.com"}, Placeholders: []string{"CLAUDE_CODE_OAUTH_TOKEN"}}}
+			in.Run = []string{name + "=https://api.anthropic.com"}
+		}, []string{name + "=https://api.anthropic.com"}, []string{name + "<-run endpoint_covered:(a name that contains an access key secret)"}},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			in := walled
+			tc.set(&in)
+			got := resolve(t, in)
+			want(t, "env", got.Env, tc.env)
+			want(t, "record", record(got.Applied), tc.record)
+		})
+	}
+}
+
+// TestEveryComputedEndpointIsChecked pins the harness's computed values of the
+// endpoint's variable behind a wall: each one is checked; when one is left out, all of
+// them are, with the reason of the first one left out, and the next source's value
+// applies; when every one is kept, the last one alone applies.
+func TestEveryComputedEndpointIsChecked(t *testing.T) {
+	const name = "ANTHROPIC_BASE_URL"
+	for _, tc := range []struct {
+		what          string
+		fixed         []string
+		fixedOut, rec []string
+	}{
+		{"an uncovered one first", []string{name + "=https://evil.example", name + "=https://api.anthropic.com"},
+			nil, []string{name + "<-run fixed:endpoint_uncovered endpoint_covered:model"}},
+		{"an uncovered one last", []string{name + "=https://api.anthropic.com", name + "=https://evil.example"},
+			nil, []string{name + "<-run fixed:endpoint_uncovered endpoint_covered:model"}},
+		{"the reason of the first one left out", []string{name + "=https://api.anthropic.com", name + "=http://api.anthropic.com", name + "=https://evil.example"},
+			nil, []string{name + "<-run fixed:endpoint_unreadable endpoint_covered:model"}},
+		{"every one covered", []string{name + "=https://api.anthropic.com/v1", "OTHER=x", name + "=https://api.anthropic.com"},
+			[]string{"OTHER=x", name + "=https://api.anthropic.com"}, []string{name + "<-fixed run:fixed endpoint_covered:model"}},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			in := claude
+			in.Walled, in.Endpoint, in.Credentials = true, name, endpointCredentials
+			in.Fixed = tc.fixed
+			in.Run = []string{name + "=https://api.anthropic.com/run"}
+			got := resolve(t, in)
+			want(t, "fixed", got.Fixed, tc.fixedOut)
+			want(t, "record", record(got.Applied), tc.rec)
+		})
+	}
+}
+
+// TestWithoutAWallTheEndpointIsDenied pins that a run without a wall takes no part in
+// the endpoint rule: the runtime's denies leave a covered value out as denied, and the
+// harness's computed value applies, since the runtime's denies leave it in.
+func TestWithoutAWallTheEndpointIsDenied(t *testing.T) {
+	const name = "ANTHROPIC_BASE_URL"
+	in := claude
+	in.Endpoint, in.Credentials, in.Unwalled = name, endpointCredentials, variables.Accept
+	in.Server = map[string]string{name: "https://api.anthropic.com"}
+	in.Run = []string{name + "=https://api.anthropic.com"}
+	in.Machine = []string{name + "=https://api.anthropic.com"}
+	in.Defaults = []string{name + "=https://api.anthropic.com"}
+	got := resolve(t, in)
+	want(t, "env", got.Env, nil)
+	want(t, "record", record(got.Applied), []string{name + " apiary:denied run:denied machine:denied harness:denied"})
+	in = claude
+	in.Endpoint, in.Credentials = name, endpointCredentials
+	in.Fixed = []string{name + "=https://evil.example"}
+	got = resolve(t, in)
+	want(t, "fixed", got.Fixed, []string{name + "=https://evil.example"})
+	want(t, "record", record(got.Applied), nil)
 }

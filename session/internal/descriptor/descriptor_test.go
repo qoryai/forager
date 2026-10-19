@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"reflect"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -59,8 +60,9 @@ func TestMatchIsEqualityOrPresenceOnly(t *testing.T) {
 
 // TestClaudeDeclaresItsModelCredential pins that the secrets of the contract's Claude
 // Code descriptor decode: the API key on x-api-key, the OAuth credential as a bearer,
-// both on api.anthropic.com under /v1/, one of the two required, and the reserved,
-// denied and credential file lists.
+// the API key as a bearer in ANTHROPIC_AUTH_TOKEN, each on api.anthropic.com under
+// /v1/; no one_of group, no reserved variable, and the denied and credential file
+// lists.
 func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
 	if err != nil {
@@ -71,25 +73,190 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := d.Secrets
-	if d.Title != "Claude Code" || s == nil || len(s.Declares) != 2 {
+	if d.Title != "Claude Code" || s == nil || len(s.Declares) != 3 {
 		t.Fatalf("title %q, secrets %+v", d.Title, s)
 	}
 	want := []descriptor.Declaration{
 		{ID: "api_key", Title: "Anthropic API key", Name: "ANTHROPIC_API_KEY", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "header", Header: "x-api-key"}},
 		{ID: "oauth_token", Title: "Claude OAuth token", Name: "CLAUDE_CODE_OAUTH_TOKEN", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "bearer"}},
+		{ID: "auth_token", Title: "Anthropic API key as a bearer", Name: "ANTHROPIC_AUTH_TOKEN", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "bearer"}},
 	}
 	for i, w := range want {
 		if !reflect.DeepEqual(s.Declares[i], w) {
 			t.Errorf("declares[%d] = %+v; want %+v", i, s.Declares[i], w)
 		}
 	}
-	if g := s.OneOf; len(g) != 1 || g[0].ID != "model_key" || !g[0].Required || !reflect.DeepEqual(g[0].Of, []string{"api_key", "oauth_token"}) {
-		t.Errorf("one_of = %+v", g)
+	if len(s.OneOf) != 0 {
+		t.Errorf("one_of = %+v; want none", s.OneOf)
 	}
-	if !reflect.DeepEqual(s.Reserves, []string{"ANTHROPIC_AUTH_TOKEN"}) ||
+	if len(s.Reserves) != 0 ||
 		!reflect.DeepEqual(s.CredentialFiles, []string{"~/.claude/.credentials.json"}) ||
 		len(s.Denies) != 23 || s.Denies[0] != "ANTHROPIC_BASE_URL" {
 		t.Errorf("reserves %v, credential_files %v, denies %v", s.Reserves, s.CredentialFiles, s.Denies)
+	}
+}
+
+// TestClaudeRequiresNoModelKey pins that the Claude Code descriptor has no one_of
+// group and that its entry in runtimes.json has one_of, empty. The descriptor requires
+// neither key, because a server's model key reaches the run only as a sealed
+// credential that the run configuration names, and otherwise the run's model key is a
+// credential the machine defines.
+func TestClaudeRequiresNoModelKey(t *testing.T) {
+	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := descriptor.Parse("descriptor.yaml", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Secrets == nil {
+		t.Fatal("the claude descriptor has no secrets")
+	}
+	if len(d.Secrets.OneOf) != 0 {
+		t.Errorf("the claude descriptor has one_of %+v; want none", d.Secrets.OneOf)
+	}
+	j, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Runtimes []struct {
+			Name  string            `json:"name"`
+			OneOf []json.RawMessage `json:"one_of"`
+		} `json:"runtimes"`
+	}
+	if err := json.Unmarshal(j, &doc); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range doc.Runtimes {
+		if r.Name != "claude" {
+			continue
+		}
+		found = true
+		if r.OneOf == nil {
+			t.Error("runtimes.json has no one_of list for the claude runtime; want []")
+		} else if len(r.OneOf) != 0 {
+			t.Errorf("runtimes.json has %d one_of groups for the claude runtime; want []", len(r.OneOf))
+		}
+	}
+	if !found {
+		t.Error("runtimes.json has no claude runtime")
+	}
+}
+
+// TestClaudeDescribesWhereItsModelGoes pins the model section of the contract's Claude
+// Code descriptor as it decodes: Anthropic's Messages format, the model id as --model,
+// the run's effort as --effort with low to max, an agent's effort in the agent file's
+// effort frontmatter with low to max, the endpoint in ANTHROPIC_BASE_URL, and the 12
+// variables that would override the model or effort in overrides.
+func TestClaudeDescribesWhereItsModelGoes(t *testing.T) {
+	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := descriptor.Parse("descriptor.yaml", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	efforts := []string{"low", "medium", "high", "xhigh", "max"}
+	want := &descriptor.Model{
+		Formats: []string{"anthropic-messages"},
+		Model:   descriptor.Place{Flag: "--model"},
+		Effort: &descriptor.Effort{
+			Run:   descriptor.ValuedPlace{Place: descriptor.Place{Flag: "--effort"}, Values: efforts},
+			Agent: &descriptor.AgentPlace{Frontmatter: "effort", Values: efforts},
+		},
+		Endpoint: descriptor.Endpoint{Variable: "ANTHROPIC_BASE_URL"},
+		Overrides: []string{
+			"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
+			"CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_AUTO_MODE_MODEL", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_EXTRA_BODY",
+		},
+	}
+	if !reflect.DeepEqual(d.Model, want) {
+		t.Errorf("model = %+v; want %+v", d.Model, want)
+	}
+}
+
+// TestModelDecodesFromYAMLAndJSON pins that a model section decodes the same from either
+// reader, each kind of place among them, and that a descriptor without one has none.
+func TestModelDecodesFromYAMLAndJSON(t *testing.T) {
+	yamlDoc, err := fs.ReadFile(contracts.FS, "fixtures/descriptor/model.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromYAML, err := descriptor.Parse("model.yaml", yamlDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := contracts.Document("fixtures/descriptor/model.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonDoc, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromJSON, err := descriptor.Parse("model.json", jsonDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &descriptor.Model{
+		Formats: []string{"openai-responses", "openai-chat"},
+		Model:   descriptor.Place{Setting: "agent.model"},
+		Effort: &descriptor.Effort{
+			Run:   descriptor.ValuedPlace{Place: descriptor.Place{Variable: "AMP_EFFORT"}, Values: []string{"low", "medium", "high"}},
+			Agent: &descriptor.AgentPlace{Frontmatter: "reasoning-effort", Values: []string{"low", "high"}},
+		},
+		Endpoint:  descriptor.Endpoint{Variable: "AMP_BASE_URL"},
+		Overrides: []string{"AMP_MODEL", "AMP_EFFORT_LEVEL"},
+	}
+	for name, d := range map[string]*descriptor.Descriptor{"yaml": fromYAML, "json": fromJSON} {
+		if !reflect.DeepEqual(d.Model, want) {
+			t.Errorf("%s: model = %+v; want %+v", name, d.Model, want)
+		}
+	}
+	noEffort, err := fs.ReadFile(contracts.FS, "fixtures/descriptor/model-no-effort.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := descriptor.Parse("model-no-effort.yaml", noEffort)
+	if err != nil || d.Model == nil || d.Model.Effort != nil || d.Model.Overrides != nil {
+		t.Errorf("a model section without effort or overrides: %+v %v", d, err)
+	}
+	const none = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
+	if d, err := descriptor.Parse("amp.yaml", []byte(none)); err != nil || d.Model != nil {
+		t.Errorf("a descriptor without a model section: %+v %v", d, err)
+	}
+}
+
+// TestModelIsChecked pins what the schema holds a model section to, each fixture under
+// fixtures/invalid named descriptor-model-* being refused by Parse.
+func TestModelIsChecked(t *testing.T) {
+	entries, err := fs.ReadDir(contracts.FS, "fixtures/invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "descriptor-model-") {
+			continue
+		}
+		n++
+		b, err := fs.ReadFile(contracts.FS, "fixtures/invalid/"+e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := descriptor.Parse(e.Name(), b); err == nil {
+			t.Errorf("%s was accepted", e.Name())
+		}
+	}
+	if n < 8 {
+		t.Errorf("%d invalid model fixtures; want one per rule: an unknown format, two places, "+
+			"empty values, no formats, an extra member, and overrides empty, with a duplicate or with a non-name", n)
 	}
 }
 
@@ -144,9 +311,46 @@ func TestSecretsAreChecked(t *testing.T) {
 		"an id in two groups":        " declares:\n" + key + " one_of: [{id: a, of: [key]}, {id: b, of: [key]}]\n",
 		"a group defined twice": " declares:\n" + key + "  - {id: alt, title: Alt, name: AMP_ALT, hosts: [api.example.com], auth: {scheme: bearer}}\n" +
 			" one_of: [{id: a, of: [key]}, {id: a, of: [alt]}]\n",
+		"a key_form": " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: bearer}, key_form: api_key}\n",
 	} {
 		if _, err := descriptor.Parse("amp.yaml", []byte(head+"secrets:\n"+secrets)); err == nil {
 			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+// TestRuntimesJSONHasModelOnlyWhenDescribed pins that runtimes.json writes a runtime's
+// model section as the descriptor has it, and has no model key for a runtime whose
+// descriptor has none.
+func TestRuntimesJSONHasModelOnlyWhenDescribed(t *testing.T) {
+	const head = "version: 1\nruntime: amp\ntitle: Amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
+	for name, c := range map[string]struct {
+		doc  string
+		want map[string]any
+	}{
+		"a descriptor without a model section": {head, nil},
+		"a descriptor with one": {head + "model:\n formats: [gemini]\n model: {flag: --model}\n endpoint: {variable: AMP_URL}\n",
+			map[string]any{"formats": []any{"gemini"}, "model": map[string]any{"flag": "--model"}, "endpoint": map[string]any{"variable": "AMP_URL"}}},
+		"a descriptor with overrides": {head + "model:\n formats: [gemini]\n model: {flag: --model}\n endpoint: {variable: AMP_URL}\n overrides: [AMP_MODEL]\n",
+			map[string]any{"formats": []any{"gemini"}, "model": map[string]any{"flag": "--model"}, "endpoint": map[string]any{"variable": "AMP_URL"}, "overrides": []any{"AMP_MODEL"}}},
+	} {
+		b, err := descriptor.Runtimes(fstest.MapFS{"runtimes/amp/descriptor.yaml": {Data: []byte(c.doc)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var f struct {
+			Runtimes []map[string]any `json:"runtimes"`
+		}
+		if err := json.Unmarshal(b, &f); err != nil || len(f.Runtimes) != 1 {
+			t.Fatalf("%s: %v\n%s", name, err, b)
+		}
+		got, has := f.Runtimes[0]["model"]
+		switch {
+		case c.want == nil && has:
+			t.Errorf("%s: runtimes.json has model %v; want no model key", name, got)
+		case c.want != nil && !reflect.DeepEqual(got, c.want):
+			t.Errorf("%s: runtimes.json has model %v; want %v", name, got, c.want)
 		}
 	}
 }
@@ -172,8 +376,10 @@ func TestRuntimesJSONIsGenerated(t *testing.T) {
 // runtimes; per runtime its name, title, reserves, denies, credential_files, declares
 // and one_of, every one present; per declaration id, title, name, hosts, auth with its
 // scheme, the header of a header scheme and the username of a basic scheme, and paths
-// when it has some; per group id, required and of. Every built-in descriptor is one
-// runtime, in name order.
+// when it has some; per group id, required and of; and model when the descriptor has
+// one, with formats, model, endpoint with its variable and optionally effort, with run
+// and optionally agent, each place being exactly one of flag, setting and variable, and
+// optionally overrides. The claude runtime has a model with overrides. Every built-in descriptor is one runtime, in name order.
 func TestRuntimesJSONShape(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
 	if err != nil {
@@ -225,6 +431,22 @@ func TestRuntimesJSONShape(t *testing.T) {
 		}
 		return out
 	}
+	// place checks a place: exactly one of flag, setting and variable, and the other
+	// members named.
+	place := func(v any, other ...string) map[string]any {
+		t.Helper()
+		m := members("place", v, other, "flag", "setting", "variable")
+		kinds := 0
+		for _, k := range []string{"flag", "setting", "variable"} {
+			if _, ok := m[k]; ok {
+				kinds++
+			}
+		}
+		if kinds != 1 {
+			t.Errorf("place %v has %d of flag, setting and variable; want one", m, kinds)
+		}
+		return m
+	}
 	members("runtimes.json", doc, []string{"version", "runtimes"})
 	if doc["version"] != 1.0 {
 		t.Errorf("version %v; want 1", doc["version"])
@@ -244,7 +466,7 @@ func TestRuntimesJSONShape(t *testing.T) {
 		t.Fatalf("%d runtimes for %d descriptors", len(runtimes), len(dirs))
 	}
 	for i, r := range runtimes {
-		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of"})
+		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of"}, "model")
 		if rt["name"] != dirs[i].Name() || rt["title"] == "" {
 			t.Errorf("runtime %d is %v, %v; want %s and a title", i, rt["name"], rt["title"], dirs[i].Name())
 		}
@@ -273,6 +495,26 @@ func TestRuntimesJSONShape(t *testing.T) {
 				t.Errorf("group %v: required is not a boolean", gr["id"])
 			}
 			strs("of", gr["of"])
+		}
+		if m, ok := rt["model"]; ok {
+			model := members("model", m, []string{"formats", "model", "endpoint"}, "effort", "overrides")
+			strs("formats", model["formats"])
+			if o, ok := model["overrides"]; ok {
+				strs("overrides", o)
+			} else if rt["name"] == "claude" {
+				t.Error("the claude runtime's model has no overrides")
+			}
+			place(model["model"])
+			members("endpoint", model["endpoint"], []string{"variable"})
+			if e, ok := model["effort"]; ok {
+				effort := members("effort", e, []string{"run"}, "agent")
+				strs("values", place(effort["run"], "values")["values"])
+				if a, ok := effort["agent"]; ok {
+					strs("values", members("agent", a, []string{"frontmatter", "values"})["values"])
+				}
+			}
+		} else if rt["name"] == "claude" {
+			t.Error("the claude runtime has no model")
 		}
 	}
 }

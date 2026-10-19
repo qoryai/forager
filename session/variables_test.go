@@ -178,6 +178,11 @@ func TestVariablesReachTheAgentByRung(t *testing.T) {
 					"LOG_LEVEL<-apiary run:overridden harness:overridden", "NODE_ENV<-apiary", "PATH<-shell apiary:denied",
 				}
 				wantEnv["LOG_LEVEL"], wantEnv["NODE_ENV"] = "server", "test"
+				// Behind a wall the endpoint rule leaves the server's endpoint out: the
+				// answer has no credential_hosts.
+				if tc.walled {
+					want[1] = "ANTHROPIC_BASE_URL apiary:endpoint_uncovered"
+				}
 			} else {
 				want = []string{
 					"ANTHROPIC_AUTH_TOKEN apiary:unwalled", "ANTHROPIC_BASE_URL apiary:unwalled", "APP_REGION apiary:unwalled",

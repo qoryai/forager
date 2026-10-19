@@ -33,13 +33,13 @@ func TestClaudeCodeDeclaresItsModelCredential(t *testing.T) {
 	for _, dc := range d.Declares {
 		names = append(names, dc.ID+"="+dc.Name+" "+dc.Auth.Scheme)
 	}
-	if want := []string{"api_key=ANTHROPIC_API_KEY header", "oauth_token=CLAUDE_CODE_OAUTH_TOKEN bearer"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"api_key=ANTHROPIC_API_KEY header", "oauth_token=CLAUDE_CODE_OAUTH_TOKEN bearer", "auth_token=ANTHROPIC_AUTH_TOKEN bearer"}; !reflect.DeepEqual(names, want) {
 		t.Errorf("declares %v, want %v", names, want)
 	}
-	if len(d.OneOf) != 1 || d.OneOf[0].ID != "model_key" || !d.OneOf[0].Required || !reflect.DeepEqual(d.OneOf[0].Of, []string{"api_key", "oauth_token"}) {
-		t.Errorf("one_of %+v", d.OneOf)
+	if len(d.OneOf) != 0 {
+		t.Errorf("one_of %+v; want none", d.OneOf)
 	}
-	if !reflect.DeepEqual(d.Reserves, []string{"ANTHROPIC_AUTH_TOKEN"}) || !slices.Contains(d.Denies, "CLAUDE_CONFIG_DIR") {
+	if len(d.Reserves) != 0 || !slices.Contains(d.Denies, "CLAUDE_CONFIG_DIR") {
 		t.Errorf("reserves %v, denies %v", d.Reserves, d.Denies)
 	}
 }

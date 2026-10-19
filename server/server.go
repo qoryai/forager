@@ -292,6 +292,40 @@ type RunConfiguration struct {
 	// Image is the image the run starts in, a reference pinned by digest; empty when
 	// the document names none, and the run's policy selects the image.
 	Image string `json:"image,omitzero"`
+	// Credentials are the credentials whose values the server stores for the run, in
+	// the document's order, each name once; nil when the document has none. The
+	// gateway fetches their values with the secrets request.
+	Credentials []RunCredential `json:"credentials,omitzero"`
+	// Computed is sha256= and the lower-case hex SHA-256 of the bytes the document was
+	// read from, which Forager computes itself: the digest a secrets request and the
+	// open of its answer use, never the answer's header. Empty for a document not read
+	// from bytes.
+	Computed string `json:"-"`
+}
+
+// RunCredential is one entry of a run configuration's credentials: the credential's
+// name, the exact hosts and the paths its value is set on, how it is set, the names of
+// the variables from which a runtime reads its key, and the variables the enclosure
+// gets a placeholder in. It has no value.
+type RunCredential struct {
+	Name  string   `json:"name"`
+	Hosts []string `json:"hosts"`
+	// Paths are nil for every path.
+	Paths []string `json:"paths,omitzero"`
+	Auth  Auth     `json:"auth"`
+	// KeyVariables are the names of the environment variables from which a runtime reads
+	// the credential's key; nil for none. The session gives the placeholder for the
+	// credential to the one of them that the run's runtime declares with the same auth.
+	KeyVariables []string `json:"key_variables,omitzero"`
+	Placeholders []string `json:"placeholders,omitzero"`
+}
+
+// Auth is how a value is set on a request, auth.schema.json: Scheme is bearer, basic
+// with Username, or header with Header.
+type Auth struct {
+	Scheme   string `json:"scheme"`
+	Header   string `json:"header,omitzero"`
+	Username string `json:"username,omitzero"`
 }
 
 // Variable is one of a run configuration's variables: its value. A member beside it is
@@ -315,7 +349,7 @@ func (rc *RunConfiguration) Values() map[string]string {
 
 // Digests are what an answer says is in force: the server's digest of the
 // configuration document and of the run's run configuration, each empty when the answer
-// did not say. They are opaque: compared byte for byte, never recomputed.
+// did not say. Forager compares them byte for byte and does not recompute them.
 type Digests struct {
 	Configuration    string
 	RunConfiguration string

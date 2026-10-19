@@ -13,7 +13,7 @@
     "source": {"description": "config when a policy document is passed to Forager; fetched when the policy is the security_policy of a run configuration the server returned, narrowed by the node's policy when there is one; none when there was neither and the gateway observes everything. With config or none, url and run_configuration are present when the server returned a run configuration without a security_policy.", "type": "string", "enum": ["none", "config", "fetched"]},
     "url": {"description": "The server's run endpoint, run.url, that answered the run configuration, when the server returned one.", "type": "string", "format": "uri", "minLength": 1},
     "digest": {"description": "sha256 of the policy document as canonical JSON, hex, when source is config or fetched: the version stamp of the run's policy, the same for the same policy however it was written. Computed by Forager.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when the server returned one. The server's, and opaque: Forager never recomputes it.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
+    "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when the server returned one: sha256= and the lower-case hex SHA-256 of the document's bytes as the server sent them.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
     "paths": {"description": "The policy's path rules, by host, when it has any: the server's, when the policy is fetched; node_policy contains the node's.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "credentials": {
       "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed, or, from the gateway's selection, the run's label it took. Never a secret.",
@@ -46,7 +46,7 @@
       }
     },
     "image": {"description": "The image the policy or the run configuration selects, which the run started in: the machine's name for it, or its reference pinned by digest. Absent when neither selects one and the machine's default was used. Fixed for the run. An image that contains qak_ or qrk_ in any case is one of two phrases in its place: the access key secret's when it contains qak_, else the run key's.", "anyOf": [{"$ref": "../policy.schema.json#/properties/image"}, {"enum": ["(a name that contains an access key secret)", "(a name that contains a run key)"]}]},
-    "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read. A credential's *. entry is not for a name under it that ends in .local, .internal or .home.arpa, such as x.home.arpa under *.arpa: the credential is for such a name only through an entry equal to it. A credential's *. entry under which every name has one of these endings, such as *.local, is not listed for the credential; it is listed when a tool serves it or it has path rules.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "harness_hosts": {"description": "The egress the harness declared, as passed to Forager, when present. Information only: it decides nothing. A host that contains qak_ or qrk_ in any case is `(a value that contains an access key secret)` in its place, or `(a value that contains a run key)` when it contains qrk_ and no qak_.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "node_policy": {
       "description": "The node's policy, when the run has both a fetched policy and a policy the command passes, which narrows it, so the record shows the path rules of the server's policy and of the node's.",
@@ -60,7 +60,7 @@
     },
     "ceiling_paths": {"description": "The path rules of each ceiling the run's policy file was put under with gateway.Policy.Under, by host, one object per ceiling that has any; absent when none has any. A request to a host a ceiling lists must match an entry of that ceiling as well. Fixed for the run: every further policy_applied repeats it.", "type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}},
     "variables": {
-      "description": "The run's variables by name, never a value: each name, the source whose value the run applies, and the values that lost, sorted by each variable's name as the run sets it, before a phrase takes the place of a name that contains qak_ or qrk_. A name is listed when the server, the run, the machine or the harness's defaults set it, and when the built-in deny list leaves out a value the harness computed. A fixed name, one Forager, the wall, the runtime's preparation, a placeholder or the harness's computed values set, is listed only when it won over one of those sources, and a name of the environment the run inherits only when one of those sources set it too, so the inherited environment and Forager's names do not fill every record. Fixed when the run starts: every further policy_applied repeats it.",
+      "description": "The run's variables by name, never a value: each name, the source whose value the run applies, and the values that lost, sorted by each variable's name as the run sets it, before a phrase takes the place of a name that contains qak_ or qrk_. A name is listed when the server, the run, the machine or the harness's defaults set it, and when the built-in deny list or, behind a wall, the endpoint rule leaves out a value the harness computed. A fixed name, one Forager, the wall, the runtime's preparation, a placeholder or the harness's computed values set, is listed only when it won over one of those sources, and a name of the environment the run inherits only when one of those sources set it too, so the inherited environment and Forager's names do not fill every record. Fixed when the run starts: every further policy_applied repeats it.",
       "type": "array",
       "items": {
         "type": "object",
@@ -70,7 +70,7 @@
           "name": {"description": "The variable's name, or, for a name that contains qak_ or qrk_ in any case, one of two phrases in its place: the access key secret's when it contains qak_, else the run key's.", "type": "string", "anyOf": [{"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}, {"enum": ["(a name that contains an access key secret)", "(a name that contains a run key)"]}]},
           "from": {"description": "The source whose value the run applies, from the highest: fixed, apiary (the server's run configuration), run, machine, harness (the harness's written defaults), shell (the inherited environment). An open list: a receiver shows a name it does not know as it is. Absent when no source's value applies, as for a variable the runtime declares, which then goes into a walled run empty.", "$ref": "#/$defs/word"},
           "lost": {
-            "description": "The values of this name the run left out, the highest source first, each once: the source, and why: overridden, a higher source's value applies; denied, the deny list matched the name, or the server's value is of a variable the runtime declares or reserves or a machine value is read from; fixed, the name is one of the run's fixed names; unwalled, the server's value in a run without a wall that takes none. An open list, as from is.",
+            "description": "The values of this name the run left out, the highest source first, each once: the source, and why: overridden, a higher source's value applies; denied, the deny list matched the name, or the server's value is of a variable the runtime declares or reserves or a machine value is read from; fixed, the name is one of the run's fixed names; unwalled, the server's value in a run without a wall that takes none; endpoint_uncovered, the endpoint's host is none of the hosts of the run's model credential; endpoint_unreadable, the value is not an https URL with a host Forager reads. An open list, as from is.",
             "type": "array",
             "items": {
               "type": "object",
@@ -81,10 +81,35 @@
                 "why": {"$ref": "#/$defs/word"}
               }
             }
+          },
+          "kept": {
+            "description": "Behind a wall, why the value of the runtime's model endpoint variable that applies was kept: why endpoint_covered, the endpoint's host is a host of the run's model credential, and credential, that credential's name. Absent for every other value.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["why", "credential"],
+            "properties": {
+              "why": {"type": "string", "enum": ["endpoint_covered"]},
+              "credential": {"type": "string", "minLength": 1}
+            }
           }
         },
+        "dependentRequired": {"kept": ["from"]},
         "if": {"not": {"required": ["from"]}},
         "then": {"properties": {"lost": {"minItems": 1}}}
+      }
+    },
+    "credential_variables": {
+      "description": "Behind a wall, the variables the agent's process receives as a placeholder for a credential the gateway holds, never a value: one entry per credential and variable, in the order of the run answer's credential_hosts and of each credential's placeholders, the variable the session chooses from a credential's key_variables after them when the credential does not list it. credential is the credential's name. A credential's name or a variable that contains qak_ or qrk_ in any case is one of two phrases in its place: the access key secret's when it contains qak_, else the run key's, so the record carries neither. Absent when there is no entry. The session decides it; fixed when the run starts: every further policy_applied repeats it.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["credential", "name"],
+        "properties": {
+          "credential": {"type": "string", "minLength": 1},
+          "name": {"type": "string", "anyOf": [{"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}, {"enum": ["(a name that contains an access key secret)", "(a name that contains a run key)"]}]}
+        }
       }
     }
   },

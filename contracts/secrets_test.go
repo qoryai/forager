@@ -866,6 +866,7 @@ func TestDeniedVariables(t *testing.T) {
 		"SSL_CERT_DIR", "GIT_SSL_CAPATH",
 		"DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY", "DOCKER_CONFIG",
 		"PATH",
+		"NODE_OPTIONS", "LD_PRELOAD", "BASH_ENV", "HOME",
 	} {
 		for _, n := range []string{name, strings.ToLower(name)} {
 			if !denied(n) {
@@ -898,7 +899,7 @@ func TestRunRefusedCodes(t *testing.T) {
 		"credential_check_invalid", "credential_check_unreachable", "credential_expired",
 		"differs_from_credential", "engine_unreachable", "image_not_allowed", "image_unknown",
 		"image_user_root", "instance_limit",
-		"invalid_request", "key_invalid", "key_limit", "labels_changed",
+		"invalid_request", "key_invalid", "key_limit", "labels_changed", "model_key_missing",
 		"mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run",
 		"mount_through_link", "not_found", "placeholder_conflict", "rate_limited", "run_attached",
 		"run_closed", "run_configuration_invalid", "run_configuration_superseded",
@@ -908,8 +909,8 @@ func TestRunRefusedCodes(t *testing.T) {
 		"tool_unknown", "unauthorized", "unavailable", "unsupported_contract_version",
 		"variable_reserved", "workspace_not_served", "wrong_gateway",
 	}
-	if len(want) != 44 {
-		t.Fatalf("%d codes in the test's list; want 44", len(want))
+	if len(want) != 45 {
+		t.Fatalf("%d codes in the test's list; want 45", len(want))
 	}
 	if got := slices.Sorted(slices.Values(s.Then.Properties.Code.Enum)); !slices.Equal(got, want) {
 		t.Errorf("run.refused codes %q; want %q", got, want)

@@ -27,8 +27,9 @@ const Version = "v1"
 // only once a release of Forager is in use.
 const Revision = 1
 
-// runtimes.json lists the secrets of the descriptors under forager/v1/runtimes, for a
-// server to vendor; it is written from them and never by hand.
+// runtimes.json lists the secrets and the model sections of the descriptors under
+// forager/v1/runtimes, for a server to vendor; it is written from them and never by
+// hand.
 //go:generate go run ../session/internal/descriptor/runtimesjson forager/v1/runtimes.json
 
 //go:embed all:forager

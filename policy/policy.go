@@ -22,7 +22,9 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/qoryai/forager/accesskey"
@@ -85,7 +87,8 @@ type Loaded struct {
 	// the run's policy, the same for the same policy however it was written.
 	Digest string
 	// URL is where the run configuration was fetched from, and RunConfiguration the
-	// server's digest of it, opaque, when Source is "fetched".
+	// server's digest of it, as the answer's header contained it, when Source is
+	// "fetched".
 	URL              string
 	RunConfiguration string
 	// Canonical is "sha256=" and the hex sha256 of the document's RFC 8785
@@ -393,6 +396,65 @@ func Host(host string) (string, bool) {
 		}
 	}
 	return h, true
+}
+
+// EndpointHost returns the host of a base URL, such as ANTHROPIC_BASE_URL's value, in
+// the form [Host] gives, and whether the URL has one. A URL has none when [url.Parse]
+// refuses it, when it is opaque or relative, when its scheme is not https (compared
+// without regard to case), when it has user information ("https://a@b/"), when its
+// host is empty, when [Host] refuses its host, or when its port is not a decimal number
+// from 1 to 65535. The host is read as url.Parse decodes it, without the brackets of an
+// IPv6 literal. A URL with no port, or with nothing after the port's colon, has a host
+// if the rest allows it. The host does not depend on the path, query or fragment, but
+// url.Parse refuses a bad percent escape in the path or fragment, and such a URL has no
+// host.
+func EndpointHost(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || !u.IsAbs() || u.Scheme != "https" || u.User != nil || u.Hostname() == "" {
+		return "", false
+	}
+	if port := u.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return "", false
+		}
+	}
+	return Host(u.Hostname())
+}
+
+// CredentialFor reports whether a credential with hosts, entries in the allow list's
+// grammar, is for host: host's form under [Host], matched against hosts by [Match]. A
+// host with no form is in no credential's hosts. A private host is in a credential's
+// hosts only through an entry equal to it, compared lower-case, and never through a
+// "*." pattern. A private host is an IP literal in 10.0.0.0/8, 172.16.0.0/12,
+// 192.168.0.0/16 or fc00::/7, the ranges [netip.Addr.IsPrivate] reports; a name of one
+// label, such as litellm; or a name that ends in ".local", ".internal" or ".home.arpa".
+// Only a name with one of these endings can get a result other than [Match]'s: Match
+// compares an IP literal only to an identical entry, and a "*." pattern matches no name
+// of one label. The gateway's proxy picks a request's credential by this rule.
+func CredentialFor(hosts []string, host string) bool {
+	h, ok := Host(host)
+	if !ok {
+		return false
+	}
+	if private(h) {
+		for _, entry := range hosts {
+			if strings.ToLower(entry) == h {
+				return true
+			}
+		}
+		return false
+	}
+	_, ok = Match(hosts, h)
+	return ok
+}
+
+// private reports whether h, a host in [Host]'s form, is a private host as
+// [CredentialFor] reads one.
+func private(h string) bool {
+	if a, err := netip.ParseAddr(h); err == nil {
+		return a.IsPrivate()
+	}
+	return !strings.Contains(h, ".") || strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".internal") || strings.HasSuffix(h, ".home.arpa")
 }
 
 // embedded are the IPv6 ranges a host has no form in, each holding an IPv4 address in
