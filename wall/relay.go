@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 )
 
@@ -106,7 +107,7 @@ func insideAddrs(subnets string, local []net.Addr) ([]net.IP, []*net.IPNet, erro
 	for _, s := range strings.Split(subnets, ",") {
 		_, subnet, err := net.ParseCIDR(s)
 		if err != nil {
-			return nil, nil, fmt.Errorf("relay: %q in %s is not a subnet", s, RelayInsideEnv)
+			return nil, nil, fmt.Errorf("relay: %s in %s is not a subnet", accesskey.ShownValue(s, true), RelayInsideEnv)
 		}
 		var in []net.IP
 		for _, a := range local {
@@ -142,10 +143,10 @@ func parseForward(f string) (int, string, error) {
 	p, target, ok := strings.Cut(f, "=")
 	port, err := strconv.Atoi(p)
 	if !ok || err != nil || port < 1 || port > 65535 {
-		return 0, "", fmt.Errorf("relay: forward %q is not port=host:port", f)
+		return 0, "", fmt.Errorf("relay: forward %s is not port=host:port", accesskey.ShownValue(f, true))
 	}
 	if _, _, err := net.SplitHostPort(target); err != nil {
-		return 0, "", fmt.Errorf("relay: forward %q is not port=host:port", f)
+		return 0, "", fmt.Errorf("relay: forward %s is not port=host:port", accesskey.ShownValue(f, true))
 	}
 	return port, target, nil
 }

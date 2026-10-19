@@ -58,6 +58,37 @@ among the signed lines. Every answer is signed with the server's key and bound t
 request, and the gateway reads an answer only once it verifies under the pin. The
 server decides which labels identify what the run works on.
 
+### Names and values that contain a key's prefix
+
+`qak_` starts every access key secret and `qrk_` every run key. Forager sends and prints
+a phrase in place of a name or a value that contains either, in any case:
+
+- A name, such as a credential's, a tool's, a variable's, an image or a label's key or
+  value, is `(a name that contains an access key secret)` when it contains `qak_`, and
+  `(a name that contains a run key)` when it contains `qrk_` and no `qak_`.
+- A value of free text, such as a path, a command, an argument, a URL, a program's
+  output or an error's text, is `(a value that contains an access key secret)` or `(a
+  value that contains a run key)` the same way.
+
+The phrases apply to the events, the registration, the outcome and Forager's messages
+and log lines. An error that a step of the session or the gateway returns unchanged,
+such as an operating system's error that quotes a path, reaches the caller unchanged.
+In the registration and `run.started`:
+
+- Of two labels whose keys become the same phrase, the one whose key sorts first is
+  sent.
+- A subject whose `type` or `ref` contains a prefix is left out, since neither form can
+  hold a phrase, and so is a subject's `url` that contains one.
+- In `about.details`, a string is the value's phrase and a member name the name's. Of
+  two members whose names become the same, the first is sent. Details that grow past
+  8192 bytes are left out.
+
+A separate gateway takes a credential's argument from the labels as the registration
+sent them, so a label value that contains a prefix gives no argument. What the agent
+writes, in `run.log` and in the events of its records, is sent as it wrote it. So are
+the server's `run.url` and its codes, which the server sent. The wall and the agent get
+every value as it is.
+
 `gateway.Server` holds what identifies the run to the server:
 
 - `AccessKey` is the access key, an `*accesskey.Key` held from its secret, which the

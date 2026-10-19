@@ -195,7 +195,7 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		// again keeps it, and the run request that comes again is run_attached.
 		if err := lr.st.MarkAnswered(); err != nil {
 			g.discard(lr)
-			refuseOpen(w, fmt.Errorf("run %s: marking its record answered: %w", req.RunID, err))
+			refuseOpen(w, fmt.Errorf("run %s: marking its record answered: %w", req.RunID, accesskey.ShownError(err)))
 			return
 		}
 		if g.cfg.marked != nil {
@@ -264,7 +264,7 @@ func refuseOpen(w http.ResponseWriter, err error) {
 	}
 	var ref *accesskey.Refusal
 	if !errors.As(err, &ref) {
-		refuse(w, http.StatusInternalServerError, codeInternal, nil, accesskey.FromGateway, err.Error())
+		refuse(w, http.StatusInternalServerError, codeInternal, nil, accesskey.FromGateway, accesskey.ShownError(err).Error())
 		return
 	}
 	from := ref.From
@@ -290,7 +290,7 @@ func refuseOpen(w http.ResponseWriter, err error) {
 func codeless(err error) error {
 	var uncoded *server.AnswerError
 	if errors.As(err, &uncoded) && uncoded.Status == http.StatusGone {
-		return errors.New(uncoded.Error())
+		return errors.New(accesskey.ShownError(uncoded).Error())
 	}
 	var ref *accesskey.Refusal
 	if !errors.As(err, &ref) || ref.Status != http.StatusGone {
@@ -600,19 +600,23 @@ func (lr *linkRun) accepted(evs []event.Event) bool {
 }
 
 // sameLabels reports whether a run.started's labels, as its data decodes, are the
-// run's: absent is none. A value may be accesskey.ShownName's phrase of the run's.
+// run's: absent is none. They may be the run's as server.ShownLabels gives them, which
+// the session sends; a session of before sends them as they are.
 func sameLabels(v any, labels map[string]string) bool {
 	got, _ := v.(map[string]any)
 	if v != nil && got == nil {
 		return false
 	}
+	return equalLabels(got, labels) || equalLabels(got, server.ShownLabels(labels))
+}
+
+// equalLabels reports whether got, a JSON object as it decodes, is labels.
+func equalLabels(got map[string]any, labels map[string]string) bool {
 	if len(got) != len(labels) {
 		return false
 	}
 	for k, want := range labels {
-		// The session sends a value that contains qak_ or qrk_ as its phrase; a session
-		// of before sends it as it is.
-		if s, ok := got[k].(string); !ok || (s != want && s != accesskey.ShownName(want, false)) {
+		if s, ok := got[k].(string); !ok || s != want {
 			return false
 		}
 	}

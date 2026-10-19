@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp/syntax"
 	"slices"
 	"strings"
@@ -23,6 +24,10 @@ import (
 // envMode makes the test binary a tool: serve, fail, stall or leave.
 const envMode = "QORY_TOOL_TEST_MODE"
 
+// envLine is a line the test binary as a tool writes to standard error: after its
+// first line when it serves, and in place of its last when it fails.
+const envLine = "QORY_TOOL_TEST_LINE"
+
 func TestMain(m *testing.M) {
 	switch os.Getenv(envMode) {
 	case "":
@@ -34,6 +39,9 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stderr, "listening for", os.Getenv(EnvRunID), "with", strings.Join(os.Args[1:], " "))
+		if l := os.Getenv(envLine); l != "" {
+			fmt.Fprintln(os.Stderr, l)
+		}
 		http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, strings.Join(os.Args[1:], " "))
 			if r.URL.Path == "/leave" {
@@ -42,7 +50,11 @@ func TestMain(m *testing.M) {
 		}))
 	case "fail":
 		fmt.Fprintln(os.Stderr, "starting")
-		fmt.Fprintln(os.Stderr, "no key for the store")
+		if l := os.Getenv(envLine); l != "" {
+			fmt.Fprintln(os.Stderr, l)
+		} else {
+			fmt.Fprintln(os.Stderr, "no key for the store")
+		}
 		os.Exit(2)
 	case "stall":
 		time.Sleep(time.Hour)
@@ -502,5 +514,84 @@ func TestAToolsArgumentPatternErrorPrintsAPhraseForASecret(t *testing.T) {
 	err := Definition{Name: "files", Command: []string{"x"}, Argument: "files(", Serves: []string{"a.internal"}}.Check()
 	if want := "tool files: argument: error parsing regexp: missing closing ): `files(`"; err == nil || err.Error() != want {
 		t.Errorf("a clean pattern:\n got %v\nwant %s", err, want)
+	}
+}
+
+// TestAToolsProgramAndOutputPrintAPhraseForASecret pins the messages that print a
+// tool's program, what it writes to standard error and a host it serves: a value that
+// contains qak_ or qrk_ in any case prints the value's phrase in its place, and a clean
+// value prints as it is.
+func TestAToolsProgramAndOutputPrintAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a value that contains an access key secret)", "(a value that contains a run key)"
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	program := filepath.Join(dir, "qak_x-tool")
+	if err := os.Symlink(exe, program); err != nil {
+		t.Fatal(err)
+	}
+	chosen := func(program string) []Chosen {
+		t.Helper()
+		d := Definition{Name: "files", Command: []string{program}, Serves: []string{"files.tools.internal"}}
+		c, err := Choose([]Definition{d}, []policy.Selected{{Name: "files"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+
+	t.Setenv(envMode, "fail")
+	t.Setenv(envLine, "no store for QRK_y")
+	_, err = Start(context.Background(), chosen(program), "the-run", os.Environ(), func(string) {})
+	if want := "tool files: " + ak + " exited before it listened: exit status 2: " + rk; err == nil || err.Error() != want {
+		t.Errorf("a tool that exits:\n got %v\nwant %s", err, want)
+	}
+	t.Setenv(envLine, "no key for the store")
+	_, err = Start(context.Background(), chosen(exe), "the-run", os.Environ(), func(string) {})
+	if want := "tool files: " + exe + " exited before it listened: exit status 2: no key for the store"; err == nil || err.Error() != want {
+		t.Errorf("a clean tool that exits:\n got %v\nwant %s", err, want)
+	}
+
+	t.Setenv(envMode, "stall")
+	was := listenWait
+	listenWait = 300 * time.Millisecond
+	_, err = Start(context.Background(), chosen(program), "the-run", os.Environ(), func(string) {})
+	listenWait = was
+	if want := "tool files: " + ak + " did not listen on "; err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("a tool that stalls:\n got %v\nwant %s…", err, want)
+	} else {
+		noSecretPrefix(t, "a tool that stalls", err.Error())
+	}
+
+	_, err = Start(context.Background(), chosen(filepath.Join(dir, "qrk_none")), "the-run", os.Environ(), func(string) {})
+	if want := "tool files: " + rk; err == nil || err.Error() != want {
+		t.Errorf("a tool that does not start:\n got %v\nwant %s", err, want)
+	}
+
+	t.Setenv(envMode, "serve")
+	for line, want := range map[string]string{"the store is qak_z": ak, "the run key is qRk_z": rk, "the store is ready": "the store is ready"} {
+		t.Setenv(envLine, line)
+		var mu sync.Mutex
+		var lines []string
+		set, err := Start(context.Background(), chosen(exe), "the-run", os.Environ(), func(l string) { mu.Lock(); lines = append(lines, l); mu.Unlock() })
+		if err != nil {
+			t.Fatal(err)
+		}
+		set.Close()
+		mu.Lock()
+		said := slices.Clone(lines)
+		mu.Unlock()
+		if !slices.Contains(said, "tool files: "+want) {
+			t.Errorf("%s: no %q among %q", line, "tool files: "+want, said)
+		}
+	}
+
+	for host, want := range map[string]string{"qak_x.example": ak, "a.QRK_x": rk, "Files.example": `"Files.example"`} {
+		err := Definition{Name: "files", Command: []string{"x"}, Serves: []string{host}}.Check()
+		if want := "tool files: " + want + " is not a lower-case host name or a *. suffix"; err == nil || err.Error() != want {
+			t.Errorf("%s:\n got %v\nwant %s", host, err, want)
+		}
 	}
 }

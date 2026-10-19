@@ -87,7 +87,7 @@ func runKeyInvalid() *accesskey.Refusal {
 // refusal of the attach would give, attach <run.url>/<run_id>: <code> (status <status>).
 func (g *Gateway) attachRefused(code string, status int, runID string) *accesskey.Refusal {
 	conf, _ := g.config()
-	return &accesskey.Refusal{Code: code, Status: status, Detail: "attach " + conf.Run.URL + "/" + runID, From: accesskey.FromGateway}
+	return &accesskey.Refusal{Code: code, Status: status, Detail: "attach " + accesskey.ShownValue(conf.Run.URL+"/"+runID, false), From: accesskey.FromGateway}
 }
 
 // admitRunKey decides the bearer value of a request on the one address, in order: no
@@ -214,12 +214,15 @@ func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID 
 	var labels map[string]string
 	if ans != nil {
 		rc = ans.RunConfiguration
+		// The record's run.registered goes to Qory Apiary: labels and about as
+		// run.started sends them. The run is decided by the labels as the answer gives
+		// them.
 		if len(ans.Labels) > 0 {
-			registered["labels"] = ans.Labels
+			registered["labels"] = server.ShownLabels(ans.Labels)
 			labels = maps.Clone(ans.Labels)
 		}
-		if ans.About != nil {
-			registered["about"] = ans.About
+		if about := server.ShownAbout(ans.About); !about.Empty() {
+			registered["about"] = about
 		}
 	}
 	return rc, digest, registered, labels, err

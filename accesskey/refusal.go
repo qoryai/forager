@@ -92,7 +92,9 @@ func (r *Refusal) Error() string {
 		b.WriteString(" (status " + strconv.Itoa(r.Status) + ")")
 	}
 	if len(r.Names) > 0 {
-		b.WriteString(": " + strings.Join(r.Names, ", "))
+		// Names read from an answer are as the answer gave them; a name that contains
+		// qak_ or qrk_ in any case prints its phrase.
+		b.WriteString(": " + strings.Join(ShownNames(r.Names), ", "))
 	}
 	return b.String()
 }

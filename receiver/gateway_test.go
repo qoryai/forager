@@ -1308,3 +1308,38 @@ func TestAGatewayKeyDiscoversNoWorkspaces(t *testing.T) {
 		t.Errorf("a batch under that gateway's key: %d %v", rec.Code, rec.Header())
 	}
 }
+
+// TestTheAttachAnswersAPhraseForASecret pins the labels and about the receiver keeps of
+// a registration and answers an attach with: a registration that sends a key, a value
+// or a title that contains qak_ or qrk_ in any case, as a starter of before does, is
+// kept and answered as run.started sends it, with server.ShownLabels' and
+// server.ShownAbout's phrases.
+func TestTheAttachAnswersAPhraseForASecret(t *testing.T) {
+	s := newStand(t)
+	s.now = time.Now().UTC().Truncate(time.Second)
+	srv := httptest.NewServer(s.h)
+	defer srv.Close()
+	client := func(id string) *server.Client {
+		return &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: id, ApiaryPublicKey: pin}, Key: secrets[id], InstanceID: inst, UserAgent: "qory-forager/test"}
+	}
+	runURL := srv.URL + receiver.DefaultRunPath
+	ctx := context.Background()
+	runID := event.NewRunID()
+	body := []byte(`{"version":1,"run_id":"` + runID + `","labels":{"qak_k":"v","repository":"acme/QRK_x"},"about":{"title":"qak_t","subjects":[{"type":"issue","ref":"qrk_r"},{"type":"issue","ref":"7","title":"t"}]},"time":"` + s.at() + `"}`)
+	ans, err := client(key).RegisterThroughGateway(ctx, runURL, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attach, _ := server.Attach{RunKey: ans.RunKey, IntervalSeconds: 30, Events: []string{"*"}, ForagerVersion: "test", Time: s.at()}.Body()
+	aa, _, err := client(gwKey).Attach(ctx, runURL, ans.RunID, attach)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	if want := map[string]string{ak: "v", "repository": rk}; !maps.Equal(aa.Labels, want) {
+		t.Errorf("the attach's labels %v, want %v", aa.Labels, want)
+	}
+	if aa.About == nil || aa.About.Title != ak || len(aa.About.Subjects) != 1 || aa.About.Subjects[0].Ref != "7" {
+		t.Errorf("the attach's about %+v", aa.About)
+	}
+}

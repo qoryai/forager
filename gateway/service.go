@@ -53,23 +53,23 @@ func checkService(cfg *Config) (*tls.Certificate, error) {
 	}
 	_, port, err := net.SplitHostPort(cfg.Listen)
 	if err != nil {
-		return nil, fmt.Errorf("the gateway's address %q is not host:port", cfg.Listen)
+		return nil, fmt.Errorf("the gateway's address %s is not host:port", accesskey.ShownValue(cfg.Listen, true))
 	}
 	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
-		return nil, fmt.Errorf("the gateway's address %q is not host:port", cfg.Listen)
+		return nil, fmt.Errorf("the gateway's address %s is not host:port", accesskey.ShownValue(cfg.Listen, true))
 	}
 	if cfg.TLS == nil {
-		return nil, fmt.Errorf("the gateway's address %s needs TLS, a certificate and its key: every connection of the link there is bound to its TLS", cfg.Listen)
+		return nil, fmt.Errorf("the gateway's address %s needs TLS, a certificate and its key: every connection of the link there is bound to its TLS", accesskey.ShownValue(cfg.Listen, false))
 	}
 	if cfg.Server == nil {
-		return nil, fmt.Errorf("the gateway's address %s needs a server and a gateway's access key: the gateway attaches each run there", cfg.Listen)
+		return nil, fmt.Errorf("the gateway's address %s needs a server and a gateway's access key: the gateway attaches each run there", accesskey.ShownValue(cfg.Listen, false))
 	}
 	if cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "" {
 		return nil, errors.New("the gateway's TLS needs a certificate file and a key file")
 	}
 	cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	if err != nil {
-		return nil, fmt.Errorf("the gateway's certificate %s and key %s: %w", cfg.TLS.CertFile, cfg.TLS.KeyFile, err)
+		return nil, fmt.Errorf("the gateway's certificate %s and key %s: %w", accesskey.ShownValue(cfg.TLS.CertFile, false), accesskey.ShownValue(cfg.TLS.KeyFile, false), accesskey.ShownError(err))
 	}
 	return &cert, nil
 }

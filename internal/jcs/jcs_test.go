@@ -190,3 +190,14 @@ func TestCanonicalAgreesWithTheStandardLibrary(t *testing.T) {
 		}
 	}
 }
+
+// TestANumberErrorPrintsAPhraseForASecret pins the error of a literal that is no JSON
+// number: one that contains qak_ or qrk_ in any case prints the value's phrase, and a
+// clean one prints quoted as it is.
+func TestANumberErrorPrintsAPhraseForASecret(t *testing.T) {
+	for literal, want := range map[string]string{"qak_1": "(a value that contains an access key secret)", "1QRK_": "(a value that contains a run key)", "x1": `"x1"`} {
+		if _, err := jcs.Number(literal); err == nil || err.Error() != "jcs: "+want+" is not a JSON number" {
+			t.Errorf("%s: %v", literal, err)
+		}
+	}
+}

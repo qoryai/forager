@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/session/internal/descriptor"
 )
@@ -196,14 +197,14 @@ func Described(name string, document []byte, installers map[string]Installer) (R
 	if h := d.Sources.Hooks; h != nil {
 		r.install = installers[h.Install]
 		if r.install == nil {
-			return nil, fmt.Errorf("%s: hook installer %q is not one Forager implements", name, h.Install)
+			return nil, fmt.Errorf("%s: hook installer %q is not one Forager implements", accesskey.ShownValue(name, false), h.Install)
 		}
 	}
 	if s := d.Stop; s != nil {
 		r.stop.Signal = s.Signal
 		if s.Grace != "" {
 			if r.stop.Grace, err = time.ParseDuration(s.Grace); err != nil || r.stop.Grace <= 0 {
-				return nil, fmt.Errorf("%s: stop.grace %q is not a duration above zero", name, s.Grace)
+				return nil, fmt.Errorf("%s: stop.grace %q is not a duration above zero", accesskey.ShownValue(name, false), s.Grace)
 			}
 		}
 	}
@@ -308,7 +309,7 @@ func CheckStopSignal(name string) error {
 		return nil
 	}
 	if _, ok := stopSignals[name]; !ok {
-		return fmt.Errorf("the stop signal %q is not one of SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2", name)
+		return fmt.Errorf("the stop signal %s is not one of SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2", accesskey.ShownName(name, true))
 	}
 	return nil
 }

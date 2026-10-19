@@ -219,7 +219,35 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	if s.ProxySecret != "" {
 		s.ProxySecret = redactedSecret
 	}
+	// A name or a value that contains qak_ or qrk_ in any case prints its phrase.
+	s.Labels = ShownLabels(a.Labels)
+	if a.Variables != nil {
+		s.Variables = make(map[string]Variable, len(a.Variables))
+		for _, name := range slices.Sorted(maps.Keys(a.Variables)) {
+			shown := accesskey.ShownName(name, false)
+			if _, ok := s.Variables[shown]; !ok {
+				s.Variables[shown] = Variable{Value: accesskey.ShownValue(a.Variables[name].Value, false)}
+			}
+		}
+	}
+	s.Policy, s.Applied = shownDocument(a.Policy), shownDocument(a.Applied)
+	s.Placeholders, s.Reserved = accesskey.ShownNames(a.Placeholders), accesskey.ShownNames(a.Reserved)
+	if a.Image != nil {
+		img := *a.Image
+		img.Name, img.Ref, img.Runtime = accesskey.ShownName(img.Name, false), accesskey.ShownName(img.Ref, false), accesskey.ShownName(img.Runtime, false)
+		s.Image = &img
+	}
+	s.RelayImage = accesskey.ShownName(a.RelayImage, false)
 	return s
+}
+
+// shownDocument is a document as it prints: the value's phrase in place of all of it
+// when it contains qak_ or qrk_ in any case.
+func shownDocument(d json.RawMessage) json.RawMessage {
+	if !accesskey.ContainsSecret(string(d)) {
+		return d
+	}
+	return json.RawMessage(accesskey.ShownValue(string(d), false))
 }
 
 // Format prints a as fmt prints a struct, under every verb and flag, with its
@@ -245,10 +273,10 @@ func (a LinkRunAnswer) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("run_id", a.RunID),
 		slog.String("digest", a.Digest),
-		slog.Any("variables", names),
+		slog.Any("variables", accesskey.ShownNames(names)),
 		slog.String("proxy_secret", a.shown().ProxySecret),
-		slog.Any("placeholders", a.Placeholders),
-		slog.Any("reserved", a.Reserved),
+		slog.Any("placeholders", accesskey.ShownNames(a.Placeholders)),
+		slog.Any("reserved", accesskey.ShownNames(a.Reserved)),
 	)
 }
 
@@ -350,7 +378,7 @@ func NewLocalLink(l link.Local, userAgent string, digests func(Digests)) (*Link,
 	if l.Socket == "" && !l.IsInMemory() {
 		return nil, errors.New("the gateway's local link has no socket")
 	}
-	name := "the gateway's local link " + l.Socket
+	name := "the gateway's local link " + accesskey.ShownValue(l.Socket, false)
 	if l.IsInMemory() {
 		name = "the gateway's local link in this process"
 	}
@@ -377,7 +405,7 @@ func NewLocalLink(l link.Local, userAgent string, digests func(Digests)) (*Link,
 func (k *Link) dialLocal(ctx context.Context, l link.Local) (net.Conn, error) {
 	c, err := l.DialContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", k.name, err)
+		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
 	}
 	if l.IsInMemory() {
 		return c, nil
@@ -505,7 +533,7 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, most int
 	if k.remote != nil {
 		if len(b) > limit {
 			// Too long to read whole, so its signature is never checked: no answer.
-			return nil, fmt.Errorf("the gateway at %s answered with a body longer than %d bytes", k.remote.url, limit)
+			return nil, fmt.Errorf("the gateway at %s answered with a body longer than %d bytes", accesskey.ShownValue(k.remote.url, false), limit)
 		}
 		if !k.remote.signed(used.get(), req, body, a, resp.Header.Values(HeaderSignature)) {
 			return nil, &GatewayKeyError{URL: k.remote.url}
@@ -603,16 +631,16 @@ func (a *linkAnswer) refusal(what string) error {
 	doc.Message = cleanMessage(doc.Message)
 	if a.status == http.StatusGone {
 		e := a.runEnd()
-		return &endError{Refusal: &accesskey.Refusal{Code: e.Code, Status: a.status, Detail: what, From: e.From, Text: doc.Message}, end: e}
+		return &endError{Refusal: &accesskey.Refusal{Code: e.Code, Status: a.status, Detail: what, From: e.From, Text: accesskey.ShownValue(doc.Message, false)}, end: e}
 	}
 	if a.status >= http.StatusInternalServerError && (doc.Error == "" || doc.Error == CodeInternal) {
-		return &StatusError{What: what, Status: a.status, Message: doc.Message}
+		return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false)}
 	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
-		r.Detail, r.From, r.Text = what, a.from(), doc.Message
+		r.Detail, r.From, r.Text = what, a.from(), accesskey.ShownValue(doc.Message, false)
 		return r
 	}
-	return &StatusError{What: what, Status: a.status, Message: doc.Message}
+	return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false)}
 }
 
 // MaxMessage is the most characters of a refusal's message the client keeps.
@@ -694,11 +722,11 @@ func (k *Link) fetch(ctx context.Context, what, method, u string, body []byte, s
 		// A gateway that failed the run key's pin is told in its own words.
 		return ke
 	} else if err != nil {
-		return fmt.Errorf("%s %s: %w", what, k.at(u), err)
+		return fmt.Errorf("%s %s: %w", what, accesskey.ShownValue(k.at(u), false), accesskey.ShownError(err))
 	}
 	k.hand(a)
 	if a.status != http.StatusOK {
-		return a.refusal(what + " " + k.at(u))
+		return a.refusal(what + " " + accesskey.ShownValue(k.at(u), false))
 	}
 	if err := readLinkDocument(schemaName, a.body, out); err != nil {
 		return &DocumentError{what, k.at(u), err}
@@ -728,7 +756,7 @@ func readLinkDocument(schemaName string, body []byte, out any) error {
 	if err := jsonv2.Unmarshal(body, &v); err != nil {
 		var syn *jsontext.SyntacticError
 		if errors.As(err, &syn) && syn.JSONPointer != "" {
-			return fmt.Errorf("it is not one JSON value in UTF-8 with each member name once, at %s", syn.JSONPointer)
+			return fmt.Errorf("it is not one JSON value in UTF-8 with each member name once, at %s", accesskey.ShownValue(string(syn.JSONPointer), false))
 		}
 		return errors.New("it is not one JSON value in UTF-8 with each member name once")
 	}
@@ -759,7 +787,7 @@ func readLinkDocument(schemaName string, body []byte, out any) error {
 func checkRunMembers(vars map[string]Variable, placeholders, reserved []string, image *LinkImage) error {
 	for name, v := range vars {
 		if len(v.Value) > MaxVariableValue {
-			return fmt.Errorf("the variable %s holds more than %d bytes", name, MaxVariableValue)
+			return fmt.Errorf("the variable %s holds more than %d bytes", accesskey.ShownName(name, false), MaxVariableValue)
 		}
 	}
 	for i, name := range placeholders {
@@ -821,7 +849,7 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // or about, which are the starter's registration's.
 func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
-		return nil, fmt.Errorf("%s: %w", k.name, err)
+		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
 	}
 	if !runIDShape.MatchString(req.RunID) {
 		return nil, fmt.Errorf("the run request: the run id is not a UUID in the canonical lower-case form")
@@ -863,7 +891,7 @@ func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (
 // the run, [Ended]; a coded refusal is an [*accesskey.Refusal].
 func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAnswer, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
-		return nil, fmt.Errorf("%s: %w", k.name, err)
+		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
 	}
 	if !runIDShape.MatchString(runID) {
 		return nil, errors.New("the reload: the run id is not a UUID in the canonical lower-case form")

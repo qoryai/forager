@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/hostfile"
 	"github.com/qoryai/forager/session/runtimes"
 )
@@ -62,10 +63,10 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		if strings.HasPrefix(strings.TrimSpace(args[at]), "{") {
 			b = []byte(args[at])
 		} else if b, err = readSettings(args[at], readable); err != nil {
-			return nil, fmt.Errorf("settings %s: %w", args[at], err)
+			return nil, fmt.Errorf("settings %s: %w", accesskey.ShownValue(args[at], false), accesskey.ShownError(err))
 		}
 		if err := json.Unmarshal(b, &settings); err != nil {
-			return nil, fmt.Errorf("settings %s: %w", args[at], err)
+			return nil, fmt.Errorf("settings %s: %w", accesskey.ShownValue(args[at], false), accesskey.ShownError(err))
 		}
 		if inside != nil {
 			settings = insideValues(settings, inside).(map[string]any)

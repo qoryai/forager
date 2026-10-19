@@ -162,7 +162,7 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 			for _, other := range h.Uses[:i] {
 				for _, theirs := range other.Hosts {
 					if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
-						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false), host)
+						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false), accesskey.ShownValue(host, false))
 					}
 				}
 			}
@@ -170,7 +170,7 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 				continue
 			}
 			if !slices.ContainsFunc(allow, func(entry string) bool { return policy.Covers(entry, host) }) {
-				return fmt.Errorf("the credential %s is for %s, which the run's allow list does not cover", accesskey.ShownName(u.Name, false), host)
+				return fmt.Errorf("the credential %s is for %s, which the run's allow list does not cover", accesskey.ShownName(u.Name, false), accesskey.ShownValue(host, false))
 			}
 		}
 	}
@@ -283,7 +283,7 @@ func (a apply) check() error {
 			return errors.New("the scheme header needs a header's name")
 		}
 	default:
-		return fmt.Errorf("the scheme %q is not bearer, basic or header", a.Scheme)
+		return fmt.Errorf("the scheme %s is not bearer, basic or header", accesskey.ShownValue(a.Scheme, true))
 	}
 	return nil
 }
@@ -450,18 +450,18 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 	}
 	doc, err := contracts.Decode("answer.json", stdout.Bytes())
 	if err != nil {
-		return nil, fmt.Errorf("the adapter %s did not print a JSON document: %w", path, err)
+		return nil, fmt.Errorf("the adapter %s did not print a JSON document: %w", path, accesskey.ShownError(err))
 	}
 	schema, err := contracts.Compile("credential.schema.json")
 	if err != nil {
 		return nil, err
 	}
 	if err := schema.Validate(doc); err != nil {
-		return nil, fmt.Errorf("the adapter %s: %w", path, err)
+		return nil, fmt.Errorf("the adapter %s: %w", path, accesskey.ShownError(err))
 	}
 	var a answer
 	if err := json.Unmarshal(stdout.Bytes(), &a); err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	for _, u := range a.Apply {
 		if err := u.check(); err != nil {
@@ -482,7 +482,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 			}
 			for _, p := range u.Paths {
 				if !slices.ContainsFunc(d.Paths, func(entry string) bool { return policy.CoversPath(entry, p) }) {
-					return nil, fmt.Errorf("the adapter %s claims the path %s, above the paths the machine gives it", path, p)
+					return nil, fmt.Errorf("the adapter %s claims the path %s, above the paths the machine gives it", path, accesskey.ShownValue(p, false))
 				}
 			}
 		}

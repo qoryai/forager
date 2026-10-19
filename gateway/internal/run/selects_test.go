@@ -294,15 +294,15 @@ func TestASelectionReportPrintsAPhraseForASecret(t *testing.T) {
 
 // TestARunConfigurationRefusalPrintsAPhraseForASecret pins the refusal of a server's
 // security_policy the schema refuses: when the schema's error contains qak_ or qrk_ in
-// any case, the value's phrase is printed in its place, and a clean error prints as
-// policy.Read gives it.
+// any case, policy.Error prints the value's phrase in place of the error's text after
+// the document's name, and a clean error prints as policy.Read gives it.
 func TestARunConfigurationRefusalPrintsAPhraseForASecret(t *testing.T) {
 	const bad = `{"version":1,"egress":{"mode":"enforce","allow":["api.example"]},"credentials":[{"name":%q}]}`
 	r := open(t, run.Config{RunID: runID, Server: true})
 	for name, phrase := range map[string]string{"QAK_FAKESECRET": accessKeyValuePhrase, "qrk_X": runKeyValuePhrase, "QRK_x.QAK_y": accessKeyValuePhrase} {
 		_, err := r.Read(*served(fmt.Sprintf(bad, name), digest('2')))
 		code, _ := refusalOf(err)
-		if want := "run configuration " + runURL + ": " + phrase + ": run_configuration_invalid"; code != "run_configuration_invalid" || err.Error() != want {
+		if want := "run configuration " + runURL + ": policy run-configuration: " + phrase + ": run_configuration_invalid"; code != "run_configuration_invalid" || err.Error() != want {
 			t.Errorf("%s:\n got %v\nwant %s", name, err, want)
 		} else {
 			noSecretPrefix(t, name, err.Error())
@@ -389,5 +389,135 @@ func TestTheEgressEventSendsAPhraseForASecretInAName(t *testing.T) {
 				t.Errorf("%s, %s: the event does not validate: %v", name, field, err)
 			}
 		}
+	}
+}
+
+// TestAnImageMessagePrintsAPhraseForASecret pins the messages that print an image: an
+// image_unknown refusal's detail and names, a reload whose image moved, and an image
+// that needs a wall. An image that contains qak_ or qrk_ in any case prints the name's
+// phrase in its place, and a clean image prints as it is.
+func TestAnImageMessagePrintsAPhraseForASecret(t *testing.T) {
+	const sum = "@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+	withImage := func(image string) string {
+		return fmt.Sprintf(`{"version":1,"egress":{"mode":"observe"},"image":%q}`, image)
+	}
+	for image, phrase := range map[string]string{
+		"registry.example/agents/qak_x" + sum: accessKeyNamePhrase, "registry.example/agents/qrk_x" + sum: runKeyNamePhrase,
+		"registry.example/agents/qrk_x.qak_y" + sum: accessKeyNamePhrase, pinned: pinned,
+	} {
+		other := "registry.example/agents/other" + sum
+		_, err := run.Decide(run.Config{RunID: runID, Wall: true, Images: allowing, Fetched: named(image, withImage(other), digest('1'))})
+		code, names := refusalOf(err)
+		if want := "the run configuration names the image " + phrase + ", and the server's policy the image " + other; code != "image_unknown" || !slices.Equal(names, []string{phrase}) || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v (%q, %q), want image_unknown with %q", image, err, code, names, want)
+		} else {
+			noSecretPrefix(t, image, err.Error())
+		}
+		_, err = run.Decide(run.Config{RunID: runID, Wall: true, Images: allowing, Fetched: named(other, withImage(image), digest('1'))})
+		if want := "the run configuration names the image " + other + ", and the server's policy the image " + phrase; err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s, the server's policy: %v, want %q", image, err, want)
+		}
+
+		r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Images: allowing, Fetched: named(image, "", digest('1'))})
+		_, err = reload(t, r, named(other, "", digest('2')))
+		if want := "the run configuration names the image " + other + ", and the run started in " + phrase; err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s, a reload: %v, want %q", image, err, want)
+		}
+		r = open(t, run.Config{RunID: runID, Wall: true, Server: true, Images: allowing, Fetched: named(other, "", digest('1'))})
+		_, err = reload(t, r, named(image, "", digest('2')))
+		if want := "the run configuration names the image " + phrase + ", and the run started in " + other; err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s, a reload to it: %v, want %q", image, err, want)
+		} else {
+			noSecretPrefix(t, image+", a reload to it", err.Error())
+		}
+	}
+	for image, phrase := range map[string]string{"qak_base": accessKeyNamePhrase, "a.qrk_b": runKeyNamePhrase, "base": `"base"`} {
+		r := open(t, run.Config{RunID: runID, Server: true, Fetched: served(`{"version":1,"egress":{"mode":"observe"}}`, digest('1'))})
+		_, err := reload(t, r, served(withImage(image), digest('2')))
+		if want := "selects the image " + phrase + ", which needs a wall"; err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s, no wall: %v, want %q", image, err, want)
+		} else {
+			noSecretPrefix(t, image+", no wall", err.Error())
+		}
+	}
+}
+
+// TestASelectionsLabelPrintsAPhraseForASecret pins the line a run is told when it does
+// not have the label a selection entry takes its argument from: a label's name that
+// contains qak_ or qrk_ in any case prints the name's phrase, and a clean name prints
+// as it is.
+func TestASelectionsLabelPrintsAPhraseForASecret(t *testing.T) {
+	for label, phrase := range map[string]string{"qak_repo": accessKeyNamePhrase, "a.qrk_b": runKeyNamePhrase, "qrk_x.qak_y": accessKeyNamePhrase, "project": "project"} {
+		cfg, said := selectsNamed(t, "github")
+		cfg.Selects[0].Label = label
+		open(t, cfg)
+		if line := "run " + runID + ": the gateway selects github by the run's label " + phrase + ", which the run does not have: it gets no github"; !said.reported(line) {
+			t.Errorf("%s: reported %q, want %q", label, said.said, line)
+		}
+		for _, l := range said.said {
+			noSecretPrefix(t, label, l)
+		}
+		cfg, said = selectsNamed(t, "github")
+		cfg.Selects[0].Label = label
+		cfg.Labels[label] = "a/b,c/d"
+		open(t, cfg)
+		if line := "run " + runID + ": the run's label " + phrase + "=a/b,c/d is no argument github takes: it gets no github"; !said.reported(line) {
+			t.Errorf("%s, a value outside the pattern: reported %q, want %q", label, said.said, line)
+		}
+	}
+}
+
+// TestAnImageTheMachineRefusesPrintsAPhraseForASecret pins image_unknown for a name the
+// machine does not define and image_not_allowed for a reference under none of its
+// prefixes: an image that contains qak_ or qrk_ in any case is the name's phrase in the
+// detail and the names, and a clean image is as it is.
+func TestAnImageTheMachineRefusesPrintsAPhraseForASecret(t *testing.T) {
+	const sum = "@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+	for _, c := range []struct{ image, code, names, detail string }{
+		{"qak_nobody", "image_unknown", accessKeyNamePhrase, "the policy selects the image " + accessKeyNamePhrase + ", which this machine does not define"},
+		{"nobody", "image_unknown", "nobody", `the policy selects the image "nobody", which this machine does not define`},
+		{"registry.other/qrk_x" + sum, "image_not_allowed", runKeyNamePhrase, "the image " + runKeyNamePhrase + " is under none of the machine's allowed prefixes (images.allow)"},
+		{"registry.other/x" + sum, "image_not_allowed", "registry.other/x" + sum, "the image registry.other/x" + sum + " is under none of the machine's allowed prefixes (images.allow)"},
+	} {
+		node := &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "observe"}, Image: c.image}
+		_, err := run.Decide(run.Config{RunID: runID, Wall: true, Images: allowing, Node: node})
+		code, names := refusalOf(err)
+		if code != c.code || !slices.Equal(names, []string{c.names}) || !strings.Contains(err.Error(), c.detail) {
+			t.Errorf("%s: %v (%q, %q), want %s with %q", c.image, err, code, names, c.code, c.detail)
+			continue
+		}
+		noSecretPrefix(t, c.image, err.Error())
+	}
+}
+
+// TestTheEgressEventSendsAPhraseForASecretInAValue pins run.egress's host, path, path
+// rule and request method, which come from the run's request or the policy: a value
+// that contains qak_ or qrk_ in any case is sent as the value's phrase, the event
+// validates against its schema, and a clean value is sent as it is.
+func TestTheEgressEventSendsAPhraseForASecretInAValue(t *testing.T) {
+	schema, err := contracts.Compile("events/run.egress.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := proxy.Decision{Host: "api.qak_x.example", Port: 443, Method: "HTTPS", Allowed: false, Rule: "", Mode: "enforce", Outcome: "refused",
+		RequestMethod: "QRK_GET", Path: "/a/qrk_b", PathRule: "/a/QAK_*"}
+	data := run.Egress(d)
+	want := map[string]any{"host": accessKeyValuePhrase, "request_method": runKeyValuePhrase, "path": runKeyValuePhrase, "path_rule": accessKeyValuePhrase}
+	for k, v := range want {
+		if data[k] != v {
+			t.Errorf("%s %v, want %s", k, data[k], v)
+		}
+	}
+	b, _ := json.Marshal(data)
+	var doc any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(doc); err != nil {
+		t.Errorf("the event does not validate: %v", err)
+	}
+	clean := run.Egress(proxy.Decision{Host: "api.example", Port: 443, Method: "HTTPS", Mode: "enforce", Outcome: "refused", RequestMethod: "GET", Path: "/a", PathRule: "/a/*"})
+	if clean["host"] != "api.example" || clean["path"] != "/a" || clean["path_rule"] != "/a/*" || clean["request_method"] != "GET" {
+		t.Errorf("a clean decision %v", clean)
 	}
 }

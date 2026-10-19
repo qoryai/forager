@@ -107,7 +107,7 @@ func (d Definition) Check() error {
 	}
 	for _, h := range d.Serves {
 		if !hostShape.MatchString(h) {
-			return fmt.Errorf("tool %s: %q is not a lower-case host name or a *. suffix", accesskey.ShownName(d.Name, false), h)
+			return fmt.Errorf("tool %s: %s is not a lower-case host name or a *. suffix", accesskey.ShownName(d.Name, false), accesskey.ShownValue(h, true))
 		}
 	}
 	for _, p := range d.Placeholders {
@@ -292,7 +292,7 @@ func Start(ctx context.Context, chosen []Chosen, runID string, env []string, rep
 func start(ctx context.Context, c Chosen, runID string, env []string, report func(string)) (*Running, error) {
 	dir, err := os.MkdirTemp("", socketDirPrefix)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	sock := filepath.Join(dir, "sock")
 	args := make([]string, len(c.Command)-1)
@@ -320,7 +320,7 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 	if err != nil {
 		stderr.Close()
 		os.RemoveAll(dir)
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	go func() {
 		defer close(t.drained)
@@ -333,7 +333,7 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 		gone := t.ready && !t.stopping
 		t.mu.Unlock()
 		if gone {
-			report(fmt.Sprintf("tool %s exited while the run goes on (%v); requests to it fail from now on", accesskey.ShownName(t.Name, false), t.err))
+			report(fmt.Sprintf("tool %s exited while the run goes on (%v); requests to it fail from now on", accesskey.ShownName(t.Name, false), accesskey.ShownError(t.err)))
 		}
 	}()
 	if err := t.listens(ctx); err != nil {
@@ -363,7 +363,7 @@ func (t *Running) lines(r io.Reader) {
 		}
 		t.mu.Unlock()
 		if ready {
-			t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + line)
+			t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + accesskey.ShownValue(line, false))
 		}
 	}
 	// A line longer than the buffer ends the scan; the rest is read and dropped, so the
@@ -386,7 +386,7 @@ func (t *Running) listens(ctx context.Context) error {
 			t.early = nil
 			t.mu.Unlock()
 			for _, line := range early {
-				t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + line)
+				t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + accesskey.ShownValue(line, false))
 			}
 			return nil
 		}
@@ -399,9 +399,9 @@ func (t *Running) listens(ctx context.Context) error {
 			case <-t.drained:
 			case <-time.After(time.Second):
 			}
-			return fmt.Errorf("%s exited before it listened: %v%s", t.cmd.Path, t.err, t.reason())
+			return fmt.Errorf("%s exited before it listened: %v%s", accesskey.ShownValue(t.cmd.Path, false), accesskey.ShownError(t.err), t.reason())
 		case <-deadline.C:
-			return fmt.Errorf("%s did not listen on %s within %s%s", t.cmd.Path, link.EnvToolListen, listenWait, t.reason())
+			return fmt.Errorf("%s did not listen on %s within %s%s", accesskey.ShownValue(t.cmd.Path, false), link.EnvToolListen, listenWait, t.reason())
 		case <-tick.C:
 		}
 	}
@@ -414,7 +414,7 @@ func (t *Running) reason() string {
 	if len(t.early) == 0 {
 		return ""
 	}
-	return ": " + t.early[len(t.early)-1]
+	return ": " + accesskey.ShownValue(t.early[len(t.early)-1], false)
 }
 
 // stop ends the tool and removes its socket's directory.

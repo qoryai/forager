@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // Outcome is the run's starter's outcome, the body of run-outcome.schema.json: how the
@@ -42,7 +44,7 @@ var outcomeStates = map[string]bool{"succeeded": true, "failed": true, "cancelle
 // body is the outcome's bytes. A Time left empty is the clock's now.
 func (o Outcome) body() ([]byte, error) {
 	if o.State != "" && !outcomeStates[o.State] {
-		return nil, fmt.Errorf("the outcome: the state %q is not succeeded, failed or cancelled", o.State)
+		return nil, fmt.Errorf("the outcome: the state %s is not succeeded, failed or cancelled", accesskey.ShownValue(o.State, true))
 	}
 	if o.State == "" && o.Reason != "" {
 		return nil, errors.New("the outcome: a reason needs a state; with no state the outcome is cancelled with the reason stopped")
@@ -50,6 +52,9 @@ func (o Outcome) body() ([]byte, error) {
 	if o.Time == "" {
 		o.Time = RegistrationTime(time.Now())
 	}
+	// The body goes to Qory Apiary: a reason that contains qak_ or qrk_ in any case is
+	// accesskey.ShownName's phrase in its place.
+	o.Reason = accesskey.ShownName(o.Reason, false)
 	return json.Marshal(outcomeBody{Version: 1, Outcome: o})
 }
 
@@ -72,12 +77,12 @@ func (c *Client) PostOutcome(ctx context.Context, runURL, runID string, o Outcom
 	if err != nil {
 		return err
 	}
-	what := "outcome " + runURL + "/" + runID
+	what := "outcome " + accesskey.ShownValue(runURL+"/"+runID, false)
 	a, err := c.send(ctx, http.MethodPost, runURL+"/"+runID+"/outcome", body, MaxRefusal, func(h http.Header) {
 		h.Set("Content-Type", RegistrationContentType)
 	})
 	if err != nil {
-		return fmt.Errorf("%s: %w", what, err)
+		return fmt.Errorf("%s: %w", what, accesskey.ShownError(err))
 	}
 	if a.status != http.StatusOK || !a.signed {
 		return a.refusal(what)

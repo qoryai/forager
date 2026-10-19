@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/session/internal/variables"
 )
@@ -123,13 +124,13 @@ type Image struct {
 // configuration says so before any run selects it.
 func (i Image) Check() error {
 	if !imageNameShape.MatchString(i.Name) {
-		return fmt.Errorf("the image name %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", i.Name)
+		return fmt.Errorf("the image name %s is not 1 to 64 of a-z, 0-9, underscore, dot and dash", accesskey.ShownName(i.Name, true))
 	}
 	if i.Ref == "" {
-		return fmt.Errorf("image %s: the reference is empty", i.Name)
+		return fmt.Errorf("image %s: the reference is empty", accesskey.ShownName(i.Name, false))
 	}
 	if i.Docker && i.Runtime == "" {
-		return fmt.Errorf("image %s: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc", i.Name)
+		return fmt.Errorf("image %s: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc", accesskey.ShownName(i.Name, false))
 	}
 	return nil
 }
@@ -151,7 +152,7 @@ func checkImages(spec Spec) error {
 	seen := map[string]bool{}
 	for _, d := range spec.Images {
 		if seen[d.Name] {
-			return fmt.Errorf("the image %s is defined twice", d.Name)
+			return fmt.Errorf("the image %s is defined twice", accesskey.ShownName(d.Name, false))
 		}
 		seen[d.Name] = true
 	}

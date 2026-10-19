@@ -313,11 +313,11 @@ func ShownNames(names []string) []string {
 	return out
 }
 
-// ShownError is err as a message wraps it: err itself, or, when its text contains qak_
-// or qrk_ in any case, an error that still wraps err and whose text is [ShownValue]'s
-// phrase in place of all of err's text.
+// ShownError is err as a message wraps it: err itself, nil among them, or, when its
+// text contains qak_ or qrk_ in any case, an error that still wraps err and whose text
+// is [ShownValue]'s phrase in place of all of err's text.
 func ShownError(err error) error {
-	if !ContainsSecret(err.Error()) {
+	if err == nil || !ContainsSecret(err.Error()) {
 		return err
 	}
 	return phrasedError{err}

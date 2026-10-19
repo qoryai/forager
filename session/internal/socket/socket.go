@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/session/internal/descriptor"
 )
@@ -105,9 +106,9 @@ func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 		if err := json.Unmarshal(line, &rec); err != nil || (rec.Source != descriptor.SourceHooks && rec.Source != descriptor.SourceOutput) || rec.Record == nil {
 			if bad != nil {
 				if err == nil {
-					err = fmt.Errorf("not a record: %.80s", line)
+					err = fmt.Errorf("not a record: %.80s", accesskey.ShownValue(string(line), false))
 				}
-				bad(err)
+				bad(accesskey.ShownError(err))
 			}
 			continue
 		}
@@ -152,7 +153,7 @@ func network(addr string) (string, string, error) {
 		return "unix", path, nil
 	}
 	if scheme, _, ok := strings.Cut(addr, ":"); ok && !strings.ContainsAny(scheme, "/.") {
-		return "", "", fmt.Errorf("%s names the transport %q, which this forwarder does not have", link.EnvRunSocket, scheme)
+		return "", "", fmt.Errorf("%s names the transport %s, which this forwarder does not have", link.EnvRunSocket, accesskey.ShownValue(scheme, true))
 	}
 	return "unix", addr, nil
 }
@@ -169,7 +170,7 @@ func Forward(ctx context.Context, addr string, r io.Reader) error {
 	}
 	var obj map[string]any
 	if err := json.Unmarshal(b, &obj); err != nil {
-		return fmt.Errorf("hook input is not a JSON object: %w", err)
+		return fmt.Errorf("hook input is not a JSON object: %w", accesskey.ShownError(err))
 	}
 	if obj == nil {
 		return errors.New("hook input is not a JSON object")

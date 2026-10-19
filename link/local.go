@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // ToolDirPrefix begins the name of the private directory the gateway makes, in the
@@ -90,8 +92,18 @@ type shown struct {
 	Reserved []string
 }
 
+// shown is l as it prints: a path or a name that contains qak_ or qrk_ in any case is
+// accesskey.ShownValue's or accesskey.ShownName's phrase in its place.
 func (l Local) shown() shown {
-	return shown{Socket: l.Socket, Proxy: l.Proxy, Files: l.Files, Reserved: l.Reserved}
+	files := make([]File, len(l.Files))
+	for i, f := range l.Files {
+		f.Path = accesskey.ShownValue(f.Path, false)
+		files[i] = f
+	}
+	if l.Files == nil {
+		files = nil
+	}
+	return shown{Socket: accesskey.ShownValue(l.Socket, false), Proxy: l.Proxy, Files: files, Reserved: accesskey.ShownNames(l.Reserved)}
 }
 
 // Format prints l as fmt prints a struct, under every verb and flag, without its way

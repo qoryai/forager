@@ -622,7 +622,8 @@ func TestARefusalOfAnyCodeSendsAPhraseForASecret(t *testing.T) {
 		want  []any
 	}{
 		{[]string{"QORY_QAK_X"}, []any{ak}},
-		{[]string{"QORY_A", "QORY_QAK_X", "QORY_QAK_Y", "QORY_QRK_Z"}, []any{"QORY_A", ak, rk}},
+		// refusal.New sorts the names it is given, phrases among them.
+		{[]string{"QORY_A", "QORY_QAK_X", "QORY_QAK_Y", "QORY_QRK_Z"}, []any{rk, ak, "QORY_A"}},
 		{[]string{"QORY_A"}, []any{"QORY_A"}},
 	} {
 		t.Run("variable_reserved "+strings.Join(c.names, ","), func(t *testing.T) {
@@ -639,6 +640,9 @@ func TestARefusalOfAnyCodeSendsAPhraseForASecret(t *testing.T) {
 			}
 			if got := refusedNames(t, sp); !slices.Equal(got, c.want) {
 				t.Errorf("names %q, want %q", got, c.want)
+			}
+			if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") {
+				t.Errorf("the refusal prints a secret's prefix: %v", err)
 			}
 		})
 	}
@@ -670,11 +674,11 @@ func TestARefusalOfAnyCodeSendsAPhraseForASecret(t *testing.T) {
 }
 
 // TestARunStartedSendsAPhraseForASecret pins run.started's members of the run's: the
-// directory, the image and its name, a label's value, and what the run is about's kind,
-// title and subjects' titles, each sent as the name's phrase when it contains qak_ or
-// qrk_ in any case, and the event validates against its schema; a label's key, a
-// subject's type and ref, and a clean value are sent as they are, and the wall and the
-// agent have every value as it is.
+// directory, the image and its name, a label's key and value, and what the run is
+// about's kind, title and subjects' titles, each sent as the name's phrase when it
+// contains qak_ or qrk_ in any case; a subject whose ref contains one is left out; the
+// event validates against its schema; a clean value is sent as it is, and the wall and
+// the agent have every value as it is.
 func TestARunStartedSendsAPhraseForASecret(t *testing.T) {
 	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
 	for name, c := range map[string]struct {
@@ -699,8 +703,8 @@ func TestARunStartedSendsAPhraseForASecret(t *testing.T) {
 				c.shown["dir"] = sp.Dir
 			}
 			sp.Wall, sp.Image, sp.Images = w, c.image, []session.Image{{Name: c.image, Ref: c.ref}}
-			sp.Labels = map[string]string{"repository": c.label, "issue": "7"}
-			sp.About = &session.About{Kind: c.kind, Title: c.title, Subjects: []session.Subject{{Type: "issue", Ref: "qak_ref", Title: c.subject}}}
+			sp.Labels = map[string]string{"repository": c.label, "issue": "7", "qrk_key": "v"}
+			sp.About = &session.About{Kind: c.kind, Title: c.title, Subjects: []session.Subject{{Type: "issue", Ref: "7", Title: c.subject}, {Type: "issue", Ref: "qak_ref"}}}
 			res, err := session.Run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
@@ -727,12 +731,43 @@ func TestARunStartedSendsAPhraseForASecret(t *testing.T) {
 			if !reflect.DeepEqual(got, c.shown) {
 				t.Errorf("run.started %v, want %v", got, c.shown)
 			}
-			if labels["issue"] != "7" || subject["type"] != "issue" || subject["ref"] != "qak_ref" {
+			if labels["issue"] != "7" || labels[rk] != "v" || len(labels) != 3 || subject["type"] != "issue" || subject["ref"] != "7" {
 				t.Errorf("run.started labels %v, subject %v", labels, subject)
 			}
 			if w.req.Image != c.ref || w.got.Dir != sp.Dir {
 				t.Errorf("the wall was asked for %q in %q", w.req.Image, w.got.Dir)
 			}
 		})
+	}
+}
+
+// TestARunStartedSendsAPhraseForASecretInAnArgument pins run.started's command and
+// arguments: an argument that contains qak_ or qrk_ in any case is sent as the value's
+// phrase, the event validates against its schema, and a clean argument is sent as it
+// is; the runtime gets every argument as it is.
+func TestARunStartedSendsAPhraseForASecretInAnArgument(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	selecting(g, "")
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp.Args = append(sp.Args, "--name", "qrk_arg")
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := data(ofType(events(t, res), "dev.qory.run.started")[0])
+	schema, err := contracts.Compile("events/run.started.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(started); err != nil {
+		t.Errorf("the run.started does not validate: %v", err)
+	}
+	args, _ := started["args"].([]any)
+	if !slices.Contains(args, any("(a value that contains a run key)")) || !slices.Contains(args, any("--name")) {
+		t.Errorf("run.started args %v", args)
+	}
+	b, _ := json.Marshal(started)
+	if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") {
+		t.Errorf("run.started contains a secret's prefix: %s", b)
 	}
 }

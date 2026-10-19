@@ -160,3 +160,62 @@ func TestAppliedImageSendsAPhraseForASecret(t *testing.T) {
 		}
 	}
 }
+
+// TestAppliedPathsAndHostsSendAPhraseForASecret pins run.policy_applied's paths, its
+// ceiling_paths, a credential's hosts and the hosts the proxy terminates: a path or a
+// host that contains qak_ or qrk_ in any case is sent as the value's phrase, the members
+// validate against the event's schema, and a clean one is sent as it is.
+func TestAppliedPathsAndHostsSendAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a value that contains an access key secret)", "(a value that contains a run key)"
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token")
+	defs := []credential.Definition{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.qrk_h.example", "api.example"}, Scheme: "bearer"}}
+	held, err := credential.Resolve(context.Background(), defs, []policy.Selected{{Name: "model"}}, policy.Observe, nil, func(l string) { t.Log(l) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	pol := &policy.Loaded{Policy: policy.Policy{Version: 1, Egress: policy.Egress{Mode: policy.Observe, Paths: map[string][]string{"a.example": {"/QAK_x/*", "/ok"}}}}, Source: "none"}
+	a := appliedOf(pol, []map[string][]string{{"b.example": {"/qrk_y"}}}, held, nil, []string{"qak_t.example", "ok.example"})
+	schema, err := contracts.Compile("events/run.policy_applied.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(a); err != nil {
+		t.Errorf("the members do not validate: %v", err)
+	}
+	want := map[string]any{
+		"paths":         map[string]any{"a.example": []any{ak, "/ok"}},
+		"ceiling_paths": []any{map[string]any{"b.example": []any{rk}}},
+		"terminated":    []any{ak, "ok.example"},
+		"hosts":         []any{rk, "api.example"},
+	}
+	creds, _ := a["credentials"].([]any)
+	var hosts any
+	if len(creds) == 1 {
+		hosts = creds[0].(map[string]any)["hosts"]
+	}
+	got := map[string]any{"paths": a["paths"], "ceiling_paths": a["ceiling_paths"], "terminated": a["terminated"], "hosts": hosts}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("appliedOf %v, want %v", got, want)
+	}
+}
+
+// TestARunStartedMayCarryPhrasedLabelKeys pins the gateway's check of a run.started's
+// labels: the run's labels as they are, or as server.ShownLabels gives them, keys
+// included, pass; other labels do not.
+func TestARunStartedMayCarryPhrasedLabelKeys(t *testing.T) {
+	labels := map[string]string{"qak_k": "v", "repository": "acme/qrk_x"}
+	for what, c := range map[string]struct {
+		got  any
+		same bool
+	}{
+		"as they are":  {map[string]any{"qak_k": "v", "repository": "acme/qrk_x"}, true},
+		"phrased":      {map[string]any{"(a name that contains an access key secret)": "v", "repository": "(a name that contains a run key)"}, true},
+		"another":      {map[string]any{"(a name that contains an access key secret)": "w", "repository": "(a name that contains a run key)"}, false},
+		"keys as they": {map[string]any{"qak_k": "v", "repository": "(a name that contains a run key)"}, false},
+	} {
+		if sameLabels(c.got, labels) != c.same {
+			t.Errorf("%s: sameLabels = %v", what, !c.same)
+		}
+	}
+}

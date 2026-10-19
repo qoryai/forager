@@ -44,7 +44,9 @@ func LocalGateway(l link.Local) Gateway {
 func (localGateway) gateway() {}
 
 // String names the gateway by its link's socket.
-func (g localGateway) String() string { return "session.Gateway{" + g.local.Socket + "}" }
+func (g localGateway) String() string {
+	return "session.Gateway{" + accesskey.ShownValue(g.local.Socket, false) + "}"
+}
 
 // Format prints g as String does, under every verb and flag.
 func (g localGateway) Format(f fmt.State, _ rune) { io.WriteString(f, g.String()) }
@@ -118,7 +120,7 @@ func (g RemoteGateway) String() string {
 	if g.RunKey != "" {
 		shown = "(not a run key)"
 		if k, err := runkey.Parse(g.RunKey); err == nil {
-			shown = k.GatewayURL
+			shown = accesskey.ShownValue(k.GatewayURL, false)
 		}
 	}
 	return "session.RemoteGateway{" + shown + "}"

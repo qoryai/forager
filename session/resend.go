@@ -142,14 +142,14 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	}
 	// The record owes the gateway: the run key reaches it.
 	if spec.Gateway.RunKey == "" {
-		return ResendResult{}, fmt.Errorf("resend %s: the run key is needed to send to its gateway; set QORY_RUN_KEY", spec.Dir)
+		return ResendResult{}, fmt.Errorf("resend %s: the run key is needed to send to its gateway; set QORY_RUN_KEY", pathShown(spec.Dir))
 	}
 	key, err := spec.Gateway.key()
 	if err != nil {
 		return ResendResult{}, err
 	}
 	if runID := filepath.Base(spec.Dir); key.RunID != runID {
-		return ResendResult{}, fmt.Errorf("resend %s: QORY_RUN_KEY names the run %s, not this one", spec.Dir, key.RunID)
+		return ResendResult{}, fmt.Errorf("resend %s: QORY_RUN_KEY names the run %s, not this one", pathShown(spec.Dir), key.RunID)
 	}
 	// How the run ended, as far as the record says.
 	state, reason := exitOf(lines)

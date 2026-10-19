@@ -195,7 +195,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 			}
 		}
 		if cfg.Listen != "" && !strings.HasPrefix(conf.NodeID, "ng_") {
-			return nil, fmt.Errorf("the access key's node %s is not a gateway, ng_: the gateway's address %s needs a gateway's access key", conf.NodeID, cfg.Listen)
+			return nil, fmt.Errorf("the access key's node %s is not a gateway, ng_: the gateway's address %s needs a gateway's access key", conf.NodeID, accesskey.ShownValue(cfg.Listen, false))
 		}
 		if cfg.Listen == "" && strings.HasPrefix(conf.NodeID, "ng_") {
 			return nil, fmt.Errorf("the access key's node %s is a gateway, ng_: a gateway without an address needs a node's access key, nd_ or np_", conf.NodeID)
@@ -420,7 +420,7 @@ func (g *Gateway) String() string {
 	if where == "" {
 		where = "in memory"
 	}
-	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + where + "}"
+	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + accesskey.ShownValue(where, false) + "}"
 }
 
 // Format prints g as String does, under every verb and flag: never its secret.

@@ -451,7 +451,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	if f.Document != nil && f.Document.SecurityPolicy != nil {
 		var err error
 		if fetched, err = policy.Read("run-configuration", f.Document.SecurityPolicy); err != nil {
-			return nil, refusal.New(refusal.RunConfigurationInvalid, nil, "run configuration %s: %s", f.URL, accesskey.ShownValue(err.Error(), false))
+			return nil, refusal.New(refusal.RunConfigurationInvalid, nil, "run configuration %s: %s", accesskey.ShownValue(f.URL, false), accesskey.ShownValue(err.Error(), false))
 		}
 		fetched.Source = "fetched"
 	}
@@ -465,7 +465,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		err = r.selects(pol)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("run configuration %s: %w", f.URL, err)
+		return nil, fmt.Errorf("run configuration %s: %w", accesskey.ShownValue(f.URL, false), err)
 	}
 	out := Narrow(pol, r.cfg.Narrowing)
 	r.mu.Lock()
@@ -497,7 +497,7 @@ func nameImage(pol, fetched, node *policy.Loaded, image string) error {
 		pol  *policy.Loaded
 	}{{"server's", fetched}, {"node's", node}} {
 		if side.pol != nil && side.pol.Policy.Image != "" && side.pol.Policy.Image != image {
-			return refusal.New(refusal.ImageUnknown, []string{image}, "the run configuration names the image %s, and the %s policy the image %s", image, side.what, side.pol.Policy.Image)
+			return refusal.New(refusal.ImageUnknown, []string{accesskey.ShownName(image, false)}, "the run configuration names the image %s, and the %s policy the image %s", accesskey.ShownName(image, false), side.what, accesskey.ShownName(side.pol.Policy.Image, false))
 		}
 	}
 	pol.Policy.Image = image
@@ -529,16 +529,16 @@ func (r *Run) selects(pol *policy.Loaded) error {
 			continue
 		}
 		if forge != s.Forge {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, name, Spaced(s.Forge), Spaced(accesskey.ShownName(forge, false)), name))
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Forge, false)), Spaced(accesskey.ShownName(forge, false)), name))
 			continue
 		}
 		value, ok := r.labels[s.Label]
 		if !ok {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, Spaced(s.Label), name))
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Label, false)), name))
 			continue
 		}
 		if !r.patterns[i].MatchString(value) {
-			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(s.Label), Spaced(accesskey.ShownName(value, false)), name, name))
+			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(accesskey.ShownName(s.Label, false)), Spaced(accesskey.ShownName(value, false)), name, name))
 			continue
 		}
 		selected = append(selected, policy.Selected{Name: s.Name, Argument: value})
@@ -720,7 +720,7 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 		d.Guard = guard
 	}
 	if err != nil {
-		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", next.URL, err)
+		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", accesskey.ShownValue(next.URL, false), err)
 	}
 	return d, nil
 }
@@ -734,7 +734,7 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 	}
 	if !r.cfg.Wall {
 		if in.Policy.Image != "" {
-			return nil, fmt.Errorf("the run configuration selects the image %q, which needs a wall", in.Policy.Image)
+			return nil, fmt.Errorf("the run configuration selects the image %s, which needs a wall", accesskey.ShownName(in.Policy.Image, true))
 		}
 	} else if named != r.named {
 		return nil, r.imageMoved(named)
@@ -775,10 +775,11 @@ func (r *Run) imageMoved(named string) error {
 	if r.img.Name != "" {
 		started = r.img.Name
 	}
+	started = accesskey.ShownName(started, false)
 	if named == "" {
 		return fmt.Errorf("the run configuration names no image, and the run started in %s, which its run configuration named", started)
 	}
-	return fmt.Errorf("the run configuration names the image %s, and the run started in %s", named, started)
+	return fmt.Errorf("the run configuration names the image %s, and the run started in %s", accesskey.ShownName(named, false), started)
 }
 
 // Commit puts a decision the caller set on the proxy in force: its policy and its
@@ -972,9 +973,12 @@ func Egress(d proxy.Decision) map[string]any {
 	if d.Allowed {
 		decision = "allowed"
 	}
-	data := map[string]any{"host": d.Host, "port": d.Port, "method": d.Method, "decision": decision, "mode": string(d.Mode), "rule": d.Rule, "outcome": d.Outcome}
+	// The host, the path, its rule and the request's method are as the run sent them or
+	// the policy gives them: a value that contains qak_ or qrk_ in any case is
+	// accesskey.ShownValue's phrase in its place.
+	data := map[string]any{"host": accesskey.ShownValue(d.Host, false), "port": d.Port, "method": d.Method, "decision": decision, "mode": string(d.Mode), "rule": d.Rule, "outcome": d.Outcome}
 	if d.Path != "" {
-		data["request_method"], data["path"], data["path_rule"] = d.RequestMethod, d.Path, d.PathRule
+		data["request_method"], data["path"], data["path_rule"] = accesskey.ShownValue(d.RequestMethod, false), accesskey.ShownValue(d.Path, false), accesskey.ShownValue(d.PathRule, false)
 	}
 	// A credential's or a tool's name that contains qak_ or qrk_ in any case is sent as
 	// accesskey.ShownName's phrase in its place.

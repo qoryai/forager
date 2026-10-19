@@ -10,6 +10,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `server.ShownLabels` and `server.ShownAbout`: a run's labels and what it is about as
+  Forager sends them to Qory Apiary. A label's key or value, and `about`'s `kind`,
+  `title` and a subject's `title`, that contains `qak_` or `qrk_` in any case is `(a
+  name that contains an access key secret)`, or `(a name that contains a run key)` when
+  it contains `qrk_` and no `qak_`. Of two labels whose keys become the same phrase, the
+  one whose key sorts first is kept. A subject whose `type` or `ref` contains a prefix
+  is left out, and so is a subject's `url` that contains one. In `details`, a string is
+  `(a value that contains …)` and a member name the name's phrase; of two members whose
+  names become the same, the first is kept, and details that grow past 8192 bytes are
+  left out. `accesskey.ShownError` takes nil and returns it.
+
 - `dev.qory.run.started` has `preparation`, the run's preparation as the caller gave it,
   when the run has one.
 - The server's variables may set `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, the
@@ -37,6 +48,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- The registration bodies, `server.Registration.Body` and
+  `server.GatewayRegistration.Body`, send the labels and about as `server.ShownLabels`
+  and `server.ShownAbout` give them, and so do `run.started` and the gateway's
+  `run.registered`. A separate gateway's selection reads the labels the attach answers
+  with, so a label value that contains `qak_` or `qrk_` gives no credential argument.
+  `run.started.schema.json` admits the two name phrases as a label's key, and
+  `server.CheckLabels` takes them. The reference receiver keeps a registration's labels
+  and about as the two functions give them, and answers an attach with that copy.
+
 - The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
   `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
 - Enrolment: an access key can belong to an adapter, `node_kind` `adapter` with an
@@ -55,6 +75,23 @@ release may change what an existing document does, and says so under Upgrading.
   run's label a gateway's selection took it from.
 
 #### Fixed
+
+- The server package printed a value as written in these messages, and now prints `(a
+  value that contains an access key secret)` or `(a value that contains a run key)` in
+  place of a value that contains `qak_` or `qrk_` in any case: a server document's name
+  and error; a URL in a request's or an answer's error, and the transport's error; the
+  decoder's and the schema's error of a document Qory Apiary answered; a pointer or a
+  member name in an answer's refusal; the gateway's proxy address, its certificate
+  authorities' file and its URL behind a separate gateway; the text of a gateway's
+  refusal; and an outcome's state. A variable's name, an image and a label's key print
+  the name's phrase. `accesskey.Refusal.Error` prints its names as
+  `accesskey.ShownNames` gives them. A run answer and a local link, as `fmt`,
+  `encoding/json` and `log/slog` print them, show the phrases in place of labels,
+  variables, documents, placeholders, reserved names, images, the socket and the files'
+  paths. An outcome's `reason` is sent as the name's phrase. `policy.Error`,
+  `internal/jcs`'s number error and the sink's reports print the value's phrase. A fixed
+  reason that names a prefix, such as a run key's "it does not start with qrk_", prints
+  as it is.
 
 - A pin whose key contains `qak_` or `qrk_` in any case, about one key in 27,000, is
   read: `server.Parse` and `accesskey.ParsePin` leave each entry's `public_key` that is
@@ -91,6 +128,22 @@ release may change what an existing document does, and says so under Upgrading.
   afterwards.
 
 #### Fixed
+
+- More of the gateway's messages and event members printed or sent a value as written,
+  and now print or send a phrase in place of one that contains `qak_` or `qrk_` in any
+  case. The name's phrase: an image in `image_unknown` and `image_not_allowed`, their
+  names included, in the refusal of an image that needs a wall, in a reload whose image
+  moved, and in the machine's image definitions; a selection's label and forge. The
+  value's phrase: a tool's program, the lines it writes, its start's error and a host
+  its definition gives; a path an adapter's answer claims, the decoder's and the
+  schema's error of the answer, and a definition's scheme and hosts; the run
+  configuration's URL; the proxy's answers to the run for an upstream error, a host
+  outside the form, a port, and a request's method and path; the record's, the server's
+  and the events' reports; the gateway's address and TLS files; a reload's failure;
+  `run.egress`'s `host`, `path`, `path_rule` and `request_method`; and
+  `run.policy_applied`'s `paths`, `ceiling_paths`, a credential's `hosts` and `paths`,
+  and `terminated`. `run.policy_applied`'s `url` and the server's codes are sent as the
+  server sent them.
 
 - Eight of the gateway's credential messages printed a credential's name or a
   placeholder as written, so a secret pasted in place of one reached the error: the two
@@ -140,12 +193,10 @@ release may change what an existing document does, and says so under Upgrading.
   `run.policy_applied`'s `tools` `name` and `argument` and its `image`; `run.egress`'s
   `credential` and `tool`; the `names` of a `run.refused` of every code, each phrase
   once; and `run.started`'s `dir`, `image`, `image_name`, each label's value, and
-  `about`'s `kind`, `title` and each subject's `title`. A label's key, a subject's
-  `type`, `ref` and `url`, and `about`'s `details` are sent as they are.
-  `run.started.schema.json` admits the two phrases as `image_name`, and
-  `run.policy_applied.schema.json` as `image`. The gateway takes a `run.started` label
-  value that is the phrase of the run's value, beside the value as it is. The wall and
-  the agent get every value as it is.
+  `about`'s `kind`, `title` and each subject's `title`. `run.started.schema.json` admits
+  the two phrases as `image_name`, and `run.policy_applied.schema.json` as `image`. The
+  gateway takes `run.started` labels as `server.ShownLabels` gives them, beside the
+  labels as they are. The wall and the agent get every value as it is.
 
 ### Wall
 
@@ -165,6 +216,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The relay now starts from the machine's default image, never from the run's, when the
   machine has a default image.
+
+#### Fixed
+
+- `wall.Docker`, the engine check, the nest and the relay printed a value as written in
+  their errors, and now print a phrase in place of one that contains `qak_` or `qrk_` in
+  any case: the name's phrase for a run id, an image, a container runtime, a user, a
+  group and a variable's name, the image's in an `image_user_root` refusal's detail and
+  names; the value's phrase for a path, a mount and its target, a limit, the helper, the
+  docker command, its output and its error, the engine's ids, the proxy and a relay's
+  forward.
+
 
 ### Session
 
@@ -211,6 +273,20 @@ release may change what an existing document does, and says so under Upgrading.
   `*wall.Docker`.
 
 #### Fixed
+
+- More of the session's messages and `run.started`'s members printed or sent a value as
+  written, and now print or send a phrase in place of one that contains `qak_` or `qrk_`
+  in any case. In `run.started`, `runtime`, `host`, `wall` and `container_runtime` are
+  the name's phrase; `command`, each argument, `runtime_version` and each word of
+  `preparation` the value's; a label's key the name's; and `about` as
+  `server.ShownAbout` gives it. The paths in a mount's refusal,
+  `mount_contains_forager_files`, `mount_mode_conflict` and the checks of other walled
+  runs, print the value's phrase in the detail and the names; and so do the paths and
+  errors of the registry of walled runs, the written places, the variables' settings,
+  the images, `exec`, the descriptors, the socket, the runtimes, the catalog and the
+  Claude settings, and the reports of removing the wall, the socket and closing the
+  sinks. A `variable_reserved` refusal's detail and names print the name's phrase, its
+  names sorted.
 
 - The `claude-settings` installer read the settings file the launch passes with
   `--settings` through links, wherever it lay, and copied it into the run directory,

@@ -347,7 +347,7 @@ func (a *EnrolmentAnswer) check() error {
 		return err
 	}
 	if want := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_"}[a.NodeKind]; want == "" || !strings.HasPrefix(a.NodeID, want) {
-		return fmt.Errorf("node_kind %q does not match the node id %s", a.NodeKind, a.NodeID)
+		return fmt.Errorf("node_kind %s does not match the node id %s", ShownName(a.NodeKind, true), a.NodeID)
 	}
 	if n := len(a.ApiaryPublicKey); n < 1 || n > 2 {
 		return fmt.Errorf("apiary_public_key lists %d keys; one or two belong", n)

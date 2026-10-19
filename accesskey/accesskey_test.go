@@ -1487,3 +1487,16 @@ func TestShownError(t *testing.T) {
 		}
 	}
 }
+
+// TestARefusalPrintsAPhraseForASecretInAName pins a refusal's text: a name the answer
+// gave that contains qak_ or qrk_ in any case prints the name's phrase, each phrase
+// once, and a clean name prints as it is.
+func TestARefusalPrintsAPhraseForASecretInAName(t *testing.T) {
+	r := accesskey.ReadRefusal(409, []byte(`{"error":"tool_unknown","names":["files","qak_x","QAK_y","qrk_z"]}`))
+	if want := "tool_unknown (status 409): files, (a name that contains an access key secret), (a name that contains a run key)"; r == nil || r.Error() != want {
+		t.Errorf("Error = %v, want %s", r, want)
+	}
+	if r.Names[1] != "qak_x" {
+		t.Errorf("the names changed: %q", r.Names)
+	}
+}

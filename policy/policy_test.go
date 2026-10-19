@@ -711,3 +711,42 @@ func TestANarrowingRefusalPrintsAPhraseForASecret(t *testing.T) {
 		}
 	}
 }
+
+// TestAnImageRefusalOfANarrowingPrintsAPhraseForASecret pins the image_unknown of a
+// server's policy whose image is not the node's: an image that contains qak_ or qrk_ in
+// any case prints the name's phrase in the detail and the names, and a clean image
+// prints as it is.
+func TestAnImageRefusalOfANarrowingPrintsAPhraseForASecret(t *testing.T) {
+	read := func(image string) *policy.Loaded {
+		t.Helper()
+		l, err := policy.Read("x.json", []byte(`{"version":1,"egress":{"mode":"observe"},"image":"`+image+`"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	for _, c := range []struct{ server, node, want string }{
+		{"qak_a", "base", "the server's policy selects the image (a name that contains an access key secret) and the node's policy the image base: image_unknown: (a name that contains an access key secret)"},
+		{"base", "a.qrk_b", "the server's policy selects the image base and the node's policy the image (a name that contains a run key): image_unknown: base"},
+		{"base", "other", "the server's policy selects the image base and the node's policy the image other: image_unknown: base"},
+	} {
+		_, err := policy.Narrowed(read(c.server), read(c.node))
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s, %s:\n got %v\nwant %s", c.server, c.node, err, c.want)
+		}
+	}
+}
+
+// TestAPolicyErrorPrintsAPhraseForASecret pins a policy document's error: a name or an
+// error's text that contains qak_ or qrk_ in any case prints the value's phrase, and
+// the error still wraps its cause.
+func TestAPolicyErrorPrintsAPhraseForASecret(t *testing.T) {
+	_, err := policy.Read("qak_policy.json", []byte(`{"version":1,"egress":{"mode":"observe"},"qrk_x":1}`))
+	if want := "policy (a value that contains an access key secret): (a value that contains a run key)"; err == nil || err.Error() != want {
+		t.Errorf("Read = %v, want %s", err, want)
+	}
+	cause := errors.New("no")
+	if e := (&policy.Error{Name: "p.json", Err: cause}); e.Error() != "policy p.json: no" || !errors.Is(e, cause) {
+		t.Errorf("a clean error: %v", e)
+	}
+}

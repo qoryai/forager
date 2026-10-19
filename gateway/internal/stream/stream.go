@@ -35,6 +35,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/sink"
 )
@@ -506,16 +507,16 @@ func (r *Run) write(ev *event.Event) {
 		return
 	}
 	if _, err := r.record.Write(append(line, '\n')); err != nil {
-		r.s.cfg.Report(fmt.Sprintf("run %s: the record: %v", r.id, err))
+		r.s.cfg.Report(fmt.Sprintf("run %s: the record: %v", r.id, accesskey.ShownError(err)))
 	}
 	if r.server != nil {
 		if err := r.server.Write(ev); err != nil {
-			r.s.cfg.Report(fmt.Sprintf("run %s: the server: %v", r.id, err))
+			r.s.cfg.Report(fmt.Sprintf("run %s: the server: %v", r.id, accesskey.ShownError(err)))
 		}
 	}
 	if r.s.events != nil {
 		if err := r.s.events.Write(ev); err != nil {
-			r.s.cfg.Report(fmt.Sprintf("run %s: the events: %v", r.id, err))
+			r.s.cfg.Report(fmt.Sprintf("run %s: the events: %v", r.id, accesskey.ShownError(err)))
 		}
 	}
 }
@@ -704,7 +705,7 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 func checkRunID(id string) error {
 	if !runIDShape.MatchString(id) {
-		return fmt.Errorf("the run id %q is not a UUID in the canonical lower-case form", id)
+		return fmt.Errorf("the run id %s is not a UUID in the canonical lower-case form", accesskey.ShownValue(id, true))
 	}
 	return nil
 }

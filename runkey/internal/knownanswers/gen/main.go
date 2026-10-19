@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/runkey/internal/knownanswers"
 )
 
@@ -18,12 +19,12 @@ func main() {
 	}
 	files, err := knownanswers.Files()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "gen:", err)
+		fmt.Fprintln(os.Stderr, "gen:", accesskey.ShownError(err))
 		os.Exit(1)
 	}
 	for name, b := range files {
 		if err := os.WriteFile(filepath.Join(os.Args[1], name), b, 0o644); err != nil {
-			fmt.Fprintln(os.Stderr, "gen:", err)
+			fmt.Fprintln(os.Stderr, "gen:", accesskey.ShownError(err))
 			os.Exit(1)
 		}
 	}

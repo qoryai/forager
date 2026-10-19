@@ -634,3 +634,40 @@ func TestAFileThatCannotBeReadPrintsAPhraseForASecretInItsPath(t *testing.T) {
 		t.Errorf("a clean path:\n got %v\nwant %s", err, want)
 	}
 }
+
+// TestAnAdaptersAnswerContentsPrintAPhraseForASecret pins the messages that print what
+// an adapter's answer contains: a path it claims, the schema's or the decoder's error,
+// which can quote the answer, and a scheme a definition gives. Each prints the value's
+// phrase in place of a value or an error text that contains qak_ or qrk_ in any case,
+// and a clean one as it is.
+func TestAnAdaptersAnswerContentsPrintAPhraseForASecret(t *testing.T) {
+	answer := func(apply string) string {
+		return `echo '{"version":1,"token":"t","apply":[` + apply + `]}'` + "\n"
+	}
+	for what, c := range map[string]struct {
+		body string
+		def  Definition
+		want string
+	}{
+		"a path above":           {answer(`{"hosts":["a.example"],"scheme":"bearer","paths":["/qak_x"]}`), Definition{Paths: []string{"/x/*"}}, " claims the path " + accessKeyValuePhrase + ", above the paths the machine gives it"},
+		"a clean path above":     {answer(`{"hosts":["a.example"],"scheme":"bearer","paths":["/y"]}`), Definition{Paths: []string{"/x/*"}}, " claims the path /y, above the paths the machine gives it"},
+		"a host of the schema":   {answer(`{"hosts":["QRK_x.example"],"scheme":"bearer"}`), Definition{}, ": " + runKeyValuePhrase},
+		"a member of the schema": {`echo '{"version":1,"token":"t","apply":[{"hosts":["a.example"],"scheme":"bearer"}],"qak_x":1}'` + "\n", Definition{}, ": " + accessKeyValuePhrase},
+	} {
+		path := adapterIn(t, "model", c.body)
+		d := c.def
+		d.Name, d.Adapter = "product", []string{path}
+		err := resolveError(t, []Definition{d}, []policy.Selected{{Name: "product"}}, nil)
+		if want := "credential product: the adapter " + path + c.want; err == nil || err.Error() != want {
+			t.Errorf("%s:\n got %v\nwant %s", what, err, want)
+			continue
+		}
+		noSecretPrefix(t, what, err)
+	}
+	for scheme, want := range map[string]string{"qak_x": accessKeyValuePhrase, "a QRK_x": runKeyValuePhrase, "other": `"other"`} {
+		err := Definition{Name: "product", Env: "PRODUCT_TOKEN", Hosts: []string{"a.example"}, Scheme: scheme}.Check()
+		if want := "the scheme " + want + " is not bearer, basic or header"; err == nil || err.Error() != want {
+			t.Errorf("%s:\n got %v\nwant %s", scheme, err, want)
+		}
+	}
+}

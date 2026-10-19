@@ -113,7 +113,11 @@ type Error struct {
 	Err  error
 }
 
-func (e *Error) Error() string { return "policy " + e.Name + ": " + e.Err.Error() }
+// Error prints the name and the error's text as accesskey.ShownValue and
+// accesskey.ShownError print them.
+func (e *Error) Error() string {
+	return "policy " + accesskey.ShownValue(e.Name, false) + ": " + accesskey.ShownError(e.Err).Error()
+}
 
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
@@ -263,7 +267,7 @@ func Narrowed(fetched, node *Loaded) (*Loaded, error) {
 	}
 	switch {
 	case s.Image != "" && n.Image != "" && s.Image != n.Image:
-		return nil, refusal.New(refusal.ImageUnknown, []string{s.Image}, "the server's policy selects the image %s and the node's policy the image %s", s.Image, n.Image)
+		return nil, refusal.New(refusal.ImageUnknown, []string{accesskey.ShownName(s.Image, false)}, "the server's policy selects the image %s and the node's policy the image %s", accesskey.ShownName(s.Image, false), accesskey.ShownName(n.Image, false))
 	case s.Image == "":
 		run.Image = n.Image
 	}
