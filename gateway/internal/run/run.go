@@ -1044,7 +1044,7 @@ func (r *Run) storedUses() []credential.Stored {
 	for i, c := range r.stored {
 		name := c.Name
 		out[i] = credential.Stored{Name: name, Hosts: c.Hosts, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header,
-			Paths: c.Paths, Placeholders: c.Placeholders, Value: func() []byte {
+			Paths: c.Paths, Placeholders: c.Placeholders, KeyForm: c.KeyForm, Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				b, _ := r.values.Value(name)

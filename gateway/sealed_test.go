@@ -85,7 +85,7 @@ func (c *control) requests(t *testing.T) []server.SecretsRequest {
 // the run, the digest it computed of the document's bytes, not the header's, and the
 // credentials' names; the proxy sets the opened value in place of forager.yaml's key,
 // whose credential claims the same host; and the run answer has model's hosts and
-// placeholder alone.
+// placeholder, its key_form and its auth, and applied.credentials its key_form.
 func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{Wall: true})
@@ -103,15 +103,32 @@ func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 	if r := reqs[0]; r.Version != 1 || r.RunID != a.RunID || r.RunConfiguration != digestOf(sealedDoc) || !slices.Equal(r.Credentials, []string{"model"}) {
 		t.Errorf("the secrets request %+v; want the run, %s and model", r, digestOf(sealedDoc))
 	}
-	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_API_KEY"}}}
+	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_API_KEY"},
+		KeyForm: "api_key", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
 	if !reflect.DeepEqual(a.CredentialHosts, want) || !slices.Equal(a.Placeholders, []string{"MODEL_API_KEY"}) {
 		t.Errorf("credential hosts %+v, placeholders %v; want %+v", a.CredentialHosts, a.Placeholders, want)
 	}
-	if got := members(a.Applied)["credentials"]; !reflect.DeepEqual(got, []any{map[string]any{"name": "model", "hosts": []any{"api.model.example"}, "scheme": "header", "paths": []any{"/v1/*"}}}) {
+	if got := members(a.Applied)["credentials"]; !reflect.DeepEqual(got, []any{map[string]any{"name": "model", "hosts": []any{"api.model.example"}, "scheme": "header", "paths": []any{"/v1/*"}, "key_form": "api_key"}}) {
 		t.Errorf("applied credentials %v", got)
 	}
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
 	h.close()
+}
+
+// TestTheSessionsCredentialVariablesAreItsOwn pins that the gateway matches the
+// session's policy_applied by the members the gateway decides alone: the session's
+// variables, harness_hosts and credential_variables are left out of the comparison.
+func TestTheSessionsCredentialVariablesAreItsOwn(t *testing.T) {
+	decided := map[string]any{"mode": "observe", "allow": []any{}, "deny": []any{}, "source": "none"}
+	data := map[string]any{"mode": "observe", "allow": []any{}, "deny": []any{}, "source": "none", "variables": []any{},
+		"harness_hosts": []any{"harness.example"}, "credential_variables": []any{map[string]any{"credential": "model", "name": "ANTHROPIC_API_KEY"}}}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gateway.AppliedIs(decided)(&event.Event{Type: event.PolicyApplied, Data: json.RawMessage(raw)}) {
+		t.Error("the gateway does not match a policy_applied with credential_variables")
+	}
 }
 
 // TestARunConfigurationWithoutCredentialsIsUnchanged pins a run configuration with no

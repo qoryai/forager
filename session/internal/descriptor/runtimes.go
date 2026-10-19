@@ -47,14 +47,15 @@ type modelEntry struct {
 }
 
 // declarationEntry is one declaration of a runtime in [RuntimesFile]; paths is absent
-// when the declaration bounds none.
+// when the declaration bounds none, and key_form when it has none.
 type declarationEntry struct {
-	ID    string   `json:"id"`
-	Title string   `json:"title"`
-	Name  string   `json:"name"`
-	Hosts []string `json:"hosts"`
-	Auth  Auth     `json:"auth"`
-	Paths []string `json:"paths,omitempty"`
+	ID      string   `json:"id"`
+	Title   string   `json:"title"`
+	Name    string   `json:"name"`
+	Hosts   []string `json:"hosts"`
+	Auth    Auth     `json:"auth"`
+	Paths   []string `json:"paths,omitempty"`
+	KeyForm string   `json:"key_form,omitempty"`
 }
 
 // groupEntry is one one_of group of a runtime in [RuntimesFile], with required always
@@ -127,7 +128,7 @@ func entry(d *Descriptor) runtimeEntry {
 	}
 	for _, dc := range s.Declares {
 		e.Declares = append(e.Declares, declarationEntry{
-			ID: dc.ID, Title: dc.Title, Name: dc.Name, Hosts: list(dc.Hosts), Auth: dc.Auth, Paths: dc.Paths,
+			ID: dc.ID, Title: dc.Title, Name: dc.Name, Hosts: list(dc.Hosts), Auth: dc.Auth, Paths: dc.Paths, KeyForm: dc.KeyForm,
 		})
 	}
 	for _, g := range s.OneOf {

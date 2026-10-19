@@ -73,8 +73,11 @@ type Use struct {
 	// Stored says the credential is the server's, a run configuration's credentials
 	// entry, whose value Qory Apiary sealed to the access key.
 	Stored bool
-	held   *held
-	index  int
+	// KeyForm is the run configuration entry's key_form, api_key or access_token, of a
+	// credential from the server; empty for every other.
+	KeyForm string
+	held    *held
+	index   int
 }
 
 // Stored is a credential whose value Qory Apiary stores for the run: an entry of the
@@ -86,6 +89,8 @@ type Stored struct {
 	// Paths are nil for every path.
 	Paths        []string
 	Placeholders []string
+	// KeyForm is the entry's key_form, api_key or access_token; empty when it has none.
+	KeyForm string
 	// Value returns a copy of the opened value's bytes, which the caller clears once it
 	// has set them; empty once the run has ended.
 	Value func() []byte
@@ -134,11 +139,15 @@ type Held struct {
 
 // Credential is one credential a run holds: its name, the hosts of its uses in their
 // order, as the proxy matches them, and the variables the enclosure gets a placeholder in
-// for it, each once.
+// for it, each once. Of a credential from the server, Stored is true, Scheme, Username
+// and Header are how its value is set, and KeyForm is its entry's key_form.
 type Credential struct {
-	Name         string
-	Hosts        []string
-	Placeholders []string
+	Name                     string
+	Hosts                    []string
+	Placeholders             []string
+	Stored                   bool
+	Scheme, Username, Header string
+	KeyForm                  string
 }
 
 // Credentials are the run's credentials, one each, in the order the policy selects
@@ -152,6 +161,9 @@ func (h *Held) Credentials() []Credential {
 		for _, u := range h.Uses {
 			if u.held == c {
 				cred.Hosts = append(cred.Hosts, u.Hosts...)
+				if u.Stored {
+					cred.Stored, cred.Scheme, cred.Username, cred.Header, cred.KeyForm = true, u.Scheme, u.Username, u.Header, u.KeyForm
+				}
 			}
 		}
 		out = append(out, cred)
@@ -251,7 +263,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 	}
 	for _, s := range stored {
 		h := &held{def: Definition{Name: s.Name}, value: s.Value, done: make(chan struct{})}
-		out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: s.Hosts, Scheme: s.Scheme, Username: s.Username, Header: s.Header, Paths: s.Paths, Stored: true, held: h})
+		out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: s.Hosts, Scheme: s.Scheme, Username: s.Username, Header: s.Header, Paths: s.Paths, Stored: true, KeyForm: s.KeyForm, held: h})
 		for _, p := range s.Placeholders {
 			if !slices.Contains(h.placeholders, p) {
 				h.placeholders = append(h.placeholders, p)

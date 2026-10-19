@@ -708,6 +708,13 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(err)
 	}
 	reserved := slices.Concat(answer.Reserved, reservedOf(spec.Gateway))
+	// The runtime chooses, by key_form and auth, the variable that gets the placeholder
+	// of each credential from the server with a key_form: from here on it is one of the
+	// credential's placeholders and of the run's.
+	credentialHosts, placeholderNames, err := chosen(rt, answer.CredentialHosts, answer.Placeholders)
+	if err != nil {
+		return fail(err)
+	}
 	var authority []byte
 	if spec.Wall != nil && answer.CertificateAuthority != "" {
 		authority = []byte(answer.CertificateAuthority)
@@ -725,7 +732,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
 		Readable: readable(written)}
 	if spec.Wall != nil {
-		attach.Placeholders = slices.Clone(answer.Placeholders)
+		attach.Placeholders = slices.Clone(placeholderNames)
 	}
 	if byReference {
 		attach.Inside = inside
@@ -742,8 +749,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The harness's values are Forager's to write as the enclosure sees them.
 	harness := spec
 	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)
-	vars, unset, err := resolve(harness, rt, answer.Values(), answer.CredentialHosts, prepared, answer.Placeholders, reserved, img.Docker, authority != nil)
+	vars, unset, err := resolve(harness, rt, answer.Values(), credentialHosts, prepared, placeholderNames, reserved, img.Docker, authority != nil)
 	if err != nil {
+		return fail(err)
+	}
+	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared); err != nil {
 		return fail(err)
 	}
 	if spec.OnVariables != nil {
@@ -879,7 +889,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(answer.Placeholders)),
+			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames)),
 			CA:    authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: relayToken,
@@ -947,13 +957,23 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// policyApplied is the policy_applied event of the members the gateway decides, for
 	// the policy in force at the start and for each one a reload puts in its place:
 	// those members as the gateway gives them, and the session's own, the run's
-	// variables as resolved at the start and the harness's hosts.
+	// variables as resolved at the start, behind a wall the variables its credentials'
+	// placeholders are in, and the harness's hosts.
+	var credentialVars []map[string]string
+	if spec.Wall != nil {
+		credentialVars = credentialVariables(credentialHosts)
+	}
 	policyApplied := func(members map[string]any) map[string]any {
 		a := maps.Clone(members)
 		if a == nil {
 			a = map[string]any{}
 		}
 		a["variables"] = vars.Applied
+		if credentialVars != nil {
+			a["credential_variables"] = credentialVars
+		} else {
+			delete(a, "credential_variables")
+		}
 		if spec.Declared != nil {
 			a["harness_hosts"] = spec.Declared
 		} else {

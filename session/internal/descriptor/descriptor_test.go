@@ -59,9 +59,10 @@ func TestMatchIsEqualityOrPresenceOnly(t *testing.T) {
 }
 
 // TestClaudeDeclaresItsModelCredential pins that the secrets of the contract's Claude
-// Code descriptor decode: the API key on x-api-key, the OAuth credential as a bearer,
-// both on api.anthropic.com under /v1/, no one_of group, and the reserved, denied and
-// credential file lists.
+// Code descriptor decode: the API key on x-api-key, key_form api_key; the OAuth
+// credential as a bearer, key_form access_token; the API key as a bearer in
+// ANTHROPIC_AUTH_TOKEN, key_form api_key; each on api.anthropic.com under /v1/; no
+// one_of group, no reserved variable, and the denied and credential file lists.
 func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
 	if err != nil {
@@ -72,12 +73,13 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := d.Secrets
-	if d.Title != "Claude Code" || s == nil || len(s.Declares) != 2 {
+	if d.Title != "Claude Code" || s == nil || len(s.Declares) != 3 {
 		t.Fatalf("title %q, secrets %+v", d.Title, s)
 	}
 	want := []descriptor.Declaration{
-		{ID: "api_key", Title: "Anthropic API key", Name: "ANTHROPIC_API_KEY", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "header", Header: "x-api-key"}},
-		{ID: "oauth_token", Title: "Claude OAuth token", Name: "CLAUDE_CODE_OAUTH_TOKEN", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "bearer"}},
+		{ID: "api_key", Title: "Anthropic API key", Name: "ANTHROPIC_API_KEY", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "header", Header: "x-api-key"}, KeyForm: "api_key"},
+		{ID: "oauth_token", Title: "Claude OAuth token", Name: "CLAUDE_CODE_OAUTH_TOKEN", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "bearer"}, KeyForm: "access_token"},
+		{ID: "auth_token", Title: "Anthropic API key as a bearer", Name: "ANTHROPIC_AUTH_TOKEN", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "bearer"}, KeyForm: "api_key"},
 	}
 	for i, w := range want {
 		if !reflect.DeepEqual(s.Declares[i], w) {
@@ -87,7 +89,7 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 	if len(s.OneOf) != 0 {
 		t.Errorf("one_of = %+v; want none", s.OneOf)
 	}
-	if !reflect.DeepEqual(s.Reserves, []string{"ANTHROPIC_AUTH_TOKEN"}) ||
+	if len(s.Reserves) != 0 ||
 		!reflect.DeepEqual(s.CredentialFiles, []string{"~/.claude/.credentials.json"}) ||
 		len(s.Denies) != 18 || s.Denies[0] != "ANTHROPIC_BASE_URL" {
 		t.Errorf("reserves %v, credential_files %v, denies %v", s.Reserves, s.CredentialFiles, s.Denies)
@@ -270,8 +272,9 @@ func TestSecretsAreChecked(t *testing.T) {
 	if _, err := descriptor.Parse("amp.yaml", []byte(head)); err != nil {
 		t.Errorf("a descriptor without secrets: %v", err)
 	}
-	ok := head + "title: Amp\nsecrets:\n declares:\n" + key +
-		"  - {id: alt, title: Alt, name: AMP_ALT, hosts: [api.example.com], paths: [/v2/*], auth: {scheme: header, header: x-key}}\n" +
+	ok := head + "title: Amp\nsecrets:\n declares:\n" +
+		"  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: bearer}, key_form: api_key}\n" +
+		"  - {id: alt, title: Alt, name: AMP_ALT, hosts: [api.example.com], paths: [/v2/*], auth: {scheme: header, header: x-key}, key_form: api_key}\n" +
 		"  - {id: git, title: Git, name: AMP_GIT, hosts: [git.example.com], auth: {scheme: basic, username: bot}}\n" +
 		" one_of: [{id: model, of: [key, alt]}]\n reserves: [AMP_OTHER]\n denies: [AMP_URL]\n credential_files: [~/.amp/key, /etc/amp/key]\n"
 	if _, err := descriptor.Parse("amp.yaml", []byte(ok)); err != nil {
@@ -284,8 +287,9 @@ func TestSecretsAreChecked(t *testing.T) {
 	var file struct {
 		Runtimes []struct {
 			Declares []struct {
-				ID   string         `json:"id"`
-				Auth map[string]any `json:"auth"`
+				ID      string         `json:"id"`
+				Auth    map[string]any `json:"auth"`
+				KeyForm *string        `json:"key_form"`
 			} `json:"declares"`
 		} `json:"runtimes"`
 	}
@@ -294,6 +298,14 @@ func TestSecretsAreChecked(t *testing.T) {
 	}
 	if auth := file.Runtimes[0].Declares[2].Auth; !reflect.DeepEqual(auth, map[string]any{"scheme": "basic", "username": "bot"}) {
 		t.Errorf("runtimes.json writes the basic declaration's auth as %v; want its scheme and username", auth)
+	}
+	// key_form is written for a declaration that has one, and absent for one that has
+	// none.
+	for i, want := range []string{"api_key", "api_key", ""} {
+		got := file.Runtimes[0].Declares[i].KeyForm
+		if (got == nil) != (want == "") || (got != nil && *got != want) {
+			t.Errorf("runtimes.json writes declares[%d].key_form as %v; want %q", i, got, want)
+		}
 	}
 	for name, secrets := range map[string]string{
 		"a wildcard host":            " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: ['*.example.com'], auth: {scheme: bearer}}\n",
@@ -309,6 +321,10 @@ func TestSecretsAreChecked(t *testing.T) {
 		"an id in two groups":        " declares:\n" + key + " one_of: [{id: a, of: [key]}, {id: b, of: [key]}]\n",
 		"a group defined twice": " declares:\n" + key + "  - {id: alt, title: Alt, name: AMP_ALT, hosts: [api.example.com], auth: {scheme: bearer}}\n" +
 			" one_of: [{id: a, of: [key]}, {id: a, of: [alt]}]\n",
+		"a key_form outside the set": " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: bearer}, key_form: password}\n",
+		"one key_form and scheme twice": " declares:\n" +
+			"  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: bearer}, key_form: api_key}\n" +
+			"  - {id: alt, title: Alt, name: AMP_ALT, hosts: [api.example.com], auth: {scheme: bearer}, key_form: api_key}\n",
 	} {
 		if _, err := descriptor.Parse("amp.yaml", []byte(head+"secrets:\n"+secrets)); err == nil {
 			t.Errorf("%s was accepted", name)
@@ -372,8 +388,8 @@ func TestRuntimesJSONIsGenerated(t *testing.T) {
 // TestRuntimesJSONShape pins the members of runtimes.json a server reads: version and
 // runtimes; per runtime its name, title, reserves, denies, credential_files, declares
 // and one_of, every one present; per declaration id, title, name, hosts, auth with its
-// scheme, the header of a header scheme and the username of a basic scheme, and paths
-// when it has some; per group id, required and of; and model when the descriptor has
+// scheme, the header of a header scheme and the username of a basic scheme, paths
+// when it has some, and key_form when it has one, which every claude declaration has; per group id, required and of; and model when the descriptor has
 // one, with formats, model, endpoint with its variable and optionally effort, with run
 // and optionally agent, each place being exactly one of flag, setting and variable, and
 // optionally overrides. The claude runtime has a model with overrides. Every built-in descriptor is one runtime, in name order.
@@ -472,7 +488,12 @@ func TestRuntimesJSONShape(t *testing.T) {
 		}
 		declares, _ := rt["declares"].([]any)
 		for _, d := range declares {
-			dc := members("declaration", d, []string{"id", "title", "name", "hosts", "auth"}, "paths")
+			dc := members("declaration", d, []string{"id", "title", "name", "hosts", "auth"}, "paths", "key_form")
+			if k, ok := dc["key_form"]; ok && k != "api_key" && k != "access_token" {
+				t.Errorf("declaration %v: key_form %v; want api_key or access_token", dc["id"], k)
+			} else if !ok && rt["name"] == "claude" {
+				t.Errorf("the claude declaration %v has no key_form", dc["id"])
+			}
 			strs("hosts", dc["hosts"])
 			if p, ok := dc["paths"]; ok {
 				strs("paths", p)

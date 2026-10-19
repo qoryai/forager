@@ -4,9 +4,7 @@
     {
       "name": "claude",
       "title": "Claude Code",
-      "reserves": [
-        "ANTHROPIC_AUTH_TOKEN"
-      ],
+      "reserves": [],
       "denies": [
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_BEDROCK_BASE_URL",
@@ -44,7 +42,8 @@
           },
           "paths": [
             "/v1/*"
-          ]
+          ],
+          "key_form": "api_key"
         },
         {
           "id": "oauth_token",
@@ -58,7 +57,23 @@
           },
           "paths": [
             "/v1/*"
-          ]
+          ],
+          "key_form": "access_token"
+        },
+        {
+          "id": "auth_token",
+          "title": "Anthropic API key as a bearer",
+          "name": "ANTHROPIC_AUTH_TOKEN",
+          "hosts": [
+            "api.anthropic.com"
+          ],
+          "auth": {
+            "scheme": "bearer"
+          },
+          "paths": [
+            "/v1/*"
+          ],
+          "key_form": "api_key"
         }
       ],
       "one_of": [],

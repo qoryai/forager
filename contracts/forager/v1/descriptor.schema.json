@@ -140,6 +140,10 @@
               "auth": {
                 "description": "How the value is set on a request, a scheme from the closed set.",
                 "$ref": "auth.schema.json"
+              },
+              "key_form": {
+                "description": "The form of model key the runtime reads from this variable, set as auth.scheme sets it: the session gives this variable the placeholder of a credential from the server with this key_form and that scheme. At most one declaration has each key_form and scheme. Absent, the declaration takes no credential by its key_form.",
+                "$ref": "run-configuration.schema.json#/$defs/key_form"
               }
             }
           }

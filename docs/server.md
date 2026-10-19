@@ -176,7 +176,11 @@ checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,
 | a `QORY_` variable, or one the gateway sets, such as one a credential is read from | a walled run | `variable_reserved` |
 | a value for a placeholder | any run | `placeholder_conflict` |
 
-`QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first. Without a wall, a
+`QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first. After it resolves the
+variables, the session refuses a walled run whose gateway holds credentials for it and
+that has no model key for its runtime, `model_key_missing`: no credential with a
+placeholder of a model key's variable on the runtime's model host, and no value of one
+that the node passes. Without a wall, a
 `QORY_` value of the server, the run, the machine or the harness is denied instead. A
 server's `QORY_` value is denied in any run, apart from `QORY_RUN_SYSTEM` and
 `QORY_RUN_REPOSITORIES`, the system and the repositories a run's preparation may use,

@@ -8,7 +8,59 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Core and contract
 
+#### Upgrading
+
+- A walled run whose gateway holds credentials for it, and whose runtime declares model
+  keys, needs a model key: without a credential whose placeholder is a model key's
+  variable on the runtime's model host, and without a value of one from the run, the
+  machine, the harness or what the run inherits, it is `model_key_missing`. A setup
+  whose walled Claude Code run has only a forge credential and finds its model key in a
+  mount, the image or its settings now stops: pass the key in the machine's variables,
+  or define a model credential with a placeholder. A run without a wall, or whose run
+  answer has no `credential_hosts`, starts as before.
+- A run configuration credential with `key_form` now sets a variable: one with
+  `access_token` in a header for Claude Code, or a `key_form` for a runtime that
+  declares no model key, is `run_configuration_invalid`, and so is one whose
+  `placeholders` list another variable the runtime declares, such as
+  `CLAUDE_CODE_OAUTH_TOKEN` beside `api_key` in a header. A credential that lists the
+  chosen variable, such as `ANTHROPIC_API_KEY` beside `api_key` in a header, runs as
+  before.
+- `runtimes.json`: the claude runtime's `reserves` is `[]`, and `ANTHROPIC_AUTH_TOKEN` is
+  its declaration `auth_token`, "Anthropic API key as a bearer". A server that lists a
+  runtime's declarations shows a third one for Claude Code.
+- `dev.qory.run.refused` and the link's batches take the code `model_key_missing`, and
+  the session's `dev.qory.run.policy_applied` may have `credential_variables`. A
+  separate gateway older than the session refuses both: upgrade the gateway first.
+
 #### Added
+
+- A runtime descriptor's declaration may have `key_form`, `api_key` or `access_token`:
+  the form of model key the runtime reads from the variable, set by the declaration's
+  `auth.scheme`. The session refuses a descriptor with two declarations of one
+  `key_form` and scheme, and `runtimes.json` writes `key_form` for a declaration that
+  has one. The Claude Code descriptor's three declarations have one each: `api_key`,
+  `ANTHROPIC_API_KEY`, `api_key` in a header; `oauth_token`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `access_token` as a bearer; and the new `auth_token`, `ANTHROPIC_AUTH_TOKEN`, `api_key`
+  as a bearer, which was reserved.
+- The session chooses the variable of a credential from the server with `key_form`:
+  the one declaration of the run's runtime with that `key_form` and the credential's
+  `auth.scheme`. The variable joins the credential's placeholders and the run's, so a
+  value the run passes for it is `placeholder_conflict`, the endpoint rule counts the
+  credential as a model credential, and Claude Code's approval script covers
+  `ANTHROPIC_API_KEY` chosen this way. A run configuration credential with `key_form`
+  needs no `placeholders`.
+- The link's run answer's `credential_hosts` has `auth` for a credential from the
+  server, and `key_form` when its entry has one. `server.LinkCredentialHosts` has `Auth`
+  and `KeyForm`.
+- `dev.qory.run.policy_applied`: each entry of `credentials` of a credential from the
+  server with `key_form` has it, and behind a wall `credential_variables` lists the
+  variable each credential's placeholder is in, `{credential, name}`, the credential's
+  name shown through `accesskey.ShownName`. The gateway leaves `credential_variables`
+  out of the members it matches.
+- The refusal `model_key_missing`, in `refusal.Decides`: a walled run whose run answer
+  has `credential_hosts`, whose runtime has a `model` section and model keys, and that
+  has no model key, as the contract's §Variables, A model key, says. Its names are the
+  model keys' variables.
 
 - The link's run answer has `credential_hosts`: the hosts and placeholders of each
   credential the gateway holds for the run, so the session can tell which hosts the run's
@@ -62,8 +114,7 @@ release may change what an existing document does, and says so under Upgrading.
   credential, `api_key` or `access_token`. Forager checks the member against
   `run-configuration.schema.json`, and refuses a name twice and an `auth.header` that
   frames the request or that the proxy sets, and a placeholder that
-  `denied-variables.json` covers, each `run_configuration_invalid`. Forager reads no
-  `key_form`.
+  `denied-variables.json` covers, each `run_configuration_invalid`.
 - The gateway sets a run configuration's `credentials` for a walled run. When the run
   starts it sends one secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value

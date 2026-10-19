@@ -42,6 +42,11 @@ const (
 	VariableReserved = "variable_reserved"
 	// PlaceholderConflict is a run that passes a value for a placeholder.
 	PlaceholderConflict = "placeholder_conflict"
+	// ModelKeyMissing is a walled run whose gateway holds credentials for it, none of
+	// them a model key for the runtime's model host, and to which the node passes no
+	// value for a variable the runtime reads a model key from: its names are those
+	// variables.
+	ModelKeyMissing = "model_key_missing"
 	// MountContainsForagerFiles is a walled run with a mount that is, contains or lies
 	// inside one of Forager's files: its names are the mount and the file, in that
 	// order.
@@ -73,7 +78,7 @@ const (
 func Decides(code string) bool {
 	switch code {
 	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot,
-		VariableReserved, PlaceholderConflict, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
+		VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable:
 		return true
 	}

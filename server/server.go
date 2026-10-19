@@ -299,8 +299,8 @@ type RunCredential struct {
 	// Paths are nil for every path.
 	Paths []string `json:"paths,omitzero"`
 	Auth  Auth     `json:"auth"`
-	// KeyForm is api_key, access_token or empty. No Forager component reads it in this
-	// revision.
+	// KeyForm is api_key, access_token or empty. With Auth.Scheme it chooses the variable
+	// of the run's runtime that gets the placeholder for the credential.
 	KeyForm      string   `json:"key_form,omitzero"`
 	Placeholders []string `json:"placeholders,omitzero"`
 }

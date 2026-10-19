@@ -10,7 +10,10 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/session/runtimes"
@@ -88,7 +91,7 @@ func passes(spec Spec) []string {
 // variables the agent sees in place of what the gateway holds, and reserved the names
 // the gateway sets for the run, what a value of the machine's is read from. Behind a
 // wall, the endpoint rule checks each value of the runtime's model endpoint variable
-// against credentials, the run answer's credential_hosts. It returns the resolution
+// against credentials, the run answer's credential_hosts after [chosen]. It returns the resolution
 // and, for a walled run, the names to unset inside, which [Exec] takes out of the
 // launch's environment: the runtime's declared and reserved variables and the names
 // the runtime denies, lists in its model overrides or as its model endpoint, or the
@@ -202,4 +205,176 @@ func names(env []string) []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// secretsOf is what rt declares of a run's secrets; empty for a runtime that declares
+// none.
+func secretsOf(rt runtimes.Runtime) runtimes.Declarations {
+	if s, ok := rt.(runtimes.Secrets); ok {
+		return s.Secrets()
+	}
+	return runtimes.Declarations{}
+}
+
+// schemeWords is how a refusal writes an auth scheme.
+func schemeWords(scheme string) string {
+	switch scheme {
+	case "header":
+		return "in a header"
+	case "":
+		return "with no auth"
+	}
+	return "as a " + scheme
+}
+
+// chosen is the run answer's credentials and placeholders after the runtime's choice.
+// For each credential from the server with a key_form, the one declaration of rt with
+// that key_form and the credential's auth scheme chooses its variable, which is added
+// to the credential's placeholders and to the run's, each once. The header's name is
+// not compared. A credential whose key_form and scheme no declaration has, or whose
+// placeholders list another variable rt declares or reserves, is
+// [refusal.RunConfigurationInvalid] with the credential's name; a placeholder rt does
+// not declare stays. A credential without a key_form, every one of the machine's
+// among them, is as the answer has it.
+func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, placeholders []string) ([]server.LinkCredentialHosts, []string, error) {
+	decl := secretsOf(rt)
+	declared := slices.Clone(decl.Reserves)
+	var offered []string
+	for _, d := range decl.Declares {
+		declared = append(declared, d.Name)
+		if d.KeyForm != "" {
+			offered = append(offered, d.KeyForm+" "+schemeWords(d.Auth.Scheme)+" for "+d.Name)
+		}
+	}
+	names := slices.Clone(placeholders)
+	out := make([]server.LinkCredentialHosts, len(credentials))
+	for i, c := range credentials {
+		c.Placeholders = slices.Clone(c.Placeholders)
+		if c.KeyForm != "" {
+			scheme := ""
+			if c.Auth != nil {
+				scheme = c.Auth.Scheme
+			}
+			shown := accesskey.ShownName(c.Name, true)
+			at := slices.IndexFunc(decl.Declares, func(d runtimes.Declaration) bool {
+				return d.KeyForm == c.KeyForm && d.Auth.Scheme == scheme
+			})
+			switch {
+			case at < 0 && len(offered) == 0:
+				return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+					"leave key_form out of the credential %s in Qory Apiary's run configuration, or run a runtime that reads a model key: the runtime %s declares no variable for one", shown, rt.Name())
+			case at < 0:
+				return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+					"give the credential %s in Qory Apiary's run configuration a key_form and auth.scheme that the runtime %s reads: %s; the credential has %s %s",
+					shown, rt.Name(), orList(offered, ", ", ", or "), c.KeyForm, schemeWords(scheme))
+			}
+			variable := decl.Declares[at].Name
+			for _, p := range c.Placeholders {
+				if p != variable && slices.Contains(declared, p) {
+					return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+						"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: its key_form %s and auth.scheme %s choose %s for the runtime %s, and a model key goes into one variable",
+						p, shown, c.KeyForm, scheme, variable, rt.Name())
+				}
+			}
+			if !slices.Contains(c.Placeholders, variable) {
+				c.Placeholders = append(c.Placeholders, variable)
+			}
+			if !slices.Contains(names, variable) {
+				names = append(names, variable)
+			}
+		}
+		out[i] = c
+	}
+	return out, names, nil
+}
+
+// orList is items joined by sep, the last two by last.
+func orList(items []string, sep, last string) string {
+	if len(items) < 2 {
+		return strings.Join(items, "")
+	}
+	return strings.Join(items[:len(items)-1], sep) + last + items[len(items)-1]
+}
+
+// credentialVariables is the record's credential_variables: one entry per credential
+// and placeholder, in order, the credential shown by [accesskey.ShownName]; nil
+// when none has a placeholder.
+func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]string {
+	var out []map[string]string
+	for _, c := range credentials {
+		for _, p := range c.Placeholders {
+			out = append(out, map[string]string{"credential": accesskey.ShownName(c.Name, false), "name": p})
+		}
+	}
+	return out
+}
+
+// checkModelKey refuses a walled run whose gateway holds credentials for it, when its
+// runtime has a model section and declares model keys, the declarations with a
+// key_form, and the run has none: no value of a model key's variable reaches the
+// runtime, from what the run inherits, the run, the machine, the harness or the
+// runtime's preparation, and no credential of credentials, after [chosen], has a
+// model key's variable among its placeholders and a host of the runtime's model among
+// its hosts. The runtime's model host is the host of the value of its endpoint variable
+// that reaches it, or, when none does, a host of a model key's declaration. A run
+// without a wall, or whose answer has no credential_hosts, is not checked: its key may
+// come from what the session does not see, such as a login of the developer's, a
+// mount or an image. The refusal is [refusal.ModelKeyMissing] with the model keys'
+// variables.
+func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch) error {
+	if spec.Wall == nil || len(credentials) == 0 {
+		return nil
+	}
+	m, ok := rt.(runtimes.Model)
+	if !ok {
+		return nil
+	}
+	places, ok := m.Model()
+	if !ok {
+		return nil
+	}
+	var keys, hosts []string
+	for _, d := range secretsOf(rt).Declares {
+		if d.KeyForm == "" {
+			continue
+		}
+		keys = append(keys, d.Name)
+		for _, h := range d.Hosts {
+			if !slices.Contains(hosts, h) {
+				hosts = append(hosts, h)
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	// What reaches the runtime, a later source's value over an earlier one's, as
+	// environment writes the launch's.
+	reaches := map[string]string{}
+	for _, kv := range slices.Concat(spec.Env, vars.Env, vars.Fixed, prepared.Env) {
+		name, value, _ := strings.Cut(kv, "=")
+		reaches[name] = value
+	}
+	if slices.ContainsFunc(keys, func(k string) bool { return reaches[k] != "" }) {
+		return nil
+	}
+	shownHosts := strings.Join(hosts, " or ")
+	if v := reaches[places.Endpoint.Variable]; places.Endpoint.Variable != "" && v != "" {
+		host, ok := policy.EndpointHost(v)
+		hosts, shownHosts = []string{host}, host
+		if !ok {
+			hosts, shownHosts = nil, "the host of "+places.Endpoint.Variable
+		}
+	}
+	for _, c := range credentials {
+		if !slices.ContainsFunc(c.Placeholders, func(p string) bool { return slices.Contains(keys, p) }) {
+			continue
+		}
+		if slices.ContainsFunc(hosts, func(h string) bool { return policy.CredentialFor(c.Hosts, h) }) {
+			return nil
+		}
+	}
+	return refusal.New(refusal.ModelKeyMissing, keys,
+		"give the run a model key for the runtime %s: a credential for %s with a placeholder of %s, on this machine or in Qory Apiary's run configuration, or a value of one of these variables from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for %s",
+		rt.Name(), shownHosts, orList(keys, ", ", " or "), shownHosts)
 }
