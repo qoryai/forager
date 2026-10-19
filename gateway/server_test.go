@@ -432,6 +432,58 @@ func TestTheGatewayReloadsARun(t *testing.T) {
 	}
 }
 
+// TestAReloadSetsNoCredentialOutsideTheRunsAuthority pins the run's authority, good
+// only for the hosts terminated when the run started: a reload with the same hosts is
+// put in force, one that selects a credential for another host fails, the user is
+// told, and the policy and the credentials in force stay.
+func TestAReloadSetsNoCredentialOutsideTheRunsAuthority(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_A_KEY", "a-value")
+	t.Setenv("GATEWAY_TEST_B_KEY", "b-value")
+	creds := []gateway.Credential{
+		{Name: "a", Env: "GATEWAY_TEST_A_KEY", Hosts: []string{"a.example"}, Scheme: "bearer"},
+		{Name: "b", Env: "GATEWAY_TEST_B_KEY", Hosts: []string{"b.example"}, Scheme: "bearer"},
+	}
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"}]}`, 'a')
+	h := start(t, gateway.Config{Server: c.server(), Credentials: creds})
+	a := h.open(server.LinkRunRequest{Wall: true})
+	runID := a.RunID
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example"]},"credentials":[{"name":"a"}]}`, 'b')
+	h.post(logged(runID))
+	var reloaded *server.LinkReloadAnswer
+	eventually(t, "the reload with the same hosts", func() bool {
+		h.post(heartbeat(runID))
+		r, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
+		if err == nil && r.Digest != a.Digest {
+			reloaded = r
+			return true
+		}
+		return false
+	})
+	if d := h.post(applied(runID, reloaded.Applied)); !d.Accepted() {
+		t.Errorf("the reload's policy_applied: %+v", d)
+	}
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"},{"name":"b"}]}`, 'c')
+	h.post(logged(runID))
+	line := "start a new run to set a credential on b.example; the run's certificate covers only the hosts it terminated when it started; the policy in force stays"
+	eventually(t, "the refused reload's report", func() bool {
+		h.post(heartbeat(runID))
+		return h.reported(line)
+	})
+	again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
+	if err != nil || again.Digest != reloaded.Digest {
+		t.Errorf("after a refused reload: %v %+v", err, again)
+	}
+	if got, want := gateway.Tokens(h.g, runID), map[string]string{"a": "a-value"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("after a refused reload the proxy sets %v, want %v", got, want)
+	}
+	h.post(exited(runID))
+	h.close()
+}
+
 // TestARunUnderACeilingRecordsItsPaths pins ceiling_paths: a walled run whose policy
 // file is put under a ceiling with path rules has them in applied at the start, and
 // again in the reload's, where the server's new policy leaves them as they were; the

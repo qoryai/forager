@@ -64,6 +64,10 @@ A credential's secret comes from one of three sources:
 - The gateway keeps each secret in memory, outside the container.
 - For the hosts a credential is for, the proxy ends the container's TLS itself. It uses
   an authority made for the run. The authority's key never leaves the gateway.
+- The authority's certificate has name constraints: it is good only for the hosts the
+  proxy terminates when the run starts, so a program that checks them rejects any other
+  host's certificate made with the key. A reload that selects a credential for another
+  host fails; start a new run for it.
 - A placeholder has the value `qory-sets-the-credential-outside-the-enclosure`. The proxy
   replaces what the program sends.
 - The record lists each credential the run uses, by name. No event contains a

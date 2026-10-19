@@ -443,18 +443,19 @@ func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	ca, err := proxy.NewCA("test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	roots := x509.NewCertPool()
 	roots.AddCert(origin.Certificate())
 	p.TrustUpstream(roots)
 	rejected := 0
-	p.Terminate(ca, []proxy.Credential{{
+	creds := []proxy.Credential{{
 		Name: "product", Hosts: []string{host}, Scheme: "basic", Username: "x-access-token", Paths: []string{"/acme/shop/*", "/graphql"},
 		Token: func() string { return "the-token" }, Rejected: func() { rejected++ },
-	}}, nil, nil)
+	}}
+	ca, err := proxy.NewCA("test", p.Terminating(creds, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Terminate(ca, creds, nil, nil)
 
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())
@@ -566,15 +567,15 @@ func TestSetPolicySwapsTheCredentialsWithThePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	ca, err := proxy.NewCA("test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	roots := x509.NewCertPool()
 	roots.AddCert(origin.Certificate())
 	p.TrustUpstream(roots)
 	cred := func(name, token string) []proxy.Credential {
 		return []proxy.Credential{{Name: name, Hosts: []string{host}, Scheme: "bearer", Token: func() string { return token }}}
+	}
+	ca, err := proxy.NewCA("test", p.Terminating(cred("first", "token-one"), nil, nil))
+	if err != nil {
+		t.Fatal(err)
 	}
 	p.Terminate(ca, cred("first", "token-one"), nil, nil)
 	if !p.Terminates() {
@@ -645,17 +646,18 @@ func TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer p.Close()
-			ca, err := proxy.NewCA("test")
-			if err != nil {
-				t.Fatal(err)
-			}
 			roots := x509.NewCertPool()
 			roots.AddCert(model.Certificate())
 			p.TrustUpstream(roots)
-			p.Terminate(ca, []proxy.Credential{{
+			creds := []proxy.Credential{{
 				Name: "model", Hosts: []string{host}, Scheme: c.scheme, Header: c.header, Paths: []string{"/v1/*"},
 				Token: func() string { return c.key },
-			}}, nil, nil)
+			}}
+			ca, err := proxy.NewCA("test", p.Terminating(creds, nil, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Terminate(ca, creds, nil, nil)
 
 			trusted := x509.NewCertPool()
 			trusted.AppendCertsFromPEM(ca.PEM())
@@ -875,15 +877,16 @@ func TestNodePathsNarrowThePolicysPaths(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer p.Close()
-			ca, err := proxy.NewCA("test")
-			if err != nil {
-				t.Fatal(err)
-			}
 			roots := x509.NewCertPool()
 			roots.AddCert(origin.Certificate())
 			p.TrustUpstream(roots)
 			p.NodePaths(map[string][]string{host: {"/repos/acme/*", "/user"}, "localhost": {"/only-the-node/*"}})
-			p.Terminate(ca, nil, map[string][]string{host: {"/repos/*", "/user"}}, nil)
+			paths := map[string][]string{host: {"/repos/*", "/user"}}
+			ca, err := proxy.NewCA("test", p.Terminating(nil, paths, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Terminate(ca, nil, paths, nil)
 			if got := strings.Join(p.Terminated(), " "); !strings.Contains(got, host) || !strings.Contains(got, "localhost") {
 				t.Errorf("terminated %q", got)
 			}
@@ -945,14 +948,15 @@ func TestCloseClosesEveryTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ca, err := proxy.NewCA("test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	roots := x509.NewCertPool()
 	roots.AddCert(tlsOrigin.Certificate())
 	p.TrustUpstream(roots)
-	p.Terminate(ca, nil, map[string][]string{"localhost": {"/*"}}, nil)
+	paths := map[string][]string{"localhost": {"/*"}}
+	ca, err := proxy.NewCA("test", p.Terminating(nil, paths, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Terminate(ca, nil, paths, nil)
 	open := func(target string) net.Conn {
 		c, err := net.Dial("tcp", p.Addr())
 		if err != nil {
