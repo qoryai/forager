@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,7 +99,10 @@ func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 		sp.Wall, sp.Image = w, "example.com/agent:1"
 		f := settingsIn(t, &sp, sp.Dir)
 		err := runErr(sp)
-		if err == nil || !strings.Contains(err.Error(), "runtime claude: settings "+f+": it lies in "+sp.Dir+", which a walled run can write") {
+		want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the settings as a JSON object. " +
+			"This launch passes --settings " + f + ", which lies in " + sp.Dir + ", a place a walled run can write, " +
+			"so the run does not start."
+		if err == nil || err.Error() != want {
 			t.Errorf("the run: %v", err)
 		}
 		if w.req.RunID != "" || w.wrapped {
@@ -110,7 +114,7 @@ func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 		mount := t.TempDir()
 		sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: mount}}
 		settingsIn(t, &sp, mount)
-		if err := runErr(sp); err == nil || !strings.Contains(err.Error(), "it lies in "+mount+",") {
+		if err := runErr(sp); err == nil || !strings.Contains(err.Error(), ", which lies in "+mount+", a place a walled run can write,") {
 			t.Errorf("the run: %v", err)
 		}
 	})
@@ -129,7 +133,7 @@ func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 		place := t.TempDir()
 		sp.Written = []string{place}
 		settingsIn(t, &sp, place)
-		if err := runErr(sp); err == nil || !strings.Contains(err.Error(), "it lies in "+place+",") {
+		if err := runErr(sp); err == nil || !strings.Contains(err.Error(), ", which lies in "+place+", a place a walled run can write,") {
 			t.Errorf("the run: %v", err)
 		}
 	})
@@ -158,8 +162,8 @@ func TestAWalledLaunchThatPassesSettingsTwiceIsNoRun(t *testing.T) {
 	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Args = []string{"--settings", first, "--settings=" + second}
-	want := "runtime claude: This launch passes --settings more than once, and Claude Code reads only the last one, " +
-		"so the run does not start. Pass one --settings file."
+	want := "runtime claude: Pass one --settings file. This launch passes --settings more than once, " +
+		"and Claude Code reads only the last one, so the run does not start."
 	if err := runErr(sp); err == nil || err.Error() != want {
 		t.Errorf("the run: %v, want %q", err, want)
 	}
@@ -188,7 +192,9 @@ func TestASettingsFileInAnotherWalledRunsBindIsNoRun(t *testing.T) {
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 		}
 		sp.Args = []string{"--settings", f}
-		want := "runtime claude: settings " + f + ": it lies in " + resolved + ", which a walled run can write"
+		want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the settings as a JSON object. " +
+			"This launch passes --settings " + f + ", which lies in " + resolved + ", a place a walled run can write, " +
+			"so the run does not start."
 		if err := runErr(sp); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("walled %v: %v", walled, err)
 		}
@@ -215,8 +221,9 @@ func TestASettingsFileInABindThatRecordsNoModeIsNoRun(t *testing.T) {
 	rebind(t, file, 0, func(b map[string]any) { delete(b, "writable") })
 	sp := spec(t, "FAKE_EXIT=0")
 	sp.Args = []string{"--settings", f}
-	want := "runtime claude: settings " + f + ": it lies in " + resolved(t, m) +
-		", which a walled run can write"
+	want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the settings as a JSON object. " +
+		"This launch passes --settings " + f + ", which lies in " + resolved(t, m) + ", a place a walled run can write, " +
+		"so the run does not start."
 	if err := runErr(sp); err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("a bind that records no mode: %v", err)
 	}
@@ -265,7 +272,9 @@ func TestAPathWithADotDotIsNotReadable(t *testing.T) {
 				RunDir:   t.TempDir(),
 				Readable: session.Readable([]string{ws}),
 			})
-			if want := "settings " + path + `: it has a ".." part`; err == nil || err.Error() != want {
+			want := `Pass the path ` + path + ` without "..". This launch passes --settings ` + path +
+				`, and the path has a ".." part, so the run does not start.`
+			if err == nil || err.Error() != want {
 				t.Errorf("the installer: %v, want %q", err, want)
 			}
 		})
@@ -298,4 +307,281 @@ func TestARunWithoutASettingsFileLeavesTheRegistryAlone(t *testing.T) {
 	if err := runErr(sp); err == nil || !strings.Contains(err.Error(), "the registry of walled runs") {
 		t.Errorf("a run with a settings file: %v", err)
 	}
+}
+
+// TestADirectoryThatHoldsAWrittenPlaceIsNotReadable pins the check of a directory a
+// runtime passes to its program, in both directions: it is refused as a file is, when
+// it lies in or is reached through a place a walled run could have written, and also
+// when such a place is it or lies inside it, as given or through links, by whole names
+// and regardless of case.
+func TestADirectoryThatHoldsAWrittenPlaceIsNotReadable(t *testing.T) {
+	root := t.TempDir()
+	p := func(rel string) string { return filepath.Join(root, rel) }
+	mkdirs(t, p("home/p/work"), p("home/q"), p("ws"), p("safe"), p("home/p2"))
+	// into leads into the place from outside it, and home-link is a link a directory
+	// is passed through.
+	symlink(t, p("ws"), p("safe/into"))
+	symlink(t, p("home/p"), p("home-link"))
+	for _, c := range []struct {
+		name, place, dir, how string
+	}{
+		{"a place inside the directory", p("home/p/work"), p("home/p"), "contains"},
+		{"a place deeper inside", p("home/p/work/later"), p("home"), "contains"},
+		{"a place inside, in another case", p("Home/P/Work"), p("home/p"), "contains"},
+		{"the directory passed in another case", p("home/p/work"), p("HOME/P"), "contains"},
+		{"a place inside, the directory through a link", p("home/p/work"), p("home-link"), "contains"},
+		{"a place inside, through a link", p("home-link/work"), p("home/p"), "contains"},
+		{"the filesystem's root holds every place", p("ws"), "/", "contains"},
+		{"the directory is the place", p("ws"), p("ws"), "lies in"},
+		{"the directory lies in the place", p("home"), p("home/q"), "lies in"},
+		{"the directory is reached through the place", p("safe"), p("safe/into"), "lies in"},
+		{"a link to the place", p("ws"), p("safe/into"), "lies in"},
+		{"a sibling with the place as prefix", p("home/p"), p("home/p2"), ""},
+		{"a directory beside the place", p("home/p/work"), p("home/q"), ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := session.ReadableDir([]string{c.place})(c.dir)
+			if c.how == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			var written *runtimes.WrittenError
+			if !errors.As(err, &written) || written.How != c.how || written.Place != c.place {
+				t.Errorf("ReadableDir(%q) for %q: %v, want it %s the place", c.dir, c.place, err, c.how)
+			}
+		})
+	}
+	want, err := filepath.EvalSymlinks(p("home/p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := session.ReadableDir(nil)(p("home-link")); err != nil || got != want {
+		t.Errorf("no places: %q, %v, want %q", got, err, want)
+	}
+}
+
+// TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun pins that a walled run whose launch
+// passes --mcp-config with a file in its workspace, or reached through a link in it,
+// stops before the wall is prepared, with the runtime's text; and that a file outside
+// every such place is passed as a copy in the run directory.
+func TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun(t *testing.T) {
+	t.Run("in the workspace", func(t *testing.T) {
+		w := &openWall{}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		f := filepath.Join(sp.Dir, "mcp.json")
+		if err := os.WriteFile(f, []byte(`{"mcpServers":{}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sp.Args = append(sp.Args, "--mcp-config", f)
+		want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the servers as a JSON string. " +
+			"This launch passes --mcp-config " + f + ", which lies in " + sp.Dir +
+			", a place a walled run can write, so the run does not start."
+		if err := runErr(sp); err == nil || err.Error() != want {
+			t.Errorf("the run: %v, want %q", err, want)
+		}
+		if w.req.RunID != "" || w.wrapped {
+			t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+		}
+	})
+	t.Run("reached through the workspace", func(t *testing.T) {
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		outside := t.TempDir()
+		if err := os.WriteFile(filepath.Join(outside, "mcp.json"), []byte(`{}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// into, outside the workspace, leads into it, and out, in it, leads out of it.
+		safe := t.TempDir()
+		symlink(t, sp.Dir, filepath.Join(safe, "into"))
+		symlink(t, outside, filepath.Join(sp.Dir, "out"))
+		f := filepath.Join(safe, "into", "out", "mcp.json")
+		sp.Args = append(sp.Args, "--mcp-config="+f)
+		want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the servers as a JSON string. " +
+			"This launch passes --mcp-config " + f + ", which is reached through " + sp.Dir +
+			", a place a walled run can write, so the run does not start."
+		if err := runErr(sp); err == nil || err.Error() != want {
+			t.Errorf("the run: %v, want %q", err, want)
+		}
+	})
+	t.Run("outside every written place", func(t *testing.T) {
+		t.Setenv("QORY_TEST_HOST_ONLY", "1")
+		sp := spec(t, "FAKE_EXIT=0")
+		mount := t.TempDir()
+		sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: mount, ReadOnly: true}}
+		f := filepath.Join(mount, "mcp.json")
+		if err := os.WriteFile(f, []byte(`{"mcpServers":{}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sp.Args = append(sp.Args, "--mcp-config", f)
+		res, err := runWithSettingsEnv(t, sp)
+		if err != nil || res.ExitCode != 0 {
+			t.Fatalf("the run: %+v, %v", res, err)
+		}
+		if b, err := os.ReadFile(filepath.Join(res.Dir, "mcp-config-1.json")); err != nil || string(b) != `{"mcpServers":{}}` {
+			t.Errorf("the copy: %s, %v", b, err)
+		}
+	})
+}
+
+// qoryHome makes a harness home as qory renders one for Claude Code in a new directory:
+// a plugin whose skill and command are links to the module's files under module, an
+// agent copied, the settings, the servers and the launch's instructions. It returns the
+// home and the launch's arguments, qory's four flags and --setting-sources.
+func qoryHome(t *testing.T, module string) (string, []string) {
+	t.Helper()
+	home := t.TempDir()
+	write := func(path, content string) {
+		t.Helper()
+		mkdirs(t, filepath.Dir(path))
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(module, "skills", "review", "SKILL.md"), "# review")
+	write(filepath.Join(module, "commands", "ship.md"), "# ship")
+	plugin := filepath.Join(home, "plugin")
+	write(filepath.Join(plugin, ".claude-plugin", "plugin.json"), `{"name":"harness"}`)
+	write(filepath.Join(plugin, "agents", "reviewer.md"), "# reviewer")
+	mkdirs(t, filepath.Join(plugin, "skills"), filepath.Join(plugin, "commands"))
+	symlink(t, filepath.Join(module, "skills", "review"), filepath.Join(plugin, "skills", "review"))
+	symlink(t, filepath.Join(module, "commands", "ship.md"), filepath.Join(plugin, "commands", "ship.md"))
+	write(filepath.Join(home, "settings.json"), `{"permissions":{"allow":["Bash"]},"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"echo existing"}]}]}}`)
+	write(filepath.Join(home, "mcp.json"), `{"mcpServers":{"docs":{"command":"/usr/bin/true"}}}`)
+	write(filepath.Join(home, "launch", "CLAUDE.md"), "# launch")
+	return home, []string{
+		"--plugin-dir", plugin,
+		"--settings", filepath.Join(home, "settings.json"),
+		"--mcp-config", filepath.Join(home, "mcp.json"),
+		"--append-system-prompt-file", filepath.Join(home, "launch", "CLAUDE.md"),
+		"--setting-sources", "user",
+	}
+}
+
+// TestAQoryShapedWalledLaunchStarts pins that a walled launch as qory composes one
+// starts when the harness home lies outside the checkout, bound read-only, and its
+// module lies outside the checkout too: the servers and the launch's instructions are
+// passed as copies in the run directory, and the plugin as it is.
+func TestAQoryShapedWalledLaunchStarts(t *testing.T) {
+	t.Setenv("QORY_TEST_HOST_ONLY", "1")
+	sp := spec(t, "FAKE_EXIT=0")
+	home, args := qoryHome(t, t.TempDir())
+	sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: home, ReadOnly: true}}
+	sp.Args = args
+	res, err := runWithSettingsEnv(t, sp)
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("the run: %+v, %v", res, err)
+	}
+	b, err := os.ReadFile(filepath.Join(res.Dir, "mcp-config-1.json"))
+	if want, _ := os.ReadFile(filepath.Join(home, "mcp.json")); err != nil || string(b) != string(want) {
+		t.Errorf("the copy of the servers: %s, %v", b, err)
+	}
+	b, err = os.ReadFile(filepath.Join(res.Dir, "append-system-prompt-file-1.md"))
+	if want, _ := os.ReadFile(filepath.Join(home, "launch", "CLAUDE.md")); err != nil || string(b) != string(want) {
+		t.Errorf("the copy of the launch's instructions: %s, %v", b, err)
+	}
+}
+
+// TestAWalledLaunchsPromptFileOrProjectConfigRootIsNoRun pins that a walled run whose
+// launch passes --append-system-prompt-file with a file in its workspace, or passes
+// --project-config-root, stops before the wall is prepared, with the runtime's text.
+func TestAWalledLaunchsPromptFileOrProjectConfigRootIsNoRun(t *testing.T) {
+	t.Run("a prompt file in the workspace", func(t *testing.T) {
+		w := &openWall{}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		f := filepath.Join(sp.Dir, "p.md")
+		if err := os.WriteFile(f, []byte("# prompt"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sp.Args = append(sp.Args, "--append-system-prompt-file", f)
+		want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the text with " +
+			"--append-system-prompt. This launch passes --append-system-prompt-file " + f + ", which lies in " + sp.Dir +
+			", a place a walled run can write, so the run does not start."
+		if err := runErr(sp); err == nil || err.Error() != want {
+			t.Errorf("the run: %v, want %q", err, want)
+		}
+		if w.req.RunID != "" || w.wrapped {
+			t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+		}
+	})
+	t.Run("--project-config-root", func(t *testing.T) {
+		w := &openWall{}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		sp.Args = append(sp.Args, "--project-config-root", sp.Dir)
+		want := "runtime claude: Remove --project-config-root from the walled launch. This launch passes " +
+			"--project-config-root, and Claude Code reads project settings, .mcp.json and the .claude trees from that " +
+			"directory, which Forager does not check, so the run does not start."
+		if err := runErr(sp); err == nil || err.Error() != want {
+			t.Errorf("the run: %v, want %q", err, want)
+		}
+		if w.req.RunID != "" || w.wrapped {
+			t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+		}
+	})
+}
+
+// TestAQoryShapedWalledLaunchWithAModuleInTheCheckoutIsNoRun pins that a walled launch
+// as qory composes one, whose module lies in the checkout, as source: {path: ./harness}
+// puts it, does not start: the plugin's skill is a link into the workspace.
+func TestAQoryShapedWalledLaunchWithAModuleInTheCheckoutIsNoRun(t *testing.T) {
+	w := &openWall{}
+	sp := spec(t, "FAKE_EXIT=0")
+	home, args := qoryHome(t, filepath.Join(sp.Dir, "harness"))
+	sp.Wall, sp.Image, sp.Mounts = w, "example.com/agent:1", []wall.Mount{{Path: home, ReadOnly: true}}
+	sp.Args = args
+	plugin := filepath.Join(home, "plugin")
+	want := "runtime claude: Replace the link " + filepath.Join(plugin, "commands", "ship.md") + " with a copy, " +
+		"or move what it leads to out of " + sp.Dir + ". This launch passes --plugin-dir " + plugin +
+		", and that link leads into " + sp.Dir + ", which a walled run can write, so the run does not start."
+	if err := runErr(sp); err == nil || err.Error() != want {
+		t.Errorf("the run: %v, want %q", err, want)
+	}
+	if w.req.RunID != "" || w.wrapped {
+		t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+	}
+}
+
+// TestAWalledLaunchsAddDirIsJudgedByItsPlace pins that a walled launch's --add-dir in
+// the workspace is refused with the runtime's text, and that one in a read-only mount
+// starts.
+func TestAWalledLaunchsAddDirIsJudgedByItsPlace(t *testing.T) {
+	t.Run("in the workspace", func(t *testing.T) {
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		ref := mkdirs(t, filepath.Join(sp.Dir, "ref"))
+		sp.Args = append(sp.Args, "--add-dir", ref)
+		want := "runtime claude: Remove --add-dir " + ref + ", or add a directory no walled run writes. " +
+			"This launch passes --add-dir " + ref + ", and that directory lies in " + sp.Dir +
+			", which a walled run can write, so the run does not start."
+		if err := runErr(sp); err == nil || err.Error() != want {
+			t.Errorf("the run: %v, want %q", err, want)
+		}
+	})
+	t.Run("a read-only mount", func(t *testing.T) {
+		t.Setenv("QORY_TEST_HOST_ONLY", "1")
+		sp := spec(t, "FAKE_EXIT=0")
+		mount := t.TempDir()
+		mkdirs(t, filepath.Join(mount, ".claude"))
+		if err := os.WriteFile(filepath.Join(mount, ".claude", "settings.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: mount, ReadOnly: true}}
+		sp.Args = append(sp.Args, "--add-dir", mount)
+		if res, err := runWithSettingsEnv(t, sp); err != nil || res.ExitCode != 0 {
+			t.Errorf("the run: %+v, %v", res, err)
+		}
+	})
+	t.Run("a writable mount", func(t *testing.T) {
+		sp := spec(t, "FAKE_EXIT=0")
+		mount := t.TempDir()
+		sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: mount}}
+		sp.Args = append(sp.Args, "--add-dir", mount)
+		if err := runErr(sp); err == nil || !strings.Contains(err.Error(), "and that directory lies in "+mount+",") {
+			t.Errorf("the run: %v", err)
+		}
+	})
 }

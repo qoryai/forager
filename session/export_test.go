@@ -94,3 +94,9 @@ func SetMachineBundles(paths []string) (restore func()) {
 	machineBundles = func() []string { return paths }
 	return func() { machineBundles = old }
 }
+
+// ReadableDir is what a runtime is given to ask of a directory before it passes it to
+// the program, for the places a walled run could have written.
+func ReadableDir(places []string) func(string) (string, error) {
+	return readableDir(func() ([]string, error) { return places, nil })
+}
