@@ -87,6 +87,7 @@ func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string,
 				return d.DialContext(ctx, "unix", sock)
 			},
 			DisableCompression: true,
+			IdleConnTimeout:    idleTimeout,
 		}
 	}
 	p.term.Store(&terminator{p: p, ca: ca, creds: creds, paths: paths, node: p.node, tools: tools})
@@ -450,13 +451,16 @@ func (c *Credential) storedHeader() (string, string, bool) {
 // against this machine's roots, dialled through the proxy's guarded dialler.
 func (p *Proxy) upstream() http.RoundTripper {
 	p.upOnce.Do(func() {
-		p.up = &unmark{&http.Transport{Proxy: nil, DialContext: p.dialHost, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS}}
+		p.up = &unmark{&http.Transport{Proxy: nil, DialContext: p.dialHost, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS, IdleConnTimeout: idleTimeout}}
 	})
 	return p.up
 }
 
 // unmark takes the proxy's own mark off a request before it leaves.
 type unmark struct{ rt http.RoundTripper }
+
+// CloseIdleConnections closes the transport's idle connections.
+func (u *unmark) CloseIdleConnections() { closeIdle(u.rt) }
 
 // RoundTrip sends the request on without the mark.
 func (u *unmark) RoundTrip(r *http.Request) (*http.Response, error) {

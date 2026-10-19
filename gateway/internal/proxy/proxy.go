@@ -367,7 +367,26 @@ func (p *Proxy) Close() error {
 		err = p.srv.Close()
 	}
 	p.wg.Wait()
+	// No pooled connection outlives the run: one to a terminated host may have carried
+	// the run's credential. A connection that goes idle later is closed as it does.
+	closeIdle(p.upstream())
+	if t := p.term.Load(); t != nil {
+		for _, tl := range t.tools {
+			closeIdle(tl.transport)
+		}
+	}
 	return err
+}
+
+// idleTimeout is how long a pooled upstream connection waits for the next request
+// before it is closed; the run's end closes every idle one at once ([Proxy.Close]).
+const idleTimeout = 90 * time.Second
+
+// closeIdle closes rt's idle connections, when it has any to close.
+func closeIdle(rt http.RoundTripper) {
+	if c, ok := rt.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 // Guard makes the proxy refuse the link-local range and the cloud metadata addresses
@@ -695,7 +714,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, h := range hopByHop {
 		out.Header.Del(h)
 	}
-	resp, err := p.transport().RoundTrip(out)
+	// The transport is the request's alone, and its connection closes once the request
+	// ends: deferred before the body's close, it runs after it.
+	tr := p.transport()
+	defer tr.CloseIdleConnections()
+	resp, err := tr.RoundTrip(out)
 	if err != nil {
 		d = failed(d, err)
 		p.observe(d)
@@ -981,5 +1004,5 @@ var hopByHop = []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-A
 
 // transport forwards plain requests upstream, directly and never through another proxy.
 func (p *Proxy) transport() *http.Transport {
-	return &http.Transport{Proxy: nil, DialContext: p.dialHost, DisableCompression: true}
+	return &http.Transport{Proxy: nil, DialContext: p.dialHost, DisableCompression: true, IdleConnTimeout: idleTimeout}
 }

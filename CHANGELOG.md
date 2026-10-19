@@ -385,6 +385,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- When a run ends, the gateway's proxy closes every idle connection to a host it
+  terminates, so a connection that carried the run's credential does not outlive the
+  run. While the run goes on, an upstream connection idle for 90 seconds closes, and a
+  plain HTTP request's upstream connection closes when the request ends. Before, these
+  connections stayed open until the host closed them.
 - More of the gateway's messages and event members printed or sent a value as written,
   and now print or send a phrase in place of one that contains `qak_` or `qrk_` in any
   case. The name's phrase: an image in `image_unknown` and `image_not_allowed`, their
