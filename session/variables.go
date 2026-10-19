@@ -325,8 +325,10 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 // without a wall, or whose answer has no credential_hosts, is not checked: its key may
 // come from what the session does not see, such as a login of the developer's, a
 // mount or an image. The refusal is [refusal.ModelKeyMissing] with the model keys'
-// variables.
-func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch) error {
+// variables. Its text offers a value only of a model key's variable that is not among
+// placeholderNames or a credential's placeholders, since a value of one of those is
+// refused as [refusal.PlaceholderConflict].
+func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, placeholderNames []string, vars variables.Resolved, prepared runtimes.Launch) error {
 	if spec.Wall == nil || len(credentials) == 0 {
 		return nil
 	}
@@ -363,13 +365,31 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	if slices.ContainsFunc(keys, func(k string) bool { return reaches[k] != "" }) {
 		return nil
 	}
+	// A value the run may pass: one of a variable no credential sets a placeholder in.
+	var free []string
+	for _, k := range keys {
+		if !slices.Contains(placeholderNames, k) && !slices.ContainsFunc(credentials, func(c server.LinkCredentialHosts) bool { return slices.Contains(c.Placeholders, k) }) {
+			free = append(free, k)
+		}
+	}
+	values := ""
+	switch {
+	case len(free) == len(keys):
+		values = "one of these variables"
+	case len(free) > 0:
+		values = orList(free, ", ", " or ")
+	}
 	endpoint := places.Endpoint.Variable
 	if v := reaches[endpoint]; endpoint != "" && v != "" {
 		host, ok := policy.EndpointHost(v)
 		if !ok {
+			give := ""
+			if values != "" {
+				give = ", or give the run a value of " + values + " from the run or the machine"
+			}
 			return refusal.New(refusal.ModelKeyMissing, keys,
-				"set %s to an https URL with a host, or give the run a value of %s from the run or the machine: the value of %s that reaches the runtime %s has no host that Forager reads, so no credential's placeholder counts as its model key",
-				endpoint, orList(keys, ", ", " or "), endpoint, rt.Name())
+				"set %s to an https URL, with no user name or password, whose host a credential with a placeholder of %s covers%s: the value of %s that reaches the runtime %s has no host that Forager reads, so no credential counts as its model key",
+				endpoint, orList(keys, ", ", " or "), give, endpoint, rt.Name())
 		}
 		hosts = []string{host}
 	}
@@ -382,7 +402,11 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 			return nil
 		}
 	}
+	give := ""
+	if values != "" {
+		give = ", or a value of " + values + " from the run or the machine"
+	}
 	return refusal.New(refusal.ModelKeyMissing, keys,
-		"give the run a model key for the runtime %s: a credential for %s with a placeholder of %s, on this machine or in Qory Apiary's run configuration, or a value of one of these variables from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for %s",
-		rt.Name(), shownHosts, orList(keys, ", ", " or "), shownHosts)
+		"give the run a model key for the runtime %s: a credential for %s with a placeholder of %s, on this machine or in Qory Apiary's run configuration%s; the gateway holds credentials for the run, and none of them is a model key for %s",
+		rt.Name(), shownHosts, orList(keys, ", ", " or "), give, shownHosts)
 }

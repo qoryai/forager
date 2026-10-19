@@ -844,10 +844,13 @@ one of these holds:
 
 The runtime's model host is the host of the value of its endpoint variable that reaches
 it, or, when none does, a host of a model key's declaration: `api.anthropic.com` for
-Claude Code. A value of the endpoint variable that the endpoint rule leaves out does not
-reach the runtime, so the declaration's host counts. When the value that reaches it has no
-host `policy.EndpointHost` reads, such as an `http` URL, no credential covers it, and the
-refusal says to set the endpoint variable to an `https` URL with a host. A run without a wall, or whose answer has no `credential_hosts`, is not
+Claude Code. A value that the endpoint rule leaves out does not reach the runtime: the
+next value that reaches it counts, or, when none does, the declaration's host. When the
+value that reaches it has no host `policy.EndpointHost` reads, such as an `http` URL or
+one with a user name, no credential covers it, and the refusal says to set the endpoint
+variable to an `https` URL, with no user name or password, whose host a model credential
+covers. The refusal offers a value only of a model key's variable that no credential sets
+a placeholder in, since a value of that variable is `placeholder_conflict`. A run without a wall, or whose answer has no `credential_hosts`, is not
 checked: its runtime may use a login the session does not see, such as the developer's,
 one in a mount or one in the image. The refusal is posted on the link, as the session's
 other refusals are.

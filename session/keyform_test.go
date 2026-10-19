@@ -273,7 +273,8 @@ func (p *recordsPrepare) Model() (runtimes.ModelPlaces, bool) {
 // runtime's model host, api.anthropic.com for Claude Code or the host of the
 // endpoint's value that reaches the runtime, or a value the run or the machine passes
 // for one of the variables. A walled run without credential_hosts, and a run without a
-// wall, are not checked.
+// wall, are not checked. A model key for another host is in
+// [TestTheModelKeyRefusalNamesTheFix].
 func TestAWalledRunNeedsAModelKey(t *testing.T) {
 	forge := sealed("forge", "api.github.com", "", "", "GITHUB_TOKEN")
 	for _, tc := range []struct {
@@ -285,7 +286,6 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 	}{
 		{"walled, no model key", true, []map[string]any{forge}, nil, true},
 		{"walled, a model credential with no placeholder", true, []map[string]any{forge, sealed("model", "api.anthropic.com", "", "")}, nil, true},
-		{"walled, a model key for another host", true, []map[string]any{sealed("model", "api.model.example", "", "", apiKeyVariable)}, nil, true},
 		{"unwalled", false, []map[string]any{forge}, nil, false},
 		{"walled, no credential_hosts", true, nil, nil, false},
 		{"walled, a machine credential", true, modelAndForge, nil, false},
@@ -343,24 +343,75 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 // runtime sends its model requests to. A value of the endpoint's variable with no host
 // Forager reads, here an http URL the run inherits, is covered by no credential, and
 // the text names the endpoint as the fix, not a credential the run has. A value the
-// endpoint rule leaves out does not reach the runtime: the descriptor's host counts,
-// and a model credential for it is the run's model key.
+// endpoint rule leaves out does not reach the runtime: the inherited value counts, or,
+// when there is none, the descriptor's host, and a model credential for it is the
+// run's model key. The text offers a value only of a variable that no credential sets
+// a placeholder in.
 func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 	forge := sealed("forge", "api.github.com", "", "", "GITHUB_TOKEN")
-	t.Run("an endpoint with no host Forager reads", func(t *testing.T) {
-		sp, g := specGateway(t, "FAKE_EXIT=0", endpointVariable+"=http://litellm.internal:4000")
-		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-		answeringWith(g, []map[string]any{sealed("model", "litellm.internal", "", "", apiKeyVariable)}, nil)
-		_, err := session.Run(context.Background(), sp)
-		var r *session.Refusal
-		if !errors.As(err, &r) || r.Code != "model_key_missing" || !slices.Equal(r.Names, modelKeys) {
-			t.Fatalf("%v, want model_key_missing for %q", err, modelKeys)
-		}
-		want := "set ANTHROPIC_BASE_URL to an https URL with a host, or give the run a value of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential's placeholder counts as its model key"
-		if r.Detail != want {
-			t.Errorf("the refusal reads\n %q\nwant\n %q", r.Detail, want)
-		}
-	})
+	const keyFix = "a credential with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN"
+	for _, tc := range []struct {
+		what         string
+		inherited    string
+		run          []string
+		hosts        []map[string]any
+		placeholders []string
+		want         string
+	}{
+		{
+			what:      "an endpoint with no host Forager reads",
+			inherited: "http://litellm.internal:4000",
+			hosts:     []map[string]any{forge},
+			want:      "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers, or give the run a value of one of these variables from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
+		},
+		{
+			what:         "an endpoint with no host Forager reads and a model credential's placeholder",
+			inherited:    "http://litellm.internal:4000",
+			hosts:        []map[string]any{sealed("model", "litellm.internal", "", "", apiKeyVariable)},
+			placeholders: []string{apiKeyVariable},
+			want:         "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers, or give the run a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
+		},
+		{
+			// The run's https value is not covered, so the endpoint rule leaves it
+			// out, and the inherited value is the one that reaches the runtime.
+			what:      "an inherited endpoint with no host Forager reads and a dropped run value",
+			inherited: "http://litellm.internal:4000",
+			run:       []string{endpointVariable + "=https://evil.example"},
+			hosts:     modelAndForge,
+			want:      "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers, or give the run a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
+		},
+		{
+			what:         "a model credential for another host",
+			hosts:        []map[string]any{sealed("model", "llm.example", "", "", apiKeyVariable)},
+			placeholders: []string{apiKeyVariable},
+			want:         "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+		},
+		{
+			what:         "every model key a placeholder of a credential for another host",
+			hosts:        []map[string]any{sealed("model", "llm.example", "", "", modelKeys...)},
+			placeholders: modelKeys,
+			want:         "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+		},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			env := []string{"FAKE_EXIT=0"}
+			if tc.inherited != "" {
+				env = append(env, endpointVariable+"="+tc.inherited)
+			}
+			sp, g := specGateway(t, env...)
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			sp.Variables.Run = tc.run
+			answeringWith(g, tc.hosts, tc.placeholders)
+			_, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "model_key_missing" || !slices.Equal(r.Names, modelKeys) {
+				t.Fatalf("%v, want model_key_missing for %q", err, modelKeys)
+			}
+			if r.Detail != tc.want {
+				t.Errorf("the refusal reads\n %q\nwant\n %q", r.Detail, tc.want)
+			}
+		})
+	}
 	for _, tc := range []struct {
 		what    string
 		hosts   []map[string]any
