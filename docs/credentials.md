@@ -24,7 +24,8 @@ For a credential that stays outside:
 ## How it works
 
 The machine defines credentials. A run's policy selects among them by name, and defines
-none.
+none. A run configuration from Qory Apiary may also list credentials whose values Qory
+Apiary stores; see [From Qory Apiary](#from-qory-apiary).
 
 A credential's secret comes from one of three sources:
 
@@ -44,6 +45,20 @@ A credential's secret comes from one of three sources:
 
 In `qory`, the `gateway.credentials` section of `forager.yaml` defines them. See
 [qory's docs](https://github.com/qoryai/qory/blob/main/docs/run.md#credentials-the-agent-never-has).
+
+## From Qory Apiary
+
+A run configuration may list `credentials`: each a name, its hosts, how its value is set
+and its placeholders, with no value. Qory Apiary stores the values.
+
+- The run needs a wall. Without one it does not start (`wall_required`).
+- When the run starts, the gateway fetches the values once, sealed to its access key,
+  and opens them. The values stay outside the container.
+- On a host that one of these credentials is for, its value replaces the machine's
+  credential, such as the model key in `forager.yaml`.
+- The credentials are fixed for the run. A reload that changes them fails, and the run
+  keeps its policy.
+- Without `credentials`, the run gets the machine's credentials as before.
 
 ## Tools
 

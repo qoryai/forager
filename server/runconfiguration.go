@@ -26,7 +26,9 @@ const MaxVariableValue = 4096
 // readRunConfiguration reads a run configuration document: through encoding/json/v2
 // first, which refuses a member name that appears twice and invalid UTF-8, then its
 // image ([CheckConfigurationImage]), then against the schema, then against the limits
-// the schema cannot state. Every refusal is a refusal with
+// the schema cannot state: a variable's size, and a credential's name twice or its
+// header one [ReservedHeader] reports. It sets [RunConfiguration.Computed] to the
+// digest of body. Every refusal is a refusal with
 // [refusal.RunConfigurationInvalid] whose message contains where in the document it is
 // and which rule refused it, and never a value but the image's: a variable's value may
 // be anything the server holds, and no decoder's message is wrapped, since those quote

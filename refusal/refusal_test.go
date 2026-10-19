@@ -52,15 +52,19 @@ func TestByGateway(t *testing.T) {
 
 // TestNeedsWallSaysWhatARunAlwaysSaid pins the text of a run without a wall whose policy
 // selects what needs one, rebuilt from the link's names word for word: the credentials'
-// before the image's.
+// before the image's; with server_credentials among them, the text for a run
+// configuration's credentials.
 func TestNeedsWallSaysWhatARunAlwaysSaid(t *testing.T) {
 	const selects = "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"
+	const server = "run it with a wall: the run configuration from Qory Apiary has credentials, and the gateway sets their values only for a run behind a wall"
 	for names, want := range map[string]string{
 		"credentials":            selects,
 		"tools":                  selects,
 		"paths":                  selects,
 		"credentials,image=base": selects,
 		"image=base":             `the policy selects the image "base", which needs a wall: without one the runtime is this machine's process`,
+		"server_credentials":     server,
+		"server_credentials,credentials,image=base": server,
 	} {
 		if got := (&NeedsWall{Names: strings.Split(names, ",")}).Error(); got != want {
 			t.Errorf("%s: %s", names, got)

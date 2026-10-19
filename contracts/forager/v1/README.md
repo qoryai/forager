@@ -411,7 +411,9 @@ included: on a host that ignores case this denies a spelling the host accepts,
 never the reverse, so whoever writes a path writes it as the host does. A path
 that could be read two ways is denied in either mode, with the rule
 `wall:ambiguous-path`: an encoded slash, backslash, dot or percent sign, a backslash, an
-empty segment, a dot segment. Under `observe` a path no entry matches is recorded as
+empty segment, a dot segment. On a host that gets a credential from the server, a
+`TRACE` or `TRACK` is denied in either mode, with the rule `wall:echo-method`
+(§Credentials, From the server). Under `observe` a path no entry matches is recorded as
 allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
 as allowed with an empty `rule`, but the credential is set only where the credential's
 paths match: observe mode sends no secret to a path nobody configured. The host
@@ -556,11 +558,38 @@ subscription login. The runtime's descriptor is to use it with `auth` to choose 
 variable that receives the placeholder; no Forager component reads it in this revision.
 `placeholders` are variables for the enclosure to get with the placeholder value. An entry
 has no value and no member beside these six: the server seals each value to the access
-key in the answer to the secrets request (§The server, Secrets). This revision defines
-the member, the secrets request, its answer and the plaintext. Forager checks a run
-configuration's `credentials` against the schema, and a run configuration the schema
-refuses is `run_configuration_invalid`; it sends no secrets request, sets no value and
-adds no placeholder for an entry.
+key in the answer to the secrets request (§The server, Secrets). Forager checks a run
+configuration's `credentials` against the schema, then refuses a name twice and an
+`auth.header` that frames the request or that the proxy sets: `Host`, `Content-Length`,
+`Transfer-Encoding`, `Connection`, `TE`, `Trailer`, `Upgrade`, `Keep-Alive`, `Cookie`,
+and any name that starts with `Proxy-`, `X-Qory-` or `Qory-`, case ignored and `_` read
+as `-`. Each is `run_configuration_invalid`.
+
+The gateway sets these credentials for a walled run alone. A run configuration with
+`credentials` and no wall is `wall_required` with the name `server_credentials`; one from
+a server whose discovery lists no `secrets` is `run_configuration_invalid`. When the run
+starts, the gateway sends the secrets request once, under the access key, for the
+document's credentials in its order and the digest it computes of the document's bytes,
+and opens the answer with `sealed.Open` under the pinned `apiary_public_key` and the
+machine's clock. A pin or an access key that is a published fixture key is
+`run_configuration_invalid`, and nothing is sent. A value with a control character other
+than tab, or a space or tab at its start or end, is `run_configuration_invalid`, and so
+is an answer `sealed.Open` refuses, but one whose envelope signature does not verify,
+`answer_unsigned`. No message contains a value. A credential from the server replaces
+each credential of the machine's whose hosts claim one of its hosts, or a host above or
+below one: forager.yaml's key for that host is then not read, and the run answer, the
+record and `placeholders` list the server's credential instead. A name a credential of
+the machine's that the policy selects also has is no run. Without `credentials` the run
+gets the machine's credentials as before.
+
+The credentials are fixed when the run starts: a reload whose `credentials` differ fails,
+and the policy in force stays. A private host gets a value only through an exact entry,
+as a credential of the machine's does, and the proxy verifies the host's certificate
+against the gateway machine's trust store. A host on the gateway machine gets a value
+only when the node's policy names it, as for every name on the machine. On a host that
+gets a credential from the server, a `TRACE` or `TRACK` is denied with the rule
+`wall:echo-method`, since its answer would send the value back. The values stay bytes
+until the proxy sets the header, and are overwritten when the run ends.
 
 ## Tools
 
@@ -1629,8 +1658,10 @@ fixture signing key, with its vectors and an envelope refused at each step
 (§Fixtures). This revision defines the request, its answer and the plaintext. Package
 `sealed` implements both sides: `sealed.Open` makes the checks of whoever opens the
 envelope, in that order, all but the rule for a value set in a header, and returns the
-values as bytes it can clear; `sealed.Seal` seals and signs an answer. Forager sends no
-secrets request, and no Forager component calls `sealed.Open`.
+values as bytes it can clear; `sealed.Seal` seals and signs an answer. The gateway sends
+the secrets request and calls `sealed.Open` for a walled run whose run configuration has
+`credentials` (§Credentials, From the server); for an attached run it takes the run
+configuration and its digest from a reload, whose bytes the digest is of.
 
 **Through a gateway.** Each node or node pool records one of three choices: `direct`,
 `default`, or a named gateway, `ng_` followed by 16 lower-case Crockford base32
@@ -2419,7 +2450,8 @@ the answer gives and decides none of it again.
 `wall_required` is a code of the link alone: a `403` from `gateway` to a run request
 whose `wall` is false and whose policy in force selects what needs a wall. Its names are
 `credentials`, `tools` and `paths`, each one the policy selects, or `image=<name>` for
-an image the policy selects. The session turns it back into the error it gives today,
+an image the policy selects, and `server_credentials` for a run configuration that has
+`credentials`. The session turns it back into the error it gives today,
 word for word, and writes no `dev.qory.run.refused` for it, as today: the code is not
 one of `refusal.Decides`, not in the enum of `events/run.refused.schema.json`, and never
 appears in an event.

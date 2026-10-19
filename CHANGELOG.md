@@ -60,22 +60,30 @@ release may change what an existing document does, and says so under Upgrading.
   stores for the run, each `{name, hosts, paths, auth, key_form, placeholders}`, with
   exact hosts and no value. `key_form`, optional, is the form of the key for a model
   credential, `api_key` or `access_token`. Forager checks the member against
-  `run-configuration.schema.json`, and a member the schema refuses is
-  `run_configuration_invalid`; Forager sets no value from it and reads no `key_form`.
+  `run-configuration.schema.json`, and refuses a name twice and an `auth.header` that
+  frames the request or that the proxy sets, each `run_configuration_invalid`. Forager
+  reads no `key_form`.
+- The gateway sets a run configuration's `credentials` for a walled run. When the run
+  starts it sends one secrets request under the access key, for the digest it computes of
+  the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value
+  in place of a credential of the machine's that claims one of its hosts. Without a wall
+  the run is `wall_required` with the name `server_credentials`; without `secrets` in
+  discovery, with a fixture pin or access key, or with a value a header cannot hold, it
+  is `run_configuration_invalid`. A reload with other `credentials` fails, and the policy
+  in force stays. A `TRACE` or `TRACK` to a host that gets one is denied with the rule
+  `wall:echo-method`. A run configuration without `credentials` runs as before.
 - The secrets request, `secrets-request.schema.json`, a signed `POST` to discovery's
   `secrets.url` for the values of a run configuration's `credentials`; its answer, the
   envelope of `secrets-answer.schema.json`, sealed with HPKE base mode, X25519,
   HKDF-SHA256 and AES-256-GCM, to the access key and signed under the server's key; and
   the plaintext it opens to, `sealed-plaintext.schema.json`. `fixtures/sealed/` contains a
-  sealed answer with its vectors and an envelope refused at each step. Forager sends no
-  secrets request.
+  sealed answer with its vectors and an envelope refused at each step.
 - Package `sealed`: `sealed.Open` checks a secrets answer in the contract's order and
   opens it with an access key, returning the values by credential name as bytes that
   `Values.Clear` overwrites. A `Values`, a `Value` or a `Sealing` prints no value with
   any format verb, also as a field of a struct printed by reflection; `sealed.Seal`
   seals and signs an answer, for a receiver and the tests. Each refusal is one of the
-  package's errors, and no error contains a value. No Forager component calls
-  `sealed.Open`.
+  package's errors, and no error contains a value.
 
 #### Changed
 
