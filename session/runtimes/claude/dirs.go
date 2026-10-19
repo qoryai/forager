@@ -98,7 +98,8 @@ func checkDir(v flagValue, a runtimes.Attach) error {
 	return err
 }
 
-// checkPluginFile checks a value of the flags of [checkDir] that is no directory.
+// checkPluginFile checks a value of --plugin-dir or --plugin-dir-no-mcp that is no
+// directory.
 func checkPluginFile(v flagValue, a runtimes.Attach) error {
 	shown := accesskey.ShownValue(v.value, false)
 	if _, err := resolveWith(a.Readable, v.value); err != nil {

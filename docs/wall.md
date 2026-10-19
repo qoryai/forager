@@ -594,9 +594,11 @@ unwalled launch passes them unchecked.
   /work/ref, and that directory lies in /work, which a walled run can write, so the run
   does not start." A directory in a read-only mount passes. A link under `.claude`, or
   `.claude` itself, that leads back to the directory reads all of the directory. Claude
-  Code adds only a directory, so a value that is no directory, or a link to one, is
-  refused: "Pass an --add-dir path to a directory. This launch passes --add-dir
-  /home/notes.md, and that file is not a directory, so the run does not start."
+  Code adds only a directory, so a value that exists and is no directory, or a link to
+  such a value, is refused after the `/workspace` check: "Pass an --add-dir path to a
+  directory. This launch passes --add-dir /home/notes.md, and that file is not a
+  directory, so the run does not start." A value that does not exist, or a link that
+  leads nowhere, gets the text for any other reason.
 - **Any other reason**, a file that does not exist say, is a fix, then the flag, the
   value and the reason: "runtime claude: Pass a --mcp-config path that exists on this
   machine. The check of --mcp-config /a/mcp.json failed: stat /a/mcp.json: no such file

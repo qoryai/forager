@@ -425,11 +425,12 @@ release may change what an existing document does, and says so under Upgrading.
   does not start, with "runtime claude: Make the file /a/settings.json a JSON object.
   The check of --settings /a/settings.json failed: it is null", as other settings that
   are no JSON object.
-- A walled launch's `--add-dir` passed with a regular file, or a link to one, though
-  Claude Code adds only a directory. It now does not start, with "runtime claude: Pass
-  an --add-dir path to a directory. This launch passes --add-dir /home/notes.md, and
-  that file is not a directory, so the run does not start." Any other value that is no
-  directory gets the same text, where it said "not a regular file" before.
+- A walled launch's `--add-dir` passed with a regular file, though Claude Code adds
+  only a directory. It now does not start, with "runtime claude: Pass an --add-dir path
+  to a directory. This launch passes --add-dir /home/notes.md, and that file is not a
+  directory, so the run does not start." A FIFO or other file that is not a regular
+  one, and a link to such a file or to a regular file, now get the same text. Before,
+  they were refused with "that file is not a regular file" or "that file is a link".
 
 #### Changed
 
