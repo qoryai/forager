@@ -346,7 +346,8 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 // endpoint rule leaves out does not reach the runtime: the inherited value counts, or,
 // when there is none, the descriptor's host, and a model credential for it is the
 // run's model key. The text offers a value only of a variable that no credential sets
-// a placeholder in, that the gateway does not reserve and that the node does not deny.
+// a placeholder in, that the gateway does not reserve and that the deny list does not
+// match.
 func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 	forge := sealed("forge", "api.github.com", "", "", "GITHUB_TOKEN")
 	const keyFix = "a credential with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN"
@@ -358,6 +359,7 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 		placeholders []string
 		reserved     []string
 		deny         []string
+		runtime      func(runtimes.Runtime) runtimes.Runtime
 		want         string
 	}{
 		{
@@ -402,6 +404,18 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 			want:  "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 		{
+			what:    "a model key the runtime denies",
+			hosts:   []map[string]any{forge},
+			runtime: func(rt runtimes.Runtime) runtimes.Runtime { return &deniesKey{Runtime: rt} },
+			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+		},
+		{
+			what:    "a model key among the runtime's model overrides",
+			hosts:   []map[string]any{forge},
+			runtime: func(rt runtimes.Runtime) runtimes.Runtime { return &deniesKey{Runtime: rt, inOverrides: true} },
+			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+		},
+		{
 			what:         "a model credential for another host",
 			hosts:        []map[string]any{sealed("model", "llm.example", "", "", apiKeyVariable)},
 			placeholders: []string{apiKeyVariable},
@@ -422,6 +436,9 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 			sp, g := specGateway(t, env...)
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			sp.Variables.Run, sp.Variables.Deny = tc.run, tc.deny
+			if tc.runtime != nil {
+				sp.Runtime = tc.runtime(sp.Runtime)
+			}
 			g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
 				a := linktest.RunAnswer(req)
 				a["credential_hosts"] = tc.hosts
@@ -489,4 +506,27 @@ func TestTheRecordOfCredentialVariablesHoldsNoSecret(t *testing.T) {
 	if got, want := credentialVariables(t, res), []string{"model=" + apiKeyVariable}; !slices.Equal(got, want) {
 		t.Errorf("credential_variables %q, want %q", got, want)
 	}
+}
+
+// deniesKey is a runtime whose descriptor lists ANTHROPIC_AUTH_TOKEN in its denies, or
+// with inOverrides in its model overrides.
+type deniesKey struct {
+	runtimes.Runtime
+	inOverrides bool
+}
+
+func (p *deniesKey) Secrets() runtimes.Declarations {
+	d := p.Runtime.(runtimes.Secrets).Secrets()
+	if !p.inOverrides {
+		d.Denies = append(slices.Clone(d.Denies), authTokenVariable)
+	}
+	return d
+}
+
+func (p *deniesKey) Model() (runtimes.ModelPlaces, bool) {
+	m, ok := p.Runtime.(runtimes.Model).Model()
+	if p.inOverrides {
+		m.Overrides = append(slices.Clone(m.Overrides), authTokenVariable)
+	}
+	return m, ok
 }

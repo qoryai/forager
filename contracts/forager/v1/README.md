@@ -852,8 +852,9 @@ variable to an `https` URL, with no user name or password, whose host a model cr
 covers. The refusal offers a value only of a model key's variable that a value can reach
 the runtime in: not one a credential sets a placeholder in, whose value is
 `placeholder_conflict`; not one the gateway reserves, whose value is `variable_reserved`;
-and not one the node's `Variables.Deny` matches, whose value is left out. A run without a wall, or whose answer has no `credential_hosts`, is not
-checked: its runtime may use a login the session does not see, such as the developer's,
+and not one the deny list matches, whose value is left out: the built-in list with the
+node's `Variables.Deny`, the descriptor's `denies` and its model `overrides`. A run
+without a wall, or whose answer has no `credential_hosts`, is not checked: its runtime may use a login the session does not see, such as the developer's,
 one in a mount or one in the image. The refusal is posted on the link, as the session's
 other refusals are.
 

@@ -328,8 +328,9 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 // variables. Its text offers a value only of a model key's variable that a value can
 // reach the runtime in: one not among placeholderNames or a credential's placeholders,
 // whose value is refused as [refusal.PlaceholderConflict]; not among reserved, whose
-// value is refused as [refusal.VariableReserved]; and not matched by spec's
-// Variables.Deny, whose value is left out.
+// value is refused as [refusal.VariableReserved]; and not matched by the deny list
+// that [resolve] applies behind a wall, the built-in list with spec's Variables.Deny,
+// the runtime's denies and its model overrides, whose value is left out.
 func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, placeholderNames, reserved []string, vars variables.Resolved, prepared runtimes.Launch) error {
 	if spec.Wall == nil || len(credentials) == 0 {
 		return nil
@@ -369,7 +370,10 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	}
 	// A value the run may pass: one of a variable that no credential sets a placeholder
 	// in, that is not reserved and that the node does not deny.
-	deny := variables.Entries(spec.Variables.Deny)
+	deny, err := variables.List(slices.Concat(spec.Variables.Deny, secretsOf(rt).Denies, places.Overrides))
+	if err != nil {
+		return err
+	}
 	var free []string
 	for _, k := range keys {
 		placeholder := slices.Contains(placeholderNames, k) || slices.ContainsFunc(credentials, func(c server.LinkCredentialHosts) bool { return slices.Contains(c.Placeholders, k) })
