@@ -69,6 +69,17 @@ secrets:
            CLAUDE_CODE_USE_FOUNDRY, CLAUDE_CODE_USE_ANTHROPIC_AWS, CLAUDE_CODE_SHELL,
            CLAUDE_CODE_SHELL_PREFIX, CLAUDE_ENV_FILE, CLAUDE_CONFIG_DIR,
            CLAUDE_CODE_CLIENT_CERT, CLAUDE_CODE_CLIENT_KEY, CLAUDE_CODE_CERT_STORE]
+# Claude Code sends Anthropic's Messages format. A composer writes the run's model id as
+# --model and its effort value as --effort, an agent's effort value in the agent file's
+# effort frontmatter, and the base URL in ANTHROPIC_BASE_URL. denies still lists
+# ANTHROPIC_BASE_URL, so the session leaves the server's value of it out.
+model:
+  formats: [anthropic-messages]
+  model: {flag: --model}
+  effort:
+    run: {flag: --effort, values: [low, medium, high, xhigh, max]}
+    agent: {frontmatter: effort, values: [low, medium, high, xhigh, max]}
+  endpoint: {variable: ANTHROPIC_BASE_URL}
 rules:
   - source: hooks
     match: {hook_event_name: SessionStart}

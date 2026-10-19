@@ -13,6 +13,11 @@ release may change what an existing document does, and says so under Upgrading.
 - `api-format.schema.json`, the fixed list of model API formats: `anthropic-messages`,
   `openai-responses`, `openai-chat` and `gemini`. A schema that uses the list refers to
   the whole file with `$ref`.
+- A runtime descriptor may have `model`: the API formats the runtime sends, and where a
+  composer writes a run's model id, effort value and model endpoint, each in a flag, a
+  setting or a variable, the endpoint in a variable only. The Claude Code descriptor
+  has one, and `runtimes.json` lists it. In Go, a described runtime implements
+  `runtimes.Model`, whose `Model` method returns the section.
 - `dev.qory.run.started` has `preparation`, the run's preparation as the caller gave it,
   when the run has one.
 - The server's variables may set `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, the

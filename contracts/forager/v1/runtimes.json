@@ -70,7 +70,40 @@
             "oauth_token"
           ]
         }
-      ]
+      ],
+      "model": {
+        "formats": [
+          "anthropic-messages"
+        ],
+        "model": {
+          "flag": "--model"
+        },
+        "effort": {
+          "run": {
+            "flag": "--effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "agent": {
+            "frontmatter": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
+        "endpoint": {
+          "variable": "ANTHROPIC_BASE_URL"
+        }
+      }
     }
   ]
 }

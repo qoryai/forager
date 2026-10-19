@@ -91,15 +91,16 @@ func TestEverySchemaCompiles(t *testing.T) {
 }
 
 // TestDocumentFixturesValidate pins that every policy, server, configuration, run
-// registration, run configuration, attach answer, outcome, batch answer and API format
-// fixture passes its schema.
+// registration, run configuration, attach answer, outcome, batch answer, API format and
+// descriptor fixture passes its schema.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json",
 		"run-attach-answer.schema.json", "run-outcome.schema.json", "batch-answer.schema.json",
-		"api-format.schema.json")
+		"api-format.schema.json", "descriptor.schema.json")
 	dirs := map[string]string{
 		"fixtures/api-format":        "api-format.schema.json",
+		"fixtures/descriptor":        "descriptor.schema.json",
 		"fixtures/run-attach-answer": "run-attach-answer.schema.json",
 		"fixtures/run-outcome":       "run-outcome.schema.json",
 		"fixtures/batch-answer":      "batch-answer.schema.json",
@@ -290,7 +291,9 @@ const beyondLinkSchema = "-beyond-schema-"
 // a run.exited without state, with a state other than the three, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
-// status, a descriptor with an expression, a link run request
+// status, a descriptor with an expression, a descriptor whose model section has a
+// format outside the list, a place of two kinds or of none, an empty list of values,
+// no formats, a member it does not define or an endpoint that is no variable, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that passes a value with a name or whose image has no reference, a link run
 // answer without applied, with a proxy secret too short or whose image has no
