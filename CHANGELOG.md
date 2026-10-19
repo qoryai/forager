@@ -569,9 +569,12 @@ release may change what an existing document does, and says so under Upgrading.
   cannot check, so the run does not start." and the texts for the other two. An `--mcp-config` or
   `--agents` file is checked as the `--settings` file is and passed as a copy in the run
   directory, `mcp-config-<n>.json` or `agents-<n>.json`; a value Claude Code takes as
-  JSON passes unchanged. A text shows a value that starts with `{` or `[` after white
-  space as `(an --mcp-config value)`, with the value's flag, because JSON that does not
-  parse may contain a token. A `--plugin-dir` or `--plugin-dir-no-mcp` directory that lies
+  JSON passes unchanged. A text shows a value of `--mcp-config`, `--agents` or
+  `--settings` that contains `{` or `[`, or starts with white space or a format
+  character such as U+FEFF, as `(an --mcp-config value)`, `(an --agents value)` or `(a
+  --settings value)`, and the reason after "failed:" as `it is no file`, `it cannot be
+  read` or `it is no JSON object`, because such a value may be JSON with a token in it;
+  for `--settings` in an unwalled launch too. A `--plugin-dir` or `--plugin-dir-no-mcp` directory that lies
   in, is reached through or contains a place a walled run can write, that holds a link
   leading into one or a file with more than one name, or that has more than 10,000
   entries, does not start; a `.zip` is checked as a file. An `--add-dir` directory is

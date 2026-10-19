@@ -532,9 +532,12 @@ unwalled launch passes them unchecked.
   workspace, which a walled run can write, so the run does not start." A value with a
   `..` part is refused: "Pass the path /a/../b.json without "..". This launch passes
   --mcp-config /a/../b.json, and the path has a ".." part, so the run does not start."
-  A text shows a value that starts with `{` or `[` after white space as `(an
-  --mcp-config value)`, with the value's flag, because JSON that does not parse may
-  contain a token.
+  A text shows a value of `--mcp-config`, `--agents` or `--settings` that contains `{`
+  or `[`, or starts with white space or a format character such as U+FEFF, as `(an
+  --mcp-config value)`, `(an --agents value)` or `(a --settings value)`, because such a
+  value may be JSON with a token in it. The reason after "failed:" is then `it is no
+  file`, `it cannot be read` or `it is no JSON object`. For `--settings` this holds in
+  an unwalled launch too.
 - **`--mcp-config` and `--agents` files** are checked and read as the settings file is,
   and Claude Code is passed a copy in the run directory, `mcp-config-<n>.json` or
   `agents-<n>.json`, numbered from 1 in the order the files appear. For a run whose
