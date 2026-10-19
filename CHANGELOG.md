@@ -657,6 +657,16 @@ release may change what an existing document does, and says so under Upgrading.
 - `catalog.Lookup` read a descriptor in `dir` through a link, of any size. It now reads
   one only when its last part is no link, it is a regular file and it holds at most
   1 MiB, and refuses one otherwise with "Make the runtime descriptor <path> a readable regular file of at most 1 MiB, or remove it. It could not be read: " and the reason.
+- A `--settings` file whose content is `null` stopped the session with a panic. It now
+  does not start, with "runtime claude: Make the file /a/settings.json a JSON object.
+  The check of --settings /a/settings.json failed: it is null", as other settings that
+  are no JSON object.
+- A walled launch's `--add-dir` passed with a regular file, though Claude Code adds
+  only a directory. It now does not start, with "runtime claude: Pass an --add-dir path
+  to a directory. This launch passes --add-dir /home/notes.md, and that file is not a
+  directory, so the run does not start." A FIFO or other file that is not a regular
+  one, and a link to such a file or to a regular file, now get the same text. Before,
+  they were refused with "that file is not a regular file" or "that file is a link".
 
 #### Changed
 

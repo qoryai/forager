@@ -331,15 +331,22 @@ func TestSettingsRefusesAWalledLaunchThatPassesProjectConfigRoot(t *testing.T) {
 // TestSettingsThatAreNoJSONObjectComeWithAFix pins the fix that leads the text of a
 // settings file whose content is no JSON object.
 func TestSettingsThatAreNoJSONObjectComeWithAFix(t *testing.T) {
-	f := filepath.Join(t.TempDir(), "settings.json")
-	if err := os.WriteFile(f, []byte("[1]"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-		Launch: runtimes.Launch{Args: []string{"--settings", f}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
-	})
-	prefix := "Make the file " + f + " a JSON object. The check of --settings " + f + " failed: json: cannot unmarshal array"
-	if err == nil || !strings.HasPrefix(err.Error(), prefix) {
-		t.Errorf("got %v, want the prefix %q", err, prefix)
+	for content, reason := range map[string]string{
+		"[1]":  "json: cannot unmarshal array",
+		"null": "it is null",
+	} {
+		t.Run(content, func(t *testing.T) {
+			f := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+				Launch: runtimes.Launch{Args: []string{"--settings", f}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+			})
+			prefix := "Make the file " + f + " a JSON object. The check of --settings " + f + " failed: " + reason
+			if err == nil || !strings.HasPrefix(err.Error(), prefix) {
+				t.Errorf("got %v, want the prefix %q", err, prefix)
+			}
+		})
 	}
 }

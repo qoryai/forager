@@ -477,7 +477,28 @@ func TestAWalledLaunchsAddDirIsChecked(t *testing.T) {
 			},
 			want: func(fifo string) string {
 				return "Pass an --add-dir path to a directory. This launch passes --add-dir " + fifo +
-					", and that file is not a regular file, so the run does not start."
+					", and that file is not a directory, so the run does not start."
+			},
+		},
+		"a regular file": {
+			make: func(t *testing.T, ref string) string {
+				writeFile(t, filepath.Join(ref, "notes.md"), "notes")
+				return filepath.Join(ref, "notes.md")
+			},
+			want: func(file string) string {
+				return "Pass an --add-dir path to a directory. This launch passes --add-dir " + file +
+					", and that file is not a directory, so the run does not start."
+			},
+		},
+		"a link to a regular file": {
+			make: func(t *testing.T, ref string) string {
+				writeFile(t, filepath.Join(ref, "notes.md"), "notes")
+				symlink(t, filepath.Join(ref, "notes.md"), filepath.Join(ref, "link.md"))
+				return filepath.Join(ref, "link.md")
+			},
+			want: func(link string) string {
+				return "Pass an --add-dir path to a directory. This launch passes --add-dir " + link +
+					", and that file is not a directory, so the run does not start."
 			},
 		},
 		"a directory in the place": {

@@ -625,14 +625,18 @@ unwalled launch passes them unchecked.
     in or be reached through such a place, must be no link, a regular file, and have
     one name. A link gets "Pass the path of the file that /home/link.zip links to.",
     and any other file that is not a regular one "Pass a --plugin-dir path to a
-    directory or a regular file.", each before the reason. For `--add-dir` that fix is
-    "Pass an --add-dir path to a directory."
+    directory or a regular file.", each before the reason.
 - **`--add-dir` directories** are checked as `--plugin-dir`'s, with the entries read
   only at `<dir>/.claude`, and under it, and at `<dir>/CLAUDE.md`: "Remove --add-dir
   /work/ref, or add a directory no walled run writes. This launch passes --add-dir
   /work/ref, and that directory lies in /work, which a walled run can write, so the run
   does not start." A directory in a read-only mount passes. A link under `.claude`, or
-  `.claude` itself, that leads back to the directory reads all of the directory.
+  `.claude` itself, that leads back to the directory reads all of the directory. Claude
+  Code adds only a directory, so a value that exists and is no directory, or a link to
+  such a value, is refused after the `/workspace` check: "Pass an --add-dir path to a
+  directory. This launch passes --add-dir /home/notes.md, and that file is not a
+  directory, so the run does not start." A value that does not exist, or a link that
+  leads nowhere, gets the text for any other reason.
 - **Any other reason**, a file that does not exist say, is a fix, then the flag, the
   value and the reason: "runtime claude: Pass a --mcp-config path that exists on this
   machine. The check of --mcp-config /a/mcp.json failed: stat /a/mcp.json: no such file
