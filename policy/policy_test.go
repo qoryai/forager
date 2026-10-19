@@ -354,9 +354,9 @@ func TestCredentialForMatchesAsTheProxyDoes(t *testing.T) {
 }
 
 // TestCredentialForGivesAPrivateHostOnlyAnExactEntry pins the private hosts: an IP
-// literal in a private range, a name of one label and a ".local" name are each covered
-// only by an entry equal to them, never by a "*." pattern, while a public name is still
-// covered by a pattern.
+// literal in a private range, a name of one label and a name that ends in ".local",
+// ".internal" or ".home.arpa" are each covered only by an entry equal to them, never by
+// a "*." pattern, while any other name is still covered by a pattern.
 func TestCredentialForGivesAPrivateHostOnlyAnExactEntry(t *testing.T) {
 	for _, c := range []struct {
 		hosts []string
@@ -389,6 +389,14 @@ func TestCredentialForGivesAPrivateHostOnlyAnExactEntry(t *testing.T) {
 		{[]string{"fd00::6"}, "fd00::5", false},
 		{[]string{"fc00::1"}, "fc00::1", true},
 		{[]string{"*.local"}, "fd00::5", false},
+		{[]string{"*.internal"}, "x.internal", false},
+		{[]string{"x.internal"}, "x.internal", true},
+		{[]string{"*.internal"}, "internal", false},
+		{[]string{"internal"}, "internal", true},
+		{[]string{"*.home.arpa"}, "x.home.arpa", false},
+		{[]string{"x.home.arpa"}, "x.home.arpa", true},
+		{[]string{"*.arpa"}, "x.home.arpa", false},
+		{[]string{"*.lan"}, "x.lan", true},
 	} {
 		if ok := policy.CredentialFor(c.hosts, c.host); ok != c.ok {
 			t.Errorf("CredentialFor(%q, %q) = %v; want %v", c.hosts, c.host, ok, c.ok)

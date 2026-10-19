@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 
@@ -94,6 +95,53 @@ func TestAPatternSetsNoKeyOnALocalName(t *testing.T) {
 				if d.Credential != c.cred {
 					t.Errorf("the record lists credential %q on %+v, want %q", d.Credential, d, c.cred)
 				}
+			}
+		})
+	}
+}
+
+// TestTerminatedLeavesOutACredentialPatternForNoHost pins the terminated hosts under the
+// private-host rule: a credential's "*." pattern under which every name is private, such
+// as "*.local", is for no host and is not listed; an exact private name and a pattern
+// that is for some host are; and a path rule's or a tool's entry is listed as before.
+func TestTerminatedLeavesOutACredentialPatternForNoHost(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		creds []string
+		paths map[string][]string
+		tools []string
+		want  []string
+	}{
+		{
+			name:  "credentials",
+			creds: []string{"*.local", "x.local", "*.x.local", "*.LOCAL", "*.internal", "*.home.arpa", "*.arpa", "*.example.com", "*.lan", "litellm"},
+			want:  []string{"x.local", "*.arpa", "*.example.com", "*.lan", "litellm"},
+		},
+		{
+			name:  "a path rule and a tool",
+			creds: []string{"*.local"},
+			paths: map[string][]string{"*.local": {"/*"}},
+			tools: []string{"*.internal"},
+			want:  []string{"*.internal", "*.local"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, err := Listen("", policy.Observe, nil, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			ca, err := NewCA("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var tools []Tool
+			if c.tools != nil {
+				tools = []Tool{{Name: "tool", Hosts: c.tools, Socket: "/nonexistent.sock"}}
+			}
+			p.Terminate(ca, []Credential{{Name: "model", Hosts: c.creds, Scheme: "bearer", Token: func() string { return "x" }}}, c.paths, tools)
+			if got := p.Terminated(); !slices.Equal(got, c.want) {
+				t.Errorf("Terminated() = %q, want %q", got, c.want)
 			}
 		})
 	}

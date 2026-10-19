@@ -421,10 +421,10 @@ func EndpointHost(raw string) (string, bool) {
 // hosts only through an entry equal to it, compared lower-case, and never through a
 // "*." pattern. A private host is an IP literal in 10.0.0.0/8, 172.16.0.0/12,
 // 192.168.0.0/16 or fc00::/7, the ranges [netip.Addr.IsPrivate] reports; a name of one
-// label, such as litellm; or a name that ends in ".local". Of the three, only a
-// ".local" name can get a result other than [Match]'s: Match compares an IP literal
-// only to an identical entry, and a "*." pattern matches no name of one label. The
-// gateway's proxy picks a request's credential by this rule.
+// label, such as litellm; or a name that ends in ".local", ".internal" or ".home.arpa".
+// Only a name with one of these endings can get a result other than [Match]'s: Match
+// compares an IP literal only to an identical entry, and a "*." pattern matches no name
+// of one label. The gateway's proxy picks a request's credential by this rule.
 func CredentialFor(hosts []string, host string) bool {
 	h, ok := Host(host)
 	if !ok {
@@ -448,7 +448,7 @@ func private(h string) bool {
 	if a, err := netip.ParseAddr(h); err == nil {
 		return a.IsPrivate()
 	}
-	return !strings.Contains(h, ".") || strings.HasSuffix(h, ".local")
+	return !strings.Contains(h, ".") || strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".internal") || strings.HasSuffix(h, ".home.arpa")
 }
 
 // embedded are the IPv6 ranges a host has no form in, each holding an IPv4 address in
