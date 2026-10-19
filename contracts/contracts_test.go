@@ -293,7 +293,9 @@ const beyondLinkSchema = "-beyond-schema-"
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
 // status, a descriptor with an expression, a descriptor whose model section has a
 // format outside the list, a place of two kinds or of none, an empty list of values,
-// no formats, a member it does not define or an endpoint that is no variable, a link run request
+// no formats, a member it does not define, an endpoint that is no variable, or
+// overrides that are empty, list a name twice or list something other than a
+// variable's name, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that passes a value with a name or whose image has no reference, a link run
 // answer without applied, with a proxy secret too short, whose image has no reference

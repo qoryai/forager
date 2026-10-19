@@ -147,8 +147,9 @@ type Model interface {
 // ModelPlaces is a descriptor's model section: Formats, the model API formats the
 // runtime sends its requests in, from the contract's api-format.schema.json; Model,
 // where a run's model id goes; Effort, where an effort value goes, nil when the runtime
-// has no place for one; and Endpoint, the variable the runtime reads the base URL of
-// its model API from.
+// has no place for one; Endpoint, the variable the runtime reads the base URL of its
+// model API from; and Overrides, the variables that would override the model id or
+// effort value a composer writes, which a walled run leaves out and unsets inside.
 type ModelPlaces = descriptor.Model
 
 // Place is where a value goes, exactly one of its fields set: Flag, an argument the
@@ -333,7 +334,7 @@ func (r *described) Model() (ModelPlaces, bool) {
 	if m == nil {
 		return ModelPlaces{}, false
 	}
-	out := ModelPlaces{Formats: slices.Clone(m.Formats), Model: m.Model, Endpoint: m.Endpoint}
+	out := ModelPlaces{Formats: slices.Clone(m.Formats), Model: m.Model, Endpoint: m.Endpoint, Overrides: slices.Clone(m.Overrides)}
 	if e := m.Effort; e != nil {
 		effort := Effort{Run: e.Run}
 		effort.Run.Values = slices.Clone(e.Run.Values)

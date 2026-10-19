@@ -214,6 +214,14 @@
           "properties": {
             "variable": {"description": "The variable the runtime reads the base URL from.", "$ref": "#/$defs/name"}
           }
+        },
+        "overrides": {
+          "description": "The variables that would override the model id or effort value a composer writes. Behind a wall the session leaves each one's value out, of every source below the run's fixed names and of the harness's computed values, records it as denied, and unsets the name inside. Without a wall they change nothing.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/name"}
         }
       }
     },

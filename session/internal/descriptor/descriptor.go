@@ -58,6 +58,10 @@ type Model struct {
 	Effort *Effort `yaml:"effort" json:"effort,omitempty"`
 	// Endpoint is where the base URL of the run's model API goes.
 	Endpoint Endpoint `yaml:"endpoint" json:"endpoint"`
+	// Overrides is the variables that would override the model id or effort value a
+	// composer writes, which a walled run leaves out and unsets inside; nil when the
+	// section lists none.
+	Overrides []string `yaml:"overrides" json:"overrides,omitempty"`
 }
 
 // Place is where a value goes, exactly one of its fields set: Flag, an argument the

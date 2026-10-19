@@ -170,8 +170,9 @@ type Spec struct {
 	// mode. Behind a wall the session starts the launch through it when the run has
 	// names to unset, in front of everything else the launch starts, after the wall's
 	// programs, with the names the run has that nothing sets
-	// and wins with, the runtime's declared, reserved and denied names and the node's
-	// denied ones, so the runtime sees them unset, never as the image's values or empty.
+	// and wins with, the runtime's declared, reserved and denied names, its model
+	// overrides and the node's denied ones, so the runtime sees them unset, never as the
+	// image's values or empty.
 	// dev.qory.run.started reports the launch without it. A Wall needs one.
 	Exec []string
 	// ForagerVersion is reported in the events.
@@ -842,7 +843,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// wall the placeholders. The resolution has left out every value of a fixed name, so
 	// what wins here by position is what the record says. Behind a wall the launch
 	// starts through Exec when the run has names to unset, which unsets the runtime's declared, reserved and denied
-	// variables and the node's denied ones that nothing sets, so an image's value for
+	// variables, its model overrides and the node's denied ones that nothing sets, so an image's value for
 	// one does not reach the runtime; the record names the launch without it.
 	ownEnv := []string{EnvRunID + "=" + runID}
 	if spec.HarnessHome != "" {
