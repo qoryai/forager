@@ -98,8 +98,29 @@ type Attach struct {
 	// links, or is reached through, a place the caller lists as written by a walled run,
 	// a writable bind of another walled run still listed, or a writable bind of this
 	// run's; and a path with a ".." name, whose clean form names another file than the
-	// system opens. Nil refuses none.
+	// system opens. Nil refuses none. A refusal for a place a walled run can write is a
+	// [*WrittenError].
 	Readable func(path string) (string, error)
+	// ReadableDir is asked of a directory of this machine before Prepare passes it to
+	// the program, such as a plugin directory Claude Code is passed, by its absolute
+	// path: where the path resolves through every link, or why the program may not read
+	// it. It refuses what Readable refuses and also a directory that is or contains,
+	// as given or resolved, by whole names and regardless of case, a place a walled run
+	// could have written. Nil refuses none.
+	ReadableDir func(path string) (string, error)
+}
+
+// WrittenError is how [Attach.Readable] and [Attach.ReadableDir] refuse a path for a
+// place a walled run can write: How is "lies in", "is reached through" or "contains",
+// and Place is the place as a message prints it.
+type WrittenError struct {
+	How, Place string
+}
+
+// Error is "it lies in /work, which a walled run can write", with the error's How and
+// Place.
+func (e *WrittenError) Error() string {
+	return "it " + e.How + " " + e.Place + ", which a walled run can write"
 }
 
 // Placeholder is the value of every variable of [Attach.Placeholders]: a stand-in that

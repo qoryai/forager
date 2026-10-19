@@ -17,11 +17,14 @@ func TestSettingsPrintsAPhraseForASecret(t *testing.T) {
 	clean := filepath.Join(base, "absent.json")
 	for _, c := range []struct{ settings, want string }{
 		{filepath.Join(base, "qak_x", "absent.json"),
-			"settings (a value that contains an access key secret): (a value that contains an access key secret)"},
-		{`{"hooks": QRK_y}`, "settings (a value that contains a run key): invalid character 'Q' looking for beginning of value"},
-		{`{"hooks": nothing}`, `settings {"hooks": nothing}: invalid character 'o' in literal null (expecting 'u')`},
+			"Pass a --settings path that exists on this machine. The check of --settings (a value that contains " +
+				"an access key secret) failed: (a value that contains an access key secret)"},
+		{`{"hooks": QRK_y}`, "Pass a valid JSON object to --settings. The check of --settings (a value that contains a run key) " +
+			"failed: invalid character 'Q' looking for beginning of value"},
+		{`{"hooks": nothing}`, `Pass a valid JSON object to --settings. The check of --settings {"hooks": nothing} failed: ` +
+			`invalid character 'o' in literal null (expecting 'u')`},
 		// The reason of a clean path is the system's, which names the path as resolved.
-		{clean, "settings " + clean + ": "},
+		{clean, "Pass a --settings path that exists on this machine. The check of --settings " + clean + " failed: "},
 	} {
 		_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
 			Launch: runtimes.Launch{Args: []string{"--settings", c.settings}}, RunDir: t.TempDir(), Forwarder: []string{"q"},

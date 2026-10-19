@@ -202,8 +202,8 @@ One run, on a developer machine, with a server configured:
    What is prepared goes into the run directory; the composed home is not modified.
    Claude Code reads only the last `--settings` it is passed. A walled launch that
    passes `--settings` more than once, counted anywhere in its arguments, does not
-   start: "This launch passes --settings more than once, and Claude Code reads only the
-   last one, so the run does not start. Pass one --settings file." An unwalled launch
+   start: "Pass one --settings file. This launch passes --settings more than once, and
+   Claude Code reads only the last one, so the run does not start." An unwalled launch
    that passes it more than once starts, and Claude Code reads the last `--settings` it
    passes, without Forager's hooks.
    A settings file that lies in a place a walled run can write, whose path has a `..`
@@ -212,6 +212,24 @@ One run, on a developer machine, with a server configured:
    places are the ones the caller records as written by walled runs, the writable binds
    of the other walled runs in the registry and, behind a wall, the run's writable
    binds.
+   A walled launch's `--mcp-config`, `--agents`, `--plugin-dir`, `--plugin-dir-no-mcp`
+   and `--add-dir` values are checked against the same places, and the run does not
+   start when one fails. A value that starts with `~`, is relative or has a `..` part is
+   refused. A value of `--mcp-config` or `--agents` that Claude Code takes as JSON
+   passes unchanged; a file is checked as the settings file is and passed as a copy in
+   the run directory, `mcp-config-<n>.json` or `agents-<n>.json`. A `--plugin-dir` or
+   `--plugin-dir-no-mcp` directory must not lie in, be reached through or contain such
+   a place, and no link under it may lead into one, no file under it may have more than
+   one name, and it may have at most 10,000 entries; a `.zip` is checked as a file. An
+   `--add-dir` directory is checked the same way, with only `<dir>/.claude` and
+   `<dir>/CLAUDE.md` read. An unwalled launch passes these flags unchecked.
+   In a walled launch the files of the three system-prompt file flags are checked and
+   copied the same way, and a launch that passes `--project-config-root` does not
+   start: "Remove --project-config-root from the walled launch. This launch passes
+   --project-config-root, and Claude Code reads project settings, .mcp.json and the
+   .claude trees from that directory, which Forager does not check, so the run does not
+   start." The programs those files start, and the checkout's `.claude/`, `.mcp.json`
+   and `CLAUDE.md`, are not checked (§The wall).
 7. It emits `dev.qory.run.started` and `dev.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when the caller is interactive and no argument the
    descriptor lists as headless is among the runtime's, on pipes otherwise.
@@ -3202,6 +3220,8 @@ Forager enforces outside the enclosure: the wall, the egress policy, the credent
 proxy sets, the tools the gateway starts and the `dev.qory.run.*` records. The runtime's
 settings, its hooks and its prompts, and the `dev.qory.session.*` records, which the
 runtime reports from inside, are not that boundary: the image can change or forge them.
+So Forager checks no program that the runtime's settings start, and no configuration
+file in the checkout.
 
 A run configuration may name the image too, by reference only, beside its
 `security_policy`. The run configuration, the server's policy and the node's policy must

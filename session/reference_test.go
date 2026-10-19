@@ -143,7 +143,9 @@ func TestASettingsFileInTheWorkspaceIsJudgedOnThisMachine(t *testing.T) {
 	}
 	sp.Args = []string{"--settings", settings}
 	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = &targetWall{}, "base", images, []string{"registry.example/agents/"}
-	want := "runtime claude: settings " + settings + ": it lies in " + sp.Dir + ", which a walled run can write"
+	want := "runtime claude: Move " + settings + " to a directory no walled run writes, or pass the settings as a " +
+		"JSON object. This launch passes --settings " + settings + ", which lies in " + sp.Dir +
+		", a place a walled run can write, so the run does not start."
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("the run: %v, want %q", err, want)
 	}
@@ -285,5 +287,28 @@ func TestTheServersImageByReferenceIsTheOneTheWallPulls(t *testing.T) {
 		if want := (wall.Request{RunID: res.RunID, Image: pinned, RelayImage: "example.com/agent:1", Pull: true}); w.req != want {
 			t.Errorf("%s: the wall was asked for %+v, want %+v", doc, w.req, want)
 		}
+	}
+}
+
+// TestAPluginLinkToTheWorkspaceInsideIsNoRun pins that a run whose workspace is at
+// /workspace inside refuses a plugin directory with a link that leads to /workspace,
+// which no place of this machine's is, before the wall is asked.
+func TestAPluginLinkToTheWorkspaceInsideIsNoRun(t *testing.T) {
+	w := &targetWall{}
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	byReference(g)
+	plugin := mkdirs(t, filepath.Join(t.TempDir(), "plugin", "skills"))
+	plugin = filepath.Dir(plugin)
+	symlink(t, "/workspace/harness/skills/review", filepath.Join(plugin, "skills", "review"))
+	sp.Args = append(sp.Args, "--plugin-dir", plugin)
+	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = w, "base", images, []string{"registry.example/agents/"}
+	want := "runtime claude: Replace the link " + filepath.Join(plugin, "skills", "review") + " with a copy, " +
+		"or move what it leads to out of /workspace. This launch passes --plugin-dir " + plugin +
+		", and that link leads into /workspace, which a walled run can write, so the run does not start."
+	if _, err := session.Run(context.Background(), sp); err == nil || err.Error() != want {
+		t.Errorf("the run: %v, want %q", err, want)
+	}
+	if w.req.RunID != "" {
+		t.Errorf("the wall was asked: %+v", w.req)
 	}
 }

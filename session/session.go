@@ -729,11 +729,12 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// placeholders the run sets. A file the runtime reads from this machine is refused
 	// when a walled run could have written it: one in a place of Spec.Written, in a
 	// writable bind of another walled run in the registry or, behind a wall, in a
-	// writable bind of this run's.
-	written := func() ([]string, error) { return writtenPlaces(spec, runID, plan, wallOwn) }
+	// writable bind of this run's. A directory the runtime passes is refused as well
+	// when it contains such a place. The places are worked out once, for both.
+	written := sync.OnceValues(func() ([]string, error) { return writtenPlaces(spec, runID, plan, wallOwn) })
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
-		Readable: readable(written)}
+		Readable: readable(written), ReadableDir: readableDir(written)}
 	if spec.Wall != nil {
 		attach.Walled, attach.Placeholders = true, slices.Clone(placeholderNames)
 	}
