@@ -507,16 +507,16 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 	return out
 }
 
-// checkModelKey refuses a run whose gateway holds credentials for it, with or without a
-// wall, when its runtime has a model section with model keys and the run has none: no
+// checkModelKey refuses a run whose gateway holds credentials for it, behind a wall or,
+// without one, when a credential has a model key's variable among its placeholders,
+// when its runtime has a model section with model keys and the run has none: no
 // credential of credentials is an API credential, and no value of a model key's
 // variable reaches the runtime, from what the run inherits, the run, the machine, the
 // harness or the runtime's preparation. A run whose answer has no credential_hosts is
 // not checked: its key may come from what the session does not see, such as a login of
-// the developer's, a mount or an image. Nor is a run without a wall none of whose
-// credentials has a model key's variable among its placeholders: its runtime may use
-// the developer's login. [checkPlaceholders] has refused every such placeholder but the
-// start key's. The refusal is [refusal.ModelKeyMissing] with the model keys'
+// the developer's, a mount or an image. [checkPlaceholders] has refused every model
+// key's placeholder but the start key's, so a run without a wall and without an API
+// credential is not refused: its runtime may use the developer's login. The refusal is [refusal.ModelKeyMissing] with the model keys'
 // variables. Without a wall, an inherited value of one of placeholderNames reaches
 // nothing: the placeholder is set over it.
 func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, placeholderNames []string) error {
