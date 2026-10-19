@@ -60,7 +60,7 @@
     },
     "ceiling_paths": {"description": "The path rules of each ceiling the run's policy file was put under with gateway.Policy.Under, by host, one object per ceiling that has any; absent when none has any. A request to a host a ceiling lists must match an entry of that ceiling as well. Fixed for the run: every further policy_applied repeats it.", "type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}},
     "variables": {
-      "description": "The run's variables by name, never a value: each name, the source whose value the run applies, and the values that lost, sorted by name. A name is listed when the server, the run, the machine or the harness's defaults set it, and when the built-in deny list leaves out a value the harness computed. A fixed name, one Forager, the wall, the runtime's preparation, a placeholder or the harness's computed values set, is listed only when it won over one of those sources, and a name of the environment the run inherits only when one of those sources set it too, so the inherited environment and Forager's names do not fill every record. Fixed when the run starts: every further policy_applied repeats it.",
+      "description": "The run's variables by name, never a value: each name, the source whose value the run applies, and the values that lost, sorted by name. A name is listed when the server, the run, the machine or the harness's defaults set it, and when the built-in deny list or, behind a wall, the endpoint rule leaves out a value the harness computed. A fixed name, one Forager, the wall, the runtime's preparation, a placeholder or the harness's computed values set, is listed only when it won over one of those sources, and a name of the environment the run inherits only when one of those sources set it too, so the inherited environment and Forager's names do not fill every record. Fixed when the run starts: every further policy_applied repeats it.",
       "type": "array",
       "items": {
         "type": "object",
@@ -70,7 +70,7 @@
           "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
           "from": {"description": "The source whose value the run applies, from the highest: fixed, apiary (the server's run configuration), run, machine, harness (the harness's written defaults), shell (the inherited environment). An open list: a receiver shows a name it does not know as it is. Absent when no source's value applies, as for a variable the runtime declares, which then goes into a walled run empty.", "$ref": "#/$defs/word"},
           "lost": {
-            "description": "The values of this name the run left out, the highest source first, each once: the source, and why: overridden, a higher source's value applies; denied, the deny list matched the name, or the server's value is of a variable the runtime declares or reserves or a machine value is read from; fixed, the name is one of the run's fixed names; unwalled, the server's value in a run without a wall that takes none. An open list, as from is.",
+            "description": "The values of this name the run left out, the highest source first, each once: the source, and why: overridden, a higher source's value applies; denied, the deny list matched the name, or the server's value is of a variable the runtime declares or reserves or a machine value is read from; fixed, the name is one of the run's fixed names; unwalled, the server's value in a run without a wall that takes none; endpoint_uncovered, the endpoint's host is none of the hosts of the run's model credential; endpoint_unreadable, the value is not an https URL with a host Forager reads. An open list, as from is.",
             "type": "array",
             "items": {
               "type": "object",
@@ -81,8 +81,19 @@
                 "why": {"$ref": "#/$defs/word"}
               }
             }
+          },
+          "kept": {
+            "description": "Behind a wall, why the value of the runtime's model endpoint variable that applies was kept: why endpoint_covered, the endpoint's host is a host of the run's model credential, and credential, that credential's name. Absent for every other value.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["why", "credential"],
+            "properties": {
+              "why": {"type": "string", "enum": ["endpoint_covered"]},
+              "credential": {"type": "string", "minLength": 1}
+            }
           }
         },
+        "dependentRequired": {"kept": ["from"]},
         "if": {"not": {"required": ["from"]}},
         "then": {"properties": {"lost": {"minItems": 1}}}
       }

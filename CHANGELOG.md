@@ -59,6 +59,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- Behind a wall, the session keeps a value of the runtime's model endpoint variable,
+  `ANTHROPIC_BASE_URL` for Claude Code, of the server, the run, the machine or the
+  harness's defaults, when its host is a host of the run's model credential in the
+  run answer's `credential_hosts`, and leaves any other value out in place of the
+  runtime's `denies`. The harness's computed value of it, which reached the runtime
+  whatever its host, is left out too when uncovered. The value the run inherits is not
+  checked. `dev.qory.run.policy_applied`'s `variables` records a kept value with
+  `kept`, and a value left out as `endpoint_uncovered` or `endpoint_unreadable`.
+  Without a wall nothing changes.
 - The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
   `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
 - Enrolment: an access key can belong to an adapter, `node_kind` `adapter` with an

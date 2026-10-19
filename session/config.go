@@ -54,10 +54,18 @@ type Variables struct {
 type Applied []AppliedVariable
 
 // AppliedVariable is one name: the source whose value the run applies, empty when none
-// does, and the values that lost, the highest source first.
+// does, the values that lost, the highest source first, and, behind a wall, why the
+// endpoint rule kept the value of the runtime's model endpoint variable, nil otherwise.
 type AppliedVariable struct {
 	Name, From string
 	Lost       []Loss
+	Kept       *Kept
+}
+
+// Kept is why the endpoint rule kept a value: [KeptEndpointCovered], and the name of
+// the model credential whose hosts include the value's host.
+type Kept struct {
+	Why, Credential string
 }
 
 // Loss is one source's value that lost, and why.
@@ -79,6 +87,10 @@ const (
 	WhyDenied     = variables.WhyDenied
 	WhyFixed      = variables.WhyFixed
 	WhyUnwalled   = variables.WhyUnwalled
+
+	WhyEndpointUncovered  = variables.WhyEndpointUncovered
+	WhyEndpointUnreadable = variables.WhyEndpointUnreadable
+	KeptEndpointCovered   = variables.KeptEndpointCovered
 )
 
 // applied is the record of a resolution as [Spec.OnVariables] receives it.
@@ -90,6 +102,9 @@ func applied(entries []variables.Entry) Applied {
 			lost[j] = Loss{From: l.From, Why: l.Why}
 		}
 		out[i] = AppliedVariable{Name: e.Name, From: e.From, Lost: lost}
+		if e.Kept != nil {
+			out[i].Kept = &Kept{Why: e.Kept.Why, Credential: e.Kept.Credential}
+		}
 	}
 	return out
 }

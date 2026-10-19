@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/wall"
@@ -85,15 +86,17 @@ func passes(spec Spec) []string {
 // resolve resolves the run's variables, from the fixed names to what the run
 // inherits, after refusing what the run passes into the enclosure: placeholders are the
 // variables the agent sees in place of what the gateway holds, and reserved the names
-// the gateway sets for the run, what a value of the machine's is read from. It returns the
-// resolution and, for a walled run, the names to unset inside, which [Exec] takes out
-// of the launch's environment: the runtime's declared and reserved variables and the
-// names the runtime denies, lists in its model overrides or the node's deny list
-// removes, that nothing sets. Forager, the wall and the preparation set names too,
-// [wall.Nest] among them for a run with nested Docker, docker, so none of theirs is
+// the gateway sets for the run, what a value of the machine's is read from. Behind a
+// wall, the endpoint rule checks each value of the runtime's model endpoint variable
+// against credentials, the run answer's credential_hosts. It returns the resolution
+// and, for a walled run, the names to unset inside, which [Exec] takes out of the
+// launch's environment: the runtime's declared and reserved variables and the names
+// the runtime denies, lists in its model overrides or as its model endpoint, or the
+// node's deny list removes, that nothing sets. Forager, the wall and the preparation
+// set names too, [wall.Nest] among them for a run with nested Docker, docker, so none of theirs is
 // ever unset; the wall's names for a run with an authority count as set only when the
 // run has one, authority.
-func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool) (variables.Resolved, []string, error) {
+func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
 		decl = s.Secrets()
@@ -103,13 +106,21 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 		runtimeNames = append(runtimeNames, d.Name)
 	}
 	runtimeNames = append(runtimeNames, decl.Reserves...)
-	// The variables that would override the model id or effort value a composer
-	// writes: a walled run leaves them out like a denied name, and unsets them inside.
+	// overrides are the variables that would override the model id or effort value a
+	// composer writes: a walled run leaves them out like a denied name, and unsets them
+	// inside. endpoint is the variable the runtime reads its model endpoint from:
+	// behind a wall the endpoint rule decides whether a value of it applies, and it is
+	// unset inside when nothing sets it.
 	var overrides []string
+	var endpoint string
 	if m, ok := rt.(runtimes.Model); ok {
 		if places, ok := m.Model(); ok {
-			overrides = places.Overrides
+			overrides, endpoint = places.Overrides, places.Endpoint.Variable
 		}
+	}
+	creds := make([]variables.Credential, 0, len(credentials))
+	for _, c := range credentials {
+		creds = append(creds, variables.Credential{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders})
 	}
 	// What a value of the machine's is read from: the gateway's own names.
 	readFrom := reserved
@@ -146,6 +157,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 		Walled: spec.Wall != nil, Unwalled: spec.Variables.Unwalled,
 		Deny: spec.Variables.Deny, RuntimeDenies: decl.Denies, Overrides: overrides, Runtime: runtimeNames,
 		Placeholders: placeholderNames, ReadFrom: readFrom, Own: own,
+		Endpoint: endpoint, Credentials: creds,
 	})
 	if err != nil {
 		return variables.Resolved{}, nil, err
@@ -164,11 +176,16 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 				unset = append(unset, name)
 			}
 		}
-		// A name the runtime denies, lists in its model overrides or the node's deny
-		// list removes is unset too, so an image's value for it does not reach the
-		// runtime either. A value that wins with it stays, and so does a name Forager,
-		// the wall or the preparation sets. A pattern names no variable to unset.
-		for _, name := range slices.Concat(decl.Denies, overrides, spec.Variables.Deny) {
+		// A name the runtime denies, lists in its model overrides or as its model
+		// endpoint, or the node's deny list removes, is unset too, so an image's value
+		// for it does not reach the runtime either. A value that wins with it stays, a
+		// kept endpoint's among them, and so does a name Forager, the wall or the
+		// preparation sets. A pattern names no variable to unset.
+		var endpoints []string
+		if endpoint != "" {
+			endpoints = []string{endpoint}
+		}
+		for _, name := range slices.Concat(decl.Denies, overrides, endpoints, spec.Variables.Deny) {
 			if variableShape.MatchString(name) && !slices.Contains(set, name) && !slices.Contains(unset, name) {
 				unset = append(unset, name)
 			}

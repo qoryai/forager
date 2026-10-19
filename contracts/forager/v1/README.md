@@ -666,7 +666,9 @@ are entries of the deny list too, and they leave out the harness's computed valu
 such a name as well; without a wall they leave nothing out. What the run inherits is
 matched against no entry: it is the developer's environment. A denied value is left
 out, recorded as `denied`, and the next source's
-value of the name applies. Each built-in entry undermines the wall, the proxy or
+value of the name applies. Behind a wall, the runtime's `denies` leave out no value of
+the variable of the runtime's model `endpoint`: the endpoint rule decides (The model
+endpoint, below). Each built-in entry undermines the wall, the proxy or
 Forager. An entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one
 character other than `*`. It matches a whole name: `*` matches any run of characters,
 the empty run included, anywhere in the entry. Matching ignores case, because programs
@@ -689,6 +691,26 @@ and the runtime's `denies` and `overrides`, which `runtimes.json` lists.
 | the run's runtime's `denies` | they move the runtime's model credential or run its commands (§The descriptor) |
 | behind a wall, the run's runtime's model `overrides` | they would override the model id or effort value a composer writes (§The descriptor) |
 
+**The model endpoint.** Behind a wall, the endpoint rule decides whether a value of the
+variable of the runtime's model `endpoint` (§The descriptor), `ANTHROPIC_BASE_URL` for
+Claude Code, applies. It checks each value of the server, the run, the machine, the
+harness's defaults and the harness's computed values, after the other entries of the
+deny list, and the other rules for the server's values (Also left out, below), that
+apply to that source; it checks no value the run inherits. A model
+credential is a credential of the run answer's `credential_hosts` whose `placeholders`
+include a variable the runtime declares or reserves. A value applies only when
+`policy.EndpointHost` reads a host from it, which needs an `https` URL without user
+information, and that host is a host of a model credential by the rule the gateway's
+proxy picks a request's credential by, `policy.CredentialFor`. When such a value
+applies, the name's entry in the record, if the record lists the name, has `kept`
+(The record of the variables, below). Any other value is
+left out, recorded as `endpoint_unreadable` or `endpoint_uncovered`, and the next
+source's value applies. When the rule leaves out one of the harness's computed values
+of the name, it leaves out all of them; when it keeps all of them, the last one alone
+applies. An answer without `credential_hosts` has no model credential,
+so every value is left out. Without a wall the rule does not apply, and the deny list
+treats the name as any other.
+
 **The run's system and repositories.** The server's variables may set two `QORY_`
 names, `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`: the system and the repositories a
 run's preparation may use (§The wall), as the server sets them. Forager reads nothing
@@ -709,8 +731,8 @@ passed. Behind a wall, every variable the runtime declares or reserves that neit
 placeholder, a source, the runtime's preparation, Forager nor the wall sets is unset
 inside the enclosure, so an image's `ENV` cannot set one, and the runtime never sees it
 empty, which a program may read as set. So is every name the runtime `denies` or lists
-in its model `overrides`, or the node's deny list removes, by its exact name, that
-nothing sets: a pattern unsets none, and a name Forager, the wall or the preparation
+in its model `overrides` or as its model `endpoint`, or the node's deny list removes, by
+its exact name, that nothing sets: a pattern unsets none, and a name Forager, the wall or the preparation
 sets keeps its value. One exception
 limits this: with nested Docker, `DOCKER_CONFIG` is never unset, and a non-empty value
 in the enclosure's environment, the image's included, takes the place of the wall's
@@ -727,8 +749,12 @@ without a wall.
 **The record of the variables.** `dev.qory.run.policy_applied`'s `variables` lists the
 run's variables by name, never a value, sorted by name: each `name`, `from`, the source
 whose value the run applies, and `lost`, the values left out, the highest source first,
-each with its source, `from`, and the reason, `why`: `overridden`, `denied`, `fixed` or
-`unwalled`.
+each with its source, `from`, and the reason, `why`: `overridden`, `denied`, `fixed`,
+`unwalled`, `endpoint_uncovered`, the endpoint's host is none of the hosts of the run's
+model credential, or `endpoint_unreadable`, the value is not an `https` URL with a host
+Forager reads. An entry has `kept`, behind a wall, when the value that applies is one of
+the model endpoint's variable whose host is a host of the run's model credential: `why`
+`endpoint_covered` and the credential's name, `credential`.
 
 ```json
 [{"name": "HARNESS_PROFILE", "from": "harness", "lost": []},
@@ -737,7 +763,8 @@ each with its source, `from`, and the reason, `why`: `overridden`, `denied`, `fi
 ```
 
 - A name is listed when the server, the run, the machine or the harness's defaults set
-  it, and when the built-in list leaves out a value the harness computed.
+  it, and when the built-in list or, behind a wall, the endpoint rule leaves out a value
+  the harness computed.
 - A fixed name is listed only when it won over one of those sources, with `from:
   fixed`, so Forager's, the proxy's and the wall's names do not fill every record.
 - A name the run inherits is listed only when one of those sources set it too, so the
@@ -2707,7 +2734,8 @@ paths of those hosts, in the policy's path grammar; and how it is set,
 declared ids, each in one group at most: groups of declarations of which the runtime
 needs at most one, and exactly one of a `required` group. `reserves` lists variables
 the runtime reads a credential from beside the declared ones; `denies`, variables the
-session always leaves out of the server's set for the runtime; `credential_files`, files
+session leaves out of the server's set for the runtime, apart from the variable of the
+model `endpoint` behind a wall (Model, below); `credential_files`, files
 in which the runtime keeps its credential, `~` being the home of the user Forager runs
 as. Behind a wall, a declared or reserved variable that neither a placeholder, the run
 nor the runtime's preparation sets is unset inside (§Variables). The session checks
@@ -2729,9 +2757,10 @@ its model API from, and is always a variable. `overrides`, optional, lists 1 to 
 distinct variables that would override the model id or effort value a composer writes.
 Behind a wall the session treats each as a name of `denies`, and also leaves out the
 harness's computed value of it (§Variables); without a wall `overrides` changes
-nothing. Every object of the section is closed. The session uses only `overrides` of the
-section, and the gateway uses none of it: `denies` still decides whether the server's
-value of the endpoint's variable reaches the runtime.
+nothing. Every object of the section is closed. The session uses `overrides` and
+`endpoint` of the section, and the gateway uses none of it. Behind a wall, the endpoint
+rule decides whether a value of the endpoint's variable reaches the runtime, in place of
+`denies` (§Variables, The model endpoint); without a wall, `denies` decides.
 
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
