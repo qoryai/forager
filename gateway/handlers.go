@@ -13,6 +13,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -616,11 +617,13 @@ func (lr *linkRun) accepted(evs []event.Event) bool {
 	return final
 }
 
-// shownStarted sets the labels of each dev.qory.run.started in evs, a batch
-// [linkRun.check] accepted, to those [server.ShownLabels] gives, so labels a session
-// sends as they are reach the record and the server with a phrase for each key and
-// value that contains qak_ or qrk_ in any case. Data whose labels are already so is
-// left as it is.
+// shownStarted phrases each dev.qory.run.started in evs, a batch [linkRun.check]
+// accepted, as a session phrases one, so a session that sends a value as it is passes
+// no value that contains qak_ or qrk_ in any case through the gateway: the members of
+// startedNames as [accesskey.ShownName] shows them, those of startedValues and each
+// entry of startedLists as [accesskey.ShownValue] does, the labels as
+// [server.ShownLabels] gives them and about as [server.ShownAbout] does. Data with no
+// such value is left byte for byte.
 func shownStarted(evs []event.Event) {
 	for i, ev := range evs {
 		if ev.Type != event.RunStarted {
@@ -631,24 +634,64 @@ func shownStarted(evs []event.Event) {
 			continue
 		}
 		var data map[string]json.RawMessage
+		if json.Unmarshal(raw, &data) != nil {
+			continue
+		}
+		changed := false
+		set := func(member string, v any) {
+			if b, err := unescaped(v); err == nil {
+				data[member], changed = b, true
+			}
+		}
+		for _, members := range []struct {
+			names []string
+			shown func(string, bool) string
+		}{{startedNames, accesskey.ShownName}, {startedValues, accesskey.ShownValue}} {
+			for _, m := range members.names {
+				var v string
+				if json.Unmarshal(data[m], &v) == nil && accesskey.ContainsSecret(v) {
+					set(m, members.shown(v, false))
+				}
+			}
+		}
+		for _, m := range startedLists {
+			var vs []string
+			if json.Unmarshal(data[m], &vs) == nil && slices.ContainsFunc(vs, accesskey.ContainsSecret) {
+				shown := make([]string, len(vs))
+				for k, v := range vs {
+					shown[k] = accesskey.ShownValue(v, false)
+				}
+				set(m, shown)
+			}
+		}
 		var labels map[string]string
-		if json.Unmarshal(raw, &data) != nil || data["labels"] == nil || json.Unmarshal(data["labels"], &labels) != nil {
+		if json.Unmarshal(data["labels"], &labels) == nil {
+			if shown := server.ShownLabels(labels); !maps.Equal(shown, labels) {
+				set("labels", shown)
+			}
+		}
+		var about server.About
+		if json.Unmarshal(data["about"], &about) == nil {
+			if shown := server.ShownAbout(&about); !reflect.DeepEqual(*shown, about) {
+				set("about", shown)
+			}
+		}
+		if !changed {
 			continue
 		}
-		shown := server.ShownLabels(labels)
-		if maps.Equal(shown, labels) {
-			continue
-		}
-		b, err := unescaped(shown)
-		if err != nil {
-			continue
-		}
-		data["labels"] = b
-		if b, err = unescaped(data); err == nil {
+		if b, err := unescaped(data); err == nil {
 			evs[i].Data = json.RawMessage(b)
 		}
 	}
 }
+
+// The members of dev.qory.run.started a session phrases: startedNames as names,
+// startedValues as values, and each entry of startedLists as a value.
+var (
+	startedNames  = []string{"runtime", "host", "wall", "image", "image_name", "container_runtime"}
+	startedValues = []string{"dir", "command", "runtime_version"}
+	startedLists  = []string{"args", "preparation"}
+)
 
 // unescaped is v as JSON without HTML escaping, so the rest of an event's data keeps
 // its characters.

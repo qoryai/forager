@@ -3,6 +3,7 @@ package receiver
 import (
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -45,5 +46,28 @@ func TestAStoreFileErrorPrintsAPhraseForASecret(t *testing.T) {
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the error %v does not wrap fs.ErrNotExist", err)
+	}
+}
+
+// TestAStoreFileCloseErrorPrintsAPhraseForASecret pins the error of closing a store
+// file twice whose name contains qak_: a phrase, the error it wraps still found by
+// errors.Is.
+func TestAStoreFileCloseErrorPrintsAPhraseForASecret(t *testing.T) {
+	f, err := OpenFile(filepath.Join(t.TempDir(), "qak_FAKE.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = f.Close()
+	if err == nil {
+		t.Fatal("a second close succeeded")
+	}
+	if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") {
+		t.Errorf("the error %v contains an access key secret's prefix", err)
+	}
+	if !errors.Is(err, os.ErrClosed) {
+		t.Errorf("the error %v does not wrap os.ErrClosed", err)
 	}
 }

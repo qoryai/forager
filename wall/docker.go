@@ -895,7 +895,7 @@ func (e *dockerEnclosure) makeTemp() error {
 	}
 	dir, err := e.sys.tempDir()
 	if err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	e.temp = dir
 	return nil
@@ -928,7 +928,7 @@ func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error)
 		image = append(image, '\n')
 	}
 	if err := os.WriteFile(file, append(image, ca...), 0o644); err != nil {
-		return "", err
+		return "", accesskey.ShownError(err)
 	}
 	return mount(file, BundlePath, true)
 }
@@ -1089,7 +1089,7 @@ func (e *dockerEnclosure) envFile(name string, env []string) (string, error) {
 		return "", err
 	}
 	file := filepath.Join(e.temp, name)
-	return file, os.WriteFile(file, []byte(b.String()), 0o600)
+	return file, accesskey.ShownError(os.WriteFile(file, []byte(b.String()), 0o600))
 }
 
 // relayListens polls the relay's output for [RelayReady]. A relay that exited instead
@@ -1135,7 +1135,7 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 	}
 	e.made = nil
 	if e.temp != "" {
-		errs = append(errs, os.RemoveAll(e.temp))
+		errs = append(errs, accesskey.ShownError(os.RemoveAll(e.temp)))
 		e.temp = ""
 	}
 	return errors.Join(errs...)

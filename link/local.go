@@ -65,7 +65,12 @@ func (l Local) DialContext(ctx context.Context) (net.Conn, error) {
 		return l.dial(ctx)
 	}
 	var d net.Dialer
-	return d.DialContext(ctx, "unix", l.Socket)
+	c, err := d.DialContext(ctx, "unix", l.Socket)
+	if err != nil {
+		// The error quotes the socket's path.
+		return nil, accesskey.ShownError(err)
+	}
+	return c, nil
 }
 
 // File is one of the gateway's own files: its path, or a pattern of paths, and what it

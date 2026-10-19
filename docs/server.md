@@ -90,8 +90,9 @@ as a run key's "it does not start with qrk_", prints as it is. In the registrati
 A separate gateway takes a credential's argument from the labels the attach answer
 contains, where a label's value that contains a prefix is the name's phrase. A label's
 value that is either name phrase gives no argument, whatever the selection's pattern
-admits. The gateway sends `run.started`'s labels as `server.ShownLabels` gives them,
-also when a session sent them as they are. A separate gateway refuses a run key whose
+admits. The gateway phrases a `run.started` as a session does, its labels as
+`server.ShownLabels` gives them and its `about` as `server.ShownAbout` does, also when
+a session sent its values as they are. A separate gateway refuses a run key whose
 instance id contains a prefix as `run_key_invalid`.
 
 `server.Client.Discover` refuses a configuration document whose `run.url` contains a

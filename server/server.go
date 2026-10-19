@@ -540,8 +540,9 @@ func (c *Client) fetchBody(ctx context.Context, what, u, digestHeader string) ([
 }
 
 // errRunURLSecret refuses a run.url that contains qak_ or qrk_: the run's
-// run.policy_applied sends run.url as a URI, which no phrase is.
-var errRunURLSecret = errors.New("run.url contains qak_ or qrk_ in some case, which starts an access key secret or a run key, and run.policy_applied sends run.url as it is")
+// run.policy_applied sends run.url as a URI, which no phrase is. Its text names
+// neither prefix, so accesskey.ShownError keeps it.
+var errRunURLSecret = errors.New("run.url contains the start of an access key secret or a run key, and run.policy_applied would send it as it is")
 
 // Discover fetches the configuration document from the server's well-known path and
 // returns it with the server's digest of it. An error, transport, status or a document

@@ -186,12 +186,13 @@ func Forward(ctx context.Context, addr string, r io.Reader) error {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, netw, path)
 	if err != nil {
-		return err
+		// The dial's and the write's errors quote the socket's path.
+		return accesskey.ShownError(err)
 	}
 	defer conn.Close()
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 	}
 	_, err = conn.Write(append(line, '\n'))
-	return err
+	return accesskey.ShownError(err)
 }

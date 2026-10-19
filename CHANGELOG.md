@@ -114,7 +114,8 @@ release may change what an existing document does, and says so under Upgrading.
   server and over the link, a via's errors, the dial of a separate gateway and the
   reference receiver's store file errors print the value's phrase in place of one that
   quotes a URL, an address or a path with a prefix. They still wrap the error, so
-  `errors.Is` and `errors.As` find it.
+  `errors.Is` and `errors.As` find it. So do `link.Local.DialContext`'s error and the
+  reference receiver's `File.Close`.
 
 - A pin whose key contains `qak_` or `qrk_` in any case, about one key in 27,000, is
   read: `server.Parse` and `accesskey.ParsePin` leave each entry's `public_key` that is
@@ -134,6 +135,9 @@ release may change what an existing document does, and says so under Upgrading.
   attach answer, where a value that contains `qak_` or `qrk_` in any case is that
   phrase, so a label such as `repository=acme/qrk_x` gave its value as the argument
   before and gives none now. The run's user is told the label is no argument.
+- A separate gateway refuses a run key whose instance id contains `qak_` or `qrk_` in
+  any case: the attach is answered `run_key_invalid`, 400. Before, the run attached and
+  `run.registered` sent the instance id as it was.
 
 #### Added
 
@@ -237,7 +241,10 @@ release may change what an existing document does, and says so under Upgrading.
   phrase, `(a value that contains …)`. `run.started.schema.json` admits
   the two phrases as `image_name`, and `run.policy_applied.schema.json` as `image`. The
   gateway accepts `run.started` labels as they are or as `server.ShownLabels` gives
-  them, and records and sends them as `server.ShownLabels` gives them. The wall and the
+  them, and records and sends them as `server.ShownLabels` gives them. It phrases every
+  other member of a `run.started` that a session phrases too, `dir`, `command`, `args`,
+  `image` and `about` among them, so a session that sends a value as it is passes none
+  through; a `run.started` without such a value is sent byte for byte. The wall and the
   agent get every value as it is.
 
 ### Wall
@@ -268,7 +275,8 @@ release may change what an existing document does, and says so under Upgrading.
   names; the value's phrase for a path, a mount and its target, a limit, the helper, the
   docker command, its output and its error, the engine's ids, the proxy and a relay's
   forward. The engine command's error and the start of a command's output print the
-  value's phrase too.
+  value's phrase too, and so do the errors of making, writing and removing the
+  directory of a run's environment files.
 
 
 ### Session
@@ -337,7 +345,9 @@ release may change what an existing document does, and says so under Upgrading.
   errors print the value's phrase in place of one that quotes a path with a prefix,
   and still wrap the error: the resend's, the run directory's files and lock, the
   preparation script, the socket, the walk of the registry of walled runs, a wall's
-  binds and its wrap, `sink.File` and `sink.Delivered`. `run.started` sends `args` as
+  binds and its wrap, `sink.File` and `sink.Delivered`, a hook's forward to the socket,
+  and `claude.Settings`' writes of the settings file and the approval script.
+  `run.started` sends `args` as
   `[]` for a run with no arguments, where it sent `null`, which its schema refuses.
   `run.started` sends `about` whenever the caller passed one that is not empty, as
   `{}` when `server.ShownAbout` leaves out every member.

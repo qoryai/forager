@@ -88,7 +88,7 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 	}
 	path := filepath.Join(dir, "settings.json")
 	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	if at >= 0 {
 		args = append([]string(nil), args...)
@@ -134,7 +134,7 @@ func readSettings(path string, readable func(string) (string, error)) ([]byte, e
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	resolve := filepath.EvalSymlinks
 	if readable != nil {
@@ -142,13 +142,14 @@ func readSettings(path string, readable func(string) (string, error)) ([]byte, e
 	}
 	resolved, err := resolve(abs)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	judged, err := os.Stat(resolved)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
-	return hostfile.Read(abs, maxSettings, judged)
+	b, err := hostfile.Read(abs, maxSettings, judged)
+	return b, accesskey.ShownError(err)
 }
 
 // shellLine quotes a command for a shell, since a command hook runs under sh -c.

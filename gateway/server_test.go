@@ -1006,3 +1006,33 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 		t.Errorf("a run with no server: delivered.log: %v", err)
 	}
 }
+
+// TestAReloadOfARunURLWithASecretSaysWhy pins the reload's report when the server's
+// configuration document turns to a run.url that contains qrk_: the reload fails with
+// its reason, which names neither prefix and so prints as it is, and the URL with the
+// prefix is printed nowhere.
+func TestAReloadOfARunURLWithASecretSaysWhy(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example"]}}`, 'a')
+	h := start(t, gateway.Config{Server: c.server()})
+	a := h.open(server.LinkRunRequest{})
+	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	c.mu.Lock()
+	c.runURL = c.srv.URL + "/v1/qrk_FAKE/runs"
+	c.mu.Unlock()
+	eventually(t, "the failed reload's report", func() bool {
+		h.post(heartbeat(a.RunID))
+		return h.reported("the reload failed: ")
+	})
+	got := h.reportsWith("the reload failed")
+	if len(got) == 0 || !strings.Contains(got[0], "run.url contains the start of an access key secret or a run key") {
+		t.Errorf("reports %q", got)
+	}
+	for _, r := range got {
+		if strings.Contains(strings.ToLower(r), "qrk_") {
+			t.Errorf("a report contains the prefix: %s", r)
+		}
+	}
+}

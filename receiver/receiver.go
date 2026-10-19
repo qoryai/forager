@@ -1378,5 +1378,5 @@ func (s *File) Count() int {
 func (s *File) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return errors.Join(s.f.Sync(), s.f.Close())
+	return accesskey.ShownError(errors.Join(s.f.Sync(), s.f.Close()))
 }
