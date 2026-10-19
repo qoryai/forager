@@ -36,8 +36,8 @@ release may change what an existing document does, and says so under Upgrading.
   relay starts from, and `reference: true` on an `image` the policy names by reference.
 - A run configuration's `credentials`: at most 8 credentials whose values the server
   stores for the run, each `{name, hosts, paths, auth, key_form, placeholders}`, with
-  exact hosts and no value. `key_form`, required, is `api_key` or `access_token`, the
-  form of the key. Forager checks the member against `run-configuration.schema.json`,
+  exact hosts and no value. `key_form`, optional, is the form of the key for a model
+  credential, `api_key` or `access_token`. Forager checks the member against `run-configuration.schema.json`,
   and a member the schema refuses is `run_configuration_invalid`; Forager sets no value
   from it and reads no `key_form`.
 - The secrets request, `secrets-request.schema.json`, a signed `POST` to discovery's
