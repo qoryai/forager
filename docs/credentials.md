@@ -123,15 +123,14 @@ The gateway holds each credential's secret and the access key in memory. Before 
 starts anything, `gateway.Start` limits core dumps of the process and debugger access
 to it:
 
-- **Linux**: `prctl(PR_SET_DUMPABLE, 0)`, so that a process of the same user without
-  `CAP_SYS_PTRACE` can neither attach to it with `ptrace` nor read its memory or its
-  environment under `/proc/<pid>/`; and `RLIMIT_CORE` 0, soft and hard, so that the
-  kernel writes no core file of it. With `fs.suid_dumpable` set to 2 and a
-  `kernel.core_pattern` that pipes to a program, such as apport on Ubuntu, that program
-  can still get a core dump of the process.
+- **Linux**: `prctl(PR_SET_DUMPABLE, 0)`, so that the kernel writes no core dump of
+  the process, and a process of the same user without `CAP_SYS_PTRACE` can neither
+  attach to it with `ptrace` nor read its memory or its environment under
+  `/proc/<pid>/`; and `RLIMIT_CORE` 0, soft and hard.
 - **macOS**: `RLIMIT_CORE` 0, soft and hard; and `ptrace(PT_DENY_ATTACH)`, so that no
-  debugger attaches to the process with `ptrace`. Root, or a program with the
-  `task_for_pid` entitlement, can still read its memory through its task port.
+  debugger attaches to the process with `ptrace`. Root, or a debugger that macOS allows
+  to call `task_for_pid` on the process, can still read its memory through its task
+  port.
 - **Other systems**: nothing.
 
 The settings stay for the life of the process, after `Close` too. In `qory run` the
@@ -187,15 +186,17 @@ and each page mapped later.
   gateway.lock_memory is true, and mlockall failed with RLIMIT_MEMLOCK at 8388608 bytes: cannot allocate memory; in Docker, pass --ulimit memlock=-1, or set gateway.lock_memory to false
   ```
 
-  If `RLIMIT_MEMLOCK` is already unlimited, the limit is not the cause: a seccomp
-  filter or a security module refused the call. The error is then:
+  That first line is for a failure the limit causes: `cannot allocate memory`
+  (`ENOMEM`) under a finite limit, or `operation not permitted` (`EPERM`) under a
+  limit of 0. Any other failure, such as `EPERM` under an unlimited or a nonzero
+  limit, comes from a seccomp filter that refuses the call. The error is then:
 
   ```text
   allow mlockall in the gateway's seccomp profile, or set gateway.lock_memory to false
   gateway.lock_memory is true, and mlockall failed with RLIMIT_MEMLOCK unlimited: operation not permitted
   ```
 
-  If `RLIMIT_MEMLOCK` does not read either, the first line is
+  If reading `RLIMIT_MEMLOCK` fails too, the first line is
   `raise RLIMIT_MEMLOCK to unlimited, or allow mlockall and prlimit64 in the gateway's seccomp profile`.
 
 - On macOS and other systems, `true` stops the gateway:

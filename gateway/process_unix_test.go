@@ -6,11 +6,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -20,33 +20,23 @@ import (
 // dumps, lock, lock-none or start.
 const envHarden = "GATEWAY_TEST_HARDEN"
 
-// memlockFix is the first line of lockAll's failure on Linux under a finite
-// RLIMIT_MEMLOCK, and mlockallFix under RLIMIT_MEMLOCK unlimited.
-const (
-	memlockFix  = "raise RLIMIT_MEMLOCK to unlimited: LimitMEMLOCK=infinity in a systemd unit, or ulimit -l unlimited"
-	mlockallFix = "allow mlockall in the gateway's seccomp profile, or set gateway.lock_memory to false"
-	// unreadFix is the first line when RLIMIT_MEMLOCK does not read either.
-	unreadFix = "raise RLIMIT_MEMLOCK to unlimited, or allow mlockall and prlimit64 in the gateway's seccomp profile"
-)
-
-// seccompFilter is the Seccomp of /proc/self/status under a seccomp filter.
-const seccompFilter = 2
-
 // hardenPrefix starts the one line on which TestHardenChild reports.
 const hardenPrefix = "harden-result: "
 
-// hardenResult is what a child reports after the calls: the error, the core size
-// limit or why it did not read, PR_GET_DUMPABLE on Linux, the kB of VmLck on Linux, and
-// the Seccomp mode of /proc/self/status on Linux; -1 for each of the last three
-// elsewhere.
+// hardenResult is what a child reports after the calls: the error and its errno, 0 for
+// none; the core size limit, or why reading it failed; the soft RLIMIT_MEMLOCK, or why
+// reading it failed; PR_GET_DUMPABLE on Linux and -1 elsewhere; and the kB of VmLck on
+// Linux and -1 elsewhere.
 type hardenResult struct {
-	Err      string
-	CoreCur  uint64
-	CoreMax  uint64
-	CoreErr  string
-	Dumpable int
-	LockedKB int64
-	Seccomp  int64
+	Err        string
+	Errno      int
+	CoreCur    uint64
+	CoreMax    uint64
+	CoreErr    string
+	MemlockCur uint64
+	MemlockErr string
+	Dumpable   int
+	LockedKB   int64
 }
 
 // TestHardenChild makes, in a child that runHardenChild starts, the calls that
@@ -81,15 +71,24 @@ func TestHardenChild(t *testing.T) {
 	default:
 		t.Fatalf("%s=%s is none of dumps, lock, lock-none and start", envHarden, os.Getenv(envHarden))
 	}
-	r := hardenResult{Dumpable: dumpable(), LockedKB: statusField("VmLck"), Seccomp: statusField("Seccomp")}
+	r := hardenResult{Dumpable: dumpable(), LockedKB: statusField("VmLck")}
 	if err != nil {
 		r.Err = err.Error()
+		var en unix.Errno
+		if errors.As(err, &en) {
+			r.Errno = int(en)
+		}
 	}
 	var c unix.Rlimit
 	if err := unix.Getrlimit(unix.RLIMIT_CORE, &c); err != nil {
 		r.CoreErr = err.Error()
 	}
 	r.CoreCur, r.CoreMax = uint64(c.Cur), uint64(c.Max)
+	var m unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_MEMLOCK, &m); err != nil {
+		r.MemlockErr = err.Error()
+	}
+	r.MemlockCur = uint64(m.Cur)
 	b, _ := json.Marshal(r)
 	fmt.Println(hardenPrefix + string(b))
 }
@@ -118,25 +117,19 @@ func runHardenChild(t *testing.T, what string) hardenResult {
 }
 
 // TestDenyDumpsLeavesNoCoreDump pins denyDumps: the core size limit is 0, soft and
-// hard, and on Linux the process is not dumpable. Under a seccomp filter that refuses
-// prctl or prlimit64, it pins the failure's fix instead.
+// hard, and on Linux the process is not dumpable. On Linux, when a seccomp filter
+// refuses prctl or prlimit64, it pins the one failure that call gives instead.
 func TestDenyDumpsLeavesNoCoreDump(t *testing.T) {
 	r := runHardenChild(t, "dumps")
 	if r.Err != "" {
-		if r.Seccomp == seccompFilter {
-			for _, fix := range []string{
-				"allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: ",
-				"allow prlimit64 in the gateway's seccomp profile: RLIMIT_CORE 0 failed: ",
-			} {
-				if strings.HasPrefix(r.Err, fix) {
-					t.Skipf("a seccomp filter refuses the call here, and denyDumps fails with the fix: %s", r.Err)
-				}
-			}
+		want := wantDumpsError(r)
+		if want == "" || r.Err != want {
+			t.Fatalf("denyDumps: %q; want %q", r.Err, want)
 		}
-		t.Fatalf("denyDumps: %s", r.Err)
+		t.Skipf("a seccomp filter refuses the call here, and denyDumps fails with the fix: %s", r.Err)
 	}
 	if r.CoreErr != "" {
-		t.Fatalf("RLIMIT_CORE does not read: %s", r.CoreErr)
+		t.Fatalf("reading RLIMIT_CORE failed: %s", r.CoreErr)
 	}
 	if r.CoreCur != 0 || r.CoreMax != 0 {
 		t.Errorf("RLIMIT_CORE is %d, hard %d; want 0 and 0", r.CoreCur, r.CoreMax)
@@ -151,7 +144,7 @@ func TestDenyDumpsLeavesNoCoreDump(t *testing.T) {
 func TestAStartedTestBinaryKeepsItsDumps(t *testing.T) {
 	var before unix.Rlimit
 	if err := unix.Getrlimit(unix.RLIMIT_CORE, &before); err != nil {
-		t.Skipf("RLIMIT_CORE does not read here: %v", err)
+		t.Skipf("reading RLIMIT_CORE failed here: %v", err)
 	}
 	g, err := Start(context.Background(), Config{Dir: t.TempDir(), NoLinkSocket: true})
 	if err != nil {
@@ -168,7 +161,7 @@ func TestAStartedTestBinaryKeepsItsDumps(t *testing.T) {
 }
 
 // TestStartWithLockMemory pins Config.LockMemory through Start: on Linux the memory is
-// locked, or with a finite RLIMIT_MEMLOCK Start fails with the fix first; elsewhere
+// locked, or Start fails with the one error the limit and the errno give; elsewhere
 // Start fails with the fix first.
 func TestStartWithLockMemory(t *testing.T) {
 	r := runHardenChild(t, "start")
@@ -180,14 +173,7 @@ func TestStartWithLockMemory(t *testing.T) {
 		return
 	}
 	if r.Err != "" {
-		first, _, _ := strings.Cut(r.Err, "\n")
-		filtered := r.Seccomp == seccompFilter && (first == mlockallFix || first == unreadFix)
-		if first != memlockFix && !filtered {
-			t.Errorf("Start: %q; want the first line %q, or %q or %q under a seccomp filter", r.Err, memlockFix, mlockallFix, unreadFix)
-		}
-		if len(first) > 100 {
-			t.Errorf("the first line is %d characters; want at most 100", len(first))
-		}
+		checkLockError(t, r)
 		t.Skipf("Start failed with the fix, since RLIMIT_MEMLOCK is finite here or a seccomp filter refuses mlockall: %s", r.Err)
 	}
 	if r.LockedKB <= 0 {
