@@ -520,9 +520,10 @@ values the server stores for the run, at most 8 (`run-configuration.schema.json`
 ```json
 "credentials": [
   {"name": "model", "hosts": ["api.model.example"], "paths": ["/v1/*"],
-   "auth": {"scheme": "header", "header": "x-api-key"}, "placeholders": ["MODEL_API_KEY"]},
+   "auth": {"scheme": "header", "header": "x-api-key"}, "key_form": "api_key",
+   "placeholders": ["MODEL_API_KEY"]},
   {"name": "forge", "hosts": ["git.example", "api.git.example"],
-   "auth": {"scheme": "basic", "username": "x-access-token"}}]
+   "auth": {"scheme": "basic", "username": "x-access-token"}, "key_form": "access_token"}]
 ```
 
 `name` is a credential's name, `^[a-z0-9][a-z0-9_.-]{0,63}$`, each once in the document.
@@ -532,10 +533,14 @@ hex groups with no leading zero, without brackets or a zone; never a `*.` patter
 port. The server writes an IPv6 address in RFC 5952's form, the form `policy.Host`
 returns: the schema does not check which run of zero groups `::` replaces. `paths` are
 in the policy's path grammar, absent meaning every path, `auth` is one of the closed set
-of schemes, `auth.schema.json`, and `placeholders` are variables for the enclosure to get
-with the placeholder value. An entry has no value and no member beside these five: the
-server seals each value to the access key in the answer to the secrets request (§The
-server, Secrets). This revision defines the member and the request. Forager checks a run
+of schemes, `auth.schema.json`. `key_form`, required, is the form of the key, `api_key`
+for an API key or `access_token` for an access token from a subscription login: the
+runtime's descriptor is to use it with `auth` to choose the variable that receives the
+placeholder, and no Forager component reads it in this revision. `placeholders` are
+variables for the enclosure to get with the placeholder value. An entry has no value and
+no member beside these six: the server seals each value to the access key in the answer
+to the secrets request (§The server, Secrets). This revision defines the member and the
+request. Forager checks a run
 configuration's `credentials` against the schema, and a run configuration the schema
 refuses is `run_configuration_invalid`; it sends no secrets request, sets no value and
 adds no placeholder for an entry.

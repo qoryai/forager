@@ -160,23 +160,26 @@ func TestARunConfigurationNamesItsImageByDigest(t *testing.T) {
 
 // TestARunConfigurationsCredentialsAreChecked pins that a run configuration's
 // credentials are read against the schema: a document with two entries is read, and an
-// entry with a value member, a *. host, a host with a port or no auth is
-// run_configuration_invalid at the entry, with an error that quotes no value.
+// entry with a value member, a *. host, a host with a port, no auth, no key_form or a
+// key_form outside the enum is run_configuration_invalid at the entry, with an error
+// that quotes no value.
 func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 	entry := func(extra string) string {
-		return `{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"}` + extra + `}]}`
+		return `{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"},"key_form":"api_key"` + extra + `}]}`
 	}
 	v := newVerified(t)
-	v.runDoc = `{"version":1,"credentials":[{"name":"model","hosts":["api.model.example","10.0.0.5","fd00::5"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"placeholders":["MODEL_API_KEY"]},{"name":"forge","hosts":["git.example"],"auth":{"scheme":"basic","username":"x-access-token"}}]}`
+	v.runDoc = `{"version":1,"credentials":[{"name":"model","hosts":["api.model.example","10.0.0.5","fd00::5"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"key_form":"api_key","placeholders":["MODEL_API_KEY"]},{"name":"forge","hosts":["git.example"],"auth":{"scheme":"basic","username":"x-access-token"},"key_form":"access_token"}]}`
 	if _, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t)); err != nil {
 		t.Fatalf("a run configuration with credentials: %v", err)
 	}
 	for name, doc := range map[string]string{
-		"a value":          entry(`,"value":"` + value + `"`),
-		"a *. host":        strings.Replace(entry(""), `"api.model.example"`, `"*.model.example"`, 1),
-		"a host and port":  strings.Replace(entry(""), `"api.model.example"`, `"api.model.example:443"`, 1),
-		"no auth":          strings.Replace(entry(""), `,"auth":{"scheme":"bearer"}`, ``, 1),
-		"nine credentials": `{"version":1,"credentials":[` + strings.Repeat(`{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"}},`, 8) + `{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"}}]}`,
+		"a value":           entry(`,"value":"` + value + `"`),
+		"a *. host":         strings.Replace(entry(""), `"api.model.example"`, `"*.model.example"`, 1),
+		"a host and port":   strings.Replace(entry(""), `"api.model.example"`, `"api.model.example:443"`, 1),
+		"no auth":           strings.Replace(entry(""), `,"auth":{"scheme":"bearer"}`, ``, 1),
+		"no key_form":       strings.Replace(entry(""), `,"key_form":"api_key"`, ``, 1),
+		"key_form password": strings.Replace(entry(""), `"api_key"`, `"password"`, 1),
+		"nine credentials":  `{"version":1,"credentials":[` + strings.Repeat(`{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"},"key_form":"api_key"},`, 8) + `{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"},"key_form":"api_key"}]}`,
 	} {
 		v := newVerified(t)
 		v.runDoc = doc

@@ -48,12 +48,13 @@
       "description": "One credential whose value the server stores: its name, where its value is set and how. The run configuration does not contain the value: the server seals it to the access key in its answer to the secrets request, secrets-answer.schema.json.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "hosts", "auth"],
+      "required": ["name", "hosts", "auth", "key_form"],
       "properties": {
         "name": {"description": "The credential's name, unique among the entries.", "$ref": "#/$defs/credential_name"},
         "hosts": {"description": "The hosts the value is set on, each exact: a DNS name or an IP literal, never a *. pattern.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/credential_host"}},
         "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
         "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},
+        "key_form": {"description": "The form of the key: an API key, or an access token from a subscription login. The runtime's descriptor uses it with auth to choose the variable that receives the placeholder.", "enum": ["api_key", "access_token"]},
         "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}}
       }
     },
