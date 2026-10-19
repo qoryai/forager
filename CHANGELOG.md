@@ -19,6 +19,13 @@ release may change what an existing document does, and says so under Upgrading.
   now stops: pass the key in the machine's variables,
   or define a model credential with a placeholder. A run without a wall, or whose run
   answer has no `credential_hosts`, starts as before.
+- A placeholder of the machine's credentials or tools that the runtime's descriptor
+  denies, lists in its model `overrides` or reads its model endpoint from, such as
+  `CLAUDE_CONFIG_DIR` or `ANTHROPIC_MODEL` for Claude Code, now stops the run,
+  `run_configuration_invalid`, and so does a tool's placeholder in a variable the
+  runtime reads a key from, such as `ANTHROPIC_API_KEY`, when no credential has it. Remove
+  the placeholder from forager.yaml. A machine credential's placeholder in a key's
+  variable runs as before.
 - `runtimes.json`: the claude runtime's `reserves` is `[]`, and `ANTHROPIC_AUTH_TOKEN` is
   its declaration `auth_token`, "Anthropic API key as a bearer". A server that lists a
   runtime's declarations shows a third one for Claude Code.
@@ -39,6 +46,14 @@ release may change what an existing document does, and says so under Upgrading.
   `placeholder_conflict`, the endpoint rule counts the credential as a model
   credential, and Claude Code's approval script covers `ANTHROPIC_API_KEY` chosen this
   way. A run configuration credential with `key_variables` needs no `placeholders`.
+- A placeholder goes only into a variable for a credential. The session refuses,
+  `run_configuration_invalid`, a placeholder of a credential from the server that the
+  runtime's descriptor denies, lists in its model `overrides` or reads its model
+  `endpoint` from, or that the runtime declares or reserves and the session did not
+  choose from the credential's `key_variables`; and one of the run answer's `placeholders` that the
+  descriptor denies, overrides or reads its endpoint from, or that the runtime declares
+  or reserves and no credential has. A tool's placeholder, such as `GITHUB_TOKEN`, and
+  a machine credential's key variable pass.
 - The link's run answer's `credential_hosts` has `auth` for a credential from the
   server, and `key_variables` when its entry has them. `server.LinkCredentialHosts` has
   `Auth` and `KeyVariables`.
@@ -101,7 +116,7 @@ release may change what an existing document does, and says so under Upgrading.
 - A run configuration's `credentials`: at most 8 credentials whose values the server
   stores for the run, each `{name, hosts, paths, auth, key_variables, placeholders}`,
   with exact hosts and no value. `key_variables`, optional, are the names of the
-  environment variables in which a runtime takes the credential's key, 1 to 16, upper
+  environment variables from which a runtime reads the credential's key, 1 to 16, upper
   case, none twice. Forager checks the member against
   `run-configuration.schema.json`, and refuses a name twice and an `auth.header` that
   frames the request or that the proxy sets, and a placeholder that

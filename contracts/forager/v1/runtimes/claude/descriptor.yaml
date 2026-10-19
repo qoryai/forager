@@ -43,8 +43,8 @@ headless:
 # the machine defines. Claude Code reads an API key from ANTHROPIC_API_KEY, which it
 # sends as x-api-key, or from ANTHROPIC_AUTH_TOKEN, which it sends as a bearer and reads
 # before the others, and a subscription login's key from CLAUDE_CODE_OAUTH_TOKEN, as a
-# bearer. A sealed credential's key_variables choose among the three the variable that
-# receives its placeholder: the one they list, whose auth is the credential's. The
+# bearer. The session gives a sealed credential's placeholder to the one of the three
+# that its key_variables list, when that declaration's auth is the credential's. The
 # denied variables move where requests and the credential go, add headers, switch to
 # another provider, wrap or replace the shell, move the settings and the credential
 # file, or change the client certificate and the trust of TLS connections; each is in

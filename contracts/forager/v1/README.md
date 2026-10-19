@@ -555,7 +555,7 @@ port. The server writes an IPv6 address in RFC 5952's form, the form `policy.Hos
 returns: the schema does not check which run of zero groups `::` replaces. `paths` are
 in the policy's path grammar, absent meaning every path, `auth` is one of the closed set
 of schemes, `auth.schema.json`. `key_variables`, optional, are the names of the
-environment variables in which a runtime takes the credential's key, 1 to 16, each
+environment variables from which a runtime reads the credential's key, 1 to 16, each
 `^[A-Z_][A-Z0-9_]{0,127}$` and none twice: the session gives the placeholder to the one
 of them that the run's runtime declares (The variable of a model key, below).
 `placeholders` are variables for the enclosure to get with the placeholder value. An entry
@@ -600,18 +600,30 @@ gateway's link), and the session takes the names among `key_variables` that the 
 runtime's descriptor declares (§The descriptor). Exactly one must match, and the
 declaration's `auth` must equal the credential's: the same scheme and, for `header`, the
 same header name, case ignored. The declaration's variable joins the credential's
-`placeholders` and the run's. For Claude Code, `ANTHROPIC_API_KEY` takes a key in the
-header `x-api-key`, and `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` take one as a
-bearer, so a credential for an API key sent as a bearer, such as OpenRouter's, lists
+`placeholders` and the run's. Claude Code sends the key in `ANTHROPIC_API_KEY` as the
+header `x-api-key`, and the key in `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` as
+a bearer, so a credential for an API key sent as a bearer, such as OpenRouter's, lists
 `ANTHROPIC_AUTH_TOKEN`. A name the runtime does not declare, such as another runtime's
 variable, is passed over.
 
 A credential of which the runtime declares none of the `key_variables`, or more than
 one, or whose `auth` differs from the one declaration's, is `run_configuration_invalid`
 with the credential's name. A credential's `placeholders` may also list the chosen
-variable, which is set once, and variables the runtime does not declare, which are set as
-well. A credential whose `placeholders` list another variable the runtime declares is
-`run_configuration_invalid`: a key goes into one variable. The chosen variable is a
+variable, which is set once, and variables the runtime does not declare, such as a
+tool's `GITHUB_TOKEN`, which are set as well.
+
+A placeholder goes only into a variable for a credential. A placeholder of a
+credential from the server is `run_configuration_invalid`, with the credential's name,
+when the runtime's descriptor lists it in `denies` or in its model `overrides`, when it
+is the model `endpoint`'s variable, or when the runtime declares or reserves it and the
+session did not choose it from the credential's `key_variables`: a key goes into one
+variable, and only through `key_variables`. The session checks the run answer's `placeholders` too, the
+machine's credentials and tools included: one that the descriptor denies, lists in its
+overrides or reads its endpoint from, or one the runtime declares or reserves that no
+credential has among its `placeholders`, is `run_configuration_invalid` with the
+placeholder's name. A credential of the machine's may have a declared variable among
+its `placeholders`, such as forager.yaml's model key in `ANTHROPIC_API_KEY`. The chosen
+variable is a
 placeholder like any other: a value the run passes for it is `placeholder_conflict`, the
 endpoint rule counts the credential as a model credential (§Variables), and Claude
 Code's approval of the stand-in covers `ANTHROPIC_API_KEY` chosen this way (§The

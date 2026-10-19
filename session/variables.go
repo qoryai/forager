@@ -239,16 +239,18 @@ func secretsOf(rt runtimes.Runtime) runtimes.Declarations {
 	return runtimes.Declarations{}
 }
 
-// authWords is how a refusal writes how a value is set: in a header, with its name, as
-// a bearer or as basic, or with no auth.
+// authWords is how a refusal names how a value is set: the header with its name, a
+// bearer, basic, or no auth.
 func authWords(scheme, header string) string {
 	switch scheme {
 	case "header":
-		return "in the header " + header
+		return "the header " + header
 	case "":
-		return "with no auth"
+		return "no auth"
+	case "basic":
+		return "basic"
 	}
-	return "as a " + scheme
+	return "a " + scheme
 }
 
 // shownNames are names as a refusal lists them, each through [accesskey.ShownName].
@@ -265,10 +267,9 @@ func shownNames(names []string) []string {
 // whose name is among them chooses its variable, which is added to the credential's
 // placeholders and to the run's, each once. A credential of which rt declares none of
 // the key_variables or more than one, whose auth differs from that declaration's in
-// the scheme or, for a header, in the header's name, compared without case, or whose
-// placeholders list another variable rt declares or reserves, is
-// [refusal.RunConfigurationInvalid] with the credential's name; a placeholder rt does
-// not declare stays. A credential without key_variables, every one of the machine's
+// the scheme or, for a header, in the header's name, compared without case, is
+// [refusal.RunConfigurationInvalid] with the credential's name, and so is a placeholder
+// [checkPlaceholders] refuses; a placeholder rt does not declare stays. A credential without key_variables, every one of the machine's
 // among them, is as the answer has it.
 func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, placeholders []string) ([]server.LinkCredentialHosts, []string, error) {
 	decl := secretsOf(rt)
@@ -280,6 +281,7 @@ func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, place
 	}
 	names := slices.Clone(placeholders)
 	out := make([]server.LinkCredentialHosts, len(credentials))
+	picked := make([]string, len(credentials))
 	for i, c := range credentials {
 		c.Placeholders = slices.Clone(c.Placeholders)
 		if len(c.KeyVariables) == 0 {
@@ -301,11 +303,11 @@ func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, place
 		switch {
 		case len(matches) == 0 && len(offered) == 0:
 			return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"run a runtime that takes a key in one of the key_variables of the credential %s in Qory Apiary's run configuration, or remove its key_variables: the runtime %s declares no variable for a key, and the credential's key_variables are %s",
+				"run a runtime that reads a key from one of the key_variables of the credential %s in Qory Apiary's run configuration, or remove its key_variables: the runtime %s declares no variable for a key, and the credential's key_variables are %s",
 				shown, rt.Name(), listed)
 		case len(matches) == 0:
 			return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"add one of %s to the key_variables of the credential %s in Qory Apiary's run configuration: the runtime %s takes a key in these variables, and the credential's key_variables are %s",
+				"add one of %s to the key_variables of the credential %s in Qory Apiary's run configuration: the runtime %s reads a key from these variables, and the credential's key_variables are %s",
 				orList(offered, ", ", " or "), shown, rt.Name(), listed)
 		case len(matches) > 1:
 			var both []string
@@ -313,23 +315,17 @@ func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, place
 				both = append(both, d.Name)
 			}
 			return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"keep only one of %s in the key_variables of the credential %s in Qory Apiary's run configuration: the runtime %s takes a key in each of them, and a key goes into one variable",
+				"keep only one of %s in the key_variables of the credential %s in Qory Apiary's run configuration: the runtime %s reads a key from each of them, and a key goes into one variable",
 				orList(both, ", ", " and "), shown, rt.Name())
 		}
 		d := matches[0]
 		if d.Auth.Scheme != auth.Scheme || (d.Auth.Scheme == "header" && !strings.EqualFold(d.Auth.Header, auth.Header)) {
 			return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"set the auth of the credential %s in Qory Apiary's run configuration to send its value %s, or list another variable in its key_variables: the runtime %s sends the key of %s %s, and the credential's auth sends its value %s",
+				"set the auth of the credential %s in Qory Apiary's run configuration to %s, or list another variable in its key_variables: the runtime %s sends the key in %s as %s, and the credential's auth is set to %s",
 				shown, authWords(d.Auth.Scheme, d.Auth.Header), rt.Name(), d.Name, authWords(d.Auth.Scheme, d.Auth.Header), authWords(auth.Scheme, auth.Header))
 		}
 		variable := d.Name
-		for _, p := range c.Placeholders {
-			if p != variable && slices.Contains(declared, p) {
-				return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: its key_variables choose %s for the runtime %s, and a key goes into one variable",
-					accesskey.ShownName(p, false), shown, variable, rt.Name())
-			}
-		}
+		picked[i] = variable
 		if !slices.Contains(c.Placeholders, variable) {
 			c.Placeholders = append(c.Placeholders, variable)
 		}
@@ -338,7 +334,80 @@ func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, place
 		}
 		out[i] = c
 	}
+	if err := checkPlaceholders(rt, declared, out, picked, names); err != nil {
+		return nil, nil, err
+	}
 	return out, names, nil
+}
+
+// checkPlaceholders refuses a placeholder that goes into a variable for no
+// credential, or into a key's variable that no credential chose, each
+// [refusal.RunConfigurationInvalid]. A placeholder of a credential from the server, one
+// with auth, may not be a variable rt denies, lists among its model overrides or reads
+// its model endpoint from, nor a variable of declared, rt's declared and reserved
+// variables, other than the one picked from its key_variables; its name is the
+// refusal's. Of names, the run's placeholders, a placeholder may not be one of those
+// rt denies, overrides or reads its endpoint from, nor one of declared that no
+// credential has among its placeholders; the placeholder's name is the refusal's. A
+// placeholder rt does not declare, such as a tool's GITHUB_TOKEN, passes, and so does a
+// declared one of a credential of the machine's.
+func checkPlaceholders(rt runtimes.Runtime, declared []string, credentials []server.LinkCredentialHosts, picked, names []string) error {
+	decl := secretsOf(rt)
+	var overrides []string
+	var endpoint string
+	if m, ok := rt.(runtimes.Model); ok {
+		if places, ok := m.Model(); ok {
+			overrides, endpoint = places.Overrides, places.Endpoint.Variable
+		}
+	}
+	// takesNone is why the variable p takes no credential, empty when it may take one.
+	takesNone := func(p string) string {
+		switch {
+		case slices.Contains(decl.Denies, p):
+			return "denies it"
+		case slices.Contains(overrides, p):
+			return "lists it among its model overrides"
+		case endpoint != "" && p == endpoint:
+			return "reads its model endpoint from it"
+		}
+		return ""
+	}
+	for i, c := range credentials {
+		if c.Auth == nil {
+			continue
+		}
+		shown := accesskey.ShownName(c.Name, true)
+		for _, p := range c.Placeholders {
+			switch why := takesNone(p); {
+			case why != "":
+				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+					"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: the runtime %s %s, and a placeholder goes only into a variable for a credential",
+					accesskey.ShownName(p, false), shown, rt.Name(), why)
+			case p == picked[i] || !slices.Contains(declared, p):
+			case picked[i] != "":
+				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+					"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: %s is the variable of its key_variables that the runtime %s declares, and a key goes into one variable",
+					accesskey.ShownName(p, false), shown, picked[i], rt.Name())
+			default:
+				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+					"list %s in the key_variables of the credential %s in Qory Apiary's run configuration instead of its placeholders: the runtime %s reads a key from it, and a key's variable gets a credential's placeholder only through key_variables",
+					accesskey.ShownName(p, false), shown, rt.Name())
+			}
+		}
+	}
+	for _, p := range names {
+		if why := takesNone(p); why != "" {
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(p),
+				"remove %s from the placeholders of the machine's credentials and tools in forager.yaml: the runtime %s %s, and a placeholder goes only into a variable for a credential",
+				accesskey.ShownName(p, false), rt.Name(), why)
+		}
+		if slices.Contains(declared, p) && !slices.ContainsFunc(credentials, func(c server.LinkCredentialHosts) bool { return slices.Contains(c.Placeholders, p) }) {
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(p),
+				"remove %s from the placeholders of the machine's tools in forager.yaml, or give it to a credential: the runtime %s reads a key from it, and no credential of the run has it among its placeholders",
+				accesskey.ShownName(p, false), rt.Name())
+		}
+	}
+	return nil
 }
 
 // orList is items joined by sep, the last two by last.

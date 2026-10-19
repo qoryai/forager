@@ -146,15 +146,15 @@ func TestKeyVariablesTheRuntimeDoesNotTakeAreRefused(t *testing.T) {
 		detail       string
 	}{
 		{"no name Claude Code declares", false, "OPENAI_API_KEY", "bearer",
-			`add one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN to the key_variables of the credential "model" in Qory Apiary's run configuration: the runtime claude takes a key in these variables, and the credential's key_variables are OPENAI_API_KEY`},
+			`add one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN to the key_variables of the credential "model" in Qory Apiary's run configuration: the runtime claude reads a key from these variables, and the credential's key_variables are OPENAI_API_KEY`},
 		{"a runtime without a variable for a key", true, "OPENAI_API_KEY,MODEL_API_KEY", "bearer",
-			`run a runtime that takes a key in one of the key_variables of the credential "model" in Qory Apiary's run configuration, or remove its key_variables: the runtime codex declares no variable for a key, and the credential's key_variables are OPENAI_API_KEY and MODEL_API_KEY`},
+			`run a runtime that reads a key from one of the key_variables of the credential "model" in Qory Apiary's run configuration, or remove its key_variables: the runtime codex declares no variable for a key, and the credential's key_variables are OPENAI_API_KEY and MODEL_API_KEY`},
 		{"two names Claude Code declares", false, apiKeyVariable + "," + authTokenVariable, "bearer",
-			`keep only one of ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN in the key_variables of the credential "model" in Qory Apiary's run configuration: the runtime claude takes a key in each of them, and a key goes into one variable`},
+			`keep only one of ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN in the key_variables of the credential "model" in Qory Apiary's run configuration: the runtime claude reads a key from each of them, and a key goes into one variable`},
 		{"another scheme", false, authTokenVariable, "header",
-			`set the auth of the credential "model" in Qory Apiary's run configuration to send its value as a bearer, or list another variable in its key_variables: the runtime claude sends the key of ANTHROPIC_AUTH_TOKEN as a bearer, and the credential's auth sends its value in the header x-api-key`},
+			`set the auth of the credential "model" in Qory Apiary's run configuration to a bearer, or list another variable in its key_variables: the runtime claude sends the key in ANTHROPIC_AUTH_TOKEN as a bearer, and the credential's auth is set to the header x-api-key`},
 		{"another header", false, apiKeyVariable, "header:authorization",
-			`set the auth of the credential "model" in Qory Apiary's run configuration to send its value in the header x-api-key, or list another variable in its key_variables: the runtime claude sends the key of ANTHROPIC_API_KEY in the header x-api-key, and the credential's auth sends its value in the header authorization`},
+			`set the auth of the credential "model" in Qory Apiary's run configuration to the header x-api-key, or list another variable in its key_variables: the runtime claude sends the key in ANTHROPIC_API_KEY as the header x-api-key, and the credential's auth is set to the header authorization`},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			sp, g := specGateway(t)
@@ -175,30 +175,98 @@ func TestKeyVariablesTheRuntimeDoesNotTakeAreRefused(t *testing.T) {
 	}
 }
 
-// TestACredentialWithoutKeyVariablesIsAsTheAnswerHasIt pins that a credential from the
-// server without key_variables chooses nothing: its placeholders alone set the
-// variables, a variable the runtime declares among them.
-func TestACredentialWithoutKeyVariablesIsAsTheAnswerHasIt(t *testing.T) {
-	sp, g := specGateway(t)
-	out := dumpsEnv(t, &sp)
-	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-	e := sealed("model", "api.anthropic.com", "", "", oauthVariable)
-	e["auth"] = map[string]any{"scheme": "header", "header": "x-api-key"}
-	answeringWith(g, []map[string]any{e}, []string{oauthVariable})
-	res, err := session.Run(context.Background(), sp)
-	if err != nil {
-		t.Fatal(err)
+// TestAPlaceholderGoesOnlyIntoACredentialsVariable pins that a placeholder goes only
+// into a variable for a credential: a placeholder of a credential from the
+// server that is a variable Claude Code denies, lists among its model overrides or
+// reads its model endpoint from, or a key's variable its key_variables did not choose,
+// another credential's included, is run_configuration_invalid with the credential's
+// name; one of the run's placeholders that Claude Code denies, or that is a key's
+// variable no credential has, is run_configuration_invalid with the placeholder's name.
+// A tool's placeholder, GITHUB_TOKEN, passes.
+func TestAPlaceholderGoesOnlyIntoACredentialsVariable(t *testing.T) {
+	model := sealed("model", "api.anthropic.com", apiKeyVariable, "header")
+	plain := func(name, host string, placeholders ...string) map[string]any {
+		e := sealed(name, host, "", "", placeholders...)
+		e["auth"] = map[string]any{"scheme": "bearer"}
+		return e
 	}
-	env := envOf(t, out)
-	if env[oauthVariable] != link.Placeholder {
-		t.Errorf("%s=%q; want the placeholder", oauthVariable, env[oauthVariable])
+	machine := func(placeholders ...string) map[string]any {
+		return map[string]any{"name": "machine-model", "hosts": []string{"llm.example"}, "placeholders": placeholders}
 	}
-	if _, ok := env[apiKeyVariable]; ok {
-		t.Errorf("%s reached the agent", apiKeyVariable)
+	for _, tc := range []struct {
+		what         string
+		hosts        []map[string]any
+		placeholders []string
+		runtime      func(runtimes.Runtime) runtimes.Runtime
+		names        []string
+		detail       string
+	}{
+		{"a variable the runtime denies", []map[string]any{plain("forge", "api.github.com", "CLAUDE_CONFIG_DIR")}, []string{"CLAUDE_CONFIG_DIR"}, nil, []string{"forge"},
+			`remove CLAUDE_CONFIG_DIR from the placeholders of the credential "forge" in Qory Apiary's run configuration: the runtime claude denies it, and a placeholder goes only into a variable for a credential`},
+		{"a model override", []map[string]any{plain("forge", "api.github.com", "ANTHROPIC_MODEL")}, []string{"ANTHROPIC_MODEL"}, nil, []string{"forge"},
+			`remove ANTHROPIC_MODEL from the placeholders of the credential "forge" in Qory Apiary's run configuration: the runtime claude lists it among its model overrides, and a placeholder goes only into a variable for a credential`},
+		{"the model endpoint's variable", []map[string]any{plain("forge", "api.github.com", endpointVariable)}, []string{endpointVariable},
+			func(rt runtimes.Runtime) runtimes.Runtime { return &allowsEndpoint{Runtime: rt} }, []string{"forge"},
+			`remove ANTHROPIC_BASE_URL from the placeholders of the credential "forge" in Qory Apiary's run configuration: the runtime claude reads its model endpoint from it, and a placeholder goes only into a variable for a credential`},
+		{"a key's variable without key_variables", []map[string]any{plain("model", "api.anthropic.com", apiKeyVariable)}, []string{apiKeyVariable}, nil, []string{"model"},
+			`list ANTHROPIC_API_KEY in the key_variables of the credential "model" in Qory Apiary's run configuration instead of its placeholders: the runtime claude reads a key from it, and a key's variable gets a credential's placeholder only through key_variables`},
+		{"a second key in another credential", []map[string]any{model, plain("forge", "api.github.com", oauthVariable)}, []string{oauthVariable}, nil, []string{"forge"},
+			`list CLAUDE_CODE_OAUTH_TOKEN in the key_variables of the credential "forge" in Qory Apiary's run configuration instead of its placeholders: the runtime claude reads a key from it, and a key's variable gets a credential's placeholder only through key_variables`},
+		{"a second key among the run's placeholders", []map[string]any{model}, []string{oauthVariable}, nil, []string{oauthVariable},
+			`remove CLAUDE_CODE_OAUTH_TOKEN from the placeholders of the machine's tools in forager.yaml, or give it to a credential: the runtime claude reads a key from it, and no credential of the run has it among its placeholders`},
+		{"a machine credential's override", []map[string]any{model, machine("ANTHROPIC_MODEL")}, []string{"ANTHROPIC_MODEL"}, nil, []string{"ANTHROPIC_MODEL"},
+			`remove ANTHROPIC_MODEL from the placeholders of the machine's credentials and tools in forager.yaml: the runtime claude lists it among its model overrides, and a placeholder goes only into a variable for a credential`},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			sp, g := specGateway(t)
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			if tc.runtime != nil {
+				sp.Runtime = tc.runtime(sp.Runtime)
+			}
+			answeringWith(g, tc.hosts, tc.placeholders)
+			_, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "run_configuration_invalid" || !slices.Equal(r.Names, tc.names) {
+				t.Fatalf("%v, want run_configuration_invalid for %q", err, tc.names)
+			}
+			if r.Detail != tc.detail {
+				t.Errorf("the refusal reads\n %q\nwant\n %q", r.Detail, tc.detail)
+			}
+		})
 	}
-	if got, want := credentialVariables(t, res), []string{"model=" + oauthVariable}; !slices.Equal(got, want) {
-		t.Errorf("credential_variables %q, want %q", got, want)
-	}
+	t.Run("a tool's placeholder", func(t *testing.T) {
+		sp, g := specGateway(t)
+		out := dumpsEnv(t, &sp)
+		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		answeringWith(g, []map[string]any{model, plain("forge", "api.github.com", "GITHUB_TOKEN")}, []string{"GITHUB_TOKEN"})
+		res, err := session.Run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := envOf(t, out)
+		for _, name := range []string{"GITHUB_TOKEN", apiKeyVariable} {
+			if env[name] != link.Placeholder {
+				t.Errorf("%s=%q; want the placeholder", name, env[name])
+			}
+		}
+		if got, want := credentialVariables(t, res), []string{"model=" + apiKeyVariable, "forge=GITHUB_TOKEN"}; !slices.Equal(got, want) {
+			t.Errorf("credential_variables %q, want %q", got, want)
+		}
+	})
+}
+
+// allowsEndpoint is Claude Code with a descriptor whose denies leave out its model
+// endpoint's variable.
+type allowsEndpoint struct{ runtimes.Runtime }
+
+func (p *allowsEndpoint) Secrets() runtimes.Declarations {
+	d := p.Runtime.(runtimes.Secrets).Secrets()
+	d.Denies = slices.DeleteFunc(slices.Clone(d.Denies), func(n string) bool { return n == endpointVariable })
+	return d
+}
+
+func (p *allowsEndpoint) Model() (runtimes.ModelPlaces, bool) {
+	return p.Runtime.(runtimes.Model).Model()
 }
 
 // TestAKeyVariablesCredentialsPlaceholders pins the both-members rule: a placeholder of
@@ -215,7 +283,7 @@ func TestAKeyVariablesCredentialsPlaceholders(t *testing.T) {
 		if !errors.As(err, &r) || r.Code != "run_configuration_invalid" || !slices.Equal(r.Names, []string{"model"}) {
 			t.Fatalf("%v, want run_configuration_invalid for model", err)
 		}
-		want := `remove CLAUDE_CODE_OAUTH_TOKEN from the placeholders of the credential "model" in Qory Apiary's run configuration: its key_variables choose ANTHROPIC_API_KEY for the runtime claude, and a key goes into one variable`
+		want := `remove CLAUDE_CODE_OAUTH_TOKEN from the placeholders of the credential "model" in Qory Apiary's run configuration: ANTHROPIC_API_KEY is the variable of its key_variables that the runtime claude declares, and a key goes into one variable`
 		if r.Detail != want {
 			t.Errorf("the refusal reads\n %q\nwant\n %q", r.Detail, want)
 		}
