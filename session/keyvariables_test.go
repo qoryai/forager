@@ -136,8 +136,9 @@ func TestTheKeyVariablesChooseTheVariable(t *testing.T) {
 // declared, by Claude Code or by a runtime that declares no variable for a key, HOME
 // among them, which the built-in deny list covers and so DeniedPlaceholder refuses as a
 // placeholder; two of them declared; or the one declared with another auth, by its
-// scheme or its header's name. Each is run_configuration_invalid with the credential's
-// name, before the runtime starts.
+// scheme or its header's name, a header's name that contains qak_ being the value's
+// phrase. Each is run_configuration_invalid with the credential's name, before the
+// runtime starts.
 func TestKeyVariablesTheRuntimeDoesNotTakeAreRefused(t *testing.T) {
 	for _, tc := range []struct {
 		what         string
@@ -158,6 +159,8 @@ func TestKeyVariablesTheRuntimeDoesNotTakeAreRefused(t *testing.T) {
 			`set the auth of the credential "model" in Qory Apiary's run configuration to the bearer scheme, or list another variable in its key_variables: the runtime claude sends the key in ANTHROPIC_AUTH_TOKEN with the bearer scheme, and the credential's auth is set to the header x-api-key`},
 		{"another header", false, apiKeyVariable, "header:authorization",
 			`set the auth of the credential "model" in Qory Apiary's run configuration to the header x-api-key, or list another variable in its key_variables: the runtime claude sends the key in ANTHROPIC_API_KEY with the header x-api-key, and the credential's auth is set to the header authorization`},
+		{"another header with a secret in its name", false, apiKeyVariable, "header:x-qak_not-a-real-secret",
+			`set the auth of the credential "model" in Qory Apiary's run configuration to the header x-api-key, or list another variable in its key_variables: the runtime claude sends the key in ANTHROPIC_API_KEY with the header x-api-key, and the credential's auth is set to the header (a value that contains an access key secret)`},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			sp, g := specGateway(t)

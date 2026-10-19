@@ -230,8 +230,10 @@ Before it resolves the variables, the session refuses a placeholder that goes in
 variable for no credential, `run_configuration_invalid`: one of the run's placeholders,
 from this machine's credentials and tools in forager.yaml or from Qory Apiary's, that the
 runtime's descriptor lists in `denies` or in its model `overrides`, or that is its model
-endpoint's variable; or a variable the runtime declares or reserves that no credential
-has among its placeholders.
+endpoint's variable; a variable the runtime declares or reserves that no credential
+has among its placeholders; or a placeholder of a credential from Qory Apiary in a
+variable the runtime declares or reserves, other than the one its `key_variables`
+chose.
 
 After it resolves the variables, the session refuses a walled run whose gateway holds
 credentials for it and that has no model key for its runtime, `model_key_missing`. The
