@@ -24,6 +24,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/qoryai/forager/contracts"
@@ -395,14 +396,19 @@ func Host(host string) (string, bool) {
 // the form [Host] gives, and whether the URL has one. A URL has none when [url.Parse]
 // refuses it, when it is opaque or relative, when its scheme is not https (compared
 // without regard to case), when it has user information ("https://a@b/"), when its
-// host is empty, or when [Host] refuses its host. The host is read as url.Parse decodes
-// it, without the brackets of an IPv6 literal. Any port url.Parse accepts is allowed:
-// decimal digits of any value, or none after the colon. The path, query and fragment
-// are not read.
+// host is empty, when [Host] refuses its host, or when its port is not a decimal number
+// from 1 to 65535. The host is read as url.Parse decodes it, without the brackets of an
+// IPv6 literal. A URL with no port, or with nothing after the port's colon, has a host
+// if the rest allows it. The path, query and fragment are not read.
 func EndpointHost(raw string) (string, bool) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Opaque != "" || !u.IsAbs() || u.Scheme != "https" || u.User != nil || u.Hostname() == "" {
 		return "", false
+	}
+	if port := u.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return "", false
+		}
 	}
 	return Host(u.Hostname())
 }

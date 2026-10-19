@@ -243,8 +243,8 @@ func TestHostHasOneForm(t *testing.T) {
 }
 
 // TestEndpointHostReadsAnHTTPSBaseURL pins the host read from a base URL: the scheme
-// https, no user information, a host in the form Host gives, and any port, path, query
-// or fragment. Every other base URL has no host.
+// https, no user information, a host in the form Host gives, no port or one from 1 to
+// 65535, and any path, query or fragment. Every other base URL has no host.
 func TestEndpointHostReadsAnHTTPSBaseURL(t *testing.T) {
 	for _, c := range []struct{ raw, host string }{
 		{"https://api.anthropic.com", "api.anthropic.com"},
@@ -257,7 +257,9 @@ func TestEndpointHostReadsAnHTTPSBaseURL(t *testing.T) {
 		{"https://api.anthropic.com:", "api.anthropic.com"},
 		{"https://api.anthropic.com/v1?beta=1#part", "api.anthropic.com"},
 		{"https://api.anthropic.com/v 1", "api.anthropic.com"},
-		{"https://api.anthropic.com:99999", "api.anthropic.com"},
+		{"https://api.anthropic.com:1", "api.anthropic.com"},
+		{"https://api.anthropic.com:65535", "api.anthropic.com"},
+		{"https://[::1]:65535", "::1"},
 		{"https://127.0.0.1:8443", "127.0.0.1"},
 		{"https://[::1]:8443/", "::1"},
 		{"https://[2001:DB8::1]/v1", "2001:db8::1"},
@@ -294,6 +296,14 @@ func TestEndpointHostReadsAnHTTPSBaseURL(t *testing.T) {
 		{"https:// api.anthropic.com", ""},
 		{"https://api.anthropic.com:84 43", ""},
 		{"https://api.anthropic.com:http", ""},
+		{"https://api.anthropic.com:99999", ""},
+		{"https://api.anthropic.com:65536", ""},
+		{"https://api.anthropic.com:0", ""},
+		{"https://api.anthropic.com:00", ""},
+		{"https://api.anthropic.com:+443", ""},
+		{"https://api.anthropic.com:-443", ""},
+		{"https://api.anthropic.com:99999999999999999999", ""},
+		{"https://[::1]:0", ""},
 	} {
 		host, ok := policy.EndpointHost(c.raw)
 		if host != c.host || ok != (c.host != "") {
