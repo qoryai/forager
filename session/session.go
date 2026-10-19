@@ -715,16 +715,17 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// sets is Forager's own and wins over a server's variable of the same name. Behind
 	// a wall the run directory goes in read-only, apart from every place the run binds:
 	// the settings are read from it, and the record in it is not the agent's to rewrite
-	// or move. Behind a wall the runtime learns the placeholders the run sets. A file
-	// the runtime reads from this machine is refused when a walled run could have
-	// written it: one in a place of Spec.Written, in a writable bind of another walled
-	// run in the registry or, behind a wall, in a writable bind of this run's.
+	// or move. Behind a wall the runtime learns that the run is walled and the
+	// placeholders the run sets. A file the runtime reads from this machine is refused
+	// when a walled run could have written it: one in a place of Spec.Written, in a
+	// writable bind of another walled run in the registry or, behind a wall, in a
+	// writable bind of this run's.
 	written := func() ([]string, error) { return writtenPlaces(spec, runID, plan, wallOwn) }
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
 		Readable: readable(written)}
 	if spec.Wall != nil {
-		attach.Placeholders = slices.Clone(answer.Placeholders)
+		attach.Walled, attach.Placeholders = true, slices.Clone(answer.Placeholders)
 	}
 	if byReference {
 		attach.Inside = inside

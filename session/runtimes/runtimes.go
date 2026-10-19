@@ -76,6 +76,8 @@ type Attach struct {
 	Forwarder []string
 	// Interactive says the session runs on a pseudo-terminal, not on pipes.
 	Interactive bool
+	// Walled is true when the program runs behind a wall.
+	Walled bool
 	// Placeholders are the variables the session sets to [Placeholder] in the
 	// program's environment: a credential's, whose value the proxy sets outside the
 	// enclosure, and a tool's, whose host the tool serves outside it. Empty without a
