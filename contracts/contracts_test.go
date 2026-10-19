@@ -148,8 +148,8 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // of the gateway's link its name starts with: the discovery of the local link and of a
 // separate gateway, each with its proxy address, a run request without a wall, one with a
 // wall, the names it passes and its images, and one with a narrowing as well, a run
-// answer with a wall, its placeholders, reserved names, image, applied and certificate
-// authority, one with a wall and an image but no certificate authority, one without a
+// answer with a wall, its placeholders, reserved names, credential hosts, image, applied
+// and certificate authority, one with a wall and an image but no certificate authority, one without a
 // wall and one without a policy, a reload answer with and without a policy and one whose
 // applied has ceiling_paths, a batch of a session's events without sequence, a batch of
 // a run.refused with a session's own code, a batch of a run.exited with timeout, and
@@ -255,8 +255,9 @@ const beyondLinkSchema = "-beyond-schema-"
 // status, a descriptor with an expression, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that passes a value with a name or whose image has no reference, a link run
-// answer without applied, with a proxy secret too short or whose image has no
-// reference, a link reload answer with the proxy secret or the certificate
+// answer without applied, with a proxy secret too short, whose image has no reference
+// or whose credential_hosts entry has a member it does not define, no hosts or no
+// placeholders, a link reload answer with the proxy secret or the certificate
 // authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
 // run.registered or a run.egress, a run.started opened by a gateway, a run.exited with one of Forager's reasons
 // other than timeout, its old names among them, or with timeout and a state other than cancelled, or a run.refused with a gateway's code,

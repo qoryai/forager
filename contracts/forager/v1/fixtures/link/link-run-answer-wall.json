@@ -35,6 +35,17 @@
   "reserved": [
     "EXAMPLE_SOURCE_KEY"
   ],
+  "credential_hosts": [
+    {
+      "name": "git",
+      "hosts": [
+        "git.example"
+      ],
+      "placeholders": [
+        "GIT_SECRET"
+      ]
+    }
+  ],
   "image": {
     "name": "base",
     "ref": "registry.example/agents/base@sha256:4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f",
