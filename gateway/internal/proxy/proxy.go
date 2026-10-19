@@ -34,7 +34,8 @@
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
 // TLS itself, reads each request's path and sets a credential on it, or hands it to the
-// tool that serves the host. For every other host the proxy sees host names and ports
+// tool that serves the host. In what a host that gets a credential answers, the
+// credential's value is replaced with the placeholder. For every other host the proxy sees host names and ports
 // and never the content of a TLS connection: a tunnel is a blind relay once
 // established. Only a proxy-aware program is seen.
 //
@@ -87,7 +88,8 @@ type Decision struct {
 	Method  string
 	Allowed bool
 	// Rule is the deny or allow entry that matched, the guard's rule when the guard
-	// refused, or empty when none did.
+	// refused, [HostForm] or [PlainRequest] when the proxy refused, or empty when none
+	// did.
 	Rule string
 	// Mode is the policy mode the decision was made under.
 	Mode policy.Mode
@@ -177,6 +179,13 @@ const GuardRule = "wall:own-address"
 // HostForm is the rule a denial names when the host has no form [policy.Host] gives: not
 // an allow or deny entry, the proxy's refusal, in either mode.
 const HostForm = "wall:host-form"
+
+// PlainRequest is the rule a denial names of a plain request, http:// or an
+// absolute-form https:// sent without CONNECT, to a host a credential is for and the
+// policy allows: the proxy
+// sets the credential, and replaces it in answers, only inside a CONNECT it
+// terminates. A refusal of the proxy's, in either mode, before anything is sent.
+const PlainRequest = "wall:plain-request"
 
 // guardError is the guard's refusal at dial time, of a name that resolved to an
 // address the guard does not dial.
@@ -693,6 +702,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	d := p.decide("HTTP", host, port)
 	d.RequestID = newRequestID()
 	term := p.term.Load()
+	if d.Allowed && term.credentialName(d.Host) != "" {
+		clean, ok := policy.CleanPath(r.URL.EscapedPath())
+		if !ok {
+			clean = r.URL.EscapedPath()
+		}
+		d.Allowed, d.Rule, d.Outcome = false, PlainRequest, Refused
+		d.RequestMethod, d.Path = r.Method, clean
+		p.observe(d)
+		deny(w, d)
+		return
+	}
 	if d.Allowed {
 		if clean, rule, ok := term.plainPath(d.Host, r.URL.EscapedPath()); clean != "" {
 			d.RequestMethod, d.Path, d.PathRule, d.Allowed = r.Method, clean, rule, ok
@@ -754,7 +774,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// asked for: the host's connection is closed, and the client's after a 502.
 	if resp.StatusCode == http.StatusSwitchingProtocols {
 		w.Header().Set("Connection", "close")
-		http.Error(w, "upstream: the host answered 101 Switching Protocols to a request that asked for no upgrade", http.StatusBadGateway)
+		http.Error(w, "upstream: "+errUnaskedSwitch.Error(), http.StatusBadGateway)
 		return
 	}
 	for k, vs := range resp.Header {
@@ -988,7 +1008,8 @@ func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 	return ctx
 }
 
-// deny answers a refused connection: 403 with one line naming the host and the mode.
+// deny answers a refused connection: 403 with one line naming the host and the mode,
+// or, for [PlainRequest], two lines, the fix first.
 func deny(w http.ResponseWriter, d Decision) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
@@ -998,6 +1019,12 @@ func deny(w http.ResponseWriter, d Decision) {
 			host = accesskey.ShownValue(d.Host, false)
 		}
 		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: the host is neither a name of ASCII letters, digits, hyphens and dots nor an IP address in canonical form\n", host, d.Port)
+		return
+	}
+	if d.Rule == PlainRequest {
+		fmt.Fprintf(w, "qory: send requests to this host as https:// through CONNECT.\n"+
+			"qory: %s %s%s denied by the gateway: the gateway sets this host's credential, and masks it in answers, only on https:// requests through CONNECT\n",
+			accesskey.ShownValue(d.RequestMethod, false), d.Host, accesskey.ShownValue(d.Path, false))
 		return
 	}
 	if d.Rule == GuardRule {

@@ -26,8 +26,8 @@ import (
 const AmbiguousPath = "wall:ambiguous-path"
 
 // EchoMethod is the rule a denial names of a TRACE or a TRACK, which echo the
-// request's headers back, to a host a credential from the server is for: the proxy's
-// own refusal, in either mode.
+// request's headers back, to a host a credential is for: a refusal of the proxy's, in
+// either mode, with a 405.
 const EchoMethod = "wall:echo-method"
 
 // Credential is one use of a credential the gateway holds for the session: the hosts it
@@ -46,8 +46,7 @@ type Credential struct {
 	Rejected func()
 	// Value, for a credential from the server, returns a copy of its opened value's
 	// bytes, which the proxy clears once the header is set, in place of Token; Stored
-	// says the credential is the server's. The proxy
-	// refuses TRACE and TRACK on a host a stored credential is for.
+	// says the credential is the server's.
 	Value  func() []byte
 	Stored bool
 }
@@ -284,6 +283,15 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			// The request's own trailer, which the server fills once the body is read:
 			// a copy made before that would carry none.
 			r.Out.Trailer = r.In.Trailer
+			if masked(r.In) != nil {
+				// The value is replaced in the answer only where it can be read: in
+				// an uncompressed body, whole, and on a connection that stays HTTP. A
+				// range of the body could hold part of the value.
+				r.Out.Header.Set("Accept-Encoding", "identity")
+				for _, h := range []string{"Range", "If-Range", "Upgrade", "Connection"} {
+					r.Out.Header.Del(h)
+				}
+			}
 		},
 		Transport:     t.p.upstream(),
 		FlushInterval: -1,
@@ -294,6 +302,18 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			}
 			if c := t.credential(d.Host); c != nil && resp.StatusCode == http.StatusUnauthorized && c.Rejected != nil && resp.Request.Header.Get(setBy) == c.Name {
 				c.Rejected()
+			}
+			if masked(resp.Request) == nil {
+				return nil
+			}
+			// The request went upstream without its Upgrade: a connection that
+			// switched could carry the value unread.
+			if resp.StatusCode == http.StatusSwitchingProtocols {
+				return errUnaskedSwitch
+			}
+			if coding := encoded(resp); coding != "" {
+				clean, _ := policy.CleanPath(resp.Request.URL.EscapedPath())
+				withheld(resp, coding, resp.Request.Method, d.Host, clean)
 			}
 			return nil
 		},
@@ -308,22 +328,32 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			req.Tool = tl.Name
 		}
 		c := t.credential(d.Host)
-		if c != nil && c.Stored && (strings.EqualFold(r.Method, "TRACE") || strings.EqualFold(r.Method, "TRACK")) {
+		if c != nil && (strings.EqualFold(r.Method, "TRACE") || strings.EqualFold(r.Method, "TRACK")) {
 			req.Allowed, req.PathRule, req.Outcome = false, EchoMethod, Refused
 			t.p.observe(req)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: use another method; TRACE and TRACK send the request's headers back, and this host gets a credential from Qory Apiary\n", r.Method, d.Host, accesskey.ShownValue(clean, false))
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			fmt.Fprintf(w, "qory: use a method other than TRACE or TRACK on this host.\n"+
+				"qory: %s %s%s denied by the gateway: this host gets a credential from the gateway, and the answer to TRACE or TRACK contains the request's headers\n", r.Method, d.Host, accesskey.ShownValue(clean, false))
 			return
 		}
 		r.Header.Del(setBy)
+		// Every answer from a host that gets a credential has its value replaced with
+		// the placeholder, on a path that gets none as well: the host may send back a
+		// value it received before.
 		keyed := false
-		if allowed && credentialed && c != nil && tl == nil {
-			if name, value, ok := c.header(); ok {
-				r.Header.Set(name, value)
-				r.Header.Set(setBy, c.Name)
-				req.Credential, keyed = c.Name, true
+		var mask *masker
+		if allowed && c != nil && tl == nil {
+			v := c.secret()
+			if credentialed {
+				if name, value, ok := c.header(v); ok {
+					r.Header.Set(name, value)
+					r.Header.Set(setBy, c.Name)
+					req.Credential, keyed = c.Name, true
+				}
 			}
+			mask = c.masker(v)
+			clear(v)
 		}
 		if !allowed {
 			req.Outcome = Refused
@@ -343,13 +373,17 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		}
 		// The request is recorded once its outcome is known: when the response's
 		// headers arrive, or when the transport fails.
-		ctx := context.WithValue(t.p.dialContext(r.Context(), d), pendingKey{}, &pending{d: req})
+		ctx := context.WithValue(t.p.dialContext(r.Context(), d), pendingKey{}, &pending{d: req, mask: mask})
 		if keyed {
 			// In the context, since the session's Connection header can take any header
 			// off the request before it reaches the transport, the mark among them.
 			ctx = context.WithValue(ctx, keyedKey{}, true)
 		}
-		rp.ServeHTTP(w, r.WithContext(ctx))
+		if mask == nil {
+			rp.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		serveMasked(rp, w, r.WithContext(ctx), mask)
 	})
 	ln := &once{conn: conn, done: make(chan struct{})}
 	srv := &http.Server{Handler: routine.Handler(t.p.reportPanic, handler), ReadHeaderTimeout: t.p.srv.ReadHeaderTimeout, ConnState: func(_ net.Conn, s http.ConnState) {
@@ -369,6 +403,16 @@ type pendingKey struct{}
 type pending struct {
 	d    Decision
 	once sync.Once
+	// mask replaces the credential's value in the answer, when the host gets one.
+	mask *masker
+}
+
+// masked is the masker of the request's answer, nil when its host gets no credential.
+func masked(r *http.Request) *masker {
+	if p, ok := r.Context().Value(pendingKey{}).(*pending); ok {
+		return p.mask
+	}
+	return nil
 }
 
 // settle returns the request's decision with its outcome, and the status of resp when
@@ -399,36 +443,23 @@ func settle(r *http.Request, resp *http.Response, err error) (Decision, bool) {
 // transport takes it off again.
 const setBy = "X-Qory-Credential-Set"
 
-// header is the header that carries the token.
-func (c *Credential) header() (string, string, bool) {
+// secret is a copy of the credential's value as it is now, which the caller clears:
+// a credential from the server's opened value, or the token. It is empty when there is
+// none.
+func (c *Credential) secret() []byte {
 	if c.Value != nil {
-		return c.storedHeader()
+		return c.Value()
 	}
-	token := c.Token()
-	if token == "" {
-		return "", "", false
-	}
-	switch c.Scheme {
-	case "bearer":
-		return "Authorization", "Bearer " + token, true
-	case "basic":
-		return "Authorization", "Basic " + base64.StdEncoding.EncodeToString([]byte(c.Username+":"+token)), true
-	case "header":
-		return c.Header, token, true
-	}
-	return "", "", false
+	return []byte(c.Token())
 }
 
-// storedHeader is the header that carries a credential from the server. The value
-// stays bytes until here: Value returns a copy, which this clears, and every buffer
-// this builds is cleared before it returns.
+// header is the header that carries the value v, which stays the caller's to clear.
+// Every buffer this builds is cleared before it returns.
 // The header's value is a Go string, since http.Header holds strings: one copy per
 // request that cannot be cleared, and the copies the transport makes as it writes the
 // request, in its buffers. The request goes over HTTP/1.1 ([Proxy.upstream]), so no
 // header compression's table keeps one.
-func (c *Credential) storedHeader() (string, string, bool) {
-	v := c.Value()
-	defer clear(v)
+func (c *Credential) header(v []byte) (string, string, bool) {
 	if len(v) == 0 {
 		return "", "", false
 	}

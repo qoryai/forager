@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 
@@ -20,11 +19,11 @@ import (
 // TestACredentialFromTheServerSetsItsValue pins the header a credential from the
 // server sets, its value bytes: Bearer and the value, Basic of the username and the
 // value, or the value in its header, the session's stand-in replaced; the value is
-// read again for every request. A TRACE or a TRACK on its host is refused with a 403
-// whose rule is wall:echo-method and reaches no origin, and a TRACE on a host of a
-// machine's credential goes on as before. A private name gets the value through an
-// exact entry alone, as a machine's credential does. A TRACE whose path contains qak_
-// has the value's phrase in place of the path.
+// read again for every request. A TRACE or a TRACK on its host is refused with a 405
+// whose rule is wall:echo-method and reaches no origin, and so is a TRACE on a host of
+// a machine's credential. A private name gets the value through an exact entry alone,
+// as a machine's credential does. A TRACE whose path contains qak_ has the value's
+// phrase in place of the path.
 func TestACredentialFromTheServerSetsItsValue(t *testing.T) {
 	up, err := NewCA("upstream")
 	if err != nil {
@@ -123,8 +122,8 @@ func TestACredentialFromTheServerSetsItsValue(t *testing.T) {
 
 	for _, method := range []string{"TRACE", "TRACK", "trace"} {
 		status, body := do(method, "header.example")
-		want := "qory: " + method + " header.example/v1/models denied by the gateway: use another method; TRACE and TRACK send the request's headers back, and this host gets a credential from Qory Apiary\n"
-		if status != http.StatusForbidden || body != want {
+		want := "qory: use a method other than TRACE or TRACK on this host.\nqory: " + method + " header.example/v1/models denied by the gateway: this host gets a credential from the gateway, and the answer to TRACE or TRACK contains the request's headers\n"
+		if status != http.StatusMethodNotAllowed || body != want {
 			t.Errorf("%s: %d %q", method, status, body)
 		}
 	}
@@ -147,11 +146,11 @@ func TestACredentialFromTheServerSetsItsValue(t *testing.T) {
 	if n != 3 {
 		t.Errorf("%d decisions with %s, want 3", n, EchoMethod)
 	}
-	if status, _ := do("TRACE", "machine.example"); status != http.StatusOK {
+	if status, _ := do("TRACE", "machine.example"); status != http.StatusMethodNotAllowed {
 		t.Errorf("a TRACE on a machine's credential's host: %d", status)
 	}
 	mu.Lock()
-	if len(got) != 1 || !strings.HasPrefix(got[0], "TRACE machine.example Bearer machine-0001") {
+	if len(got) != 0 {
 		t.Errorf("the machine's TRACE: the origin got %q", got)
 	}
 	mu.Unlock()
@@ -163,7 +162,7 @@ func TestACredentialFromTheServerSetsItsValue(t *testing.T) {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if want := "qory: TRACE header.example(a value that contains an access key secret) denied by the gateway: use another method; TRACE and TRACK send the request's headers back, and this host gets a credential from Qory Apiary\n"; resp.StatusCode != http.StatusForbidden || string(b) != want {
+	if want := "qory: use a method other than TRACE or TRACK on this host.\nqory: TRACE header.example(a value that contains an access key secret) denied by the gateway: this host gets a credential from the gateway, and the answer to TRACE or TRACK contains the request's headers\n"; resp.StatusCode != http.StatusMethodNotAllowed || string(b) != want {
 		t.Errorf("a TRACE of a path with qak_: %d %q", resp.StatusCode, b)
 	}
 }
