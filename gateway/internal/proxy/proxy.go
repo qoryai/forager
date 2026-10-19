@@ -26,8 +26,11 @@
 // address an interface holds, are refused unless one of the guard's names is the host
 // itself, not a *. suffix over it, and the allow list allows the host. The gateway takes
 // the names from the node's policy alone: a local MCP server or model endpoint is
-// reached through the proxy like everything else, decided and recorded, when the node's
-// policy names it, in either mode. Without the guard the way around a wall is through the proxy.
+// reached through the proxy like everything else, decided and recorded, in either
+// mode, when the node's policy names it and the run's allow list allows it. Under a
+// session's narrowing of a policy that observes, the gateway passes no name, and
+// nothing on this machine is reached. Without the guard the way around a wall is
+// through the proxy.
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
 // TLS itself, reads each request's path and sets a credential on it, or hands it to the
@@ -110,8 +113,9 @@ type rules struct {
 	// deny is decided before allow and before the mode: a host it covers is denied in
 	// either mode.
 	deny []string
-	// opened are the entries of the allow list that name a host, as its owner wrote
-	// them: a *. suffix opens nothing on this machine.
+	// opened are the guard's names that name a host itself, which the gateway takes
+	// from the node's policy's allow list: a *. suffix opens nothing on this machine,
+	// and a host is opened only when allow matches it as well.
 	opened []string
 }
 

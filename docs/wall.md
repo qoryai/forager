@@ -163,6 +163,9 @@ Behind a wall, the proxy is guarded:
   policy lists by its name, and that the run's policy allows. A `*.` entry above that
   host is not enough, and an entry of a server's policy never opens the node.
 
+The node's policy is the one the command passes, `gateway.Config.Policy` in Go. In
+`qory` it is the `gateway.egress` section of `~/.config/qory/forager.yaml`.
+
 A model endpoint or MCP server on the node is reached through the proxy. The session
 reaches it by the node's host name, listed in the node's policy's `egress`, as the
 hosts file or a name server gives it; no search domain is added. `localhost` inside the
