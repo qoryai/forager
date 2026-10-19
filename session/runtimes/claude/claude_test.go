@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -163,4 +164,88 @@ func TestSettingsReadsOnlyAPlainFileItIsLetRead(t *testing.T) {
 			}
 		})
 	}
+}
+
+// settingsMoreThanOnce is the refusal of a walled launch that passes --settings more
+// than once.
+const settingsMoreThanOnce = "This launch passes --settings more than once, and Claude Code reads only the last one, " +
+	"so the run does not start. Pass one --settings file."
+
+// TestSettingsRefusesAWalledLaunchThatPassesSettingsMoreThanOnce pins that a walled
+// launch whose arguments pass --settings more than once, in either form, after -- or
+// as the value of another option, is refused before any file is read or written, and
+// that a walled launch with one --settings and an unwalled launch with two are
+// prepared as before.
+func TestSettingsRefusesAWalledLaunchThatPassesSettingsMoreThanOnce(t *testing.T) {
+	dir := t.TempDir()
+	first, second := filepath.Join(dir, "first.json"), filepath.Join(dir, "second.json")
+	for _, f := range []string{first, second} {
+		if err := os.WriteFile(f, []byte(`{"permissions":{}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepare := func(t *testing.T, walled bool, args []string) (runtimes.Launch, string, []string, error) {
+		t.Helper()
+		var asked []string
+		run := t.TempDir()
+		got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+			Launch: runtimes.Launch{Command: "claude", Args: args}, RunDir: run, Forwarder: []string{"q"},
+			Walled: walled,
+			Readable: func(p string) (string, error) {
+				asked = append(asked, p)
+				return filepath.EvalSymlinks(p)
+			},
+		})
+		return got, run, asked, err
+	}
+	for name, args := range map[string][]string{
+		"--settings path twice":     {"--settings", first, "-p", "hi", "--settings", second},
+		"--settings=path twice":     {"--settings=" + first, "--settings=" + second},
+		"path, then =path":          {"--settings", first, "--settings=" + second},
+		"=path, then path":          {"--settings=" + first, "--settings", second},
+		"three flags":               {"--settings", first, "--settings=" + second, "--settings", first},
+		"a document and a path":     {"--settings", `{"permissions":{}}`, "--settings", second},
+		"a flag after --":           {"--settings", first, "--", "--settings", second},
+		"a flag as an option value": {"--settings", first, "--model", "--settings", second},
+		"two flags with no value":   {"--settings", "--settings"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, run, asked, err := prepare(t, true, args)
+			if err == nil || err.Error() != settingsMoreThanOnce {
+				t.Fatalf("got %v, want %q", err, settingsMoreThanOnce)
+			}
+			if len(asked) > 0 {
+				t.Errorf("Readable was asked of %q", asked)
+			}
+			if _, err := os.Stat(filepath.Join(run, "settings.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the run's settings were written: %v", err)
+			}
+		})
+	}
+	for name, args := range map[string][]string{
+		"a file":        {"-p", "hi", "--settings", first},
+		"a file with =": {"--settings=" + first},
+		"a document":    {"--settings", `{"permissions":{}}`},
+		"none":          {"-p", "hi"},
+	} {
+		t.Run("walled, "+name, func(t *testing.T) {
+			got, run, _, err := prepare(t, true, args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := strings.Count(strings.Join(got.Args, "\x00")+"\x00", "--settings\x00"+filepath.Join(run, "settings.json")+"\x00"); n != 1 {
+				t.Errorf("launch %q does not pass the run's settings once", got.Args)
+			}
+		})
+	}
+	t.Run("unwalled, two flags", func(t *testing.T) {
+		got, run, _, err := prepare(t, false, []string{"--settings", first, "--settings=" + second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"--settings", filepath.Join(run, "settings.json"), "--settings=" + second}
+		if !slices.Equal(got.Args, want) {
+			t.Errorf("launch %q, want %q", got.Args, want)
+		}
+	})
 }

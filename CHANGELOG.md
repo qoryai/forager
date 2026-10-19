@@ -170,6 +170,14 @@ release may change what an existing document does, and says so under Upgrading.
   reason. Settings passed as a document are not checked, as before. The places also hold
   the writable binds of the other walled runs in the registry, with or without a wall
   for this run, and are worked out only when a settings file is to be read.
+- The `claude-settings` installer copied and checked only the first `--settings` of a
+  launch, and Claude Code reads only the last: a walled launch that passed two started
+  without Forager's hooks and with a file the session had not checked. A walled launch
+  that passes `--settings` more than once, in either form and anywhere in its
+  arguments, now does not start, with "runtime claude: This launch passes --settings
+  more than once, and Claude Code reads only the last one, so the run does not start.
+  Pass one --settings file." `runtimes.Attach.Walled` is set for a walled run. An
+  unwalled launch starts as before.
 - A walled run bound a mount or a workspace through a link that an agent of an earlier
   walled run, already ended, had left in a place it could write: the engine followed
   the link, so the run could bind any directory of this machine, writable. A place whose

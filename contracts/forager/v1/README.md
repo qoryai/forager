@@ -191,11 +191,17 @@ One run, on a developer machine, with a server configured:
    and the node's denied ones that nothing sets are unset inside (§The wall).
 6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
    Forager's forwarder as a command hook for each event the runtime lists. For Claude
-   Code that is a copy of the settings file the launch passes, written as
+   Code that is a copy of the first settings file the launch passes, written as
    `settings.json` in the run directory and passed in its place, and, for an
    interactive session whose API key is a placeholder, a script that pre-approves the
    placeholder value in Claude Code's configuration before it starts (§The descriptor).
    What is prepared goes into the run directory; the composed home is not modified.
+   Claude Code reads only the last `--settings` it is passed. A walled launch that
+   passes `--settings` more than once, counted anywhere in its arguments, does not
+   start: "This launch passes --settings more than once, and Claude Code reads only the
+   last one, so the run does not start. Pass one --settings file." An unwalled launch
+   that passes it more than once starts, and Claude Code reads the last file it passes,
+   without Forager's hooks.
    A settings file that lies in a place a walled run can write, whose path has a `..`
    name, that is a link or that is not a regular file of at most 1 MiB is not read, and
    the run does not start. The
@@ -2655,7 +2661,8 @@ command hook, the way `install` selects among the installers the binary has: a
 descriptor selects an installer and never contains one, so a program that takes hooks
 another way needs an installer in Forager before a descriptor can select it.
 `claude-settings` adds a group per event under `hooks` in the JSON settings the launch
-passes with `--settings`, leaving the groups already there. The forwarder writes the
+passes with its first `--settings`, leaving the groups already there; a launch that
+passes `--settings` more than once is handled as §Sequence step 6 says. The forwarder writes the
 JSON it reads on its standard input to the local socket, as one record. A forwarder
 exits 0 and prints nothing, which every hook interface reads as no decision, so an
 installed hook observes and never changes what the runtime does.

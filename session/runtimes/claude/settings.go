@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,16 +29,40 @@ const maxSettings = 1 << 20
 // A file is read only when its path has no ".." name, [runtimes.Attach.Readable] passes
 // it, its last part is no link, it is a regular file, it is the file Readable judged
 // and it holds at most 1 MiB.
+// A walled launch whose arguments pass --settings more than once is refused before
+// anything is read: Claude Code reads only the last one, so the run would start
+// without Forager's hooks and with a file that was not checked.
 // An interactive launch whose API key is the run's stand-in is then started through
 // the script of [ApproveScript], so Claude Code uses the stand-in at once.
 func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	launch := a.Launch
+	if a.Walled && settingsFlags(launch.Args) > 1 {
+		return runtimes.Launch{}, errSettingsMoreThanOnce
+	}
 	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside)
 	if err != nil {
 		return runtimes.Launch{}, err
 	}
 	launch.Args = args
 	return approve(a, launch)
+}
+
+// errSettingsMoreThanOnce refuses a walled launch that passes --settings more than once.
+var errSettingsMoreThanOnce = errors.New("This launch passes --settings more than once, and Claude Code " +
+	"reads only the last one, so the run does not start. Pass one --settings file.")
+
+// settingsFlags counts the arguments that are --settings or start with --settings=,
+// wherever they are: after --, and as the value of another option, though Claude Code
+// reads neither as a --settings flag. A count above the flags Claude Code reads only
+// refuses more launches; one below would let a later file through unchecked.
+func settingsFlags(args []string) int {
+	n := 0
+	for _, a := range args {
+		if a == "--settings" || strings.HasPrefix(a, "--settings=") {
+			n++
+		}
+	}
+	return n
 }
 
 func settingsArgs(events []string, args []string, dir string, forwarder []string,
