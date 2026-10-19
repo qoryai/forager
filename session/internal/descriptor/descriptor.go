@@ -237,7 +237,7 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 }
 
 // check holds the secrets to what the schema cannot express: declaration ids and group
-// ids are each distinct, and every id a group lists is a declared one, in one group at
+// ids are each distinct, every id a group lists is a declared one, in one group at
 // most.
 func (s *Secrets) check() error {
 	if s == nil {

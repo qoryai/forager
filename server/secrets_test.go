@@ -17,7 +17,7 @@ import (
 )
 
 // credentialDoc is a run configuration with one credential.
-const credentialDoc = `{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"header","header":"x-api-key"},"key_form":"api_key","placeholders":["MODEL_API_KEY"]}]}`
+const credentialDoc = `{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"header","header":"x-api-key"},"key_variables":["MODEL_API_KEY"],"placeholders":["MODEL_API_KEY"]}]}`
 
 // TestARunConfigurationsCredentialsAndItsComputedDigest pins the reading of
 // credentials: each entry decoded, and Computed the SHA-256 of the bytes as they came,
@@ -30,8 +30,8 @@ func TestARunConfigurationsCredentialsAndItsComputedDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256([]byte(credentialDoc))
-	want := server.RunCredential{Name: "model", Hosts: []string{"api.model.example"}, Auth: server.Auth{Scheme: "header", Header: "x-api-key"}, KeyForm: "api_key", Placeholders: []string{"MODEL_API_KEY"}}
-	if len(rc.Credentials) != 1 || rc.Credentials[0].Name != want.Name || rc.Credentials[0].Auth != want.Auth || rc.Credentials[0].KeyForm != "api_key" {
+	want := server.RunCredential{Name: "model", Hosts: []string{"api.model.example"}, Auth: server.Auth{Scheme: "header", Header: "x-api-key"}, KeyVariables: []string{"MODEL_API_KEY"}, Placeholders: []string{"MODEL_API_KEY"}}
+	if len(rc.Credentials) != 1 || rc.Credentials[0].Name != want.Name || rc.Credentials[0].Auth != want.Auth || !slices.Equal(rc.Credentials[0].KeyVariables, want.KeyVariables) {
 		t.Errorf("credentials %+v", rc.Credentials)
 	}
 	if rc.Computed != "sha256="+hex.EncodeToString(sum[:]) || rc.Computed == d {

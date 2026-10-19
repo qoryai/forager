@@ -739,14 +739,19 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 }
 
 // credentialHosts are the run answer's credential_hosts: one entry per credential held,
-// from the same uses as appliedOf's credentials; nil when the run holds none.
+// from the same uses as appliedOf's credentials, with the auth and key_variables of a
+// credential from the server; nil when the run holds none.
 func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
 	if held == nil {
 		return nil
 	}
 	var out []server.LinkCredentialHosts
 	for _, c := range held.Credentials() {
-		out = append(out, server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders})
+		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, KeyVariables: c.KeyVariables}
+		if c.Stored {
+			e.Auth = &server.Auth{Scheme: c.Scheme, Header: c.Header, Username: c.Username}
+		}
+		out = append(out, e)
 	}
 	return out
 }
@@ -799,8 +804,8 @@ func images(li *server.LinkImages) run.Images {
 }
 
 // appliedOf is what dev.qory.run.policy_applied records of a policy that the gateway
-// decides, as today's session writes it: every member but the variables and the
-// harness's hosts, which are the session's. beside are the sides of path rules
+// decides, as today's session writes it: every member but the variables, the
+// credential variables and the harness's hosts, which are the session's. beside are the sides of path rules
 // [Policy.Under] put beside the run's policy, its ceiling_paths. It is in JSON's types,
 // as an event's data decodes.
 func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credential.Held, chosen []tool.Chosen, terminated []string) map[string]any {
@@ -957,7 +962,7 @@ func appliedIs(a map[string]any) func(*event.Event) bool {
 func decided(data map[string]any) map[string]any {
 	own := map[string]any{}
 	for k, v := range data {
-		if k != "harness_hosts" && k != "variables" {
+		if k != "harness_hosts" && k != "variables" && k != "credential_variables" {
 			own[k] = v
 		}
 	}

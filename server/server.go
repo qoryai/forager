@@ -304,17 +304,19 @@ type RunConfiguration struct {
 }
 
 // RunCredential is one entry of a run configuration's credentials: the credential's
-// name, the exact hosts and the paths its value is set on, how it is set, the form of
-// the key, and the variables the enclosure gets a placeholder in. It has no value.
+// name, the exact hosts and the paths its value is set on, how it is set, the names of
+// the variables from which a runtime reads its key, and the variables the enclosure
+// gets a placeholder in. It has no value.
 type RunCredential struct {
 	Name  string   `json:"name"`
 	Hosts []string `json:"hosts"`
 	// Paths are nil for every path.
 	Paths []string `json:"paths,omitzero"`
 	Auth  Auth     `json:"auth"`
-	// KeyForm is api_key, access_token or empty. No Forager component reads it in this
-	// revision.
-	KeyForm      string   `json:"key_form,omitzero"`
+	// KeyVariables are the names of the environment variables from which a runtime reads
+	// the credential's key; nil for none. The session gives the placeholder for the
+	// credential to the one of them that the run's runtime declares with the same auth.
+	KeyVariables []string `json:"key_variables,omitzero"`
 	Placeholders []string `json:"placeholders,omitzero"`
 }
 

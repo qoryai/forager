@@ -138,7 +138,7 @@
               "hosts": {"description": "The hosts the value is set on: exact DNS names, no wildcard, no IP literal.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/exact_host"}},
               "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
               "auth": {
-                "description": "How the value is set on a request, a scheme from the closed set.",
+                "description": "How the value is set on a request, a scheme from the closed set. The session gives this variable the placeholder of a credential from the server whose key_variables name it only when the credential's auth has the same scheme and, for a header, the same header name.",
                 "$ref": "auth.schema.json"
               }
             }

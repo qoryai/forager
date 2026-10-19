@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-run-answer.schema.json",
   "title": "Link run answer",
-  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key the run key names, over the connection and the request (README §The gateway's link). The run id echoed, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the names of the variables the machine's credentials are read from, the hosts and placeholders of each credential the gateway holds, the run's image when it has a wall, the policy_applied members the gateway decides, on the local link the run's labels and proxy secret, and the run's certificate authority when the run request's wall is true and the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key the run key names, over the connection and the request (README §The gateway's link). The run id echoed, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the names of the variables the machine's credentials are read from, the hosts and placeholders of each credential the gateway holds, with the auth and key_variables of a credential from the server, the run's image when it has a wall, the policy_applied members the gateway decides, on the local link the run's labels and proxy secret, and the run's certificate authority when the run request's wall is true and the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "run_id", "applied"],
@@ -61,12 +61,15 @@
             "items": {"$ref": "events/run.policy_applied.schema.json#/properties/credentials/items/properties/hosts/items"}
           },
           "placeholders": {
-            "description": "The variables the session sets to a value that is no credential for this credential, each also in placeholders. Empty when the credential sets none.",
+            "description": "The variables the session sets to a value that is no credential for this credential, each also in placeholders. Empty when the credential sets none. The variable the session chooses from key_variables may be among them, when the server's entry lists it; when it is not, the session adds it.",
             "type": "array",
             "uniqueItems": true,
             "items": {"$ref": "#/properties/placeholders/items"}
-          }
-        }
+          },
+          "auth": {"description": "How the proxy sets the value of a credential from the server, its run configuration entry's auth. Absent for a credential of the machine's.", "$ref": "auth.schema.json"},
+          "key_variables": {"description": "The key_variables of a credential from the server whose run configuration entry has them. The session gives the credential's placeholder to the one of them that the run's runtime declares with the same auth, and refuses the run otherwise, run_configuration_invalid. Absent for every other credential.", "$ref": "run-configuration.schema.json#/$defs/key_variables"}
+        },
+        "dependentRequired": {"key_variables": ["auth"]}
       }
     },
     "image": {
@@ -79,7 +82,7 @@
       "minLength": 1
     },
     "applied": {
-      "description": "The members of dev.qory.run.policy_applied the gateway decides for the policy in force: every member but variables and harness_hosts, each present exactly when the gateway's is. The session's dev.qory.run.policy_applied is this object with the session's variables and harness_hosts added.",
+      "description": "The members of dev.qory.run.policy_applied the gateway decides for the policy in force: every member but variables, credential_variables and harness_hosts, each present exactly when the gateway's is. The session's dev.qory.run.policy_applied is this object with the session's variables, credential_variables and harness_hosts added.",
       "type": "object",
       "additionalProperties": false,
       "required": ["mode", "allow", "source"],

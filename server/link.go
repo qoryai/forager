@@ -164,11 +164,17 @@ type LinkImage struct {
 // LinkCredentialHosts is one credential the gateway holds for a run, as the run answer's
 // credential_hosts has it: its name, its hosts as the proxy matches them, which are the
 // hosts applied.credentials lists for it, and the variables the session sets to a
-// placeholder for it. Names and hosts alone, never a secret.
+// placeholder for it. For a credential from the server, Auth is how the proxy sets its
+// value and KeyVariables its run configuration entry's key_variables, among which the
+// session chooses one more variable for the placeholder by the run's runtime's
+// declarations and Auth; both are empty for a credential of the machine's. Names and
+// hosts alone, never a secret.
 type LinkCredentialHosts struct {
 	Name         string   `json:"name"`
 	Hosts        []string `json:"hosts"`
 	Placeholders []string `json:"placeholders"`
+	Auth         *Auth    `json:"auth,omitempty"`
+	KeyVariables []string `json:"key_variables,omitempty"`
 }
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,
@@ -212,8 +218,8 @@ type LinkRunAnswer struct {
 	// Labels are the run's labels as the gateway holds them, which run.started reports.
 	Labels map[string]string `json:"labels,omitempty"`
 	// Applied are the members of dev.qory.run.policy_applied the gateway decides for
-	// the policy in force, a JSON object: every member but harness_hosts and variables,
-	// which the session adds. The gateway refuses a policy_applied whose other members
+	// the policy in force, a JSON object: every member but harness_hosts, variables and
+	// credential_variables, which the session adds. The gateway refuses a policy_applied whose other members
 	// are not these. Nil when the answer has none.
 	Applied json.RawMessage `json:"applied,omitzero"`
 }
@@ -257,7 +263,10 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 			if placeholders == nil && c.Placeholders != nil {
 				placeholders = []string{}
 			}
-			s.CredentialHosts[i] = LinkCredentialHosts{Name: accesskey.ShownName(c.Name, false), Hosts: hosts, Placeholders: placeholders}
+			s.CredentialHosts[i] = LinkCredentialHosts{Name: accesskey.ShownName(c.Name, false), Hosts: hosts, Placeholders: placeholders, KeyVariables: accesskey.ShownNames(c.KeyVariables)}
+			if c.Auth != nil {
+				s.CredentialHosts[i].Auth = &Auth{Scheme: c.Auth.Scheme, Header: accesskey.ShownValue(c.Auth.Header, false), Username: accesskey.ShownValue(c.Auth.Username, false)}
+			}
 		}
 	}
 	if a.Image != nil {

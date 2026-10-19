@@ -226,6 +226,20 @@ server's `QORY_` value is denied in any run, apart from `QORY_RUN_SYSTEM` and
 which the server's variables may set and which reach the agent as any server variable
 does. Set by the node, they are `QORY_` names like any other.
 
+Before it resolves the variables, the session refuses a placeholder that goes into a
+variable for no credential, `run_configuration_invalid`: one of the run's placeholders,
+from this machine's credentials and tools in forager.yaml or from Qory Apiary's, that the
+runtime's descriptor lists in `denies` or in its model `overrides`, or that is its model
+endpoint's variable; or a variable the runtime declares or reserves that no credential
+has among its placeholders.
+
+After it resolves the variables, the session refuses a walled run whose gateway holds
+credentials for it and that has no model key for its runtime, `model_key_missing`. The
+run has one when a credential has a placeholder of a model key's variable on the
+runtime's model host, or when a value of one reaches the runtime from `Env`,
+`LaunchFixed`, `LaunchDefaults`, `Variables.Run`, `Variables.Machine` or the runtime's
+preparation.
+
 The record lists every variable by name, never a value: `dev.qory.run.policy_applied`'s
 `variables` contains each name, `from`, the source that applies, and `lost`, each value
 that lost with its source and why: `overridden`, `denied`, `fixed`, `unwalled`,

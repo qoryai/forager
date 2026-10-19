@@ -12,8 +12,13 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/server"
 )
+
+// AppliedIs matches the session's dev.qory.run.policy_applied whose members the
+// gateway decides are a.
+func AppliedIs(a map[string]any) func(*event.Event) bool { return appliedIs(a) }
 
 // BoundLine is the line the gateway answers the binding with under key, on a connection
 // whose exporter value is ekm.

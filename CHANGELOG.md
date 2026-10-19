@@ -24,8 +24,62 @@ release may change what an existing document does, and says so under Upgrading.
   computes the digest itself. For any other digest from the hook, it answers a signed
   `500` in place of the registration's, the attach's or the reload's answer, and no
   digest on a batch's answer. Before, the receiver served the hook's digest as it was.
+- A walled run whose gateway holds credentials for it, and whose runtime declares model
+  keys, needs a model key: without a credential whose placeholder is a model key's
+  variable on the runtime's model host, and without a value of one from the run, the
+  machine, the harness, the runtime's preparation or what the run inherits, it is
+  `model_key_missing`. A setup whose walled Claude Code run has only a forge credential
+  and finds its model key in a mount, the image, its settings or a login inside the run
+  now stops: pass the key in the machine's variables,
+  or define a model credential with a placeholder. A run without a wall, or whose run
+  answer has no `credential_hosts`, starts as before.
+- A placeholder of the machine's credentials or tools that the runtime's descriptor
+  denies, lists in its model `overrides` or reads its model endpoint from, such as
+  `CLAUDE_CONFIG_DIR` or `ANTHROPIC_MODEL` for Claude Code, now stops the run,
+  `run_configuration_invalid`, and so does a tool's placeholder in a variable the
+  runtime reads a key from, such as `ANTHROPIC_API_KEY`, when no credential has it. Remove
+  the placeholder from forager.yaml. A machine credential's placeholder in a key's
+  variable runs as before.
+- `runtimes.json`: the claude runtime's `reserves` is `[]`, and `ANTHROPIC_AUTH_TOKEN` is
+  its declaration `auth_token`, "Anthropic API key as a bearer". A server that lists a
+  runtime's declarations shows a third one for Claude Code.
+- `dev.qory.run.refused` and the link's batches take the code `model_key_missing`, and
+  the session's `dev.qory.run.policy_applied` may have `credential_variables`. A
+  separate gateway older than the session refuses both: upgrade the gateway first.
 
 #### Added
+
+- The Claude Code descriptor declares `auth_token`, `ANTHROPIC_AUTH_TOKEN`, an API key
+  set as a bearer, which was reserved.
+- The session chooses the variable of a credential from the server with
+  `key_variables`: the one name among them that the run's runtime declares, whose
+  declaration's `auth` has the credential's scheme and, for a header, its header name.
+  None, two or more, or another auth is `run_configuration_invalid`, and so are
+  `placeholders` that list another variable the runtime declares. The variable joins
+  the credential's placeholders and the run's, so a value the run passes for it is
+  `placeholder_conflict`, the endpoint rule counts the credential as a model
+  credential, and Claude Code's approval script covers `ANTHROPIC_API_KEY` chosen this
+  way. A run configuration credential with `key_variables` needs no `placeholders`.
+- A placeholder goes only into a variable for a credential. The session refuses,
+  `run_configuration_invalid`, a placeholder of a credential from the server that the
+  runtime's descriptor denies, lists in its model `overrides` or reads its model
+  `endpoint` from, or that the runtime declares or reserves and the session did not
+  choose from the credential's `key_variables`; and one of the run answer's `placeholders` that the
+  descriptor denies, overrides or reads its endpoint from, or that the runtime declares
+  or reserves and no credential has. A tool's placeholder, such as `GITHUB_TOKEN`, and
+  a machine credential's key variable pass.
+- The link's run answer's `credential_hosts` has `auth` for a credential from the
+  server, and `key_variables` when its entry has them. `server.LinkCredentialHosts` has
+  `Auth` and `KeyVariables`.
+- `dev.qory.run.policy_applied`: behind a wall `credential_variables` lists the
+  variable each credential's placeholder is in, `{credential, name}`, with a name's
+  phrase in place of a credential's name or a variable that contains `qak_` or `qrk_`.
+  The gateway leaves `credential_variables`
+  out of the members it matches.
+- The refusal `model_key_missing`, in `refusal.Decides`: a walled run whose run answer
+  has `credential_hosts`, whose runtime has a `model` section and model keys, and that
+  has no model key, as the contract's §Variables, A model key, says. Its names are the
+  model keys' variables.
 
 - The link's run answer has `credential_hosts`: the hosts and placeholders of each
   credential the gateway holds for the run, so the session can tell which hosts the run's
@@ -85,13 +139,13 @@ release may change what an existing document does, and says so under Upgrading.
 - The link's run request has `images.allow`; its answer has `relay_image`, the image the
   relay starts from, and `reference: true` on an `image` the policy names by reference.
 - A run configuration's `credentials`: at most 8 credentials whose values the server
-  stores for the run, each `{name, hosts, paths, auth, key_form, placeholders}`, with
-  exact hosts and no value. `key_form`, optional, is the form of the key for a model
-  credential, `api_key` or `access_token`. Forager checks the member against
+  stores for the run, each `{name, hosts, paths, auth, key_variables, placeholders}`,
+  with exact hosts and no value. `key_variables`, optional, are the names of the
+  environment variables from which a runtime reads the credential's key, 1 to 16, upper
+  case, none twice. Forager checks the member against
   `run-configuration.schema.json`, and refuses a name twice and an `auth.header` that
   frames the request or that the proxy sets, and a placeholder that
-  `denied-variables.json` covers, each `run_configuration_invalid`. Forager reads no
-  `key_form`.
+  `denied-variables.json` covers, each `run_configuration_invalid`.
 - The gateway sets a run configuration's `credentials` for a walled run. When the run
   starts it sends one secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value

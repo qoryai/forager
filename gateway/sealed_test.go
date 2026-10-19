@@ -34,7 +34,7 @@ import (
 // value Qory Apiary seals.
 const (
 	sealedPolicy = `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"machine-model"}]}`
-	modelEntry   = `{"name":"model","hosts":["api.model.example"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"key_form":"api_key","placeholders":["MODEL_API_KEY"]}`
+	modelEntry   = `{"name":"model","hosts":["api.model.example"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"key_variables":["MODEL_API_KEY"],"placeholders":["MODEL_API_KEY"]}`
 	sealedDoc    = `{"version":1,"security_policy":` + sealedPolicy + `,"credentials":[` + modelEntry + `]}`
 	sealedValue  = "sealed-value-of-the-test"
 	machineValue = "machine-value-of-the-test"
@@ -85,7 +85,7 @@ func (c *control) requests(t *testing.T) []server.SecretsRequest {
 // the run, the digest it computed of the document's bytes, not the header's, and the
 // credentials' names; the proxy sets the opened value in place of forager.yaml's key,
 // whose credential claims the same host; and the run answer has model's hosts and
-// placeholder alone.
+// placeholder, its key_variables and its auth, and applied.credentials neither.
 func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{Wall: true})
@@ -103,7 +103,8 @@ func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 	if r := reqs[0]; r.Version != 1 || r.RunID != a.RunID || r.RunConfiguration != digestOf(sealedDoc) || !slices.Equal(r.Credentials, []string{"model"}) {
 		t.Errorf("the secrets request %+v; want the run, %s and model", r, digestOf(sealedDoc))
 	}
-	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_API_KEY"}}}
+	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_API_KEY"},
+		KeyVariables: []string{"MODEL_API_KEY"}, Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
 	if !reflect.DeepEqual(a.CredentialHosts, want) || !slices.Equal(a.Placeholders, []string{"MODEL_API_KEY"}) {
 		t.Errorf("credential hosts %+v, placeholders %v; want %+v", a.CredentialHosts, a.Placeholders, want)
 	}
@@ -112,6 +113,22 @@ func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 	}
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
 	h.close()
+}
+
+// TestTheSessionsCredentialVariablesAreItsOwn pins that the gateway matches the
+// session's policy_applied by the members the gateway decides alone: the session's
+// variables, harness_hosts and credential_variables are left out of the comparison.
+func TestTheSessionsCredentialVariablesAreItsOwn(t *testing.T) {
+	decided := map[string]any{"mode": "observe", "allow": []any{}, "deny": []any{}, "source": "none"}
+	data := map[string]any{"mode": "observe", "allow": []any{}, "deny": []any{}, "source": "none", "variables": []any{},
+		"harness_hosts": []any{"harness.example"}, "credential_variables": []any{map[string]any{"credential": "model", "name": "ANTHROPIC_API_KEY"}}}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gateway.AppliedIs(decided)(&event.Event{Type: event.PolicyApplied, Data: json.RawMessage(raw)}) {
+		t.Error("the gateway does not match a policy_applied with credential_variables")
+	}
 }
 
 // TestARunConfigurationWithoutCredentialsIsUnchanged pins a run configuration with no

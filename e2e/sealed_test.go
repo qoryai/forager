@@ -124,7 +124,7 @@ func (r sealedRun) reference(t *testing.T, accessKey, poolKey, signer *accesskey
 	t.Cleanup(func() { store.Close() })
 	pin, _ := json.Marshal(accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}})
 	doc := []byte(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["` + r.host + `"]}},` +
-		`"credentials":[{"name":"model","hosts":["` + r.host + `"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"key_form":"api_key","placeholders":["` + sealedPlaceholder + `"]}]}`)
+		`"credentials":[{"name":"model","hosts":["` + r.host + `"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"placeholders":["` + sealedPlaceholder + `"]}]}`)
 	keys := map[string]receiver.AccessKey{
 		sealedNodeKey:    {PublicKey: accessKey.PublicKey(), StoredSecrets: true},
 		sealedPoolKey:    {PublicKey: poolKey.PublicKey(), Node: sealedPool},

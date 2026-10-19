@@ -58,6 +58,22 @@ and its placeholders, with no value. Qory Apiary stores the values.
   and opens them. The values stay outside the container.
 - On a host that one of these credentials is for, its value replaces the machine's
   credential, such as the model key in `forager.yaml`, whatever its name.
+- A model credential may have `key_variables`: the names of the variables from which a
+  runtime reads its key. The session gives the placeholder to the one name the run's
+  runtime declares, when the declaration and the credential have the same `auth`.
+  Claude Code sends the key in `ANTHROPIC_API_KEY` as the header `x-api-key`, and the
+  key in `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` as a bearer. A
+  credential for an API key sent as a bearer lists `ANTHROPIC_AUTH_TOKEN`. When the
+  runtime declares none of the names or more than one, or the declaration has another
+  `auth`, the run does not start (`run_configuration_invalid`).
+- A placeholder goes only into a variable for a credential. A credential from
+  Qory Apiary whose `placeholders` list a variable the runtime denies, a model override,
+  the model endpoint's variable, or a key's variable that the session did not
+  choose from its `key_variables` stops the run (`run_configuration_invalid`). The same
+  holds for the run's placeholders from this machine's credentials and tools, apart
+  from a machine credential's key variable. A tool's variable, such as `GITHUB_TOKEN`,
+  is fine. Two credentials with `key_variables` on different hosts may each set one
+  key's variable; both get a placeholder.
 - The credentials are fixed for the run. A reload that changes them fails, and the run
   keeps its policy.
 - Without `credentials`, the run gets the machine's credentials as before.
