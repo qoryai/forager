@@ -76,7 +76,7 @@ const (
 
 // Why a source's value of a name lost: another source's value won, the deny list
 // matched it, the name is one of the run's fixed names, the run has no wall and takes
-// none of the server's, or, of the endpoint's variable behind a wall, the value's host
+// none of the server's, or, of the endpoint's variable under the endpoint rule, the value's host
 // is none of the hosts of the run's model credential or the value is not an https URL
 // with a host [policy.EndpointHost] reads.
 const (
@@ -88,8 +88,8 @@ const (
 	WhyEndpointUnreadable = "endpoint_unreadable"
 )
 
-// KeptEndpointCovered is why a value of the endpoint's variable applies behind a wall:
-// its host is a host of the run's model credential.
+// KeptEndpointCovered is why a value of the endpoint's variable applies under the
+// endpoint rule: its host is a host of the run's model credential.
 const KeptEndpointCovered = "endpoint_covered"
 
 // Inputs is what the resolution of one run's variables takes. Each list of values is
@@ -130,8 +130,8 @@ type Inputs struct {
 	// the placeholders and Fixed, the run's fixed names.
 	Own []string
 	// Endpoint is the variable the run's runtime reads the base URL of its model API
-	// from, its descriptor's model.endpoint.variable; empty when it has none. Only a
-	// walled run applies the endpoint rule to it.
+	// from, its descriptor's model.endpoint.variable; empty when it has none. A walled
+	// run applies the endpoint rule to it, and an unwalled one with Credentials.
 	Endpoint string
 	// Credentials is each credential the gateway holds for the run, as the run
 	// answer's credential_hosts lists them. A model credential is one with a
@@ -205,7 +205,8 @@ type Loss struct {
 // whose name is one of them is left out too. The inherited environment's values are
 // not matched against the deny list.
 //
-// Behind a wall, the endpoint rule applies to each value of in.Endpoint of the server,
+// Behind a wall, and without one when in.Credentials is not empty, the endpoint rule
+// applies to each value of in.Endpoint of the server,
 // the run, the machine, the harness's defaults and the harness's computed ones, in
 // place of the runtime's denies. The other entries of the deny list that cover the
 // source, and the rules for the server's value, apply first, as for any name. Every
@@ -223,7 +224,12 @@ func Resolve(in Inputs) (Resolved, error) {
 	if in.Unwalled != "" && in.Unwalled != Ignore && in.Unwalled != Accept {
 		return Resolved{}, fmt.Errorf("variables.unwalled is %s, neither %s nor %s", accesskey.ShownValue(in.Unwalled, true), Accept, Ignore)
 	}
-	passed := slices.Concat(in.Fixed, in.Run, in.Machine, in.Defaults, in.Shell)
+	// Without a wall what the run inherits is the developer's environment, and a
+	// placeholder wins over a value of it: it passes nothing into an enclosure.
+	passed := slices.Concat(in.Fixed, in.Run, in.Machine, in.Defaults)
+	if in.Walled {
+		passed = append(passed, in.Shell...)
+	}
 	if err := Check(passed, in.Walled, in.Placeholders, in.ReadFrom); err != nil {
 		return Resolved{}, err
 	}
@@ -247,11 +253,12 @@ func Resolve(in Inputs) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, err
 	}
-	// Behind a wall, the endpoint's variable is matched against the deny list without
-	// the runtime's denies, and then checked by the endpoint rule.
+	// Behind a wall, and without one for a run whose gateway holds credentials for it,
+	// the endpoint's variable is matched against the deny list without the runtime's
+	// denies, and then checked by the endpoint rule.
 	var endpoint string
 	endpointDeny := deny
-	if in.Walled && in.Endpoint != "" {
+	if (in.Walled || len(in.Credentials) > 0) && in.Endpoint != "" {
 		endpoint = in.Endpoint
 		if endpointDeny, err = List(slices.Concat(in.Deny, overrides)); err != nil {
 			return Resolved{}, err

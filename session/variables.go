@@ -74,10 +74,15 @@ func checkHarnessHome(home string) error {
 // what it inherits, what the harness sets, or the run's or the machine's variables,
 // sorted, each once. A name outside the grammar of a variable's name is left out: it
 // can match no placeholder. The run request carries them, names alone, so the gateway
-// refuses a placeholder the run passes a value for, as the session did.
+// refuses a placeholder the run passes a value for, as the session did. Without a wall
+// what the run inherits is left out: a placeholder wins over an inherited value.
 func passes(spec Spec) []string {
 	seen := map[string]bool{}
-	for _, kv := range slices.Concat(spec.Env, spec.LaunchFixed, spec.LaunchDefaults, spec.Variables.Run, spec.Variables.Machine) {
+	inherited := spec.Env
+	if spec.Wall == nil {
+		inherited = nil
+	}
+	for _, kv := range slices.Concat(inherited, spec.LaunchFixed, spec.LaunchDefaults, spec.Variables.Run, spec.Variables.Machine) {
 		name, _, ok := strings.Cut(kv, "=")
 		if ok && variableShape.MatchString(name) {
 			seen[name] = true
@@ -90,16 +95,18 @@ func passes(spec Spec) []string {
 // inherits, after refusing what the run passes into the enclosure: placeholders are the
 // variables the agent sees in place of what the gateway holds, and reserved the names
 // the gateway sets for the run, what a value of the machine's is read from. Behind a
-// wall, the endpoint rule checks each value of the runtime's model endpoint variable
-// against credentials, the run answer's credential_hosts after [chosen]. It returns the resolution
+// wall, and without one for a run whose answer has credential_hosts, the endpoint rule
+// checks each value of the runtime's model endpoint variable against credentials, the
+// run answer's credential_hosts after [chosen]. It returns the resolution
 // and, for a walled run, the names to unset inside, which [Exec] takes out of the
 // launch's environment: the runtime's declared and reserved variables and the names
 // the runtime denies, lists in its model overrides or as its model endpoint, or the
 // node's deny list removes, that nothing sets. Forager, the wall and the preparation
 // set names too, [wall.Nest] among them for a run with nested Docker, docker, so none of theirs is
 // ever unset; the wall's names for a run with an authority count as set only when the
-// run has one, authority.
-func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool) (variables.Resolved, []string, error) {
+// run has one, authority. Without a wall, bundle are the variables Forager sets to the
+// run's bundle, Forager's own names.
+func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool, bundle []string) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
 		decl = s.Secrets()
@@ -135,6 +142,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentia
 	}
 	own = append(own, names(link.ProxyEnv(""))...)
 	own = append(own, names(prepared.Env)...)
+	own = append(own, bundle...)
 	// What Forager, the preparation and the wall set in this run, which the helper's
 	// exec never unsets: a name the wall sets only for a run with an authority counts
 	// when the run has one, and nested Docker's when the run has it.
@@ -436,22 +444,27 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 	return out
 }
 
-// checkModelKey refuses a walled run whose gateway holds credentials for it, when its
-// runtime has a model section and declares model keys, its declarations, and the run
-// has none: no value of a model key's variable reaches the
+// checkModelKey refuses a run whose gateway holds credentials for it, behind a wall or,
+// without one, when a credential has a model key's variable among its placeholders,
+// when its runtime has a model section and declares model keys, its declarations, and
+// the run has none: no value of a model key's variable reaches the
 // runtime, from what the run inherits, the run, the machine, the harness or the
 // runtime's preparation, and no credential of credentials, after [chosen], has a
 // model key's variable among its placeholders and a host of the runtime's model among
 // its hosts. The runtime's model host is the host of the value of its endpoint variable
 // that reaches it, or, when none does, a host of a model key's declaration; a value
 // from which [policy.EndpointHost] reads no host is covered by no credential. A run
-// without a wall, or whose answer has no credential_hosts, is not checked: its key may
-// come from what the session does not see, such as a login of the developer's, a
-// mount or an image. The refusal is [refusal.ModelKeyMissing] with the model keys'
+// whose answer has no credential_hosts is not checked: its key may come from what the
+// session does not see, such as a login of the developer's, a mount or an image. Nor
+// is a run without a wall none of whose credentials has a model key's variable among
+// its placeholders: its runtime may use the developer's login, and no placeholder goes
+// to its model host. The refusal is [refusal.ModelKeyMissing] with the model keys'
 // variables. Its text offers a value only of a model key's variable for which passes
 // reports true: a value of it from the run reaches the runtime's environment.
-func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, passes func(name string) bool) error {
-	if spec.Wall == nil || len(credentials) == 0 {
+// Without a wall, an inherited value of one of placeholderNames reaches nothing: the
+// placeholder is set over it, so the hosts decide.
+func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, placeholderNames []string, passes func(name string) bool) error {
+	if len(credentials) == 0 {
 		return nil
 	}
 	m, ok := rt.(runtimes.Model)
@@ -474,10 +487,20 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	if len(keys) == 0 {
 		return nil
 	}
+	isKey := func(p string) bool { return slices.Contains(keys, p) }
+	if spec.Wall == nil && !slices.ContainsFunc(credentials, func(c server.LinkCredentialHosts) bool {
+		return slices.ContainsFunc(c.Placeholders, isKey)
+	}) {
+		return nil
+	}
 	// What reaches the runtime, a later source's value over an earlier one's, as
 	// environment writes the launch's.
+	inherited := spec.Env
+	if spec.Wall == nil {
+		inherited = withoutNames(spec.Env, placeholderNames)
+	}
 	reaches := map[string]string{}
-	for _, kv := range slices.Concat(spec.Env, vars.Env, vars.Fixed, prepared.Env) {
+	for _, kv := range slices.Concat(inherited, vars.Env, vars.Fixed, prepared.Env) {
 		name, value, _ := strings.Cut(kv, "=")
 		reaches[name] = value
 	}
@@ -520,7 +543,7 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	}
 	shownHosts := strings.Join(hosts, " or ")
 	for _, c := range credentials {
-		if !slices.ContainsFunc(c.Placeholders, func(p string) bool { return slices.Contains(keys, p) }) {
+		if !slices.ContainsFunc(c.Placeholders, isKey) {
 			continue
 		}
 		if slices.ContainsFunc(hosts, func(h string) bool { return policy.CredentialFor(c.Hosts, h) }) {

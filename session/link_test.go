@@ -61,8 +61,9 @@ func TestTheGatewayPrintsBySocket(t *testing.T) {
 
 // TestTheRunRequestSaysWhatTheGatewayDecidesBy pins the run request: the session's run
 // id, no wall, the labels, what the run is about, and the names of the variables the
-// run passes a value for, from what it inherits, what the harness sets and its
-// variables, sorted, never a value, and none outside a variable name's grammar.
+// run passes a value for, from what the harness sets and its variables, sorted, never
+// a value, and none outside a variable name's grammar. Without a wall what the run
+// inherits is left out, since a placeholder wins over it; behind a wall it counts.
 func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 	const value = "a-value-no-request-carries"
 	sp, g := specGateway(t, "INHERITED="+value, "not a name="+value, "1BAD="+value)
@@ -81,12 +82,22 @@ func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 		t.Fatalf("%d run requests", len(reqs))
 	}
 	req := reqs[0]
-	want := []string{"DEFAULT_ONE", "FAKE_RUNTIME", "FIXED_ONE", "INHERITED", "MACHINE_ONE", "PATH", "RUN_ONE"}
+	want := []string{"DEFAULT_ONE", "FIXED_ONE", "MACHINE_ONE", "RUN_ONE"}
 	if req.RunID != sp.RunID || req.Wall || req.Labels["repository"] != "example-namespace/project" || req.About == nil || req.About.Title != "Example title" || !slices.Equal(req.Passes, want) || req.Images != nil || req.Narrowing != nil {
 		t.Errorf("the run request %+v, passes want %q", req, want)
 	}
 	if raw := string(g.RawRequests()[0]); strings.Contains(raw, value) {
 		t.Errorf("the run request carries a value: %s", raw)
+	}
+
+	sp, g = specGateway(t, "INHERITED="+value)
+	sleeps(&sp, 0)
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	if _, err := session.Run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	if reqs := g.Requests(); len(reqs) != 1 || !slices.Equal(reqs[0].Passes, []string{"FAKE_RUNTIME", "INHERITED", "PATH"}) {
+		t.Errorf("a walled run's run requests %+v", reqs)
 	}
 }
 
@@ -115,8 +126,8 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 			"run_id_used", accesskey.FromGateway, nil, "the gateway: run_id_used (status 409)", map[string]any{"code": "run_id_used"}},
 		"the server's instance_limit": {linktest.Reply{Status: 409, Body: linktest.Refusal("instance_limit", "apiary")},
 			"instance_limit", accesskey.FromApiary, nil, "the gateway: instance_limit (status 409)", map[string]any{"code": "instance_limit", "status": 409.0}},
-		"wall_required for credentials": {linktest.Reply{Status: 403, Body: linktest.Refusal("wall_required", "gateway", "credentials", "paths")},
-			"", "", nil, "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them", nil},
+		"wall_required for path rules": {linktest.Reply{Status: 403, Body: linktest.Refusal("wall_required", "gateway", "tools", "paths")},
+			"", "", nil, "run it with a wall: the policy selects tools or has path rules, and without a wall a program that ignores the proxy is bound by neither", nil},
 		"wall_required for an image": {linktest.Reply{Status: 403, Body: linktest.Refusal("wall_required", "gateway", "image=with-docker")},
 			"", "", nil, `the policy selects the image "with-docker", which needs a wall: without one the runtime is this machine's process`, nil},
 		"the gateway's run_closed": {linktest.Reply{Status: 410, Body: linktest.Refusal("run_closed", "gateway")},

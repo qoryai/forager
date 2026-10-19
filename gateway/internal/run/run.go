@@ -62,10 +62,9 @@ type Config struct {
 	Credentials []Credential
 	Tools       []Tool
 	// Selects are the gateway's selection among Credentials, for a run that attached
-	// with a run key behind a separate gateway; nil on the local link. A walled run gets
-	// it, by its labels, when the run configuration's policy selects no credential, at
-	// the start and at every reload; an unwalled run gets none, and the run's user is
-	// told once.
+	// with a run key behind a separate gateway; nil on the local link. The run gets it,
+	// by its labels, with or without a wall, when the run configuration's policy selects
+	// no credential, at the start and at every reload.
 	Selects []Selection
 	// Images are the images the run's policy selects among, and the one it starts in
 	// when the policy selects none; they mean something only behind a wall.
@@ -81,7 +80,8 @@ type Config struct {
 	// to check, with [Run.Conflict].
 	Passes func(name string) bool
 	// Report receives one line per thing the run reports to its user: a credential's
-	// renewal that failed, a tool's standard error, path rules a reload cannot hold.
+	// renewal that failed, a tool's standard error, and an entry of the gateway's
+	// selection whose credential the run does not get.
 	// Nil reports nothing.
 	Report func(string)
 	// Secrets fetches the values of the credentials of the run configuration the run
@@ -157,9 +157,10 @@ type Run struct {
 
 // Decide is the policy a run starts under, and refuses a run that cannot have it: the
 // node's policy, the server's run configuration narrowed by it, or none, mode observe.
-// A run without a wall refuses a policy that selects credentials or tools or has path
-// rules, the node's beside a server's and a ceiling's the node's policy was put under
-// included, and one that selects an image, a [*refusal.NeedsWall]. Behind a wall the
+// A run without a wall refuses a policy that selects tools or has path rules, the
+// node's beside a server's and a ceiling's the node's policy was put under included,
+// and one that selects an image, a [*refusal.NeedsWall]: its credentials are the
+// gateway's to set with or without a wall. Behind a wall the
 // policy's image, or the one the run configuration names, is resolved among
 // [Config.Images]: a definition that cannot be
 // one, a name defined twice, an allow list that cannot be one, a name the machine does
@@ -218,11 +219,8 @@ func Decide(cfg Config) (*Run, error) {
 		r.runDigest = pol.RunConfiguration
 	}
 	if !cfg.Wall {
-		if err := needsWall(pol, len(r.beside) > 0, len(r.stored) > 0); err != nil {
+		if err := needsWall(pol, len(r.beside) > 0); err != nil {
 			return nil, err
-		}
-		if len(cfg.Selects) > 0 {
-			cfg.Report(fmt.Sprintf("run %s: the gateway selects credentials for a walled run alone: this run has no wall and gets none", cfg.RunID))
 		}
 	}
 	if len(r.stored) > 0 && cfg.Secrets == nil {
@@ -241,17 +239,11 @@ func Decide(cfg Config) (*Run, error) {
 }
 
 // needsWall refuses what a policy selects that needs a wall, a [*refusal.NeedsWall]
-// naming it: credentials, tools and path rules, the node's beside a server's and the
-// sides beside the node's policy, beside, included, and an image; and, stored, a run
-// configuration's credentials, server_credentials.
-func needsWall(pol *policy.Loaded, beside, stored bool) error {
+// naming it: tools and path rules, the node's beside a server's and the sides beside
+// the node's policy, beside, included, and an image. Credentials need none: a program
+// that ignores the proxy sends only their placeholders.
+func needsWall(pol *policy.Loaded, beside bool) error {
 	var names []string
-	if stored {
-		names = append(names, refusal.ServerCredentials)
-	}
-	if len(pol.Policy.Credentials) > 0 {
-		names = append(names, "credentials")
-	}
 	if len(pol.Policy.Tools) > 0 {
 		names = append(names, "tools")
 	}
@@ -295,7 +287,7 @@ func (r *Run) Hold(ctx context.Context) error {
 	r.mu.Unlock()
 	r.chosen = chosen
 	pol := r.start
-	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || (r.cfg.Wall && r.server)
+	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || r.server
 	return nil
 }
 
@@ -507,9 +499,10 @@ func (r *Run) Conflict(passes func(name string) bool) error {
 }
 
 // NeedsCA says the run has an authority of its own: for the hosts a credential is for,
-// the hosts its tools serve and the hosts with path rules, and behind a wall with a
-// server always, since a reload may bring a run configuration with path rules or
-// credentials, and the enclosure trusts only what it was given at start.
+// the hosts its tools serve and the hosts with path rules, and with a server always,
+// with or without a wall, since a reload may bring a run configuration with
+// credentials or path rules, and the agent's tools trust only what they were given at
+// the start.
 func (r *Run) NeedsCA() bool { return r.terminates }
 
 // ToolEnv is the environment a tool gets: Forager's own, without the variables the
@@ -535,9 +528,9 @@ func (r *Run) StartTools(ctx context.Context) (*tool.Set, error) {
 // beside its URL and digest. Without a security_policy it is the node's, or none. With
 // one, it is the server's, narrowed by the node's when the run has one. An image the
 // run configuration names is the policy's image selection, which the server's policy
-// and the node's must name as well when they name one, else image_unknown. For a walled
-// run, when the server's side selects no credential, the run's credentials are the
-// gateway's selection, [Config.Selects], capped by the node's credentials member.
+// and the node's must name as well when they name one, else image_unknown. When the
+// server's side selects no credential, the run's credentials are the gateway's
+// selection, [Config.Selects], capped by the node's credentials member.
 // A security_policy the schema refuses, and an image that is not a reference pinned by
 // digest, are run_configuration_invalid.
 func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
@@ -560,7 +553,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		named = f.Document.Image
 		err = nameImage(pol, fetched, r.node, named)
 	}
-	if err == nil && r.cfg.Wall && len(r.cfg.Selects) > 0 && (fetched == nil || len(fetched.Policy.Credentials) == 0) {
+	if err == nil && len(r.cfg.Selects) > 0 && (fetched == nil || len(fetched.Policy.Credentials) == 0) {
 		err = r.selects(pol)
 	}
 	if err != nil {
@@ -797,9 +790,7 @@ func Settled(err error) bool {
 type Decision struct {
 	// Unchanged says the run configuration is the one in force: nothing is set.
 	Unchanged bool
-	// Policy is the policy put in force, as dev.qory.run.policy_applied records it:
-	// without the path rules, and without their hosts in its allow list, when the
-	// proxy cannot hold them.
+	// Policy is the policy put in force, as dev.qory.run.policy_applied records it.
 	Policy *policy.Loaded
 	// Uses are its credentials as the proxy sets them.
 	Uses []proxy.Credential
@@ -825,16 +816,14 @@ func (d *Decision) Discard() {
 
 // Reload decides what a run configuration read with [Run.Read] puts in force. One
 // that is the one in force is [Decision.Unchanged]. A reload is as strict as a start:
-// what a start refuses, a policy that selects credentials without the run's authority,
-// an image without a wall, a credential that does not resolve, fails the reload, and
-// the policy in force stays; and the run's tools and image are fixed when it starts.
-// The image compared is the one the selection resolves to, so naming the machine's
-// default, or no longer naming it, is no change; an image the run configuration names
-// is fixed by the string, so one that differs from the start's, appears or disappears
-// is refused. Path rules
-// the proxy cannot hold, for want of the run's authority, take their hosts out of the
-// allow list instead, so they are not reached on every path, and the caller's user is
-// told.
+// what a start refuses, path rules or an image without a wall, a credential that does
+// not resolve, fails the reload, and the policy in force stays; and the run's tools
+// and image are fixed when it starts. Whether a name needs a wall is decided by the
+// run's wall, as [Decide] decides it, never by the run's authority, which every run
+// with a server has. The image compared is the one the selection resolves to, so
+// naming the machine's default, or no longer naming it, is no change; an image the run
+// configuration names is fixed by the string, so one that differs from the start's,
+// appears or disappears is refused.
 func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error) {
 	guard, named, creds := r.takeGuard(next), r.takeNamed(next), r.takeCreds(next)
 	if next.RunConfiguration == r.RunConfiguration() {
@@ -864,22 +853,17 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 		if in.Policy.Image != "" {
 			return nil, fmt.Errorf("the run configuration selects the image %s, which needs a wall", accesskey.ShownName(in.Policy.Image, true))
 		}
+		// What a start without a wall refuses, a reload refuses too: the run's authority
+		// does not decide it, since every run with a server has one.
+		if err := needsWall(&in, len(r.beside) > 0); err != nil {
+			return nil, err
+		}
 	} else if named != r.named {
 		return nil, r.imageMoved(named)
 	} else if next, err := r.cfg.Images.resolve(in.Policy.Image); err != nil {
 		return nil, err
 	} else if next != r.img {
 		return nil, errors.New("the run configuration selects another image than the run started in; a run's image is fixed when it starts")
-	}
-	if !r.terminates {
-		if len(in.Policy.Credentials) > 0 {
-			return nil, errors.New("the run configuration selects credentials, which need a wall")
-		}
-		if len(in.Policy.Egress.Paths) > 0 {
-			in.Policy.Egress.Allow = withoutHeld(in.Policy.Egress.Allow, in.Policy.Egress.Paths)
-			in.Policy.Egress.Paths = nil
-			r.cfg.Report("the run configuration has path rules, which need a wall; the hosts they hold are taken out of the allow list")
-		}
 	}
 	fresh, err := r.hold(ctx, &in)
 	if err != nil {
@@ -1083,27 +1067,6 @@ func sameSelection(a, b []policy.Selected) bool {
 		return s
 	}
 	return slices.Equal(order(a), order(b))
-}
-
-// withoutHeld is an allow list without the hosts path rules hold, for a proxy that
-// cannot hold them: an entry goes when it is a held host, stands under one or stands
-// above one, since what stays would be reached on every path. Under enforce the hosts
-// are then denied and recorded like any other.
-func withoutHeld(allow []string, paths map[string][]string) []string {
-	out := []string{}
-	for _, entry := range allow {
-		keep := true
-		for host := range paths {
-			if policy.Covers(host, entry) || policy.Covers(entry, host) {
-				keep = false
-				break
-			}
-		}
-		if keep {
-			out = append(out, entry)
-		}
-	}
-	return out
 }
 
 // ProxyUses are held credentials as the proxy sets them.

@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -193,6 +194,22 @@ func throughProxy(t *testing.T, client *http.Client, authority string, o *origin
 	return resp.StatusCode
 }
 
+// aroundProxy sends a GET of the model credential's path to the origin without the
+// proxy, trusting roots, with the session's placeholder in x-api-key, as an unwalled
+// agent that ignores the proxy sends it.
+func aroundProxy(t *testing.T, roots *x509.CertPool, o *origin) {
+	t.Helper()
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{RootCAs: roots}}}
+	req, _ := http.NewRequest(http.MethodGet, "https://"+o.host+"/v1/models", nil)
+	req.Header.Set("X-Api-Key", link.Placeholder)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("the request around the proxy: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+}
+
 // noValueIn fails the test when refValue is in a file under one of the directories, in
 // the receiver's store or log, or in the run answer as the gateway sent it.
 func noValueIn(t *testing.T, ref *reference, answer any, dirs ...string) {
@@ -243,9 +260,23 @@ func placeholdersOnly(t *testing.T, a *server.LinkRunAnswer, o *origin) {
 // run key, then reloads it for the digest of the document's bytes. In each case the
 // receiver is asked for the credential model once; the origin gets the value in
 // x-api-key; the run answer has MODEL_API_KEY as its one placeholder and no value; and
-// no record, report, stored event or log line of the receiver holds the value.
+// no record, report, stored event or log line of the receiver contains the value. A run
+// without a wall is brokered the same way, and a request it sends around the proxy
+// reaches the origin with the placeholder alone.
 func TestASealedCredentialFromTheReferenceReceiverReachesTheOrigin(t *testing.T) {
+	for _, wall := range []bool{true, false} {
+		t.Run(fmt.Sprintf("wall %v", wall), func(t *testing.T) { sealedReachesTheOrigin(t, wall) })
+	}
+}
+
+// sealedReachesTheOrigin is TestASealedCredentialFromTheReferenceReceiverReachesTheOrigin
+// for a walled run or an unwalled one.
+func sealedReachesTheOrigin(t *testing.T, wall bool) {
 	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
+	want := []string{"GET /v1/models " + refValue}
+	if !wall {
+		want = append(want, "GET /v1/models "+link.Placeholder)
+	}
 	t.Run("start", func(t *testing.T) {
 		certFile, keyFile, roots := testCertificate(t, t.TempDir())
 		o := newOrigin(t, certFile, keyFile)
@@ -254,12 +285,15 @@ func TestASealedCredentialFromTheReferenceReceiverReachesTheOrigin(t *testing.T)
 		gateway.SetUpstreamRoots(&cfg, roots)
 		h := start(t, cfg)
 		h.secrets = append(h.secrets, refValue)
-		a := h.open(server.LinkRunRequest{Wall: true})
+		a := h.open(server.LinkRunRequest{Wall: wall})
 		if status := throughProxy(t, relay(h.g.Addr(), a.ProxySecret), a.CertificateAuthority, o); status != http.StatusOK {
 			t.Errorf("the origin answered %d", status)
 		}
-		if got := o.requests(); !slices.Equal(got, []string{"GET /v1/models " + refValue}) {
-			t.Errorf("the origin got %q; want the GET with the value once", got)
+		if !wall {
+			aroundProxy(t, roots, o)
+		}
+		if got := o.requests(); !slices.Equal(got, want) {
+			t.Errorf("the origin got %q; want %q", got, want)
 		}
 		placeholdersOnly(t, a, o)
 		h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
@@ -285,12 +319,15 @@ func TestASealedCredentialFromTheReferenceReceiverReachesTheOrigin(t *testing.T)
 		r := startRemote(t, nil, cfg)
 		runID := event.NewRunID()
 		key := ref.registerThroughGateway(t, runID)
-		e := r.open(t, key, server.LinkRunRequest{Wall: true})
+		e := r.open(t, key, server.LinkRunRequest{Wall: wall})
 		if status := throughProxy(t, r.relay(t, key), e.a.CertificateAuthority, o); status != http.StatusOK {
 			t.Errorf("the origin answered %d", status)
 		}
-		if got := o.requests(); !slices.Equal(got, []string{"GET /v1/models " + refValue}) {
-			t.Errorf("the origin got %q; want the GET with the value once", got)
+		if !wall {
+			aroundProxy(t, roots, o)
+		}
+		if got := o.requests(); !slices.Equal(got, want) {
+			t.Errorf("the origin got %q; want %q", got, want)
 		}
 		placeholdersOnly(t, e.a, o)
 		if got := e.post(t, exited(runID)); got.status != http.StatusAccepted {

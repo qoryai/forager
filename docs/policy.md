@@ -21,7 +21,8 @@ Forager observes and enforces egress through a proxy it owns.
 
 ## What else a policy selects
 
-Behind a wall, a policy does more:
+A policy selects more. `credentials` applies with or without a wall; the others need a
+wall, and a run without one does not start (`wall_required`):
 
 | Field          | What it does                                                       |
 | -------------- | ------------------------------------------------------------------ |

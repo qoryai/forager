@@ -79,13 +79,15 @@ approve() {
 exec "$@"
 `
 
-// approve starts an interactive Claude Code with the API key's stand-in through the
-// script of [ApproveScript], which it writes into the run directory: Claude Code then
-// uses the stand-in without waiting for a person to approve it. A launch that is
-// headless, or whose API key is no stand-in, is returned as it is: Claude Code shows no
-// approval prompt for the first, and a key of a person's own is theirs to approve.
+// approve starts an interactive, walled Claude Code with the API key's stand-in through
+// the script of [ApproveScript], which it writes into the run directory: Claude Code
+// then uses the stand-in without waiting for a person to approve it. A launch that is
+// headless, unwalled, or whose API key is no stand-in, is returned as it is: Claude
+// Code shows no approval prompt for the first; without a wall the script would write
+// into the developer's ~/.claude.json or CLAUDE_CONFIG_DIR, so Claude Code asks the
+// person once instead; and a key of a person's is theirs to approve.
 func approve(a runtimes.Attach, launch runtimes.Launch) (runtimes.Launch, error) {
-	if !a.Interactive || !slices.Contains(a.Placeholders, apiKeyVar) {
+	if !a.Interactive || !a.Walled || !slices.Contains(a.Placeholders, apiKeyVar) {
 		return launch, nil
 	}
 	script := strings.Replace(approveScript, "@APPROVED@", approved(), 1)

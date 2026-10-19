@@ -238,7 +238,8 @@ type Credential struct {
 func (c Credential) Check() error { return credential.Definition(c).Check() }
 
 // Selection is one credential the gateway selects, [Config.Selects]: behind a separate
-// gateway, a walled run gets it when the server's policy selects no credential. An
+// gateway, a run gets it, with or without a wall, when the server's policy selects no
+// credential. An
 // entry for a credential that takes no argument names the credential alone; one for a
 // credential that takes an argument names Label, Forge and Pattern as well.
 type Selection struct {

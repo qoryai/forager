@@ -3,8 +3,34 @@
 Forager keeps its credentials out of the session. Behind a wall, it keeps the run's
 credentials outside the container too. Its proxy sets each credential on the way out.
 
-Credentials need a wall. Without one, a program that ignores the proxy is bound by
-nothing here.
+The gateway sets every credential, with or without a wall. A wall also makes a
+connection around the proxy fail.
+
+Without a wall, Forager gives the run only placeholders, but the agent can read every credential the machine already holds; run a brokered run on a machine that holds none.
+
+## Without a wall
+
+- The agent's environment gets the placeholders. A placeholder wins over a value the
+  run inherits, and the variables the machine's credentials are read from are left out.
+- The run trusts the gateway through `ca-bundle.pem` in the run directory: the
+  machine's authorities, then the run's certificate. `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
+  `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `AWS_CA_BUNDLE`
+  point at it, or the names the caller gives in `Spec.CAEnv`. `qory` is to give them
+  from `wall.ca_env`.
+- Forager reads the machine's authorities from the first of
+  `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`,
+  `/etc/ssl/ca-bundle.pem` and `/etc/ssl/cert.pem` that contains a certificate. On a
+  machine with none of them the run does not start.
+- A program that ignores the proxy sends only the placeholder, and its connection is
+  not recorded.
+- If no credential has a placeholder of a model key's variable, such as
+  `ANTHROPIC_API_KEY`, the run starts, and Claude Code can use the machine's Claude
+  login. If one has, the run stops with `model_key_missing` unless such a credential
+  covers the model host, `api.anthropic.com` or the host of `ANTHROPIC_BASE_URL`, or a
+  value of a model key's variable reaches the runtime.
+- In an interactive run, Claude Code shows its approval prompt for the placeholder of
+  `ANTHROPIC_API_KEY` once; approve it. Behind a wall the session approves it inside
+  the container.
 
 ## What goes into the container
 
@@ -53,7 +79,10 @@ In `qory`, the `gateway.credentials` section of `forager.yaml` defines them. See
 A run configuration may list `credentials`: each a name, its hosts, how its value is set
 and its placeholders, with no value. Qory Apiary stores the values.
 
-- The run needs a wall. Without one it does not start (`wall_required`).
+- The run needs no wall: the gateway sets these credentials with or without one.
+  On an unwalled local run the agent can read the gateway's access key, which opens the
+  sealed values. The program that starts the run must refuse stored credentials there,
+  as qory's `key_needs_wall` does.
 - When the run starts, the gateway fetches the values once, sealed to its access key,
   and opens them. The values stay outside the container.
 - On a host that one of these credentials is for, its value replaces the machine's
@@ -86,7 +115,7 @@ that needs more than a credential in a header.
 - The gateway starts a run's tools outside the container.
 - The proxy passes each tool the requests to the hosts it serves.
 - A policy selects tools by name, as it selects credentials.
-- Tools need a wall, as credentials do.
+- Tools need a wall.
 
 ## The details
 

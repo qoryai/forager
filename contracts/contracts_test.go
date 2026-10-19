@@ -188,9 +188,10 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // separate gateway, each with its proxy address, a run request without a wall, one with a
 // wall, the names it passes and its images, and one with a narrowing as well, a run
 // answer with a wall, its placeholders, reserved names, credential hosts, image, applied
-// and certificate authority, one with a wall and an image but no certificate authority, one without a
-// wall and one without a policy, a reload answer with and without a policy and one whose
-// applied has ceiling_paths, a batch of a session's events without sequence, a batch of
+// and certificate authority, one with a wall and an image but no certificate
+// authority, one without a wall, one without a wall whose gateway holds a credential,
+// with its certificate authority, and one without a policy, a reload answer with and
+// without a policy and one whose applied has ceiling_paths, a batch of a session's events without sequence, a batch of
 // a run.refused with a session's own code, a batch of a run.exited with timeout, and
 // refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.

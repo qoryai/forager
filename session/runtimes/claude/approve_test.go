@@ -44,8 +44,15 @@ func TestClaudeCodeDeclaresItsModelCredential(t *testing.T) {
 	}
 }
 
-// prepare is the claude runtime's Prepare of `claude --model m` with a forwarder.
+// prepare is the claude runtime's walled Prepare of `claude --model m` with a
+// forwarder.
 func prepare(t *testing.T, dir string, interactive bool, placeholders ...string) runtimes.Launch {
+	t.Helper()
+	return prepareWalled(t, dir, interactive, true, placeholders...)
+}
+
+// prepareWalled is prepare, with a wall or without one.
+func prepareWalled(t *testing.T, dir string, interactive, walled bool, placeholders ...string) runtimes.Launch {
 	t.Helper()
 	rt, err := claude.New()
 	if err != nil {
@@ -53,7 +60,7 @@ func prepare(t *testing.T, dir string, interactive bool, placeholders ...string)
 	}
 	got, err := rt.Prepare(runtimes.Attach{
 		Launch: runtimes.Launch{Command: "claude", Args: []string{"--model", "m"}}, RunDir: dir,
-		Forwarder: []string{"/opt/q", "forward"}, Interactive: interactive, Placeholders: placeholders,
+		Forwarder: []string{"/opt/q", "forward"}, Interactive: interactive, Walled: walled, Placeholders: placeholders,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -62,26 +69,30 @@ func prepare(t *testing.T, dir string, interactive bool, placeholders ...string)
 }
 
 // TestPrepareApprovesTheAPIKeyStandInAlone pins when the launch goes through the
-// script: interactive, with ANTHROPIC_API_KEY among the stand-ins. With the OAuth
-// credential's stand-in, with none, or headless, Claude Code shows no approval prompt,
-// and the launch is the program itself.
+// script: interactive, walled, with ANTHROPIC_API_KEY among the stand-ins. With the
+// OAuth credential's stand-in, with none, or headless, Claude Code shows no approval
+// prompt, and the launch is the program itself. Without a wall the launch is the
+// program itself too: the script would write into the developer's configuration, so
+// Claude Code asks the person instead.
 func TestPrepareApprovesTheAPIKeyStandInAlone(t *testing.T) {
 	for _, c := range []struct {
 		name         string
 		interactive  bool
+		walled       bool
 		placeholders []string
 		through      bool
 	}{
-		{"api key, interactive", true, []string{"GH_TOKEN", "ANTHROPIC_API_KEY"}, true},
-		{"api key, headless", false, []string{"ANTHROPIC_API_KEY"}, false},
-		{"oauth, interactive", true, []string{"CLAUDE_CODE_OAUTH_TOKEN"}, false},
-		{"oauth, headless", false, []string{"CLAUDE_CODE_OAUTH_TOKEN"}, false},
-		{"neither, interactive", true, nil, false},
-		{"neither, headless", false, nil, false},
+		{"api key, interactive", true, true, []string{"GH_TOKEN", "ANTHROPIC_API_KEY"}, true},
+		{"api key, interactive, no wall", true, false, []string{"GH_TOKEN", "ANTHROPIC_API_KEY"}, false},
+		{"api key, headless", false, true, []string{"ANTHROPIC_API_KEY"}, false},
+		{"oauth, interactive", true, true, []string{"CLAUDE_CODE_OAUTH_TOKEN"}, false},
+		{"oauth, headless", false, true, []string{"CLAUDE_CODE_OAUTH_TOKEN"}, false},
+		{"neither, interactive", true, true, nil, false},
+		{"neither, headless", false, true, nil, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			got := prepare(t, dir, c.interactive, c.placeholders...)
+			got := prepareWalled(t, dir, c.interactive, c.walled, c.placeholders...)
 			settings := []string{"--model", "m", "--settings", filepath.Join(dir, "settings.json")}
 			script := filepath.Join(dir, claude.ApproveScript)
 			_, err := os.Stat(script)
@@ -234,7 +245,7 @@ func TestTheScriptApprovesTheStandInAndKeepsTheRest(t *testing.T) {
 			}
 			launch, err := rt.Prepare(runtimes.Attach{
 				Launch: runtimes.Launch{Command: "printf", Args: []string{"%s|", "an argument", "it's"}}, RunDir: dir,
-				Forwarder: []string{"/opt/q", "forward"}, Interactive: true, Placeholders: []string{"ANTHROPIC_API_KEY"},
+				Forwarder: []string{"/opt/q", "forward"}, Interactive: true, Walled: true, Placeholders: []string{"ANTHROPIC_API_KEY"},
 			})
 			if err != nil {
 				t.Fatal(err)

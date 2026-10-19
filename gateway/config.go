@@ -23,15 +23,16 @@ type Config struct {
 	// open this machine's addresses to a guarded proxy.
 	Policy *Policy
 	// Credentials and Tools are the ones this machine defines; a run's policy selects
-	// among them by name. Each needs a wall.
+	// among them by name. The gateway sets a credential's value for a run with or
+	// without a wall; a tool needs a wall.
 	Credentials []Credential
 	Tools       []Tool
-	// Selects are, behind a separate gateway, the credentials a walled run gets when the
-	// server's policy selects none, each one of Credentials by name. An entry that takes
-	// an argument names the run's label it takes, the forge the run's forge label must
-	// be, and the pattern the label's value must match whole; an entry the run's labels
-	// do not satisfy gives no credential, and the gateway reports why. An unwalled run
-	// gets none, and the gateway reports that once. Selects needs a Listen.
+	// Selects are, behind a separate gateway, the credentials a run gets, with or
+	// without a wall, when the server's policy selects none, each one of Credentials by
+	// name. An entry that takes an argument names the run's label it takes, the forge
+	// the run's forge label must be, and the pattern the label's value must match whole;
+	// an entry the run's labels do not satisfy gives no credential, and the gateway
+	// reports why. Selects needs a Listen.
 	Selects []Selection
 	// Version is Forager's version, reported in each run's registration and in the user
 	// agent of every request to the Server; empty means "dev".

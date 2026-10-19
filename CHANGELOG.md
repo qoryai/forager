@@ -31,8 +31,8 @@ release may change what an existing document does, and says so under Upgrading.
   `model_key_missing`. A setup whose walled Claude Code run has only a forge credential
   and finds its model key in a mount, the image, its settings or a login inside the run
   now stops: pass the key in the machine's variables,
-  or define a model credential with a placeholder. A run without a wall, or whose run
-  answer has no `credential_hosts`, starts as before.
+  or define a model credential with a placeholder. A run whose run answer has no
+  `credential_hosts` starts as before.
 - A placeholder of the machine's credentials or tools that the runtime's descriptor
   denies, lists in its model `overrides` or reads its model endpoint from, such as
   `CLAUDE_CONFIG_DIR` or `ANTHROPIC_MODEL` for Claude Code, now stops the run,
@@ -46,6 +46,23 @@ release may change what an existing document does, and says so under Upgrading.
 - `dev.qory.run.refused` and the link's batches take the code `model_key_missing`, and
   the session's `dev.qory.run.policy_applied` may have `credential_variables`. A
   separate gateway older than the session refuses both: upgrade the gateway first.
+- A run without a wall whose policy selects credentials now starts, and the gateway
+  sets the credentials: before, it was `wall_required`. The agent's environment gets
+  each credential's placeholder, and the run trusts the gateway through `ca-bundle.pem`
+  in the run directory (Session, Added). A run without a wall on a machine with none of
+  `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`,
+  `/etc/ssl/ca-bundle.pem` and `/etc/ssl/cert.pem` now stops when the gateway gives it
+  an authority: install a CA bundle at one of those paths. Without a wall, the agent
+  can read every credential the machine already holds; run a brokered run on a machine
+  that holds none.
+- A run without a wall whose gateway holds credentials for it now gets the rules a
+  walled run gets: the `key_variables` choice, the endpoint rule and
+  `credential_variables` in `dev.qory.run.policy_applied`. It is `model_key_missing`
+  only when a credential has a placeholder of a model key's variable, no such
+  credential covers the runtime's model host, and no value of a model key's variable
+  reaches the runtime. A Claude Code run without a wall whose
+  only credential is a forge's starts, and Claude Code can use the machine's Claude
+  login.
 
 #### Added
 
@@ -76,9 +93,10 @@ release may change what an existing document does, and says so under Upgrading.
   phrase in place of a credential's name or a variable that contains `qak_` or `qrk_`.
   The gateway leaves `credential_variables`
   out of the members it matches.
-- The refusal `model_key_missing`, in `refusal.Decides`: a walled run whose run answer
-  has `credential_hosts`, whose runtime has a `model` section and model keys, and that
-  has no model key, as the contract's §Variables, A model key, says. Its names are the
+- The refusal `model_key_missing`, in `refusal.Decides`: a run whose run answer has
+  `credential_hosts`, behind a wall or, without one, with a credential whose placeholder
+  is a model key's variable, whose runtime has a `model` section and model keys, and
+  that has no model key, as the contract's §Variables, A model key, says. Its names are the
   model keys' variables.
 
 - The link's run answer has `credential_hosts`: the hosts and placeholders of each
@@ -146,12 +164,11 @@ release may change what an existing document does, and says so under Upgrading.
   `run-configuration.schema.json`, and refuses a name twice and an `auth.header` that
   frames the request or that the proxy sets, and a placeholder that
   `denied-variables.json` covers, each `run_configuration_invalid`.
-- The gateway sets a run configuration's `credentials` for a walled run. When the run
+- The gateway sets a run configuration's `credentials`, with or without a wall. When the run
   starts it sends one secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value
   in place of a credential of the machine's that claims one of its hosts, of the same
-  name or another. Without a wall the run is `wall_required` with the name
-  `server_credentials`; without `secrets` in discovery, with a fixture pin or access
+  name or another. Without `secrets` in discovery, with a fixture pin or access
   key, or with a value a header cannot hold, it is `run_configuration_invalid`. A reload with other `credentials` fails, and the policy
   in force stays. A `TRACE` or `TRACK` to a host that gets one is denied with the rule
   `wall:echo-method`. A run configuration without `credentials` runs as before.
@@ -183,6 +200,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- `wall_required` has the names `tools`, `paths` and `image=<name>`, never
+  `credentials`. Its message for tools and path rules reads "run it with a wall: the
+  policy selects tools or has path rules, and without a wall a program that ignores
+  the proxy is bound by neither". The run answer's `certificate_authority` is present
+  with or without a wall, whenever the gateway reads inside HTTPS for the run, and
+  always with a server. The `wall:` rules of `dev.qory.run.egress` keep their names,
+  and `wall:echo-method` and `wall:ambiguous-path` now appear in the records of runs
+  without a wall too.
 - The built-in deny list, `denied-variables.json`, has `NODE_OPTIONS`, `LD_PRELOAD`,
   `BASH_ENV` and `HOME`. A value of one of them from the server, the run, the machine,
   the harness's defaults or the harness's computed values is left out and recorded as
@@ -293,7 +318,7 @@ release may change what an existing document does, and says so under Upgrading.
 #### Added
 
 - `gateway.Config.Selects`: behind a separate gateway, when the server's policy selects
-  no credential, a walled run gets the gateway's selection, a credential that takes an
+  no credential, a run, with or without a wall, gets the gateway's selection, a credential that takes an
   argument taking it from a label of the run whose value matches the pattern named, for
   a run whose `forge` label is the one named.
 - The gateway decides an image a policy names by reference: refused with
@@ -307,6 +332,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A reload that brings tools, path rules or an image to a run without a wall fails, and
+  the policy in force stays. Before, a reload's path rules for such a run were dropped
+  from the policy, and its credentials failed it.
 - Behind a wall, and behind a separate gateway, only the node's policy opens the
   gateway's machine: the guard reaches the machine's addresses only for an
   `egress.allow` entry of `gateway.Config.Policy` that names the host itself and that
@@ -475,6 +503,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- A run without a wall gets its credentials' placeholders, set after the environment it
+  inherits, so a placeholder wins over an inherited value, which is then no
+  `placeholder_conflict`. The variables the machine's credentials are read from, the run
+  answer's `reserved`, are left out of what it inherits. When the gateway gives it an
+  authority, the session writes `ca-bundle.pem` into the run directory, the machine's
+  authorities and then the run's certificate, and points the names of
+  `session.Spec.CAEnv`, or `wall.DefaultCAEnv` when it is nil, at it.
+  `wall.BundleFiles` lists the files the machine's authorities are read from.
+- Claude Code's `approve-key.sh` runs behind a wall alone: without a wall, an
+  interactive Claude Code shows its approval prompt for the placeholder of
+  `ANTHROPIC_API_KEY`, once, and the approval stays in your configuration.
 - `session.Exec`, the helper's `exec`: `--unset NAME …`, then `--` and the program and
   its arguments. It unsets the names and executes the program, found in `PATH`; a name
   outside a variable's grammar exits 2, a program it does not find, or finds only

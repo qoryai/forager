@@ -315,7 +315,9 @@ func TestTheServersValueOfWhatStaysOutsideIsLeftOut(t *testing.T) {
 // the node passes: behind a wall a QORY_ name from the run, the machine, the harness's
 // defaults or its computed values is variable_reserved, not denied, and so is a
 // variable a machine value is read from; in any run a placeholder's name from any of
-// them is placeholder_conflict. Without a wall a QORY_ name of the run's is denied.
+// them is placeholder_conflict, and behind a wall one the run inherits as well. Without
+// a wall a QORY_ name of the run's is denied, and a placeholder the run inherits is no
+// conflict.
 func TestRefusalsComeFirst(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -331,6 +333,7 @@ func TestRefusalsComeFirst(t *testing.T) {
 		{"a placeholder from --env", variables.Inputs{Placeholders: []string{"GITHUB_TOKEN"}, Run: []string{"GITHUB_TOKEN=x"}}, refusal.PlaceholderConflict, []string{"GITHUB_TOKEN"}},
 		{"a placeholder from wall.env", variables.Inputs{Walled: true, Placeholders: []string{"GITHUB_TOKEN"}, Machine: []string{"GITHUB_TOKEN=x"}}, refusal.PlaceholderConflict, []string{"GITHUB_TOKEN"}},
 		{"a placeholder from a default", variables.Inputs{Walled: true, Placeholders: []string{"GITHUB_TOKEN"}, Defaults: []string{"GITHUB_TOKEN=x"}}, refusal.PlaceholderConflict, []string{"GITHUB_TOKEN"}},
+		{"a placeholder a walled run inherits", variables.Inputs{Walled: true, Placeholders: []string{"GITHUB_TOKEN"}, Shell: []string{"GITHUB_TOKEN=x"}}, refusal.PlaceholderConflict, []string{"GITHUB_TOKEN"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := variables.Resolve(tc.in)
@@ -342,6 +345,9 @@ func TestRefusalsComeFirst(t *testing.T) {
 	}
 	got := resolve(t, variables.Inputs{Run: []string{"QORY_HARNESS_HOME=/h", "QORY_X=1"}})
 	want(t, "unwalled", record(got.Applied), []string{"QORY_HARNESS_HOME run:denied", "QORY_X run:denied"})
+	// Without a wall what the run inherits is no conflict: the placeholder wins over it.
+	got = resolve(t, variables.Inputs{Placeholders: []string{"GITHUB_TOKEN"}, Shell: []string{"GITHUB_TOKEN=x"}})
+	want(t, "an inherited placeholder", got.Env, nil)
 }
 
 // TestTheServerSetsTheRunsSystemAndRepositories pins the two QORY_ names the server's
@@ -641,10 +647,12 @@ func TestEveryComputedEndpointIsChecked(t *testing.T) {
 	}
 }
 
-// TestWithoutAWallTheEndpointIsDenied pins that a run without a wall takes no part in
-// the endpoint rule: the runtime's denies leave a covered value out as denied, and the
-// harness's computed value applies, since the runtime's denies leave it in.
-func TestWithoutAWallTheEndpointIsDenied(t *testing.T) {
+// TestWithoutAWallTheEndpointRuleNeedsCredentials pins a run without a wall: with
+// credentials it takes part in the endpoint rule, as a walled run does, so a covered
+// value applies and an uncovered computed one is left out; without credentials the
+// runtime's denies leave a value out as denied, and the harness's computed value
+// applies, since the runtime's denies leave it in.
+func TestWithoutAWallTheEndpointRuleNeedsCredentials(t *testing.T) {
 	const name = "ANTHROPIC_BASE_URL"
 	in := claude
 	in.Endpoint, in.Credentials, in.Unwalled = name, endpointCredentials, variables.Accept
@@ -653,11 +661,19 @@ func TestWithoutAWallTheEndpointIsDenied(t *testing.T) {
 	in.Machine = []string{name + "=https://api.anthropic.com"}
 	in.Defaults = []string{name + "=https://api.anthropic.com"}
 	got := resolve(t, in)
+	want(t, "env", got.Env, []string{name + "=https://api.anthropic.com"})
+	want(t, "record", record(got.Applied), []string{name + "<-apiary run:overridden machine:overridden harness:overridden endpoint_covered:model"})
+	in.Credentials = nil
+	got = resolve(t, in)
 	want(t, "env", got.Env, nil)
 	want(t, "record", record(got.Applied), []string{name + " apiary:denied run:denied machine:denied harness:denied"})
 	in = claude
 	in.Endpoint, in.Credentials = name, endpointCredentials
 	in.Fixed = []string{name + "=https://evil.example"}
+	got = resolve(t, in)
+	want(t, "fixed", got.Fixed, nil)
+	want(t, "record", record(got.Applied), []string{name + " fixed:endpoint_uncovered"})
+	in.Credentials = nil
 	got = resolve(t, in)
 	want(t, "fixed", got.Fixed, []string{name + "=https://evil.example"})
 	want(t, "record", record(got.Applied), nil)

@@ -32,7 +32,7 @@ func TestSettingsWritesPrintAPhraseForASecretInTheRunDirectory(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, claude.ApproveScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err = claude.Settings([]string{"Stop"}, runtimes.Attach{RunDir: dir, Forwarder: []string{"q"}, Interactive: true, Placeholders: []string{"ANTHROPIC_API_KEY"}})
+	_, err = claude.Settings([]string{"Stop"}, runtimes.Attach{RunDir: dir, Forwarder: []string{"q"}, Interactive: true, Walled: true, Placeholders: []string{"ANTHROPIC_API_KEY"}})
 	if err == nil {
 		t.Fatal("the approval script was written over a directory")
 	}

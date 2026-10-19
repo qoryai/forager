@@ -479,9 +479,6 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	lr.opened = true
 	lr.last = time.Now()
 	lr.mu.Unlock()
-	if !req.Wall {
-		authority = nil
-	}
 	lr.mu.Lock()
 	lr.answer = newSecretValue(string(lr.runAnswer(authority)))
 	lr.mu.Unlock()

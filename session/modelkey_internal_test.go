@@ -15,7 +15,8 @@ type anyWall struct{ wall.Wall }
 
 // TestTheModelKeyTrialRunsOnlyForARefusal pins that checkModelKey calls passes, the
 // trial resolution of a model key's variable, only when it refuses the run: never for
-// a run that starts, and once per model key at most for one it refuses.
+// a run that starts, and once per model key at most for one it refuses, with or
+// without a wall.
 func TestTheModelKeyTrialRunsOnlyForARefusal(t *testing.T) {
 	rt, err := claude.New()
 	if err != nil {
@@ -29,18 +30,24 @@ func TestTheModelKeyTrialRunsOnlyForARefusal(t *testing.T) {
 		set     []string
 		creds   []server.LinkCredentialHosts
 		refused bool
+		walled  bool
 	}{
-		{"a model credential", nil, nil, []server.LinkCredentialHosts{forge, model}, false},
-		{"a value that reaches the runtime", nil, []string{"ANTHROPIC_API_KEY=k"}, []server.LinkCredentialHosts{forge}, false},
-		{"no model key", nil, nil, []server.LinkCredentialHosts{forge}, true},
-		{"an endpoint with no host Forager reads", []string{"ANTHROPIC_BASE_URL=http://litellm.internal:4000"}, nil, []server.LinkCredentialHosts{forge, model}, true},
+		{"a model credential", nil, nil, []server.LinkCredentialHosts{forge, model}, false, true},
+		{"a value that reaches the runtime", nil, []string{"ANTHROPIC_API_KEY=k"}, []server.LinkCredentialHosts{forge}, false, true},
+		{"no model key", nil, nil, []server.LinkCredentialHosts{forge}, true, true},
+		{"an endpoint with no host Forager reads", []string{"ANTHROPIC_BASE_URL=http://litellm.internal:4000"}, nil, []server.LinkCredentialHosts{forge, model}, true, true},
+		{"unwalled, no model key's placeholder", nil, nil, []server.LinkCredentialHosts{forge}, false, false},
+		{"unwalled, an endpoint with no host Forager reads", []string{"ANTHROPIC_BASE_URL=http://litellm.internal:4000"}, nil, []server.LinkCredentialHosts{forge, model}, true, false},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
-			spec := Spec{Wall: anyWall{}, Env: tc.env}
+			spec := Spec{Env: tc.env}
+			if tc.walled {
+				spec.Wall = anyWall{}
+			}
 			vars := variables.Resolved{Env: tc.set}
 			trials := 0
 			passes := func(string) bool { trials++; return true }
-			err := checkModelKey(spec, rt, tc.creds, vars, runtimes.Launch{}, passes)
+			err := checkModelKey(spec, rt, tc.creds, vars, runtimes.Launch{}, nil, passes)
 			if (err != nil) != tc.refused {
 				t.Fatalf("%v, want refused %v", err, tc.refused)
 			}

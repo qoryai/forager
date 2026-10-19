@@ -102,6 +102,14 @@ func Tokens(g *Gateway, runID string) map[string]string {
 	return out
 }
 
+// Guarded reports whether the proxy of g's run of runID is guarded.
+func Guarded(g *Gateway, runID string) bool {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	return lr.px.Guarded()
+}
+
 // SetUpstreamRoots sets the roots every run's proxy verifies a terminated host's
 // certificate against.
 func SetUpstreamRoots(c *Config, roots *x509.CertPool) { c.upstreamRoots = roots }

@@ -77,10 +77,11 @@ For each run the session, over the gateway's link:
    behind a wall, the machine's images;
 3. applies the run answer: on the local link the proxy secret goes to the session's
    forwarder, or behind a wall to the wall's relay, and never into the agent's
-   environment; behind a wall, the
-   run's certificate authority and the placeholders go into the enclosure; the image is
-   the one the answer names; the variables the gateway sets are not the session's to
-   set;
+   environment; with or without a wall, the placeholders go into the agent's
+   environment, and the run's certificate authority into the bundle its programs
+   trust: behind a wall the enclosure's, and without one `ca-bundle.pem` in the run
+   directory, which the variables of `CAEnv` point at; behind a wall the image is the
+   one in the answer; the variables the gateway sets are not the session's to set;
 4. records `dev.qory.run.started`, with the gateway's labels on the local link, and
    `dev.qory.run.policy_applied` with the members the gateway decides, and the run's
    variables and the harness's hosts beside them, and posts every event of the run to
@@ -127,8 +128,9 @@ A refusal the gateway or the server answers with a code returns a `*session.Refu
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
 the refusal's `message`, the text such a run returns, such as
 `register https://qory.example/v1/runs: instance_limit (status 409)`. A run whose policy
-needs a wall and has none returns the error such a run always had, and so does a run
-the gateway could not open for a reason without a code.
+needs a wall and has none returns the error of [`wall_required`](../contracts/forager/v1/README.md#the-gateways-link)
+as the session words it, and so does a run the gateway could not open for a reason
+without a code.
 
 ## A separate gateway
 
@@ -163,10 +165,10 @@ link. Its `gateway.Config` sets it:
   sees the run keys they carry, in each attach and in each accepted registration answer
   the gateway relays; one that only tunnels them sees the server's host and port.
   `Listen` needs it.
-- `Selects`: behind a separate gateway, the credentials a walled run gets when the
-  server's policy selects none. An entry that takes an argument names the run's label
-  it takes, the forge the run's `forge` label must be, and the pattern the label's value
-  must match whole.
+- `Selects`: behind a separate gateway, the credentials a run gets, with or without a
+  wall, when the server's policy selects none. An entry that takes an argument names
+  the run's label it takes, the forge the run's `forge` label must be, and the pattern
+  the label's value must match whole.
 
 A separate gateway runs no sessions on the gateway's machine: it makes no local link, in
 memory or on a socket, and no proxy listener on loopback, and a session that dials its
@@ -375,6 +377,14 @@ A program that needs custom code implements the interface.
 - `Forwarder` is the command installed as the runtime's hook. It must call
   `session.Forward(ctx, os.Stdin)`. That passes the hook's input to the run, over a
   socket whose address is in the environment.
+- `CAEnv` lists the names of the variables that point at `ca-bundle.pem` in the run
+  directory, the bundle of a run without a wall: the machine's authorities, then the
+  run's certificate. The session writes the bundle when the gateway's answer has an
+  authority. Nil means `wall.DefaultCAEnv`: `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
+  `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `AWS_CA_BUNDLE`.
+  Forager takes the names from `CAEnv` alone. The caller sets it: `qory` is to set it
+  from `wall.ca_env`. Behind a `Wall`, the wall sets the names for the enclosure's
+  bundle instead.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go). A walled
   run needs `Exec`, the command that calls `session.Exec` inside the enclosure, which
   the launch starts through when the run has names to unset.

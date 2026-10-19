@@ -87,6 +87,14 @@ func Readable(places []string) func(string) (string, error) {
 	return readable(func() ([]string, error) { return places, nil })
 }
 
+// SetMachineBundles sets the files an unwalled run reads the machine's authorities
+// from, until restore is called.
+func SetMachineBundles(paths []string) (restore func()) {
+	old := machineBundles
+	machineBundles = func() []string { return paths }
+	return func() { machineBundles = old }
+}
+
 // ReadableDir is what a runtime is given to ask of a directory before it passes it to
 // the program, for the places a walled run could have written.
 func ReadableDir(places []string) func(string) (string, error) {

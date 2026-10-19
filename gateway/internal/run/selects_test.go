@@ -85,33 +85,30 @@ func TestAReloadKeepsTheGatewaysSelection(t *testing.T) {
 	d.Discard()
 }
 
-// TestAnUnwalledRunIsToldOnce pins a run without a wall: it gets none of the gateway's
-// selection, at the start or at a reload, and its user is told once.
-func TestAnUnwalledRunIsToldOnce(t *testing.T) {
-	cfg, said := selectsConfig(t, `{"version":1,"egress":{"mode":"enforce","allow":["git.example"]}}`)
+// TestAnUnwalledRunGetsTheSelection pins a run without a wall: it gets the gateway's
+// selection at the start and at a reload, as a walled run does, has the run's
+// authority, and its user is told nothing.
+func TestAnUnwalledRunGetsTheSelection(t *testing.T) {
+	const none = `{"version":1,"egress":{"mode":"enforce","allow":["git.example","api.model.example"]}}`
+	cfg, said := selectsConfig(t, none)
 	cfg.Wall = false
 	r := open(t, cfg)
-	if len(r.Uses()) != 0 || len(r.Policy().Policy.Credentials) != 0 {
-		t.Errorf("uses %v, credentials %v", r.Uses(), r.Policy().Policy.Credentials)
+	want := []string{"github=minted-for-example/repo", "model=the-token-held-outside"}
+	if got := tokensOf(r.Uses()); !slices.Equal(got, want) || !r.NeedsCA() {
+		t.Errorf("the start's uses %v, want %v; authority %v", got, want, r.NeedsCA())
 	}
-	d, err := reload(t, r, served(`{"version":1,"egress":{"mode":"enforce","allow":["git.example","b.example"]}}`, digest('2')))
+	d, err := reload(t, r, served(`{"version":1,"egress":{"mode":"enforce","allow":["git.example","api.model.example","b.example"]}}`, digest('2')))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Uses) != 0 {
-		t.Errorf("the reload's uses %v", d.Uses)
+	if got := tokensOf(d.Uses); d.CredentialsChanged || !slices.Equal(got, want) {
+		t.Errorf("the reload: changed %v, uses %v, want %v", d.CredentialsChanged, got, want)
 	}
-	line := "run " + runID + ": the gateway selects credentials for a walled run alone: this run has no wall and gets none"
+	d.Discard()
 	said.mu.Lock()
-	n := 0
-	for _, l := range said.said {
-		if l == line {
-			n++
-		}
-	}
-	said.mu.Unlock()
-	if n != 1 {
-		t.Errorf("the line %d times in %v", n, said.said)
+	defer said.mu.Unlock()
+	if len(said.said) != 0 {
+		t.Errorf("the user was told %v", said.said)
 	}
 }
 

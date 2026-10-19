@@ -96,8 +96,8 @@ When your server sends a policy, Forager narrows it by the policy it is passed,
 records everything.
 
 A denied connection gets a `403`, and the record gets the event. The session goes on.
-Behind a wall, a policy can also limit a host to paths, and select the credentials, the
-tools and the image the run gets.
+A policy can also select the credentials the run gets, with or without a wall. Behind a
+wall, it can also limit a host to paths, and select the tools and the image.
 
 More: [docs/policy.md](docs/policy.md).
 
@@ -110,9 +110,9 @@ The proxy sees only programs that honour it. A **wall** makes the rest fail:
 - The session, the gateway, the policy and the access key secret stay outside. The
   record is written from outside.
 
-Credentials stay outside too. The machine defines them, and a run's policy selects them
-by name. Inside, the agent sees a placeholder. The proxy sets the real credential on the
-requests to the hosts it is for.
+Credentials stay outside too, with or without a wall. The machine defines them, and a
+run's policy selects them by name. The agent sees a placeholder. The proxy sets the real
+credential on the requests to the hosts it is for.
 
 A **tool**, a program of the machine's, runs outside as well. It is for what needs more
 than a credential, such as a request signed with a key.

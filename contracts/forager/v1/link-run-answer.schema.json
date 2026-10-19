@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-run-answer.schema.json",
   "title": "Link run answer",
-  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key the run key names, over the connection and the request (README §The gateway's link). The run id echoed, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the names of the variables the machine's credentials are read from, the hosts and placeholders of each credential the gateway holds, with the auth and key_variables of a credential from the server, the run's image when it has a wall, the policy_applied members the gateway decides, on the local link the run's labels and proxy secret, and the run's certificate authority when the run request's wall is true and the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key the run key names, over the connection and the request (README §The gateway's link). The run id echoed, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the names of the variables the machine's credentials are read from, the hosts and placeholders of each credential the gateway holds, with the auth and key_variables of a credential from the server, the run's image when it has a wall, the policy_applied members the gateway decides, on the local link the run's labels and proxy secret, and the run's certificate authority when the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "run_id", "applied"],
@@ -110,7 +110,7 @@
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },
     "certificate_authority": {
-      "description": "The certificate of the run's certificate authority, PEM: present when the run request's wall is true and the gateway reads inside HTTPS for the run, for a credential it holds, a tool it starts or a path rule, the policy's or the node's, and behind a wall with a server always, since a reload may bring path rules or credentials; absent otherwise, and always when wall is false. The certificate the enclosure trusts after the image's authorities; never its key, which stays with the gateway.",
+      "description": "The certificate of the run's certificate authority, PEM: present, with or without a wall, when the gateway reads inside HTTPS for the run, for a credential it holds, a tool it starts or a path rule, the policy's or the node's, and with a server always, since a reload may bring credentials or path rules; absent otherwise. The certificate the run trusts after the image's authorities behind a wall, and after the machine's in the run's ca-bundle.pem without one; never its key, which stays with the gateway.",
       "type": "string",
       "maxLength": 16384,
       "pattern": "^-----BEGIN CERTIFICATE-----\\r?\\n[A-Za-z0-9+/=\\r\\n]+-----END CERTIFICATE-----\\r?\\n?$"
