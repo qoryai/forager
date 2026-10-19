@@ -455,7 +455,7 @@ func (g *Gateway) files() []link.File {
 	for _, t := range g.cfg.Tools {
 		if len(t.Command) > 0 {
 			for _, d := range program.Dirs(t.Command[0]) {
-				out = append(out, link.File{Path: d, What: "the directory of the tool " + t.Name + "'s program"})
+				out = append(out, link.File{Path: d, What: "the directory of the tool " + accesskey.ShownName(t.Name, false) + "'s program"})
 			}
 		}
 	}

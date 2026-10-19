@@ -976,11 +976,13 @@ func Egress(d proxy.Decision) map[string]any {
 	if d.Path != "" {
 		data["request_method"], data["path"], data["path_rule"] = d.RequestMethod, d.Path, d.PathRule
 	}
+	// A credential's or a tool's name that contains qak_ or qrk_ in any case is sent as
+	// accesskey.ShownName's phrase in its place.
 	if d.Credential != "" {
-		data["credential"] = d.Credential
+		data["credential"] = accesskey.ShownName(d.Credential, false)
 	}
 	if d.Tool != "" {
-		data["tool"] = d.Tool
+		data["tool"] = accesskey.ShownName(d.Tool, false)
 	}
 	if d.RequestID != "" {
 		data["request_id"] = d.RequestID

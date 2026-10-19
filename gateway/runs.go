@@ -836,7 +836,7 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 		a["tools"] = used
 	}
 	if pol.Policy.Image != "" {
-		a["image"] = pol.Policy.Image
+		a["image"] = accesskey.ShownName(pol.Policy.Image, false)
 	}
 	if len(terminated) > 0 {
 		a["terminated"] = terminated

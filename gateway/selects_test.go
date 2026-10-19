@@ -350,17 +350,20 @@ func TestStartsSelectionRefusalPrintsAPhraseForASecret(t *testing.T) {
 }
 
 // TestALinksFilePrintsAPhraseForASecretInAName pins the phrases the link gives a
-// credential's program directory and file by: a credential's name that contains qak_
-// or qrk_ prints the name's phrase, and a clean name prints as it is.
+// credential's program directory and file, and a tool's program directory, by: a
+// credential's or a tool's name that contains qak_ or qrk_ prints the name's phrase,
+// and a clean name prints as it is.
 func TestALinksFilePrintsAPhraseForASecretInAName(t *testing.T) {
 	dir := t.TempDir()
 	program := shell(t, dir, "adapter", "exit 1\n")
 	token := filepath.Join(dir, "token")
+	// The tool's program is in a directory apart, since the link lists a directory once.
+	toolProgram := shell(t, t.TempDir(), "tool", "exit 1\n")
 	for name, shown := range map[string]string{"qak_x": accessKeyNamePhrase, "a.qrk_b": runKeyNamePhrase, "qrk_x.qak_y": accessKeyNamePhrase, "model": "model"} {
 		h := start(t, gateway.Config{Credentials: []gateway.Credential{
 			{Name: name, Adapter: []string{program}},
 			{Name: name + "-file", File: token, Hosts: []string{"api.model.example"}, Scheme: "bearer"},
-		}})
+		}, Tools: []gateway.Tool{{Name: name, Command: []string{toolProgram}, Serves: []string{"files.tools.internal"}}}})
 		fileShown := shown
 		if shown == "model" {
 			fileShown = "model-file"
@@ -369,7 +372,7 @@ func TestALinksFilePrintsAPhraseForASecretInAName(t *testing.T) {
 		for _, f := range h.g.LocalLink().Files {
 			whats = append(whats, f.What)
 		}
-		for _, want := range []string{"the directory of the credential " + shown + "'s program", "the file the credential " + fileShown + " is read from"} {
+		for _, want := range []string{"the directory of the credential " + shown + "'s program", "the file the credential " + fileShown + " is read from", "the directory of the tool " + shown + "'s program"} {
 			if !slices.Contains(whats, want) {
 				t.Errorf("%s: no %q among %q", name, want, whats)
 			}

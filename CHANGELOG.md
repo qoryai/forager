@@ -110,39 +110,42 @@ release may change what an existing document does, and says so under Upgrading.
   env or file, env or file without hosts, and an argument the credential does not take
   or the machine does not provide for, its name and the argument; the two lines a
   renewal reports; the refusals of `Config.Selects`; the link's phrases for a
-  credential's program directory and file; the lines a run is told when a selection
-  entry gives it no credential, the entry's name, the run's forge and the label's value
-  among them, and the refusal of a selection the node's policy does not list; the tool
-  messages, a tool's name, argument and placeholder in `Definition.Check`, `Choose` and
-  `Check`, a tool that does not start, a tool that exits while the run goes on, and the
-  lines a tool writes; the refusals of a server's tools and credentials that the node's
-  policy does not list; the credential's name in the tool check of a host a credential
-  is for; a `placeholder_conflict` refusal's detail and names, the gateway's for a
-  credential's or a tool's placeholder and the session's; `run.policy_applied`'s
-  `credentials` `name` and `argument` and its `variables` `name`; and the names of a
-  `placeholder_conflict`'s `run.refused`. A refusal's names, and a list of names in a
-  message the `tool_unknown` and `placeholder_conflict` refusals and the server's
-  credentials refusal give, contain each phrase once. Five parts that may quote a secret
-  print `(a value that contains an access key secret)` or `(a value that contains a run
-  key)` in place of the whole part: in the message of an adapter that fails, its path,
-  its error and the first line of its error output; the adapter's path in the other
-  messages about its answer; the error of a credential's file that cannot be read; the
-  regular expression error of a credential's argument pattern and of a `Selects`
-  pattern; and the error of a server's `security_policy` that does not read as a policy.
-  The rest of each message prints as before, and so does a value with neither prefix.
+  credential's program directory and file and a tool's program directory; the lines a
+  run is told when a selection entry gives it no credential, the entry's name, the run's
+  forge and the label's value among them, and the refusal of a selection the node's
+  policy does not list; the tool messages, a tool's name, argument and placeholder in
+  `Definition.Check`, `Choose` and `Check`, a tool that does not start, a tool that
+  exits while the run goes on, and the lines a tool writes; the refusals of a server's
+  tools and credentials that the node's policy does not list; the credential's name in
+  the tool check of a host a credential is for; a `placeholder_conflict` refusal's
+  detail and names, the gateway's for a credential's or a tool's placeholder and the
+  session's; `run.policy_applied`'s `credentials` `name` and `argument` and its
+  `variables` `name`; and the names of a `placeholder_conflict`'s `run.refused`. A
+  refusal's names, and a list of names in a message the `tool_unknown` and
+  `placeholder_conflict` refusals and the server's credentials refusal give, contain
+  each phrase once. Five parts that may quote a secret print `(a value that contains an
+  access key secret)` or `(a value that contains a run key)` in place of the whole part:
+  in the message of an adapter that fails, its path, its error and the first line of its
+  error output; the adapter's path in the other messages about its answer; the error of
+  a credential's file that cannot be read; the regular expression error of a
+  credential's or a tool's argument pattern and of a `Selects` pattern; and the error of
+  a server's `security_policy` that does not read as a policy. The rest of each message
+  prints as before, and so does a value with neither prefix.
   `run.policy_applied.schema.json` admits the two name phrases as a variable's name.
-  `accesskey.ShownValue` holds the rule for a value, and `accesskey.ShownNames` for a
-  list of names.
+  `accesskey.ShownValue` holds the rule for a value, `accesskey.ShownError` for an
+  error's text, and `accesskey.ShownNames` for a list of names.
 - More run events sent a value of the run's as written, and now send `(a name that
   contains an access key secret)` in place of one that contains `qak_` in any case, and
   `(a name that contains a run key)` in place of one that contains `qrk_` and no `qak_`:
-  `run.policy_applied`'s `tools` `name` and `argument`; the `names` of a `run.refused`
-  of every code, each phrase once; and `run.started`'s `dir`, `image`, `image_name`,
-  each label's value, and `about`'s `kind`, `title` and each subject's `title`. A
-  label's key, a subject's `type`, `ref` and `url`, and `about`'s `details` are sent as
-  they are. `run.started.schema.json` admits the two phrases as `image_name`. The
-  gateway takes a `run.started` label value that is the phrase of the run's value,
-  beside the value as it is. The wall and the agent get every value as it is.
+  `run.policy_applied`'s `tools` `name` and `argument` and its `image`; `run.egress`'s
+  `credential` and `tool`; the `names` of a `run.refused` of every code, each phrase
+  once; and `run.started`'s `dir`, `image`, `image_name`, each label's value, and
+  `about`'s `kind`, `title` and each subject's `title`. A label's key, a subject's
+  `type`, `ref` and `url`, and `about`'s `details` are sent as they are.
+  `run.started.schema.json` admits the two phrases as `image_name`, and
+  `run.policy_applied.schema.json` as `image`. The gateway takes a `run.started` label
+  value that is the phrase of the run's value, beside the value as it is. The wall and
+  the agent get every value as it is.
 
 ### Wall
 

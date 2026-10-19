@@ -2,6 +2,7 @@ package run_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/policy"
@@ -352,6 +354,39 @@ func TestAPlaceholderConflictPrintsAPhraseForASecret(t *testing.T) {
 			noSecretPrefix(t, of+", "+name, err.Error())
 			if !slices.Equal(r.Names, []string{phrase}) {
 				t.Errorf("%s, %s: the names %q", of, name, r.Names)
+			}
+		}
+	}
+}
+
+// TestTheEgressEventSendsAPhraseForASecretInAName pins run.egress's credential and
+// tool: a name that contains qak_ or qrk_ in any case is sent as the name's phrase, the
+// event validates against its schema, and a clean name is sent as it is.
+func TestTheEgressEventSendsAPhraseForASecretInAName(t *testing.T) {
+	schema, err := contracts.Compile("events/run.egress.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"qak_x": accessKeyNamePhrase, "a.qrk_b": runKeyNamePhrase, "qrk_x.qak_y": accessKeyNamePhrase, "model": "model"} {
+		for _, d := range []proxy.Decision{
+			{Host: "api.example", Port: 443, Method: "HTTPS", Allowed: true, Rule: "api.example", Mode: "enforce", Outcome: "connected", RequestMethod: "GET", Path: "/a", PathRule: "/*", Credential: name},
+			{Host: "files.tools.internal", Port: 443, Method: "HTTPS", Allowed: true, Rule: "files.tools.internal", Mode: "enforce", Outcome: "connected", RequestMethod: "GET", Path: "/a", PathRule: "/*", Tool: name},
+		} {
+			data := run.Egress(d)
+			field := "credential"
+			if d.Tool != "" {
+				field = "tool"
+			}
+			if data[field] != want {
+				t.Errorf("%s: %s %v, want %s", name, field, data[field], want)
+			}
+			b, _ := json.Marshal(data)
+			var doc any
+			if err := json.Unmarshal(b, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if err := schema.Validate(doc); err != nil {
+				t.Errorf("%s, %s: the event does not validate: %v", name, field, err)
 			}
 		}
 	}

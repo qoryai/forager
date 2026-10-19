@@ -137,3 +137,26 @@ func TestAppliedToolsSendAPhraseForASecret(t *testing.T) {
 		}
 	}
 }
+
+// TestAppliedImageSendsAPhraseForASecret pins run.policy_applied's image: a name that
+// contains qak_ or qrk_ in any case is sent as the name's phrase, the members validate
+// against the event's schema, and a clean name is sent as it is.
+func TestAppliedImageSendsAPhraseForASecret(t *testing.T) {
+	schema, err := contracts.Compile("events/run.policy_applied.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for image, want := range map[string]string{
+		"qak_base": "(a name that contains an access key secret)", "a.qrk_b": "(a name that contains a run key)",
+		"qrk_x.qak_y": "(a name that contains an access key secret)", "base": "base",
+	} {
+		pol := &policy.Loaded{Policy: policy.Policy{Version: 1, Egress: policy.Egress{Mode: policy.Observe}, Image: image}, Source: "none"}
+		a := appliedOf(pol, nil, nil, nil, nil)
+		if a["image"] != want {
+			t.Errorf("%s: image %v, want %s", image, a["image"], want)
+		}
+		if err := schema.Validate(a); err != nil {
+			t.Errorf("%s: the members do not validate: %v", image, err)
+		}
+	}
+}

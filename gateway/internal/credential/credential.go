@@ -199,7 +199,7 @@ func (d Definition) Check() error {
 	}
 	if d.Argument != "" {
 		if _, err := wholeMatch(d.Argument); err != nil {
-			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), shownError(err))
+			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), accesskey.ShownError(err))
 		}
 	}
 	for _, p := range d.Placeholders {
@@ -233,7 +233,7 @@ func (d Definition) check(argument string) error {
 	case d.Argument != "":
 		re, err := wholeMatch(d.Argument)
 		if err != nil {
-			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), shownError(err))
+			return fmt.Errorf("credential %s: argument: %w", accesskey.ShownName(d.Name, false), accesskey.ShownError(err))
 		}
 		if !re.MatchString(argument) {
 			return fmt.Errorf("credential %s: the argument %s is not one the machine provides for", accesskey.ShownName(d.Name, false), accesskey.ShownName(argument, true))
@@ -241,25 +241,6 @@ func (d Definition) check(argument string) error {
 	}
 	return nil
 }
-
-// shownError is err as a message wraps it: err itself, or, when its text contains qak_
-// or qrk_ in any case, an error that still wraps err and whose text is
-// [accesskey.ShownValue]'s phrase in place of all of err's text.
-func shownError(err error) error {
-	if !accesskey.ContainsSecret(err.Error()) {
-		return err
-	}
-	return phrasedError{err}
-}
-
-// phrasedError is an error whose text is a phrase in place of the text of the error it
-// wraps.
-type phrasedError struct{ err error }
-
-func (p phrasedError) Error() string { return accesskey.ShownValue(p.err.Error(), false) }
-
-// Unwrap returns the error the phrase stands in for.
-func (p phrasedError) Unwrap() error { return p.err }
 
 // wholeMatch compiles pattern as a run's argument is matched: anchored, so an argument
 // matches only when the pattern matches all of it. The error of a pattern that does not
@@ -444,7 +425,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 	case d.File != "":
 		b, err := os.ReadFile(d.File)
 		if err != nil {
-			return nil, shownError(err)
+			return nil, accesskey.ShownError(err)
 		}
 		return static(strings.TrimSpace(string(b)))
 	}
@@ -465,7 +446,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		// What an adapter prints is its own to word, and a line of it is worth the
 		// reader's time; its output is never the token, which goes to stdout.
 		line, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n")
-		return nil, fmt.Errorf("the adapter %s: %w: %s", path, shownError(err), accesskey.ShownValue(line, false))
+		return nil, fmt.Errorf("the adapter %s: %w: %s", path, accesskey.ShownError(err), accesskey.ShownValue(line, false))
 	}
 	doc, err := contracts.Decode("answer.json", stdout.Bytes())
 	if err != nil {

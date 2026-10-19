@@ -1466,3 +1466,24 @@ func TestShownNames(t *testing.T) {
 		}
 	}
 }
+
+// TestShownError pins an error as a message wraps it: the same error when its text
+// contains neither prefix, and otherwise one whose text is the value's phrase and which
+// still wraps it.
+func TestShownError(t *testing.T) {
+	clean := errors.New("exit status 3")
+	if got := accesskey.ShownError(clean); got != clean {
+		t.Errorf("ShownError(%v) = %v, want the error itself", clean, got)
+	}
+	for text, want := range map[string]string{
+		"open /x/qak_y: no such file": "(a value that contains an access key secret)",
+		"QRK_x":                       "(a value that contains a run key)",
+		"qrk_x QaK_y":                 "(a value that contains an access key secret)",
+	} {
+		err := fmt.Errorf("wrapped: %w", errors.New(text))
+		got := accesskey.ShownError(err)
+		if got.Error() != want || !errors.Is(got, err) {
+			t.Errorf("ShownError(%q) = %q, wraps %v; want %q wrapping it", text, got, errors.Is(got, err), want)
+		}
+	}
+}

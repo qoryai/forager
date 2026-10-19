@@ -313,6 +313,25 @@ func ShownNames(names []string) []string {
 	return out
 }
 
+// ShownError is err as a message wraps it: err itself, or, when its text contains qak_
+// or qrk_ in any case, an error that still wraps err and whose text is [ShownValue]'s
+// phrase in place of all of err's text.
+func ShownError(err error) error {
+	if !ContainsSecret(err.Error()) {
+		return err
+	}
+	return phrasedError{err}
+}
+
+// phrasedError is an error whose text is a phrase in place of the text of the error it
+// wraps.
+type phrasedError struct{ err error }
+
+func (p phrasedError) Error() string { return ShownValue(p.err.Error(), false) }
+
+// Unwrap returns the error the phrase stands in for.
+func (p phrasedError) Unwrap() error { return p.err }
+
 // ContainsSecret reports whether a value contains what starts an access key secret,
 // qak_, or a run key, qrk_, in any case. A reader of a document a secret does not
 // belong in, such as the server document or a pin, refuses one that contains it with a

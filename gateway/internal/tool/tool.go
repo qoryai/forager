@@ -99,7 +99,7 @@ func (d Definition) Check() error {
 	}
 	if d.Argument != "" {
 		if _, err := wholeMatch(d.Argument); err != nil {
-			return fmt.Errorf("tool %s: argument: %w", accesskey.ShownName(d.Name, false), err)
+			return fmt.Errorf("tool %s: argument: %w", accesskey.ShownName(d.Name, false), accesskey.ShownError(err))
 		}
 	}
 	if len(d.Serves) == 0 {
@@ -129,7 +129,7 @@ func (d Definition) check(argument string) error {
 	case d.Argument != "":
 		re, err := wholeMatch(d.Argument)
 		if err != nil {
-			return fmt.Errorf("tool %s: argument: %w", accesskey.ShownName(d.Name, false), err)
+			return fmt.Errorf("tool %s: argument: %w", accesskey.ShownName(d.Name, false), accesskey.ShownError(err))
 		}
 		if !re.MatchString(argument) {
 			return fmt.Errorf("tool %s: the argument %s is not one the machine provides for", accesskey.ShownName(d.Name, false), accesskey.ShownName(argument, true))

@@ -2,12 +2,14 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"net"
 	"net/http"
 	"os"
+	"regexp/syntax"
 	"slices"
 	"strings"
 	"sync"
@@ -476,5 +478,29 @@ func TestARunningToolsReportPrintsAPhraseForASecretInAName(t *testing.T) {
 		} else {
 			noSecretPrefix(t, name, err.Error())
 		}
+	}
+}
+
+// TestAToolsArgumentPatternErrorPrintsAPhraseForASecret pins the error of a tool's
+// argument pattern that does not compile, which quotes the pattern: when its text
+// contains qak_ or qrk_ in any case, the value's phrase is printed in its place, the
+// error still wraps the regular expression's, and a clean error prints as it is.
+func TestAToolsArgumentPatternErrorPrintsAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a value that contains an access key secret)", "(a value that contains a run key)"
+	for pattern, phrase := range map[string]string{"qak_x(": ak, "QRK_x(": rk, "qrk_x qAk_y(": ak, `QAK_x\Q`: ak} {
+		err := Definition{Name: "files", Command: []string{"x"}, Argument: pattern, Serves: []string{"a.internal"}}.Check()
+		if want := "tool files: argument: " + phrase; err == nil || err.Error() != want {
+			t.Errorf("%s:\n got %v\nwant %s", pattern, err, want)
+			continue
+		}
+		noSecretPrefix(t, pattern, err.Error())
+		var se *syntax.Error
+		if !errors.As(err, &se) {
+			t.Errorf("%s: %v does not wrap the regular expression's error", pattern, err)
+		}
+	}
+	err := Definition{Name: "files", Command: []string{"x"}, Argument: "files(", Serves: []string{"a.internal"}}.Check()
+	if want := "tool files: argument: error parsing regexp: missing closing ): `files(`"; err == nil || err.Error() != want {
+		t.Errorf("a clean pattern:\n got %v\nwant %s", err, want)
 	}
 }
