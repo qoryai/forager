@@ -198,8 +198,8 @@ One run, on a developer machine, with a server configured:
    What is prepared goes into the run directory; the composed home is not modified.
    Claude Code reads only the last `--settings` it is passed. A walled launch that
    passes `--settings` more than once, counted anywhere in its arguments, does not
-   start: "This launch passes --settings more than once, and Claude Code reads only the
-   last one, so the run does not start. Pass one --settings file." An unwalled launch
+   start: "Pass one --settings file. This launch passes --settings more than once, and
+   Claude Code reads only the last one, so the run does not start." An unwalled launch
    that passes it more than once starts, and Claude Code reads the last `--settings` it
    passes, without Forager's hooks.
    A settings file that lies in a place a walled run can write, whose path has a `..`
@@ -221,10 +221,10 @@ One run, on a developer machine, with a server configured:
    `<dir>/CLAUDE.md` read. An unwalled launch passes these flags unchecked.
    In a walled launch the files of the three system-prompt file flags are checked and
    copied the same way, and a launch that passes `--project-config-root` does not
-   start: "This launch passes --project-config-root, and Claude Code reads project
-   settings, .mcp.json and the .claude trees from that directory, which Forager does not
-   check, so the run does not start. Remove --project-config-root from the walled
-   launch." The programs those files start, and the checkout's `.claude/`, `.mcp.json`
+   start: "Remove --project-config-root from the walled launch. This launch passes
+   --project-config-root, and Claude Code reads project settings, .mcp.json and the
+   .claude trees from that directory, which Forager does not check, so the run does not
+   start." The programs those files start, and the checkout's `.claude/`, `.mcp.json`
    and `CLAUDE.md`, are not checked (§The wall).
 7. It emits `dev.qory.run.started` and `dev.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when the caller is interactive and no argument the

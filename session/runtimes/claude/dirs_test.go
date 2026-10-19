@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/qoryai/forager/session/runtimes"
@@ -60,7 +61,7 @@ func plugin(t *testing.T, dir string) string {
 func TestAWalledLaunchsPluginDirIsChecked(t *testing.T) {
 	for _, flag := range []string{"--plugin-dir", "--plugin-dir-no-mcp"} {
 		t.Run(flag, func(t *testing.T) {
-			fix := "Move the plugin to a directory no walled run writes."
+			fix := func(v string) string { return "Move the plugin " + v + " to a directory no walled run writes." }
 			for name, c := range map[string]struct {
 				make func(t *testing.T, home, work string) string
 				want func(home, work string) string
@@ -71,15 +72,15 @@ func TestAWalledLaunchsPluginDirIsChecked(t *testing.T) {
 				"a directory that contains the place": {
 					make: func(t *testing.T, home, work string) string { return home },
 					want: func(home, work string) string {
-						return "This launch passes " + flag + " " + home + ", and that directory contains " + work +
-							", which a walled run can write, so the run does not start. " + fix
+						return fix(home) + " This launch passes " + flag + " " + home + ", and that directory contains " + work +
+							", which a walled run can write, so the run does not start."
 					},
 				},
 				"a directory in the place": {
 					make: func(t *testing.T, _, work string) string { return plugin(t, filepath.Join(work, "p")) },
 					want: func(_, work string) string {
-						return "This launch passes " + flag + " " + filepath.Join(work, "p") + ", and that directory lies in " + work +
-							", which a walled run can write, so the run does not start. " + fix
+						return fix(filepath.Join(work, "p")) + " This launch passes " + flag + " " + filepath.Join(work, "p") +
+							", and that directory lies in " + work + ", which a walled run can write, so the run does not start."
 					},
 				},
 				"a link into the place": {
@@ -90,9 +91,9 @@ func TestAWalledLaunchsPluginDirIsChecked(t *testing.T) {
 						return p
 					},
 					want: func(home, work string) string {
-						return "This launch passes " + flag + " " + filepath.Join(home, "p") + ", and its link " +
-							filepath.Join(home, "p", "skills", "x") + " leads into " + work + ", which a walled run can write, " +
-							"so the run does not start. Replace the link with a copy, or move what it leads to out of " + work + "."
+						return "Replace the link " + filepath.Join(home, "p", "skills", "x") + " with a copy, or move what it leads to out of " + work +
+							". This launch passes " + flag + " " + filepath.Join(home, "p") + ", and that link leads into " + work +
+							", which a walled run can write, so the run does not start."
 					},
 				},
 				"a link to a directory that holds a link into the place": {
@@ -108,9 +109,9 @@ func TestAWalledLaunchsPluginDirIsChecked(t *testing.T) {
 						return p
 					},
 					want: func(home, work string) string {
-						return "This launch passes " + flag + " " + filepath.Join(home, "p") + ", and its link " +
-							filepath.Join(home, "p", "skills", "y", "SKILL.md") + " leads into " + work + ", which a walled run can write, " +
-							"so the run does not start. Replace the link with a copy, or move what it leads to out of " + work + "."
+						return "Replace the link " + filepath.Join(home, "p", "skills", "y", "SKILL.md") + " with a copy, or move what it leads to out of " + work +
+							". This launch passes " + flag + " " + filepath.Join(home, "p") + ", and that link leads into " + work +
+							", which a walled run can write, so the run does not start."
 					},
 				},
 				"a link to a directory outside the place": {
@@ -131,9 +132,9 @@ func TestAWalledLaunchsPluginDirIsChecked(t *testing.T) {
 						return p
 					},
 					want: func(home, work string) string {
-						return "This launch passes " + flag + " " + filepath.Join(home, "p") + ", and " +
-							filepath.Join(home, "p", "agents", "a.md") + " has more than one hard link, so a walled run could change it " +
-							"under another name, and the run does not start. Replace the file with a copy that has one name."
+						return "Replace " + filepath.Join(home, "p", "agents", "a.md") + " with a copy that has one name. This launch passes " + flag + " " +
+							filepath.Join(home, "p") + ", and that file has more than one hard link, so a walled run could change it " +
+							"under another name, and the run does not start."
 					},
 				},
 				"a link to a file with a second name": {
@@ -147,9 +148,9 @@ func TestAWalledLaunchsPluginDirIsChecked(t *testing.T) {
 						return p
 					},
 					want: func(home, work string) string {
-						return "This launch passes " + flag + " " + filepath.Join(home, "p") + ", and " +
-							filepath.Join(home, "p", "c.md") + " has more than one hard link, so a walled run could change it " +
-							"under another name, and the run does not start. Replace the file with a copy that has one name."
+						return "Replace " + filepath.Join(home, "p", "c.md") + " with a copy that has one name. This launch passes " + flag + " " +
+							filepath.Join(home, "p") + ", and that file has more than one hard link, so a walled run could change it " +
+							"under another name, and the run does not start."
 					},
 				},
 				"10,000 entries": {
@@ -158,8 +159,8 @@ func TestAWalledLaunchsPluginDirIsChecked(t *testing.T) {
 				"10,001 entries": {
 					make: func(t *testing.T, home, work string) string { return entries(t, filepath.Join(home, "p"), 10_001) },
 					want: func(home, work string) string {
-						return "This launch passes " + flag + " " + filepath.Join(home, "p") + ", which has more than 10,000 entries, " +
-							"the most Forager checks, so the run does not start. Pass a smaller plugin directory."
+						return "Pass a smaller plugin directory. This launch passes " + flag + " " + filepath.Join(home, "p") +
+							", which has more than 10,000 entries, the most Forager checks, so the run does not start."
 					},
 				},
 				"a .zip": {
@@ -168,8 +169,21 @@ func TestAWalledLaunchsPluginDirIsChecked(t *testing.T) {
 				"a .zip in the place": {
 					make: func(t *testing.T, _, work string) string { return writeFile(t, filepath.Join(work, "p.zip"), "PK") },
 					want: func(_, work string) string {
-						return "This launch passes " + flag + " " + filepath.Join(work, "p.zip") + ", and that file lies in " + work +
-							", which a walled run can write, so the run does not start. " + fix
+						return fix(filepath.Join(work, "p.zip")) + " This launch passes " + flag + " " + filepath.Join(work, "p.zip") +
+							", and that file lies in " + work + ", which a walled run can write, so the run does not start."
+					},
+				},
+				"a value that is not a regular file": {
+					make: func(t *testing.T, home, work string) string {
+						fifo := filepath.Join(home, "p.fifo")
+						if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+							t.Fatal(err)
+						}
+						return fifo
+					},
+					want: func(home, work string) string {
+						return "Pass a " + flag + " path to a directory or a regular file. This launch passes " + flag + " " +
+							filepath.Join(home, "p.fifo") + ", and that file is not a regular file, so the run does not start."
 					},
 				},
 				"a .zip that is a link": {
@@ -179,7 +193,9 @@ func TestAWalledLaunchsPluginDirIsChecked(t *testing.T) {
 						return filepath.Join(home, "link.zip")
 					},
 					want: func(home, work string) string {
-						return "This launch passes " + flag + " " + filepath.Join(home, "link.zip") + ", and that file is a link, so the run does not start."
+						link := filepath.Join(home, "link.zip")
+						return "Pass the path of the file that " + link + " links to. This launch passes " + flag + " " + link +
+							", and that file is a link, so the run does not start."
 					},
 				},
 			} {
@@ -257,9 +273,9 @@ func TestAWalledLaunchsPluginLinkIntoTheWorkspaceInsideIsRefused(t *testing.T) {
 			}
 			symlink(t, c.to(home), filepath.Join(p, "skills", "x"))
 			_, err := walledDirs(t, &fakeWritten{written: t.TempDir()}, inside, []string{"--plugin-dir", p})
-			want := "This launch passes --plugin-dir " + p + ", and its link " + filepath.Join(p, "skills", "x") +
-				" leads into /workspace, which a walled run can write, so the run does not start. " +
-				"Replace the link with a copy, or move what it leads to out of /workspace."
+			want := "Replace the link " + filepath.Join(p, "skills", "x") + " with a copy, or move what it leads to out of " +
+				"/workspace. This launch passes --plugin-dir " + p + ", and that link leads into /workspace, " +
+				"which a walled run can write, so the run does not start."
 			if err == nil || err.Error() != want {
 				t.Errorf("got %v, want %q", err, want)
 			}
@@ -272,7 +288,9 @@ func TestAWalledLaunchsPluginLinkIntoTheWorkspaceInsideIsRefused(t *testing.T) {
 		symlink(t, filepath.Join(home, "a"), filepath.Join(home, "b"))
 		symlink(t, filepath.Join(home, "a"), filepath.Join(p, "skills", "x"))
 		_, err := walledDirs(t, &fakeWritten{written: t.TempDir()}, inside, []string{"--plugin-dir", p})
-		want := "--plugin-dir " + p + ": " + filepath.Join(p, "skills", "x") + ": too many links"
+		link := filepath.Join(p, "skills", "x")
+		want := "Replace the link " + link + " with a copy, or point it at a path with fewer links. " +
+			"The check of --plugin-dir " + p + " failed: " + link + ": more than 40 links, the most Forager follows"
 		if err == nil || err.Error() != want {
 			t.Errorf("got %v, want %q", err, want)
 		}
@@ -283,7 +301,9 @@ func TestAWalledLaunchsPluginLinkIntoTheWorkspaceInsideIsRefused(t *testing.T) {
 		symlink(t, filepath.Join(home, "a"), filepath.Join(home, "b"))
 		value := filepath.Join(home, "a")
 		_, err := walledDirs(t, &fakeWritten{written: t.TempDir()}, inside, []string{"--plugin-dir", value})
-		if want := "--plugin-dir " + value + ": too many links"; err == nil || err.Error() != want {
+		want := "Pass a --plugin-dir path with fewer links. The check of --plugin-dir " + value +
+			" failed: more than 40 links, the most Forager follows"
+		if err == nil || err.Error() != want {
 			t.Errorf("got %v, want %q", err, want)
 		}
 	})
@@ -307,7 +327,6 @@ func TestAWalledLaunchsValueInTheWorkspaceInsideIsRefused(t *testing.T) {
 	home := t.TempDir()
 	symlink(t, "/workspace/plug", filepath.Join(home, "plug"))
 	symlink(t, "/workspace/p.zip", filepath.Join(home, "w.zip"))
-	plugins := "Move the plugin to a directory no walled run writes."
 	for _, flag := range []string{"--plugin-dir", "--plugin-dir-no-mcp", "--add-dir"} {
 		for value, what := range map[string]string{
 			"/workspace/plug":            "directory",
@@ -317,12 +336,12 @@ func TestAWalledLaunchsValueInTheWorkspaceInsideIsRefused(t *testing.T) {
 			filepath.Join(home, "w.zip"): "file",
 		} {
 			t.Run(flag+" "+value, func(t *testing.T) {
-				fix := plugins
+				fix := "Move the plugin " + value + " to a directory no walled run writes."
 				if flag == "--add-dir" {
 					fix = "Remove --add-dir " + value + ", or add a directory no walled run writes."
 				}
-				want := "This launch passes " + flag + " " + value + ", and that " + what + " lies in /workspace, " +
-					"which a walled run can write, so the run does not start. " + fix
+				want := fix + " This launch passes " + flag + " " + value + ", and that " + what + " lies in /workspace, " +
+					"which a walled run can write, so the run does not start."
 				_, err := walledDirs(t, &fakeWritten{written: t.TempDir()}, inside, []string{flag, value})
 				if err == nil || err.Error() != want {
 					t.Errorf("got %v, want %q", err, want)
@@ -349,9 +368,9 @@ func TestAWalledLaunchsPluginLinkTextSaysWhereItLeads(t *testing.T) {
 	symlink(t, other, filepath.Join(p, "skills", "x"))
 	_, err := walledDirs(t, &fakeWritten{written: work}, nil, []string{"--plugin-dir", p})
 	target, _ := filepath.EvalSymlinks(other)
-	want := "This launch passes --plugin-dir " + p + ", and its link " + filepath.Join(p, "skills", "x") + " leads to " + target +
-		", and " + target + " contains " + work + ", which a walled run can write, so the run does not start. " +
-		"Replace the link with a copy, or link to a directory that contains no place a walled run writes."
+	want := "Replace the link " + filepath.Join(p, "skills", "x") + " with a copy, or link to a directory with " +
+		"no place a walled run writes. This launch passes --plugin-dir " + p + ", and that link leads to " + target +
+		", and " + target + " contains " + work + ", which a walled run can write, so the run does not start."
 	if err == nil || err.Error() != want {
 		t.Errorf("contains: got %v, want %q", err, want)
 	}
@@ -368,9 +387,9 @@ func TestAWalledLaunchsPluginLinkTextSaysWhereItLeads(t *testing.T) {
 		Launch: runtimes.Launch{Args: []string{"--plugin-dir", q}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
 		Walled: true, Readable: through, ReadableDir: through,
 	})
-	want = "This launch passes --plugin-dir " + q + ", and its link " + filepath.Join(q, "skills", "y") + " leads through /work, " +
-		"which a walled run can write, so the run does not start. Replace the link with a copy, or point it at a path that " +
-		"does not go through /work."
+	want = "Replace the link " + filepath.Join(q, "skills", "y") + " with a copy, or point it at a path that does not go " +
+		"through /work. This launch passes --plugin-dir " + q + ", and that link leads through /work, " +
+		"which a walled run can write, so the run does not start."
 	if err == nil || err.Error() != want {
 		t.Errorf("reached through: got %v, want %q", err, want)
 	}
@@ -403,8 +422,9 @@ func TestAWalledLaunchsAddDirIsChecked(t *testing.T) {
 		return ref
 	}
 	linkText := func(ref, at string) string {
-		return "This launch passes --add-dir " + ref + ", and its link " + filepath.Join(ref, at) + " leads into " + work +
-			", which a walled run can write, so the run does not start. Replace the link with a copy, or move what it leads to out of " + work + "."
+		return "Replace the link " + filepath.Join(ref, at) + " with a copy, or move what it leads to out of " + work +
+			". This launch passes --add-dir " + ref + ", and that link leads into " + work +
+			", which a walled run can write, so the run does not start."
 	}
 	for name, c := range map[string]struct {
 		make func(t *testing.T, ref string) string
@@ -447,12 +467,25 @@ func TestAWalledLaunchsAddDirIsChecked(t *testing.T) {
 		"a link into the place outside .claude": {
 			make: func(t *testing.T, ref string) string { return linked(t, ref, "src/settings.json") },
 		},
+		"a value that is not a regular file": {
+			make: func(t *testing.T, ref string) string {
+				fifo := filepath.Join(ref, "p.fifo")
+				if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return fifo
+			},
+			want: func(fifo string) string {
+				return "Pass an --add-dir path to a directory. This launch passes --add-dir " + fifo +
+					", and that file is not a regular file, so the run does not start."
+			},
+		},
 		"a directory in the place": {
 			make: func(t *testing.T, _ string) string { return mkdir(t, filepath.Join(work, "ref")) },
 			want: func(string) string {
-				return "This launch passes --add-dir " + filepath.Join(work, "ref") + ", and that directory lies in " + work +
-					", which a walled run can write, so the run does not start. Remove --add-dir " + filepath.Join(work, "ref") +
-					", or add a directory no walled run writes."
+				return "Remove --add-dir " + filepath.Join(work, "ref") + ", or add a directory no walled run writes. " +
+					"This launch passes --add-dir " + filepath.Join(work, "ref") + ", and that directory lies in " + work +
+					", which a walled run can write, so the run does not start."
 			},
 		},
 	} {
@@ -480,10 +513,10 @@ func TestAWalledLaunchsAddDirIsChecked(t *testing.T) {
 		}
 	}
 	for value, want := range map[string]string{
-		"~/ref": "This launch passes --add-dir ~/ref, and inside the wall ~ is the home of the wall's user, " +
-			"which Forager cannot check, so the run does not start. Pass an absolute path.",
-		"ref": "This launch passes --add-dir ref, a relative path that Claude Code reads from the workspace, " +
-			"which a walled run can write, so the run does not start. Pass an absolute path outside the workspace.",
+		"~/ref": "Replace ~/ref with an absolute path. This launch passes --add-dir ~/ref, and inside the wall ~ is " +
+			"the home of the wall's user, which Forager cannot check, so the run does not start.",
+		"ref": "Replace ref with an absolute path outside the workspace. This launch passes --add-dir ref, " +
+			"a relative path that Claude Code reads from the workspace, which a walled run can write, so the run does not start.",
 	} {
 		t.Run(value, func(t *testing.T) {
 			if _, err := walledDirs(t, &fakeWritten{written: work}, nil, []string{"--add-dir", value}); err == nil || err.Error() != want {

@@ -143,7 +143,9 @@ func TestASettingsFileInTheWorkspaceIsJudgedOnThisMachine(t *testing.T) {
 	}
 	sp.Args = []string{"--settings", settings}
 	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = &targetWall{}, "base", images, []string{"registry.example/agents/"}
-	want := "runtime claude: settings " + settings + ": it lies in " + sp.Dir + ", which a walled run can write"
+	want := "runtime claude: Move " + settings + " to a directory no walled run writes, or pass the settings as a " +
+		"JSON object. This launch passes --settings " + settings + ", which lies in " + sp.Dir +
+		", a place a walled run can write, so the run does not start."
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("the run: %v, want %q", err, want)
 	}
@@ -300,9 +302,9 @@ func TestAPluginLinkToTheWorkspaceInsideIsNoRun(t *testing.T) {
 	symlink(t, "/workspace/harness/skills/review", filepath.Join(plugin, "skills", "review"))
 	sp.Args = append(sp.Args, "--plugin-dir", plugin)
 	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = w, "base", images, []string{"registry.example/agents/"}
-	want := "runtime claude: This launch passes --plugin-dir " + plugin + ", and its link " + filepath.Join(plugin, "skills", "review") +
-		" leads into /workspace, which a walled run can write, so the run does not start. " +
-		"Replace the link with a copy, or move what it leads to out of /workspace."
+	want := "runtime claude: Replace the link " + filepath.Join(plugin, "skills", "review") + " with a copy, " +
+		"or move what it leads to out of /workspace. This launch passes --plugin-dir " + plugin +
+		", and that link leads into /workspace, which a walled run can write, so the run does not start."
 	if _, err := session.Run(context.Background(), sp); err == nil || err.Error() != want {
 		t.Errorf("the run: %v, want %q", err, want)
 	}

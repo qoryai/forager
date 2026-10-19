@@ -65,16 +65,16 @@ func writeFile(t *testing.T, path, content string) string {
 
 // mcpInWork is the refusal of an --mcp-config file in a place a walled run can write.
 func mcpInWork(file, place string) string {
-	return "This launch passes --mcp-config " + file + ", and that file lies in " + place +
-		", which a walled run can write, so the run does not start. Move the file to a directory no walled run writes, " +
-		"or pass the servers as a JSON string."
+	return "Move " + file + " to a directory no walled run writes, or pass the servers as a JSON string. " +
+		"This launch passes --mcp-config " + file + ", which lies in " + place +
+		", a place a walled run can write, so the run does not start."
 }
 
 // agentsInWork is the refusal of an --agents file in a place a walled run can write.
 func agentsInWork(file, place string) string {
-	return "This launch passes --agents " + file + ", and that file lies in " + place +
-		", which a walled run can write, so the run does not start. Move the file to a directory no walled run writes, " +
-		"or pass the agents as a JSON object."
+	return "Move " + file + " to a directory no walled run writes, or pass the agents as a JSON object. " +
+		"This launch passes --agents " + file + ", which lies in " + place +
+		", a place a walled run can write, so the run does not start."
 }
 
 // TestAWalledLaunchsFileInAWrittenPlaceIsRefused pins that a walled launch whose
@@ -123,8 +123,9 @@ func TestAWalledLaunchsFileReachedThroughAWrittenPlaceIsRefused(t *testing.T) {
 		Launch: runtimes.Launch{Args: []string{"--mcp-config", file}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
 		Walled: true, Readable: through,
 	})
-	want := "This launch passes --mcp-config " + file + ", and that file is reached through /work, which a walled run can write, " +
-		"so the run does not start. Move the file to a directory no walled run writes, or pass the servers as a JSON string."
+	want := "Move " + file + " to a directory no walled run writes, or pass the servers as a JSON string. " +
+		"This launch passes --mcp-config " + file + ", which is reached through /work, a place a walled run can write, " +
+		"so the run does not start."
 	if err == nil || err.Error() != want {
 		t.Errorf("got %v, want %q", err, want)
 	}
@@ -167,8 +168,8 @@ func TestAWalledLaunchsValuesAreReadAsClaudeCodeReadsThem(t *testing.T) {
 // path.
 func TestAWalledLaunchsInlineJSONPassesAsItIs(t *testing.T) {
 	relative := func(flag, v string) string {
-		return "This launch passes " + flag + " " + v + ", a relative path that Claude Code reads from the workspace, " +
-			"which a walled run can write, so the run does not start. Pass an absolute path outside the workspace."
+		return "Replace " + v + " with an absolute path outside the workspace. This launch passes " + flag + " " + v +
+			", a relative path that Claude Code reads from the workspace, which a walled run can write, so the run does not start."
 	}
 	for _, c := range []struct {
 		flag, value string
@@ -302,9 +303,9 @@ func TestAWalledLaunchsPromptFileInAWrittenPlaceIsRefused(t *testing.T) {
 	ok := writeFile(t, filepath.Join(t.TempDir(), "ok.md"), "# ok")
 	bad := writeFile(t, filepath.Join(work, "p.md"), "# prompt")
 	refusal := func(flag, how, place string) string {
-		return "This launch passes " + flag + " " + bad + ", and that file " + how + " " + place +
-			", which a walled run can write, so the run does not start. Move the file to a directory no walled run writes, " +
-			"or pass the text with " + promptFlags[flag] + "."
+		return "Move " + bad + " to a directory no walled run writes, or pass the text with " + promptFlags[flag] + ". " +
+			"This launch passes " + flag + " " + bad + ", which " + how + " " + place +
+			", a place a walled run can write, so the run does not start."
 	}
 	for flag := range promptFlags {
 		for name, args := range map[string][]string{
@@ -394,16 +395,18 @@ func TestAWalledLaunchsPathsFollowThePathRules(t *testing.T) {
 	for _, flag := range []string{"--mcp-config", "--agents", "--plugin-dir", "--plugin-dir-no-mcp", "--add-dir",
 		"--system-prompt-file", "--append-system-prompt-file", "--append-subagent-system-prompt-file"} {
 		for value, want := range map[string]string{
-			"~/ref": "This launch passes " + flag + " ~/ref, and inside the wall ~ is the home of the wall's user, " +
-				"which Forager cannot check, so the run does not start. Pass an absolute path.",
-			"~": "This launch passes " + flag + " ~, and inside the wall ~ is the home of the wall's user, " +
-				"which Forager cannot check, so the run does not start. Pass an absolute path.",
-			"mcp.json": "This launch passes " + flag + " mcp.json, a relative path that Claude Code reads from the workspace, " +
-				"which a walled run can write, so the run does not start. Pass an absolute path outside the workspace.",
-			"./x": "This launch passes " + flag + " ./x, a relative path that Claude Code reads from the workspace, " +
-				"which a walled run can write, so the run does not start. Pass an absolute path outside the workspace.",
-			"/a/../b.json": "This launch passes " + flag + ` /a/../b.json, and the path has a ".." part, so the run does not start. ` +
-				`Pass the path without "..".`,
+			"~/ref": "Replace ~/ref with an absolute path. This launch passes " + flag + " ~/ref, and inside the wall ~ is " +
+				"the home of the wall's user, which Forager cannot check, so the run does not start.",
+			"~": "Replace ~ with an absolute path. This launch passes " + flag + " ~, and inside the wall ~ is " +
+				"the home of the wall's user, which Forager cannot check, so the run does not start.",
+			"mcp.json": "Replace mcp.json with an absolute path outside the workspace. This launch passes " + flag +
+				" mcp.json, a relative path that Claude Code reads from the workspace, which a walled run can write, " +
+				"so the run does not start.",
+			"./x": "Replace ./x with an absolute path outside the workspace. This launch passes " + flag +
+				" ./x, a relative path that Claude Code reads from the workspace, which a walled run can write, " +
+				"so the run does not start.",
+			"/a/../b.json": `Pass the path /a/../b.json without "..". This launch passes ` + flag +
+				` /a/../b.json, and the path has a ".." part, so the run does not start.`,
 		} {
 			for _, args := range [][]string{{flag, value}, {flag + "=" + value}} {
 				t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -439,21 +442,22 @@ func TestAWalledLaunchsFileIsReadAsTheSettingsAre(t *testing.T) {
 	for _, flag := range []string{"--mcp-config", "--agents", "--system-prompt-file", "--append-system-prompt-file",
 		"--append-subagent-system-prompt-file"} {
 		for _, c := range []struct {
-			name, file string
-			readable   func(string) (string, error)
-			reason     string
+			name, file  string
+			readable    func(string) (string, error)
+			reason, fix string
 		}{
-			{"a link", link, nil, "is a link"},
-			{"a directory", sub, nil, "is not a regular file"},
-			{"larger than 1 MiB", big, nil, "is larger than 1048576 bytes"},
-			{"not the file judged", plain, other, "changed while it was checked"},
+			{"a link", link, nil, "is a link", "Pass the path of the file that " + link + " links to."},
+			{"a directory", sub, nil, "is not a regular file", "Pass a " + flag + " path to a regular file."},
+			{"larger than 1 MiB", big, nil, "is larger than 1048576 bytes", "Pass a " + flag + " file of at most 1048576 bytes."},
+			{"not the file judged", plain, other, "changed while it was checked",
+				"Start the run again when no process is writing " + plain + "."},
 		} {
 			t.Run(flag+" "+c.name, func(t *testing.T) {
 				_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
 					Launch: runtimes.Launch{Args: []string{flag, c.file}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
 					Walled: true, Readable: c.readable,
 				})
-				want := "This launch passes " + flag + " " + c.file + ", and that file " + c.reason + ", so the run does not start."
+				want := c.fix + " This launch passes " + flag + " " + c.file + ", and that file " + c.reason + ", so the run does not start."
 				if err == nil || err.Error() != want {
 					t.Errorf("got %v, want %q", err, want)
 				}
@@ -464,9 +468,53 @@ func TestAWalledLaunchsFileIsReadAsTheSettingsAre(t *testing.T) {
 			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
 				Launch: runtimes.Launch{Args: []string{flag, absent}}, RunDir: t.TempDir(), Forwarder: []string{"q"}, Walled: true,
 			})
-			if err == nil || !strings.HasPrefix(err.Error(), flag+" "+absent+": ") || !errors.Is(err, os.ErrNotExist) {
+			prefix := "Pass a " + flag + " path that exists on this machine. The check of " + flag + " " + absent + " failed: "
+			if err == nil || !strings.HasPrefix(err.Error(), prefix) || !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("got %v", err)
 			}
 		})
 	}
+}
+
+// TestAWalledLaunchsOtherReasonsComeWithAFix pins the fix that leads the text of a file
+// the check could not read for any other reason: access for a path the check had no
+// permission for, and otherwise the error at the end of the text.
+func TestAWalledLaunchsOtherReasonsComeWithAFix(t *testing.T) {
+	t.Run("no permission", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a directory of mode 0")
+		}
+		// The path is resolved first, so the path in the error is the one passed.
+		dir, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		locked := filepath.Join(dir, "locked")
+		f := writeFile(t, filepath.Join(locked, "mcp.json"), "{}")
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+		_, err = claude.Settings([]string{"Stop"}, runtimes.Attach{
+			Launch: runtimes.Launch{Args: []string{"--mcp-config", f}}, RunDir: t.TempDir(), Forwarder: []string{"q"}, Walled: true,
+		})
+		prefix := "Give the user that runs Forager access to " + f + ", or pass another --mcp-config path. " +
+			"The check of --mcp-config " + f + " failed: "
+		if err == nil || !strings.HasPrefix(err.Error(), prefix) || !errors.Is(err, os.ErrPermission) {
+			t.Errorf("got %v, want the prefix %q", err, prefix)
+		}
+	})
+	t.Run("any other error", func(t *testing.T) {
+		f := writeFile(t, filepath.Join(t.TempDir(), "mcp.json"), "{}")
+		failed := errors.New("the registry could not be read")
+		_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+			Launch: runtimes.Launch{Args: []string{"--mcp-config", f}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+			Walled: true, Readable: func(string) (string, error) { return "", failed },
+		})
+		want := "Fix the error at the end of this message, or pass another --mcp-config path. " +
+			"The check of --mcp-config " + f + " failed: the registry could not be read"
+		if err == nil || err.Error() != want || !errors.Is(err, failed) {
+			t.Errorf("got %v, want %q", err, want)
+		}
+	})
 }

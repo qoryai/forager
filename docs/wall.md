@@ -477,7 +477,7 @@ chooses what a later run is given:
 - behind a wall, this run's writable binds: the workspace, or the mount that holds it,
   the writable mounts and the wall's writable binds.
 
-A path with a `..` name is refused first, "it has a ".." part": the system applies `..`
+A path with a `..` name is refused first, "the path has a ".." part": the system applies `..`
 after the link before it, so the path made clean would name another file than the one
 opened. Otherwise the path is made absolute once, and that one path is checked and
 opened. A file is refused when its path, absolute and clean or resolved through every
@@ -486,14 +486,19 @@ names and regardless of case; when a name on the way to it is looked up inside s
 place; when its last part is a link; and when it is not a regular file. The file is then
 opened without following a link as its last part, and read only when it is a regular
 file of at most 1 MiB and the same file as the one its path resolved to when it was
-checked, or the run is refused with "it changed while it was checked". A refusal stops
-the run before the runtime starts, with the session's error, such as "runtime claude:
-settings /work/launch-settings.json: it lies in /work, which a walled run can write".
+checked, or the run is refused with "that file changed while it was checked". A refusal
+stops the run before the runtime starts, with the session's error, which starts with the
+fix, such as "runtime claude: Move /work/launch-settings.json to a directory no walled run
+writes, or pass the settings as a JSON object. This launch passes --settings
+/work/launch-settings.json, which lies in /work, a place a walled run can write, so the
+run does not start." The other refusals of a settings file take the forms of the
+`--mcp-config` file's, and settings that are no JSON object get "Make the file
+/a/settings.json a JSON object." before the reason.
 Settings passed as a document, `--settings '{…}'`, are no file and are not checked.
 Claude Code reads only the last `--settings` it is passed, and the session checks only
 the first, so a walled launch that passes `--settings` more than once does not start:
-"This launch passes --settings more than once, and Claude Code reads only the last one,
-so the run does not start. Pass one --settings file." The places are worked out only
+"Pass one --settings file. This launch passes --settings more than once, and Claude Code
+reads only the last one, so the run does not start." The places are worked out only
 when a file is to be read: a run that passes none does not read the registry for them.
 
 A walled launch's `--mcp-config`, `--agents`, `--plugin-dir`, `--plugin-dir-no-mcp` and
@@ -515,74 +520,87 @@ unwalled launch passes them unchecked.
   space, `1e400` for `--mcp-config` and `null` for `--agents` are refused as relative
   paths.
 - **Path rules.** Every other value is a path. A value that starts with `~` is refused:
-  "This launch passes --add-dir ~/ref, and inside the wall ~ is the home of the wall's
-  user, which Forager cannot check, so the run does not start. Pass an absolute path." A
-  relative value is refused, because Claude Code reads it from the workspace: "This
-  launch passes --mcp-config mcp.json, a relative path that Claude Code reads from the
-  workspace, which a walled run can write, so the run does not start. Pass an absolute
-  path outside the workspace." A value with a `..` part is refused: "This launch passes
-  --mcp-config /a/../b.json, and the path has a ".." part, so the run does not start.
-  Pass the path without ".."."
+  "Replace ~/ref with an absolute path. This launch passes --add-dir ~/ref, and inside
+  the wall ~ is the home of the wall's user, which Forager cannot check, so the run does
+  not start." A relative value is refused, because Claude Code reads it from the
+  workspace: "Replace mcp.json with an absolute path outside the workspace. This launch
+  passes --mcp-config mcp.json, a relative path that Claude Code reads from the
+  workspace, which a walled run can write, so the run does not start." A value with a
+  `..` part is refused: "Pass the path /a/../b.json without "..". This launch passes
+  --mcp-config /a/../b.json, and the path has a ".." part, so the run does not start."
 - **`--mcp-config` and `--agents` files** are checked and read as the settings file is,
   and Claude Code is passed a copy in the run directory, `mcp-config-<n>.json` or
   `agents-<n>.json`, numbered from 1 in the order the files appear. For a run whose
   workspace is at `/workspace` inside, a copy that is JSON has every string written as
-  the enclosure sees it. A file in such a place is refused: "This launch passes
-  --mcp-config /work/mcp.json, and that file lies in /work, which a walled run can
-  write, so the run does not start. Move the file to a directory no walled run writes,
-  or pass the servers as a JSON string." A file whose path is looked up in such a place
-  says "is reached through /work", and an `--agents` file ends "or pass the agents as a
-  JSON object." A file refused by the read says why, such as "This launch passes
-  --mcp-config /a/mcp.json, and that file is a link, so the run does not start." No
-  copy is written before every value has passed.
+  the enclosure sees it. A file in such a place is refused: "Move /work/mcp.json to a
+  directory no walled run writes, or pass the servers as a JSON string. This launch
+  passes --mcp-config /work/mcp.json, which lies in /work, a place a walled run can
+  write, so the run does not start." A file whose path is looked up in such a place
+  gets the text with "is reached through /work", and the fix for an `--agents` file
+  ends "or pass the agents as a JSON object." The text for a file refused by the read
+  shows the reason after the fix, such as "Pass the path of the file that /a/mcp.json
+  links to. This launch passes --mcp-config /a/mcp.json, and that file is a link, so
+  the run does not start." The other fixes are "Pass a --mcp-config path to a regular
+  file.", "Pass a --mcp-config file of at most 1048576 bytes." and "Start the run again
+  when no process is writing /a/mcp.json." No copy is written before every value has
+  passed.
 - **`--plugin-dir` and `--plugin-dir-no-mcp` directories** may not lie in, be reached
-  through, or contain such a place, by whole names and regardless of case: "This launch
-  passes --plugin-dir /home/p, and that directory contains /home/p/work, which a walled
-  run can write, so the run does not start. Move the plugin to a directory no walled run
-  writes." Every entry under the directory is then read without following a link as it
-  is read, and the check stops after 10,000 entries: "This launch passes --plugin-dir
-  /home/p, which has more than 10,000 entries, the most Forager checks, so the run does
-  not start. Pass a smaller plugin directory."
-  - A link must not lead into such a place: "This launch passes --plugin-dir /home/p,
-    and its link /home/p/skills/x leads into /work, which a walled run can write, so the
-    run does not start. Replace the link with a copy, or move what it leads to out of
-    /work." A link whose path goes through such a place says so: "This launch passes
-    --plugin-dir /home/p, and its link /home/p/skills/x leads through /work, which a
-    walled run can write, so the run does not start. Replace the link with a copy, or
-    point it at a path that does not go through /work."
-  - A link to a directory is checked as the directory is: "This launch passes
-    --plugin-dir /home/p, and its link /home/p/skills/x leads to /h/other, and /h/other
-    contains /h/other/work, which a walled run can write, so the run does not start.
-    Replace the link with a copy, or link to a directory that contains no place a
-    walled run writes." The entries under the directory it leads to are read the same
+  through, or contain such a place, by whole names and regardless of case: "Move the
+  plugin /home/p to a directory no walled run writes. This launch passes --plugin-dir
+  /home/p, and that directory contains /home/p/work, which a walled run can write, so
+  the run does not start." Every entry under the directory is then read without
+  following a link as it is read, and the check stops after 10,000 entries: "Pass a
+  smaller plugin directory. This launch passes --plugin-dir /home/p, which has more than
+  10,000 entries, the most Forager checks, so the run does not start."
+  - A link must not lead into such a place: "Replace the link /home/p/skills/x with a
+    copy, or move what it leads to out of /work. This launch passes --plugin-dir
+    /home/p, and that link leads into /work, which a walled run can write, so the run
+    does not start." A link whose path goes through such a place says so: "Replace the
+    link /home/p/skills/x with a copy, or point it at a path that does not go through
+    /work. This launch passes --plugin-dir /home/p, and that link leads through /work,
+    which a walled run can write, so the run does not start."
+  - A link to a directory is checked as the directory is: "Replace the link
+    /home/p/skills/x with a copy, or link to a directory with no place a walled run
+    writes. This launch passes --plugin-dir /home/p, and that link leads to
+    /h/other, and /h/other contains /h/other/work, which a walled run can write, so the
+    run does not start." The entries under the directory it leads to are read the same
     way. Each directory is read once, by its device and inode: one reached again,
     through a link or as an entry, counts as one entry and is not read again.
   - For a run whose workspace is at `/workspace` inside, a link whose path, followed a
     name at a time on this machine, reaches `/workspace` is refused the same way, with
     `/workspace` as the place. So is a value whose path reaches `/workspace`, before
-    Forager checks the path on this machine: "This launch passes --plugin-dir
-    /workspace/plug, and that directory lies in /workspace, which a walled run can
-    write, so the run does not start. Move the plugin to a directory no walled run
-    writes." For a value whose name ends in `.zip`, the text says "that file" in place
-    of "that directory". A link with more than 40 links on the way is refused with the
-    reason, "--plugin-dir /home/p: /home/p/skills/x: too many links", and a value with
-    more than 40 with "--plugin-dir /home/p: too many links".
+    Forager checks the path on this machine: "Move the plugin /workspace/plug to a
+    directory no walled run writes. This launch passes --plugin-dir /workspace/plug,
+    and that directory lies in /workspace, which a walled run can write, so the run
+    does not start." For a value whose name ends in `.zip`, the text says "that file" in
+    place of "that directory". Forager follows at most 40 links on the way, counting
+    them itself, so the limit is the same on Linux and macOS. A link past it is refused
+    with the reason: "Replace the link /home/p/skills/x with a copy, or point it at a
+    path with fewer links. The check of --plugin-dir /home/p failed: /home/p/skills/x:
+    more than 40 links, the most Forager follows". A value past it gets "Pass a
+    --plugin-dir path with fewer links." before the same reason.
   - A regular file, or a file a link leads to, with more than one name is refused:
-    "This launch passes --plugin-dir /home/p, and /home/p/agents/a.md has more than one
-    hard link, so a walled run could change it under another name, and the run does
-    not start. Replace the file with a copy that has one name."
+    "Replace /home/p/agents/a.md with a copy that has one name. This launch passes
+    --plugin-dir /home/p, and that file has more than one hard link, so a walled run
+    could change it under another name, and the run does not start."
   - A value that is no directory, a `.zip` say, is checked as a file: it must not lie
     in or be reached through such a place, must be no link, a regular file, and have
-    one name.
+    one name. A link gets "Pass the path of the file that /home/link.zip links to.",
+    and any other file that is not a regular one "Pass a --plugin-dir path to a
+    directory or a regular file.", each before the reason. For `--add-dir` that fix is
+    "Pass an --add-dir path to a directory."
 - **`--add-dir` directories** are checked as `--plugin-dir`'s, with the entries read
-  only at `<dir>/.claude`, and under it, and at `<dir>/CLAUDE.md`: "This launch passes
-  --add-dir /work/ref, and that directory lies in /work, which a walled run can write,
-  so the run does not start. Remove --add-dir /work/ref, or add a directory no walled
-  run writes." A directory in a read-only mount passes. A link under `.claude`, or
+  only at `<dir>/.claude`, and under it, and at `<dir>/CLAUDE.md`: "Remove --add-dir
+  /work/ref, or add a directory no walled run writes. This launch passes --add-dir
+  /work/ref, and that directory lies in /work, which a walled run can write, so the run
+  does not start." A directory in a read-only mount passes. A link under `.claude`, or
   `.claude` itself, that leads back to the directory reads all of the directory.
-- **Any other reason**, a file that does not exist say, is the flag, the value and the
-  reason, as for the settings: "runtime claude: --mcp-config /a/mcp.json: stat
-  /a/mcp.json: no such file or directory".
+- **Any other reason**, a file that does not exist say, is a fix, then the flag, the
+  value and the reason: "runtime claude: Pass a --mcp-config path that exists on this
+  machine. The check of --mcp-config /a/mcp.json failed: stat /a/mcp.json: no such file
+  or directory". A path the check had no permission for gets "Give the user that runs
+  Forager access to /a/mcp.json, or pass another --mcp-config path.", and any other
+  error "Fix the error at the end of this message, or pass another --mcp-config path."
 
 A refusal stops the run before the wall is prepared, with the prefix `runtime claude: `.
 Claude Code also loads plugin directories named in `CLAUDE_CODE_PLUGIN_DIRS`,

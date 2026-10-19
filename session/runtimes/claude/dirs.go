@@ -26,8 +26,9 @@ const workspaceInside = "/workspace"
 const maxLinks = 40
 
 // errTooManyLinks is the error of a path [throughWorkspace] follows through more than
-// maxLinks links.
-var errTooManyLinks = errors.New("too many links")
+// maxLinks links. Forager counts the links itself, so the limit is the same on every
+// system.
+var errTooManyLinks = fmt.Errorf("more than %d links, the most Forager follows", maxLinks)
 
 // checkDir checks the value of --plugin-dir, --plugin-dir-no-mcp or --add-dir in a
 // walled launch. A directory must pass [runtimes.Attach.ReadableDir]: it may not lie
@@ -46,8 +47,11 @@ var errTooManyLinks = errors.New("too many links")
 func checkDir(v flagValue, a runtimes.Attach) error {
 	if a.Inside != nil {
 		through, err := throughWorkspace(v.value)
+		if errors.Is(err, errTooManyLinks) {
+			return tooManyLinks(v, "")
+		}
 		if err != nil {
-			return dirRefused(v, err)
+			return checkFailed(v, err)
 		}
 		if through {
 			// The value may not exist here: a value whose name ends in .zip is taken
@@ -59,7 +63,7 @@ func checkDir(v flagValue, a runtimes.Attach) error {
 	}
 	info, err := os.Stat(v.value)
 	if err != nil {
-		return dirRefused(v, err)
+		return checkFailed(v, err)
 	}
 	if !info.IsDir() {
 		return checkPluginFile(v, a)
@@ -70,7 +74,7 @@ func checkDir(v flagValue, a runtimes.Attach) error {
 		if errors.As(err, &written) {
 			return writtenValue(v, false, written)
 		}
-		return dirRefused(v, err)
+		return checkFailed(v, err)
 	}
 	s := &scan{v: v, a: a, seen: map[fileID]bool{}}
 	if v.flag != addDirFlag {
@@ -96,16 +100,22 @@ func checkPluginFile(v flagValue, a runtimes.Attach) error {
 		if errors.As(err, &written) {
 			return writtenValue(v, true, written)
 		}
-		return dirRefused(v, err)
+		return checkFailed(v, err)
 	}
 	info, err := os.Lstat(v.value)
 	switch {
 	case err != nil:
-		return dirRefused(v, err)
+		return checkFailed(v, err)
 	case info.Mode()&fs.ModeSymlink != 0:
-		return fmt.Errorf("This launch passes %s %s, and that file is a link, so the run does not start.", v.flag, shown)
+		return fmt.Errorf("Pass the path of the file that %s links to. This launch passes %s %s, and that file "+
+			"is a link, so the run does not start.", shown, v.flag, shown)
 	case !info.Mode().IsRegular():
-		return fmt.Errorf("This launch passes %s %s, and that file is not a regular file, so the run does not start.", v.flag, shown)
+		fix := "Pass a " + v.flag + " path to a directory or a regular file."
+		if v.flag == addDirFlag {
+			fix = "Pass an " + v.flag + " path to a directory."
+		}
+		return fmt.Errorf("%s This launch passes %s %s, and that file is not a regular file, so the run does not start.",
+			fix, v.flag, shown)
 	case links(info) > 1:
 		return hardLinked(v, v.value)
 	}
@@ -131,7 +141,7 @@ type fileID struct{ dev, ino uint64 }
 func (s *scan) enter(p string) (bool, error) {
 	info, err := os.Stat(p)
 	if err != nil {
-		return false, dirRefused(s.v, err)
+		return false, checkFailed(s.v, err)
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -145,20 +155,20 @@ func (s *scan) enter(p string) (bool, error) {
 	return true, nil
 }
 
-// dir reads every entry under the directory real, which a refusal names by shown, the
-// path Claude Code reads it by. A directory under it that the scan read before is
-// counted as an entry and not read again.
+// dir reads every entry under the directory real, which a refusal shows by the path in
+// `shown`, the path Claude Code reads it by. A directory under it that the scan read
+// before is counted as an entry and not read again.
 func (s *scan) dir(real, shown string) error {
 	return filepath.WalkDir(real, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return dirRefused(s.v, err)
+			return checkFailed(s.v, err)
 		}
 		if p == real {
 			return nil
 		}
 		rel, err := filepath.Rel(real, p)
 		if err != nil {
-			return dirRefused(s.v, err)
+			return checkFailed(s.v, err)
 		}
 		if err := s.count(); err != nil {
 			return err
@@ -185,7 +195,7 @@ func (s *scan) entry(p, shown string) error {
 		return nil
 	}
 	if err != nil {
-		return dirRefused(s.v, err)
+		return checkFailed(s.v, err)
 	}
 	if err := s.count(); err != nil {
 		return err
@@ -209,8 +219,8 @@ func (s *scan) count() error {
 		if s.v.flag == addDirFlag {
 			what = "directory"
 		}
-		return fmt.Errorf("This launch passes %s %s, which has more than 10,000 entries, the most Forager checks, "+
-			"so the run does not start. Pass a smaller %s.", s.v.flag, accesskey.ShownValue(s.v.value, false), what)
+		return fmt.Errorf("Pass a smaller %s. This launch passes %s %s, which has more than 10,000 entries, "+
+			"the most Forager checks, so the run does not start.", what, s.v.flag, accesskey.ShownValue(s.v.value, false))
 	}
 	return nil
 }
@@ -226,7 +236,7 @@ func (s *scan) check(p, shown string, typ fs.FileMode) error {
 	}
 	info, err := os.Lstat(p)
 	if err != nil {
-		return dirRefused(s.v, err)
+		return checkFailed(s.v, err)
 	}
 	if links(info) > 1 {
 		return hardLinked(s.v, shown)
@@ -238,8 +248,11 @@ func (s *scan) check(p, shown string, typ fs.FileMode) error {
 func (s *scan) link(p, shown string) error {
 	if s.a.Inside != nil {
 		through, err := throughWorkspace(p)
+		if errors.Is(err, errTooManyLinks) {
+			return tooManyLinks(s.v, shown)
+		}
 		if err != nil {
-			return dirRefused(s.v, fmt.Errorf("%s: %w", accesskey.ShownValue(shown, false), err))
+			return checkFailed(s.v, fmt.Errorf("%s: %w", accesskey.ShownValue(shown, false), err))
 		}
 		if through {
 			return linkInto(s.v, shown, workspaceInside)
@@ -255,7 +268,7 @@ func (s *scan) link(p, shown string) error {
 		return nil
 	}
 	if err != nil {
-		return dirRefused(s.v, err)
+		return checkFailed(s.v, err)
 	}
 	if !info.IsDir() {
 		if info.Mode().IsRegular() && links(info) > 1 {
@@ -272,26 +285,27 @@ func (s *scan) link(p, shown string) error {
 	return s.dir(target, shown)
 }
 
-// linkRefused is the refusal of the link a refusal names by shown, which leads to
-// target: one that lies in a place a walled run can write, one whose path goes
-// through such a place, and one that leads to a directory that contains one.
+// linkRefused is the refusal of the link that leads to target, which a refusal shows
+// by the path in `shown`, the path Claude Code reads it by: one that lies in a place a
+// walled run can write, one whose path goes through such a place, and one that leads
+// to a directory that contains one.
 func (s *scan) linkRefused(shown, target string, err error) error {
 	var written *runtimes.WrittenError
 	if !errors.As(err, &written) {
-		return dirRefused(s.v, err)
+		return checkFailed(s.v, err)
 	}
 	value := accesskey.ShownValue(s.v.value, false)
 	link := accesskey.ShownValue(shown, false)
 	switch written.How {
 	case "is reached through":
-		return fmt.Errorf("This launch passes %s %s, and its link %s leads through %s, which a walled run can write, "+
-			"so the run does not start. Replace the link with a copy, or point it at a path that does not go through %s.",
-			s.v.flag, value, link, written.Place, written.Place)
+		return fmt.Errorf("Replace the link %s with a copy, or point it at a path that does not go through %s. "+
+			"This launch passes %s %s, and that link leads through %s, which a walled run can write, "+
+			"so the run does not start.", link, written.Place, s.v.flag, value, written.Place)
 	case "contains":
-		return fmt.Errorf("This launch passes %s %s, and its link %s leads to %s, and %s contains %s, which a walled run "+
-			"can write, so the run does not start. Replace the link with a copy, or link to a directory that contains "+
-			"no place a walled run writes.", s.v.flag, value, link, accesskey.ShownValue(target, false),
-			accesskey.ShownValue(target, false), written.Place)
+		to := accesskey.ShownValue(target, false)
+		return fmt.Errorf("Replace the link %s with a copy, or link to a directory with no place a walled run "+
+			"writes. This launch passes %s %s, and that link leads to %s, and %s contains %s, which a walled run "+
+			"can write, so the run does not start.", link, s.v.flag, value, to, to, written.Place)
 	}
 	return linkInto(s.v, shown, written.Place)
 }
@@ -360,11 +374,11 @@ func links(info fs.FileInfo) uint64 {
 // dirFix is what a refusal of a value of [checkDir] for a place a walled run can write
 // asks for.
 func dirFix(v flagValue) string {
+	shown := accesskey.ShownValue(v.value, false)
 	if v.flag == addDirFlag {
-		shown := accesskey.ShownValue(v.value, false)
 		return "Remove " + v.flag + " " + shown + ", or add a directory no walled run writes."
 	}
-	return "Move the plugin to a directory no walled run writes."
+	return "Move the plugin " + shown + " to a directory no walled run writes."
 }
 
 // writtenValue is the refusal of a value of [checkDir], a directory or a file, for a
@@ -374,27 +388,34 @@ func writtenValue(v flagValue, file bool, written *runtimes.WrittenError) error 
 	if file {
 		what = "file"
 	}
-	return fmt.Errorf("This launch passes %s %s, and that %s %s %s, which a walled run can write, "+
-		"so the run does not start. %s", v.flag, accesskey.ShownValue(v.value, false), what, written.How, written.Place, dirFix(v))
+	return fmt.Errorf("%s This launch passes %s %s, and that %s %s %s, which a walled run can write, "+
+		"so the run does not start.", dirFix(v), v.flag, accesskey.ShownValue(v.value, false), what, written.How, written.Place)
 }
 
 // linkInto is the refusal of a link under a directory that leads into a place a walled
 // run can write.
 func linkInto(v flagValue, link, place string) error {
-	return fmt.Errorf("This launch passes %s %s, and its link %s leads into %s, which a walled run can write, "+
-		"so the run does not start. Replace the link with a copy, or move what it leads to out of %s.",
-		v.flag, accesskey.ShownValue(v.value, false), accesskey.ShownValue(link, false), place, place)
+	return fmt.Errorf("Replace the link %s with a copy, or move what it leads to out of %s. This launch passes %s %s, "+
+		"and that link leads into %s, which a walled run can write, so the run does not start.",
+		accesskey.ShownValue(link, false), place, v.flag, accesskey.ShownValue(v.value, false), place)
+}
+
+// tooManyLinks is the refusal of a value of [checkDir], or of the link link under it,
+// whose path [throughWorkspace] follows through more than maxLinks links. The refusal
+// shows link as Claude Code reads it; an empty link is the value itself.
+func tooManyLinks(v flagValue, link string) error {
+	if link == "" {
+		return fmt.Errorf("Pass a %s path with fewer links. The check of %s %s failed: %w",
+			v.flag, v.flag, accesskey.ShownValue(v.value, false), errTooManyLinks)
+	}
+	shown := accesskey.ShownValue(link, false)
+	return fmt.Errorf("Replace the link %s with a copy, or point it at a path with fewer links. "+
+		"The check of %s %s failed: %s: %w", shown, v.flag, accesskey.ShownValue(v.value, false), shown, errTooManyLinks)
 }
 
 // hardLinked is the refusal of a file with more than one name.
 func hardLinked(v flagValue, file string) error {
-	return fmt.Errorf("This launch passes %s %s, and %s has more than one hard link, so a walled run could change it "+
-		"under another name, and the run does not start. Replace the file with a copy that has one name.",
-		v.flag, accesskey.ShownValue(v.value, false), accesskey.ShownValue(file, false))
-}
-
-// dirRefused is the refusal of a value of [checkDir] for any other reason: the reason
-// after the flag and the value, as the settings' refusals are.
-func dirRefused(v flagValue, err error) error {
-	return fmt.Errorf("%s %s: %w", v.flag, accesskey.ShownValue(v.value, false), accesskey.ShownError(err))
+	return fmt.Errorf("Replace %s with a copy that has one name. This launch passes %s %s, and that file has more "+
+		"than one hard link, so a walled run could change it under another name, and the run does not start.",
+		accesskey.ShownValue(file, false), v.flag, accesskey.ShownValue(v.value, false))
 }
