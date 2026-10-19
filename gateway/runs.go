@@ -663,19 +663,20 @@ func (lr *linkRun) end(e ending) {
 // contracts/forager/v1/link-run-answer.schema.json: on the one address without the
 // labels and the proxy secret.
 type runAnswerDoc struct {
-	Version              int                        `json:"version"`
-	RunID                string                     `json:"run_id"`
-	Labels               map[string]string          `json:"labels,omitzero"`
-	Policy               json.RawMessage            `json:"policy,omitempty"`
-	Digest               string                     `json:"digest,omitempty"`
-	Variables            map[string]server.Variable `json:"variables,omitempty"`
-	ProxySecret          string                     `json:"proxy_secret,omitempty"`
-	CertificateAuthority string                     `json:"certificate_authority,omitempty"`
-	Placeholders         []string                   `json:"placeholders,omitempty"`
-	Reserved             []string                   `json:"reserved,omitempty"`
-	Image                *server.LinkImage          `json:"image,omitempty"`
-	RelayImage           string                     `json:"relay_image,omitempty"`
-	Applied              map[string]any             `json:"applied"`
+	Version              int                          `json:"version"`
+	RunID                string                       `json:"run_id"`
+	Labels               map[string]string            `json:"labels,omitzero"`
+	Policy               json.RawMessage              `json:"policy,omitempty"`
+	Digest               string                       `json:"digest,omitempty"`
+	Variables            map[string]server.Variable   `json:"variables,omitempty"`
+	ProxySecret          string                       `json:"proxy_secret,omitempty"`
+	CertificateAuthority string                       `json:"certificate_authority,omitempty"`
+	Placeholders         []string                     `json:"placeholders,omitempty"`
+	Reserved             []string                     `json:"reserved,omitempty"`
+	CredentialHosts      []server.LinkCredentialHosts `json:"credential_hosts,omitempty"`
+	Image                *server.LinkImage            `json:"image,omitempty"`
+	RelayImage           string                       `json:"relay_image,omitempty"`
+	Applied              map[string]any               `json:"applied"`
 }
 
 // reloadAnswerDoc is the reload answer as the gateway writes it,
@@ -715,7 +716,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	a := runAnswerDoc{
 		Version: 1, RunID: lr.id, Labels: lr.labels, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
 		ProxySecret: lr.secret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
-		Image: lr.image(), Applied: lr.given[len(lr.given)-1],
+		CredentialHosts: credentialHosts(lr.r.Held()), Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	}
 	if lr.wall {
 		a.RelayImage = lr.r.RelayImage()
@@ -727,6 +728,19 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	}
 	b, _ := json.Marshal(a)
 	return b
+}
+
+// credentialHosts are the run answer's credential_hosts: one entry per credential held,
+// from the same uses as appliedOf's credentials; nil when the run holds none.
+func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
+	if held == nil {
+		return nil
+	}
+	var out []server.LinkCredentialHosts
+	for _, c := range held.Credentials() {
+		out = append(out, server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders})
+	}
+	return out
 }
 
 // image is the image the run gets, behind a wall, when it has a reference.

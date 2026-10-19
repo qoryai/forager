@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -675,6 +676,53 @@ func TestAWalledRunWithACredential(t *testing.T) {
 	want = "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"
 	if _, got := h.refusalOf("/v1/run-configuration", openBody(event.NewRunID())); got["message"] != want {
 		t.Errorf("wall_required's message %q", got["message"])
+	}
+	h.post(exited(a.RunID))
+	h.close()
+}
+
+// TestTheRunAnswerHasTheHostsOfEachCredential pins credential_hosts in the run answer,
+// read through the session's link client, which holds it to the schema: one entry per
+// credential the gateway holds, with exactly its hosts and placeholders, the hosts the
+// same as applied.credentials lists for it, and an empty list for a credential that sets
+// no placeholder.
+func TestTheRunAnswerHasTheHostsOfEachCredential(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_SECRET", "s3cret-value-of-the-test")
+	ref := "registry.example/agents/base@sha256:" + strings.Repeat("0", 64)
+	h := start(t, gateway.Config{
+		Credentials: []gateway.Credential{
+			{Name: "model", Env: "GATEWAY_TEST_SECRET", Hosts: []string{"api.model.example"}, Scheme: "bearer", Placeholders: []string{"MODEL_KEY", "MODEL_OTHER_KEY"}},
+			{Name: "git", Env: "GATEWAY_TEST_SECRET", Hosts: []string{"git.example", "api.git.example"}, Scheme: "basic", Username: "x-access-token"},
+		},
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.model.example", "git.example", "api.git.example"}},
+			Credentials: []gateway.PolicyCredential{{Name: "model"}, {Name: "git"}}},
+	})
+	h.secrets = append(h.secrets, "s3cret-value-of-the-test", ref)
+	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: ref, Runtime: "sysbox-runc"}}}
+	a := h.open(server.LinkRunRequest{Wall: true, Images: images})
+	want := []server.LinkCredentialHosts{
+		{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_KEY", "MODEL_OTHER_KEY"}},
+		{Name: "git", Hosts: []string{"git.example", "api.git.example"}, Placeholders: []string{}},
+	}
+	if !reflect.DeepEqual(a.CredentialHosts, want) {
+		t.Errorf("credential hosts %+v, want %+v", a.CredentialHosts, want)
+	}
+	var members struct {
+		Credentials []struct {
+			Name  string   `json:"name"`
+			Hosts []string `json:"hosts"`
+		} `json:"credentials"`
+	}
+	if err := json.Unmarshal(a.Applied, &members); err != nil {
+		t.Fatal(err)
+	}
+	if len(members.Credentials) != len(want) {
+		t.Fatalf("applied %s", a.Applied)
+	}
+	for i, c := range members.Credentials {
+		if c.Name != want[i].Name || !slices.Equal(c.Hosts, want[i].Hosts) {
+			t.Errorf("applied.credentials[%d] %+v, and credential_hosts has %+v", i, c, want[i])
+		}
 	}
 	h.post(exited(a.RunID))
 	h.close()

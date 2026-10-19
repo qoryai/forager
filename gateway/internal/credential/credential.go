@@ -99,6 +99,33 @@ type Held struct {
 	all          []*held
 }
 
+// Credential is one credential a run holds: its name, the hosts of its uses in their
+// order, as the proxy matches them, and the variables the enclosure gets a placeholder in
+// for it, each once.
+type Credential struct {
+	Name         string
+	Hosts        []string
+	Placeholders []string
+}
+
+// Credentials are the run's credentials, one each, in the order the policy selects
+// them. Hosts are taken from [Held.Uses], so they are the hosts the record's
+// applied.credentials lists for the credential. Placeholders is empty, never nil, for a
+// credential that sets none.
+func (h *Held) Credentials() []Credential {
+	out := make([]Credential, 0, len(h.all))
+	for _, c := range h.all {
+		cred := Credential{Name: c.def.Name, Placeholders: append([]string{}, c.placeholders...)}
+		for _, u := range h.Uses {
+			if u.held == c {
+				cred.Hosts = append(cred.Hosts, u.Hosts...)
+			}
+		}
+		out = append(out, cred)
+	}
+	return out
+}
+
 // Close stops the renewals.
 func (h *Held) Close() {
 	for _, c := range h.all {
@@ -136,7 +163,10 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 		for i, a := range answer.Apply {
 			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, held: h, index: i})
 		}
-		for _, p := range append(append([]string{}, def.Placeholders...), answer.Placeholders...) {
+		for _, p := range slices.Concat(def.Placeholders, answer.Placeholders) {
+			if !slices.Contains(h.placeholders, p) {
+				h.placeholders = append(h.placeholders, p)
+			}
 			if !slices.Contains(out.Placeholders, p) {
 				out.Placeholders = append(out.Placeholders, p)
 			}
@@ -304,6 +334,8 @@ type held struct {
 	argument string
 	report   func(string)
 	shape    string
+	// placeholders are the definition's placeholders and then the adapter's, each once.
+	placeholders []string
 
 	mu      sync.Mutex
 	tokens  []string

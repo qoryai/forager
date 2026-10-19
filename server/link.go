@@ -161,6 +161,16 @@ type LinkImage struct {
 	Reference bool   `json:"reference,omitempty"`
 }
 
+// LinkCredentialHosts is one credential the gateway holds for a run, as the run answer's
+// credential_hosts has it: its name, its hosts as the proxy matches them, which are the
+// hosts applied.credentials lists for it, and the variables the session sets to a
+// placeholder for it. Names and hosts alone, never a secret.
+type LinkCredentialHosts struct {
+	Name         string   `json:"name"`
+	Hosts        []string `json:"hosts"`
+	Placeholders []string `json:"placeholders"`
+}
+
 // LinkRunAnswer is what the gateway answers a run request it accepts,
 // contracts/forager/v1/link-run-answer.schema.json. A member Forager does not know is
 // ignored. Its ProxySecret is never printed: fmt, log/slog and encoding/json show it as
@@ -189,6 +199,10 @@ type LinkRunAnswer struct {
 	// a walled run that passes one is refused with variable_reserved, and an unwalled
 	// run has its value left out.
 	Reserved []string `json:"reserved,omitempty"`
+	// CredentialHosts are the hosts and placeholders of each credential the gateway
+	// holds for the run, so the session can tell which hosts the run's credentials
+	// cover. Empty when the gateway holds none, or sends no credential_hosts.
+	CredentialHosts []LinkCredentialHosts `json:"credential_hosts,omitempty"`
 	// Image is the image the run gets, when it has a wall.
 	Image *LinkImage `json:"image,omitempty"`
 	// RelayImage is the reference of the machine's default image, which the wall starts

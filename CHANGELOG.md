@@ -10,6 +10,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The link's run answer has `credential_hosts`: the hosts and placeholders of each
+  credential the gateway holds for the run, so the session can tell which hosts the run's
+  credentials cover. `server.LinkRunAnswer.CredentialHosts` contains it, and is empty for
+  a gateway that sends none.
 - `dev.qory.run.started` has `preparation`, the run's preparation as the caller gave it,
   when the run has one.
 - The server's variables may set `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, the

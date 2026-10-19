@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -50,6 +51,33 @@ func TestAnAdapterSaysHowItsTokenIsUsed(t *testing.T) {
 		if u.Argument != "acme/shop" {
 			t.Errorf("a use of %s has the argument %q, want the policy's", u.Name, u.Argument)
 		}
+	}
+}
+
+// TestEachCredentialHasItsHostsAndPlaceholders pins Credentials: one entry per
+// credential, in the policy's order, with the hosts of every use of it in their order
+// and the placeholders it sets alone, the definition's and then the adapter's, each once;
+// a credential that sets none has an empty list.
+func TestEachCredentialHasItsHostsAndPlaceholders(t *testing.T) {
+	t.Setenv("MODEL_TOKEN", "a-token")
+	defs := []Definition{
+		{Name: "model", Env: "MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer", Placeholders: []string{"MODEL_KEY"}},
+		{Name: "product", Adapter: []string{adapter(t, answerFor), "${argument}"}, Argument: `[a-z0-9-]+/[a-z0-9-]+`, Placeholders: []string{"GIT_HOST_TOKEN", "PRODUCT_KEY"}},
+		{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"},
+	}
+	sel := []policy.Selected{{Name: "product", Argument: "acme/shop"}, {Name: "model"}, {Name: "plain"}}
+	held, err := Resolve(context.Background(), defs, sel, policy.Observe, nil, func(l string) { t.Log(l) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	want := []Credential{
+		{Name: "product", Hosts: []string{"git.example.com", "api.git.example.com"}, Placeholders: []string{"GIT_HOST_TOKEN", "PRODUCT_KEY"}},
+		{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_KEY"}},
+		{Name: "plain", Hosts: []string{"plain.example"}, Placeholders: []string{}},
+	}
+	if got := held.Credentials(); !reflect.DeepEqual(got, want) {
+		t.Errorf("credentials %+v, want %+v", got, want)
 	}
 }
 
