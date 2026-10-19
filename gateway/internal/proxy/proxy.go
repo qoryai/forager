@@ -713,17 +713,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	d := p.decide("HTTP", host, port)
 	d.RequestID = newRequestID()
 	term := p.term.Load()
-	if d.Allowed && term.credentialName(d.Host) != "" {
-		clean, ok := policy.CleanPath(r.URL.EscapedPath())
-		if !ok {
-			clean = r.URL.EscapedPath()
-		}
-		d.Allowed, d.Rule, d.Outcome = false, PlainRequest, Refused
-		d.RequestMethod, d.Path = r.Method, clean
-		p.observe(d)
-		deny(w, d)
-		return
-	}
 	if d.Allowed {
 		if clean, rule, ok := term.plainPath(d.Host, r.URL.EscapedPath()); clean != "" {
 			d.RequestMethod, d.Path, d.PathRule, d.Allowed = r.Method, clean, rule, ok
@@ -742,6 +731,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if rated != nil {
 		p.limited(w, d, RateLimit, rated)
+		return
+	}
+	if d.Allowed && term.credentialName(d.Host) != "" {
+		clean, ok := policy.CleanPath(r.URL.EscapedPath())
+		if !ok {
+			clean = r.URL.EscapedPath()
+		}
+		d.Allowed, d.Rule, d.Outcome = false, PlainRequest, Refused
+		d.RequestMethod, d.Path = r.Method, clean
+		p.observe(d)
+		deny(w, d)
 		return
 	}
 	// Only a request the policy allows is a connection in flight.

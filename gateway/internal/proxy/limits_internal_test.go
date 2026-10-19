@@ -674,3 +674,80 @@ func TestWaitingRequestsAreBounded(t *testing.T) {
 		})
 	}
 }
+
+// TestThePlainRefusalOfAKeyedHostWaitsForItsToken pins the order of the rate limit and
+// the refusal of a plain request to a host that gets a credential: under the limit the
+// request gets the 403 with the fix first and a wall:plain-request record; in a flood
+// past the limit every other request gets a 429 with Retry-After: 1, one wall:rate-limit
+// record stands for all of them at one moment, and no 429 has a wall:plain-request
+// record. Nothing is dialled.
+func TestThePlainRefusalOfAKeyedHostWaitsForItsToken(t *testing.T) {
+	seen := &decisions{}
+	p, err := Listen("", policy.Observe, nil, nil, seen.observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.dial = func(context.Context, string, string) (net.Conn, error) {
+		t.Error("the proxy dialled a host")
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: io.EOF}
+	}
+	creds := []Credential{{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Token: func() string { return fakeKey }}}
+	ca, err := NewCA("test", p.Terminating(creds, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Terminate(ca, creds, nil, nil)
+	ft := newFakeTime()
+	limit(p, Limits{Connections: 1, RequestsPerSecond: 1, Burst: 1}, ft)
+	const target = "http://bearer.example/x"
+	const fix = "qory: send requests to this host as https:// through CONNECT.\n"
+	underTheLimit := func(when string) {
+		t.Helper()
+		before := len(seen.refusals(PlainRequest))
+		if a := get(t, p.Addr(), target); a.status != http.StatusForbidden || !strings.HasPrefix(a.body, fix) {
+			t.Errorf("%s: %+v, want a 403 with the fix first", when, a)
+		}
+		if n := len(seen.refusals(PlainRequest)) - before; n != 1 {
+			t.Errorf("%s: %d %s records, want 1", when, n, PlainRequest)
+		}
+	}
+	underTheLimit("the first request")
+
+	var mu sync.Mutex
+	statuses := map[int]int{}
+	var wg sync.WaitGroup
+	for range 100 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a, err := tryGet(p.Addr(), target)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if a.status == http.StatusTooManyRequests && a.retryAfter != "1" {
+				t.Errorf("a 429 with Retry-After %q, want 1", a.retryAfter)
+			}
+			mu.Lock()
+			statuses[a.status]++
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	// Of the burst of 1 and a wait of up to 5 seconds at 1 a second, at most 5 requests
+	// of the flood get a token.
+	if statuses[http.StatusForbidden]+statuses[http.StatusTooManyRequests] != 100 || statuses[http.StatusForbidden] > 5 {
+		t.Errorf("the flood got %v, want 429s and at most 5 403s", statuses)
+	}
+	if n := len(seen.refusals(PlainRequest)); n != 1+statuses[http.StatusForbidden] {
+		t.Errorf("%d %s records for %d 403s", n, PlainRequest, 1+statuses[http.StatusForbidden])
+	}
+	if n := len(seen.refusals(RateLimit)); n != 1 {
+		t.Errorf("%d %s records at one moment, want 1", n, RateLimit)
+	}
+
+	// The reservations ahead are paid back by 6 seconds.
+	ft.advance(7 * time.Second)
+	underTheLimit("a request once a token is there")
+}
