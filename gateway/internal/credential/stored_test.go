@@ -140,7 +140,7 @@ func TestACredentialFromTheServerIsCheckedAsTheMachines(t *testing.T) {
 	}{
 		"a name the machine's has": {[]Definition{{Name: "server-model", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"}}, []policy.Selected{{Name: "server-model"}},
 			[]Stored{storedModel("server-value")}, []string{"plain.example", "api.model.example"},
-			`rename the run configuration's credential "server-model" or this machine's credential of that name; the machine's is for other hosts, so it stays, and the record names each credential once`},
+			`rename the run configuration's credential "server-model" or this machine's credential of that name; the machine's is for other hosts, so it stays, and the record lists each credential once`},
 		"two on one host": {nil, nil, []Stored{storedModel("server-value"), other}, []string{"api.model.example"}, "both claim api.model.example"},
 		"a host the run does not reach": {nil, nil, []Stored{storedModel("server-value")}, []string{"plain.example"},
 			"the credential server-model is for api.model.example, which the run's allow list does not cover"},

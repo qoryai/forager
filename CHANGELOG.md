@@ -14,6 +14,11 @@ release may change what an existing document does, and says so under Upgrading.
   refused: `server.Client.Discover` returns a `*server.DocumentError`, and no run
   starts. Before, the document was read and `run.policy_applied` sent `run.url` as it
   was.
+- Set `HOME` in the image, as `ENV HOME`, if a run set it through the server's
+  variables, `--env`, `wall.env` or the harness's defaults: the session now leaves that
+  value out. A run that set `NODE_OPTIONS`, `LD_PRELOAD` or `BASH_ENV` that way gets
+  no value for them from those sources either, and a sealed credential needs another
+  placeholder than one of the four.
 
 #### Added
 
@@ -106,6 +111,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- The built-in deny list, `denied-variables.json`, has `NODE_OPTIONS`, `LD_PRELOAD`,
+  `BASH_ENV` and `HOME`. A value of one of them from the server, the run, the machine,
+  the harness's defaults or the harness's computed values is left out and recorded as
+  `denied`; the value the run inherits applies. A run configuration's credential with
+  one of them as a placeholder is `run_configuration_invalid`.
 - Behind a wall, the session keeps a value of the runtime's model endpoint variable,
   `ANTHROPIC_BASE_URL` for Claude Code, of the server, the run, the machine or the
   harness's defaults, when its host is a host of the run's model credential in the

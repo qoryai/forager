@@ -170,8 +170,9 @@ and for each name the run takes the value of the highest that sets it:
   defaults. The list is the contract's
   [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
   `denies`, and `Spec.Variables.Deny`. It holds the session's names, the proxy's, the
-  trust store's, Docker's and `PATH`. The built-in list leaves out a value the harness
-  computes as well; the runtime's `denies` and `Variables.Deny` leave those in.
+  trust store's, Docker's, `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` and
+  `HOME`. The built-in list leaves out a value the harness computes as well; the
+  runtime's `denies` and `Variables.Deny` leave those in.
 - A value of a fixed name from any other source is left out.
 - The server's value of a variable the runtime declares or reserves, or one a
   credential is read from, is left out. A node's value of a declared one reaches the

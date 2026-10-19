@@ -866,6 +866,7 @@ func TestDeniedVariables(t *testing.T) {
 		"SSL_CERT_DIR", "GIT_SSL_CAPATH",
 		"DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY", "DOCKER_CONFIG",
 		"PATH",
+		"NODE_OPTIONS", "LD_PRELOAD", "BASH_ENV", "HOME",
 	} {
 		for _, n := range []string{name, strings.ToLower(name)} {
 			if !denied(n) {

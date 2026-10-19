@@ -143,6 +143,36 @@ func TestTheDenyListCoversEverySourceBelowTheFixedNames(t *testing.T) {
 	})
 }
 
+// TestTheLoadersAndHomeAreDenied pins the built-in entries NODE_OPTIONS, LD_PRELOAD,
+// BASH_ENV and HOME: a value of each from the server, the run (--env), the machine
+// (wall.env), the harness's defaults or the harness's computed values is left out and
+// recorded as denied, and the inherited environment's value then applies.
+func TestTheLoadersAndHomeAreDenied(t *testing.T) {
+	for _, name := range []string{"NODE_OPTIONS", "LD_PRELOAD", "BASH_ENV", "HOME", "home"} {
+		for _, tc := range []struct {
+			source string
+			set    func(in *variables.Inputs)
+		}{
+			{"apiary", func(in *variables.Inputs) { in.Server = map[string]string{name: "/x"} }},
+			{"run", func(in *variables.Inputs) { in.Run = []string{name + "=/x"} }},
+			{"machine", func(in *variables.Inputs) { in.Machine = []string{name + "=/x"} }},
+			{"harness", func(in *variables.Inputs) { in.Defaults = []string{name + "=/x"} }},
+			{"fixed", func(in *variables.Inputs) { in.Fixed = []string{name + "=/x"} }},
+		} {
+			t.Run(name+" from "+tc.source, func(t *testing.T) {
+				in := claude
+				in.Walled = true
+				tc.set(&in)
+				in.Shell = []string{name + "=/inherited"}
+				got := resolve(t, in)
+				want(t, "env", got.Env, nil)
+				want(t, "fixed", got.Fixed, nil)
+				want(t, "record", record(got.Applied), []string{name + "<-shell " + tc.source + ":denied"})
+			})
+		}
+	}
+}
+
 // TestTheHarnesssComputedValuesTakeTheBuiltinListAlone pins the deny list on the
 // values the harness computes: an entry of denied-variables.json leaves one out, and
 // the record lists it as a fixed value denied; the runtime's denies and the node's own

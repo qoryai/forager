@@ -2,6 +2,7 @@
   "version": 1,
   "names": [
     "AWS_CA_BUNDLE",
+    "BASH_ENV",
     "CURL_CA_BUNDLE",
     "DOCKER_CERT_PATH",
     "DOCKER_CONFIG",
@@ -10,7 +11,10 @@
     "DOCKER_TLS_VERIFY",
     "GIT_SSL_CAINFO",
     "GIT_SSL_CAPATH",
+    "HOME",
+    "LD_PRELOAD",
     "NODE_EXTRA_CA_CERTS",
+    "NODE_OPTIONS",
     "PATH",
     "REQUESTS_CA_BUNDLE",
     "SSL_CERT_DIR",
