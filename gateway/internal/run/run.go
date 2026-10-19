@@ -87,7 +87,7 @@ type Config struct {
 type Fetched struct {
 	// URL is where it was fetched from, the configuration document's run section.
 	URL string
-	// Digest is the server's digest of it, opaque, from the answer's header.
+	// Digest is the server's digest of it, from the answer's header.
 	Digest string
 	// Document is the document; nil is one with no member.
 	Document *server.RunConfiguration

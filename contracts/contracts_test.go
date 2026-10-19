@@ -320,7 +320,8 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
 		"run-key.schema.json", "run-registration-answer.schema.json",
 		"run-attach.schema.json", "run-attach-answer.schema.json", "run-outcome.schema.json",
-		"run-outcome-answer.schema.json", "batch-answer.schema.json")
+		"run-outcome-answer.schema.json", "batch-answer.schema.json",
+		"secrets-request.schema.json", "secrets-answer.schema.json", "sealed-plaintext.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
 		kind := namedSchema(s, f)
 		schema, ok := s[kind+".schema.json"]

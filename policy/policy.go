@@ -86,7 +86,8 @@ type Loaded struct {
 	// the run's policy, the same for the same policy however it was written.
 	Digest string
 	// URL is where the run configuration was fetched from, and RunConfiguration the
-	// server's digest of it, opaque, when Source is "fetched".
+	// server's digest of it, as the answer's header contained it, when Source is
+	// "fetched".
 	URL              string
 	RunConfiguration string
 	// Canonical is "sha256=" and the hex sha256 of the document's RFC 8785
