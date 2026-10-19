@@ -553,7 +553,7 @@ trusted bundle (§The wall). Without a wall the session writes `ca-bundle.pem` i
 run directory: the first of `/etc/ssl/certs/ca-certificates.crt`,
 `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/ca-bundle.pem` and `/etc/ssl/cert.pem`
 that is a regular file with a certificate in it, then the run's certificate. It points
-the variables of `wall.ca_env`, `Spec.CAEnv` in Go, or the wall's default list
+the variables the caller gives, `Spec.CAEnv` in Go, or the wall's default list
 (§The wall), at that file. For programs that read those variables the bundle replaces
 the machine's trust, so a root that exists only in another store, such as the macOS
 Keychain, is not trusted. A machine with none of the four files does not start the run:

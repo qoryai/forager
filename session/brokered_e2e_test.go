@@ -21,7 +21,9 @@ import (
 // real gateway that has a credential of the machine's for the run, on the local link
 // and behind a separate gateway. That the origin then gets the value through the proxy,
 // and the placeholder around it, is gateway's
-// TestASealedCredentialFromTheReferenceReceiverReachesTheOrigin.
+// TestASealedCredentialFromTheReferenceReceiverReachesTheOrigin; that an unwalled
+// session.Run's agent sends the placeholder and the origin gets the value is e2e's
+// TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy, on Linux.
 
 // brokeredValue is the fake value of the machine's credential of these runs, which the
 // gateway reads from brokeredSource.

@@ -15,7 +15,8 @@ Without a wall, Forager gives the run only placeholders, but the agent can read 
 - The run trusts the gateway through `ca-bundle.pem` in the run directory: the
   machine's authorities, then the run's certificate. `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
   `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `AWS_CA_BUNDLE`
-  point at it, or the names in `wall.ca_env`.
+  point at it, or the names the caller gives in `Spec.CAEnv`. `qory` is to give them
+  from `wall.ca_env`.
 - Forager reads the machine's authorities from the first of
   `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`,
   `/etc/ssl/ca-bundle.pem` and `/etc/ssl/cert.pem` that contains a certificate. On a
