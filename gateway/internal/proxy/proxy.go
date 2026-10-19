@@ -512,6 +512,10 @@ func linkLocal(ip net.IP) bool {
 //   - 192.0.0.192, Oracle Cloud Compute Classic: docs.oracle.com/en/cloud/cloud-at-customer/occ-get-started/retrieve-predefined-instance-metadata.html
 //   - fd00:ec2::254, AWS EC2 over IPv6: docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html
 //   - fd20:ce::254, Google Compute Engine over IPv6: docs.cloud.google.com/compute/docs/metadata/querying-metadata
+//   - 168.63.129.16, Azure WireServer: learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16
+//   - fd00:ec2::23, AWS EKS Pod Identity Agent over IPv6: docs.aws.amazon.com/eks/latest/userguide/pod-identities.html
+//   - fd00:a9fe:a9fe::1, Akamai (Linode) Metadata service over IPv6: techdocs.akamai.com/cloud-computing/docs/access-the-metadata-service-api
+//   - fd00:42::42, Scaleway Instance metadata API over IPv6: scaleway.com/en/developers/api/instance/
 //
 // The private ranges around them, 10/8, 172.16/12, 192.168/16 and 100.64/10, stay open.
 var metadataAddrs = []netip.Addr{
@@ -519,6 +523,10 @@ var metadataAddrs = []netip.Addr{
 	netip.MustParseAddr("192.0.0.192"),
 	netip.MustParseAddr("fd00:ec2::254"),
 	netip.MustParseAddr("fd20:ce::254"),
+	netip.MustParseAddr("168.63.129.16"),
+	netip.MustParseAddr("fd00:ec2::23"),
+	netip.MustParseAddr("fd00:a9fe:a9fe::1"),
+	netip.MustParseAddr("fd00:42::42"),
 }
 
 // metadata reports whether ip is one of [metadataAddrs], which a guarded proxy never

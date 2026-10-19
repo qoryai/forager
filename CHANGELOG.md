@@ -159,13 +159,18 @@ release may change what an existing document does, and says so under Upgrading.
 - Behind a wall or behind a separate gateway, the gateway's proxy refuses the cloud
   metadata addresses outside `169.254.0.0/16` and `fe80::/10`, as it refuses
   `169.254.169.254`: `100.100.100.200` (Alibaba Cloud), `192.0.0.192` (Oracle Cloud
-  Compute Classic), `fd00:ec2::254` (AWS over IPv6) and `fd20:ce::254` (Google Cloud
-  over IPv6), and an IPv6 address that contains one of these IPv4 addresses in its last
-  32 bits (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`). An exact `egress.allow` entry
-  of the node's policy does not open them. The guard's error for one reads "Use
-  another host: the gateway refuses the cloud metadata address <address>", and the
-  errors for a link-local address and for the machine's address end "the gateway
-  refuses it", where they ended "the wall refuses it". A `403` page for a refused
+  Compute Classic), `fd00:ec2::254` (AWS over IPv6), `fd20:ce::254` (Google Cloud
+  over IPv6), `168.63.129.16` (Azure WireServer), `fd00:ec2::23` (AWS EKS Pod
+  Identity Agent over IPv6), `fd00:a9fe:a9fe::1` (Akamai over IPv6) and `fd00:42::42`
+  (Scaleway over IPv6), and an IPv6 address that contains one of these IPv4 addresses
+  in its last 32 bits (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`). An exact
+  `egress.allow` entry of the node's policy does not open them. The guard's error for
+  one reads "Use another host: the gateway refuses the cloud metadata address
+  <address>". The errors for a host that does not read as an address, for a
+  link-local address and for the machine's address end "the gateway refuses it",
+  where they ended "the wall refuses it", and the error for the machine's address
+  reads "no allow entry lists the host by name", where it read "no allow entry names
+  the host". A `403` page for a refused
   address ends "the gateway reaches its machine only for such a host, and never a
   link-local or cloud metadata address". The private ranges `10/8`, `172.16/12`,
   `192.168/16` and `100.64/10` stay open. Before, a request to `100.100.100.200` was

@@ -276,6 +276,10 @@ func TestGuardRefusesThisMachineAndLinkLocal(t *testing.T) {
 		{"http://192.0.0.192/2007-08-29/meta-data", 403, proxy.GuardRule},
 		{"http://[fd00:ec2::254]/latest/meta-data/", 403, proxy.GuardRule},
 		{"http://[fd20:ce::254]/computeMetadata/v1", 403, proxy.GuardRule},
+		{"http://168.63.129.16/?comp=versions", 403, proxy.GuardRule},
+		{"http://[fd00:ec2::23]/v1/credentials", 403, proxy.GuardRule},
+		{"http://[fd00:a9fe:a9fe::1]/v1/instance", 403, proxy.GuardRule},
+		{"http://[fd00:42::42]/conf", 403, proxy.GuardRule},
 		// A name that resolves to loopback passes the decision and is refused when
 		// dialled, recorded then as the wall's denial.
 		{"http://localtest.me" + port, 403, proxy.GuardRule},
@@ -304,13 +308,14 @@ func TestGuardRefusesThisMachineAndLinkLocal(t *testing.T) {
 // allow list contains.
 func TestGuardRefusesAMetadataAddressInAConnect(t *testing.T) {
 	var o observer
-	p, err := proxy.Listen("", policy.Observe, []string{"100.100.100.200", "fd00:ec2::254"}, nil, o.observe)
+	metadata := []string{"100.100.100.200", "fd00:ec2::254", "168.63.129.16", "fd00:ec2::23", "fd00:a9fe:a9fe::1", "fd00:42::42"}
+	p, err := proxy.Listen("", policy.Observe, metadata, nil, o.observe)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	p.Guard([]string{"100.100.100.200", "fd00:ec2::254"})
-	for _, target := range []string{"100.100.100.200:443", "[fd00:ec2::254]:443"} {
+	p.Guard(metadata)
+	for _, target := range []string{"100.100.100.200:443", "[fd00:ec2::254]:443", "168.63.129.16:443", "[fd00:ec2::23]:443", "[fd00:a9fe:a9fe::1]:443", "[fd00:42::42]:443"} {
 		c, err := net.Dial("tcp", p.Addr())
 		if err != nil {
 			t.Fatal(err)
@@ -345,11 +350,11 @@ func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 		var o observer
 		// Only a host the policy names itself opens this machine, not one under a
 		// suffix it lists.
-		p, err := proxy.Listen("", mode, []string{"127.0.0.1", "app.localtest.me", "169.254.169.254", "100.100.100.200", "192.0.0.192", "fd00:ec2::254", "fd20:ce::254"}, nil, o.observe)
+		p, err := proxy.Listen("", mode, []string{"127.0.0.1", "app.localtest.me", "169.254.169.254", "100.100.100.200", "192.0.0.192", "fd00:ec2::254", "fd20:ce::254", "168.63.129.16", "fd00:ec2::23", "fd00:a9fe:a9fe::1", "fd00:42::42"}, nil, o.observe)
 		if err != nil {
 			t.Fatal(err)
 		}
-		p.Guard([]string{"127.0.0.1", "*.localtest.me", "169.254.169.254", "100.100.100.200", "192.0.0.192", "fd00:ec2::254", "fd20:ce::254"})
+		p.Guard([]string{"127.0.0.1", "*.localtest.me", "169.254.169.254", "100.100.100.200", "192.0.0.192", "fd00:ec2::254", "fd20:ce::254", "168.63.129.16", "fd00:ec2::23", "fd00:a9fe:a9fe::1", "fd00:42::42"})
 		resp, err := through(t, p, nil).Get(origin.URL)
 		if err != nil {
 			t.Fatal(err)
@@ -359,7 +364,7 @@ func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 		if d := o.last(t); string(body) != "the local server" || !d.Allowed || d.Rule != "127.0.0.1" {
 			t.Errorf("%s: a named host: %q, decision %+v", mode, body, d)
 		}
-		for _, u := range []string{"http://app.localtest.me" + port, "http://169.254.169.254/", "http://100.100.100.200/", "http://192.0.0.192/", "http://[fd00:ec2::254]/", "http://[fd20:ce::254]/"} {
+		for _, u := range []string{"http://app.localtest.me" + port, "http://169.254.169.254/", "http://100.100.100.200/", "http://192.0.0.192/", "http://[fd00:ec2::254]/", "http://[fd20:ce::254]/", "http://168.63.129.16/", "http://[fd00:ec2::23]/", "http://[fd00:a9fe:a9fe::1]/", "http://[fd00:42::42]/"} {
 			resp, err := through(t, p, nil).Get(u)
 			if err != nil {
 				t.Fatal(err)
