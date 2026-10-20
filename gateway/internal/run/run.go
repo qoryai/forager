@@ -237,7 +237,7 @@ func Decide(cfg Config) (*Run, error) {
 	}
 	if len(r.stored) > 0 && cfg.Secrets == nil {
 		return nil, refusal.New(refusal.RunConfigurationInvalid, nil,
-			"run configuration %s: enrol an access key allowed stored secrets: the document has credentials, and Qory Apiary's configuration document lists no secrets endpoint for this access key", accesskey.ShownValue(cfg.Fetched.URL, false))
+			"run configuration %s: enrol an access key allowed stored secrets: the document has credentials, and the control plane's configuration document lists no secrets endpoint for this access key", accesskey.ShownValue(cfg.Fetched.URL, false))
 	}
 	if cfg.Wall {
 		img, err := cfg.Images.resolve(pol.Policy.Image)
@@ -351,7 +351,7 @@ func (r *Run) open(ctx context.Context) error {
 		if !HeaderValue(v) {
 			values.Clear()
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
-				"run configuration %s: store another value of the credential %s in Qory Apiary: its value has a control character, or a space or tab at its start or end, which a header value cannot have", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true))
+				"run configuration %s: store another value of the credential %s in the control plane: its value has a control character, or a space or tab at its start or end, which a header value cannot have", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true))
 		}
 		if prefixes := r.stored[i].KeyPrefixes; !credential.KeyMatches(prefixes, v) {
 			values.Clear()
@@ -853,7 +853,7 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
 	if !sameCredentials(creds.creds, r.stored) {
-		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from Qory Apiary are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false))
+		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false))
 	}
 	if creds.model != r.storedModel {
 		return nil, fmt.Errorf("run configuration %s: start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays", accesskey.ShownValue(next.URL, false))
