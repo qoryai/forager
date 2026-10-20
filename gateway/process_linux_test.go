@@ -24,8 +24,8 @@ const (
 )
 
 const (
-	prctlFix   = "allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: "
-	prlimitFix = "allow prlimit64 in the gateway's seccomp profile: RLIMIT_CORE 0 failed: "
+	prctlFix   = "allow prctl in this process's seccomp profile: PR_SET_DUMPABLE 0 failed: "
+	prlimitFix = "allow prlimit64 in this process's seccomp profile: RLIMIT_CORE 0 failed: "
 )
 
 // wantDumpsError is denyDumps' failure in the child r reports, from its errnos in

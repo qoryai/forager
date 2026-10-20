@@ -26,10 +26,10 @@ var (
 func denyDumps() error {
 	var errs []error
 	if err := prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
-		errs = append(errs, fmt.Errorf("allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: %w", err))
+		errs = append(errs, fmt.Errorf("allow prctl in this process's seccomp profile: PR_SET_DUMPABLE 0 failed: %w", err))
 	}
 	if err := setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{}); err != nil {
-		errs = append(errs, fmt.Errorf("allow prlimit64 in the gateway's seccomp profile: RLIMIT_CORE 0 failed: %w", err))
+		errs = append(errs, fmt.Errorf("allow prlimit64 in this process's seccomp profile: RLIMIT_CORE 0 failed: %w", err))
 	}
 	return errors.Join(errs...)
 }

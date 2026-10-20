@@ -40,8 +40,8 @@ func fakeDenyDumps(t *testing.T, calls *[]string, fail map[string]error) {
 }
 
 const (
-	ptraceFix = "allow ptrace in the gateway's sandbox: PT_DENY_ATTACH failed: "
-	rlimitFix = "allow setrlimit in the gateway's sandbox: RLIMIT_CORE 0 failed: "
+	ptraceFix = "allow ptrace in this process's sandbox: PT_DENY_ATTACH failed: "
+	rlimitFix = "allow setrlimit in this process's sandbox: RLIMIT_CORE 0 failed: "
 )
 
 // TestDenyDumpsMakesEveryCall pins that denyDumps makes both calls, PT_DENY_ATTACH

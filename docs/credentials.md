@@ -293,10 +293,10 @@ again, and the second call succeeds. `HardenProcess` locks no memory.
 - If a call fails, `Start` still makes the other calls, and the gateway does not
   start. The error has one line for each call that failed, in the order of the calls,
   and each line starts with its fix:
-  - Linux: `allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: <reason>`
-  - Linux: `allow prlimit64 in the gateway's seccomp profile: RLIMIT_CORE 0 failed: <reason>`
-  - macOS: `allow ptrace in the gateway's sandbox: PT_DENY_ATTACH failed: <reason>`
-  - macOS: `allow setrlimit in the gateway's sandbox: RLIMIT_CORE 0 failed: <reason>`
+  - Linux: `allow prctl in this process's seccomp profile: PR_SET_DUMPABLE 0 failed: <reason>`
+  - Linux: `allow prlimit64 in this process's seccomp profile: RLIMIT_CORE 0 failed: <reason>`
+  - macOS: `allow ptrace in this process's sandbox: PT_DENY_ATTACH failed: <reason>`
+  - macOS: `allow setrlimit in this process's sandbox: RLIMIT_CORE 0 failed: <reason>`
 
 ### Keep the memory out of swap
 

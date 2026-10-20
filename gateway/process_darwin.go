@@ -27,10 +27,10 @@ var (
 func denyDumps() error {
 	var errs []error
 	if err := ptraceDenyAttach(); err != nil {
-		errs = append(errs, fmt.Errorf("allow ptrace in the gateway's sandbox: PT_DENY_ATTACH failed: %w", err))
+		errs = append(errs, fmt.Errorf("allow ptrace in this process's sandbox: PT_DENY_ATTACH failed: %w", err))
 	}
 	if err := setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{}); err != nil {
-		errs = append(errs, fmt.Errorf("allow setrlimit in the gateway's sandbox: RLIMIT_CORE 0 failed: %w", err))
+		errs = append(errs, fmt.Errorf("allow setrlimit in this process's sandbox: RLIMIT_CORE 0 failed: %w", err))
 	}
 	return errors.Join(errs...)
 }
