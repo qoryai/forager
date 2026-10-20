@@ -555,7 +555,7 @@ func forgedRun(t *testing.T) (dir string, lines [][]byte, cut int) {
 	}
 	r.Accept([]event.Event{
 		sessionEvent(r.ID(), event.RunStarted, map[string]any{}),
-		sessionEvent(r.ID(), "dev.qory.session.tool_started", map[string]any{"tool": "Bash", "input": json.RawMessage(input)}),
+		sessionEvent(r.ID(), "dev.qory.runtime.tool_started", map[string]any{"tool": "Bash", "input": json.RawMessage(input)}),
 		sessionEvent(r.ID(), event.RunLog, map[string]any{"stream": "stdout", "bytes": "aGkK"}),
 		sessionEvent(r.ID(), event.RunLog, map[string]any{"stream": "stdout", "bytes": "aGkK"}),
 	})

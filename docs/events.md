@@ -105,7 +105,7 @@ code of the server's comes with its status, and is recorded as the server sent i
 could not open for a reason without a code, a `5xx` `internal`, is recorded nowhere: the
 run returns the error the gateway's message says. The contract describes each.
 
-## The session's events
+## The runtime's events
 
 The runtime reports what happens in its session, through its hooks and its structured
 output, from inside the enclosure: in an image by reference, which a repository may have
@@ -114,21 +114,21 @@ records come from outside. A **descriptor** maps those reports to events:
 
 | Type                                 | When                                  |
 | ------------------------------------ | ------------------------------------- |
-| `dev.qory.session.started`           | The runtime opened its session        |
-| `dev.qory.session.prompt_submitted`  | A prompt reached the runtime          |
-| `dev.qory.session.tool_started`      | The runtime is about to run a tool    |
-| `dev.qory.session.tool_finished`     | A tool ran and returned               |
-| `dev.qory.session.tool_failed`       | A tool ran and failed                 |
-| `dev.qory.session.turn_finished`     | The runtime finished responding       |
-| `dev.qory.session.turn_failed`       | A turn ended on an API error          |
-| `dev.qory.session.subagent_started`  | A subagent was spawned                |
-| `dev.qory.session.subagent_finished` | A subagent finished                   |
-| `dev.qory.session.notification`      | The runtime notified its user         |
-| `dev.qory.session.ended`             | The runtime closed its session        |
-| `dev.qory.session.result`            | A headless session printed its result |
+| `dev.qory.runtime.started`           | The runtime opened its session        |
+| `dev.qory.runtime.prompt_submitted`  | A prompt reached the runtime          |
+| `dev.qory.runtime.tool_started`      | The runtime is about to run a tool    |
+| `dev.qory.runtime.tool_finished`     | A tool ran and returned               |
+| `dev.qory.runtime.tool_failed`       | A tool ran and failed                 |
+| `dev.qory.runtime.turn_finished`     | The runtime finished responding       |
+| `dev.qory.runtime.turn_failed`       | A turn ended on an API error          |
+| `dev.qory.runtime.subagent_started`  | A subagent was spawned                |
+| `dev.qory.runtime.subagent_finished` | A subagent finished                   |
+| `dev.qory.runtime.notification`      | The runtime notified its user         |
+| `dev.qory.runtime.ended`             | The runtime closed its session        |
+| `dev.qory.runtime.result`            | A headless session printed its result |
 
 Forager ships the descriptor for Claude Code. A runtime that nothing describes still
-runs: its run, its log and its egress are recorded, with no session events. See
+runs: its run, its log and its egress are recorded, with no runtime events. See
 [the runtime](go.md#the-runtime).
 
 ## Following a run

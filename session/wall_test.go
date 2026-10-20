@@ -134,7 +134,7 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 	if d := data(evs[0]); d["wall"] != "open" || d["image"] != "example.com/agent:1" {
 		t.Errorf("run.started %v", d)
 	}
-	if len(ofType(evs, "dev.qory.session.ended")) != 1 {
+	if len(ofType(evs, "dev.qory.runtime.ended")) != 1 {
 		t.Errorf("the hook did not cross: %v", types(evs))
 	}
 

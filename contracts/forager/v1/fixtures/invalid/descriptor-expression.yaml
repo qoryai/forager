@@ -9,7 +9,7 @@ sources:
 rules:
   - source: hooks
     match: {hook_event_name: {regex: "Pre.*"}}
-    type: dev.qory.session.tool_started
+    type: dev.qory.runtime.tool_started
     data:
       session_id: session_id
       tool: "upper(tool_name)"

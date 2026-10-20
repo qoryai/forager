@@ -21,7 +21,7 @@ import (
 
 var (
 	name      = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
-	eventType = regexp.MustCompile(`^dev\.qory\.session\.[a-z_]+$`)
+	eventType = regexp.MustCompile(`^dev\.qory\.runtime\.[a-z_]+$`)
 )
 
 // Conforms checks what holds of every runtime: a name events can carry, a stop the
@@ -82,7 +82,7 @@ func Conforms(t *testing.T, rt runtimes.Runtime) {
 // Replays checks the runtime's Map against recorded cases: in every directory of fsys
 // under dir, the records of records.jsonl, each {"source", "record"}, produce exactly
 // the events of expected/events.jsonl, each {"type", "data"}, in order; every type is a
-// session event's, and its data passes the contract's schema for it.
+// runtime event's, and its data passes the contract's schema for it.
 func Replays(t *testing.T, rt runtimes.Runtime, fsys fs.FS, dir string) {
 	t.Helper()
 	cases, err := fs.ReadDir(fsys, dir)
@@ -118,7 +118,7 @@ func Replays(t *testing.T, rt runtimes.Runtime, fsys fs.FS, dir string) {
 				}
 				typ, _ := got[i]["type"].(string)
 				if !eventType.MatchString(typ) {
-					t.Errorf("event %d: %q is not a session event's type", i, typ)
+					t.Errorf("event %d: %q is not a runtime event's type", i, typ)
 					continue
 				}
 				schema, err := contracts.Compile("events/" + strings.TrimPrefix(typ, "dev.qory.") + ".schema.json")

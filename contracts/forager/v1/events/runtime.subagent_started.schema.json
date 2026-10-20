@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qory.dev/contracts/forager/v1/events/session.subagent_started.schema.json",
-  "title": "dev.qory.session.subagent_started",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.subagent_started.schema.json",
+  "title": "dev.qory.runtime.subagent_started",
   "description": "The runtime spawned a subagent.",
   "type": "object",
   "additionalProperties": false,

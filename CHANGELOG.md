@@ -67,6 +67,12 @@ release may change what an existing document does, and says so under Upgrading.
   `credential_variables` in `dev.qory.run.policy_applied`. A Claude Code run without a
   wall and without a model key starts, and Claude Code can use the machine's Claude
   login.
+- The runtime hook's events are `dev.qory.runtime.*`, such as
+  `dev.qory.runtime.tool_started`, with their schemas at
+  `events/runtime.*.schema.json`; before, they were `dev.qory.session.*`, at
+  `events/session.*.schema.json`. Rename the types a receiver, a configuration's
+  `events.types` or a descriptor of yours lists; an event with an old name fails
+  validation against the schemas. The data of each event is unchanged.
 
 #### Added
 

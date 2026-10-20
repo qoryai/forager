@@ -27,7 +27,7 @@ func TestAnExpressionIsRefused(t *testing.T) {
 // nested paths, and no match on a missing path.
 func TestMatchIsEqualityOrPresenceOnly(t *testing.T) {
 	d := &descriptor.Descriptor{Rules: []descriptor.Rule{
-		{Source: "output", Match: map[string]any{"type": "result", "num_turns": 1, "ok": true, "meta.kind": map[string]any{"present": true}}, Type: "dev.qory.session.result", Data: map[string]string{"n": "num_turns", "k": "meta.kind", "missing": "nope"}},
+		{Source: "output", Match: map[string]any{"type": "result", "num_turns": 1, "ok": true, "meta.kind": map[string]any{"present": true}}, Type: "dev.qory.runtime.result", Data: map[string]string{"n": "num_turns", "k": "meta.kind", "missing": "nope"}},
 	}}
 	rec := func(js string) descriptor.Record {
 		var m map[string]any
@@ -37,7 +37,7 @@ func TestMatchIsEqualityOrPresenceOnly(t *testing.T) {
 		return descriptor.Record{Source: "output", Record: m}
 	}
 	typ, data, ok := d.Map(rec(`{"type":"result","num_turns":1,"ok":true,"meta":{"kind":"x"}}`))
-	if !ok || typ != "dev.qory.session.result" || data["n"] != 1.0 || data["k"] != "x" {
+	if !ok || typ != "dev.qory.runtime.result" || data["n"] != 1.0 || data["k"] != "x" {
 		t.Errorf("Map = %s %v %v", typ, data, ok)
 	}
 	if _, hasMissing := data["missing"]; hasMissing {
@@ -227,7 +227,7 @@ func TestModelDecodesFromYAMLAndJSON(t *testing.T) {
 		t.Errorf("a model section without effort or overrides: %+v %v", d, err)
 	}
 	const none = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
-		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
 	if d, err := descriptor.Parse("amp.yaml", []byte(none)); err != nil || d.Model != nil {
 		t.Errorf("a descriptor without a model section: %+v %v", d, err)
 	}
@@ -268,7 +268,7 @@ func TestModelIsChecked(t *testing.T) {
 // auth.
 func TestModelKeysAreChecked(t *testing.T) {
 	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
-		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
 	const model = "model:\n  formats: [openai-chat]\n  model: {flag: --model}\n  endpoint: {variable: AMP_BASE_URL}\n  overrides: [AMP_MODEL]\n"
 	ok := head + "secrets:\n  denies: [AMP_URL]\n  declares: [{id: key, title: Key, name: AMP_API_KEY, hosts: [api.example.com], auth: {scheme: bearer}}]\n" +
 		model + "  keys: [{format: openai-chat, auth: {scheme: bearer}, variable: AMP_API_KEY}, {format: openai-chat, auth: {scheme: bearer, oauth: true}, variable: AMP_OAUTH}]\n"
@@ -308,7 +308,7 @@ func TestModelKeysAreChecked(t *testing.T) {
 // declaration's username beside its scheme.
 func TestSecretsAreChecked(t *testing.T) {
 	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
-		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
 	const key = "  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: bearer}}\n"
 	if _, err := descriptor.Parse("amp.yaml", []byte(head)); err != nil {
 		t.Errorf("a descriptor without secrets: %v", err)
@@ -365,7 +365,7 @@ func TestSecretsAreChecked(t *testing.T) {
 // descriptor has none.
 func TestRuntimesJSONHasModelOnlyWhenDescribed(t *testing.T) {
 	const head = "version: 1\nruntime: amp\ntitle: Amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
-		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
 	for name, c := range map[string]struct {
 		doc  string
 		want map[string]any

@@ -740,7 +740,7 @@ copies it into the workspace; Forager copies none of it. Hooks reach the session
 Against an image by reference, which a repository may have built, what holds is what
 Forager enforces outside the enclosure: the wall, the egress policy, the credentials the
 proxy sets, the tools the gateway starts and the `dev.qory.run.*` records. The runtime's
-settings, its hooks and its prompts, and the `dev.qory.session.*` records, which the
+settings, its hooks and its prompts, and the `dev.qory.runtime.*` records, which the
 runtime reports from inside, are not that boundary: the image can change or forge them.
 
 ## Nested Docker

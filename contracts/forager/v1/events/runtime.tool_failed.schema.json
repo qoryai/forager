@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qory.dev/contracts/forager/v1/events/session.tool_failed.schema.json",
-  "title": "dev.qory.session.tool_failed",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.tool_failed.schema.json",
+  "title": "dev.qory.runtime.tool_failed",
   "description": "A tool ran and failed.",
   "type": "object",
   "additionalProperties": false,

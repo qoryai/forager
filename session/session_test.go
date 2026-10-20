@@ -282,8 +282,8 @@ func data(e map[string]any) map[string]any { return e["data"].(map[string]any) }
 // TestRunRecordsAndExitsWithTheRuntimesStatus is the run end to end on pipes: the
 // members of policy_applied the gateway decides are recorded as its run answer gives
 // them, beside the harness's hosts, both requests go to the gateway's proxy through the
-// forwarder, the runtime's output is logged per stream and mapped to session.result,
-// the installed hook reaches the socket and becomes session.ended, and the exit status
+// forwarder, the runtime's output is logged per stream and mapped to runtime.result,
+// the installed hook reaches the socket and becomes runtime.ended, and the exit status
 // is the runtime's.
 func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_ALLOWED_URL=http://api.example/allowed", "FAKE_DENIED_URL=http://tracker.example/denied", "FAKE_EXIT=3")
@@ -323,11 +323,11 @@ func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	if !streams["stdout"] || !streams["stderr"] {
 		t.Errorf("log streams %v", streams)
 	}
-	if r := ofType(evs, "dev.qory.session.result"); len(r) != 1 || data(r[0])["outcome"] != "success" || data(r[0])["result"] != "done" {
-		t.Errorf("session.result %v", r)
+	if r := ofType(evs, "dev.qory.runtime.result"); len(r) != 1 || data(r[0])["outcome"] != "success" || data(r[0])["result"] != "done" {
+		t.Errorf("runtime.result %v", r)
 	}
-	if e := ofType(evs, "dev.qory.session.ended"); len(e) != 1 || data(e[0])["reason"] != "other" {
-		t.Errorf("session.ended %v", e)
+	if e := ofType(evs, "dev.qory.runtime.ended"); len(e) != 1 || data(e[0])["reason"] != "other" {
+		t.Errorf("runtime.ended %v", e)
 	}
 	exited := data(evs[len(evs)-1])
 	if exited["state"] != "failed" || exited["exit_code"] != 3.0 || exited["reason"] != nil {
@@ -439,8 +439,8 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 		if l := ofType(evs, "dev.qory.run.log"); len(l) == 0 || data(l[0])["stream"] == "terminal" {
 			t.Errorf("log %v; want the streams of pipes", l)
 		}
-		if r := ofType(evs, "dev.qory.session.result"); len(r) != 1 || data(r[0])["result"] != "done" {
-			t.Errorf("session.result %v; want the output read", r)
+		if r := ofType(evs, "dev.qory.runtime.result"); len(r) != 1 || data(r[0])["result"] != "done" {
+			t.Errorf("runtime.result %v; want the output read", r)
 		}
 	})
 	t.Run("the runtime names none", func(t *testing.T) {

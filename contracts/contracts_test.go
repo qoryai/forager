@@ -810,7 +810,7 @@ func signBatches(t *testing.T) {
 // TestDescriptorsHaveFixturesThatValidate pins the rule that a descriptor without
 // fixtures is not accepted: every runtime under runtimes/ has a descriptor that passes
 // the schema, at least one fixture directory, and in each a records.jsonl of records and
-// an expected/events.jsonl whose every line is a session type of the descriptor with
+// an expected/events.jsonl whose every line is a runtime type of the descriptor with
 // data that passes that type's schema. It also pins that every hook event a rule matches
 // on is one the descriptor installs.
 func TestDescriptorsHaveFixturesThatValidate(t *testing.T) {

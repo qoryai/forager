@@ -29,7 +29,7 @@ func TestLookupIsTheMachinesDescriptorThenTheContractsThenBare(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	doc := "version: 1\nruntime: codex\nruntime_version: \"9\"\nsources:\n  output: {format: jsonl}\nstop: {signal: SIGHUP}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}\n"
+	doc := "version: 1\nruntime: codex\nruntime_version: \"9\"\nsources:\n  output: {format: jsonl}\nstop: {signal: SIGHUP}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}\n"
 	if err := os.WriteFile(filepath.Join(dir, "codex.yaml"), []byte(doc), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestLookupIsTheMachinesDescriptorThenTheContractsThenBare(t *testing.T) {
 // refusal names the descriptor.
 func TestLookupReadsOnlyAPlainDescriptor(t *testing.T) {
 	dir, elsewhere := t.TempDir(), t.TempDir()
-	doc := "version: 1\nruntime: codex\nruntime_version: \"9\"\nsources:\n  output: {format: jsonl}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}\n"
+	doc := "version: 1\nruntime: codex\nruntime_version: \"9\"\nsources:\n  output: {format: jsonl}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}\n"
 	target := filepath.Join(elsewhere, "codex.yaml")
 	if err := os.WriteFile(target, []byte(doc), 0o644); err != nil {
 		t.Fatal(err)

@@ -28,7 +28,7 @@
 //     policy again when an answer's digest says another is in force, and ends the run
 //     when the gateway closes it
 //   - takes the harness's reports over a local socket and maps them, with the
-//     runtime's structured output, to session events through the runtime's descriptor
+//     runtime's structured output, to runtime events through the runtime's descriptor
 //
 // The package knows nothing of stacks, modules, homes or reports. The caller, the qory
 // command, turns those into the spec.

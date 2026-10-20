@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qory.dev/contracts/forager/v1/events/session.tool_started.schema.json",
-  "title": "dev.qory.session.tool_started",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.tool_started.schema.json",
+  "title": "dev.qory.runtime.tool_started",
   "description": "The runtime is about to run a tool.",
   "type": "object",
   "additionalProperties": false,

@@ -14,7 +14,7 @@ import (
 )
 
 // TestEventsValidateAgainstTheContract pins that what the emitter makes is what the
-// envelope schema accepts, for a run type and for a session type.
+// envelope schema accepts, for a run type and for a runtime type.
 func TestEventsValidateAgainstTheContract(t *testing.T) {
 	schema, err := contracts.Compile("event.schema.json")
 	if err != nil {
@@ -23,7 +23,7 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 	e := event.NewEmitter(event.NewRunID(), func() time.Time { return time.Unix(1_800_000_000, 5_000_000) })
 	for _, ev := range []*event.Event{
 		e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}),
-		e.Make("dev.qory.session.ended", map[string]any{"session_id": "s1", "reason": "other"}),
+		e.Make("dev.qory.runtime.ended", map[string]any{"session_id": "s1", "reason": "other"}),
 	} {
 		b, err := ev.JSON()
 		if err != nil {
@@ -168,7 +168,7 @@ func TestNumberSharesTheSequenceWithMake(t *testing.T) {
 	first := e.Make(event.RunStarted, nil)
 	id := held.ID
 	e.Number(held)
-	other := &event.Event{ID: "x", Type: "dev.qory.session.started"}
+	other := &event.Event{ID: "x", Type: "dev.qory.runtime.started"}
 	e.Number(other)
 	if first.Sequence != "0000000001" || held.Sequence != "0000000002" || other.Sequence != "0000000003" || held.ID != id {
 		t.Errorf("sequences %s %s %s", first.Sequence, held.Sequence, other.Sequence)

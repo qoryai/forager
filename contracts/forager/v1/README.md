@@ -68,7 +68,7 @@ Forager's duties, in the order that matters when they conflict:
    requests to the hosts they serve (§Tools).
 4. **Liveness.** A heartbeat while the session runs; the exit as the result.
 5. **Reporting.** The session's terminal bytes as log chunks, Forager's observations
-   as events, the runtime's output mapped to session events by a descriptor. Every event
+   as events, the runtime's output mapped to runtime events by a descriptor. Every event
    goes to files. When a server is configured, every event its configuration lists goes
    there too. When the caller passes a stream, such as standard output, every event goes
    there as well, as the line `events.jsonl` contains; that is how a run with no
@@ -136,13 +136,13 @@ Stated so a receiver reads the record for what it is.
   the first byte of HTTP, and a connection that opens otherwise is closed unanswered
   and reported once. The secret is never inside the enclosure.
 - On an engine inside a virtual machine, such as a Mac's, the hook socket does not cross the
-  file share, so a walled run there has no session events from hooks; the log, the
+  file share, so a walled run there has no runtime events from hooks; the log, the
   egress record and the structured output are unaffected. The forwarder's only
   transport is the local socket (§The local socket).
-- The runtime's session events are what the runtime reports through its hooks and its
-  structured output. A runtime that reports nothing produces no session events; the log
+- The runtime events are what the runtime reports through its hooks and its
+  structured output. A runtime that reports nothing produces no runtime events; the log
   and the egress record come from Forager and are always there. In an image by
-  reference the image can change or forge the session events, and the runtime's
+  reference the image can change or forge the runtime events, and the runtime's
   settings and hooks are no boundary (§Images).
 - A descriptor matches and copies. It never computes, so a mapping that needs a program
   is a Forager change, never a configuration change.
@@ -247,7 +247,7 @@ One run, on a developer machine, with a server configured:
 8. While the program runs: every chunk of output is one `dev.qory.run.log`; on a
    pseudo-terminal every resize is one `dev.qory.run.resized`; every connection through
    the proxy is one `dev.qory.run.egress`; every record the descriptor matches is one
-   session event; every thirty seconds one `dev.qory.run.heartbeat`, from the accepted
+   runtime event; every thirty seconds one `dev.qory.run.heartbeat`, from the accepted
    registration with a server and from step 7 without one, until the final event.
 9. The program exits. The session drains the socket, so a hook on the runtime's last
    event is still read, emits `dev.qory.run.exited`, waits up to fifteen seconds for the
@@ -980,7 +980,7 @@ refuses contains the tool it did not reach, with `decision: denied`; a connectio
 policy refuses by its host, by the deny list, the guard or the allow list, contains
 none. The gateway reads no body, so what an invocation does beyond its method and its
 path is not read by the gateway, and the tool checks it; the runtime's hooks report the
-MCP call an agent makes (`dev.qory.session.tool_started`), as the runtime reports it
+MCP call an agent makes (`dev.qory.runtime.tool_started`), as the runtime reports it
 from inside, which an image by reference can change (§Images).
 
 ## Variables
@@ -1282,27 +1282,27 @@ The types, one namespace. Forager's:
 | `dev.qory.run.exited` | the run ended: the runtime exited, or the run ended without one; the result and the last event, as `dev.qory.run.refused` is the last of a refused run | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
 | `dev.qory.run.refused` | the run was refused before it started; in place of `dev.qory.run.started`, the first event after `dev.qory.run.registered` where there is one, heartbeats aside, and the last. The session writes it: when a gateway refused the run request, with the code in its answer on the link, which opens no run at the gateway, recorded only in the session's record, and nothing reaches the server for it; when a gateway's `410` closed the run before the runtime started, with the `410`'s code, `session_lost`, `batch_refused`, `stopped` or `run_closed`, and `status` `410`, only in the session's record; when the session fails after the gateway's run answer and before its process starts, posted on the link too, and the gateway delivers it | `code`; for a gateway's `410` its code and `status`, `410`; for a gateway's refusal its code and, when it lists any, `names`; for a refusal of the server's its code and `status`. A code without `status` is one of the schema's list; a code of the server's, with its `status`, is kept as the server sent it, one the list does not hold yet included, and a receiver shows a code it does not know as it is |
 
-The session's, produced by a descriptor from what the runtime reports:
+The runtime's, produced by a descriptor from what the runtime reports:
 
 | Type | When | Data |
 |---|---|---|
-| `dev.qory.session.started` | the runtime opened its session | `session_id`, `source`, `model`, `cwd` |
-| `dev.qory.session.prompt_submitted` | a prompt reached the runtime | `session_id`, `prompt` |
-| `dev.qory.session.tool_started` | the runtime is about to run a tool | `session_id`, `tool`, `tool_use_id`, `input` |
-| `dev.qory.session.tool_finished` | a tool ran and returned | the same, `response`, `duration_ms` |
-| `dev.qory.session.tool_failed` | a tool ran and failed | the same, `error`, `interrupted`, `duration_ms` |
-| `dev.qory.session.turn_finished` | the runtime finished responding | `session_id`, `message`, `background_tasks` |
-| `dev.qory.session.turn_failed` | a turn ended on an API error | `session_id`, `error`, `details`, `message` |
-| `dev.qory.session.subagent_started` | a subagent was spawned | `session_id`, `agent_id`, `agent_type` |
-| `dev.qory.session.subagent_finished` | a subagent finished | the same, `message`, `background_tasks` |
-| `dev.qory.session.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
-| `dev.qory.session.ended` | the runtime closed its session | `session_id`, `reason` |
-| `dev.qory.session.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
+| `dev.qory.runtime.started` | the runtime opened its session | `session_id`, `source`, `model`, `cwd` |
+| `dev.qory.runtime.prompt_submitted` | a prompt reached the runtime | `session_id`, `prompt` |
+| `dev.qory.runtime.tool_started` | the runtime is about to run a tool | `session_id`, `tool`, `tool_use_id`, `input` |
+| `dev.qory.runtime.tool_finished` | a tool ran and returned | the same, `response`, `duration_ms` |
+| `dev.qory.runtime.tool_failed` | a tool ran and failed | the same, `error`, `interrupted`, `duration_ms` |
+| `dev.qory.runtime.turn_finished` | the runtime finished responding | `session_id`, `message`, `background_tasks` |
+| `dev.qory.runtime.turn_failed` | a turn ended on an API error | `session_id`, `error`, `details`, `message` |
+| `dev.qory.runtime.subagent_started` | a subagent was spawned | `session_id`, `agent_id`, `agent_type` |
+| `dev.qory.runtime.subagent_finished` | a subagent finished | the same, `message`, `background_tasks` |
+| `dev.qory.runtime.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
+| `dev.qory.runtime.ended` | the runtime closed its session | `session_id`, `reason` |
+| `dev.qory.runtime.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
 
 **Work in the background.** A runtime that starts a command or a subagent in the
 background reports it where it reports everything else: the start is a tool call,
-recorded as `dev.qory.session.tool_started` with the runtime's `input`,
-`run_in_background` in Claude Code's, and as `dev.qory.session.tool_finished` with
+recorded as `dev.qory.runtime.tool_started` with the runtime's `input`,
+`run_in_background` in Claude Code's, and as `dev.qory.runtime.tool_finished` with
 whatever the tool returned; a subagent's start and end are the subagent events, with its
 `agent_id` and `agent_type`. After that the runtime reports a list, not an event: what
 is still running, each entry with the runtime's `id`, `type`, `status` and
@@ -1319,8 +1319,8 @@ Behind a wall only the variables a run lists go in, so such a variable is listed
 any other; and the run's stop signal and grace are what the runtime has to close such
 work when the session stops it.
 
-Every session event that comes from a hook may contain `agent_id` and `agent_type` when
-it happened inside a subagent; `dev.qory.session.result`, read from the runtime's
+Every runtime event that comes from a hook may contain `agent_id` and `agent_type` when
+it happened inside a subagent; `dev.qory.runtime.result`, read from the runtime's
 output, contains neither. The schema of each type, under `events/`, defines which fields
 are required and what each contains. Values are copied from the runtime unchanged:
 `input` and `response` have the tool's shape, `error` is display text, and the
@@ -3507,7 +3507,7 @@ workspace at `/workspace`, not at its path on the machine (below).
 Against an image by reference, which a repository may have built, what holds is what
 Forager enforces outside the enclosure: the wall, the egress policy, the credentials the
 proxy sets, the tools the gateway starts and the `dev.qory.run.*` records. The runtime's
-settings, its hooks and its prompts, and the `dev.qory.session.*` records, which the
+settings, its hooks and its prompts, and the `dev.qory.runtime.*` records, which the
 runtime reports from inside, are not that boundary: the image can change or forge them.
 So Forager checks no program that the runtime's settings start, and no configuration
 file in the checkout.

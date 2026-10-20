@@ -8,7 +8,7 @@ Everywhere. Three kinds are the most useful:
 
 - **A runtime descriptor.** One YAML file under `contracts/forager/v1/runtimes/<name>/`
   that maps what a runtime emits, JSON lines on its standard output and hook calls, to the
-  session events of the contract, with the fixtures that prove the mapping. A descriptor
+  runtime events of the contract, with the fixtures that prove the mapping. A descriptor
   matches and copies; it never computes. A descriptor without fixtures is not accepted.
 - **The contract.** The documents under `contracts/forager/v1/`, their schemas and their
   fixtures. A receiver follows the contract and lives in your repository; nothing in
@@ -106,7 +106,7 @@ run may do; **egress** is a connection the session opens to the outside through 
 proxy; **event** is one CloudEvent Forager emits; **sink** is where events go, the file
 or the server; **server** is what Forager is a client of, a control plane or a
 receiver; **receiver** is a server that is not a control plane; **descriptor** is the document that
-maps a runtime's output to session events; **record** is one unit of runtime output a
+maps a runtime's output to runtime events; **record** is one unit of runtime output a
 descriptor reads; **harness** is what the session runs on, composed elsewhere. A runtime is
 never a provider, a tool, an agent or a vendor; Forager's code and docs use no other hive
 words: no hive, bee or flower.

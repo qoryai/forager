@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qory.dev/contracts/forager/v1/events/session.result.schema.json",
-  "title": "dev.qory.session.result",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.result.schema.json",
+  "title": "dev.qory.runtime.result",
   "description": "The result a non-interactive session printed on its standard output: outcome, turns, cost.",
   "type": "object",
   "additionalProperties": false,

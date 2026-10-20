@@ -1,1 +1,1 @@
-{"type":"dev.qory.session.result","data":{"session_id":"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90","outcome":"error_max_turns","is_error":true,"turns":3,"duration_ms":90210,"cost_usd":0.41}}
+{"type":"dev.qory.runtime.result","data":{"session_id":"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90","outcome":"error_max_turns","is_error":true,"turns":3,"duration_ms":90210,"cost_usd":0.41}}

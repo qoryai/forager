@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qory.dev/contracts/forager/v1/events/session.subagent_finished.schema.json",
-  "title": "dev.qory.session.subagent_finished",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.subagent_finished.schema.json",
+  "title": "dev.qory.runtime.subagent_finished",
   "description": "A subagent finished.",
   "type": "object",
   "additionalProperties": false,

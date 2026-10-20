@@ -1,16 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qory.dev/contracts/forager/v1/events/session.turn_failed.schema.json",
-  "title": "dev.qory.session.turn_failed",
-  "description": "A turn ended on an error from the model's API rather than on a response.",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.started.schema.json",
+  "title": "dev.qory.runtime.started",
+  "description": "The runtime opened its session.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["session_id", "error"],
+  "required": ["session_id", "source"],
   "properties": {
     "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
-    "error": {"description": "The error kind, in the runtime's words: rate_limit, overloaded, authentication_failed.", "type": "string", "minLength": 1},
-    "details": {"type": "string"},
-    "message": {"type": "string"},
+    "source": {"description": "How the session started, in the runtime's words: startup, resume.", "type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "cwd": {"type": "string", "minLength": 1},
     "agent_id": {"description": "The subagent this happened in, when it did not happen in the main conversation.", "type": "string", "minLength": 1},
     "agent_type": {"description": "The subagent's type, or the agent the session was started as.", "type": "string", "minLength": 1}
   }

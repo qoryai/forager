@@ -12,7 +12,7 @@ import (
 // phrase, and a clean one prints as before.
 func TestParsePrintsAPhraseForASecret(t *testing.T) {
 	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
-		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
 	declare := func(id string) string {
 		return "  - {id: " + id + ", title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: bearer}}\n"
 	}

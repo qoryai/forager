@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qory.dev/contracts/forager/v1/events/session.turn_finished.schema.json",
-  "title": "dev.qory.session.turn_finished",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.turn_finished.schema.json",
+  "title": "dev.qory.runtime.turn_finished",
   "description": "The runtime finished responding to a prompt.",
   "type": "object",
   "additionalProperties": false,

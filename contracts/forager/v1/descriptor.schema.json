@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/descriptor.schema.json",
   "title": "Runtime descriptor",
-  "description": "How the session attaches to one runtime and turns its records into session events. A descriptor matches and copies; it never computes. runtimes/<name>/descriptor.yaml, with fixtures beside it.",
+  "description": "How the session attaches to one runtime and turns its records into runtime events. A descriptor matches and copies; it never computes. runtimes/<name>/descriptor.yaml, with fixtures beside it.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -294,21 +294,21 @@
             }
           },
           "type": {
-            "description": "The session event type produced.",
+            "description": "The runtime event type produced.",
             "type": "string",
             "enum": [
-              "dev.qory.session.started",
-              "dev.qory.session.prompt_submitted",
-              "dev.qory.session.tool_started",
-              "dev.qory.session.tool_finished",
-              "dev.qory.session.tool_failed",
-              "dev.qory.session.turn_finished",
-              "dev.qory.session.turn_failed",
-              "dev.qory.session.subagent_started",
-              "dev.qory.session.subagent_finished",
-              "dev.qory.session.notification",
-              "dev.qory.session.ended",
-              "dev.qory.session.result"
+              "dev.qory.runtime.started",
+              "dev.qory.runtime.prompt_submitted",
+              "dev.qory.runtime.tool_started",
+              "dev.qory.runtime.tool_finished",
+              "dev.qory.runtime.tool_failed",
+              "dev.qory.runtime.turn_finished",
+              "dev.qory.runtime.turn_failed",
+              "dev.qory.runtime.subagent_started",
+              "dev.qory.runtime.subagent_finished",
+              "dev.qory.runtime.notification",
+              "dev.qory.runtime.ended",
+              "dev.qory.runtime.result"
             ]
           },
           "data": {

@@ -426,11 +426,11 @@ func Run(t *testing.T, o Options) {
 			t.Skip("the adapter carries no hook socket across on this machine")
 		}
 		for _, e := range r.events {
-			if e["type"] == "dev.qory.session.ended" {
+			if e["type"] == "dev.qory.runtime.ended" {
 				return
 			}
 		}
-		t.Errorf("no session.ended among the events; the hook said: %s", p.Hook)
+		t.Errorf("no runtime.ended among the events; the hook said: %s", p.Hook)
 	})
 	check("the exit status is the runtime's", r.res.ExitCode == 7, r.res.ExitCode)
 	// The preparation left its report in the workspace before the probe started, from

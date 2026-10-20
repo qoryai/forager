@@ -112,7 +112,7 @@ func StarterReason(reason string) bool {
 	return !Reserved(reason)
 }
 
-// Prefix is what every type of the contract starts with; a descriptor's session types
+// Prefix is what every type of the contract starts with; a descriptor's runtime types
 // carry it too.
 const Prefix = "dev.qory."
 
