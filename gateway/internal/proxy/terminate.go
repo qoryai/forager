@@ -302,13 +302,13 @@ func (t *terminator) covers(host string) bool {
 	return t.ruled(host) || t.credential(host) != nil || t.tool(host) != nil
 }
 
-// path decides one request's path. A path that could be read two ways is denied in
-// either mode; a path that misses the rules of a side that lists its host is denied
-// under enforce, with no rule. A path every such side matches has the narrowest entry
-// that matched as its rule. The credential is set only on a path its own rules match,
-// whatever the mode: observing is no reason to hand a credential to a path nobody
-// configured.
-func (t *terminator) path(host, escaped string) (clean, rule string, allowed, credentialed bool) {
+// path decides one request's path under mode. A path that could be read two ways is
+// denied in either mode; a path that misses the rules of a side that lists its host is
+// denied under enforce, with no rule. A path every such side matches has the narrowest
+// entry that matched as its rule. The credential is set only on a path its own rules
+// match, whatever the mode: observing is no reason to hand a credential to a path
+// nobody configured.
+func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule string, allowed, credentialed bool) {
 	clean, ok := policy.CleanPath(escaped)
 	if !ok {
 		return escaped, AmbiguousPath, false, false
@@ -334,7 +334,7 @@ func (t *terminator) path(host, escaped string) (clean, rule string, allowed, cr
 		}
 		allowed = allowed && ok
 	}
-	if !allowed && t.p.rules.Load().mode == policy.Observe {
+	if !allowed && mode == policy.Observe {
 		allowed = true
 	}
 	return clean, rule, allowed, credentialed
@@ -397,11 +397,13 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		},
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The token first, then the path's decision.
+		// The token first, then the path's decision, under the mode in force now: a
+		// reload since the connection opened changes the mode of the requests in it.
 		rated := t.p.take(r.Context())
-		clean, rule, allowed, credentialed := t.path(d.Host, r.URL.EscapedPath())
+		mode := t.p.rules.Load().mode
+		clean, rule, allowed, credentialed := t.path(d.Host, r.URL.EscapedPath(), mode)
 		req := d
-		req.Method, req.RequestMethod, req.Path, req.PathRule = "HTTPS", r.Method, clean, rule
+		req.Method, req.RequestMethod, req.Path, req.PathRule, req.Mode = "HTTPS", r.Method, clean, rule, mode
 		req.Allowed, req.RequestID = allowed, newRequestID()
 		tl := t.tool(d.Host)
 		if tl != nil {
@@ -660,16 +662,16 @@ func (l *once) Close() error {
 // Addr is the connection's.
 func (l *once) Addr() net.Addr { return l.conn.LocalAddr() }
 
-// plainPath decides a plain request's path by the policy's rules. No credential is ever
-// set on a connection that is not encrypted.
-func (t *terminator) plainPath(host, escaped string) (string, string, bool) {
+// plainPath decides a plain request's path by the policy's rules, under mode. No
+// credential is ever set on a connection that is not encrypted.
+func (t *terminator) plainPath(host, escaped string, mode policy.Mode) (string, string, bool) {
 	if t == nil {
 		return "", "", true
 	}
 	if !t.ruled(host) && t.credential(host) == nil && t.tool(host) == nil {
 		return "", "", true
 	}
-	clean, rule, allowed, _ := t.path(host, escaped)
+	clean, rule, allowed, _ := t.path(host, escaped, mode)
 	return clean, rule, allowed
 }
 

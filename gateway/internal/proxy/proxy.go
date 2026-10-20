@@ -729,8 +729,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		deny(w, d)
 		return
 	}
+	// The path is decided under the mode the host was decided under, which the answer
+	// and the record give.
 	if d.Allowed {
-		if clean, rule, ok := term.plainPath(d.Host, r.URL.EscapedPath()); clean != "" {
+		if clean, rule, ok := term.plainPath(d.Host, r.URL.EscapedPath(), d.Mode); clean != "" {
 			d.RequestMethod, d.Path, d.PathRule, d.Allowed = r.Method, clean, rule, ok
 			if !ok {
 				d.Outcome = Refused

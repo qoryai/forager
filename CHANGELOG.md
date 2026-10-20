@@ -639,6 +639,11 @@ release may change what an existing document does, and says so under Upgrading.
   leaves a host's path rules equal closes none of its connections. Before, a
   connection the gateway's proxy terminated kept the path rules it opened under until
   it closed.
+- A request inside a connection the gateway's proxy terminates is decided under the
+  mode in force when the proxy reads the request, and its answer and its `run.egress`
+  give that mode. Before, they gave the mode the connection opened under: after a
+  reload from observe to enforce, a refused request's answer read "denied by policy
+  (mode observe)", and its `run.egress` had `mode: observe`.
 
 ### Wall
 

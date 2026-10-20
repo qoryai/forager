@@ -697,6 +697,48 @@ func TestSetPolicyClosesATunnelWhosePathRulesChange(t *testing.T) {
 	}
 }
 
+// TestARequestInATunnelIsDecidedUnderTheModeInForce pins the mode of a request inside
+// a terminated connection: after a reload from observe to enforce, the next request in
+// a connection opened under observe is decided under enforce, and its answer and its
+// record give enforce.
+func TestARequestInATunnelIsDecidedUnderTheModeInForce(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "from the origin") }))
+	defer origin.Close()
+	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	var o observer
+	p, err := proxy.Listen("", policy.Observe, []string{host}, nil, o.observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(origin.Certificate())
+	p.TrustUpstream(roots)
+	paths := map[string][]string{host: {"/a/*"}}
+	ca, err := proxy.NewCA("test", p.Terminating(nil, paths, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Terminate(ca, nil, paths, nil)
+	trusted := x509.NewCertPool()
+	trusted.AppendCertsFromPEM(ca.PEM())
+	send := terminated(t, p, net.JoinHostPort(host, port), trusted)
+	if code, body, err := send("/b/x"); err != nil || code != 200 {
+		t.Fatalf("under observe: %d %q %v", code, body, err)
+	}
+	if d := o.last(t); d.Path != "/b/x" || !d.Allowed || d.Mode != policy.Observe {
+		t.Errorf("under observe the request was recorded as %+v", d)
+	}
+	p.SetPolicy(policy.Enforce, []string{host}, nil, map[string][]string{host: {"/a/*"}}, nil)
+	code, body, err := send("/b/x")
+	if err != nil || code != 403 || !strings.Contains(body, "denied by policy (mode enforce)") {
+		t.Errorf("under enforce: %d %q %v", code, body, err)
+	}
+	if d := o.last(t); d.Path != "/b/x" || d.Allowed || d.Outcome != proxy.Refused || d.Mode != policy.Enforce {
+		t.Errorf("under enforce the request was recorded as %+v", d)
+	}
+}
+
 // TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt pins a model provider's two
 // credentials, the OAuth one set as a bearer and the API key set in a header of its
 // own: the host the credential is for gets the key in the credential's header, once,

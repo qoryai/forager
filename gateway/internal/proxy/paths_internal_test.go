@@ -9,7 +9,7 @@ import (
 // decidePath is how the terminator decides one request's path, under the proxy's mode.
 func decidePath(t *testing.T, p *Proxy, host, path string) (rule string, allowed bool) {
 	t.Helper()
-	_, rule, allowed, _ = p.term.Load().path(host, path)
+	_, rule, allowed, _ = p.term.Load().path(host, path, p.rules.Load().mode)
 	return rule, allowed
 }
 
