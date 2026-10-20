@@ -52,10 +52,11 @@ Forager's duties, in the order that matters when they conflict:
    the one address the enclosure reaches (§The wall), and starts the session behind it.
    Every connection the session opens through the proxy is observed and recorded as one
    event: the host, the port, whether it was a `CONNECT` tunnel or a plain request, the
-   decision, and the rule that made it. A connection to a host the deny list covers is
-   denied in either mode; in enforce mode a connection to a host outside the allow
-   list is denied as well. A denied attempt is recorded and the session continues; a
-   denial never ends a run.
+   decision, and the rule that made it. A connection to a host the allow_first list
+   lists is allowed in either mode, before the other lists are read. Past it, a
+   connection to a host the deny list covers is denied in either mode; in enforce mode
+   a connection to a host outside the allow list is denied as well. A denied attempt
+   is recorded and the session continues; a denial never ends a run.
 3. **Credentials.** The session's environment and files contain none of Forager's. On a
    developer machine the session runs with the developer's environment, and the server's
    variables only when the launch spec accepts them (§Variables). With or without a
@@ -368,9 +369,10 @@ egress:
 | Field | Meaning |
 |---|---|
 | `version` | `1`. Forager refuses a version it does not read, and the error contains that version |
-| `egress.mode` | `observe`: every connection is recorded, and only a host `deny` covers is denied. `enforce`: a connection to a host outside `allow` is denied as well, and recorded |
-| `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. An entry that names a host, not a `*.` suffix, is a host name or an IPv4 address in canonical form, four decimal parts with no leading zero; a document with any other is refused as one the schema refuses. Absent is empty, and `enforce` with an empty list reaches nothing |
-| `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, whatever `allow` contains, and the entry is the rule reported. Absent is empty |
+| `egress.mode` | `observe`: every connection is recorded, and only a host `deny` covers is denied. `enforce`: a connection to a host outside `allow` and `allow_first` is denied as well, and recorded |
+| `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. An entry that names a host, not a `*.` suffix, is a host name or an IPv4 address in canonical form, four decimal parts with no leading zero; a document with any other is refused as one the schema refuses. Absent is empty, and `enforce` with an empty list reaches only the hosts `allow_first` lists |
+| `egress.allow_first` | hosts the session may reach in either mode, checked before `deny` and `allow`: a lower-case host name or an IPv4 address in canonical form, with no `*.` pattern, at most 64 entries. A host an entry matches is allowed, and the entry is the rule reported; a host below an entry is not matched. The guard of a walled proxy (§The wall), `wall:host-form`, `wall:plain-request`, the run limits and `paths` still apply. A document with any other entry is refused. Absent is empty |
+| `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, unless `allow_first` lists the host, whatever `allow` contains, and the entry is the rule reported. Absent is empty |
 | `egress.paths` | by host, in `allow`'s grammar, the paths the session may request on it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. A host several entries cover is held to the most specific one: its name itself, else the `*.` entry with the longest suffix. An empty list is no path at all |
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, such as a repository, of at most 4096 characters. A policy defines none (§Credentials) |
 | `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one, of at most 4096 characters. A policy defines none (§Tools) |
@@ -389,8 +391,9 @@ With a server's policy and no node policy, the server's applies as it is.
 | Field | The run's |
 |---|---|
 | `egress.mode` | `enforce` when either side sets `enforce`, else `observe` |
-| `egress.allow` | under `enforce`, a host passes only when the allow list of every side under `enforce` covers it; a side under `observe` allows every host its `deny` leaves open. Forager reports the entries of each side under `enforce` that every other such side's list covers, the server's first, each entry once, which is exactly the hosts both allow; with neither side under `enforce`, the server's entries |
-| `egress.deny` | the union: a host either side's `deny` covers is denied, in either mode, and recorded with that entry as its rule |
+| `egress.allow_first` | each side's entries that the other side allows, the server's first, each entry once: an entry lifts only the `deny` and `allow` of the side that lists it. A host the other side's `deny` covers, or that the other side's `allow` does not cover under `enforce`, is left out, and the run's `deny` and `allow` decide it |
+| `egress.allow` | under `enforce`, a host the run's `allow_first` does not list passes only when the allow list of every side under `enforce` covers it; a side under `observe` allows every host its `deny` leaves open. Forager reports the entries of each side under `enforce` that every other such side's list covers, the server's first, each entry once, which is exactly the hosts both allow; with neither side under `enforce`, the server's entries |
+| `egress.deny` | the union: a host either side's `deny` covers is denied, in either mode, unless the run's `allow_first` lists it, and recorded with that entry as its rule |
 | `egress.paths` | a host either side lists is terminated, and a request to it must match an entry of every side that lists its host. The run's mode decides what a miss does: under `enforce` it is denied; under `observe` it passes; either way it is recorded with an empty `path_rule`. A request every such side matches is recorded with the narrowest entry that matched |
 | `tools` | the server's selection, narrowed by the node's `tools` member: absent, it leaves the selection as it is; present, each selected tool must be listed in it by name, and by argument when the node's entry has one, so `tools: []` allows none. A selected tool outside it is no run, `tool_unknown`, as a tool the node does not define |
 | `credentials` | the server's selection, narrowed by the node's `credentials` member as `tools` is; a selected credential outside it is no run; behind a separate gateway, when the server's selects none, a run, with or without a wall, gets the gateway's selection: a credential that takes an argument takes it from the run's label the selection names, whose value must match whole the pattern it names, and only for a run whose `forge` label is the one it names |
@@ -401,17 +404,18 @@ With a server's policy and no node policy, the server's applies as it is.
 no run rather than a choice. The node's policy is fixed for the run: a reload replaces
 the server's side, and the run applies the new `security_policy` narrowed by the same
 node policy; the reload rules (§The server) hold for the result.
-`dev.qory.run.policy_applied` reports the run's `mode`, `allow` and `deny` as the table
-computes them, the server's `paths`, `source` `fetched` with the server's `url`,
-`digest` and `run_configuration`, and the node's policy as `node_policy` (§The events).
+`dev.qory.run.policy_applied` reports the run's `mode`, `allow_first`, `allow` and
+`deny` as the table computes them, the server's `paths`, `source` `fetched` with the
+server's `url`, `digest` and `run_configuration`, and the node's policy as
+`node_policy` (§The events).
 
 **The harness's declared hosts.** The harness compose reports the hosts its modules
 declare, the command passes that list to Forager, and `dev.qory.run.policy_applied`
 reports it as `harness_hosts`; it decides nothing. The policy alone decides: `allow` is
 the policy's list, a declared host the policy does not cover is denied under `enforce`
-like any other, and one `deny` covers is denied in either mode. The grammar of a declared
-host is that of `egress.allow`, defined here once; the harness contract copies it and
-cites this document.
+like any other, and one `deny` covers and `allow_first` does not list is denied in
+either mode. The grammar of a declared host is that of `egress.allow`, defined here
+once; the harness contract copies it and cites this document.
 
 **Matching a connection.** The host of a `CONNECT` request is its authority; the host of
 a plain request is the authority of its absolute-form target, never its `Host` header.
@@ -419,19 +423,24 @@ Host names are compared lower-case; an IP literal matches only an identical entr
 A host name is resolved as given, with no search domain added: a short name reaches
 only a host of that exact name, from the hosts file or a name server.
 A host that is neither a name of ASCII letters, digits, hyphens and dots nor an IP
-address in canonical form is denied in either mode before either list, with the rule
+address in canonical form is denied in either mode before any list, with the rule
 `wall:host-form`. An IP address is in canonical form when it is an IPv4 address of four
 decimal parts with no leading zero, or an IPv6 address in RFC 5952's form, in either
 case, with no zone, and not in ::/96 (except ::1), ::ffff:0:0/96, ::ffff:0:0:0/96 or
 64:ff9b::/96, ranges that each hold an IPv4 address in their last 32 bits. A host whose
 last label is all digits, or 0x followed by hex digits or none, in either case, ends in
-a number and is an address. `deny` is decided first: when an entry of it covers the host, the connection is denied
-in either mode and that entry is the rule reported; only then `allow` and the mode
-decide. `deny` beats `allow` whatever the shapes: `allow: ["*.example"]` with
-`deny: ["tracker.example"]` denies `tracker.example` and reaches `api.example`, and a
-host both lists cover is denied. A denied host is never reached, so its paths and a
-credential for it never apply; the guard of a walled proxy (§The wall) decides before
-either list. In each list the first entry that matches is the rule reported. A denial
+a number and is an address. `allow_first` is decided first, then `deny`: when an
+entry of `allow_first` is the host itself, the connection is allowed in either mode and
+that entry is the rule reported, and a host below an entry is not matched. Otherwise,
+when an entry of `deny` covers the host, the connection is denied in either mode and
+that entry is the rule reported; only then `allow` and the mode decide. `deny` beats
+`allow` whatever the shapes: `allow: ["*.example"]` with `deny: ["tracker.example"]`
+denies `tracker.example` and reaches `api.example`, and a host both lists cover is
+denied. `allow_first` beats `deny`: `allow_first: ["status.example"]` with
+`deny: ["*.example"]` reaches `status.example` and denies `x.status.example`. A denied
+host is never reached, so its paths and a credential for it never apply; the guard of a
+walled proxy (§The wall) decides before every list. In each list the first entry that
+matches is the rule reported. A denial
 is a `403 Forbidden` with a one-line text body containing the host and the mode; a tunnel
 is never opened for it.
 
@@ -1265,7 +1274,7 @@ The types, one namespace. Forager's:
 |---|---|---|
 | `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
 | `dev.qory.run.started` | the run is open: the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, for an image by reference `image_fetch_ms`, and `preparation` when the run has one (§The wall); and `labels` when the caller passes any, and `about` when the caller passes one |
-| `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
+| `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `allow_first`, `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows` |
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
@@ -1373,7 +1382,8 @@ run configuration, and
 `fetched`, and with `config` or `none` when the run configuration has no
 `security_policy`; `digest` is Forager's hex sha256 of the policy document's canonical
 JSON, with `config` and `fetched`; `allow` and `deny` are the policy's two lists as
-written, `deny` the hosts denied by name in either mode, and when the node's policy
+written, `deny` the hosts denied by name in either mode, `allow_first`, present when
+it has an entry, the hosts allowed by name before `deny` in either mode, and when the node's policy
 narrows a server's, the lists the narrowing computes (§The policy). Behind a separate
 gateway, for a policy a session's `narrowing` narrows (§The gateway's link), `source` is
 the source of the policy it narrows, `config` or `fetched`, with that policy's `url` and
@@ -3009,7 +3019,7 @@ its events:
   below);
 - is a `dev.qory.run.policy_applied` that is not `applied` from an answer of this run,
   the run answer's or a reload answer's, with the session's members added: every
-  member the gateway decides, `mode`, `allow`, `deny`, `source`, `url`, `digest`,
+  member the gateway decides, `mode`, `allow`, `allow_first`, `deny`, `source`, `url`, `digest`,
   `run_configuration`, `node_policy`, `paths`, `credentials`, `tools`, `image` and
   `terminated`, present exactly when that `applied` holds it and equal to it. Only
   `harness_hosts`, `variables`, the variables' names and their sources, and

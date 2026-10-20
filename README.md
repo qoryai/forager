@@ -8,7 +8,8 @@ It does four things:
    host, the decision, the rule. So is every chunk of output, and every prompt, tool call
    and turn the agent reports. The record is written to the checkout.
 2. **It enforces a policy.** A policy lists what the agent may reach. `enforce` denies
-   the rest. `observe` records everything and denies only what `deny` lists.
+   the rest. `observe` records everything and denies only what `deny` lists and
+   `allow_first` does not.
 3. **It walls the agent in, and keeps your secrets out.** A wall starts the agent in a
    container whose one way out is the proxy. The credentials a run's policy selects stay
    with the gateway, which sets them on the way out.

@@ -724,13 +724,14 @@ func (r *Run) takeNamed(p *policy.Loaded) string {
 }
 
 // GuardNames are the names a guarded proxy opens, this machine's own addresses and the
-// private network addresses reached for them, under pol, the policy in force before n narrows it: the entries of
-// the node's policy's allow list that name a host itself, not a "*." pattern, and that
-// pol's allow list matches by [policy.Match]. A server's policy, which pol may be or
-// contain, opens nothing: with no node's policy, nil, there is no name. A session's
-// narrowing only narrows, so it opens nothing either: under a pol that observes, no
-// name at all, since every name its allow list holds is the narrowing's to choose. A
-// nil n is no narrowing.
+// private network addresses reached for them, under pol, the policy in force before n
+// narrows it: the entries of the node's policy's allow list that name a host itself,
+// not a "*." pattern, and that pol's allow list matches by [policy.Match] or its
+// allow_first list by [policy.Exact]. A server's policy, which pol may be or contain,
+// opens nothing: with no node's policy, nil, there is no name. A session's narrowing
+// only narrows, so it opens nothing either: under a pol that observes, no name at all,
+// since every name its allow list holds is the narrowing's to choose. A nil n is no
+// narrowing.
 func GuardNames(node, pol *policy.Loaded, n *Narrowing) []string {
 	if node == nil || (n != nil && pol.Policy.Egress.Mode != policy.Enforce) {
 		return nil
@@ -740,7 +741,8 @@ func GuardNames(node, pol *policy.Loaded, n *Narrowing) []string {
 		if strings.HasPrefix(entry, "*.") {
 			continue
 		}
-		if _, ok := policy.Match(pol.Policy.Egress.Allow, entry); ok {
+		_, allowed := policy.Match(pol.Policy.Egress.Allow, entry)
+		if _, first := policy.Exact(pol.Policy.Egress.AllowFirst, entry); allowed || first {
 			out = append(out, entry)
 		}
 	}
@@ -902,7 +904,7 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 		fresh.Close()
 		return nil, fmt.Errorf("start a new run to change the model key it starts with: the run started with %s, and this run configuration selects %s", shownKey(started), shownKey(fresh.Start))
 	}
-	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Allow, claimedBy(fresh)); err != nil {
+	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Listed(), claimedBy(fresh)); err != nil {
 		fresh.Close()
 		return nil, err
 	}
@@ -948,7 +950,7 @@ func (r *Run) Commit(d *Decision) {
 // credential that claims one of their hosts, and refuses a placeholder the run passes
 // a value for: at the start and at every reload alike.
 func (r *Run) hold(ctx context.Context, pol *policy.Loaded) (*credential.Held, error) {
-	held, err := credential.ResolveWith(ctx, r.defs, pol.Policy.Credentials, r.storedUses(), r.storedModel, pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, r.cfg.Report)
+	held, err := credential.ResolveWith(ctx, r.defs, pol.Policy.Credentials, r.storedUses(), r.storedModel, pol.Policy.Egress.Mode, pol.Policy.Egress.Listed(), r.cfg.Report)
 	if err != nil {
 		return nil, err
 	}
@@ -973,7 +975,7 @@ func (r *Run) choose(held *credential.Held) ([]tool.Chosen, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := tool.Check(chosen, pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, claimedBy(held)); err != nil {
+	if err := tool.Check(chosen, pol.Policy.Egress.Mode, pol.Policy.Egress.Listed(), claimedBy(held)); err != nil {
 		return nil, err
 	}
 	if r.cfg.Passes != nil {

@@ -59,9 +59,13 @@ type PolicyEgress struct {
 	// Allow are lower-case host names, or *. suffixes, in the contract's grammar. Nil
 	// and empty are the same: nothing, which under enforce reaches nothing.
 	Allow []string `json:"allow,omitempty"`
+	// AllowFirst are hosts the session may reach in either mode, each a lower-case host
+	// name or an IPv4 address, never a *. suffix: a host an entry matches exactly is
+	// allowed before Deny and Allow are consulted, with the entry as its rule.
+	AllowFirst []string `json:"allow_first,omitempty"`
 	// Deny are hosts the session may not reach, in the same grammar, in either mode: a
-	// host an entry covers is denied before Allow and before Mode are consulted, with
-	// the entry as its rule.
+	// host an entry covers is denied before Allow and before Mode are consulted, unless
+	// AllowFirst lists the host, with the entry as its rule.
 	Deny []string `json:"deny,omitempty"`
 	// Paths are the paths the session may ask of a host, by host. A host listed is one
 	// the proxy terminates TLS for.
@@ -82,7 +86,7 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 	if err != nil {
 		return nil, &policy.Error{Name: name, Err: err}
 	}
-	out := &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(p.Egress.Mode), Allow: p.Egress.Allow, Deny: p.Egress.Deny, Paths: p.Egress.Paths}, Image: p.Image}
+	out := &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(p.Egress.Mode), Allow: p.Egress.Allow, AllowFirst: p.Egress.AllowFirst, Deny: p.Egress.Deny, Paths: p.Egress.Paths}, Image: p.Image}
 	if p.Credentials != nil {
 		out.Credentials = []PolicyCredential{}
 	}
@@ -109,19 +113,22 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 // mode enforce the mode is enforce: a policy in mode observe limits no host and gets
 // the ceiling's allow list, and one in mode enforce gets its entries the
 // ceiling covers; an entry it does not cover is dropped, as a harness declaration's
-// is. The credentials, the tools and the image are the policy's: a ceiling defines
-// them and selects none. The run's record lists the ceiling's path rules in
-// dev.qory.run.policy_applied's ceiling_paths.
+// is. The allow_first list is each side's entries that the other side allows, the
+// ceiling's first, as [policy.Narrowed] combines it: an entry lifts the deny and allow
+// of the side that lists it alone. The credentials, the tools and the image are the
+// policy's: a ceiling defines them and selects none. The run's record lists the
+// ceiling's path rules in dev.qory.run.policy_applied's ceiling_paths.
 func (p *Policy) Under(ceiling *Policy) *Policy {
 	if ceiling == nil {
 		return p
 	}
 	deny := bothDeny(ceiling.Egress.Deny, p.Egress.Deny)
+	first := policy.First(ceiling.Egress.side(), p.Egress.side())
 	beside := sides(p.Egress.beside, []map[string][]string{ceiling.Egress.Paths}, ceiling.Egress.beside)
 	var out Policy
 	switch {
 	case ceiling.Egress.Mode != string(policy.Enforce):
-		if len(ceiling.Egress.Deny) == 0 && len(beside) == len(p.Egress.beside) {
+		if len(ceiling.Egress.Deny) == 0 && len(ceiling.Egress.AllowFirst) == 0 && len(beside) == len(p.Egress.beside) {
 			return p
 		}
 		out = *p
@@ -140,8 +147,13 @@ func (p *Policy) Under(ceiling *Policy) *Policy {
 		}
 		out = Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: allow}, Credentials: p.Credentials, Tools: p.Tools, Image: p.Image}
 	}
-	out.Egress.Deny, out.Egress.Paths, out.Egress.beside = deny, p.Egress.Paths, beside
+	out.Egress.AllowFirst, out.Egress.Deny, out.Egress.Paths, out.Egress.beside = first, deny, p.Egress.Paths, beside
 	return &out
+}
+
+// side is the egress section as one side of a policy decides a host by.
+func (e PolicyEgress) side() policy.Egress {
+	return policy.Egress{Mode: policy.Mode(e.Mode), Allow: e.Allow, AllowFirst: e.AllowFirst, Deny: e.Deny}
 }
 
 // sides are the sides of path rules of each list, in order, but those that list no

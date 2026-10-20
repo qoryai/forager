@@ -70,6 +70,20 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `security_policy.egress.allow_first` in `policy.schema.json`: up to 64 hosts, each a
+  lower-case host name or an IPv4 address in canonical form, with no `*.` pattern. In
+  either mode, a host an entry matches exactly is allowed before `deny` and `allow` are
+  checked, and recorded with the entry as its rule. A host below an entry is not
+  matched. The guard, `wall:host-form`, `wall:plain-request`, the run limits and `paths`
+  still apply, so behind a wall or a separate gateway a private network address still
+  needs a host listed by name in the node's allow list. When the node's policy narrows a
+  server's, or a session's narrowing narrows the gateway's, an entry lifts only the
+  `deny` and `allow` of the policy that lists it: a node's `deny` still denies a
+  server's entry, and under the node's `enforce` the node's `allow` must cover it. Under
+  `enforce`, an entry covers a credential's host or a tool's host in the checks at the
+  start and at a reload. A reload carries the list. `dev.qory.run.policy_applied` and
+  the link's `applied` report the list in force as `allow_first` when it has an entry.
+  `policy.Egress.AllowFirst` and `gateway.PolicyEgress.AllowFirst` contain it in Go.
 - `dev.qory.run.egress` takes the rules `wall:connection-limit` and `wall:rate-limit`:
   a refusal by one of the run's limits, with `decision: denied` and `outcome: refused`,
   at most one per limit per second for a run. `rule` has no enum, so only its

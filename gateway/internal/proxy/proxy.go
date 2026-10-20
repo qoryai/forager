@@ -8,11 +8,14 @@
 // decided and dialled in the form [policy.Host] gives it, a name with no search domain
 // added: rooted, with one trailing dot, or, a name of one label the hosts file holds,
 // at the addresses the file gives it ([Proxy.dialHost]). A host without that form is
-// refused with 403 in either mode before any list is read, with the rule [HostForm]. A host a deny entry matches is denied with 403 in either mode, and nothing is opened for it; past
-// that, in observe mode every decision allows, and in enforce mode a host no allow
-// entry matches is denied the same way. The session continues either way. A decision
-// says what became of the connection as its outcome: connected, refused, or allowed and
-// the dial failed; no address the guard refuses is dialled.
+// refused with 403 in either mode before any list is read, with the rule [HostForm]. A
+// host an allow_first entry matches exactly is allowed in either mode, before the deny
+// list and the allow list are read ([Proxy.AllowFirst]). Past that, a host a deny entry
+// matches is denied with 403 in either mode, and nothing is opened for it; then, in
+// observe mode every decision allows, and in enforce mode a host no allow entry matches
+// is denied the same way. The session continues either way. A decision says what
+// became of the connection as its outcome: connected, refused, or allowed and the dial
+// failed; no address the guard refuses is dialled.
 //
 // The policy the proxy decides by is the one it was started with until [Proxy.SetPolicy]
 // replaces it: a run whose server sends a new run configuration reloads it this way,
@@ -94,9 +97,9 @@ type Decision struct {
 	// Method is "CONNECT" for a tunnel, "HTTP" for a plain request.
 	Method  string
 	Allowed bool
-	// Rule is the deny or allow entry that matched, the guard's rule when the guard
-	// refused, [HostForm] or [PlainRequest] when the proxy refused, or empty when none
-	// did.
+	// Rule is the allow_first, deny or allow entry that matched, the guard's rule when
+	// the guard refused, [HostForm] or [PlainRequest] when the proxy refused, or empty
+	// when none did.
 	Rule string
 	// Mode is the policy mode the decision was made under.
 	Mode policy.Mode
@@ -116,14 +119,17 @@ type Decision struct {
 	Status    int
 }
 
-// rules is what the proxy decides by: the policy's mode, allow list and deny list, and
-// the hosts a guarded proxy reaches on this machine or at a private network address. It is replaced whole, never
-// changed.
+// rules is what the proxy decides by: the policy's mode, allow_first list, allow list
+// and deny list, and the hosts a guarded proxy reaches on this machine or at a private
+// network address. It is replaced whole, never changed.
 type rules struct {
 	mode  policy.Mode
 	allow []string
-	// deny is decided before allow and before the mode: a host it covers is denied in
-	// either mode.
+	// first is decided before deny, allow and the mode: a host an entry matches
+	// exactly is allowed in either mode.
+	first []string
+	// deny is decided before allow and before the mode, after first: a host it covers
+	// and first does not list is denied in either mode.
 	deny []string
 	// opened are the guard's names that name a host itself, which the gateway takes
 	// from the node's policy's allow list: a *. suffix opens nothing on this machine or
@@ -442,6 +448,17 @@ func (p *Proxy) Guard(names []string) {
 	p.guarded.Store(true)
 }
 
+// AllowFirst sets the allow_first list the proxy decides by, before it serves a
+// connection: a host an entry matches exactly ([policy.Exact]) is allowed in either
+// mode before the deny list and the allow list are read, with the entry as its rule.
+// The guard, the host's form, the limits and the path rules still apply.
+// [Proxy.SetPolicyOpening] replaces it with the rest of the policy.
+func (p *Proxy) AllowFirst(entries []string) {
+	r := *p.rules.Load()
+	r.first = entries
+	p.rules.Store(&r)
+}
+
 // Guarded reports whether [Proxy.Guard] was called.
 func (p *Proxy) Guarded() bool { return p.guarded.Load() }
 
@@ -472,9 +489,8 @@ func opened(names []string) []string {
 func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
 
 // SetPolicy replaces the policy the proxy decides by: the mode, the allow list and the
-// deny list for every decision from now on, the guard's names with them when the
-// proxy is guarded,
-// and, in one step with them, the path rules and the credentials of the hosts it
+// deny list for every decision from now on, with no allow_first list, the guard's
+// names with them when the proxy is guarded, and, in one step with them, the path rules and the credentials of the hosts it
 // terminates. Without a terminator, [Proxy.Terminates], paths and credentials are not
 // applied, and the caller must not pass a policy that relies on them. A tunnel open to
 // a host the new policy denies is closed, and the decisions that denied them are
@@ -485,15 +501,16 @@ func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
 // to a host whose path rules are other ones now: the next connection is held to the
 // new rules. A host whose path rules are equal keeps its connections.
 func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[string][]string, creds []Credential) (refused []Decision) {
-	return p.SetPolicyOpening(mode, allow, deny, allow, paths, creds)
+	return p.SetPolicyOpening(mode, nil, allow, deny, allow, paths, creds)
 }
 
-// SetPolicyOpening is [Proxy.SetPolicy] with the guard's names apart from the allow
-// list: names, which the gateway takes from the node's policy's allow list, alone open
-// this machine's addresses and the private network addresses when the proxy is
-// guarded, and only for a host the allow list allows as well.
-func (p *Proxy) SetPolicyOpening(mode policy.Mode, allow, deny, names []string, paths map[string][]string, creds []Credential) (refused []Decision) {
-	r := &rules{mode: mode, allow: allow, deny: deny}
+// SetPolicyOpening is [Proxy.SetPolicy] with the allow_first list, first, and with
+// the guard's names apart from the allow list: names, which the gateway takes from the
+// node's policy's allow list, alone open this machine's addresses and the private
+// network addresses when the proxy is guarded, and only for a host the allow list or
+// first allows as well.
+func (p *Proxy) SetPolicyOpening(mode policy.Mode, first, allow, deny, names []string, paths map[string][]string, creds []Credential) (refused []Decision) {
+	r := &rules{mode: mode, allow: allow, first: first, deny: deny}
 	if p.guarded.Load() {
 		r.opened = opened(names)
 	}
@@ -654,14 +671,16 @@ func own(ip net.IP) bool {
 	return false
 }
 
-// decide applies the host's form, the guard, the deny list, and then the mode and the
-// allow list to a host. A host without the form [policy.Host] gives is refused in
-// either mode before anything else is read; past that, the decision's host is that
+// decide applies the host's form, the guard, the allow_first list, the deny list, and
+// then the mode and the allow list to a host. A host without the form [policy.Host]
+// gives is refused in either mode before anything else is read; past that, the decision's host is that
 // form, the one dialled as [Proxy.dialHost] says. The guard decides here what it can
 // without resolving, a literal address and localhost, so the denial is in the record; a
 // name that resolves to such an address is refused when dialled, by the address
-// dialled: the one the name resolved to, or the one the hosts file gave it. A host the deny list covers is denied in
-// either mode, with the entry as its rule, before the mode and the allow list are
+// dialled: the one the name resolved to, or the one the hosts file gave it. A host an
+// allow_first entry matches exactly is allowed in either mode, with the entry as its
+// rule, before the deny list is read. Past that, a host the deny list covers is denied
+// in either mode, with the entry as its rule, before the mode and the allow list are
 // consulted. A denied decision is refused; an allowed one has no outcome until it is
 // dialled.
 func (p *Proxy) decide(method, host string, port int) Decision {
@@ -675,6 +694,10 @@ func (p *Proxy) decide(method, host string, port int) Decision {
 	}
 	d.Host = host
 	rule, ok := policy.Match(r.allow, host)
+	first, lifted := policy.Exact(r.first, host)
+	if lifted {
+		rule, ok = first, true
+	}
 	if p.guarded.Load() {
 		ip := net.ParseIP(host)
 		local := strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || own(ip) || private(ip)
@@ -683,7 +706,7 @@ func (p *Proxy) decide(method, host string, port int) Decision {
 			return d
 		}
 	}
-	if denied, ok := policy.Match(r.deny, host); ok {
+	if denied, ok := policy.Match(r.deny, host); ok && !lifted {
 		d.Rule, d.Outcome = denied, Refused
 		return d
 	}

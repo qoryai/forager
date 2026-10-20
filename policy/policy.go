@@ -37,8 +37,9 @@ import (
 type Mode string
 
 // The two modes. Observe records every connection and denies only what the deny list
-// names; Enforce denies a connection to a host outside the allow list as well, and
-// records the denial. The deny list is decided first in either mode.
+// names; Enforce denies a connection to a host outside the allow list and the
+// allow_first list as well, and records the denial. In either mode the allow_first list
+// is decided first, then the deny list.
 const (
 	Observe Mode = "observe"
 	Enforce Mode = "enforce"
@@ -62,9 +63,13 @@ type Policy struct {
 type Egress struct {
 	Mode  Mode     `json:"mode"`
 	Allow []string `json:"allow"`
+	// AllowFirst are hosts the session may reach in either mode, each a host name or
+	// an IPv4 address, never a *. pattern: a host an entry matches exactly ([Exact]) is
+	// allowed before Deny and Allow are consulted, with the entry as its rule.
+	AllowFirst []string `json:"allow_first,omitempty"`
 	// Deny are the hosts the session may not reach, in Allow's grammar, in either
 	// mode: a host an entry covers is denied before Allow and before Mode are
-	// consulted, with the entry as its rule.
+	// consulted, unless AllowFirst lists the host, with the entry as its rule.
 	Deny  []string            `json:"deny,omitempty"`
 	Paths map[string][]string `json:"paths,omitempty"`
 }
@@ -194,14 +199,14 @@ func parse(name string, b []byte) (*Policy, []byte, error) {
 	return &p, j, nil
 }
 
-// formed refuses an egress entry naming a host, of allow, deny or paths, that is not
-// in the form [Host] gives it: a name, or an IPv4 address of four decimal parts with no
-// leading zero. A *. suffix is held by the schema alone.
+// formed refuses an egress entry naming a host, of allow, allow_first, deny or paths,
+// that is not in the form [Host] gives it: a name, or an IPv4 address of four decimal
+// parts with no leading zero. A *. suffix is held by the schema alone.
 func formed(e Egress) error {
 	for _, list := range []struct {
 		name    string
 		entries []string
-	}{{"allow", e.Allow}, {"deny", e.Deny}, {"paths", slices.Sorted(maps.Keys(e.Paths))}} {
+	}{{"allow", e.Allow}, {"allow_first", e.AllowFirst}, {"deny", e.Deny}, {"paths", slices.Sorted(maps.Keys(e.Paths))}} {
 		for _, entry := range list.entries {
 			if strings.HasPrefix(entry, "*.") {
 				continue
@@ -222,6 +227,11 @@ func formed(e Egress) error {
 //     every host: under enforce on both sides, each side's entries that an entry of
 //     the other covers, the server's first, each once; under enforce on one side, that
 //     side's entries; under observe on both, the server's.
+//   - The allow_first list is each side's entries that the other side allows
+//     ([Egress.Allows]), the server's first, each once: the hosts both sides allow and
+//     one of them lists there. An entry lifts the deny and allow of the side that lists
+//     it alone, so a host the other side's deny covers, or that the other side's allow
+//     does not cover under enforce, stays out.
 //   - The deny list is both sides' entries, the server's first, each once.
 //   - The path rules are the server's, and the node's go to the proxy beside them as
 //     [Node.Paths]: a request to a host either side lists must match an entry of each
@@ -255,6 +265,7 @@ func Narrowed(fetched, node *Loaded) (*Loaded, error) {
 	if run.Egress.Allow == nil {
 		run.Egress.Allow = []string{}
 	}
+	run.Egress.AllowFirst = First(s.Egress, n.Egress)
 	if len(s.Egress.Deny) > 0 || len(n.Egress.Deny) > 0 {
 		run.Egress.Deny = union(s.Egress.Deny, n.Egress.Deny)
 	}
@@ -278,6 +289,47 @@ func Narrowed(fetched, node *Loaded) (*Loaded, error) {
 	out.Policy = run
 	out.Node = &Node{Digest: node.Canonical, Paths: n.Egress.Paths}
 	return &out, nil
+}
+
+// Allows reports whether e, one side of a policy, allows host by itself: a host its
+// allow_first matches exactly, else one its deny does not cover and, under enforce,
+// its allow covers.
+func (e Egress) Allows(host string) bool {
+	if _, ok := Exact(e.AllowFirst, host); ok {
+		return true
+	}
+	if _, ok := Match(e.Deny, host); ok {
+		return false
+	}
+	if e.Mode != Enforce {
+		return true
+	}
+	_, ok := Match(e.Allow, host)
+	return ok
+}
+
+// Listed is the allow_first entries, then the allow entries: what a check of a host
+// under enforce counts as covering it by [Covers], an allow_first entry covering the
+// host it is alone.
+func (e Egress) Listed() []string { return slices.Concat(e.AllowFirst, e.Allow) }
+
+// First is the allow_first list of two sides of a policy combined: a's entries that
+// b allows ([Egress.Allows]), then b's that a allows, each once, nil when there are
+// none. Each entry is a host both sides allow, which the combined policy allows before
+// its deny and allow: an entry of one side lifts that side's deny and allow alone.
+func First(a, b Egress) []string {
+	var out []string
+	for _, side := range []struct {
+		entries []string
+		other   Egress
+	}{{a.AllowFirst, b}, {b.AllowFirst, a}} {
+		for _, entry := range side.entries {
+			if side.other.Allows(entry) && !slices.Contains(out, entry) {
+				out = append(out, entry)
+			}
+		}
+	}
+	return out
 }
 
 // coveredBy are the entries of list an entry of other covers, in list's order.
@@ -353,6 +405,19 @@ func Match(entries []string, host string) (string, bool) {
 			continue
 		}
 		if suffix, ok := strings.CutPrefix(e, "*."); ok && strings.HasSuffix(host, "."+suffix) {
+			return entry, true
+		}
+	}
+	return "", false
+}
+
+// Exact returns the entry of an allow_first list that matches host exactly, and
+// whether one did: host compared lower-case and without a trailing dot, so a host
+// below an entry is not matched.
+func Exact(entries []string, host string) (string, bool) {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, entry := range entries {
+		if strings.ToLower(entry) == host {
 			return entry, true
 		}
 	}

@@ -1,0 +1,11 @@
+# Observe with allow_first: api.example is reached though the deny entry *.example
+# covers it, because allow_first lists it and is checked first. A host below it,
+# x.api.example, is not matched by allow_first and is denied by *.example.
+version: 1
+egress:
+  mode: observe
+  allow_first:
+    - api.example
+    - 10.0.0.5
+  deny:
+    - "*.example"

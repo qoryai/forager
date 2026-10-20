@@ -7,10 +7,11 @@ Forager observes and enforces egress through a proxy it owns.
 
 | Mode      | What it does                                                   |
 | --------- | -------------------------------------------------------------- |
-| `enforce` | Records every connection; denies every host outside `allow`    |
+| `enforce` | Records every connection; denies every host outside `allow` and `allow_first` |
 | `observe` | Records every connection; denies only the hosts `deny` covers  |
 
-`deny` applies in either mode, whatever `allow` lists.
+`deny` applies in either mode, whatever `allow` lists. `allow_first` is checked before
+`deny` and `allow`: a host it lists is allowed in either mode, though `deny` covers it.
 
 ## Hosts
 
@@ -18,6 +19,10 @@ Forager observes and enforces egress through a proxy it owns.
 
 - a name, such as `api.anthropic.com`,
 - or `*.` and a name, for every host below it.
+
+`allow_first` lists hosts themselves: a name or an IPv4 address, never a `*.` pattern,
+at most 64 entries. A host below an entry is not matched. Behind a wall, the guard and
+the path rules still apply to a host `allow_first` lists.
 
 ## What else a policy selects
 
@@ -70,6 +75,7 @@ server, so what the node contributes can only narrow the run:
 | `egress.mode`  | `enforce` when either side sets it                                        |
 | `egress.allow` | the hosts both sides allow; a side under `observe` allows every host      |
 | `egress.deny`  | both sides' entries                                                       |
+| `egress.allow_first` | each side's entries the other side allows: a node's `deny` still denies a server's entry |
 | `egress.paths` | a request to a host either side lists must match an entry of each side that lists it |
 | `tools`        | the server's selection, within the node's `tools` when it has that member |
 | `image`        | the one both select, or the one a side selects                            |

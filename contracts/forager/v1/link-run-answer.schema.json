@@ -95,6 +95,7 @@
       "properties": {
         "mode": {"$ref": "events/run.policy_applied.schema.json#/properties/mode"},
         "allow": {"$ref": "events/run.policy_applied.schema.json#/properties/allow"},
+        "allow_first": {"$ref": "events/run.policy_applied.schema.json#/properties/allow_first"},
         "deny": {"$ref": "events/run.policy_applied.schema.json#/properties/deny"},
         "source": {"$ref": "events/run.policy_applied.schema.json#/properties/source"},
         "url": {"$ref": "events/run.policy_applied.schema.json#/properties/url"},

@@ -280,7 +280,8 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 const beyondLinkSchema = "-beyond-schema-"
 
 // TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails the
-// schema its name starts with: a policy that widens, a server without its access key id
+// schema its name starts with: a policy that widens or whose allow_first holds a *.
+// pattern or 65 entries, a server without its access key id
 // or its pin or with a secret, a configuration without events, without its run
 // endpoint, without workspaces or with two, or whose run endpoint has a query, a fragment
 // or a trailing slash, a batch that holds a

@@ -18,7 +18,7 @@
       "required": ["mode"],
       "properties": {
         "mode": {
-          "description": "observe records every connection and denies only what deny covers; enforce denies a connection to a host outside allow as well, and records the denial. Enforce with no allow list reaches nothing.",
+          "description": "observe records every connection and denies only what deny covers; enforce denies a connection to a host outside allow and allow_first as well, and records the denial. Enforce with no allow list reaches only the hosts allow_first lists.",
           "type": "string",
           "enum": ["observe", "enforce"]
         },
@@ -31,8 +31,18 @@
             "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
           }
         },
+        "allow_first": {
+          "description": "Hosts the session may reach in either mode, checked before deny and allow: a lower-case host name or an IPv4 address in canonical form, with no *. pattern. A host an entry matches is allowed and recorded with the entry as its rule; a host below an entry is not matched. The guard, wall:host-form, wall:plain-request, the run limits and paths still apply. In a policy that narrows another, an entry lifts only the deny and allow of the policy that lists it. Absent means an empty list.",
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+          }
+        },
         "deny": {
-          "description": "Hosts the session may not reach, in allow's grammar, in either mode: a host an entry here covers is denied before allow and before the mode are consulted, and the denial is recorded with the entry as its rule. Absent means an empty list.",
+          "description": "Hosts the session may not reach, in allow's grammar, in either mode: a host an entry here covers is denied before allow and before the mode are consulted, unless allow_first lists the host, and the denial is recorded with the entry as its rule. Absent means an empty list.",
           "type": "array",
           "uniqueItems": true,
           "items": {

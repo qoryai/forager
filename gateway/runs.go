@@ -440,6 +440,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		return fail(err)
 	}
 	lr.px.ReportPanics(routine.ForRun(g.report, req.RunID))
+	lr.px.AllowFirst(pol.Policy.Egress.AllowFirst)
 	// Every run's counters are its own, at the limits Start checked.
 	lr.px.SetLimits(proxy.Limits{Connections: g.cfg.RunLimits.Connections, RequestsPerSecond: g.cfg.RunLimits.RequestsPerSecond, Burst: g.cfg.RunLimits.Burst})
 	if g.cfg.upstreamRoots != nil {
@@ -836,6 +837,9 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 		deny = []string{}
 	}
 	a := map[string]any{"mode": string(pol.Policy.Egress.Mode), "allow": allow, "deny": deny, "source": pol.Source}
+	if len(pol.Policy.Egress.AllowFirst) > 0 {
+		a["allow_first"] = pol.Policy.Egress.AllowFirst
+	}
 	if pol.Source != "none" {
 		a["digest"] = pol.Digest
 	}
@@ -951,7 +955,7 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	// numbered first, as today's session switched the policy and wrote its event in one
 	// step under its record's lock.
 	hold := lr.st.Hold()
-	refused := lr.px.SetPolicyOpening(in.Mode, in.Allow, in.Deny, d.Guard, in.Paths, d.Uses)
+	refused := lr.px.SetPolicyOpening(in.Mode, in.AllowFirst, in.Allow, in.Deny, d.Guard, in.Paths, d.Uses)
 	lr.r.Commit(d)
 	lr.posts.SetRunDigest(d.Policy.RunConfiguration)
 	lr.mu.Lock()
