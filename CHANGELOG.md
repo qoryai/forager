@@ -958,6 +958,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The conformance suite passes the launch's settings file from outside the workspace,
   since the session refuses a settings file in it.
+- CI's Wall conformance job runs the e2e test
+  `TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy` with `QORY_WALL_REQUIRE`
+  set, so that the test fails on a machine with none of the CA bundles. Before, it ran
+  only in the e2e part job, where it skipped on such a machine and the job passed.
 
 ## [0.7.0] - 2026-10-12
 
