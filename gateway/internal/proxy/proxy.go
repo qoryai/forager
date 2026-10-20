@@ -191,9 +191,10 @@ type tunnel struct {
 	// terminated says the proxy ends the connection's TLS itself and sets the
 	// credential for its host on the requests inside it.
 	terminated bool
-	// ended is set by the first of a reload and [Proxy.recheck] to close the tunnel,
-	// and only that one records its denial: a reload may list a tunnel recheck closes.
-	ended atomic.Bool
+	// closed is set by each reload and [Proxy.recheck] that closes the tunnel, and
+	// recorded by the first of them to find its host denied, which alone records it:
+	// a reload may list a tunnel that recheck closes, each under other rules.
+	closed, recorded atomic.Bool
 }
 
 // GuardRule is the rule a guarded proxy's denial names in its decision: not an allow
@@ -558,7 +559,8 @@ func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
 // reason. A tunnel that the proxy puts on its list after the reload listed its tunnels
 // is checked the same way once it is on the list and closed for the same reasons; the
 // proxy hands a denial of it to the observer, not the caller. A tunnel that both the
-// reload and that check close is closed and its denial recorded once, by the first.
+// reload and that check find is closed by whichever runs, and its denial is recorded
+// once, by the first of them to find the host denied.
 func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	return p.SetPolicyOpening(mode, nil, allow, deny, allow, paths, creds)
 }
@@ -605,10 +607,11 @@ func (p *Proxy) SetPolicyOpening(mode policy.Mode, first, allow, deny, names []s
 	}
 	for _, t := range open {
 		d, closes := p.outdated(t, before, after, old, r)
-		if !closes || !t.ended.CompareAndSwap(false, true) {
+		if !closes {
 			continue
 		}
-		if !d.Allowed {
+		t.closed.Store(true)
+		if !d.Allowed && t.recorded.CompareAndSwap(false, true) {
 			refused = append(refused, d)
 		}
 		for _, c := range t.conns {
@@ -646,20 +649,18 @@ func (p *Proxy) tracked(d Decision, terminated bool, term *terminator, old *rule
 }
 
 // recheck makes the check of a reload for a tracked tunnel t decided under the
-// terminator term and the rules old, under the policy in force: when it closes t, and
-// no reload closed t first, recheck closes t's ends and hands a denial to the observer.
-// It returns false when t is closed, by recheck or by a reload.
+// terminator term and the rules old, under the policy in force: when it closes t,
+// recheck closes t's ends and hands a denial to the observer, unless a reload recorded
+// one. It returns false when t is closed, by recheck or by a reload.
 func (p *Proxy) recheck(t *tunnel, term *terminator, old *rules) bool {
 	// A reload stores the terminator and the rules before it takes p.tmu to list the
 	// tunnels, and track takes p.tmu: a reload whose list missed t is in force here.
 	now, closes := p.outdated(t, term, p.term.Load(), old, p.rules.Load())
 	if !closes {
-		return !t.ended.Load()
+		return !t.closed.Load()
 	}
-	if !t.ended.CompareAndSwap(false, true) {
-		return false
-	}
-	if !now.Allowed {
+	t.closed.Store(true)
+	if !now.Allowed && t.recorded.CompareAndSwap(false, true) {
 		p.observe(now)
 	}
 	for _, c := range t.conns {

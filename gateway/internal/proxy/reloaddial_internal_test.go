@@ -93,16 +93,26 @@ func TestAReloadDuringTheDialOfATunnelClosesIt(t *testing.T) {
 }
 
 // TestAReloadAndTheRecheckRecordADenialOnce pins a tunnel that a reload denying its host
-// lists and that [Proxy.recheck] finds denied as well: it is closed and recorded
-// refused once, by the reload when the reload lists it first, and by the observer when
-// the recheck runs between the reload's switch to the new rules and its list.
+// lists and that [Proxy.recheck] checks as well: it is closed and recorded refused
+// once, whether the reload lists it before the recheck, or the recheck runs after the
+// reload stored the new rules, or after it stored only the new terminator, for a tunnel
+// the proxy passes TLS through and for one it terminates.
 func TestAReloadAndTheRecheckRecordADenialOnce(t *testing.T) {
+	creds := []Credential{{Name: "product", Hosts: []string{"localhost"}, Scheme: "bearer", Token: func() string { return "fake-token" }}}
 	for _, c := range []struct {
-		name         string
-		recheckFirst bool
+		name string
+		// paths are the terminator's before the reload, creds the reload's.
+		paths map[string][]string
+		creds []Credential
+		// before is what the reload has done when the recheck runs: "listed" for all
+		// of it, "rules" for the terminator and the rules, "terminator" for the
+		// terminator alone.
+		before string
 	}{
-		{"the reload lists the tunnel first", false},
-		{"the recheck runs first", true},
+		{"the reload lists the tunnel first", nil, nil, "listed"},
+		{"the recheck runs after the rules are stored", nil, nil, "rules"},
+		{"pass-through, the recheck runs after the terminator alone is stored", nil, creds, "terminator"},
+		{"terminated, the recheck runs after the terminator alone is stored", map[string][]string{"localhost": {"/*"}}, nil, "terminator"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			seen := &decisions{}
@@ -111,6 +121,11 @@ func TestAReloadAndTheRecheckRecordADenialOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer p.Close()
+			ca, err := NewCA("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Terminate(ca, nil, c.paths, nil)
 			old, term := p.rules.Load(), p.term.Load()
 			d := p.decide(http.MethodConnect, "localhost", 443)
 			if !d.Allowed {
@@ -118,20 +133,27 @@ func TestAReloadAndTheRecheckRecordADenialOnce(t *testing.T) {
 			}
 			client, far := net.Pipe()
 			defer far.Close()
-			tn := p.track(d, false, client)
+			tn := p.track(d, term.covers("localhost"), client)
 			defer p.untrack(tn)
+			reload := func() []Decision { return p.SetPolicy(policy.Enforce, nil, nil, nil, c.creds) }
 			var refused []Decision
-			if c.recheckFirst {
-				// The reload's switch to the new rules, before its list.
-				p.rules.Store(&rules{mode: policy.Enforce})
-			} else {
-				refused = p.SetPolicy(policy.Enforce, nil, nil, nil, nil)
+			switch c.before {
+			case "listed":
+				refused = reload()
+			case "rules", "terminator":
+				// The reload's first steps, before its list.
+				nt := *term
+				nt.paths, nt.creds = nil, c.creds
+				p.term.Store(&nt)
+				if c.before == "rules" {
+					p.rules.Store(&rules{mode: policy.Enforce})
+				}
 			}
 			if p.recheck(tn, term, old) {
-				t.Error("recheck kept the tunnel to a denied host open")
+				t.Error("recheck kept the tunnel open")
 			}
-			if c.recheckFirst {
-				refused = p.SetPolicy(policy.Enforce, nil, nil, nil, nil)
+			if c.before != "listed" {
+				refused = reload()
 			}
 			observed := 0
 			for i := range seen.count() {
