@@ -74,7 +74,8 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 var errSettingsMoreThanOnce = errors.New("Pass one --settings file. This launch passes --settings more than once, " +
 	"and Claude Code reads only the last one, so the run does not start.")
 
-// credentialSettings outrank the start key: apiKeyHelper, cloud credentials, model ids.
+// credentialSettings can replace the start key: apiKeyHelper outranks an OAuth one, and the
+// others set cloud credentials or model ids for a provider switch.
 var credentialSettings = []string{"apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "gcpAuthRefresh", "modelOverrides"}
 
 // settingsFlag is the flag whose file or document Claude Code reads its settings from.

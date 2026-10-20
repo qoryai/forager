@@ -670,6 +670,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Pass `--settings` at most once in a run without a wall, as behind one. A launch that
+  passes it more than once now does not start, with "runtime claude: Pass one --settings
+  file. This launch passes --settings more than once, and Claude Code reads only the last
+  one, so the run does not start." Before, the launch started and Claude Code read the
+  last file, without Forager's hooks.
+- Set the model endpoint in the run, not in the `env` of the `--settings` file. The
+  session drops the runtime's `denies` from that `env` in every run, and Claude Code's
+  `denies` list `ANTHROPIC_BASE_URL`. Before, a run without a start key kept a value of it
+  there.
 - Give a walled run's `--mcp-config`, `--agents` and system-prompt files the mode its
   wall's user can read, if that user is not the node's: a copy in the run directory has
   its file's permission bits within 0644, less the umask, so the copy of a file of mode
@@ -684,7 +693,9 @@ release may change what an existing document does, and says so under Upgrading.
   exactly, from the `env` object of the `--settings` file when it copies the file into
   the run's `settings.json`, walled or not: Claude Code applies that object over its
   environment, so a value there could replace the start key's variable or endpoint.
-  Without a start key the installer drops none of these names.
+  Without a start key `ModelVariables` is empty; the installer still drops the endpoint
+  variable when the runtime's `denies` lists it, as Claude Code's does
+  (`DeniedVariables`).
 - A run without a wall gets its credentials' placeholders, set after the environment it
   inherits, so a placeholder wins over an inherited value, which is then no
   `placeholder_conflict`. The variables the machine's credentials are read from, the run
