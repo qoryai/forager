@@ -81,8 +81,8 @@ func sealedCode(err error) string {
 // same inputs first, and the gateway does not open the answer; an answer refused while
 // secrets-answer.schema.json does not compile is a bug in that schema. Otherwise the answer
 // does not open: for a signature, the step is the pin; for an exp outside the window,
-// this machine's clock; for every other refusal, Qory Apiary, which sealed an answer
-// that is not the request's.
+// this machine's clock; for every other refusal, the control plane, which sealed an
+// answer that is not the request's.
 func sealedFix(err error) (fix, cause string) {
 	const opens = "the answer does not open"
 	switch {

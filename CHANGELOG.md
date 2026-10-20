@@ -101,8 +101,11 @@ release may change what an existing document does, and says so under Upgrading.
   without a wall, one of `CAEnv` of `wall.Docker` behind one. The session drops every
   variable of `model.keys` and the endpoint variable from the `env` object of the
   `--settings` file, which Claude Code applies; a value in Claude Code's other settings
-  files can still reach it. A descriptor without a `model` section, a format it lists
-  no key for, and an auth no key of that format has are `run_configuration_invalid`.
+  files can still reach it. Without a wall, a launch that passes `--settings` more than
+  once, or ends in a bare `--settings`, gives Claude Code a settings file the session
+  does not copy, so its `env` is not filtered. A descriptor without a `model` section, a
+  format it lists no key for, and an auth no key of that format has are
+  `run_configuration_invalid`.
 - A model key's placeholder contains its name: `qory-`, the name and
   `-sets-the-credential-outside-the-enclosure`, such as
   `qory-model-sets-the-credential-outside-the-enclosure`, `link.KeyPlaceholder` in Go.

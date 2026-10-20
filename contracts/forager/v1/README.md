@@ -211,7 +211,7 @@ One run, on a developer machine, with a server configured:
    start: "Pass one --settings file. This launch passes --settings more than once, and
    Claude Code reads only the last one, so the run does not start." An unwalled launch
    that passes it more than once starts, and Claude Code reads the last `--settings` it
-   passes, without Forager's hooks.
+   passes, without Forager's hooks and with its `env` not filtered.
    A settings file that lies in a place a walled run can write, whose path has a `..`
    name, that is a link or that is not a regular file of at most 1 MiB is not read, and
    the run does not start. The
@@ -820,7 +820,9 @@ variable that points at the CA bundle is set to the bundle's path, even one of
 `model.keys`. Claude Code also applies the `env` object of a settings file: the session
 drops every variable of `model.keys` and the endpoint variable from the `env` of the
 `--settings` file, and does not read Claude Code's other settings files, so a value set
-in one of them can reach Claude Code (§Variables, The model endpoint).
+in one of them can reach Claude Code (§Variables, The model endpoint). Without a wall, a
+launch that passes `--settings` more than once, or ends in a bare `--settings`, gives
+Claude Code a settings file the session does not copy, so its `env` is not filtered.
 
 For Claude Code:
 
