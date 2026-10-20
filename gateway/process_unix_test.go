@@ -93,6 +93,10 @@ func TestHardenChild(t *testing.T) {
 	fmt.Println(hardenPrefix + string(b))
 }
 
+// Dumpable is dumpable, PR_GET_DUMPABLE of this process on Linux and -1 elsewhere, for
+// the tests of HardenProcess in gateway_test.
+func Dumpable() int { return dumpable() }
+
 // runHardenChild runs TestHardenChild in a child of this test binary, with envHarden
 // set to what, and returns its report.
 func runHardenChild(t *testing.T, what string) hardenResult {

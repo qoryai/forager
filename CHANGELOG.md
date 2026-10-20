@@ -404,6 +404,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `gateway.HardenProcess`, for qory to call first in `main`: it makes the calls with
+  which `Start` limits core dumps of the process and debugger access to it, before the
+  program reads its configuration, a key or its environment. Before, a debugger that
+  attached before `Start` could read the caller's `Config`, the TLS key and the
+  environment. `HardenProcess` locks no memory, and makes its calls in a test binary
+  too. `Start` makes them again, and the second call succeeds.
 - `gateway.Config.LockMemory`, `gateway.lock_memory` in `forager.yaml`, default
   `false`: on Linux, `true` makes `Start` call `mlockall(MCL_CURRENT|MCL_FUTURE)`, so
   that no page of the gateway's process goes to swap. It needs `RLIMIT_MEMLOCK`
