@@ -189,7 +189,8 @@ Behind a wall or behind a separate gateway, the proxy is guarded:
   entry of the node's policy lists by its name, and that the run's policy allows. A
   `*.` entry above that host is not enough, and an entry of a server's policy never
   opens the node or a private network address. The same holds for an IPv6 address that
-  contains an IPv4 address of those ranges in its last 32 bits.
+  contains an IPv4 address of those ranges in its last 32 bits (`::/96`,
+  `::ffff:0:0:0/96`, `64:ff9b::/96`).
 
 The node's policy is the one the command passes, `gateway.Config.Policy` in Go. In
 `qory` it is the `gateway.egress` section of `~/.config/qory/forager.yaml`.
