@@ -24,9 +24,9 @@ func TestSealedFixNamesTheFaultOfARequestOrASchema(t *testing.T) {
 		"a schema that does not compile": {fmt.Errorf("%w: secrets-answer.schema.json does not compile: x", sealed.ErrAnswer), false,
 			"report this bug in secrets-answer.schema.json to the Forager maintainers", "the answer does not open"},
 		"an answer outside the schema": {sealed.ErrAnswer, true,
-			"report this answer to whoever runs Qory Apiary", "the answer does not open"},
+			"report this answer to whoever runs the control plane", "the answer does not open"},
 		"a signature": {sealed.ErrSignature, true,
-			"pin Qory Apiary's current signing key in apiary_public_key", "the answer does not open"},
+			"pin the control plane's current signing key in apiary_public_key", "the answer does not open"},
 	} {
 		answerSchemaCompiles = func() bool { return c.compiles }
 		if fix, cause := sealedFix(c.err); fix != c.fix || cause != c.cause {
@@ -37,7 +37,7 @@ func TestSealedFixNamesTheFaultOfARequestOrASchema(t *testing.T) {
 	if !answerSchemaCompiles() {
 		t.Error("secrets-answer.schema.json does not compile")
 	}
-	if fix, _ := sealedFix(errors.New("another error")); fix != "report this answer to whoever runs Qory Apiary" {
+	if fix, _ := sealedFix(errors.New("another error")); fix != "report this answer to whoever runs the control plane" {
 		t.Errorf("another error: %q", fix)
 	}
 }

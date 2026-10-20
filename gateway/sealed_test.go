@@ -233,7 +233,7 @@ func TestASealedAnswerThatDoesNotOpenIsNoRun(t *testing.T) {
 		"another digest": {answer: func(c *control, req server.SecretsRequest) (int, []byte) {
 			req.RunConfiguration = "sha256=" + strings.Repeat("b", 64)
 			return http.StatusOK, c.seal(req, map[string]string{"model": sealedValue}, sealed.Expiry(time.Now()))
-		}, status: http.StatusForbidden, code: "run_configuration_invalid", message: "report this answer to whoever runs Qory Apiary; the answer does not open: the envelope is for another run configuration"},
+		}, status: http.StatusForbidden, code: "run_configuration_invalid", message: "report this answer to whoever runs the control plane; the answer does not open: the envelope is for another run configuration"},
 		"other credentials": {answer: func(c *control, req server.SecretsRequest) (int, []byte) {
 			req.Credentials = []string{"other"}
 			return http.StatusOK, c.seal(req, map[string]string{"other": sealedValue}, sealed.Expiry(time.Now()))
@@ -245,7 +245,7 @@ func TestASealedAnswerThatDoesNotOpenIsNoRun(t *testing.T) {
 				panic(err)
 			}
 			return http.StatusOK, b
-		}, status: http.StatusBadGateway, code: "answer_unsigned", message: "pin Qory Apiary's current signing key in apiary_public_key; the answer does not open: the envelope's sig does not verify under the pinned apiary_public_key"},
+		}, status: http.StatusBadGateway, code: "answer_unsigned", message: "pin the control plane's current signing key in apiary_public_key; the answer does not open: the envelope's sig does not verify under the pinned apiary_public_key"},
 		"secrets_not_allowed": {answer: func(*control, server.SecretsRequest) (int, []byte) {
 			return http.StatusConflict, []byte(`{"error":"secrets_not_allowed"}`)
 		}, status: http.StatusConflict, code: "secrets_not_allowed", message: "secrets "},
@@ -325,7 +325,7 @@ func TestAFixtureKeyGetsNoValue(t *testing.T) {
 		accessKey, signer *accesskey.Key
 		message           string
 	}{
-		"the pin":        {testAccessKey, keys.signer, "pin Qory Apiary's signing key: the server document's apiary_public_key lists a published fixture key, under which anyone can sign"},
+		"the pin":        {testAccessKey, keys.signer, "pin the control plane's signing key: the server document's apiary_public_key lists a published fixture key, under which anyone can sign"},
 		"the access key": {keys.accessKey, testSigner, "enrol another access key: this access key is a published fixture key, and anyone can open what is sealed to it"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -624,7 +624,7 @@ func TestASecretsURLWithASecretIsAPhrase(t *testing.T) {
 		answer            func(*control) func(server.SecretsRequest, string) (int, []byte)
 		want              string
 	}{
-		"a fixture pin":                {testAccessKey, keys.signer, nil, "pin Qory Apiary's signing key"},
+		"a fixture pin":                {testAccessKey, keys.signer, nil, "pin the control plane's signing key"},
 		"a fixture access key":         {keys.accessKey, testSigner, nil, "enrol another access key"},
 		"an answer that does not open": {testAccessKey, testSigner, expired, "set this machine's clock to the right time"},
 		"the server's refusal":         {testAccessKey, testSigner, refused, "secrets_not_allowed"},

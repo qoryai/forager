@@ -40,7 +40,7 @@ func (g *Gateway) secrets(runID string) func(context.Context, string, []string) 
 		}
 		if pin.Fixture() {
 			return sealed.Values{}, refusal.New(refusal.RunConfigurationInvalid, nil,
-				"secrets %s: pin Qory Apiary's signing key: the server document's apiary_public_key lists a published fixture key, under which anyone can sign", accesskey.ShownValue(u, false))
+				"secrets %s: pin the control plane's signing key: the server document's apiary_public_key lists a published fixture key, under which anyone can sign", accesskey.ShownValue(u, false))
 		}
 		if s.AccessKey.PublicKey().Fixture() {
 			return sealed.Values{}, refusal.New(refusal.RunConfigurationInvalid, nil,
@@ -91,11 +91,11 @@ func sealedFix(err error) (fix, cause string) {
 	case errors.Is(err, sealed.ErrAnswer) && !answerSchemaCompiles():
 		return "report this bug in secrets-answer.schema.json to the Forager maintainers", opens
 	case errors.Is(err, sealed.ErrSignature):
-		return "pin Qory Apiary's current signing key in apiary_public_key", opens
+		return "pin the control plane's current signing key in apiary_public_key", opens
 	case errors.Is(err, sealed.ErrExpired), errors.Is(err, sealed.ErrAhead):
 		return "set this machine's clock to the right time", opens
 	}
-	return "report this answer to whoever runs Qory Apiary", opens
+	return "report this answer to whoever runs the control plane", opens
 }
 
 // answerSchemaCompiles reports whether secrets-answer.schema.json, which [sealed.Open]
