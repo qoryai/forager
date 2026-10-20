@@ -759,7 +759,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
 		Readable: readable(written), ReadableDir: readableDir(written),
-		Walled: spec.Wall != nil, Placeholders: slices.Clone(placeholderNames)}
+		Walled: spec.Wall != nil, Placeholders: slices.Clone(placeholderNames), ModelVariables: key.modelVariables()}
 	if byReference {
 		attach.Inside = inside
 	}

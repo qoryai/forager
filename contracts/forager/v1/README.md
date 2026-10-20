@@ -817,8 +817,10 @@ key's endpoint. For Claude Code with a start key in `ANTHROPIC_API_KEY`, no valu
 `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` reaches its process environment,
 with one exception (§Variables, The model endpoint): when the run has an authority, a
 variable that points at the CA bundle is set to the bundle's path, even one of
-`model.keys`. Claude Code also applies the `env` object of a settings file, which the
-session does not filter, so a value set there can reach Claude Code.
+`model.keys`. Claude Code also applies the `env` object of a settings file: the session
+drops every variable of `model.keys` and the endpoint variable from the `env` of the
+`--settings` file, and does not read Claude Code's other settings files, so a value set
+in one of them can reach Claude Code (§Variables, The model endpoint).
 
 For Claude Code:
 
@@ -1072,15 +1074,16 @@ bundle's path, even one of `model.keys`. Without a wall these are the names the 
 gives in `Spec.CAEnv`, or `wall.DefaultCAEnv` when it is nil; `qory` is to set it from
 `wall.ca_env`. Behind a wall they are the names in `CAEnv` of `wall.Docker`, or
 `wall.DefaultCAEnv` when it is nil, each set to `/qory/ca-bundle.pem`. No check compares
-these names with `model.keys`, and a walled run does not unset them. These rules cover
-the process environment only. The session does not filter the `env` object of a
-settings file, which Claude Code applies. It copies the `env` of the `--settings` file
-into the run's `settings.json` without filtering it. In a run whose image is named by
-its reference, a path in it is written as the enclosure sees it. The session does not
-read Claude Code's other settings files, such as `~/.claude/settings.json`, or the
-workspace's `.claude/settings.json`, which Claude Code reads unless the launch passes
-`--setting-sources user`. So a value of the endpoint variable or of a model-key
-variable set in one of them can reach Claude Code.
+these names with `model.keys`, and a walled run does not unset them. Claude Code also
+applies the `env` object of a settings file. The session copies the `env` of the
+`--settings` file into the run's `settings.json` without the endpoint variable and the
+variables of `model.keys`, the start key's included, matched by exact name, and keeps
+every other member; without a start key it copies the `env` as it is. In a run whose
+image is named by its reference, a path in it is written as the enclosure sees it. The
+session does not read Claude Code's other settings files, such as
+`~/.claude/settings.json`, or the workspace's `.claude/settings.json`, which Claude Code
+reads unless the launch passes `--setting-sources user`. So a value of the endpoint
+variable or of a model-key variable set in one of them can reach Claude Code.
 
 In a run without a start key, the endpoint rule sets whether a value of the
 endpoint variable applies: behind a wall, and without one for a run whose answer has

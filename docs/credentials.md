@@ -171,19 +171,20 @@ The session also sets `ANTHROPIC_BASE_URL` to the endpoint. Every other value of
 left out. Claude Code's other key variables get no value in its process environment
 either: with the start key in `ANTHROPIC_API_KEY`, a value of `ANTHROPIC_AUTH_TOKEN` or
 `CLAUDE_CODE_OAUTH_TOKEN` from any of these sources or the runtime's preparation is left
-out, and behind a wall the image's value is unset. Two exceptions apply:
+out, and behind a wall the image's value is unset. One exception applies: when the run
+has an authority, a variable that points at the CA bundle is set to the bundle's path,
+even one of these. Without a wall these are the names the caller gives in
+`Spec.CAEnv`; `qory` is to set it from `wall.ca_env`. Behind a wall they are the names
+in `CAEnv` of `wall.Docker`. A nil list means `wall.DefaultCAEnv`.
 
-- When the run has an authority, a variable that points at the CA bundle is set to the
-  bundle's path, even one of these. Without a wall these are the names the caller gives
-  in `Spec.CAEnv`; `qory` is to set it from `wall.ca_env`. Behind a wall they are the
-  names in `CAEnv` of `wall.Docker`. A nil list means `wall.DefaultCAEnv`.
-- The session does not filter the `env` object of a settings file, which Claude Code
-  applies. It copies the `env` of the `--settings` file into the run's `settings.json`
-  without filtering it. In a run whose image is named by its reference, a path in it is
-  written as the enclosure sees it. The session does not read `~/.claude/settings.json`,
-  or the workspace's `.claude/settings.json`, which Claude Code reads unless the launch
-  passes `--setting-sources user`. A value set in one of these files can reach Claude
-  Code.
+Claude Code also applies the `env` object of a settings file. The session copies the
+`env` of the `--settings` file into the run's `settings.json` without
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and
+`ANTHROPIC_BASE_URL`, and keeps the other members. In a run whose image is named by its
+reference, a path in it is written as the enclosure sees it. The session does not read
+`~/.claude/settings.json`, or the workspace's `.claude/settings.json`, which Claude Code
+reads unless the launch passes `--setting-sources user`. A value set in one of these
+files can reach Claude Code.
 
 If the runtime reads no key for the format or the `auth`, the run stops with
 `run_configuration_invalid`.

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -765,4 +767,57 @@ func (p *preparesKeys) Secrets() runtimes.Declarations {
 
 func (p *preparesKeys) Model() (runtimes.ModelPlaces, bool) {
 	return p.Runtime.(runtimes.Model).Model()
+}
+
+// TestTheSettingsEnvSetsNoModelKeyVariable pins that, beside an x-api-key start key,
+// the run's settings.json keeps no value of a Claude Code model-key variable or of
+// ANTHROPIC_BASE_URL from the env object of the --settings file, which Claude Code
+// applies over its environment, and keeps the other members and the hooks. Without a
+// start key the env object is kept as the file has it.
+func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
+	env := map[string]any{
+		authTokenVariable:    "sk-fake-auth-token",
+		oauthVariable:        "sk-fake-oauth-token",
+		apiKeyVariable:       "sk-fake-api-key",
+		"ANTHROPIC_BASE_URL": "https://settings.invalid/anthropic",
+		"QORY_TEST_KEPT":     "kept",
+	}
+	for _, c := range []struct {
+		name  string
+		hosts []map[string]any
+		want  map[string]any
+	}{
+		{"start key", []map[string]any{model()}, map[string]any{"QORY_TEST_KEPT": "kept"}},
+		{"no start key", nil, env},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			passed := filepath.Join(t.TempDir(), "launch-settings.json")
+			b, _ := json.Marshal(map[string]any{"env": env, "permissions": map[string]any{"allow": []string{"Bash"}}})
+			if err := os.WriteFile(passed, b, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			sp.Args = []string{"--settings", passed}
+			answering(g, c.hosts, nil)
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ = os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+			var doc struct {
+				Env         map[string]any `json:"env"`
+				Permissions map[string]any `json:"permissions"`
+				Hooks       map[string]any `json:"hooks"`
+			}
+			if err := json.Unmarshal(b, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := must(json.Marshal(doc.Env)), must(json.Marshal(c.want)); string(got) != string(want) {
+				t.Errorf("env is %s, want %s", got, want)
+			}
+			if doc.Permissions == nil || len(doc.Hooks) == 0 || !strings.Contains(string(b), os.Args[0]) {
+				t.Errorf("settings.json without the launch's permissions or the hooks:\n%s", b)
+			}
+		})
+	}
 }

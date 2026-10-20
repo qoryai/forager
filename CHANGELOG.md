@@ -98,10 +98,11 @@ release may change what an existing document does, and says so under Upgrading.
   left out too but not recorded as `fixed`, and behind a wall the name is unset
   inside. When the run has an authority, a variable that points at the CA bundle is
   still set to the bundle's path, even one of `model.keys`: one of `Spec.CAEnv`
-  without a wall, one of `CAEnv` of `wall.Docker` behind one. The session does not
-  filter a settings file's `env` object, which Claude Code applies. A descriptor
-  without a `model` section, a format it lists no key for, and an auth no key of that
-  format has are `run_configuration_invalid`.
+  without a wall, one of `CAEnv` of `wall.Docker` behind one. The session drops every
+  variable of `model.keys` and the endpoint variable from the `env` object of the
+  `--settings` file, which Claude Code applies; a value in Claude Code's other settings
+  files can still reach it. A descriptor without a `model` section, a format it lists
+  no key for, and an auth no key of that format has are `run_configuration_invalid`.
 - A model key's placeholder contains its name: `qory-`, the name and
   `-sets-the-credential-outside-the-enclosure`, such as
   `qory-model-sets-the-credential-outside-the-enclosure`, `link.KeyPlaceholder` in Go.
@@ -674,6 +675,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `runtimes.Attach.ModelVariables`, which the session sets in a run with a start key:
+  the variables of the runtime's `model.keys` and its model endpoint variable, from its
+  descriptor. The `claude-settings` installer drops each of these names, matched
+  exactly, from the `env` object of the `--settings` file when it copies the file into
+  the run's `settings.json`, walled or not: Claude Code applies that object over its
+  environment, so a value there could replace the start key's variable or endpoint.
+  Without a start key the installer copies the `env` object as it is.
 - A run without a wall gets its credentials' placeholders, set after the environment it
   inherits, so a placeholder wins over an inherited value, which is then no
   `placeholder_conflict`. The variables the machine's credentials are read from, the run

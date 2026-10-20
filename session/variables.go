@@ -260,6 +260,20 @@ func (k keyed) endpointName() string {
 	return name
 }
 
+// modelVariables is the name of Variable, Others and the name Endpoint sets, each
+// once; empty when the run has no start key.
+func (k keyed) modelVariables() []string {
+	if k.Variable == "" {
+		return nil
+	}
+	name, _, _ := strings.Cut(k.Variable, "=")
+	out := append([]string{name}, k.Others...)
+	if e := k.endpointName(); e != "" && !slices.Contains(out, e) {
+		out = append(out, e)
+	}
+	return out
+}
+
 // startKey is the index in credentials of the API credential the runtime starts with,
 // or -1 when credentials have none: the one named model, the run answer's
 // model_credential, or the one API credential when model is empty. An empty model

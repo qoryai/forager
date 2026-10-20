@@ -31,8 +31,9 @@ const maxSettings = 1 << 20
 // directory, and names that file instead. The file the launch passed is not modified.
 // A file is read only when its path has no ".." name, [runtimes.Attach.Readable] passes
 // it, its last part is no link, it is a regular file, it is the file Readable judged
-// and it holds at most 1 MiB. In a walled launch whose last argument is a bare
-// --settings, that flag is given the path of the run's settings.
+// and it holds at most 1 MiB. Of its "env" object, the copy keeps no member whose
+// name is in [runtimes.Attach.ModelVariables]. In a walled launch whose last
+// argument is a bare --settings, that flag is given the path of the run's settings.
 // A walled launch whose arguments pass --settings more than once is refused before
 // anything is read: Claude Code reads only the last one, so the run would start
 // without Forager's hooks and with a file that was not checked. So is a walled launch
@@ -57,7 +58,7 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 			return runtimes.Launch{}, err
 		}
 	}
-	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside, a.Walled)
+	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.Walled)
 	if err != nil {
 		return runtimes.Launch{}, err
 	}
@@ -123,7 +124,7 @@ func flagCount(args []string, flag string) int {
 }
 
 func settingsArgs(events []string, args []string, dir string, forwarder []string,
-	readable func(string) (string, error), inside func(string) string, walled bool) ([]string, error) {
+	readable func(string) (string, error), inside func(string) string, model []string, walled bool) ([]string, error) {
 	settings := map[string]any{}
 	at := -1
 	for i, a := range args {
@@ -155,6 +156,13 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		}
 		if inside != nil {
 			settings = insideValues(settings, inside).(map[string]any)
+		}
+		// Claude Code applies the env object to its environment, over the start key's
+		// variable and endpoint the session sets.
+		if env, ok := settings["env"].(map[string]any); ok {
+			for _, name := range model {
+				delete(env, name)
+			}
 		}
 	}
 	groups, _ := settings["hooks"].(map[string]any)

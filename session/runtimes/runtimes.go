@@ -84,6 +84,13 @@ type Attach struct {
 	// enclosure, and a tool's, whose host the tool serves outside it. The session sets
 	// them with or without a wall.
 	Placeholders []string
+	// ModelVariables, in a run with a start key, are the variables of the runtime's
+	// model keys, the start key's among them, and its model endpoint variable, from its
+	// descriptor's model section. The session sets the start key's variable and the
+	// endpoint's and leaves out the others; a runtime that copies a file whose values
+	// reach the program's environment leaves these names out of the copy. Empty when
+	// the run has no start key.
+	ModelVariables []string
 	// Inside, when not nil, writes a path of this machine's as the enclosure sees it,
 	// in a string that may hold one: a runtime applies it to what it copies into the
 	// run directory of the caller's, so a path it names still leads where it led. The
