@@ -190,9 +190,7 @@ ids. In a run whose image is named by its reference, a path in it is written as 
 enclosure sees it. The session does not read Claude Code's other settings files, such as
 `~/.claude/settings.json`, or the workspace's `.claude/settings.json`, which Claude Code
 reads unless the launch passes `--setting-sources user`. A value set in one of them can
-reach Claude Code. Without a wall, a launch that passes `--settings` more than once, or
-ends in a bare `--settings`, gives Claude Code a settings file the session does not
-copy, so its `env` is not filtered.
+reach Claude Code.
 
 If the runtime reads no key for the format or the `auth`, the run stops with
 `run_configuration_invalid`.

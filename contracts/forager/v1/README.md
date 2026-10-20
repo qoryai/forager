@@ -206,12 +206,12 @@ One run, on a developer machine, with a server configured:
    interactive session whose API key is a placeholder, a script that pre-approves the
    placeholder value in Claude Code's configuration before it starts (§The descriptor).
    What is prepared goes into the run directory; the composed home is not modified.
-   Claude Code reads only the last `--settings` it is passed. A walled launch that
-   passes `--settings` more than once, counted anywhere in its arguments, does not
-   start: "Pass one --settings file. This launch passes --settings more than once, and
-   Claude Code reads only the last one, so the run does not start." An unwalled launch
-   that passes it more than once starts, and Claude Code reads the last `--settings` it
-   passes, without Forager's hooks and with its `env` not filtered.
+   Claude Code reads only the last `--settings` it is passed. A launch that passes
+   `--settings` more than once, counted anywhere in its arguments, does not start,
+   walled or not: "Pass one --settings file. This launch passes --settings more than
+   once, and Claude Code reads only the last one, so the run does not start." In a
+   launch whose last argument is a bare `--settings`, that flag is given the path of the
+   run's `settings.json`.
    A settings file that lies in a place a walled run can write, whose path has a `..`
    name, that is a link or that is not a regular file of at most 1 MiB is not read, and
    the run does not start. The
@@ -824,9 +824,6 @@ drops every variable of `model.keys` and the endpoint variable from the `env` of
 `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`, and the others set cloud credentials or
 a provider's model ids. The session does not read Claude Code's other settings files, so
 a value set in one of them can reach Claude Code (§Variables, The model endpoint).
-Without a wall, a launch that passes `--settings` more than once, or ends in a bare
-`--settings`, gives Claude Code a settings file the session does not copy, so its `env`
-is not filtered.
 
 For Claude Code:
 
@@ -1095,9 +1092,7 @@ reference, a path in it is written as the enclosure sees it. The session does no
 Claude Code's other settings files, such as `~/.claude/settings.json`, or the
 workspace's `.claude/settings.json`, which Claude Code reads unless the launch passes
 `--setting-sources user`. So a value of the endpoint variable or of a model-key variable
-set in one of them can reach Claude Code. Without a wall, a launch that passes
-`--settings` more than once, or ends in a bare `--settings`, gives Claude Code a
-settings file the session does not copy, so its `env` is not filtered.
+set in one of them can reach Claude Code.
 
 In a run without a start key, the endpoint rule sets whether a value of the
 endpoint variable applies: behind a wall, and without one for a run whose answer has

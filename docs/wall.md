@@ -528,9 +528,9 @@ run does not start." The other refusals of a settings file take the forms of the
 /a/settings.json a JSON object." before the reason.
 Settings passed as a document, `--settings '{…}'`, are no file and are not checked.
 Claude Code reads only the last `--settings` it is passed, and the session checks only
-the first, so a walled launch that passes `--settings` more than once does not start:
-"Pass one --settings file. This launch passes --settings more than once, and Claude Code
-reads only the last one, so the run does not start." The places are worked out only
+the first, so a launch that passes `--settings` more than once does not start, walled or
+not: "Pass one --settings file. This launch passes --settings more than once, and Claude
+Code reads only the last one, so the run does not start." The places are worked out only
 when a file is to be read: a run that passes none does not read the registry for them.
 
 A walled launch's `--mcp-config`, `--agents`, `--plugin-dir`, `--plugin-dir-no-mcp` and

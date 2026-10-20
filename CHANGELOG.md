@@ -103,11 +103,9 @@ release may change what an existing document does, and says so under Upgrading.
   `--settings` file, which Claude Code applies, and the file's top-level `apiKeyHelper`,
   `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides`, which
   set a key, cloud credentials or model ids in place of the start key; a value in Claude
-  Code's other settings files can still reach it. Without a wall, a launch that passes
-  `--settings` more than once, or ends in a bare `--settings`, gives Claude Code a
-  settings file the session does not copy, so its `env` is not filtered. A descriptor
-  without a `model` section, a format it lists no key for, and an auth no key of that
-  format has are `run_configuration_invalid`.
+  Code's other settings files can still reach it. A descriptor without a `model`
+  section, a format it lists no key for, and an auth no key of that format has are
+  `run_configuration_invalid`.
 - A model key's placeholder contains its name: `qory-`, the name and
   `-sets-the-credential-outside-the-enclosure`, such as
   `qory-model-sets-the-credential-outside-the-enclosure`, `link.KeyPlaceholder` in Go.
@@ -747,6 +745,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- Without a wall, a launch that passed `--settings` more than once started, and Claude
+  Code read its last settings file, which the `claude-settings` installer had not
+  copied: the run had no Forager hooks, and that file's `env` was not filtered. A launch
+  that ended in a bare `--settings` got `--settings <path>` appended, so Claude Code
+  read `./--settings`. An unwalled launch that passes `--settings` more than once now
+  does not start either, with "runtime claude: Pass one --settings file. This launch
+  passes --settings more than once, and Claude Code reads only the last one, so the run
+  does not start." In an unwalled launch whose last argument is a bare `--settings`,
+  that flag is now given the path of the run's `settings.json`, as behind a wall.
 - The `claude-settings` installer copied the `env` object of the `--settings` file
   with the names the session leaves out of the runtime's process environment: the
   runtime's `denies`, such as `CLAUDE_CONFIG_DIR`, and, behind a wall, its model
@@ -840,8 +847,7 @@ release may change what an existing document does, and says so under Upgrading.
   launch passes --settings more than once, and Claude Code reads only the last one, so
   the run does not start." In a walled launch whose last argument is a bare
   `--settings`, the session gives that flag the path of the run's settings, so the
-  launch passes one `--settings`. `runtimes.Attach.Walled` is set for a walled run. An
-  unwalled launch starts as before.
+  launch passes one `--settings`. `runtimes.Attach.Walled` is set for a walled run.
 - The `claude-settings` installer passed a walled launch's `--mcp-config`, `--agents`,
   `--plugin-dir`, `--plugin-dir-no-mcp` and `--add-dir` to Claude Code unchecked, so
   Claude Code could load servers, agents, plugins or settings that an agent of a walled

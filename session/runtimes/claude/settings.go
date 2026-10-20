@@ -36,13 +36,13 @@ const maxSettings = 1 << 20
 // name is in [runtimes.Attach.ModelVariables], nor one whose name is in
 // [runtimes.Attach.DeniedVariables], regardless of case. In a run with a start key,
 // the copy keeps no top-level member whose name is in [credentialSettings]. In a
-// walled launch whose last argument is a bare --settings, that flag is given the path
-// of the run's settings.
-// A walled launch whose arguments pass --settings more than once is refused before
-// anything is read: Claude Code reads only the last one, so the run would start
-// without Forager's hooks and with a file that was not checked. So is a walled launch
-// that passes --project-config-root, counted the same way: Claude Code reads project
-// settings, .mcp.json and the .claude trees from that directory. A walled launch's
+// launch whose last argument is a bare --settings, that flag is given the path of the
+// run's settings. A launch whose arguments pass --settings more than once is refused
+// before anything is read, walled or not: Claude Code reads only the last one, so the
+// run would start without Forager's hooks, with a file that was not checked and with
+// an env that was not filtered. A walled launch that passes --project-config-root,
+// counted the same way, is refused too: Claude Code reads project settings, .mcp.json
+// and the .claude trees from that directory. A walled launch's
 // --mcp-config, --agents, --plugin-dir, --plugin-dir-no-mcp, --add-dir and
 // system-prompt file values are then checked as [walledPaths] checks them, before the
 // settings are read.
@@ -50,7 +50,7 @@ const maxSettings = 1 << 20
 // the script of [ApproveScript], so Claude Code uses the stand-in at once.
 func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	launch := a.Launch
-	if a.Walled && flagCount(launch.Args, "--settings") > 1 {
+	if flagCount(launch.Args, settingsFlag) > 1 {
 		return runtimes.Launch{}, errSettingsMoreThanOnce
 	}
 	if a.Walled && flagCount(launch.Args, projectConfigRootFlag) > 0 {
@@ -62,7 +62,7 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 			return runtimes.Launch{}, err
 		}
 	}
-	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.DeniedVariables, a.Walled)
+	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.DeniedVariables)
 	if err != nil {
 		return runtimes.Launch{}, err
 	}
@@ -70,7 +70,7 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	return approve(a, launch)
 }
 
-// errSettingsMoreThanOnce refuses a walled launch that passes --settings more than once.
+// errSettingsMoreThanOnce refuses a launch that passes --settings more than once.
 var errSettingsMoreThanOnce = errors.New("Pass one --settings file. This launch passes --settings more than once, " +
 	"and Claude Code reads only the last one, so the run does not start.")
 
@@ -131,7 +131,7 @@ func flagCount(args []string, flag string) int {
 }
 
 func settingsArgs(events []string, args []string, dir string, forwarder []string,
-	readable func(string) (string, error), inside func(string) string, model, denied []string, walled bool) ([]string, error) {
+	readable func(string) (string, error), inside func(string) string, model, denied []string) ([]string, error) {
 	settings := map[string]any{}
 	at := -1
 	for i, a := range args {
@@ -208,8 +208,8 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 	}
 	// Claude Code takes the argument after --settings as its value, even one that is
 	// --settings, so a second flag after a bare last one would name a file called
-	// --settings in its working directory. Behind a wall that flag is given the path.
-	if walled && len(args) > 0 && args[len(args)-1] == "--settings" {
+	// --settings in its working directory. That flag is given the path instead.
+	if len(args) > 0 && args[len(args)-1] == "--settings" {
 		return append(append([]string(nil), args...), path), nil
 	}
 	return append(append([]string(nil), args...), "--settings", path), nil
