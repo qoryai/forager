@@ -447,9 +447,10 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	}
 	if req.Wall || remote {
 		// The proxy serves something that is not on this machine, so this machine's own
-		// addresses are not its to reach: an enclosure, or another machine.
-		// The names are entries of the node's policy, never of a server's policy or a
-		// session's narrowing: neither opens any of this machine's addresses.
+		// addresses and the private network addresses are not its to reach: an
+		// enclosure, or another machine. The names are entries of the node's policy,
+		// never of a server's policy or a session's narrowing: neither opens any of
+		// these addresses.
 		lr.px.Guard(r.GuardNames())
 	}
 	// The node's path rules, beside a server's, and those put beside the node's policy:

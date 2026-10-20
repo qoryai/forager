@@ -30,13 +30,14 @@
 // reached by default. The link-local range, which holds a cloud's metadata service, and
 // the cloud metadata addresses outside it ([metadataAddrs]) are refused whatever the
 // policy says. This machine's own addresses, loopback and every address an interface
-// holds, are refused unless one of the guard's names is the host itself, not a *.
-// suffix over it, and the allow list allows the host. The gateway takes the names from
-// the node's policy alone: a local MCP server or model endpoint is reached through the
-// proxy like everything else, decided and recorded, in either mode, when the node's
-// policy names it and the run's allow list allows it. Under a session's narrowing of a
-// policy that observes, the gateway passes no name, and none of this machine's
-// addresses is reached. Without the guard the way around a wall is through the proxy.
+// holds, and the private network addresses ([privateRanges]) are refused unless one of
+// the guard's names is the host itself, not a *. suffix over it, and the allow list
+// allows the host. The gateway takes the names from the node's policy alone: a local
+// MCP server or model endpoint is reached through the proxy like everything else,
+// decided and recorded, in either mode, when the node's policy names it and the run's
+// allow list allows it. Under a session's narrowing of a policy that observes, the
+// gateway passes no name, and none of these addresses is reached. Without the guard
+// the way around a wall is through the proxy.
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
 // TLS itself, reads each request's path and sets a credential on it, or hands it to the
@@ -116,7 +117,7 @@ type Decision struct {
 }
 
 // rules is what the proxy decides by: the policy's mode, allow list and deny list, and
-// the hosts a guarded proxy reaches on this machine. It is replaced whole, never
+// the hosts a guarded proxy reaches on this machine or at a private network address. It is replaced whole, never
 // changed.
 type rules struct {
 	mode  policy.Mode
@@ -125,8 +126,9 @@ type rules struct {
 	// either mode.
 	deny []string
 	// opened are the guard's names that name a host itself, which the gateway takes
-	// from the node's policy's allow list: a *. suffix opens nothing on this machine,
-	// and a host is opened only when allow matches it as well.
+	// from the node's policy's allow list: a *. suffix opens nothing on this machine or
+	// at a private network address, and a host is opened only when allow matches it as
+	// well.
 	opened []string
 }
 
@@ -291,6 +293,8 @@ func judge(ctx context.Context, host string, ip net.IP) error {
 		return &guardError{"Use another host: the gateway refuses the cloud metadata address " + host}
 	case own(ip) && ctx.Value(namedKey{}) == nil:
 		return &guardError{host + " is this machine's address and no allow entry lists the host by name; the gateway refuses it"}
+	case private(ip) && ctx.Value(namedKey{}) == nil:
+		return &guardError{"List the host by name in the allow list of the node's policy: " + host + " is a private network address, and the gateway dials one only for a host listed there by name"}
 	}
 	return nil
 }
@@ -425,8 +429,9 @@ func closeIdle(rt http.RoundTripper) {
 }
 
 // Guard makes the proxy refuse the link-local range and the cloud metadata addresses
-// outside it ([metadataAddrs]), and this machine's addresses unless the host is one of
-// names and the allow list allows it. The gateway passes entries of the node's policy's
+// outside it ([metadataAddrs]), and this machine's addresses and the private network
+// addresses ([privateRanges]) unless the host is one of names and the allow list
+// allows it. The gateway passes entries of the node's policy's
 // allow list, as its owner wrote them, never a server's policy's. Entries that are *.
 // suffixes are ignored. The session calls Guard once, before it starts anything behind
 // a wall; a policy set later brings its own names.
@@ -485,8 +490,8 @@ func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[stri
 
 // SetPolicyOpening is [Proxy.SetPolicy] with the guard's names apart from the allow
 // list: names, which the gateway takes from the node's policy's allow list, alone open
-// this machine's addresses when the proxy is guarded, and only for a host the allow
-// list allows as well.
+// this machine's addresses and the private network addresses when the proxy is
+// guarded, and only for a host the allow list allows as well.
 func (p *Proxy) SetPolicyOpening(mode policy.Mode, allow, deny, names []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	r := &rules{mode: mode, allow: allow, deny: deny}
 	if p.guarded.Load() {
@@ -557,7 +562,8 @@ func (p *Proxy) untrack(t *tunnel) {
 type namedKey struct{}
 
 // named reports whether the host is one of the guard's names, which alone open this
-// machine to an enclosure, and the connection is one the allow list lets through.
+// machine and the private network addresses to an enclosure, and the connection is
+// one the allow list lets through.
 func (p *Proxy) named(host string, allowed bool) bool {
 	_, ok := policy.Match(p.rules.Load().opened, host)
 	return ok && allowed
@@ -579,7 +585,8 @@ func linkLocal(ip net.IP) bool {
 //   - fd00:a9fe:a9fe::1, Akamai (Linode) Metadata service over IPv6: techdocs.akamai.com/cloud-computing/docs/access-the-metadata-service-api
 //   - fd00:42::42, Scaleway Instance metadata API over IPv6: scaleway.com/en/developers/api/instance/
 //
-// The private ranges around them, 10/8, 172.16/12, 192.168/16 and 100.64/10, stay open.
+// The private ranges around them ([privateRanges]) are dialled only for one of the
+// guard's names, and these addresses never.
 var metadataAddrs = []netip.Addr{
 	netip.MustParseAddr("100.100.100.200"),
 	netip.MustParseAddr("192.0.0.192"),
@@ -600,6 +607,33 @@ func metadata(ip net.IP) bool {
 		return false
 	}
 	return slices.Contains(metadataAddrs, a.Unmap())
+}
+
+// privateRanges are the private network ranges a guarded proxy dials only for one of
+// the guard's names: 10/8, 172.16/12 and 192.168/16 (RFC 1918), 100.64/10, the shared
+// address space (RFC 6598), and fc00::/7, the unique local IPv6 addresses (RFC 4193).
+var privateRanges = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("fc00::/7"),
+}
+
+// private reports whether ip is in one of [privateRanges]. An IPv4 address mapped into
+// IPv6 counts as the IPv4 address; [carried] covers the other IPv6 forms of one.
+func private(ip net.IP) bool {
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	a = a.Unmap()
+	for _, r := range privateRanges {
+		if r.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // own reports whether ip is this machine's: loopback, unspecified, or an address one of
@@ -643,7 +677,7 @@ func (p *Proxy) decide(method, host string, port int) Decision {
 	rule, ok := policy.Match(r.allow, host)
 	if p.guarded.Load() {
 		ip := net.ParseIP(host)
-		local := strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || own(ip)
+		local := strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || own(ip) || private(ip)
 		if linkLocal(ip) || metadata(ip) || (local && !p.named(host, ok)) {
 			d.Rule, d.Outcome = GuardRule, Refused
 			return d
@@ -1041,7 +1075,8 @@ func unrooted(err error, host string) error {
 }
 
 // dialContext carries into the dial whether the host is one of the guard's names,
-// which is what lets a guarded proxy reach this machine for it.
+// which is what lets a guarded proxy reach this machine or a private network address
+// for it.
 func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 	if p.named(d.Host, d.Rule != "") {
 		return context.WithValue(ctx, namedKey{}, true)
@@ -1069,7 +1104,7 @@ func deny(w http.ResponseWriter, d Decision) {
 		return
 	}
 	if d.Rule == GuardRule {
-		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: to reach the gateway's machine, list the host itself, not a *. pattern, in the allow list of the node's policy, and allow it in the run's policy; the gateway reaches its machine only for such a host, and never a link-local or cloud metadata address\n", d.Host, d.Port)
+		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: to reach the gateway's machine or a private network address, list the host itself, not a *. pattern, in the allow list of the node's policy, and allow it in the run's policy; the gateway reaches either only for such a host, and never a link-local or cloud metadata address\n", d.Host, d.Port)
 		return
 	}
 	fmt.Fprintf(w, "qory: egress to %s:%d denied by policy (mode %s)\n", d.Host, d.Port, d.Mode)

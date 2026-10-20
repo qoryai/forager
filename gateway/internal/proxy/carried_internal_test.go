@@ -19,9 +19,9 @@ type carriedCase struct {
 
 // carriedCases are the addresses that carry an IPv4 address, and those that do not,
 // with the guard's judgement of each: the link-local 169.254.169.254 refused whatever
-// the policy says, as are the cloud metadata addresses outside that range; 127.0.0.1
-// and each IPv4 address this machine's interfaces hold refused unless the host is
-// named, and an ordinary address let through. ::1 and :: keep their judgement as this
+// the policy says, as are the cloud metadata addresses outside that range; 127.0.0.1,
+// each IPv4 address this machine's interfaces hold and the private network addresses
+// refused unless the host is named, and an ordinary address let through. ::1 and :: keep their judgement as this
 // machine's addresses, and an address outside the ranges is judged as itself alone.
 func carriedCases(t *testing.T) []carriedCase {
 	t.Helper()
@@ -53,26 +53,60 @@ func carriedCases(t *testing.T) []carriedCase {
 		{"fd00:ec2::23", true, true},
 		{"fd00:a9fe:a9fe::1", true, true},
 		{"fd00:42::42", true, true},
-		// The addresses next to them, and the private ranges, stay open.
-		{"100.100.100.201", false, false},
-		{"100.100.100.199", false, false},
+		// The addresses next to them outside the private ranges stay open.
 		{"192.0.0.193", false, false},
-		{"fd00:ec2::255", false, false},
-		{"fd00:ec2::253", false, false},
-		{"fd20:ce::255", false, false},
 		{"168.63.129.15", false, false},
 		{"168.63.129.17", false, false},
-		{"fd00:ec2::24", false, false},
-		{"fd00:a9fe:a9fe::2", false, false},
-		{"fd00:42::43", false, false},
-		{"10.0.0.1", false, false},
-		{"172.16.0.1", false, false},
-		{"192.168.0.1", false, false},
-		{"100.64.0.1", false, false},
-		{"::ffff:10.0.0.1", false, false},
-		{"::ffff:100.64.0.1", false, false},
-		{"64:ff9b::a00:1", false, false},
-		{"64:ff9b::6440:1", false, false},
+		// The private ranges, the addresses next to the metadata addresses in them
+		// among them, are refused unless the host is named: the literal address, each
+		// way an IPv6 address carries an IPv4 one, and with a zone.
+		{"100.100.100.201", true, false},
+		{"100.100.100.199", true, false},
+		{"fd00:ec2::255", true, false},
+		{"fd00:ec2::253", true, false},
+		{"fd20:ce::255", true, false},
+		{"fd00:ec2::24", true, false},
+		{"fd00:a9fe:a9fe::2", true, false},
+		{"fd00:42::43", true, false},
+		{"10.0.0.1", true, false},
+		{"10.255.255.255", true, false},
+		{"172.16.0.1", true, false},
+		{"172.31.255.255", true, false},
+		{"192.168.0.1", true, false},
+		{"192.168.255.255", true, false},
+		{"100.64.0.1", true, false},
+		{"100.127.255.255", true, false},
+		{"fc00::1", true, false},
+		{"fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", true, false},
+		{"::ffff:10.0.0.1", true, false},
+		{"::ffff:172.16.0.1", true, false},
+		{"::ffff:192.168.0.1", true, false},
+		{"::ffff:100.64.0.1", true, false},
+		{"::a00:1", true, false},
+		{"::ac10:1", true, false},
+		{"::c0a8:1", true, false},
+		{"::6440:1", true, false},
+		{"::ffff:0:a00:1", true, false},
+		{"::ffff:0:c0a8:1", true, false},
+		{"64:ff9b::a00:1", true, false},
+		{"64:ff9b::10.0.0.1", true, false},
+		{"64:ff9b::ac10:1", true, false},
+		{"64:ff9b::c0a8:1", true, false},
+		{"64:ff9b::6440:1", true, false},
+		{"64:ff9b::a00:1%eth0", true, false},
+		{"fc00::1%eth0", true, false},
+		// The addresses just outside the private ranges stay open.
+		{"9.255.255.255", false, false},
+		{"11.0.0.0", false, false},
+		{"172.15.255.255", false, false},
+		{"172.32.0.0", false, false},
+		{"192.167.255.255", false, false},
+		{"192.169.0.0", false, false},
+		{"100.63.255.255", false, false},
+		{"100.128.0.0", false, false},
+		{"fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", false, false},
+		{"fe00::1", false, false},
+		{"64:ff9b::b00:0", false, false},
 		{"::a9fe:a9fe", true, true},
 		{"::169.254.169.254", true, true},
 		{"::ffff:0:a9fe:a9fe", true, true},

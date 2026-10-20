@@ -723,8 +723,8 @@ func (r *Run) takeNamed(p *policy.Loaded) string {
 	return named
 }
 
-// GuardNames are the names a guarded proxy opens, this machine's own addresses
-// reached for them, under pol, the policy in force before n narrows it: the entries of
+// GuardNames are the names a guarded proxy opens, this machine's own addresses and the
+// private network addresses reached for them, under pol, the policy in force before n narrows it: the entries of
 // the node's policy's allow list that name a host itself, not a "*." pattern, and that
 // pol's allow list matches by [policy.Match]. A server's policy, which pol may be or
 // contain, opens nothing: with no node's policy, nil, there is no name. A session's

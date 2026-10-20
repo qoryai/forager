@@ -183,11 +183,13 @@ Behind a wall or behind a separate gateway, the proxy is guarded:
     <https://www.scaleway.com/en/developers/api/instance/>
 
   It also refuses an IPv6 address that contains `100.100.100.200`, `192.0.0.192` or
-  `168.63.129.16` in its last 32 bits (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`). The private ranges
-  `10/8`, `172.16/12`, `192.168/16` and `100.64/10` stay open.
-- It dials the node itself only for a host that an `egress.allow` entry of the node's
-  policy lists by its name, and that the run's policy allows. A `*.` entry above that
-  host is not enough, and an entry of a server's policy never opens the node.
+  `168.63.129.16` in its last 32 bits (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`).
+- It dials the node itself, and a private network address in `10/8`, `172.16/12`,
+  `192.168/16`, `100.64/10` or `fc00::/7`, only for a host that an `egress.allow`
+  entry of the node's policy lists by its name, and that the run's policy allows. A
+  `*.` entry above that host is not enough, and an entry of a server's policy never
+  opens the node or a private network address. The same holds for an IPv6 address that
+  contains an IPv4 address of those ranges in its last 32 bits.
 
 The node's policy is the one the command passes, `gateway.Config.Policy` in Go. In
 `qory` it is the `gateway.egress` section of `~/.config/qory/forager.yaml`.

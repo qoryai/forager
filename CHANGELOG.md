@@ -363,6 +363,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- List a host that resolves to a private network address by name in the node's allow
+  list, or a walled run can no longer reach it.
 - Each run on a gateway now has limits: at most 256 connections open at once, and 50
   requests a second with a burst of 200. A run past one gets `429 Too Many Requests`
   with `Retry-After: 1`. Set `gateway.Config.RunLimits` higher if your runs need more.
@@ -485,12 +487,13 @@ release may change what an existing document does, and says so under Upgrading.
   longer opens it: list the host in the node's policy. With no server's policy the
   node's policy opens what it names, as before.
 - Two messages start with the step that fixes them. The guard's `403` for a link-local
-  address or the machine's address reads "qory: egress to <host>:<port> denied by the
-  gateway: to reach the gateway's machine, list the host itself, not a *. pattern, in
-  the allow list of the node's policy, and allow it in the run's policy; the gateway
-  reaches its machine only for such a host, and never a link-local or cloud metadata
-  address". Two credentials that claim one host are refused with "claim <host> in only
-  one of the credentials <a> and <b>; both claim it, and a host has one".
+  address, the machine's address or a private network address reads "qory: egress to
+  <host>:<port> denied by the gateway: to reach the gateway's machine or a private
+  network address, list the host itself, not a *. pattern, in the allow list of the
+  node's policy, and allow it in the run's policy; the gateway reaches either only for
+  such a host, and never a link-local or cloud metadata address". Two credentials that
+  claim one host are refused with "claim <host> in only one of the credentials <a> and
+  <b>; both claim it, and a host has one".
 - The proxy sets a credential on a private host only through a `hosts` entry equal to
   the host, never through a `*.` pattern. A private host is an IP literal in
   `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `fc00::/7`, a name of one label,
@@ -513,11 +516,21 @@ release may change what an existing document does, and says so under Upgrading.
   link-local address and for the machine's address end "the gateway refuses it",
   where they ended "the wall refuses it", and the error for the machine's address
   reads "no allow entry lists the host by name", where it read "no allow entry names
-  the host". A `403` page for a refused
-  address ends "the gateway reaches its machine only for such a host, and never a
-  link-local or cloud metadata address". The private ranges `10/8`, `172.16/12`,
-  `192.168/16` and `100.64/10` stay open. Before, a request to `100.100.100.200` was
-  dialled.
+  the host". A `403` page for a refused address ends "the gateway reaches either only
+  for such a host, and never a link-local or cloud metadata address". Before, a request
+  to `100.100.100.200` was dialled.
+- Behind a wall, and behind a separate gateway, the gateway's proxy dials a private
+  network address, in `10/8`, `172.16/12`, `192.168/16`, `100.64/10` or `fc00::/7`,
+  only for a host that an `egress.allow` entry of the node's policy lists by name and
+  that the run's policy allows, as it dials the gateway's machine. The same holds for
+  an IPv6 address that contains an IPv4 address of those ranges in its last 32 bits
+  (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`), and for a name that resolves to such an
+  address. A refused connection is recorded with the rule `wall:own-address` and
+  answered with the guard's `403`. The guard's error reads "List the host by name in
+  the allow list of the node's policy: <address> is a private network address, and
+  the gateway dials one only for a host listed there by name". A run without a wall
+  whose gateway runs on the session's machine is not changed. Before, the proxy
+  dialled these addresses for any host the policy allowed.
 - A run holds a copy of the path rules `gateway.Policy.Under` adds, taken and checked
   when it starts: the proxy and `ceiling_paths` keep them for the run whatever the
   caller's `Policy` holds afterwards.
