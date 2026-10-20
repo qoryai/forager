@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -253,6 +254,58 @@ func TestAPlainRequestToAKeyedHostIsRefused(t *testing.T) {
 		if got := take(); len(got) != 2 {
 			t.Errorf("%s: the origin got %+v", mode, got)
 		}
+	}
+}
+
+// TestAPlainRequestToAKeyedHostIsRefusedBeforeItsPath pins the plain refusal ahead of
+// the path rules of a host that gets a credential: a path that could be read two ways
+// and a path outside the rules each get the 403 with the fix first and a
+// wall:plain-request record with no path rule, in either mode. Nothing is dialled.
+func TestAPlainRequestToAKeyedHostIsRefusedBeforeItsPath(t *testing.T) {
+	const fix = "qory: send requests to this host as https:// through CONNECT.\n"
+	for _, mode := range []policy.Mode{policy.Observe, policy.Enforce} {
+		seen := &decisions{}
+		p, err := Listen("", mode, []string{"bearer.example"}, nil, seen.observe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.dial = func(context.Context, string, string) (net.Conn, error) {
+			t.Errorf("%s: the proxy dialled a host", mode)
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: io.EOF}
+		}
+		creds := []Credential{{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Token: func() string { return fakeKey }}}
+		paths := map[string][]string{"bearer.example": {"/ok/*"}}
+		ca, err := NewCA("test", p.Terminating(creds, paths, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Terminate(ca, creds, paths, nil)
+		for _, path := range []string{"/%2e%2e/ok/x", "/elsewhere"} {
+			conn, err := net.Dial("tcp", p.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.SetDeadline(time.Now().Add(5 * time.Second))
+			fmt.Fprintf(conn, "GET http://bearer.example%s HTTP/1.1\r\nHost: bearer.example\r\nConnection: close\r\n\r\n", path)
+			resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			conn.Close()
+			if resp.StatusCode != http.StatusForbidden || !strings.HasPrefix(string(b), fix) {
+				t.Errorf("%s: plain %s: %d %q, want a 403 with the fix first", mode, path, resp.StatusCode, b)
+			}
+			d := seen.at(-1)
+			if d.Rule != PlainRequest || d.PathRule != "" || d.Allowed || d.Outcome != Refused {
+				t.Errorf("%s: plain %s: the decision %+v, want %s with no path rule", mode, path, d, PlainRequest)
+			}
+		}
+		if n := seen.count(); n != 2 {
+			t.Errorf("%s: %d decisions, want 2", mode, n)
+		}
+		p.Close()
 	}
 }
 
