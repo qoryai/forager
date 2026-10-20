@@ -349,7 +349,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			if d, ok := settle(resp.Request, resp, nil); ok {
 				t.p.observe(d)
 			}
-			if c := t.credential(d.Host); c != nil && resp.StatusCode == http.StatusUnauthorized && c.Rejected != nil && resp.Request.Header.Get(setBy) == c.Name {
+			if c := t.credential(d.Host); c != nil && resp.StatusCode == http.StatusUnauthorized && c.Rejected != nil && resp.Request.Context().Value(keyedKey{}) == c.Name {
 				c.Rejected()
 			}
 			if masked(resp.Request) == nil {
@@ -432,7 +432,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		if keyed {
 			// In the context, since the session's Connection header can take any header
 			// off the request before it reaches the transport, the mark among them.
-			ctx = context.WithValue(ctx, keyedKey{}, true)
+			ctx = context.WithValue(ctx, keyedKey{}, req.Credential)
 		}
 		if mask == nil {
 			rp.ServeHTTP(w, r.WithContext(ctx))
@@ -567,7 +567,8 @@ func (p *Proxy) upstream() http.RoundTripper {
 	return p.up
 }
 
-// keyedKey marks the context of a request the proxy set a credential on.
+// keyedKey marks the context of a request the proxy set a credential on, with the
+// credential's name.
 type keyedKey struct{}
 
 // unmark takes the proxy's own mark off a request before it leaves, and sends a

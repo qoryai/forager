@@ -549,6 +549,10 @@ release may change what an existing document does, and says so under Upgrading.
   and every run, and Go printed the panic's value to standard error; net/http printed
   a request handler's panic with its value to standard error, from the proxy, or wrote
   it nowhere.
+- A `401` from a host to a request that the gateway's proxy set a credential on renews
+  the credential through its adapter at once, also when the session's `Connection`
+  header lists `X-Qory-Credential-Set`. Before, that header took the proxy's mark off
+  the request, and the credential was renewed only before its secret expired.
 - A request the gateway's proxy sets a credential on goes to its host over HTTP/1.1,
   so no HTTP/2 header table (HPACK) on the connection keeps a copy of the credential.
   A request without a credential goes on over HTTP/2 where the host offers it. Before,
