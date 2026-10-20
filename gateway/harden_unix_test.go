@@ -92,7 +92,7 @@ func runHardenProcessChild(t *testing.T, calls int) hardenProcessResult {
 func checkHardened(t *testing.T, r hardenProcessResult) {
 	t.Helper()
 	if r.Err != "" {
-		if runtime.GOOS == "linux" && (strings.Contains(r.Err, ": allow prctl in the gateway's seccomp profile: ") || strings.Contains(r.Err, ": allow prlimit64 in the gateway's seccomp profile: ")) {
+		if runtime.GOOS == "linux" && (strings.Contains(r.Err, ": allow prctl in this process's seccomp profile: ") || strings.Contains(r.Err, ": allow prlimit64 in this process's seccomp profile: ")) {
 			t.Skipf("a seccomp filter refuses the call here, and HardenProcess fails with the fix: %s", r.Err)
 		}
 		t.Fatalf("HardenProcess: %s", r.Err)

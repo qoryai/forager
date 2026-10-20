@@ -10,20 +10,28 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// prctl and setrlimit are the system calls denyDumps makes. Only tests replace them.
+var (
+	prctl     = unix.Prctl
+	setrlimit = unix.Setrlimit
+)
+
 // denyDumps makes this process non-dumpable, prctl(PR_SET_DUMPABLE, 0): the kernel
 // writes no core dump of it, and a process of the same user without CAP_SYS_PTRACE can
 // neither attach to it with ptrace nor read its memory or its environment under /proc.
 // It then sets the core size limit, RLIMIT_CORE, soft and hard, to 0, through
 // prlimit64. A program this process starts is dumpable again after its execve, and
-// keeps the limit of 0.
+// keeps the limit of 0. denyDumps makes both calls when the first fails, and returns
+// every failure, one per line in the order of the calls, each starting with its fix.
 func denyDumps() error {
-	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
-		return fmt.Errorf("allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: %w", err)
+	var errs []error
+	if err := prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+		errs = append(errs, fmt.Errorf("allow prctl in this process's seccomp profile: PR_SET_DUMPABLE 0 failed: %w", err))
 	}
-	if err := unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{}); err != nil {
-		return fmt.Errorf("allow prlimit64 in the gateway's seccomp profile: RLIMIT_CORE 0 failed: %w", err)
+	if err := setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{}); err != nil {
+		errs = append(errs, fmt.Errorf("allow prlimit64 in this process's seccomp profile: RLIMIT_CORE 0 failed: %w", err))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // lockAll locks every page of this process in memory, mlockall(MCL_CURRENT|MCL_FUTURE):
