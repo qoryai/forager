@@ -554,6 +554,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- `gateway.Start` and `gateway.HardenProcess` stopped at the first call that failed.
+  On macOS, a failed `setrlimit(RLIMIT_CORE)` skipped `ptrace(PT_DENY_ATTACH)`, so a
+  debugger could still attach to the process. On Linux, a failed
+  `prctl(PR_SET_DUMPABLE, 0)` skipped `RLIMIT_CORE` 0, so the kernel could still write
+  a core dump of the process. Both now make every call and return every failure, one
+  line each, in the order of the calls, and each line starts with its fix. On macOS,
+  `PT_DENY_ATTACH` comes first. When `gateway.lock_memory` is true and locking fails,
+  `Start` makes these calls too, and its error starts with the locking failure.
+
 - The gateway opened a run directory's `gateway.lock`, and the session's `lock` for
   `gateway.Resend`, through a symbolic link at their path, and the open made the file
   the link points at when it did not exist. Both are now opened with O_NOFOLLOW, and a

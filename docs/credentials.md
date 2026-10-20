@@ -270,8 +270,8 @@ to it:
   the process, and a process of the same user without `CAP_SYS_PTRACE` can neither
   attach to it with `ptrace` nor read its memory or its environment under
   `/proc/<pid>/`; and `RLIMIT_CORE` 0, soft and hard.
-- **macOS**: `RLIMIT_CORE` 0, soft and hard; and `ptrace(PT_DENY_ATTACH)`, so that no
-  debugger attaches to the process with `ptrace`. Root, or a debugger that macOS allows
+- **macOS**: `ptrace(PT_DENY_ATTACH)`, so that no debugger attaches to the process with
+  `ptrace`; and `RLIMIT_CORE` 0, soft and hard. Root, or a debugger that macOS allows
   to call `task_for_pid` on the process, can still read its memory through its task
   port.
 - **Other systems**: nothing.
@@ -290,12 +290,13 @@ again, and the second call succeeds. `HardenProcess` locks no memory.
   (`ENOTSUP`). To debug the gateway, debug its tests: a test binary, the one `go test`
   builds, gets none of these settings. The tests of the settings run them in a child
   process.
-- If a call fails, `Start` returns an error that starts with the fix, and the gateway
-  does not start:
+- If a call fails, `Start` still makes the other calls, and the gateway does not
+  start. The error has one line for each call that failed, in the order of the calls,
+  and each line starts with its fix:
   - Linux: `allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: <reason>`
   - Linux: `allow prlimit64 in the gateway's seccomp profile: RLIMIT_CORE 0 failed: <reason>`
-  - macOS: `allow setrlimit in the gateway's sandbox: RLIMIT_CORE 0 failed: <reason>`
   - macOS: `allow ptrace in the gateway's sandbox: PT_DENY_ATTACH failed: <reason>`
+  - macOS: `allow setrlimit in the gateway's sandbox: RLIMIT_CORE 0 failed: <reason>`
 
 ### Keep the memory out of swap
 
@@ -326,8 +327,8 @@ and each page mapped later.
 - Locking loads the mapped pages into RAM: the resident memory of the same small
   program grew from 2.5 MB to 42 MB when it locked its memory.
 - A program the process starts locks nothing.
-- If `mlockall` fails, `Start` returns an error of two lines, and the gateway does not
-  start:
+- If `mlockall` fails, the gateway does not start, and the error from `Start` starts
+  with two lines:
 
   ```text
   raise RLIMIT_MEMLOCK to unlimited: LimitMEMLOCK=infinity in a systemd unit, or ulimit -l unlimited
@@ -349,6 +350,8 @@ and each page mapped later.
 
 - On macOS and other systems, `true` stops the gateway:
   `set gateway.lock_memory to false: Forager locks memory only on Linux, and this system is darwin`.
+- When locking fails, `Start` still limits core dumps and debugger access. If one of
+  those calls fails too, its line follows the lines of the locking failure.
 
 ## The details
 

@@ -3,23 +3,34 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 
 	"golang.org/x/sys/unix"
 )
 
-// denyDumps sets the core size limit, RLIMIT_CORE, soft and hard, to 0, so that the
-// kernel writes no core dump of this process, and calls ptrace(PT_DENY_ATTACH), so that
-// no debugger attaches to it with ptrace. Root, or a debugger that macOS allows to call
-// task_for_pid on the process, can still read its memory through its task port. A process that a debugger traces when it calls
-// PT_DENY_ATTACH exits at once, with status 45 (ENOTSUP). A program this process starts
-// keeps the limit of 0.
+// ptraceDenyAttach and setrlimit are the system calls denyDumps makes. Only tests
+// replace them.
+var (
+	ptraceDenyAttach = unix.PtraceDenyAttach
+	setrlimit        = unix.Setrlimit
+)
+
+// denyDumps calls ptrace(PT_DENY_ATTACH), so that no debugger attaches to this process
+// with ptrace, and sets the core size limit, RLIMIT_CORE, soft and hard, to 0, so that
+// the kernel writes no core dump of it. Root, or a debugger that macOS allows to call
+// task_for_pid on the process, can still read its memory through its task port. A
+// process that a debugger traces when it calls PT_DENY_ATTACH exits at once, with
+// status 45 (ENOTSUP). A program this process starts keeps the limit of 0. denyDumps
+// makes both calls when the first fails, and returns every failure, one per line in
+// the order of the calls, each starting with its fix.
 func denyDumps() error {
-	if err := unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{}); err != nil {
-		return fmt.Errorf("allow setrlimit in the gateway's sandbox: RLIMIT_CORE 0 failed: %w", err)
+	var errs []error
+	if err := ptraceDenyAttach(); err != nil {
+		errs = append(errs, fmt.Errorf("allow ptrace in the gateway's sandbox: PT_DENY_ATTACH failed: %w", err))
 	}
-	if err := unix.PtraceDenyAttach(); err != nil {
-		return fmt.Errorf("allow ptrace in the gateway's sandbox: PT_DENY_ATTACH failed: %w", err)
+	if err := setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{}); err != nil {
+		errs = append(errs, fmt.Errorf("allow setrlimit in the gateway's sandbox: RLIMIT_CORE 0 failed: %w", err))
 	}
-	return nil
+	return errors.Join(errs...)
 }

@@ -23,13 +23,14 @@ const envHarden = "GATEWAY_TEST_HARDEN"
 // hardenPrefix starts the one line on which TestHardenChild reports.
 const hardenPrefix = "harden-result: "
 
-// hardenResult is what a child reports after the calls: the error and its errno, 0 for
-// none; the core size limit, or why reading it failed; the soft RLIMIT_MEMLOCK, or why
+// hardenResult is what a child reports after the calls: the error, its first errno, 0
+// for none, and the errno of each failure it joins, in order; the core size limit, or why reading it failed; the soft RLIMIT_MEMLOCK, or why
 // reading it failed; PR_GET_DUMPABLE on Linux and -1 elsewhere; and the kB of VmLck on
 // Linux and -1 elsewhere.
 type hardenResult struct {
 	Err        string
 	Errno      int
+	Errnos     []int
 	CoreCur    uint64
 	CoreMax    uint64
 	CoreErr    string
@@ -78,6 +79,7 @@ func TestHardenChild(t *testing.T) {
 		if errors.As(err, &en) {
 			r.Errno = int(en)
 		}
+		r.Errnos = errnos(err)
 	}
 	var c unix.Rlimit
 	if err := unix.Getrlimit(unix.RLIMIT_CORE, &c); err != nil {
@@ -91,6 +93,23 @@ func TestHardenChild(t *testing.T) {
 	r.MemlockCur = uint64(m.Cur)
 	b, _ := json.Marshal(r)
 	fmt.Println(hardenPrefix + string(b))
+}
+
+// errnos is the errno of each failure that err joins, in order, through every
+// errors.Join, or the errno of err when it joins none.
+func errnos(err error) []int {
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		var ns []int
+		for _, e := range j.Unwrap() {
+			ns = append(ns, errnos(e)...)
+		}
+		return ns
+	}
+	var en unix.Errno
+	if errors.As(err, &en) {
+		return []int{int(en)}
+	}
+	return nil
 }
 
 // Dumpable is dumpable, PR_GET_DUMPABLE of this process on Linux and -1 elsewhere, for

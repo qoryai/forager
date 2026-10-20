@@ -153,7 +153,9 @@ type Gateway struct {
 // PR_SET_DUMPABLE 0, and on macOS it calls ptrace(PT_DENY_ATTACH); on both it sets
 // RLIMIT_CORE to 0, soft and hard. A test binary gets none of these. With
 // [Config.LockMemory], on Linux, it locks the process's memory out of swap. What it sets
-// stays for the life of the process, after Close too, and a failure is Start's error.
+// stays for the life of the process, after Close too. When a call fails, Start makes
+// the other calls, and its error contains every failure, in the order of the calls,
+// each starting on a new line with its fix.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.Server != nil {
 		s := *cfg.Server

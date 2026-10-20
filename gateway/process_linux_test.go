@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,13 +23,75 @@ const (
 	dockerTail  = "; in Docker, pass --ulimit memlock=-1, or set gateway.lock_memory to false"
 )
 
-// wantDumpsError is denyDumps' failure in the child r reports: prctl's when the
-// process is still dumpable, else prlimit64's.
+const (
+	prctlFix   = "allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: "
+	prlimitFix = "allow prlimit64 in the gateway's seccomp profile: RLIMIT_CORE 0 failed: "
+)
+
+// wantDumpsError is denyDumps' failure in the child r reports, from its errnos in
+// order: prctl's when the process is still dumpable, then prlimit64's when the core
+// size limit is not 0, one per line.
 func wantDumpsError(r hardenResult) string {
+	var lines []string
 	if r.Dumpable == 1 {
-		return "allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: " + unix.Errno(r.Errno).Error()
+		lines = append(lines, prctlFix)
 	}
-	return "allow prlimit64 in the gateway's seccomp profile: RLIMIT_CORE 0 failed: " + unix.Errno(r.Errno).Error()
+	if r.CoreCur != 0 || r.CoreMax != 0 {
+		lines = append(lines, prlimitFix)
+	}
+	if len(lines) != len(r.Errnos) {
+		return ""
+	}
+	for i, en := range r.Errnos {
+		lines[i] += unix.Errno(en).Error()
+	}
+	return strings.Join(lines, "\n")
+}
+
+// fakeDenyDumps replaces denyDumps' system calls for the test t: each appends its name
+// to calls and returns its error from fail, nil for none.
+func fakeDenyDumps(t *testing.T, calls *[]string, fail map[string]error) {
+	t.Helper()
+	pr, rlimit := prctl, setrlimit
+	t.Cleanup(func() { prctl, setrlimit = pr, rlimit })
+	prctl = func(int, uintptr, uintptr, uintptr, uintptr) error {
+		*calls = append(*calls, "prctl")
+		return fail["prctl"]
+	}
+	setrlimit = func(int, *unix.Rlimit) error {
+		*calls = append(*calls, "setrlimit")
+		return fail["setrlimit"]
+	}
+}
+
+// TestDenyDumpsMakesEveryCall pins that denyDumps makes both calls, prctl first, when
+// either fails, and returns every failure, one per line in the order of the calls,
+// each starting with its fix.
+func TestDenyDumpsMakesEveryCall(t *testing.T) {
+	for _, c := range []struct {
+		fail map[string]error
+		want string
+	}{
+		{map[string]error{"prctl": unix.EPERM}, prctlFix + unix.EPERM.Error()},
+		{map[string]error{"setrlimit": unix.EPERM}, prlimitFix + unix.EPERM.Error()},
+		{map[string]error{"prctl": unix.EPERM, "setrlimit": unix.ENOSYS}, prctlFix + unix.EPERM.Error() + "\n" + prlimitFix + unix.ENOSYS.Error()},
+	} {
+		var calls []string
+		fakeDenyDumps(t, &calls, c.fail)
+		err := denyDumps()
+		if !slices.Equal(calls, []string{"prctl", "setrlimit"}) {
+			t.Errorf("with %v failing, the calls are %v; want prctl and setrlimit", c.fail, calls)
+		}
+		if err == nil || err.Error() != c.want {
+			t.Errorf("with %v failing, denyDumps: %v; want %q", c.fail, err, c.want)
+			continue
+		}
+		for _, e := range c.fail {
+			if !errors.Is(err, e) {
+				t.Errorf("with %v failing, denyDumps' error wraps no %v", c.fail, e)
+			}
+		}
+	}
 }
 
 // wantLockError is lockAll's failure in the child r reports, from its soft
