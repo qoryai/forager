@@ -34,13 +34,13 @@
 // the cloud metadata addresses outside it ([metadataAddrs]) are refused whatever the
 // policy says. This machine's own addresses, loopback and every address an interface
 // holds, and the private network addresses ([privateRanges]) are refused unless one of
-// the guard's names is the host itself, not a *. suffix over it, and the allow list
-// allows the host. The gateway takes the names from the node's policy alone: a local
-// MCP server or model endpoint is reached through the proxy like everything else,
-// decided and recorded, in either mode, when the node's policy names it and the run's
-// allow list allows it. Under a session's narrowing of a policy that observes, the
-// gateway passes no name, and none of these addresses is reached. Without the guard
-// the way around a wall is through the proxy.
+// the guard's names is the host itself, not a *. suffix over it, and the allow list or
+// the allow_first list allows the host. The gateway takes the names from the node's
+// policy alone: a local MCP server or model endpoint is reached through the proxy like
+// everything else, decided and recorded, in either mode, when the node's policy names
+// it and the run's allow list or the allow_first list allows it. Under a session's
+// narrowing of a policy that observes, the gateway passes no name, and none of these
+// addresses is reached. Without the guard the way around a wall is through the proxy.
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
 // TLS itself, reads each request's path and sets a credential on it, or hands it to the
@@ -133,8 +133,8 @@ type rules struct {
 	deny []string
 	// opened are the guard's names that name a host itself, which the gateway takes
 	// from the node's policy's allow list: a *. suffix opens nothing on this machine or
-	// at a private network address, and a host is opened only when allow matches it as
-	// well.
+	// at a private network address, and a host is opened only when the allow list or
+	// the allow_first list matches it as well.
 	opened []string
 }
 
@@ -436,8 +436,8 @@ func closeIdle(rt http.RoundTripper) {
 
 // Guard makes the proxy refuse the link-local range and the cloud metadata addresses
 // outside it ([metadataAddrs]), and this machine's addresses and the private network
-// addresses ([privateRanges]) unless the host is one of names and the allow list
-// allows it. The gateway passes entries of the node's policy's
+// addresses ([privateRanges]) unless the host is one of names and the allow list or
+// the allow_first list allows it. The gateway passes entries of the node's policy's
 // allow list, as its owner wrote them, never a server's policy's. Entries that are *.
 // suffixes are ignored. The session calls Guard once, before it starts anything behind
 // a wall; a policy set later brings its own names.
@@ -580,7 +580,7 @@ type namedKey struct{}
 
 // named reports whether the host is one of the guard's names, which alone open this
 // machine and the private network addresses to an enclosure, and the connection is
-// one the allow list lets through.
+// one the allow list or the allow_first list lets through.
 func (p *Proxy) named(host string, allowed bool) bool {
 	_, ok := policy.Match(p.rules.Load().opened, host)
 	return ok && allowed
