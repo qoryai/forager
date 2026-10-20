@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/x509"
 	"io"
 	"time"
 
@@ -17,12 +18,23 @@ type Config struct {
 	Server *Server
 	// Policy is the node's policy, the one the command passes; nil means none. Without
 	// a server's policy it is each run's, and none is mode observe. Beside a server's
-	// policy it narrows that one: the node only takes away.
+	// policy it narrows that one: the node only takes away. Its allow list's entries
+	// that name a host itself, and that the run's policy allows, are the only ones that
+	// open this machine's addresses and the private network addresses to a guarded
+	// proxy.
 	Policy *Policy
 	// Credentials and Tools are the ones this machine defines; a run's policy selects
-	// among them by name. Each needs a wall.
+	// among them by name. The gateway sets a credential's value for a run with or
+	// without a wall; a tool needs a wall.
 	Credentials []Credential
 	Tools       []Tool
+	// Selects are, behind a separate gateway, the credentials a run gets, with or
+	// without a wall, when the server's policy selects none, each one of Credentials by
+	// name. An entry that takes an argument names the run's label it takes, the forge
+	// the run's forge label must be, and the pattern the label's value must match whole;
+	// an entry the run's labels do not satisfy gives no credential, and the gateway
+	// reports why. Selects needs a Listen.
+	Selects []Selection
 	// Version is Forager's version, reported in each run's registration and in the user
 	// agent of every request to the Server; empty means "dev".
 	Version string
@@ -42,14 +54,17 @@ type Config struct {
 	// output this way.
 	Events io.Writer
 	// Report receives one line per thing the gateway reports to its user; nil means
-	// Stderr. It never receives a proxy secret, an access key, a run key or an
-	// image reference.
+	// Stderr. A panic's report has the stack on the lines after its first. It never
+	// receives a proxy secret, an access key, a run key or an image reference.
 	Report func(string)
 	// Heartbeat is the interval the link's discovery announces, and each run's
 	// registration toward the Server: a whole number of seconds from 1 to 300; zero means 30 seconds. The
 	// session sends a heartbeat every interval, and the gateway ends a run whose session
 	// sends nothing for three.
 	Heartbeat time.Duration
+	// RunLimits are the limits of each run on the gateway, the same for every run, so
+	// that one run cannot slow the others down. A field of zero is its default.
+	RunLimits RunLimits
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the
 	// system's choosing: the link for the sessions of other machines, the proxy for
 	// their agents, and the relay of their starters' and keyed machines' requests to the
@@ -68,6 +83,11 @@ type Config struct {
 	// False makes the socket, for a session in another process too. A gateway with
 	// Listen serves no local link either way.
 	NoLinkSocket bool
+	// LockMemory, on Linux, makes Start lock every page of this process in memory, the
+	// pages mapped now and those mapped later, so that no key the gateway holds is
+	// written to swap: gateway.lock_memory of qory's configuration. Start fails when the
+	// lock fails, and on any other system when LockMemory is true. False locks nothing.
+	LockMemory bool
 
 	// quiet, when not zero, replaces three intervals as the time after which a run
 	// whose session sends nothing ends; closeWait, when not zero, bounds each run's
@@ -95,6 +115,31 @@ type Config struct {
 	// of Qory Apiary as a run opens. Tests set them.
 	openWaits  []time.Duration
 	openWindow time.Duration
+	// upstreamRoots, when not nil, are the roots every run's proxy verifies a
+	// terminated host's certificate against, in place of this machine's. Tests set them.
+	upstreamRoots *x509.CertPool
+}
+
+// RunLimits are the limits of each run on the gateway's proxy: gateway.run_limits of
+// qory's configuration. Start refuses a field outside its range; zero is the field's
+// default. Each run has counters of its own: one run at its limit refuses nothing of
+// another's.
+type RunLimits struct {
+	// Connections is the most connections a run has open through the gateway at once:
+	// CONNECT tunnels, blind or terminated, and plain HTTP requests in flight. From 1 to
+	// 65536; zero means 256. The next connection is refused at once with 429 Too Many
+	// Requests and Retry-After: 1.
+	Connections int
+	// RequestsPerSecond is how many requests a run sends a second, beyond Burst: every
+	// CONNECT, plain request and request inside a terminated tunnel takes one token of
+	// a bucket that gains RequestsPerSecond tokens a second. From 1 to 10000; zero means
+	// 50. A request waits up to 5 seconds for a token, then is refused with 429 Too Many
+	// Requests and Retry-After: 1. While Connections requests of the run wait, the next
+	// that needs a token is refused at once, the same way.
+	RequestsPerSecond int
+	// Burst is the most tokens the bucket holds: how many requests a run sends at once
+	// after a pause. From 1 to 100000; zero means 200.
+	Burst int
 }
 
 // TLS is the certificate and key a separate gateway serves on its one address, files in
@@ -155,6 +200,9 @@ func ReadPolicy(name string, b []byte) (*Policy, error) { return run.ReadPolicy(
 // Credential is one credential as the machine defines it, [Config.Credentials]. Its
 // Check refuses a definition that cannot be one.
 type Credential = run.Credential
+
+// Selection is one credential the gateway selects, [Config.Selects].
+type Selection = run.Selection
 
 // Tool is one tool as the machine defines it, [Config.Tools]. Its Check refuses a
 // definition that cannot be one.

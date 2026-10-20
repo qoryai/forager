@@ -52,7 +52,7 @@ func newSepRun(t *testing.T, gw session.Gateway) *sepRun {
 		Env: []string{"FAKE_RUNTIME=1", "FAKE_EXIT=0", "FAKE_ALLOWED_URL=" + allowedURL, "PATH=" + os.Getenv("PATH")},
 		Dir: t.TempDir(), RunsDir: filepath.Join(t.TempDir(), "runs"),
 		Stdin: strings.NewReader(""), Stdout: stdout, Stderr: r.stderr,
-		Gateway: gw, ForagerVersion: "test",
+		Gateway: gw, ForagerVersion: "test", Exec: []string{os.Args[0], "exec"},
 		Labels: map[string]string{"forge": "example-forge", "repository": "example-namespace/project"},
 		About:  &session.About{Title: "Example title"},
 		Report: func(l string) {

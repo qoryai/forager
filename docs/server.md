@@ -46,8 +46,9 @@ The gateway reports to the server; the session never speaks to it. A
    about never selects a policy. The registration opens the run at the server, which
    decides `instance_limit` there;
 3. reads the answer, the run's run configuration. Its `security_policy`, narrowed by
-   the node's policy, is the run's policy. Its `variables` are the server's variables
-   for the run. A server with no policy answers `{"version":1}`. The gateway answers
+   the node's policy, is the run's policy. Its `image`, a reference pinned by digest,
+   is the image the run starts in when it names one. Its `variables` are the server's
+   variables for the run. A server with no policy answers `{"version":1}`. The gateway answers
    the session's run request with what follows of them;
 4. posts the events the document selects to the URL it defines, signed: the session's,
    which it receives on its link and numbers, and the gateway's.
@@ -56,6 +57,48 @@ Every request is signed with the access key, the access key id and the instance 
 among the signed lines. Every answer is signed with the server's key and bound to the
 request, and the gateway reads an answer only once it verifies under the pin. The
 server decides which labels identify what the run works on.
+
+### Names and values that contain a key's prefix
+
+`qak_` starts every access key secret and `qrk_` every run key. Forager sends and prints
+a phrase in place of a name or a value that contains either, in any case:
+
+- A name, such as a credential's, a tool's, a variable's, an image or a label's key or
+  value, is `(a name that contains an access key secret)` when it contains `qak_`, and
+  `(a name that contains a run key)` when it contains `qrk_` and no `qak_`.
+- A value of free text, such as a path, a command, an argument, a URL, a program's
+  output or an error's text, is `(a value that contains an access key secret)` or `(a
+  value that contains a run key)` the same way. `run.started`'s `dir` is a path.
+- In a `run.refused`'s `names`, every entry is the name's phrase, a path among them;
+  the refusal's `detail` prints a path as the value's phrase.
+
+The phrases apply to the events, the registration, the outcome and Forager's messages
+and log lines. An operating system's or a network's error that quotes a path, an
+address or a name the caller passed prints as the value's phrase, and still wraps the
+error, so `errors.Is` and `errors.As` find it. A fixed reason that names a prefix, such
+as a run key's "it does not start with qrk_", prints as it is. In the registration and
+`run.started`:
+
+- Of two labels whose keys become the same phrase, the one whose key sorts first is
+  sent.
+- A subject whose `type` or `ref` contains a prefix is left out, since neither form can
+  hold a phrase, and so is a subject's `url` that contains one.
+- In `about.details`, a string is the value's phrase and a member name the name's. Of
+  two members whose names become the same, the first is sent. Details that grow past
+  8192 bytes are left out.
+
+A separate gateway takes a credential's argument from the labels the attach answer
+contains, where a label's value that contains a prefix is the name's phrase. A label's
+value that is either name phrase gives no argument, whatever the selection's pattern
+admits. The gateway phrases a `run.started` as a session does, its labels as
+`server.ShownLabels` gives them and its `about` as `server.ShownAbout` does, also when
+a session sent its values as they are. A separate gateway refuses a run key whose
+instance id contains a prefix as `run_key_invalid`.
+
+`server.Client.Discover` refuses a configuration document whose `run.url` contains a
+prefix, since `run.policy_applied` sends `run.url` as a URI. What the agent writes, in
+`run.log` and in the events of its records, is sent as it wrote it, and so are the
+server's codes. The wall and the agent get every value as it is.
 
 `gateway.Server` holds what identifies the run to the server:
 
@@ -127,8 +170,9 @@ and for each name the run takes the value of the highest that sets it:
   defaults. The list is the contract's
   [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
   `denies`, and `Spec.Variables.Deny`. It holds the session's names, the proxy's, the
-  trust store's, Docker's and `PATH`. The built-in list leaves out a value the harness
-  computes as well; the runtime's `denies` and `Variables.Deny` leave those in.
+  trust store's, Docker's, `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` and
+  `HOME`. The built-in list leaves out a value the harness computes as well; the
+  runtime's `denies` and `Variables.Deny` leave those in.
 - A value of a fixed name from any other source is left out.
 - The server's value of a variable the runtime declares or reserves, or one a
   credential is read from, is left out. A node's value of a declared one reaches the
@@ -176,14 +220,43 @@ checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,
 | a value for a placeholder | any run | `placeholder_conflict` |
 
 `QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first. Without a wall, a
-`QORY_` value of the server, the run, the machine or the harness is denied instead.
+`QORY_` value of the server, the run, the machine or the harness is denied instead. A
+server's `QORY_` value is denied in any run, apart from `QORY_RUN_SYSTEM` and
+`QORY_RUN_REPOSITORIES`, the system and the repositories a run's preparation may use,
+which the server's variables may set and which reach the agent as any server variable
+does. Set by the node, they are `QORY_` names like any other.
+
+Before it resolves the variables, the session refuses a placeholder that goes into a
+variable for no credential, `run_configuration_invalid`: one of the run's placeholders,
+from this machine's credentials and tools in forager.yaml or from the control plane's,
+that the runtime's descriptor lists in `denies` or in its model `overrides`, or that is
+its model endpoint's variable; a variable the runtime declares or reserves that no
+credential has among its placeholders; and a placeholder of a host credential in a
+variable the runtime reads a model key from, its descriptor's `model.keys`. Only the
+start key, the model key the runtime starts with, gets that variable. The session sets
+the runtime's model endpoint variable, `ANTHROPIC_BASE_URL` for Claude Code, to the
+start key's endpoint, and leaves out every value of it from `Env`, `LaunchFixed`,
+`LaunchDefaults`, `Variables.Run` and `Variables.Machine`.
+
+After it resolves the variables, the session refuses a run whose gateway holds
+credentials for it and that has no model key for its runtime, `model_key_missing`:
+behind a wall, or without one when a credential has a placeholder of a model key's
+variable. The run has one when the gateway holds a model key for it, from the control
+plane or forager.yaml, or when a value of a model key's variable reaches the runtime
+from `Env`, `LaunchFixed`, `LaunchDefaults`, `Variables.Run`, `Variables.Machine` or
+the runtime's preparation.
 
 The record lists every variable by name, never a value: `dev.qory.run.policy_applied`'s
 `variables` contains each name, `from`, the source that applies, and `lost`, each value
-that lost with its source and why: `overridden`, `denied`, `fixed` or `unwalled`. A
-fixed name, and a name the run inherits, is listed only beside a value of the server,
-the run, the machine or the harness's defaults. `Spec.OnVariables` receives the same
-list, as `session.Applied`.
+that lost with its source and why: `overridden`, `denied`, `fixed`, `unwalled`,
+`endpoint_uncovered` or `endpoint_unreadable`; behind a wall, the entry of the runtime's
+model endpoint variable has `kept`, with the model credential's name, when the value
+that applies is one the endpoint rule kept. A name
+that contains `qak_` or `qrk_` in any case is sent as `(a name that contains an access
+key secret)`, or `(a name that contains a run key)` when it contains `qrk_` and no
+`qak_`. A fixed name, and a name the run inherits, is listed only beside a value of the
+server, the run, the machine or the harness's defaults. `Spec.OnVariables` receives the
+same list, as `session.Applied`, with each name as it is.
 
 ## A control plane
 

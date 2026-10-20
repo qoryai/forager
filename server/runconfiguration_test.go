@@ -120,3 +120,84 @@ func TestARunConfigurationIsReadOnlyOnceItsAnswerVerifies(t *testing.T) {
 		t.Errorf("a signed answer: %+v, %v", rc, err)
 	}
 }
+
+// TestARunConfigurationNamesItsImageByDigest pins a run configuration's image: a
+// reference pinned by digest is read; a tag, upper case, no digest, a NAME of more than
+// 255 characters and the machine's name for an image are run_configuration_invalid
+// before the schema reads them, the image named in the refusal, quoted when it holds
+// what is not printable; a value that is no string is the schema's.
+func TestARunConfigurationNamesItsImageByDigest(t *testing.T) {
+	const pinned = "registry.example/agents/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+	v := newVerified(t)
+	runs := v.srv.URL + "/v1/runs"
+	v.runDoc = `{"version":1,"image":"` + pinned + `"}`
+	if rc, _, err := v.client().RunConfiguration(context.Background(), runs, runID); err != nil || rc.Image != pinned || rc.SecurityPolicy != nil {
+		t.Errorf("read %+v, %v", rc, err)
+	}
+	long := strings.Repeat("a", 256) + "@sha256:" + strings.Repeat("b", 64)
+	for _, tc := range []struct{ image, shown string }{
+		{"registry.example/agents/app:1", "registry.example/agents/app:1"},
+		{"registry.example/agents/app:1@sha256:" + strings.Repeat("b", 64), "registry.example/agents/app:1@sha256:" + strings.Repeat("b", 64)},
+		{"Registry.example/agents/app@sha256:" + strings.Repeat("b", 64), "Registry.example/agents/app@sha256:" + strings.Repeat("b", 64)},
+		{"registry.example/agents/app", "registry.example/agents/app"},
+		{"base", "base"},
+		{long, long},
+		{"", `""`},
+		{`base\nline`, `"base\nline"`},
+	} {
+		v.runDoc = `{"version":1,"image":"` + tc.image + `"}`
+		_, _, err := v.client().RunConfiguration(context.Background(), runs, runID)
+		want := "run configuration " + runs + "/" + runID + ": the image " + tc.shown + " is not a reference pinned by digest"
+		if code(err) != refusal.RunConfigurationInvalid || err == nil || !strings.HasPrefix(err.Error(), want+":") {
+			t.Errorf("%s: %v, want run_configuration_invalid and %q", tc.image, err, want)
+		}
+	}
+	v.runDoc = `{"version":1,"image":1}`
+	if _, _, err := v.client().RunConfiguration(context.Background(), runs, runID); code(err) != refusal.RunConfigurationInvalid || err == nil || !strings.Contains(err.Error(), "/image (type)") {
+		t.Errorf("a number: %v", err)
+	}
+}
+
+// TestARunConfigurationsCredentialsAreChecked pins that a run configuration's
+// credentials are read against the schema: a document with an API credential and a
+// host credential is read, and an entry with a value member, a *. host, a host with a
+// port, no auth, an API credential with hosts or placeholders, an http endpoint, an
+// endpoint with a user or a query, or key prefixes with a space is
+// run_configuration_invalid at the entry, with an error that quotes no value.
+func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
+	entry := func(extra string) string {
+		return `{"version":1,"credentials":[{"name":"forge","hosts":["api.model.example"],"auth":{"scheme":"bearer"}` + extra + `}]}`
+	}
+	api := func(extra string) string {
+		return `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer"}` + extra + `}]}`
+	}
+	v := newVerified(t)
+	v.runDoc = `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://10.0.0.5:4443/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]},{"name":"forge","hosts":["git.example","fd00::5"],"paths":["/v1/*"],"auth":{"scheme":"basic","username":"x-access-token"},"placeholders":["FORGE_TOKEN"]}]}`
+	if _, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t)); err != nil {
+		t.Fatalf("a run configuration with credentials: %v", err)
+	}
+	for name, doc := range map[string]string{
+		"a value":                   entry(`,"value":"` + value + `"`),
+		"a *. host":                 strings.Replace(entry(""), `"api.model.example"`, `"*.model.example"`, 1),
+		"a host and port":           strings.Replace(entry(""), `"api.model.example"`, `"api.model.example:443"`, 1),
+		"no auth":                   strings.Replace(entry(""), `,"auth":{"scheme":"bearer"}`, ``, 1),
+		"an API with hosts":         api(`,"hosts":["api.model.example"]`),
+		"an API with placeholders":  api(`,"placeholders":["MODEL_API_KEY"]`),
+		"an http endpoint":          strings.Replace(api(""), `https://`, `http://`, 1),
+		"an endpoint with a user":   strings.Replace(api(""), `https://`, `https://`+value+`@`, 1),
+		"an endpoint with a query":  strings.Replace(api(""), `/anthropic`, `/anthropic?key=`+value, 1),
+		"a key prefix with a space": api(`,"key_prefixes":["sk ant"]`),
+		"nine credentials":          `{"version":1,"credentials":[` + strings.Repeat(`{"name":"forge","hosts":["api.model.example"],"auth":{"scheme":"bearer"}},`, 8) + `{"name":"forge","hosts":["api.model.example"],"auth":{"scheme":"bearer"}}]}`,
+	} {
+		v := newVerified(t)
+		v.runDoc = doc
+		_, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t))
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), "/credentials") {
+			t.Errorf("%s: %v; want run_configuration_invalid at /credentials", name, err)
+		}
+		if err != nil && strings.Contains(err.Error(), value) {
+			t.Errorf("%s: the error quotes the value: %v", name, err)
+		}
+	}
+}

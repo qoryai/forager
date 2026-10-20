@@ -15,18 +15,23 @@
 // configure that would make it.
 //
 // A descriptor's [Secrets] defines the secrets the runtime reads and the variables it
-// keeps for itself. [Runtimes] renders them, for every descriptor the contract ships,
-// as runtimes.json, the file a server vendors.
+// keeps for itself, and its [Model] the API formats the runtime sends, where a composer
+// writes a run's model id, effort value and model endpoint, and the variables it reads
+// a model key from. [Runtimes] renders
+// both, for every descriptor the contract ships, as runtimes.json, the file a server
+// vendors.
 package descriptor
 
 import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 )
 
@@ -40,7 +45,71 @@ type Descriptor struct {
 	Stop           *Stop     `yaml:"stop" json:"stop,omitempty"`
 	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
 	Secrets        *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
+	Model          *Model    `yaml:"model" json:"model,omitempty"`
 	Rules          []Rule    `yaml:"rules" json:"rules"`
+}
+
+// Model is the API formats the runtime sends its requests in, and where a composer
+// writes a run's model id, effort value and model endpoint for it. Nil when the
+// descriptor has no model section.
+type Model struct {
+	// Formats is the API formats, each one of api-format.schema.json.
+	Formats []string `yaml:"formats" json:"formats"`
+	// Model is where the run's model id goes.
+	Model Place `yaml:"model" json:"model"`
+	// Effort is where an effort value goes; nil when the runtime has no place for one.
+	Effort *Effort `yaml:"effort" json:"effort,omitempty"`
+	// Endpoint is where the base URL of the run's model API goes.
+	Endpoint Endpoint `yaml:"endpoint" json:"endpoint"`
+	// Keys is the variables the runtime reads a model key from, one per API format and
+	// auth; nil when the section lists none.
+	Keys []Key `yaml:"keys" json:"keys,omitempty"`
+	// Overrides is the variables that would override the model id or effort value a
+	// composer writes, which a walled run leaves out and unsets inside; nil when the
+	// section lists none.
+	Overrides []string `yaml:"overrides" json:"overrides,omitempty"`
+}
+
+// Key is one variable the runtime reads a model key from: the API format the key is
+// for, how the runtime sends it, and the variable.
+type Key struct {
+	Format   string `yaml:"format" json:"format"`
+	Auth     Auth   `yaml:"auth" json:"auth"`
+	Variable string `yaml:"variable" json:"variable"`
+}
+
+// Place is where a value goes, exactly one of its fields set: Flag, an argument the
+// runtime is started with, which takes the value; Setting, a dotted key in the JSON
+// settings file the launch passes; Variable, an environment variable.
+type Place struct {
+	Flag     string `yaml:"flag" json:"flag,omitempty"`
+	Setting  string `yaml:"setting" json:"setting,omitempty"`
+	Variable string `yaml:"variable" json:"variable,omitempty"`
+}
+
+// ValuedPlace is a place and the values the runtime accepts there.
+type ValuedPlace struct {
+	Place  `yaml:",inline"`
+	Values []string `yaml:"values" json:"values"`
+}
+
+// AgentPlace is where a value goes in an agent's file: Frontmatter, a key of the file's
+// frontmatter, and the values the runtime accepts there.
+type AgentPlace struct {
+	Frontmatter string   `yaml:"frontmatter" json:"frontmatter"`
+	Values      []string `yaml:"values" json:"values"`
+}
+
+// Effort is where an effort value goes: Run, the run's; Agent, an agent's, nil when the
+// runtime has no place for an agent's effort.
+type Effort struct {
+	Run   ValuedPlace `yaml:"run" json:"run"`
+	Agent *AgentPlace `yaml:"agent" json:"agent,omitempty"`
+}
+
+// Endpoint is the variable the runtime reads the base URL of its model API from.
+type Endpoint struct {
+	Variable string `yaml:"variable" json:"variable"`
 }
 
 // Secrets is what the runtime needs of a run's secrets and the variables it keeps for
@@ -73,11 +142,13 @@ type Declaration struct {
 }
 
 // Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
-// the header of header, Username the fixed user of basic.
+// the header of header, Username the fixed user of basic, and OAuth marks a bearer as
+// an OAuth token.
 type Auth struct {
 	Scheme   string `yaml:"scheme" json:"scheme"`
 	Header   string `yaml:"header" json:"header,omitempty"`
 	Username string `yaml:"username" json:"username,omitempty"`
+	OAuth    bool   `yaml:"oauth" json:"oauth,omitempty"`
 }
 
 // Group is a set of declarations of which the runtime needs at most one, and exactly
@@ -151,16 +222,18 @@ const (
 // Parse validates a descriptor document against the schema and decodes it. name is
 // used in messages and chooses YAML or JSON by its extension.
 func Parse(name string, b []byte) (*Descriptor, error) {
+	// shown is name as a message prints it.
+	shown := accesskey.ShownValue(name, false)
 	doc, err := contracts.Decode(name, b)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	schema, err := contracts.Compile("descriptor.schema.json")
 	if err != nil {
 		return nil, err
 	}
 	if err := schema.Validate(doc); err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
+		return nil, fmt.Errorf("%s: %w", shown, accesskey.ShownError(err))
 	}
 	var d Descriptor
 	switch filepath.Ext(name) {
@@ -170,16 +243,92 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 		err = json.Unmarshal(b, &d)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
+		return nil, fmt.Errorf("%s: %w", shown, accesskey.ShownError(err))
 	}
 	if err := d.Secrets.check(); err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
+		return nil, fmt.Errorf("%s: %w", shown, err)
+	}
+	if err := d.Model.check(d.Secrets); err != nil {
+		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
 	return &d, nil
 }
 
+// keyless are the variables a key may not be read from, compared without case: each
+// changes what runs.
+var keyless = []string{"HOME", "LD_PRELOAD", "NODE_OPTIONS", "BASH_ENV"}
+
+// check holds the model keys to what the schema cannot express: a key's variable, and
+// a declaration's, is none of keyless in any case; a key's format is one of Formats;
+// each pair of format and auth appears once; a key's variable is not in the secrets'
+// denies, Overrides or the endpoint's variable; and a key's variable that a
+// declaration also has has the declaration's auth.
+func (m *Model) check(s *Secrets) error {
+	var secrets Secrets
+	if s != nil {
+		secrets = *s
+	}
+	for _, d := range secrets.Declares {
+		if i := slices.IndexFunc(keyless, func(k string) bool { return strings.EqualFold(k, d.Name) }); i >= 0 {
+			return fmt.Errorf("secrets.declares: read the secret %s from another variable than %s: a secret may not be read from HOME, LD_PRELOAD, NODE_OPTIONS or BASH_ENV",
+				accesskey.ShownName(d.ID, false), accesskey.ShownName(d.Name, false))
+		}
+	}
+	if m == nil {
+		return nil
+	}
+	for i, k := range m.Keys {
+		v := accesskey.ShownName(k.Variable, false)
+		switch {
+		case slices.ContainsFunc(keyless, func(n string) bool { return strings.EqualFold(n, k.Variable) }):
+			return fmt.Errorf("model.keys: read the key from another variable than %s: a key may not be read from HOME, LD_PRELOAD, NODE_OPTIONS or BASH_ENV", v)
+		case !slices.Contains(m.Formats, k.Format):
+			return fmt.Errorf("model.keys: add %s to model.formats, or remove its keys: model.formats lists only %s",
+				accesskey.ShownName(k.Format, false), strings.Join(m.Formats, ", "))
+		case slices.ContainsFunc(m.Keys[:i], func(o Key) bool { return o.Format == k.Format && sameAuth(o.Auth, k.Auth) }):
+			return fmt.Errorf("model.keys: list %s with %s once: two keys have it", accesskey.ShownName(k.Format, false), authWords(k.Auth))
+		case slices.Contains(secrets.Denies, k.Variable) || slices.Contains(m.Overrides, k.Variable) || k.Variable == m.Endpoint.Variable:
+			return fmt.Errorf("model.keys: read the key from a variable outside denies, overrides and the endpoint: %s is %s", v, place(m, k.Variable))
+		}
+		if j := slices.IndexFunc(secrets.Declares, func(d Declaration) bool { return d.Name == k.Variable }); j >= 0 && !sameAuth(secrets.Declares[j].Auth, k.Auth) {
+			return fmt.Errorf("model.keys: give %s the auth of its secrets.declares entry: the two differ", v)
+		}
+	}
+	return nil
+}
+
+// place is where the descriptor lists name among denies, overrides and the endpoint's
+// variable, as check's message writes it.
+func place(m *Model, name string) string {
+	switch {
+	case name == m.Endpoint.Variable:
+		return "the endpoint"
+	case slices.Contains(m.Overrides, name):
+		return "in overrides"
+	}
+	return "in denies"
+}
+
+// sameAuth reports whether two auths are the same: the same scheme, the same header
+// name with case ignored, the same username, and the same oauth.
+func sameAuth(a, b Auth) bool {
+	return a.Scheme == b.Scheme && strings.EqualFold(a.Header, b.Header) && a.Username == b.Username && a.OAuth == b.OAuth
+}
+
+// authWords is how check's message writes an auth: the header with its name, the
+// bearer scheme, with oauth when it is set, or the basic scheme.
+func authWords(a Auth) string {
+	switch {
+	case a.Scheme == "header":
+		return "the header " + accesskey.ShownValue(a.Header, false)
+	case a.OAuth:
+		return "the bearer scheme and oauth"
+	}
+	return "the " + a.Scheme + " scheme"
+}
+
 // check holds the secrets to what the schema cannot express: declaration ids and group
-// ids are each distinct, and every id a group lists is a declared one, in one group at
+// ids are each distinct, every id a group lists is a declared one, in one group at
 // most.
 func (s *Secrets) check() error {
 	if s == nil {
@@ -188,7 +337,7 @@ func (s *Secrets) check() error {
 	declared := map[string]bool{}
 	for _, d := range s.Declares {
 		if declared[d.ID] {
-			return fmt.Errorf("secrets: %s is declared twice", d.ID)
+			return fmt.Errorf("secrets: %s is declared twice", accesskey.ShownName(d.ID, false))
 		}
 		declared[d.ID] = true
 	}
@@ -196,15 +345,17 @@ func (s *Secrets) check() error {
 	grouped := map[string]string{}
 	for _, g := range s.OneOf {
 		if groups[g.ID] {
-			return fmt.Errorf("secrets: one_of %s is defined twice", g.ID)
+			return fmt.Errorf("secrets: one_of %s is defined twice", accesskey.ShownName(g.ID, false))
 		}
 		groups[g.ID] = true
 		for _, id := range g.Of {
 			if !declared[id] {
-				return fmt.Errorf("secrets: one_of %s lists %s, which no declaration has as its id", g.ID, id)
+				return fmt.Errorf("secrets: one_of %s lists %s, which no declaration has as its id",
+					accesskey.ShownName(g.ID, false), accesskey.ShownName(id, false))
 			}
 			if other, ok := grouped[id]; ok {
-				return fmt.Errorf("secrets: %s is in one_of %s and in %s", id, other, g.ID)
+				return fmt.Errorf("secrets: %s is in one_of %s and in %s", accesskey.ShownName(id, false),
+					accesskey.ShownName(other, false), accesskey.ShownName(g.ID, false))
 			}
 			grouped[id] = g.ID
 		}

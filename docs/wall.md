@@ -7,6 +7,11 @@ A **wall** starts the runtime in a container with no route out except to the pro
 the rest fails, instead of going unseen. A program that ignores the proxy reaches
 nothing.
 
+The gateway sets a run's credentials with or without a wall, and the agent gets their
+placeholders (see [credentials](credentials.md#without-a-wall)). Without a wall, a
+program that ignores the proxy sends only the placeholder; behind one, its connection
+fails. Tools, path rules and images need a wall.
+
 ## How it works
 
 ```
@@ -36,7 +41,8 @@ nothing.
   its subnets, and takes a connection only from an address in those subnets.
 - So every connection is the proxy's to decide and record.
 - The checkout and the composed home are each mounted at the same path as on the
-  machine. The workspace is the working directory inside. The run's record is mounted
+  machine, except in an image a run's policy names by reference, where the checkout is
+  at `/workspace` ([Images](#images)). The workspace is the working directory inside. The run's record is mounted
   read-only, from a runs directory outside every mount.
 - In a git worktree the repository's data lies in the main checkout; git inside the
   container works only with that directory mounted.
@@ -155,16 +161,50 @@ Two flags change one run:
 
 ## The guard
 
-Behind a wall, the proxy is guarded:
+In this section, an IPv6 address contains an IPv4 address in its last 32 bits in
+`::/96`, `::ffff:0:0/96`, `::ffff:0:0:0/96` and `64:ff9b::/96`, and in bits 16 to 47 in
+`2002::/16` (6to4). An address in `64:ff9b:1::/48` (local-use NAT64) contains one at
+each of the four positions RFC 6052 defines for an IPv4 address after a prefix of 48,
+56, 64 or 96 bits, and the guard refuses the address where any of the four would be
+refused.
 
-- It never dials link-local addresses, the cloud metadata service among them.
-- It dials the node itself only for a host that an `egress.allow` entry lists by its
-  name. A `*.` entry above that host is not enough.
+Behind a wall or behind a separate gateway, the proxy is guarded:
+
+- It never dials link-local addresses, the cloud metadata service among them, or these
+  cloud metadata addresses outside that range, whatever the allow list contains:
+  - `100.100.100.200`, Alibaba Cloud ECS:
+    <https://www.alibabacloud.com/help/en/ecs/user-guide/view-instance-metadata>
+  - `192.0.0.192`, Oracle Cloud Compute Classic:
+    <https://docs.oracle.com/en/cloud/cloud-at-customer/occ-get-started/retrieve-predefined-instance-metadata.html>
+  - `fd00:ec2::254`, AWS EC2 over IPv6:
+    <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html>
+  - `fd20:ce::254`, Google Compute Engine over IPv6:
+    <https://docs.cloud.google.com/compute/docs/metadata/querying-metadata>
+  - `168.63.129.16`, Azure WireServer:
+    <https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16>
+  - `fd00:ec2::23`, AWS EKS Pod Identity Agent over IPv6:
+    <https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html>
+  - `fd00:a9fe:a9fe::1`, Akamai (Linode) Metadata service over IPv6:
+    <https://techdocs.akamai.com/cloud-computing/docs/access-the-metadata-service-api>
+  - `fd00:42::42`, Scaleway Instance metadata API over IPv6:
+    <https://www.scaleway.com/en/developers/api/instance/>
+
+  It also refuses an IPv6 address that contains `100.100.100.200`, `192.0.0.192` or
+  `168.63.129.16`.
+- It dials the node itself, and a private network address in `10/8`, `172.16/12`,
+  `192.168/16`, `100.64/10`, `0/8`, `198.18/15`, `240/4`, `fc00::/7` or `fec0::/10`,
+  only for a host that an `egress.allow` entry of the node's policy lists by its name,
+  and that the run's policy allows. A `*.` entry above that host is not enough, and an
+  entry of a server's policy never opens the node or a private network address. The
+  same holds for an IPv6 address that contains an IPv4 address of those ranges.
+
+The node's policy is the one the command passes, `gateway.Config.Policy` in Go. In
+`qory` it is the `gateway.egress` section of `~/.config/qory/forager.yaml`.
 
 A model endpoint or MCP server on the node is reached through the proxy. The session
-reaches it by the node's host name, listed in `egress`, as the hosts file or a name
-server gives it; no search domain is added. `localhost` inside the container is the
-container.
+reaches it by the node's host name, listed in the node's policy's `egress`, as the
+hosts file or a name server gives it; no search domain is added. `localhost` inside the
+container is the container.
 
 ## From Go
 
@@ -204,9 +244,20 @@ res, err := session.Run(ctx, session.Spec{
 		NestArgs:  []string{"nest"},              // the mode of it that calls wall.Nest
 	},
 	Forwarder: []string{wall.HelperPath, "forward"},
+	Exec:      []string{wall.HelperPath, "exec"},  // the mode of it that calls session.Exec
 	Gateway:   session.LocalGateway(g.LocalLink()), // the gateway on this machine, with the policy and the credentials
 })
 ```
+
+When a walled run has names to unset, its launch starts through `Exec`, the helper's
+`exec` mode, which calls `os.Exit(session.Exec(os.Args[2:], os.Stderr))`: it unsets the
+runtime's declared, reserved and denied variables and the node's denied ones that
+nothing sets, so a value the image's `ENV` gives one never reaches the runtime, and
+neither does an empty one. A name Forager or the wall sets is never unset. One
+exception limits this: with nested Docker, `DOCKER_CONFIG` is never unset, and a
+non-empty value, the image's included, takes the place of the wall's docker
+configuration, as [Nested Docker](#nested-docker) says. Only an image the machine
+defines has nested Docker. A `Wall` needs an `Exec`.
 
 Sizes are written the way Docker writes them: a number, and optionally `b`, `k`, `m` or
 `g`, in either case. A number alone is bytes. So `8g` is 8 GB. `8GB` or `8GiB` is
@@ -326,8 +377,9 @@ up in its parent, so two binds of one root are allowed.
   choose the directory of this machine that is bound. `Names` holds the place as
   passed, the link, absolute and clean, and the writable place as passed. The link is
   the last one inside the writable place on the way to the place, the one that leads
-  out of it. Its sentence reads: "/work/home is reached through the link /work/home
-  inside /work, which a walled agent can change: list the link's target itself". A
+  out of it. Its sentence reads: "List the path that /work/home resolves to, in place
+  of /work/home. /work/home is reached through the link /work/home inside /work, which
+  a walled agent can change". A
   place whose link leads back into the writable place lies inside it and is reached
   through it, and nothing is bound through the link. A link on the way to a place that
   lies inside no writable place of the run's is followed by the engine as it binds.
@@ -335,9 +387,10 @@ up in its parent, so two binds of one root are allowed.
   The same holds of a link inside a place of `Spec.Written`, the places the caller
   records as written by walled runs, though no walled run that wrote it is still
   going: `Names` holds the place, the link and the written place as passed. Its
-  sentence reads: "/code/repo/.claude/worktrees/wt is reached through the link
-  /code/repo/.claude/worktrees/wt inside /code/repo, which a walled agent can change:
-  list the link's target itself".
+  sentence reads: "List the path that /code/repo/.claude/worktrees/wt resolves to, in
+  place of /code/repo/.claude/worktrees/wt. /code/repo/.claude/worktrees/wt is reached
+  through the link /code/repo/.claude/worktrees/wt inside /code/repo, which a walled
+  agent can change".
 - **Forager's files.** A writable place that contains a directory a name on the way
   to one of Forager's files is looked up in, such as a runs directory that is a link
   inside the checkout, is `mount_contains_forager_files`: the agent could point the link
@@ -391,10 +444,10 @@ up in its parent, so two binds of one root are allowed.
   command other than podman, or neither a pinned selection nor an id for podman, or that
   reads an entry that records no engine or cannot be read, is no run,
   `engine_unreachable`, with the earlier run's id and then the absolute path of its entry
-  in `Names`: "Docker could not be asked whether the walled run <id> is still going, so
-  the run does not start: <the error>". Under the registry's lock, a run reads the
-  entries, checks its binds against them and adds its entry, so two runs that start
-  together are checked one after the other. A run is no run, `mount_shared_with_run`,
+  in `Names`: "The check for a container of the walled run <id> failed, so this run
+  does not start: <the error>". Under the registry's lock, a run reads the entries,
+  checks its binds against them and adds its entry, so two runs that start together are
+  checked one after the other. A run is no run, `mount_shared_with_run`,
   when one of its binds lies inside a writable bind of another run's or is reached
   through one, or when one of its writable binds holds a bind of another run's or a
   directory a name on the way to one is looked up in. Two runs that bind the same root,
@@ -417,6 +470,29 @@ up in its parent, so two binds of one root are allowed.
   The check comes before the gateway is contacted, and the run leaves the registry when
   it ends, however it ends, unless its wall could not be removed.
 
+  `session.RunsBinding(ctx, d, p)` reads the registry, under its lock, for a caller that
+  removes or reuses a place p, an absolute path: it returns each walled run still going,
+  by the same rule, one of whose writable binds overlaps p, as a `session.WalledRun` of
+  the run's id and the absolute path of its entry. A bind overlaps p when it is p, holds
+  p or lies inside p, so a run that binds only `p/.git` counts, and when a name on the
+  way to p is looked up in it, or a name on the way to it is looked up in p. The paths
+  are compared as written and as resolved through links, either side resolved now, so a
+  link on neither side hides an overlap; p is resolved as the filesystem resolves it, a
+  `..` after a link from the link's target. The run directory is bound read-only, so a
+  run whose run directory alone overlaps p is not returned. The answer holds when the
+  read returns: a caller that removes or reuses p on it holds a lock that the runs it
+  starts on p wait for, from the check to the action. A read-only bind does not count,
+  and the read asks after an entry only when one of its writable binds overlaps p, or
+  one cannot be resolved now. It removes the entries of those runs that are over, as a
+  run that starts does, is `engine_unreachable`, with the same `Names`, when it cannot
+  ask, or cannot read an entry whose lock is free, with `EntryUnreadable` set on the
+  refusal for that, in the sentence "The check for a container of the walled run <id>
+  failed, so the run counts as still going: <the error>", and is a plain error for a
+  relative p. It asks an engine through d, the caller's `*wall.Docker`, by
+  `(*wall.Docker).RunContainersExist`, as a run asks through its wall when that is a
+  `*wall.Docker`; a nil d, like a run behind another wall, asks as
+  `wall.RunContainersExist` does, the method of a Docker with no field set.
+
 A refusal's first name is always a `Spec.Mounts` path or `Dir`, exactly as passed, and
 the run directory is named by `Spec.RunsDir`. Every check runs again just before the
 enclosure binds the mounts, with the wall's extra binds, and the run's entry is updated.
@@ -429,10 +505,10 @@ change a path between the last check and the bind.
 
 ### No file read from a place an agent can write
 
-Claude Code's runtime reads one file of this machine as the run starts: the settings
-file passed with `--settings`, which it copies into the run directory with Forager's
-hooks added. The session refuses that file when it lies in a place a walled run can
-write, so no walled run chooses what a later run is given:
+Claude Code's runtime reads the settings file passed with `--settings` as the run
+starts, and copies it into the run directory with Forager's hooks added. The session
+refuses that file when it lies in a place a walled run can write, so no walled run
+chooses what a later run is given:
 
 - the places the caller lists in `Spec.Written`, the workspaces and the writable mounts
   of the walled runs it starts, with or without a wall for this run;
@@ -442,7 +518,7 @@ write, so no walled run chooses what a later run is given:
 - behind a wall, this run's writable binds: the workspace, or the mount that holds it,
   the writable mounts and the wall's writable binds.
 
-A path with a `..` name is refused first, "it has a ".." part": the system applies `..`
+A path with a `..` name is refused first, "the path has a ".." part": the system applies `..`
 after the link before it, so the path made clean would name another file than the one
 opened. Otherwise the path is made absolute once, and that one path is checked and
 opened. A file is refused when its path, absolute and clean or resolved through every
@@ -451,12 +527,161 @@ names and regardless of case; when a name on the way to it is looked up inside s
 place; when its last part is a link; and when it is not a regular file. The file is then
 opened without following a link as its last part, and read only when it is a regular
 file of at most 1 MiB and the same file as the one its path resolved to when it was
-checked, or the run is refused with "it changed while it was checked". A refusal stops
-the run before the runtime starts, with the session's error, such as "runtime claude:
-settings /work/launch-settings.json: it lies in /work, which a walled run can write".
-Settings passed as a document, `--settings '{…}'`, are no file and are not checked. The
-places are worked out only when a file is to be read: a run that passes none does not
-read the registry for them.
+checked, or the run is refused with "that file changed while it was checked". A refusal
+stops the run before the runtime starts, with the session's error, which starts with the
+fix, such as "runtime claude: Move /work/launch-settings.json to a directory no walled run
+writes, or pass the settings as a JSON object. This launch passes --settings
+/work/launch-settings.json, which lies in /work, a place a walled run can write, so the
+run does not start." The other refusals of a settings file take the forms of the
+`--mcp-config` file's, and settings that are no JSON object get "Make the file
+/a/settings.json a JSON object." before the reason.
+Settings passed as a document, `--settings '{…}'`, are no file and are not checked.
+Claude Code reads only the last `--settings` it is passed, and the session checks only
+the first, so a launch that passes `--settings` more than once does not start, walled or
+not: "Pass one --settings file. This launch passes --settings more than once, and Claude
+Code reads only the last one, so the run does not start." The places are worked out only
+when a file is to be read: a run that passes none does not read the registry for them.
+
+A walled launch's `--mcp-config`, `--agents`, `--plugin-dir`, `--plugin-dir-no-mcp` and
+`--add-dir` are checked too, against the same places, before the settings are read. An
+unwalled launch passes them unchecked.
+
+- **Which words are values.** Every value is listed as Claude Code's parser takes it:
+  the word after the flag, whatever it is, the part after `=` of `--flag=value`, and for
+  `--mcp-config` and `--add-dir` every further word up to one that starts with `-` and is
+  longer than one character. The list ends at a `--`, unless the word before that `--`
+  starts with `-` and is not a `--name=value` word: that option may take the `--` as its
+  value, so the words after it are listed too.
+- **JSON passes unchanged.** Only JSON's white space, space, tab, newline and carriage
+  return, is taken off a value before it is judged. An `--mcp-config` value that is then
+  JSON is servers, not a path, unless it is `null`, `false`, `""`, or a number that is
+  0 or does not fit a 64-bit float, such as `1e400`. An `--agents` value that then
+  starts with `{`, or is JSON other than `null`, is agents, not a path. Every other
+  value is a path, so a value that starts with other white space, such as a no-break
+  space, `1e400` for `--mcp-config` and `null` for `--agents` are refused as relative
+  paths.
+- **Path rules.** Every other value is a path. A value that starts with `~` is refused:
+  "Replace ~/ref with an absolute path. This launch passes --add-dir ~/ref, and inside
+  the wall ~ is the home of the wall's user, which Forager cannot check, so the run does
+  not start." A relative value is refused, because Claude Code reads it from the
+  workspace: "Replace mcp.json with an absolute path outside the workspace. This launch
+  passes --mcp-config mcp.json, a relative path that Claude Code reads from the
+  workspace, which a walled run can write, so the run does not start." A value with a
+  `..` part is refused: "Pass the path /a/../b.json without "..". This launch passes
+  --mcp-config /a/../b.json, and the path has a ".." part, so the run does not start."
+  A text shows a value of `--mcp-config`, `--agents` or `--settings` that contains `{`
+  or `[`, or starts with white space or a format character such as U+FEFF, as `(an
+  --mcp-config value)`, `(an --agents value)` or `(a --settings value)`, because such a
+  value may be JSON with a token in it. The reason after "failed:" is then `it is no
+  file`, `it cannot be read` or `it is no JSON object`. For `--settings` this holds in
+  an unwalled launch too.
+- **`--mcp-config` and `--agents` files** are checked and read as the settings file is,
+  and Claude Code is passed a copy in the run directory, `mcp-config-<n>.json` or
+  `agents-<n>.json`, numbered from 1 in the order the files appear. For a run whose
+  workspace is at `/workspace` inside, a copy that is JSON has every string written as
+  the enclosure sees it. A file in such a place is refused: "Move /work/mcp.json to a
+  directory no walled run can write, or pass the servers as a JSON string. This launch
+  passes --mcp-config /work/mcp.json, which lies in /work, a place a walled run can
+  write, so the run does not start." A file whose path is looked up in such a place
+  gets the text with "is reached through /work", and the fix for an `--agents` file
+  ends "or pass the agents as a JSON object." The text for a file refused by the read
+  shows the reason after the fix, such as "Pass the path of the file that /a/mcp.json
+  links to. This launch passes --mcp-config /a/mcp.json, and that file is a link, so
+  the run does not start." The other fixes are "Pass a --mcp-config path to a regular
+  file.", "Pass a --mcp-config file of at most 1048576 bytes (1 MiB)." and "Start the run
+  again when no process is writing /a/mcp.json." No copy is written before every value has
+  passed.
+- **`--plugin-dir` and `--plugin-dir-no-mcp` directories** may not lie in, be reached
+  through, or contain such a place, by whole names and regardless of case: "Move the
+  plugin /home/p to a directory no walled run writes. This launch passes --plugin-dir
+  /home/p, and that directory contains /home/p/work, which a walled run can write, so
+  the run does not start." Every entry under the directory is then read without
+  following a link as it is read, and the check stops after 10,000 entries: "Pass a
+  smaller plugin directory. This launch passes --plugin-dir /home/p, which has more than
+  10,000 entries, the most Forager checks, so the run does not start."
+  - A link must not lead into such a place: "Replace the link /home/p/skills/x with a
+    copy, or move what it leads to out of /work. This launch passes --plugin-dir
+    /home/p, and that link leads into /work, which a walled run can write, so the run
+    does not start." A link whose path goes through such a place says so: "Replace the
+    link /home/p/skills/x with a copy, or point it at a path that does not go through
+    /work. This launch passes --plugin-dir /home/p, and that link leads through /work,
+    which a walled run can write, so the run does not start."
+  - A link to a directory is checked as the directory is: "Replace the link
+    /home/p/skills/x with a copy, or link to a directory with no place a walled run
+    writes. This launch passes --plugin-dir /home/p, and that link leads to
+    /h/other, and /h/other contains /h/other/work, which a walled run can write, so the
+    run does not start." The entries under the directory it leads to are read the same
+    way. Each directory is read once, by its device and inode: one reached again,
+    through a link or as an entry, counts as one entry and is not read again.
+  - For a run whose workspace is at `/workspace` inside, a link whose path, followed a
+    name at a time on this machine, reaches `/workspace` is refused the same way, with
+    `/workspace` as the place. So is a value whose path reaches `/workspace`, before
+    Forager checks the path on this machine: "Move the plugin /workspace/plug to a
+    directory no walled run writes. This launch passes --plugin-dir /workspace/plug,
+    and that directory lies in /workspace, which a walled run can write, so the run
+    does not start." For a value whose name ends in `.zip`, the text says "that file" in
+    place of "that directory". Forager follows at most 40 links on the way, counting
+    them itself, so the limit is the same on Linux and macOS. A link past it is refused
+    with the reason: "Replace the link /home/p/skills/x with a copy, or point it at a
+    path with fewer links. The check of --plugin-dir /home/p failed: /home/p/skills/x:
+    more than 40 links, the most Forager follows". A value past it gets "Pass a
+    --plugin-dir path with fewer links." before the same reason.
+  - A regular file, or a file a link leads to, with more than one name is refused:
+    "Replace /home/p/agents/a.md with a copy that has one name. This launch passes
+    --plugin-dir /home/p, and that file has more than one hard link, so a walled run
+    could change it under another name, and the run does not start."
+  - A value that is no directory, a `.zip` say, is checked as a file: it must not lie
+    in or be reached through such a place, must be no link, a regular file, and have
+    one name. A link gets "Pass the path of the file that /home/link.zip links to.",
+    and any other file that is not a regular one "Pass a --plugin-dir path to a
+    directory or a regular file.", each before the reason.
+- **`--add-dir` directories** are checked as `--plugin-dir`'s, with the entries read
+  only at `<dir>/.claude`, and under it, and at `<dir>/CLAUDE.md`: "Remove --add-dir
+  /work/ref, or add a directory no walled run writes. This launch passes --add-dir
+  /work/ref, and that directory lies in /work, which a walled run can write, so the run
+  does not start." A directory in a read-only mount passes. A link under `.claude`, or
+  `.claude` itself, that leads back to the directory reads all of the directory. Claude
+  Code adds only a directory, so a value that exists and is no directory, or a link to
+  such a value, is refused after the `/workspace` check: "Pass an --add-dir path to a
+  directory. This launch passes --add-dir /home/notes.md, and that file is not a
+  directory, so the run does not start." A value that does not exist, or a link that
+  leads nowhere, gets the text for any other reason.
+- **Any other reason**, a file that does not exist say, is a fix, then the flag, the
+  value and the reason: "runtime claude: Pass a --mcp-config path that exists on this
+  machine. The check of --mcp-config /a/mcp.json failed: stat /a/mcp.json: no such file
+  or directory". A path the check had no permission for gets "Give the user that runs
+  Forager access to /a/mcp.json, or pass another --mcp-config path.", and any other
+  error "Fix the error at the end of this message, or pass another --mcp-config path."
+
+A refusal stops the run before the wall is prepared, with the prefix `runtime claude: `.
+Claude Code also loads plugin directories named in `CLAUDE_CODE_PLUGIN_DIRS`,
+adds the directories named in `CLAUDE_RELAUNCH_SESSION_ADD_DIRS`, and reads plugins or
+settings from `CLAUDE_CODE_PLUGIN_SEED_DIR`, `CLAUDE_CODE_PLUGIN_CACHE_DIR` and
+`CLAUDE_CODE_MANAGED_SETTINGS_PATH`. The Claude descriptor denies all five, so no value
+of the server's, the run's or the machine's reaches the enclosure, and a walled run has
+them unset.
+
+A walled launch's files of `--system-prompt-file`, `--append-system-prompt-file` and
+`--append-subagent-system-prompt-file` are checked and copied as the settings file is,
+and Claude Code is passed the copies. A walled launch that passes
+`--project-config-root` does not start, because Claude Code reads project settings,
+`.mcp.json` and the `.claude` trees from that directory.
+
+Forager does not check:
+
+- the programs that a checked file starts: a hook's command, an MCP server's command,
+  `apiKeyHelper` and the like. A command that runs a file in a place a walled run can
+  write runs what that run wrote. Keep the scripts of a harness's hooks and servers
+  outside the checkout.
+- the checkout's `.claude/`, `.mcp.json`, `CLAUDE.md` and `CLAUDE.local.md`. Claude Code
+  reads them unless the launch passes `--setting-sources user`, as `qory` does.
+- a change after the check by a process outside every wall. A change to a file after
+  its copy has no effect, since Claude Code reads the copy. A directory and a program
+  are read in place, so a process with write access to them can change them after the
+  check.
+
+These programs, and what these files start, run inside the enclosure. Against an image
+by reference, what runs inside is not the boundary ([Images](#images)).
 
 ### The helper
 
@@ -482,6 +707,42 @@ names the image. Without a selection, the run starts in `Image`.
 `runtime` and `docker` when it needs them. It reads `wall.image` too, the image a run
 starts in when its policy selects none.
 
+A policy may also name an image by its reference pinned by digest, `NAME@sha256:` and 64
+lower-case hexadecimal digits, with no tag. The machine runs one only under a prefix of
+`Spec.ImagesAllow`, its `images.allow`: an entry such as `registry.example/agents/` or
+`registry.example/agents` covers the references that start with it at a whole part;
+without a list no reference runs. Any other reference is refused with
+`image_not_allowed`, and one with a tag or in upper case with
+`run_configuration_invalid`. `images.allow` needs a default image, `Image`.
+
+An image by reference starts as the default does: under the default's runtime, with no
+nested Docker, as the node's user, which must then be given as `uid:gid` in numbers,
+neither 0: the engine would look a name, or a uid's groups, up in the image's
+`/etc/passwd` and `/etc/group`, which the image writes, so a user given by name or as a
+uid alone is refused. The wall pulls it before it makes anything else for the run,
+unless the engine holds it by that digest, and refuses with `image_user_root` an image
+whose user is root: no user, `root`, uid 0, or a name the image's `/etc/passwd` maps to
+uid 0. An image whose user is a name its `/etc/passwd` does not map, or that has no
+`/etc/passwd`, is refused the same way, since its user cannot be checked: give the user
+as a uid. The relay always starts from the
+default image, never from the run's, and the authorities the run trusts are read out of
+the run's image. `dev.qory.run.started` reports `image_fetch_ms`, how long finding
+the image took, the pull included when there was one.
+
+In such an image the checkout is mounted at `/workspace` and the working directory is
+under it; the paths Forager puts inside name it there, and values from the server,
+`--env` and the machine pass as they are. The checkout must be a full repository: a git
+worktree's `.git` file names the main checkout by its path on the machine, which is not
+inside. An image that brings a tree for the run keeps it at `/qory/seed`, and `qory`
+copies it into the workspace; Forager copies none of it. Hooks reach the session through
+`/qory/hooks` as in every walled run, reporting what the runtime reports from inside.
+
+Against an image by reference, which a repository may have built, what holds is what
+Forager enforces outside the enclosure: the wall, the egress policy, the credentials the
+proxy sets, the tools the gateway starts and the `dev.qory.run.*` records. The runtime's
+settings, its hooks and its prompts, and the `dev.qory.session.*` records, which the
+runtime reports from inside, are not that boundary: the image can change or forge them.
+
 ## Nested Docker
 
 *Experimental.* An image with `Docker` gets nested Docker: a Docker daemon inside the
@@ -497,9 +758,10 @@ wall, separate from the machine's:
   `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin`: these are the daemon's `PATH`.
 - Of the run's environment, the daemon gets the proxy and, when the run has one, the
   run's certificate bundle.
-- Unless the run sets a non-empty `DOCKER_CONFIG`, the agent's docker configuration is
-  `/run/qory/docker` and its `config.json`, the agent's, 0700 and 0600, in a `/run/qory`
-  that is root's, mode 0755. A link at either path stops the run.
+- Unless the enclosure's environment has a non-empty `DOCKER_CONFIG`, the image's
+  included, the agent's docker configuration is `/run/qory/docker` and its
+  `config.json`, the agent's, 0700 and 0600, in a `/run/qory` that is root's, mode
+  0755. A link at either path stops the run.
 - It needs the `docker` command and Docker Engine 28 or later; with podman, nerdctl or an
   earlier engine the run is refused before anything is made.
 - Its inside network has an IPv6 subnet, the engine's choice, in Docker's isolated

@@ -1,0 +1,5 @@
+# A reference is written in lower case: its NAME and its digest.
+version: 1
+egress:
+  mode: enforce
+image: registry.example/Agents/app@sha256:B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2

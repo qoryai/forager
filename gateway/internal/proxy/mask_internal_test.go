@@ -1,0 +1,684 @@
+package proxy
+
+import (
+	"bufio"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httptrace"
+	"net/textproto"
+	"net/url"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/policy"
+)
+
+// fakeKey and fakeToken are the values the test credentials set; neither is a real key.
+const (
+	fakeKey   = "fake-key-0001-not-a-real-secret"
+	fakeToken = "fake/token+0002"
+)
+
+// echoed is what the echo origin received of one request.
+type echoed struct {
+	method, auth, acceptEncoding, rangeHeader, upgrade string
+}
+
+// echoOrigin is a TLS origin, under a certificate of up, that sends the credential it
+// received back in its headers, its body, a 1xx and its trailer, on each path a way,
+// and a plain origin of the same handler.
+func echoOrigin(t *testing.T, up *CA) (*httptest.Server, *httptest.Server, func() []echoed) {
+	t.Helper()
+	var mu sync.Mutex
+	var got []echoed
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization") + r.Header.Get("X-Api-Key")
+		mu.Lock()
+		got = append(got, echoed{r.Method, auth, r.Header.Get("Accept-Encoding"), r.Header.Get("Range"), r.Header.Get("Upgrade")})
+		mu.Unlock()
+		// The value alone, as a host that parses the header has it.
+		value := strings.TrimPrefix(strings.TrimPrefix(auth, "Bearer "), "Basic ")
+		switch r.URL.Path {
+		case "/echo":
+			w.Header().Set("Link", "</hint?k="+value+">; rel=preload")
+			w.WriteHeader(http.StatusEarlyHints)
+			w.Header().Del("Link")
+			w.Header().Set("Set-Cookie", "session="+value+"; Secure")
+			w.Header().Set("Location", "https://elsewhere.example/?token="+url.QueryEscape(value))
+			w.Header().Set("WWW-Authenticate", `Bearer realm="`+value+`"`)
+			w.Header().Set("X-Seen-"+strings.ReplaceAll(value, "/", "-"), "1")
+			w.Header().Set("Trailer", "X-Echo-Trailer")
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusOK)
+			if r.Method == http.MethodHead {
+				return
+			}
+			r.Header.Write(w)
+			io.Copy(w, r.Body)
+			io.WriteString(w, `{"auth":"`+strings.ReplaceAll(auth, "/", `\/`)+`"}`)
+			w.Header().Set("X-Echo-Trailer", auth)
+		case "/split":
+			// The value split across two writes, each flushed.
+			half := len(auth) / 2
+			io.WriteString(w, "before "+auth[:half])
+			w.(http.Flusher).Flush()
+			time.Sleep(20 * time.Millisecond)
+			io.WriteString(w, auth[half:]+" after")
+		case "/trailer":
+			// The value in a trailer's name, which the proxy announces in the
+			// Trailer header in canonical case, and in a header in upper case.
+			w.Header().Set("Trailer", "X-T-"+value)
+			w.Header().Set("X-Upper", strings.ToUpper(value))
+			w.WriteHeader(http.StatusOK)
+			io.WriteString(w, "body")
+			w.Header().Set("X-T-"+value, value)
+			w.Header().Set(http.TrailerPrefix+"X-U-"+value, value)
+		case "/length":
+			body := "value " + auth
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			io.WriteString(w, body)
+		case "/gzip":
+			w.Header().Set("Content-Encoding", "gzip")
+			zw := gzip.NewWriter(w)
+			io.WriteString(zw, auth)
+			zw.Close()
+		case "/switch":
+			conn, brw, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n" + auth)
+			brw.Flush()
+		default:
+			io.WriteString(w, "value "+fakeKey)
+		}
+	})
+	origin := httptest.NewUnstartedServer(handler)
+	origin.Config.ErrorLog = log.New(io.Discard, "", 0)
+	origin.TLS = &tls.Config{GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) { return up.leaf(hello.ServerName) }}
+	origin.StartTLS()
+	plain := httptest.NewServer(handler)
+	return origin, plain, func() []echoed {
+		mu.Lock()
+		defer mu.Unlock()
+		out := got
+		got = nil
+		return out
+	}
+}
+
+// maskedProxy is a proxy that terminates, against an echo origin, a host of a stored
+// bearer, a host of a machine's basic token, and a host with a path rule and no
+// credential, in observe mode.
+func maskedProxy(t *testing.T) (*http.Client, *decisions, func() []echoed) {
+	t.Helper()
+	client, _, seen, take := maskedProxyIn(t, policy.Observe)
+	return client, seen, take
+}
+
+// maskedProxyIn is maskedProxy in the mode given, which under enforce allows the three
+// hosts and other.example, a host the proxy does not terminate. A plain request goes
+// to the plain echo origin.
+func maskedProxyIn(t *testing.T, mode policy.Mode) (*http.Client, *Proxy, *decisions, func() []echoed) {
+	t.Helper()
+	up, err := NewCA("upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, plain, take := echoOrigin(t, up)
+	t.Cleanup(origin.Close)
+	t.Cleanup(plain.Close)
+	seen := &decisions{}
+	p, err := Listen("", mode, []string{"bearer.example", "basic.example", "plain.example", "other.example"}, nil, seen.observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.Close() })
+	p.dial = (&dials{plain: plain.Listener.Addr().String(), secure: origin.Listener.Addr().String()}).dial
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(up.PEM())
+	p.TrustUpstream(roots)
+	ca, err := NewCA("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := []byte(fakeKey)
+	p.Terminate(ca, []Credential{
+		{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Value: func() []byte { return slices.Clone(value) }, Stored: true},
+		{Name: "basic", Hosts: []string{"basic.example"}, Scheme: "basic", Username: "x-access-token", Token: func() string { return fakeToken }},
+	}, map[string][]string{"plain.example": {"/*"}}, nil)
+	trusted := x509.NewCertPool()
+	trusted.AppendCertsFromPEM(ca.PEM())
+	proxyURL, _ := url.Parse(p.URL())
+	client := &http.Client{
+		Transport:     &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}, DisableCompression: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return client, p, seen, take
+}
+
+// TestAPlainRequestToAKeyedHostIsRefused pins a plain request to a host that gets a
+// credential, in either mode: a plain GET, a plain TRACE and an absolute-form https://
+// sent without CONNECT each get a 403 whose first line is the fix, reach no origin,
+// and are recorded with the rule wall:plain-request. A plain request to a host without
+// a credential goes on as before.
+func TestAPlainRequestToAKeyedHostIsRefused(t *testing.T) {
+	for _, mode := range []policy.Mode{policy.Observe, policy.Enforce} {
+		client, p, seen, take := maskedProxyIn(t, mode)
+		want := func(method, host, path string) string {
+			return "qory: send requests to this host as https:// through CONNECT.\n" +
+				"qory: " + method + " " + host + path + " denied by the gateway: the gateway sets this host's credential, and masks it in answers, only on https:// requests through CONNECT\n"
+		}
+		for _, c := range []struct{ method, host string }{
+			{http.MethodGet, "bearer.example"}, {"TRACE", "bearer.example"}, {http.MethodGet, "basic.example"},
+		} {
+			req, _ := http.NewRequest(c.method, "http://"+c.host+"/keys", nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || string(b) != want(c.method, c.host, "/keys") {
+				t.Errorf("%s: plain %s %s: %d %q", mode, c.method, c.host, resp.StatusCode, b)
+			}
+		}
+		// An absolute-form https:// target sent to the proxy as a plain request.
+		conn, err := net.Dial("tcp", strings.TrimPrefix(p.URL(), "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		fmt.Fprintf(conn, "GET https://bearer.example/keys HTTP/1.1\r\nHost: bearer.example\r\nConnection: close\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		conn.Close()
+		if resp.StatusCode != http.StatusForbidden || string(b) != want("GET", "bearer.example", "/keys") {
+			t.Errorf("%s: an absolute-form https://: %d %q", mode, resp.StatusCode, b)
+		}
+		if first, _, _ := strings.Cut(want("GET", "x", "/"), "\n"); len(first) > 100 {
+			t.Errorf("the first line has %d characters", len(first))
+		}
+		if got := take(); len(got) != 0 {
+			t.Errorf("%s: a plain request to a keyed host reached the origin: %+v", mode, got)
+		}
+		seen.mu.Lock()
+		n := 0
+		for _, d := range seen.seen {
+			if d.Rule != PlainRequest {
+				continue
+			}
+			n++
+			if d.Allowed || d.Outcome != Refused || d.Method != "HTTP" || d.Path != "/keys" || d.Credential != "" {
+				t.Errorf("%s: the refused plain request's decision %+v", mode, d)
+			}
+		}
+		seen.mu.Unlock()
+		if n != 4 {
+			t.Errorf("%s: %d decisions with %s, want 4", mode, n, PlainRequest)
+		}
+		// A host without a credential: plain, and with path rules.
+		for _, host := range []string{"other.example", "plain.example"} {
+			resp, err := client.Get("http://" + host + "/other")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || string(b) != "value "+fakeKey {
+				t.Errorf("%s: a plain request to %s: %d %q", mode, host, resp.StatusCode, b)
+			}
+		}
+		if got := take(); len(got) != 2 {
+			t.Errorf("%s: the origin got %+v", mode, got)
+		}
+	}
+}
+
+// TestAPlainRequestToAKeyedHostIsRefusedBeforeItsPath pins the plain refusal ahead of
+// the path rules of a host that gets a credential: a path that could be read two ways
+// and a path outside the rules each get the 403 with the fix first and a
+// wall:plain-request record with no path rule, in either mode. Nothing is dialled.
+func TestAPlainRequestToAKeyedHostIsRefusedBeforeItsPath(t *testing.T) {
+	const fix = "qory: send requests to this host as https:// through CONNECT.\n"
+	for _, mode := range []policy.Mode{policy.Observe, policy.Enforce} {
+		seen := &decisions{}
+		p, err := Listen("", mode, []string{"bearer.example"}, nil, seen.observe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.dial = func(context.Context, string, string) (net.Conn, error) {
+			t.Errorf("%s: the proxy dialled a host", mode)
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: io.EOF}
+		}
+		creds := []Credential{{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Token: func() string { return fakeKey }}}
+		paths := map[string][]string{"bearer.example": {"/ok/*"}}
+		ca, err := NewCA("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Terminate(ca, creds, paths, nil)
+		for _, path := range []string{"/%2e%2e/ok/x", "/elsewhere"} {
+			conn, err := net.Dial("tcp", p.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.SetDeadline(time.Now().Add(5 * time.Second))
+			fmt.Fprintf(conn, "GET http://bearer.example%s HTTP/1.1\r\nHost: bearer.example\r\nConnection: close\r\n\r\n", path)
+			resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			conn.Close()
+			if resp.StatusCode != http.StatusForbidden || !strings.HasPrefix(string(b), fix) {
+				t.Errorf("%s: plain %s: %d %q, want a 403 with the fix first", mode, path, resp.StatusCode, b)
+			}
+			d := seen.at(-1)
+			if d.Rule != PlainRequest || d.PathRule != "" || d.Allowed || d.Outcome != Refused {
+				t.Errorf("%s: plain %s: the decision %+v, want %s with no path rule", mode, path, d, PlainRequest)
+			}
+		}
+		if n := seen.count(); n != 2 {
+			t.Errorf("%s: %d decisions, want 2", mode, n)
+		}
+		p.Close()
+	}
+}
+
+// TestAKeyedHostRefusesTraceWith405 pins TRACE and TRACK on a host that gets a
+// credential, of the server's or of the machine's: a 405 whose first line is the fix,
+// the rule wall:echo-method, and nothing sent to the origin.
+func TestAKeyedHostRefusesTraceWith405(t *testing.T) {
+	client, seen, take := maskedProxy(t)
+	for _, host := range []string{"bearer.example", "basic.example"} {
+		for _, method := range []string{"TRACE", "TRACK", "trace"} {
+			req, _ := http.NewRequest(method, "https://"+host+"/v1/models", nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			want := "qory: use a method other than TRACE or TRACK on this host.\n" +
+				"qory: " + method + " " + host + "/v1/models denied by the gateway: this host gets a credential from the gateway, and the answer to TRACE or TRACK contains the request's headers\n"
+			if resp.StatusCode != http.StatusMethodNotAllowed || string(b) != want {
+				t.Errorf("%s %s: %d %q", method, host, resp.StatusCode, b)
+			}
+			if first, _, _ := strings.Cut(string(b), "\n"); len(first) > 100 {
+				t.Errorf("the first line has %d characters", len(first))
+			}
+		}
+	}
+	if got := take(); len(got) != 0 {
+		t.Errorf("a TRACE or a TRACK reached the origin: %+v", got)
+	}
+	seen.mu.Lock()
+	defer seen.mu.Unlock()
+	n := 0
+	for _, d := range seen.seen {
+		if d.PathRule == EchoMethod {
+			n++
+			if d.Allowed || d.Outcome != Refused || d.Credential != "" {
+				t.Errorf("the refused TRACE's decision %+v", d)
+			}
+		}
+	}
+	if n != 6 {
+		t.Errorf("%d decisions with %s, want 6", n, EchoMethod)
+	}
+}
+
+// TestAKeyedHostsAnswerHasThePlaceholder pins the value replaced with the placeholder
+// in what the host sends back: a 1xx, Set-Cookie, Location, WWW-Authenticate, a header's
+// name, the body, the trailer, a body with a Content-Length, and, for basic, the
+// base64 the header has and its percent-encoded and JSON-escaped forms. The request
+// went upstream with Accept-Encoding identity, without its Range and its Upgrade.
+func TestAKeyedHostsAnswerHasThePlaceholder(t *testing.T) {
+	client, _, take := maskedProxy(t)
+	basicValue := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + fakeToken))
+	basicStand := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + link.Placeholder))
+	for _, c := range []struct{ host, value, stand string }{
+		{"bearer.example", fakeKey, link.Placeholder},
+		{"basic.example", basicValue, basicStand},
+	} {
+		var hints []string
+		trace := &httptrace.ClientTrace{Got1xxResponse: func(_ int, h textproto.MIMEHeader) error {
+			hints = append(hints, h.Get("Link"))
+			return nil
+		}}
+		req, _ := http.NewRequest(http.MethodPost, "https://"+c.host+"/echo", strings.NewReader("body "+c.value))
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+		req.Header.Set("Authorization", "Bearer "+link.Placeholder)
+		req.Header.Set("Accept-Encoding", "gzip")
+		req.Header.Set("Range", "bytes=0-3")
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		whole := strings.Join(hints, "\n") + "\n" + headerText(resp.Header) + "\n" + string(b) + "\n" + headerText(resp.Trailer)
+		for _, leak := range []string{fakeKey, fakeToken, url.QueryEscape(fakeToken), basicValue, strings.TrimRight(basicValue, "="), url.QueryEscape(basicValue), strings.ReplaceAll(basicValue, "/", `\/`)} {
+			if strings.Contains(whole, leak) {
+				t.Errorf("%s: the answer contains %q:\n%s", c.host, leak, whole)
+			}
+		}
+		if !strings.Contains(string(b), "Authorization: Bearer "+c.stand) && !strings.Contains(string(b), "Authorization: Basic "+c.stand) {
+			t.Errorf("%s: the echoed header is not the placeholder:\n%s", c.host, b)
+		}
+		if !strings.Contains(string(b), "body "+c.stand) {
+			t.Errorf("%s: the echoed body is not the placeholder:\n%s", c.host, b)
+		}
+		if resp.Trailer.Get("X-Echo-Trailer") == "" || !strings.Contains(resp.Trailer.Get("X-Echo-Trailer"), c.stand) {
+			t.Errorf("%s: the trailer %q", c.host, resp.Trailer.Get("X-Echo-Trailer"))
+		}
+		if len(hints) != 1 || !strings.Contains(hints[0], url.QueryEscape(c.stand)) && !strings.Contains(hints[0], c.stand) {
+			t.Errorf("%s: the 103's Link %q", c.host, hints)
+		}
+		if !strings.Contains(resp.Header.Get("Set-Cookie"), c.stand) || !strings.Contains(resp.Header.Get("WWW-Authenticate"), c.stand) || !strings.Contains(resp.Header.Get("Location"), c.stand) && !strings.Contains(resp.Header.Get("Location"), url.QueryEscape(c.stand)) {
+			t.Errorf("%s: the headers:\n%s", c.host, headerText(resp.Header))
+		}
+		for _, e := range take() {
+			if e.acceptEncoding != "identity" || e.rangeHeader != "" || e.upgrade != "" {
+				t.Errorf("%s: the origin got %+v", c.host, e)
+			}
+		}
+
+		// A HEAD has the headers replaced.
+		resp, err = client.Head("https://" + c.host + "/echo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if h := headerText(resp.Header); strings.Contains(h, fakeKey) || strings.Contains(h, fakeToken) || !strings.Contains(h, c.stand) {
+			t.Errorf("%s: a HEAD's headers:\n%s", c.host, h)
+		}
+
+		// A body of a known length comes whole, with the placeholder, whatever its
+		// length.
+		resp, err = client.Get("https://" + c.host + "/length")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || !strings.HasSuffix(string(b), c.stand) {
+			t.Errorf("%s: a body of a known length: %q, %v", c.host, b, err)
+		}
+
+		// A value split across two writes is replaced.
+		resp, err = client.Get("https://" + c.host + "/split")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !strings.HasPrefix(string(b), "before ") || !strings.HasSuffix(string(b), c.stand+" after") || strings.Contains(string(b), c.value) {
+			t.Errorf("%s: a split value: %q", c.host, b)
+		}
+		take()
+	}
+}
+
+// TestAKeyedHostsHeaderNamesAreMaskedInAnyCase pins the value in a trailer's name,
+// which reaches the client in another case through the Trailer header, and in a
+// header's value in upper case: neither reaches the client in any case.
+func TestAKeyedHostsHeaderNamesAreMaskedInAnyCase(t *testing.T) {
+	client, _, _ := maskedProxy(t)
+	resp, err := client.Get("https://bearer.example/trailer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	whole := strings.ToLower(headerText(resp.Header) + string(b) + headerText(resp.Trailer))
+	for name := range resp.Trailer {
+		whole += strings.ToLower(name) + "\n"
+	}
+	if strings.Contains(whole, strings.ToLower(fakeKey)) {
+		t.Errorf("the answer contains the value in some case:\n%s", whole)
+	}
+	if resp.Trailer.Get("X-T-"+link.Placeholder) != link.Placeholder || resp.Trailer.Get("X-U-"+link.Placeholder) != link.Placeholder {
+		t.Errorf("the trailer %v", resp.Trailer)
+	}
+	if resp.Header.Get("X-Upper") != link.Placeholder {
+		t.Errorf("an upper-case value: %q", resp.Header.Get("X-Upper"))
+	}
+}
+
+// TestMaskingARepeatedValueIsLinear masks 4 MiB of the basic value repeated. When
+// each replacement searched the rest of the body for every form again, a body of the
+// value repeated went through at about 1 MB/s.
+func TestMaskingARepeatedValueIsLinear(t *testing.T) {
+	m := (&Credential{Scheme: "basic", Username: "x-access-token"}).masker([]byte(fakeToken))
+	body := bytes.Repeat([]byte(fakeToken), (4<<20)/len(fakeToken))
+	start := time.Now()
+	maskAll(m, body)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("masking 4 MiB took %v", took)
+	}
+}
+
+// BenchmarkMasking masks 1 MiB with no copy of the value and 1 MiB of the value
+// repeated, in writes of 32 KiB.
+func BenchmarkMasking(b *testing.B) {
+	for _, c := range []struct {
+		name string
+		body []byte
+	}{
+		{"none", bytes.Repeat([]byte("x"), 1<<20)},
+		{"repeated", bytes.Repeat([]byte(fakeToken), (1<<20)/len(fakeToken))},
+	} {
+		for _, scheme := range []string{"bearer", "basic"} {
+			m := (&Credential{Scheme: scheme, Username: "x-access-token"}).masker([]byte(fakeToken))
+			b.Run(c.name+"-"+scheme, func(b *testing.B) {
+				b.SetBytes(int64(len(c.body)))
+				for range b.N {
+					maskAll(m, c.body)
+				}
+			})
+		}
+	}
+}
+
+// maskAll writes body through a masking writer in writes of 32 KiB.
+func maskAll(m *masker, body []byte) {
+	mw := &masking{w: httptest.NewRecorder(), m: m}
+	for off := 0; off < len(body); off += 32 << 10 {
+		mw.Write(body[off:min(off+32<<10, len(body))])
+	}
+	mw.finish()
+}
+
+// TestAKeyedHostsCompressedAnswerIsA502 pins a compressed answer from a host that gets
+// a credential, which the origin sent although the request asked for identity: a 502
+// whose first line is the fix, the origin's status in the record.
+func TestAKeyedHostsCompressedAnswerIsA502(t *testing.T) {
+	client, seen, take := maskedProxy(t)
+	resp, err := client.Get("https://bearer.example/gzip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	want := "qory: remove this host's credential from the policy, or serve the host through a tool.\n" +
+		"qory: the gateway did not pass on the answer to GET bearer.example/gzip: it has Content-Encoding \"gzip\" although the request had Accept-Encoding: identity, and the gateway replaces the credential only in an uncompressed answer\n"
+	if resp.StatusCode != http.StatusBadGateway || string(b) != want || resp.Header.Get("Content-Encoding") != "" {
+		t.Errorf("a compressed answer: %d %q %v", resp.StatusCode, b, resp.Header)
+	}
+	if first, _, _ := strings.Cut(want, "\n"); len(first) > 100 {
+		t.Errorf("the first line has %d characters", len(first))
+	}
+	if got := take(); len(got) != 1 || got[0].acceptEncoding != "identity" {
+		t.Errorf("the origin got %+v", got)
+	}
+	seen.mu.Lock()
+	d := seen.seen[len(seen.seen)-1]
+	seen.mu.Unlock()
+	if !d.Allowed || d.Outcome != Connected || d.Status != http.StatusOK || d.Credential != "bearer" {
+		t.Errorf("the compressed answer's decision %+v", d)
+	}
+}
+
+// TestAKeyedHostsSwitchIsA502 pins a 101 from a host that gets a credential: the
+// request went without its Upgrade, so the switch is no upgrade it asked for, and the
+// client gets a 502 with none of what the origin sent after it.
+func TestAKeyedHostsSwitchIsA502(t *testing.T) {
+	client, _, take := maskedProxy(t)
+	req, _ := http.NewRequest(http.MethodGet, "https://bearer.example/switch", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if want := "upstream: " + errUnaskedSwitch.Error() + "\n"; resp.StatusCode != http.StatusBadGateway || string(b) != want {
+		t.Errorf("a switch: %d %q", resp.StatusCode, b)
+	}
+	if got := take(); len(got) != 1 || got[0].upgrade != "" {
+		t.Errorf("the origin got %+v", got)
+	}
+}
+
+// TestAnUnkeyedHostsAnswerIsUntouched pins a terminated host without a credential: its
+// answer comes as the origin sent it, its length and compression included, and its
+// request as the client sent it.
+func TestAnUnkeyedHostsAnswerIsUntouched(t *testing.T) {
+	client, _, take := maskedProxy(t)
+	resp, err := client.Get("https://plain.example/other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(b) != "value "+fakeKey || resp.ContentLength != int64(len(b)) {
+		t.Errorf("an unkeyed answer: %q, length %d", b, resp.ContentLength)
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://plain.example/gzip", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Range", "bytes=0-")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "gzip" {
+		t.Errorf("an unkeyed compressed answer: %d %v", resp.StatusCode, resp.Header)
+	}
+	if got := take(); len(got) != 2 || got[1].acceptEncoding != "gzip" || got[1].rangeHeader != "bytes=0-" {
+		t.Errorf("the origin got %+v", got)
+	}
+}
+
+// TestMaskingCatchesAValueAtEverySplit writes a body that contains the value twice, in
+// two writes split at every place, and a body that ends in the start of the value.
+func TestMaskingCatchesAValueAtEverySplit(t *testing.T) {
+	c := &Credential{Scheme: "bearer"}
+	m := c.masker([]byte(fakeKey))
+	body := "a " + fakeKey + fakeKey + " b " + fakeKey[:5]
+	want := "a " + link.Placeholder + link.Placeholder + " b " + fakeKey[:5]
+	for i := 0; i <= len(body); i++ {
+		rec := httptest.NewRecorder()
+		mw := &masking{w: rec, m: m}
+		mw.Write([]byte(body[:i]))
+		mw.Flush()
+		mw.Write([]byte(body[i:]))
+		mw.finish()
+		if got := rec.Body.String(); got != want {
+			t.Errorf("split at %d: %q", i, got)
+		}
+	}
+	// What cannot start the value is not kept back.
+	rec := httptest.NewRecorder()
+	mw := &masking{w: rec, m: m}
+	mw.Write([]byte("data: done\n\n"))
+	if got := rec.Body.String(); got != "data: done\n\n" {
+		t.Errorf("an event that cannot start the value: %q", got)
+	}
+}
+
+// TestAnAbortedAnswerKeepsNoPartOfTheValue pins an answer whose copy ends with a panic,
+// as the reverse proxy's does when the host's connection breaks part way: the bytes
+// kept back, the start of the value, and every find are overwritten.
+func TestAnAbortedAnswerKeepsNoPartOfTheValue(t *testing.T) {
+	m := (&Credential{Scheme: "bearer"}).masker([]byte(fakeKey))
+	finds := slices.Clone(m.pairs)
+	var held []byte
+	aborting := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mw := w.(*masking)
+		mw.Write([]byte("before " + fakeKey[:10]))
+		held = mw.tail
+		panic(http.ErrAbortHandler)
+	})
+	func() {
+		defer func() {
+			if recover() != http.ErrAbortHandler {
+				t.Error("the panic did not reach the server")
+			}
+		}()
+		serveMasked(aborting, httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), m)
+	}()
+	if len(held) != 10 || !bytes.Equal(held, make([]byte, 10)) {
+		t.Errorf("the bytes kept back after the panic: %q", held)
+	}
+	for _, p := range finds {
+		if !bytes.Equal(p.find, make([]byte, len(p.find))) {
+			t.Errorf("a find after the panic: %q", p.find)
+		}
+	}
+}
+
+// TestTheMaskersForms pins the forms looked for: a value of letters, digits and
+// hyphens in one form, a value with / and + also percent-encoded and with / escaped.
+func TestTheMaskersForms(t *testing.T) {
+	if m := (&Credential{Scheme: "header"}).masker([]byte(fakeKey)); len(m.pairs) != 1 {
+		t.Errorf("a plain value has %d forms", len(m.pairs))
+	}
+	m := (&Credential{Scheme: "header"}).masker([]byte(fakeToken))
+	var finds []string
+	for _, p := range m.pairs {
+		finds = append(finds, string(p.find))
+	}
+	if want := []string{fakeToken, "fake%2Ftoken%2B0002", `fake\/token+0002`}; !slices.Equal(finds, want) {
+		t.Errorf("the forms %q, want %q", finds, want)
+	}
+	if (&Credential{}).masker(nil) != nil {
+		t.Error("an empty value has a masker")
+	}
+}
+
+// headerText is h as lines.
+func headerText(h http.Header) string {
+	var b bytes.Buffer
+	h.Write(&b)
+	return b.String()
+}

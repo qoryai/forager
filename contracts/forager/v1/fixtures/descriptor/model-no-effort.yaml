@@ -1,0 +1,10 @@
+# A model section without effort: the runtime has no place for an effort value.
+version: 1
+runtime: amp
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]
+model:
+  formats: [gemini]
+  model: {flag: --model}
+  endpoint: {variable: AMP_BASE_URL}

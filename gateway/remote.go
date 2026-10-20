@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -86,14 +87,15 @@ func runKeyInvalid() *accesskey.Refusal {
 // refusal of the attach would give, attach <run.url>/<run_id>: <code> (status <status>).
 func (g *Gateway) attachRefused(code string, status int, runID string) *accesskey.Refusal {
 	conf, _ := g.config()
-	return &accesskey.Refusal{Code: code, Status: status, Detail: "attach " + conf.Run.URL + "/" + runID, From: accesskey.FromGateway}
+	return &accesskey.Refusal{Code: code, Status: status, Detail: "attach " + accesskey.ShownValue(conf.Run.URL+"/"+runID, false), From: accesskey.FromGateway}
 }
 
 // admitRunKey decides the bearer value of a request on the one address, in order: no
-// value, or one that is no run key that verifies under the server's pin, is
-// run_key_invalid, 400; then, in the server's order of the attach, a run key past its
-// attach_by plus the skew of [server.Window], 300 s, by the gateway's clock, of a run
-// the gateway holds nothing of, never attached here, is run_key_expired, 409; one that
+// value, or one that is no run key that verifies under the server's pin, or whose
+// instance id [accesskey.CheckInstanceID] refuses, is run_key_invalid, 400; then, in
+// the server's order of the attach, a run key past its attach_by plus the skew of
+// [server.Window], 300 s, by the gateway's clock, of a run the gateway holds nothing
+// of, never attached here, is run_key_expired, 409; one that
 // names another gateway than the one discovery lists of the access key is
 // wrong_gateway, 409. A run key past its attach_by within the skew goes on as one
 // before it, and the server decides its attach. The run's workspace is the run key's:
@@ -106,6 +108,11 @@ func (g *Gateway) admitRunKey(value string, ok bool) (runkey.Key, *accesskey.Ref
 	}
 	k, err := runkey.Verify(value, g.cfg.Server.ApiaryPublicKey)
 	if err != nil {
+		return runkey.Key{}, runKeyInvalid()
+	}
+	// The instance id goes into run.registered as it is, so one that contains qak_ or
+	// qrk_ in any case is refused, as a registration's is ([accesskey.CheckInstanceID]).
+	if accesskey.CheckInstanceID(k.InstanceID) != nil {
 		return runkey.Key{}, runKeyInvalid()
 	}
 	conf, _ := g.config()
@@ -185,15 +192,19 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func
 
 // attach attaches a run of the one address at the server under the gateway's access
 // key, its body built once, so every try sends the same bytes ([Gateway.tries]), and
-// returns the run's run configuration with its digest, and the record's first line,
+// returns the run's run configuration with its digest, the record's first line,
 // dev.qory.run.registered: the run key's workspace, node and instance, what the attach
 // announced, and the labels and about the attach's answer gives back of the starter's
-// registration. A run configuration Forager refuses is a [*server.DocumentError] with
-// the first line, an attach the server accepted; any other failure has none.
-func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID string, how opening) (*server.RunConfiguration, string, map[string]any, error) {
+// registration; and those labels, nil when it gives none. When the answer's run
+// configuration has credentials, the run configuration and its digest are a reload's
+// instead, fetched with the same tries, so the credentials and the digest Forager
+// computes come from the bytes of the document a reload answers. A run configuration Forager
+// refuses is a [*server.DocumentError] with the first line, an attach the server
+// accepted; any other failure has none.
+func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID string, how opening) (*server.RunConfiguration, string, map[string]any, map[string]string, error) {
 	body, err := server.Attach{RunKey: how.runKey, IntervalSeconds: g.interval, Events: conf.Events.Types, ForagerVersion: g.cfg.Version}.Body()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	var ans *server.AttachAnswer
 	var digest string
@@ -203,20 +214,41 @@ func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID 
 	})
 	var refused *server.DocumentError
 	if err != nil && !errors.As(err, &refused) {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
+	}
+	if err == nil && ans != nil && len(ans.RunConfiguration.Credentials) > 0 {
+		// The attach answer's body is the run configuration with labels and about, so
+		// its bytes are not the document whose digest the values are sealed under: the
+		// run takes its run configuration from a reload, whose bytes are, and reads the
+		// credentials and computes the digest from them.
+		var rc *server.RunConfiguration
+		var reloaded string
+		err = g.tries(ctx, how.deadline, func() (err error) {
+			rc, reloaded, err = g.client.RunConfiguration(ctx, conf.Run.URL, runID)
+			return err
+		})
+		if err != nil && !errors.As(err, &refused) {
+			return nil, "", nil, nil, err
+		}
+		ans.RunConfiguration, digest = rc, reloaded
 	}
 	k := how.key
 	registered := map[string]any{"workspace": k.Workspace, "node_id": k.NodeID, "instance_id": k.InstanceID, "forager_version": g.cfg.Version,
 		"events": slices.Clone(conf.Events.Types), "contract_version": server.Revision, "interval_seconds": g.interval}
 	var rc *server.RunConfiguration
+	var labels map[string]string
 	if ans != nil {
 		rc = ans.RunConfiguration
+		// The record's run.registered goes to Qory Apiary: labels and about as
+		// run.started sends them. The run is decided by the labels as the answer gives
+		// them.
 		if len(ans.Labels) > 0 {
-			registered["labels"] = ans.Labels
+			registered["labels"] = server.ShownLabels(ans.Labels)
+			labels = maps.Clone(ans.Labels)
 		}
-		if ans.About != nil {
-			registered["about"] = ans.About
+		if about := server.ShownAbout(ans.About); !about.Empty() {
+			registered["about"] = about
 		}
 	}
-	return rc, digest, registered, err
+	return rc, digest, registered, labels, err
 }

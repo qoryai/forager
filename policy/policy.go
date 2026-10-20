@@ -22,9 +22,12 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/internal/jcs"
 	"github.com/qoryai/forager/refusal"
@@ -34,8 +37,9 @@ import (
 type Mode string
 
 // The two modes. Observe records every connection and denies only what the deny list
-// names; Enforce denies a connection to a host outside the allow list as well, and
-// records the denial. The deny list is decided first in either mode.
+// names; Enforce denies a connection to a host outside the allow list and the
+// allow_first list as well, and records the denial. In either mode the allow_first list
+// is decided first, then the deny list.
 const (
 	Observe Mode = "observe"
 	Enforce Mode = "enforce"
@@ -49,8 +53,9 @@ type Policy struct {
 	// when it has an empty list: a node's empty list allows none of a server's.
 	Credentials []Selected `json:"credentials,omitzero"`
 	Tools       []Selected `json:"tools,omitzero"`
-	// Image is the name of the machine's image the run starts in; empty is the
-	// machine's default.
+	// Image is the image the run starts in: the machine's name for one of its images,
+	// or a reference pinned by digest under one of the machine's allowed prefixes;
+	// empty is the machine's default.
 	Image string `json:"image,omitempty"`
 }
 
@@ -58,9 +63,13 @@ type Policy struct {
 type Egress struct {
 	Mode  Mode     `json:"mode"`
 	Allow []string `json:"allow"`
+	// AllowFirst are hosts the session may reach in either mode, each a host name or
+	// an IPv4 address, never a *. pattern: a host an entry matches exactly ([Exact]) is
+	// allowed before Deny and Allow are consulted, with the entry as its rule.
+	AllowFirst []string `json:"allow_first,omitempty"`
 	// Deny are the hosts the session may not reach, in Allow's grammar, in either
 	// mode: a host an entry covers is denied before Allow and before Mode are
-	// consulted, with the entry as its rule.
+	// consulted, unless AllowFirst lists the host, with the entry as its rule.
 	Deny  []string            `json:"deny,omitempty"`
 	Paths map[string][]string `json:"paths,omitempty"`
 }
@@ -83,7 +92,8 @@ type Loaded struct {
 	// the run's policy, the same for the same policy however it was written.
 	Digest string
 	// URL is where the run configuration was fetched from, and RunConfiguration the
-	// server's digest of it, opaque, when Source is "fetched".
+	// server's digest of it, as the answer's header contained it, when Source is
+	// "fetched".
 	URL              string
 	RunConfiguration string
 	// Canonical is "sha256=" and the hex sha256 of the document's RFC 8785
@@ -111,7 +121,11 @@ type Error struct {
 	Err  error
 }
 
-func (e *Error) Error() string { return "policy " + e.Name + ": " + e.Err.Error() }
+// Error prints the name and the error's text as accesskey.ShownValue and
+// accesskey.ShownError print them.
+func (e *Error) Error() string {
+	return "policy " + accesskey.ShownValue(e.Name, false) + ": " + accesskey.ShownError(e.Err).Error()
+}
 
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
@@ -123,7 +137,8 @@ func None() *Loaded {
 
 // Read reads a policy document from bytes, YAML or JSON by name's extension, JSON
 // when it has none, validates it and pins it with its digest. A refused document is a
-// [*Error] naming name.
+// [*Error] naming name; one whose image is a reference not pinned by digest wraps a
+// refusal with run_configuration_invalid ([CheckImage]).
 func Read(name string, b []byte) (*Loaded, error) {
 	p, j, err := parse(name, b)
 	if err != nil {
@@ -143,7 +158,9 @@ func Read(name string, b []byte) (*Loaded, error) {
 }
 
 // Parse validates the bytes of a policy document against the schema and decodes it.
-// name chooses YAML or JSON by its extension, JSON when it has none.
+// name chooses YAML or JSON by its extension, JSON when it has none. An image written
+// as a reference that is not pinned by digest is refused before the schema reads it,
+// with run_configuration_invalid ([CheckImage]).
 func Parse(name string, b []byte) (*Policy, error) {
 	p, _, err := parse(name, b)
 	return p, err
@@ -156,6 +173,9 @@ func parse(name string, b []byte) (*Policy, []byte, error) {
 	}
 	doc, err := contracts.Decode(name, b)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkImage(doc); err != nil {
 		return nil, nil, err
 	}
 	schema, err := contracts.Compile("policy.schema.json")
@@ -179,14 +199,14 @@ func parse(name string, b []byte) (*Policy, []byte, error) {
 	return &p, j, nil
 }
 
-// formed refuses an egress entry naming a host, of allow, deny or paths, that is not
-// in the form [Host] gives it: a name, or an IPv4 address of four decimal parts with no
-// leading zero. A *. suffix is held by the schema alone.
+// formed refuses an egress entry naming a host, of allow, allow_first, deny or paths,
+// that is not in the form [Host] gives it: a name, or an IPv4 address of four decimal
+// parts with no leading zero. A *. suffix is held by the schema alone.
 func formed(e Egress) error {
 	for _, list := range []struct {
 		name    string
 		entries []string
-	}{{"allow", e.Allow}, {"deny", e.Deny}, {"paths", slices.Sorted(maps.Keys(e.Paths))}} {
+	}{{"allow", e.Allow}, {"allow_first", e.AllowFirst}, {"deny", e.Deny}, {"paths", slices.Sorted(maps.Keys(e.Paths))}} {
 		for _, entry := range list.entries {
 			if strings.HasPrefix(entry, "*.") {
 				continue
@@ -207,6 +227,11 @@ func formed(e Egress) error {
 //     every host: under enforce on both sides, each side's entries that an entry of
 //     the other covers, the server's first, each once; under enforce on one side, that
 //     side's entries; under observe on both, the server's.
+//   - The allow_first list is each side's entries that the other side allows
+//     ([Egress.Allows]), the server's first, each once: the hosts both sides allow and
+//     one of them lists there. An entry lifts the deny and allow of the side that lists
+//     it alone, so a host the other side's deny covers, or that the other side's allow
+//     does not cover under enforce, stays out.
 //   - The deny list is both sides' entries, the server's first, each once.
 //   - The path rules are the server's, and the node's go to the proxy beside them as
 //     [Node.Paths]: a request to a host either side lists must match an entry of each
@@ -216,8 +241,9 @@ func formed(e Egress) error {
 //     by argument when the node's entry has one, so an empty list allows none. A tool
 //     outside it is refused with [refusal.ToolUnknown]. The credentials are bounded the
 //     same way.
-//   - The image is the one both select, or the one a side selects; two different ones
-//     are refused with [refusal.ImageUnknown]. Neither leaves the machine's default.
+//   - The image is the one both select, or the one a side selects; two different ones,
+//     two strings that are not the same, a name and a reference among them, are
+//     refused with [refusal.ImageUnknown]. Neither leaves the machine's default.
 //
 // The result keeps the fetched policy's source, digest and URL, with the node's side in
 // [Loaded.Node].
@@ -239,22 +265,23 @@ func Narrowed(fetched, node *Loaded) (*Loaded, error) {
 	if run.Egress.Allow == nil {
 		run.Egress.Allow = []string{}
 	}
+	run.Egress.AllowFirst = First(s.Egress, n.Egress)
 	if len(s.Egress.Deny) > 0 || len(n.Egress.Deny) > 0 {
 		run.Egress.Deny = union(s.Egress.Deny, n.Egress.Deny)
 	}
 	if n.Tools != nil {
-		if out := outside(s.Tools, n.Tools); len(out) > 0 {
+		if out := accesskey.ShownNames(outside(s.Tools, n.Tools)); len(out) > 0 {
 			return nil, refusal.New(refusal.ToolUnknown, out, "the server's policy selects the tools %s, which the node's policy does not list", strings.Join(out, ", "))
 		}
 	}
 	if n.Credentials != nil {
-		if out := outside(s.Credentials, n.Credentials); len(out) > 0 {
+		if out := accesskey.ShownNames(outside(s.Credentials, n.Credentials)); len(out) > 0 {
 			return nil, fmt.Errorf("the server's policy selects the credentials %s, which the node's policy does not list", strings.Join(out, ", "))
 		}
 	}
 	switch {
 	case s.Image != "" && n.Image != "" && s.Image != n.Image:
-		return nil, refusal.New(refusal.ImageUnknown, []string{s.Image}, "the server's policy selects the image %s and the node's policy the image %s", s.Image, n.Image)
+		return nil, refusal.New(refusal.ImageUnknown, []string{accesskey.ShownName(s.Image, false)}, "the server's policy selects the image %s and the node's policy the image %s", accesskey.ShownName(s.Image, false), accesskey.ShownName(n.Image, false))
 	case s.Image == "":
 		run.Image = n.Image
 	}
@@ -262,6 +289,47 @@ func Narrowed(fetched, node *Loaded) (*Loaded, error) {
 	out.Policy = run
 	out.Node = &Node{Digest: node.Canonical, Paths: n.Egress.Paths}
 	return &out, nil
+}
+
+// Allows reports whether e, one side of a policy, allows host by itself: a host its
+// allow_first matches exactly, else one its deny does not cover and, under enforce,
+// its allow covers.
+func (e Egress) Allows(host string) bool {
+	if _, ok := Exact(e.AllowFirst, host); ok {
+		return true
+	}
+	if _, ok := Match(e.Deny, host); ok {
+		return false
+	}
+	if e.Mode != Enforce {
+		return true
+	}
+	_, ok := Match(e.Allow, host)
+	return ok
+}
+
+// Listed is the allow_first entries, then the allow entries: what a check of a host
+// under enforce counts as covering it by [Covers], an allow_first entry covering the
+// host it is alone.
+func (e Egress) Listed() []string { return slices.Concat(e.AllowFirst, e.Allow) }
+
+// First is the allow_first list of two sides of a policy combined: a's entries that
+// b allows ([Egress.Allows]), then b's that a allows, each once, nil when there are
+// none. Each entry is a host both sides allow, which the combined policy allows before
+// its deny and allow: an entry of one side lifts that side's deny and allow alone.
+func First(a, b Egress) []string {
+	var out []string
+	for _, side := range []struct {
+		entries []string
+		other   Egress
+	}{{a.AllowFirst, b}, {b.AllowFirst, a}} {
+		for _, entry := range side.entries {
+			if side.other.Allows(entry) && !slices.Contains(out, entry) {
+				out = append(out, entry)
+			}
+		}
+	}
+	return out
 }
 
 // coveredBy are the entries of list an entry of other covers, in list's order.
@@ -343,6 +411,19 @@ func Match(entries []string, host string) (string, bool) {
 	return "", false
 }
 
+// Exact returns the entry of an allow_first list that matches host exactly, and
+// whether one did: host compared lower-case and without a trailing dot, so a host
+// below an entry is not matched.
+func Exact(entries []string, host string) (string, bool) {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, entry := range entries {
+		if strings.ToLower(entry) == host {
+			return entry, true
+		}
+	}
+	return "", false
+}
+
 // Host is the form of a host a request names that a decision is made on and a
 // connection dialled to, and whether the host has one. A name is ASCII letters, digits,
 // hyphens and dots, lower-cased and without one trailing dot, with no empty label. A
@@ -380,6 +461,65 @@ func Host(host string) (string, bool) {
 		}
 	}
 	return h, true
+}
+
+// EndpointHost returns the host of a base URL, such as ANTHROPIC_BASE_URL's value, in
+// the form [Host] gives, and whether the URL has one. A URL has none when [url.Parse]
+// refuses it, when it is opaque or relative, when its scheme is not https (compared
+// without regard to case), when it has user information ("https://a@b/"), when its
+// host is empty, when [Host] refuses its host, or when its port is not a decimal number
+// from 1 to 65535. The host is read as url.Parse decodes it, without the brackets of an
+// IPv6 literal. A URL with no port, or with nothing after the port's colon, has a host
+// if the rest allows it. The host does not depend on the path, query or fragment, but
+// url.Parse refuses a bad percent escape in the path or fragment, and such a URL has no
+// host.
+func EndpointHost(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || !u.IsAbs() || u.Scheme != "https" || u.User != nil || u.Hostname() == "" {
+		return "", false
+	}
+	if port := u.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return "", false
+		}
+	}
+	return Host(u.Hostname())
+}
+
+// CredentialFor reports whether a credential with hosts, entries in the allow list's
+// grammar, is for host: host's form under [Host], matched against hosts by [Match]. A
+// host with no form is in no credential's hosts. A private host is in a credential's
+// hosts only through an entry equal to it, compared lower-case, and never through a
+// "*." pattern. A private host is an IP literal in 10.0.0.0/8, 172.16.0.0/12,
+// 192.168.0.0/16 or fc00::/7, the ranges [netip.Addr.IsPrivate] reports; a name of one
+// label, such as litellm; or a name that ends in ".local", ".internal" or ".home.arpa".
+// Only a name with one of these endings can get a result other than [Match]'s: Match
+// compares an IP literal only to an identical entry, and a "*." pattern matches no name
+// of one label. The gateway's proxy picks a request's credential by this rule.
+func CredentialFor(hosts []string, host string) bool {
+	h, ok := Host(host)
+	if !ok {
+		return false
+	}
+	if private(h) {
+		for _, entry := range hosts {
+			if strings.ToLower(entry) == h {
+				return true
+			}
+		}
+		return false
+	}
+	_, ok = Match(hosts, h)
+	return ok
+}
+
+// private reports whether h, a host in [Host]'s form, is a private host as
+// [CredentialFor] reads one.
+func private(h string) bool {
+	if a, err := netip.ParseAddr(h); err == nil {
+		return a.IsPrivate()
+	}
+	return !strings.Contains(h, ".") || strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".internal") || strings.HasSuffix(h, ".home.arpa")
 }
 
 // embedded are the IPv6 ranges a host has no form in, each holding an IPv4 address in

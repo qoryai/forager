@@ -164,3 +164,23 @@ func TestAnswerRequestHash(t *testing.T) {
 		}
 	}
 }
+
+// TestALocalLinkPrintsAPhraseForASecret pins a local link as fmt, encoding/json and
+// log/slog print it: a socket, a file's path or a reserved name that contains qak_ or
+// qrk_ in any case prints its phrase, and a clean one prints as it is.
+func TestALocalLinkPrintsAPhraseForASecret(t *testing.T) {
+	l := link.Local{Socket: "/tmp/qak_x/sock", Proxy: "127.0.0.1:1", Files: []link.File{{Path: "/a/QRK_b", What: "the file"}, {Path: "/clean", What: "c"}}, Reserved: []string{"QAK_V", "PLAIN"}}
+	b, _ := json.Marshal(l)
+	var logged strings.Builder
+	slog.New(slog.NewJSONHandler(&logged, nil)).Info("x", "link", l)
+	for what, text := range map[string]string{"%v": fmt.Sprintf("%v", l), "%+v": fmt.Sprintf("%+v", l), "%#v": fmt.Sprintf("%#v", l), "json": string(b), "slog": logged.String()} {
+		if low := strings.ToLower(text); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") {
+			t.Errorf("%s: %s contains a secret's prefix", what, text)
+		}
+		for _, want := range []string{"(a value that contains an access key secret)", "(a value that contains a run key)", "(a name that contains an access key secret)", "/clean", "PLAIN"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s: %s does not contain %s", what, text, want)
+			}
+		}
+	}
+}

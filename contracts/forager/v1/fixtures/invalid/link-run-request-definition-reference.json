@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e",
+  "wall": true,
+  "images": {
+    "default": "base",
+    "definitions": [
+      {
+        "name": "base",
+        "ref": "registry.example/agents/base@sha256:4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f",
+        "reference": true
+      }
+    ]
+  }
+}

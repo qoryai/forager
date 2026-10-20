@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-run-answer.schema.json",
   "title": "Link run answer",
-  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key the run key names, over the connection and the request (README §The gateway's link). The run id echoed, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the names of the variables the machine's credentials are read from, the run's image when it has a wall, the policy_applied members the gateway decides, on the local link the run's labels and proxy secret, and the run's certificate authority when the run request's wall is true and the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key the run key names, over the connection and the request (README §The gateway's link). The run id echoed, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the names of the variables the machine's credentials are read from, the hosts and placeholders of each credential the gateway holds, with the auth of a credential from the server and of a model key, a model key's format and endpoint, and the start key's name in model_credential, the run's image when it has a wall, the policy_applied members the gateway decides, on the local link the run's labels and proxy secret, and the run's certificate authority when the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "run_id", "applied"],
@@ -45,12 +45,49 @@
       "type": "array",
       "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
     },
+    "credential_hosts": {
+      "description": "The hosts and placeholders of each credential the gateway holds for the run, so the session can tell which hosts the run's credentials cover: one entry per credential, in the order the policy selects them. Names and hosts alone, never a secret. Absent means none.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "hosts", "placeholders"],
+        "properties": {
+          "name": {"description": "The credential's name, as the policy selects it.", "$ref": "policy.schema.json#/properties/credentials/items/properties/name"},
+          "hosts": {
+            "description": "The credential's hosts as the proxy matches them: the hosts applied.credentials lists for the credential, in its order.",
+            "type": "array",
+            "minItems": 1,
+            "items": {"$ref": "events/run.policy_applied.schema.json#/properties/credentials/items/properties/hosts/items"}
+          },
+          "placeholders": {
+            "description": "The variables the session sets to a value that is no credential for this credential, each also in placeholders. Empty when the credential sets none, and for an API credential: the session adds the variable the run's runtime reads the key from.",
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"$ref": "#/properties/placeholders/items"}
+          },
+          "auth": {"description": "How the proxy sets the value: the run configuration entry's auth for a credential from the server, and the definition's for a model key of the machine's. Absent for every other credential of the machine's.", "$ref": "auth.schema.json"},
+          "format": {"description": "The API format of an API credential, a model key from the server or the machine. The session gives the key to the variable the run's runtime lists for this format and auth, and refuses the run otherwise, run_configuration_invalid. Absent for every other credential.", "$ref": "api-format.schema.json"},
+          "endpoint": {"description": "The endpoint of an API credential, which the session sets the runtime's model endpoint variable to; hosts is its host alone.", "$ref": "run-configuration.schema.json#/$defs/endpoint"}
+        },
+        "dependentRequired": {"format": ["auth", "endpoint"], "endpoint": ["format"]}
+      }
+    },
+    "model_credential": {
+      "description": "The name of the model key the runtime starts with, an entry of credential_hosts with format: the run configuration's model_credential, or the run's one model key. The session gives the runtime the variable and the endpoint of this one alone. Absent when the gateway holds no model key for the run.",
+      "$ref": "policy.schema.json#/properties/credentials/items/properties/name"
+    },
     "image": {
       "description": "The image the run gets, the one the policy in force selects or the machine's default, resolved against the run request's images: present when the run request's wall is true. Its reference may carry a registry's credentials in its user information: never logged or reported.",
       "$ref": "link-run-request.schema.json#/$defs/image"
     },
+    "relay_image": {
+      "description": "The reference of the machine's default image, which the wall starts the run's relay from whatever image the run gets: present when the run request's wall is true and its images have a default. The session decides none of it again. Its reference may carry a registry's credentials in its user information: never logged or reported.",
+      "type": "string",
+      "minLength": 1
+    },
     "applied": {
-      "description": "The members of dev.qory.run.policy_applied the gateway decides for the policy in force: every member but variables and harness_hosts, each present exactly when the gateway's is. The session's dev.qory.run.policy_applied is this object with the session's variables and harness_hosts added.",
+      "description": "The members of dev.qory.run.policy_applied the gateway decides for the policy in force: every member but variables, credential_variables and harness_hosts, each present exactly when the gateway's is. The session's dev.qory.run.policy_applied is this object with the session's variables, credential_variables and harness_hosts added.",
       "type": "object",
       "additionalProperties": false,
       "required": ["mode", "allow", "source"],
@@ -58,6 +95,7 @@
       "properties": {
         "mode": {"$ref": "events/run.policy_applied.schema.json#/properties/mode"},
         "allow": {"$ref": "events/run.policy_applied.schema.json#/properties/allow"},
+        "allow_first": {"$ref": "events/run.policy_applied.schema.json#/properties/allow_first"},
         "deny": {"$ref": "events/run.policy_applied.schema.json#/properties/deny"},
         "source": {"$ref": "events/run.policy_applied.schema.json#/properties/source"},
         "url": {"$ref": "events/run.policy_applied.schema.json#/properties/url"},
@@ -78,7 +116,7 @@
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },
     "certificate_authority": {
-      "description": "The certificate of the run's certificate authority, PEM: present when the run request's wall is true and the gateway reads inside HTTPS for the run, for a credential it holds, a tool it starts or a path rule, the policy's or the node's, and behind a wall with a server always, since a reload may bring path rules or credentials; absent otherwise, and always when wall is false. The certificate the enclosure trusts after the image's authorities; never its key, which stays with the gateway.",
+      "description": "The certificate of the run's certificate authority, PEM: present, with or without a wall, when the gateway reads inside HTTPS for the run, for a credential it holds, a tool it starts or a path rule, the policy's or the node's, and with a server always, since a reload may bring credentials or path rules; absent otherwise. The certificate the run trusts after the image's authorities behind a wall, and after the machine's in the run's ca-bundle.pem without one; never its key, which stays with the gateway.",
       "type": "string",
       "maxLength": 16384,
       "pattern": "^-----BEGIN CERTIFICATE-----\\r?\\n[A-Za-z0-9+/=\\r\\n]+-----END CERTIFICATE-----\\r?\\n?$"

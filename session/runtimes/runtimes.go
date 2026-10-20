@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/session/internal/descriptor"
 )
@@ -76,11 +77,32 @@ type Attach struct {
 	Forwarder []string
 	// Interactive says the session runs on a pseudo-terminal, not on pipes.
 	Interactive bool
+	// Walled is true when the program runs behind a wall.
+	Walled bool
 	// Placeholders are the variables the session sets to [Placeholder] in the
 	// program's environment: a credential's, whose value the proxy sets outside the
-	// enclosure, and a tool's, whose host the tool serves outside it. Empty without a
-	// wall.
+	// enclosure, and a tool's, whose host the tool serves outside it. The session sets
+	// them with or without a wall.
 	Placeholders []string
+	// ModelVariables, in a run with a start key, are the variables of the runtime's
+	// model keys, the start key's among them, and its model endpoint variable, from its
+	// descriptor's model section. The session sets the start key's variable and the
+	// endpoint's and leaves out the others; a runtime that copies a file whose values
+	// reach the program's environment leaves these names out of the copy. Empty when
+	// the run has no start key.
+	ModelVariables []string
+	// DeniedVariables are the runtime's denies and, behind a wall, its model
+	// overrides, from its descriptor: the names the session leaves out of the values
+	// of the server, the run, the machine and the harness's defaults, with or without
+	// a start key. A runtime that copies a file whose values reach the program's
+	// environment leaves these names out of the copy, regardless of case.
+	DeniedVariables []string
+	// Inside, when not nil, writes a path of this machine's as the enclosure sees it,
+	// in a string that may hold one: a runtime applies it to what it copies into the
+	// run directory of the caller's, so a path it names still leads where it led. The
+	// session sets it for a run whose workspace is at /workspace inside. Nil leaves
+	// every path as it is.
+	Inside func(string) string
 	// Readable is asked of a file of this machine before Prepare reads it, such as the
 	// settings Claude Code is passed, by its absolute path, which Prepare then opens as
 	// it is: where the path resolves through every link, which is the file Prepare may
@@ -89,8 +111,29 @@ type Attach struct {
 	// links, or is reached through, a place the caller lists as written by a walled run,
 	// a writable bind of another walled run still listed, or a writable bind of this
 	// run's; and a path with a ".." name, whose clean form names another file than the
-	// system opens. Nil refuses none.
+	// system opens. Nil refuses none. A refusal for a place a walled run can write is a
+	// [*WrittenError].
 	Readable func(path string) (string, error)
+	// ReadableDir is asked of a directory of this machine before Prepare passes it to
+	// the program, such as a plugin directory Claude Code is passed, by its absolute
+	// path: where the path resolves through every link, or why the program may not read
+	// it. It refuses what Readable refuses and also a directory that is or contains,
+	// as given or resolved, by whole names and regardless of case, a place a walled run
+	// could have written. Nil refuses none.
+	ReadableDir func(path string) (string, error)
+}
+
+// WrittenError is how [Attach.Readable] and [Attach.ReadableDir] refuse a path for a
+// place a walled run can write: How is "lies in", "is reached through" or "contains",
+// and Place is the place as a message prints it.
+type WrittenError struct {
+	How, Place string
+}
+
+// Error is "it lies in /work, which a walled run can write", with the error's How and
+// Place.
+func (e *WrittenError) Error() string {
+	return "it " + e.How + " " + e.Place + ", which a walled run can write"
 }
 
 // Placeholder is the value of every variable of [Attach.Placeholders]: a stand-in that
@@ -121,12 +164,55 @@ type Declarations = descriptor.Secrets
 type Declaration = descriptor.Declaration
 
 // Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
-// the header of header, Username the fixed user of basic.
+// the header of header, Username the fixed user of basic, and OAuth marks a bearer as
+// an OAuth token.
 type Auth = descriptor.Auth
 
 // Group is a set of declarations of which the runtime needs one at most, and exactly
 // one when Required.
 type Group = descriptor.Group
+
+// Model is implemented by a runtime that can report a descriptor's model section. It
+// is optional and checked by type assertion, so [Runtime] keeps its methods: a runtime
+// without it has no model section.
+type Model interface {
+	// Model is the runtime's model section and true, or the zero ModelPlaces and false
+	// when the runtime has none. The lists are the caller's to keep: a runtime returns
+	// a copy.
+	Model() (ModelPlaces, bool)
+}
+
+// ModelPlaces is a descriptor's model section: Formats, the model API formats the
+// runtime sends its requests in, from the contract's api-format.schema.json; Model,
+// where a run's model id goes; Effort, where an effort value goes, nil when the runtime
+// has no place for one; Endpoint, the variable the runtime reads the base URL of its
+// model API from; Keys, the variables it reads a model key from, one per API format
+// and auth; and Overrides, the variables that would override the model id or effort
+// value a composer writes, which a walled run leaves out and unsets inside.
+type ModelPlaces = descriptor.Model
+
+// Key is one variable a runtime reads a model key from: Format, the API format the key
+// is for; Auth, how the runtime sends it; and Variable.
+type Key = descriptor.Key
+
+// Place is where a value goes, exactly one of its fields set: Flag, an argument the
+// runtime is started with, which takes the value; Setting, a dotted key in the JSON
+// settings file the launch passes; Variable, an environment variable.
+type Place = descriptor.Place
+
+// ValuedPlace is a [Place] and the values the runtime accepts there.
+type ValuedPlace = descriptor.ValuedPlace
+
+// AgentPlace is where a value goes in an agent's file: Frontmatter, a key of the file's
+// frontmatter, and the values the runtime accepts there.
+type AgentPlace = descriptor.AgentPlace
+
+// Effort is where an effort value goes: Run, the run's; Agent, an agent's, nil when the
+// runtime has no place for an agent's effort.
+type Effort = descriptor.Effort
+
+// Endpoint is the variable a runtime reads the base URL of its model API from.
+type Endpoint = descriptor.Endpoint
 
 // Record is one unit of what a program reports.
 type Record = descriptor.Record
@@ -190,14 +276,14 @@ func Described(name string, document []byte, installers map[string]Installer) (R
 	if h := d.Sources.Hooks; h != nil {
 		r.install = installers[h.Install]
 		if r.install == nil {
-			return nil, fmt.Errorf("%s: hook installer %q is not one Forager implements", name, h.Install)
+			return nil, fmt.Errorf("%s: hook installer %q is not one Forager implements", accesskey.ShownValue(name, false), h.Install)
 		}
 	}
 	if s := d.Stop; s != nil {
 		r.stop.Signal = s.Signal
 		if s.Grace != "" {
 			if r.stop.Grace, err = time.ParseDuration(s.Grace); err != nil || r.stop.Grace <= 0 {
-				return nil, fmt.Errorf("%s: stop.grace %q is not a duration above zero", name, s.Grace)
+				return nil, fmt.Errorf("%s: stop.grace %q is not a duration above zero", accesskey.ShownValue(name, false), s.Grace)
 			}
 		}
 	}
@@ -284,6 +370,25 @@ func (r *described) Secrets() Declarations {
 	return out
 }
 
+// Model is the descriptor's model section, a copy, and true; the zero ModelPlaces and
+// false when it has none.
+func (r *described) Model() (ModelPlaces, bool) {
+	m := r.d.Model
+	if m == nil {
+		return ModelPlaces{}, false
+	}
+	out := ModelPlaces{Formats: slices.Clone(m.Formats), Model: m.Model, Endpoint: m.Endpoint, Keys: slices.Clone(m.Keys), Overrides: slices.Clone(m.Overrides)}
+	if e := m.Effort; e != nil {
+		effort := Effort{Run: e.Run}
+		effort.Run.Values = slices.Clone(e.Run.Values)
+		if a := e.Agent; a != nil {
+			effort.Agent = &AgentPlace{Frontmatter: a.Frontmatter, Values: slices.Clone(a.Values)}
+		}
+		out.Effort = &effort
+	}
+	return out, true
+}
+
 // stopSignals are the signals a spec may name: the ones a program is written to leave
 // on. SIGKILL is not one, it is what follows the grace.
 var stopSignals = map[string]syscall.Signal{
@@ -302,7 +407,7 @@ func CheckStopSignal(name string) error {
 		return nil
 	}
 	if _, ok := stopSignals[name]; !ok {
-		return fmt.Errorf("the stop signal %q is not one of SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2", name)
+		return fmt.Errorf("the stop signal %s is not one of SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2", accesskey.ShownName(name, true))
 	}
 	return nil
 }

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/server"
 )
@@ -191,7 +193,7 @@ func New(c Config) *Server {
 		if acks, err := os.OpenFile(filepath.Join(c.Spool, DeliveredFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
 			w.acks = acks
 		} else {
-			report("the record of accepted batches: " + err.Error())
+			report("the record of accepted batches: " + accesskey.ShownError(err).Error())
 		}
 	}
 	go w.run()
@@ -291,16 +293,35 @@ func (w *Server) Resend(ctx context.Context, line []byte, seq string) bool {
 	}
 }
 
-// run is the worker: it forms batches from the queue and delivers each with retries.
+// run is the worker: it forms batches from the queue and delivers each with retries. A
+// panic while a batch is formed or delivered ends that batch alone: report gets
+// [panicked] and the stack, never the panic's value, which may contain a credential,
+// and the worker goes on with the next batch.
 func (w *Server) run() {
 	defer close(w.done)
+	for w.batches() {
+	}
+}
+
+// panicked is the first line of the report of a panic in the worker; the stack follows.
+const panicked = "the run's event sender recovered from a panic and sends the next batch; send the stack below to Forager's maintainers"
+
+// batches delivers batches until the queue is closed and drained. It returns true
+// after a panic, which it reports, and false at the end.
+func (w *Server) batches() (again bool) {
+	defer func() {
+		if recover() != nil {
+			w.report(panicked + "\n" + string(debug.Stack()))
+			again = true
+		}
+	}()
 	for {
 		batch, ok := w.next()
 		if len(batch) > 0 {
 			w.deliver(batch)
 		}
 		if !ok {
-			return
+			return false
 		}
 	}
 }
@@ -425,7 +446,7 @@ func (w *Server) ack(id string, batch []queued) {
 	}
 	b.WriteString("\n")
 	if _, err := w.acks.WriteString(b.String()); err != nil {
-		w.report("the record of accepted batches: " + err.Error())
+		w.report("the record of accepted batches: " + accesskey.ShownError(err).Error())
 	}
 }
 
@@ -439,11 +460,11 @@ func (w *Server) spool(batch []queued, id string) {
 	}
 	dir := filepath.Join(w.dir, UndeliveredDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		w.report("spool: " + err.Error())
+		w.report("spool: " + accesskey.ShownError(err).Error())
 		return
 	}
 	if err := os.WriteFile(filepath.Join(dir, id+".json"), encode(batch), 0o644); err != nil {
-		w.report("spool: " + err.Error())
+		w.report("spool: " + accesskey.ShownError(err).Error())
 	}
 }
 
@@ -480,7 +501,7 @@ func (w *Server) Close(ctx context.Context) error {
 		w.acks.Close()
 	}
 	if n := w.Undelivered(); n > 0 && !w.link && w.dir != "" {
-		w.report(fmt.Sprintf("%d events were not accepted by the server; see %s", n, filepath.Join(w.dir, UndeliveredDir)))
+		w.report(fmt.Sprintf("%d events were not accepted by the server; see %s", n, accesskey.ShownValue(filepath.Join(w.dir, UndeliveredDir), false)))
 	}
 	return nil
 }
@@ -554,7 +575,7 @@ func sleep(ctx context.Context, d time.Duration) bool {
 func Delivered(dir string) (map[string]bool, bool, error) {
 	b, err := os.ReadFile(filepath.Join(dir, DeliveredFile))
 	if err != nil && !os.IsNotExist(err) {
-		return nil, false, err
+		return nil, false, accesskey.ShownError(err)
 	}
 	seqs, stopped := map[string]bool{}, false
 	for _, line := range strings.Split(string(b), "\n") {

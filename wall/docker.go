@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"debug/elf"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/program"
+	"github.com/qoryai/forager/refusal"
 )
 
 // Where things are inside a Docker enclosure.
@@ -30,6 +32,9 @@ const (
 	// HelperPath is where the helper binary is mounted, read-only. A caller names it in
 	// the hook forwarder's command, since the host's own path does not exist inside.
 	HelperPath = "/qory/qory"
+	// qoryDir holds what the adapter shows the enclosure, the helper, the hooks and the
+	// bundle: no mount of the caller's is shown at it, or inside it.
+	qoryDir = "/qory"
 	// hooksDir is where the directory holding the hook socket is mounted.
 	hooksDir = "/qory/hooks"
 	// BundlePath is where the enclosure finds the authorities it trusts when the run has
@@ -50,17 +55,19 @@ const (
 // One *Docker serves one run at a time: [Docker.Engine] records that run's engine
 // selection on it, and every engine command of the adapter's runs with it.
 //
-// A run gets two networks and two containers. The agent's container is on a network
-// created with --internal and on nothing else, so it has no route out and its resolver
-// knows only that network; the network's bridge gets no address, so the engine's host is
-// not on it either. For any image the network has no IPv6 subnet, and the agent's
-// container starts with no IPv6 address but loopback's. With a Docker of the agent's
-// own, which needs the docker command and Docker Engine 28 or later, the network has an
-// IPv6 subnet, the engine's choice, in Docker's isolated gateway mode: the bridge has
-// IPv6 off and no address. The relay's container is on that network and on an ordinary
-// one; it runs [Relay], forwarding one port to the gateway, listens on its addresses on
-// the internal network alone, and is the one peer the agent can reach. Both run as a
-// user that is not root, with every capability dropped and no new privileges.
+// A run gets two networks and two containers that run, and a third container, never
+// started and on no network, of the run's image when the relay starts from another,
+// which the wall reads files out of. The agent's container is on a network created with
+// --internal and on nothing else, so it has no route out and its resolver knows only
+// that network; the network's bridge gets no address, so the engine's host is not on it
+// either. For any image the network has no IPv6 subnet, and the agent's container
+// starts with no IPv6 address but loopback's. With nested Docker, which needs the
+// docker command and Docker Engine 28 or later, the network has an IPv6 subnet, the
+// engine's choice, in Docker's isolated gateway mode: the bridge has IPv6 off and no
+// address. The relay's container is on that network and on an ordinary one; it runs
+// [Relay], forwarding one port to the gateway, listens on its addresses on the internal
+// network alone, and is the one peer the agent can reach. Both run as a user that is
+// not root, with every capability dropped and no new privileges.
 type Docker struct {
 	// Command is the program to run; empty means docker.
 	Command string
@@ -112,6 +119,10 @@ type system interface {
 	run(ctx context.Context, argv, env []string) ([]byte, error)
 	// output runs a command and returns its standard output alone; env is as for run.
 	output(ctx context.Context, argv, env []string) ([]byte, error)
+	// stdout starts a command and returns its standard output as it comes; env is as
+	// for run. Close waits for the command, and kills it first when its output was not
+	// read to the end, so a reader that stops early stops the command too.
+	stdout(ctx context.Context, argv, env []string) (io.ReadCloser, error)
 	// local reports whether this machine holds the address.
 	local(ip string) bool
 	// tempDir makes a private directory.
@@ -132,16 +143,22 @@ type system interface {
 // itself: the proxy's, the hook socket's and the ones that point a program at the
 // run's bundle.
 func (d *Docker) Sets() []string {
-	names := d.CAEnv
-	if names == nil {
-		names = DefaultCAEnv
-	}
 	var out []string
 	for _, kv := range link.ProxyEnv("") {
 		name, _, _ := strings.Cut(kv, "=")
 		out = append(out, name)
 	}
-	return append(append(out, link.EnvRunSocket), names...)
+	return append(append(out, link.EnvRunSocket), d.SetsWithAuthority()...)
+}
+
+// SetsWithAuthority lists the variables of [Docker.Sets] the adapter sets only for a
+// run with an authority: the ones that point a program at the run's bundle, CAEnv, or
+// DefaultCAEnv when it is nil.
+func (d *Docker) SetsWithAuthority() []string {
+	if d.CAEnv != nil {
+		return slices.Clone(d.CAEnv)
+	}
+	return slices.Clone(DefaultCAEnv)
 }
 
 // Files lists the adapter's own files on this machine: the directory of the docker
@@ -181,6 +198,11 @@ var DefaultCAEnv = []string{"SSL_CERT_FILE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CE
 // OpenSUSE, and the OpenSSL default.
 var imageBundles = []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem"}
 
+// BundleFiles are the files, in order, where a system keeps its authorities as PEM:
+// those the wall reads out of an image, which a machine without a wall keeps at the
+// same paths, macOS's /etc/ssl/cert.pem among them.
+func BundleFiles() []string { return slices.Clone(imageBundles) }
+
 // What goes on a command line is checked for its shape first, because a word that
 // starts with a dash is a flag to the command that reads it: a run id names things, an
 // image is a reference, a user is uid[:gid] or a name, a variable is NAME=value.
@@ -212,13 +234,19 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 		sys = hostSystem{}
 	}
 	if !runIDShape.MatchString(req.RunID) {
-		return nil, fmt.Errorf("wall docker: the run id %q cannot name a container", req.RunID)
+		return nil, fmt.Errorf("wall docker: the run id %s cannot name a container", accesskey.ShownName(req.RunID, true))
 	}
 	if !imageShape.MatchString(req.Image) {
-		return nil, fmt.Errorf("wall docker: %q is not an image reference", req.Image)
+		return nil, fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(req.Image, true))
+	}
+	if req.RelayImage != "" && !imageShape.MatchString(req.RelayImage) {
+		return nil, fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(req.RelayImage, true))
+	}
+	if req.Pull && req.Docker {
+		return nil, errors.New("wall docker: an image a run names by its reference never gets nested Docker")
 	}
 	if req.Runtime != "" && !runtimeShape.MatchString(req.Runtime) {
-		return nil, fmt.Errorf("wall docker: %q is not a container runtime's name", req.Runtime)
+		return nil, fmt.Errorf("wall docker: %s is not a container runtime's name", accesskey.ShownName(req.Runtime, true))
 	}
 	if req.Docker && req.Runtime == "" {
 		return nil, errors.New("wall docker: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc; a privileged container is never an enclosure")
@@ -230,7 +258,7 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 		return nil, errors.New("wall docker: the helper binary and its relay arguments are required")
 	}
 	if err := sys.checkHelper(d.Helper); err != nil {
-		return nil, fmt.Errorf("wall docker: helper %s: %w", d.Helper, err)
+		return nil, fmt.Errorf("wall docker: helper %s: %w", accesskey.ShownValue(d.Helper, false), accesskey.ShownError(err))
 	}
 	user := d.User
 	if user == "" {
@@ -238,17 +266,37 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 		user = fmt.Sprintf("%d:%d", uid, gid)
 	}
 	if !userShape.MatchString(user) {
-		return nil, fmt.Errorf("wall docker: the user %q is not uid[:gid] or a name", user)
+		return nil, fmt.Errorf("wall docker: the user %s is not uid[:gid] or a name", accesskey.ShownName(user, true))
 	}
 	uid, _, _ := strings.Cut(user, ":")
 	if n, err := strconv.Atoi(uid); uid == "root" || (err == nil && n == 0) {
 		return nil, errors.New("wall docker: the agent does not run as root; name a user")
+	}
+	// The engine reads a user's name, and a uid's group and groups, out of the image's
+	// /etc/passwd and /etc/group, which an image a run names by its reference writes:
+	// such an image runs only under a uid and a gid, neither 0, that it cannot remap.
+	if req.Pull && !numericUser(user) {
+		return nil, fmt.Errorf("wall docker: an image a run names by its reference needs the wall's user as uid:gid in numbers, neither of them 0, not %s, which the image's /etc/passwd or /etc/group would resolve", accesskey.ShownName(user, true))
+	}
+	// The relay of a run in an image by reference starts from the machine's image, never
+	// from the run's, which may be anything.
+	if req.Pull && req.RelayImage == "" {
+		return nil, errors.New("wall docker: an image a run names by its reference needs the machine's image for the relay, RelayImage")
 	}
 	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID,
 		env: d.selected()}
 	if req.Docker {
 		if err := e.nestEngine(ctx); err != nil {
 			return nil, err
+		}
+	}
+	// An image a run names by its reference is fetched, unless the engine holds it by
+	// that digest, and its user read, before any network is made: one that cannot be
+	// fetched, or whose user is root, leaves no container or network; what the engine
+	// pulled stays in its store.
+	if req.Pull {
+		if err := e.pull(ctx); err != nil {
+			return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
 		}
 	}
 	// What removes a thing is noted before the thing is asked for: a command cut off by
@@ -321,14 +369,14 @@ var engineVersionShape = regexp.MustCompile(`^([0-9]+)\.[0-9]+(\.[0-9]+)?([-+~][
 // anything is made.
 func (e *dockerEnclosure) nestEngine(ctx context.Context) error {
 	if name := e.d.Name(); name != "docker" {
-		return fmt.Errorf("wall docker: nested Docker needs the docker command and Docker Engine 28 or later, not %s", name)
+		return fmt.Errorf("wall docker: nested Docker needs the docker command and Docker Engine 28 or later, not %s", accesskey.ShownValue(name, false))
 	}
 	out, err := e.sys.run(ctx, []string{e.command(), "version", "--format", engineVersion}, e.env)
 	if err != nil {
 		if said := bytes.TrimSpace(out); len(said) > 0 {
-			err = fmt.Errorf("%w: %s", err, said)
+			err = fmt.Errorf("%w: %s", accesskey.ShownError(err), accesskey.ShownValue(string(said), false))
 		}
-		return fmt.Errorf("wall docker: docker version: %w", err)
+		return fmt.Errorf("wall docker: docker version: %w", accesskey.ShownError(err))
 	}
 	version := string(bytes.TrimSpace(out))
 	m := engineVersionShape.FindStringSubmatch(version)
@@ -358,12 +406,20 @@ type dockerEnclosure struct {
 	// env is the engine's selection every command of the run's runs with, nil for
 	// Forager's own environment.
 	env []string
+	// fetched is how long finding an image by reference took, the check of the engine's
+	// store and any pull, and pulled whether the run's image is one by reference.
+	fetched time.Duration
+	pulled  bool
+	// created says the never-started container of the run's image exists, which the
+	// image's files are read out of.
+	created bool
 }
 
 func (e *dockerEnclosure) inside() string  { return e.base + "-in" }
 func (e *dockerEnclosure) outside() string { return e.base + "-out" }
 func (e *dockerEnclosure) relay() string   { return e.base + "-relay" }
 func (e *dockerEnclosure) agent() string   { return e.base + "-agent" }
+func (e *dockerEnclosure) image() string   { return e.base + "-image" }
 func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunID }
 
 // docker runs one docker command; a failure carries what the command printed.
@@ -371,7 +427,7 @@ func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, e
 	argv := append([]string{e.command()}, args...)
 	out, err := e.sys.run(ctx, argv, e.env)
 	if err != nil {
-		return out, fmt.Errorf("wall docker: %s: %w: %s", strings.Join(argv[:min(3, len(argv))], " "), err, bytes.TrimSpace(out))
+		return out, fmt.Errorf("wall docker: %s: %w: %s", accesskey.ShownValue(strings.Join(argv[:min(3, len(argv))], " "), false), accesskey.ShownError(err), accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
 	}
 	return out, nil
 }
@@ -392,21 +448,282 @@ func (e *dockerEnclosure) hardening() []string {
 	return []string{"--user", e.user, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--init"}
 }
 
-// relayWait is how long the relay has to listen, the image's pull included.
+// relayWait is how long the relay has to listen, the image's pull included, and how
+// long the run's image has to be pulled when it is not the relay's.
 const relayWait = 5 * time.Minute
 
-// Wrap starts the relay towards the proxy, waits until it listens, and returns the
-// docker run that starts the launch in the agent's container: on the internal network
-// only, the launch's mounts at their own paths, the workspace as the working directory
-// inside one of them, the helper read-only,
-// the socket's directory, and the launch's environment through a file, so no value is on a
-// command line.
+// pullWait is how long finding an image a run names by its reference may take, the
+// check of the engine's store and any pull.
+const pullWait = 10 * time.Minute
+
+// ImageFetch is how long finding the image a run names by its reference took, the check
+// of the engine's store and any pull, and whether the run's image is one by reference.
+func (e *dockerEnclosure) ImageFetch() (time.Duration, bool) { return e.fetched, e.pulled }
+
+// pull fetches the image a run names by its reference with docker pull, unless the
+// engine holds it by that digest, [dockerEnclosure.held], timed, the check included,
+// under [pullWait]. An image held with no Config, as a containerd store holds an index
+// with the content of none of its platforms, is pulled then all the same, and its Config
+// read again. pull refuses an image whose user is root, image_user_root: no user, root, a uid
+// of 0 in any spelling, with or without a group, or a name the image's /etc/passwd maps
+// to uid 0. A name the image cannot map, for want of /etc/passwd or of the name in it,
+// is refused as well, since it cannot be checked. The agent runs as the wall's user
+// whatever the image's, and that user is uid:gid in numbers, which Prepare requires
+// for such an image, so neither the image's /etc/passwd nor its /etc/group chooses who
+// the agent is; this keeps an image that expects root out of the run.
+func (e *dockerEnclosure) pull(ctx context.Context) error {
+	fetch, cancel := context.WithTimeout(ctx, pullWait)
+	defer cancel()
+	start := time.Now()
+	held, err := e.held(fetch)
+	if err != nil {
+		return err
+	}
+	if !held {
+		if _, err := e.docker(fetch, "pull", e.req.Image); err != nil {
+			return err
+		}
+	}
+	e.fetched, e.pulled = time.Since(start), true
+	config, err := e.imageConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if config == nil && held {
+		again := time.Now()
+		if _, err := e.docker(fetch, "pull", e.req.Image); err != nil {
+			return err
+		}
+		e.fetched += time.Since(again)
+		if config, err = e.imageConfig(ctx); err != nil {
+			return err
+		}
+	}
+	var user string
+	if config != nil {
+		user = config.User
+	}
+	name, _, _ := strings.Cut(strings.TrimSpace(user), ":")
+	image := accesskey.ShownName(e.req.Image, false)
+	root := func() error {
+		return refusal.New(refusal.ImageUserRoot, []string{image}, "the image %s runs as root; a run's image runs as the wall's user", image)
+	}
+	switch {
+	case name == "" || name == "root":
+		return root()
+	case uidShape.MatchString(name):
+		if strings.Trim(name, "0") == "" {
+			return root()
+		}
+		return nil
+	}
+	unchecked := func() error {
+		return refusal.New(refusal.ImageUserRoot, []string{image}, "the image %s runs as the user %s, which no /etc/passwd of the image maps to a uid, so it cannot be checked for root; a run's image runs as the wall's user", image, accesskey.ShownName(name, false))
+	}
+	passwd, err := e.imageFile(ctx, "/etc/passwd")
+	if err != nil {
+		return unchecked()
+	}
+	uid, ok := passwdUID(passwd, name)
+	switch {
+	case !ok:
+		return unchecked()
+	case strings.Trim(uid, "0") == "":
+		return root()
+	}
+	return nil
+}
+
+// held reports whether the engine holds the image a run names by its reference by that
+// very reference: the image inspect of NAME@sha256:… answers, and NAME@sha256:… is among
+// the image's repository digests. The same content under another name, or an image whose
+// id is the digest, is not held by the reference, and is pulled. An engine that has no
+// such image says so, and the image is not held; any other failure of the inspect, an
+// engine that does not answer say, is the run's error, as it would be the pull's, and is
+// never taken for an image the engine lacks.
+func (e *dockerEnclosure) held(ctx context.Context) (bool, error) {
+	argv := []string{e.command(), "image", "inspect", "--format", "{{json .RepoDigests}}", e.req.Image}
+	out, err := e.sys.output(ctx, argv, e.env)
+	if err != nil {
+		said := err.Error()
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			said = string(bytes.TrimSpace(exit.Stderr))
+		}
+		if noSuchImage(said) {
+			return false, nil
+		}
+		if exit != nil {
+			return false, fmt.Errorf("wall docker: image inspect %s: %w: %s", accesskey.ShownName(e.req.Image, false), accesskey.ShownError(err), accesskey.ShownValue(said, false))
+		}
+		return false, fmt.Errorf("wall docker: image inspect %s: %w", accesskey.ShownName(e.req.Image, false), accesskey.ShownError(err))
+	}
+	var digests []string
+	if err := json.Unmarshal(bytes.TrimSpace(out), &digests); err != nil {
+		return false, fmt.Errorf("wall docker: the repository digests of %s: %w", accesskey.ShownName(e.req.Image, false), err)
+	}
+	want := fullReference(e.req.Image)
+	return slices.ContainsFunc(digests, func(d string) bool { return fullReference(d) == want }), nil
+}
+
+// noSuchImage reports whether an engine's answer to an image inspect says it has no such
+// image: Docker's and nerdctl's "No such image", Podman's "image not known".
+func noSuchImage(said string) bool {
+	said = strings.ToLower(said)
+	return strings.Contains(said, "no such image") || strings.Contains(said, "image not known")
+}
+
+// fullReference is a reference pinned by digest, NAME@sha256:…, with its registry and
+// path in full, as the engine reads it: a NAME whose first part holds no dot or colon
+// and is not localhost is on docker.io, and a docker.io NAME of one part is in library/.
+// An engine lists a repository digest in either form.
+func fullReference(ref string) string {
+	name, digest, _ := strings.Cut(ref, "@")
+	domain, rest, ok := strings.Cut(name, "/")
+	if !ok || (!strings.ContainsAny(domain, ".:") && domain != "localhost") {
+		domain, rest = "docker.io", name
+	}
+	if domain == "index.docker.io" {
+		domain = "docker.io"
+	}
+	if domain == "docker.io" && !strings.Contains(rest, "/") {
+		rest = "library/" + rest
+	}
+	return domain + "/" + rest + "@" + digest
+}
+
+// imageConfig is the Config of the run's image, nil when it has none. It is the whole
+// Config, since an image that sets no user has no User in it, which a template of
+// .Config.User fails on; no Config at all is no user either.
+func (e *dockerEnclosure) imageConfig(ctx context.Context) (*struct{ User string }, error) {
+	argv := []string{e.command(), "image", "inspect", "--format", "{{json .Config}}", e.req.Image}
+	out, err := e.sys.output(ctx, argv, e.env)
+	if err != nil {
+		return nil, fmt.Errorf("wall docker: image inspect: %w", accesskey.ShownError(err))
+	}
+	var config *struct{ User string }
+	if err := json.Unmarshal(bytes.TrimSpace(out), &config); err != nil {
+		return nil, fmt.Errorf("wall docker: the image's user: %w", err)
+	}
+	return config, nil
+}
+
+// numericUser reports whether user is uid:gid in decimal digits, neither of them 0.
+func numericUser(user string) bool {
+	uid, gid, ok := strings.Cut(user, ":")
+	return ok && uidShape.MatchString(uid) && uidShape.MatchString(gid) &&
+		strings.Trim(uid, "0") != "" && strings.Trim(gid, "0") != ""
+}
+
+// uidShape is a uid written in decimal digits, leading zeros and all.
+var uidShape = regexp.MustCompile(`^[0-9]+$`)
+
+// passwdUID is the uid /etc/passwd gives the user name, as written, and whether it
+// names the user with a uid of digits.
+func passwdUID(passwd []byte, name string) (string, bool) {
+	for _, line := range strings.Split(string(passwd), "\n") {
+		f := strings.Split(strings.TrimSuffix(line, "\r"), ":")
+		if len(f) >= 3 && f[0] == name && uidShape.MatchString(f[2]) {
+			return f[2], true
+		}
+	}
+	return "", false
+}
+
+// imageFile is a file of the run's image, read out of a container created from it and
+// never started, on no network, by [copyOut]: a file over [fileLimit] is an error. The
+// container is created once, and removed with the enclosure.
+func (e *dockerEnclosure) imageFile(ctx context.Context, p string) ([]byte, error) {
+	if err := e.createImage(ctx); err != nil {
+		return nil, err
+	}
+	b, over, err := e.copyOut(ctx, e.image(), p)
+	switch {
+	case err != nil:
+		return nil, err
+	case over:
+		return nil, fmt.Errorf("wall docker: %s of the image is over %d bytes", p, fileLimit)
+	}
+	return b, nil
+}
+
+// fileLimit is the most of a file the wall reads out of a container, and tarAllowance
+// what docker cp may write around it, its tar headers and padding.
+const (
+	fileLimit    = 16 << 20
+	tarAllowance = 64 << 10
+)
+
+// copyWait is how long a read of a file out of a container may take.
+const copyWait = time.Minute
+
+// copyOut reads the file at p out of the container with docker cp, under [copyWait],
+// and returns the first [fileLimit] bytes of its content, and whether it is longer. It
+// reads at most fileLimit and [tarAllowance] bytes of what docker cp writes, and stops
+// the command there, so an image cannot make the wall hold more, whatever the file's
+// size or how well it compresses.
+func (e *dockerEnclosure) copyOut(ctx context.Context, container, p string) ([]byte, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, copyWait)
+	defer cancel()
+	r, err := e.sys.stdout(ctx, []string{e.command(), "cp", "--follow-link", container + ":" + p, "-"}, e.env)
+	if err != nil {
+		return nil, false, err
+	}
+	stream, readErr := io.ReadAll(io.LimitReader(r, fileLimit+tarAllowance+1))
+	closeErr := r.Close()
+	over := len(stream) > fileLimit+tarAllowance
+	if !over && readErr != nil {
+		return nil, false, readErr
+	}
+	if !over && closeErr != nil {
+		return nil, false, closeErr
+	}
+	b, size, err := firstFile(stream)
+	if err != nil {
+		return nil, false, err
+	}
+	return b, over || size > fileLimit, nil
+}
+
+// createImage creates the container of the run's image that is never started, once,
+// under [relayWait], since it pulls an image the engine does not have: the image's
+// files are read out of it, and the image is there before the agent's container
+// starts.
+func (e *dockerEnclosure) createImage(ctx context.Context) error {
+	if e.created {
+		return nil
+	}
+	pull, cancel := context.WithTimeout(ctx, relayWait)
+	defer cancel()
+	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.image()})
+	if _, err := e.docker(pull, "create", "--name", e.image(), "--label", e.label(), "--network", "none", "--entrypoint", HelperPath, e.req.Image); err != nil {
+		return err
+	}
+	e.created = true
+	return nil
+}
+
+// relayImage is the image the relay starts from: the machine's default, or the run's
+// when the request names none.
+func (e *dockerEnclosure) relayImage() string {
+	if e.req.RelayImage != "" {
+		return e.req.RelayImage
+	}
+	return e.req.Image
+}
+
+// Wrap starts the relay towards the proxy, from the request's RelayImage, the machine's
+// default, waits until it listens, and returns the docker run that starts the launch in
+// the agent's container: on the internal network only, the launch's mounts at their
+// own paths or their Targets, the workspace as the working directory inside one of
+// them, the helper read-only, the socket's directory, and the launch's environment
+// through a file, so no value is on a command line.
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	_, port, err := net.SplitHostPort(l.Proxy)
 	if err != nil {
-		return Launch{}, fmt.Errorf("wall docker: the proxy's address: %w", err)
+		return Launch{}, fmt.Errorf("wall docker: the proxy's address: %w", accesskey.ShownError(err))
 	}
-	mounts, err := e.mounts(l)
+	mounts, dir, err := e.mounts(l)
 	if err != nil {
 		return Launch{}, err
 	}
@@ -425,11 +742,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		env = append(env, link.EnvRunSocket+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
 	}
 	if len(l.CA) > 0 {
-		names := e.d.CAEnv
-		if names == nil {
-			names = DefaultCAEnv
-		}
-		for _, n := range names {
+		for _, n := range e.d.SetsWithAuthority() {
 			env = append(env, n+"="+BundlePath)
 		}
 	}
@@ -461,7 +774,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	// The image's health check would run inside the relay, as its user and beside its
 	// environment, with the relay's way out; the relay runs none.
-	create = append(create, "--env-file", relayEnvFile, "--read-only", "--no-healthcheck", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
+	create = append(create, "--env-file", relayEnvFile, "--read-only", "--no-healthcheck", "--mount", helper, "--entrypoint", HelperPath, e.relayImage())
 	create = append(create, e.d.RelayArgs...)
 	create = append(create, fmt.Sprintf("%d=%s", relayPort, net.JoinHostPort(e.host, port)))
 	pull, cancel := context.WithTimeout(ctx, relayWait)
@@ -469,6 +782,13 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.relay()})
 	if _, err := e.docker(pull, create...); err != nil {
 		return Launch{}, err
+	}
+	// The run's image, when the relay's is another, is there before the agent's
+	// container starts, and its files are read from a container made from it.
+	if e.relayImage() != e.req.Image {
+		if err := e.createImage(ctx); err != nil {
+			return Launch{}, err
+		}
 	}
 	var bundle string
 	if len(l.CA) > 0 {
@@ -541,7 +861,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if e.env != nil {
 		cli = withSelection(cli, e.env)
 	}
-	return Launch{Command: e.command(), Args: run, Env: cli, Dir: l.Dir}, nil
+	return Launch{Command: e.command(), Args: run, Env: cli, Dir: dir}, nil
 }
 
 // Binds lists the adapter's own binds before an enclosure is prepared: the helper,
@@ -580,26 +900,27 @@ func (e *dockerEnclosure) makeTemp() error {
 	}
 	dir, err := e.sys.tempDir()
 	if err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	e.temp = dir
 	return nil
 }
 
 // bundle writes the file the enclosure trusts: the image's own authorities, read out of
-// the relay's container, which is the same image and exists by now, and the run's
+// the relay's container when it is the same image, and otherwise out of the container
+// of the run's image that is never started, each of which exists by now, and the run's
 // certificate after them. An image that keeps a bundle nowhere known gets the run's
 // alone, which serves the hosts the proxy answers as and no other; that is the image's
 // to mend. It returns the file's mount.
 func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error) {
+	from := e.relay()
+	if e.relayImage() != e.req.Image {
+		from = e.image()
+	}
+	// A bundle over [fileLimit] is read up to it, as before the read was bounded.
 	var image []byte
 	for _, p := range imageBundles {
-		argv := []string{e.command(), "cp", "--follow-link", e.relay() + ":" + p, "-"}
-		out, err := e.sys.output(ctx, argv, e.env)
-		if err != nil {
-			continue
-		}
-		if b, err := firstFile(out); err == nil && bytes.Contains(b, []byte("BEGIN CERTIFICATE")) {
+		if b, _, err := e.copyOut(ctx, from, p); err == nil && bytes.Contains(b, []byte("BEGIN CERTIFICATE")) {
 			image = b
 			break
 		}
@@ -612,48 +933,69 @@ func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error)
 		image = append(image, '\n')
 	}
 	if err := os.WriteFile(file, append(image, ca...), 0o644); err != nil {
-		return "", err
+		return "", accesskey.ShownError(err)
 	}
 	return mount(file, BundlePath, true)
 }
 
-// firstFile is the content of the first file in a tar stream, what docker cp writes.
-func firstFile(stream []byte) ([]byte, error) {
+// firstFile is the content of the first file in a tar stream, what docker cp writes,
+// at most [fileLimit] bytes of it, and the size its header gives. A stream cut short
+// gives what it holds of the file.
+func firstFile(stream []byte) ([]byte, int64, error) {
 	r := tar.NewReader(bytes.NewReader(stream))
 	for {
 		h, err := r.Next()
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if h.Typeflag == tar.TypeReg {
-			return io.ReadAll(io.LimitReader(r, 16<<20))
+			b, err := io.ReadAll(io.LimitReader(r, fileLimit))
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				// A stream cut at the read's limit holds the start of the file.
+				err = nil
+			}
+			return b, h.Size, err
 		}
 	}
 }
 
-// mounts are the launch's own: what it lists and the socket's directory. The workspace
-// is the working directory inside; a mount whose path holds it, by whole components,
-// shows it, and a launch none of whose mounts does is refused: the adapter binds
-// nothing of the caller's the launch does not list.
-func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
+// mounts are the launch's: what it lists and the socket's directory, and the
+// workspace's directory on this machine. The workspace is the working directory
+// inside; a mount whose path inside, its Path or its Target, holds it, by whole
+// components, shows it, and a launch none of whose mounts does is refused: the adapter
+// binds nothing of the caller's the launch does not list. A Target that is not
+// absolute, or that is, holds or lies under the adapter's /qory, is refused.
+func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 	if !filepath.IsAbs(l.Dir) {
-		return nil, fmt.Errorf("wall docker: the workspace %q is not an absolute path", l.Dir)
+		return nil, "", fmt.Errorf("wall docker: the workspace %s is not an absolute path", accesskey.ShownValue(l.Dir, true))
 	}
 	var binds []bind
-	held := false
+	host := ""
 	for _, m := range l.Mounts {
 		if !filepath.IsAbs(m.Path) {
-			return nil, fmt.Errorf("wall docker: the mount %q is not an absolute path", m.Path)
+			return nil, "", fmt.Errorf("wall docker: the mount %s is not an absolute path", accesskey.ShownValue(m.Path, true))
 		}
 		if e.sys.socket(m.Path) {
-			return nil, fmt.Errorf("wall docker: the mount %q is a socket or holds a container runtime's, which an enclosure never gets", m.Path)
+			return nil, "", fmt.Errorf("wall docker: the mount %s is a socket or holds a container runtime's, which an enclosure never gets", accesskey.ShownValue(m.Path, true))
 		}
-		binds = append(binds, bind{m.Path, m.Path, m.ReadOnly})
-		held = held || under(m.Path, l.Dir)
+		dst := m.Path
+		if m.Target != "" {
+			if !filepath.IsAbs(m.Target) {
+				return nil, "", fmt.Errorf("wall docker: the mount %s is shown at %s, which is not an absolute path", accesskey.ShownValue(m.Path, true), accesskey.ShownValue(m.Target, true))
+			}
+			if under(qoryDir, m.Target) || under(m.Target, qoryDir) {
+				return nil, "", fmt.Errorf("wall docker: the mount %s is shown at %s, which overlaps %s, the wall's", accesskey.ShownValue(m.Path, true), accesskey.ShownValue(m.Target, true), qoryDir)
+			}
+			dst = filepath.Clean(m.Target)
+		}
+		binds = append(binds, bind{m.Path, dst, m.ReadOnly})
+		if rel, err := filepath.Rel(dst, l.Dir); host == "" && err == nil && under(dst, l.Dir) {
+			host = filepath.Join(m.Path, rel)
+		}
 	}
-	if !held {
-		return nil, fmt.Errorf("wall docker: the workspace %q lies in none of the "+
-			"launch's mounts", l.Dir)
+	if host == "" {
+		return nil, "", fmt.Errorf("wall docker: the workspace %s lies in none of the "+
+			"launch's mounts", accesskey.ShownValue(l.Dir, true))
 	}
 	if l.Socket != "" {
 		binds = append(binds, bind{filepath.Dir(l.Socket), hooksDir, false})
@@ -667,11 +1009,11 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 		seen[b.dst] = true
 		m, err := mount(b.src, b.dst, b.readonly)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		out = append(out, m)
 	}
-	return out, nil
+	return out, host, nil
 }
 
 // under reports whether path is dir or lies below it, by whole components of the
@@ -687,7 +1029,7 @@ func limits(l Limits) ([]string, error) {
 	var out []string
 	if l.CPUs != "" {
 		if !cpusShape.MatchString(l.CPUs) {
-			return nil, fmt.Errorf("wall docker: the cpus limit %q is not a decimal number", l.CPUs)
+			return nil, fmt.Errorf("wall docker: the cpus limit %s is not a decimal number", accesskey.ShownValue(l.CPUs, true))
 		}
 		out = append(out, "--cpus", l.CPUs)
 	}
@@ -696,7 +1038,7 @@ func limits(l Limits) ([]string, error) {
 			continue
 		}
 		if !bytesShape.MatchString(f.value) {
-			return nil, fmt.Errorf("wall docker: the %s %q is not a number of bytes with a unit of b, k, m or g", f.name, f.value)
+			return nil, fmt.Errorf("wall docker: the %s %s is not a number of bytes with a unit of b, k, m or g", f.name, accesskey.ShownValue(f.value, true))
 		}
 		out = append(out, f.flag, f.value)
 	}
@@ -720,7 +1062,7 @@ type bind struct {
 func mount(src, dst string, readonly bool) (string, error) {
 	for _, p := range []string{src, dst} {
 		if strings.ContainsAny(p, ",\"\n") {
-			return "", fmt.Errorf("wall docker: the path %q holds a comma or a quote and cannot be mounted", p)
+			return "", fmt.Errorf("wall docker: the path %s holds a comma or a quote and cannot be mounted", accesskey.ShownValue(p, true))
 		}
 	}
 	m := "type=bind,src=" + src + ",dst=" + dst
@@ -740,11 +1082,11 @@ func (e *dockerEnclosure) envFile(name string, env []string) (string, error) {
 		// which is this machine's.
 		if !envShape.MatchString(kv) {
 			name, _, _ := strings.Cut(kv, "=")
-			return "", fmt.Errorf("wall docker: the environment entry %q is not NAME=value", name)
+			return "", fmt.Errorf("wall docker: the environment entry %s is not NAME=value", accesskey.ShownName(name, true))
 		}
 		if strings.ContainsAny(kv, "\n\r") {
 			name, _, _ := strings.Cut(kv, "=")
-			return "", fmt.Errorf("wall docker: the value of %s holds a line break and cannot be passed", name)
+			return "", fmt.Errorf("wall docker: the value of %s holds a line break and cannot be passed", accesskey.ShownName(name, false))
 		}
 		b.WriteString(kv + "\n")
 	}
@@ -752,7 +1094,7 @@ func (e *dockerEnclosure) envFile(name string, env []string) (string, error) {
 		return "", err
 	}
 	file := filepath.Join(e.temp, name)
-	return file, os.WriteFile(file, []byte(b.String()), 0o600)
+	return file, accesskey.ShownError(os.WriteFile(file, []byte(b.String()), 0o600))
 }
 
 // relayListens polls the relay's output for [RelayReady]. A relay that exited instead
@@ -768,10 +1110,10 @@ func (e *dockerEnclosure) relayListens(ctx context.Context) error {
 			return nil
 		}
 		if state, err := e.docker(ctx, "inspect", "--format", "{{.State.Running}}", e.relay()); err == nil && strings.TrimSpace(string(state)) == "false" {
-			return fmt.Errorf("wall docker: the relay exited: %s", bytes.TrimSpace(out))
+			return fmt.Errorf("wall docker: the relay exited: %s", accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("wall docker: the relay did not listen: %s", bytes.TrimSpace(out))
+			return fmt.Errorf("wall docker: the relay did not listen: %s", accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
 		}
 		select {
 		case <-ctx.Done():
@@ -798,7 +1140,7 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 	}
 	e.made = nil
 	if e.temp != "" {
-		errs = append(errs, os.RemoveAll(e.temp))
+		errs = append(errs, accesskey.ShownError(os.RemoveAll(e.temp)))
 		e.temp = ""
 	}
 	return errors.Join(errs...)
@@ -808,7 +1150,7 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 // session that died left behind. The containers go first, since a network in use stays.
 func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
 	if !runIDShape.MatchString(runID) {
-		return 0, fmt.Errorf("wall docker: the run id %q cannot name a container", runID)
+		return 0, fmt.Errorf("wall docker: the run id %s cannot name a container", accesskey.ShownName(runID, true))
 	}
 	sys := d.sys
 	if sys == nil {
@@ -848,6 +1190,52 @@ func (hostSystem) run(ctx context.Context, argv, env []string) ([]byte, error) {
 
 func (hostSystem) output(ctx context.Context, argv, env []string) ([]byte, error) {
 	return selectedCommand(ctx, argv, env).Output()
+}
+
+func (hostSystem) stdout(ctx context.Context, argv, env []string) (io.ReadCloser, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	cmd := selectedCommand(ctx, argv, env)
+	out, err := cmd.StdoutPipe()
+	if err == nil {
+		err = cmd.Start()
+	}
+	if err != nil {
+		cancel()
+		return nil, accesskey.ShownError(err)
+	}
+	return &piped{r: out, cmd: cmd, cancel: cancel}, nil
+}
+
+// piped is a command's standard output as it comes. Close kills the command when the
+// output was not read to its end, and waits for it.
+type piped struct {
+	r      io.Reader
+	cmd    *exec.Cmd
+	cancel context.CancelFunc
+	ended  bool
+}
+
+// Read reads the command's output, and notes its end.
+func (p *piped) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if err == io.EOF {
+		p.ended = true
+	}
+	return n, err
+}
+
+// Close kills the command when its output was not read to the end, and waits for it.
+func (p *piped) Close() error {
+	if !p.ended {
+		p.cancel()
+	}
+	err := p.cmd.Wait()
+	p.cancel()
+	if !p.ended {
+		// Stopped by the reader: what the command says of being killed is not news.
+		return nil
+	}
+	return err
 }
 
 // selectedCommand is hostCommand, with the engine's selection in place of Forager's
@@ -924,7 +1312,7 @@ func (hostSystem) ids() (int, int) { return os.Getuid(), os.Getgid() }
 func (hostSystem) checkHelper(path string) error {
 	f, err := elf.Open(path)
 	if err != nil {
-		return fmt.Errorf("not a Linux executable: %w", err)
+		return fmt.Errorf("not a Linux executable: %w", accesskey.ShownError(err))
 	}
 	defer f.Close()
 	for _, p := range f.Progs {

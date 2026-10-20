@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/server"
@@ -111,7 +113,7 @@ func (l *live) kick() {
 	}
 	l.running = true
 	l.wg.Add(1)
-	go l.loop()
+	routine.Go(routine.ForRun(l.report, l.runID), l.loop)
 }
 
 // stale reports whether what the server said is in force differs from what the run
@@ -126,18 +128,28 @@ func (l *live) stale() bool {
 // failed reports a reload that failed, unless the run's end is why.
 func (l *live) failed(err error) {
 	if l.ctx.Err() == nil {
-		l.report("the reload failed: " + err.Error())
+		l.report("the reload failed: " + accesskey.ShownError(err).Error())
 	}
 }
 
-// loop runs passes until nothing is marked dirty or the run ends.
+// loop runs passes until nothing is marked dirty or the run ends. After a pass that
+// panicked the loop is no longer running, so the next answer that differs starts
+// another.
 func (l *live) loop() {
 	defer l.wg.Done()
+	ended := false
+	defer func() {
+		if !ended {
+			l.mu.Lock()
+			l.running = false
+			l.mu.Unlock()
+		}
+	}()
 	for {
 		l.pass()
 		l.mu.Lock()
 		if !l.dirty || l.ctx.Err() != nil {
-			l.running = false
+			l.running, ended = false, true
 			l.mu.Unlock()
 			return
 		}

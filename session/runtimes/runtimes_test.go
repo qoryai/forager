@@ -190,3 +190,63 @@ func TestADescriptorDeclaresItsSecretsThroughTheOptionalInterface(t *testing.T) 
 		t.Error("a bare runtime declares secrets")
 	}
 }
+
+// TestADescriptorSaysWhereItsModelGoesThroughTheOptionalInterface pins the Go API of a
+// runtime's model section: a described runtime implements runtimes.Model, which reports
+// the section and true, or false when the descriptor has none; a bare runtime does not
+// implement it; and what a caller does to the lists it receives changes nothing of the
+// runtime's.
+func TestADescriptorSaysWhereItsModelGoesThroughTheOptionalInterface(t *testing.T) {
+	doc := other + `model:
+  formats: [openai-responses, openai-chat]
+  model: {setting: agent.model}
+  effort:
+    run: {flag: --effort, values: [low, high]}
+    agent: {frontmatter: effort, values: [low, high, max]}
+  endpoint: {variable: OTHER_BASE_URL}
+  overrides: [OTHER_MODEL]
+`
+	rt, err := runtimes.Described("other-agent.yaml", []byte(doc), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := rt.(runtimes.Model)
+	if !ok {
+		t.Fatal("a described runtime does not implement runtimes.Model")
+	}
+	want := runtimes.ModelPlaces{
+		Formats: []string{"openai-responses", "openai-chat"},
+		Model:   runtimes.Place{Setting: "agent.model"},
+		Effort: &runtimes.Effort{
+			Run:   runtimes.ValuedPlace{Place: runtimes.Place{Flag: "--effort"}, Values: []string{"low", "high"}},
+			Agent: &runtimes.AgentPlace{Frontmatter: "effort", Values: []string{"low", "high", "max"}},
+		},
+		Endpoint:  runtimes.Endpoint{Variable: "OTHER_BASE_URL"},
+		Overrides: []string{"OTHER_MODEL"},
+	}
+	got, ok := m.Model()
+	if !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("model %v\n%+v\nwant\n%+v", ok, got, want)
+	}
+	got.Formats[0] = "gemini"
+	got.Effort.Run.Values[0] = "changed"
+	got.Effort.Agent.Values[0] = "changed"
+	got.Effort.Agent.Frontmatter = "changed"
+	got.Overrides[0] = "CHANGED"
+	if again, _ := m.Model(); !reflect.DeepEqual(again, want) {
+		t.Errorf("a change to what Model returned reached the runtime: %+v", again)
+	}
+
+	plain, err := runtimes.Described("other-agent.yaml", []byte(other), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := plain.(runtimes.Model); !ok {
+		t.Error("a described runtime without a model section does not implement runtimes.Model")
+	} else if got, ok := m.Model(); ok || !reflect.DeepEqual(got, runtimes.ModelPlaces{}) {
+		t.Errorf("a descriptor without a model section reports %v, %+v", ok, got)
+	}
+	if _, ok := runtimes.Bare("other-agent").(runtimes.Model); ok {
+		t.Error("a bare runtime implements runtimes.Model")
+	}
+}

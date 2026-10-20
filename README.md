@@ -8,7 +8,8 @@ It does four things:
    host, the decision, the rule. So is every chunk of output, and every prompt, tool call
    and turn the agent reports. The record is written to the checkout.
 2. **It enforces a policy.** A policy lists what the agent may reach. `enforce` denies
-   the rest. `observe` records everything and denies only what `deny` lists.
+   the rest. `observe` records everything and denies only what `deny` lists and
+   `allow_first` does not.
 3. **It walls the agent in, and keeps your secrets out.** A wall starts the agent in a
    container whose one way out is the proxy. The credentials a run's policy selects stay
    with the gateway, which sets them on the way out.
@@ -65,7 +66,8 @@ them under its state directory and prints the path:
 
 Forager writes its events: the start, the policy, each connection, each chunk of output,
 a heartbeat every 30 seconds, and the exit. The agent's hooks and output add the
-session's events: prompts, tool calls, subagents, turns. A **descriptor** maps them.
+session's events: prompts, tool calls, subagents, turns, as the runtime reports them
+from inside, which an image a repository built can change. A **descriptor** maps them.
 Forager ships one for Claude Code.
 
 More: [docs/events.md](docs/events.md).
@@ -95,8 +97,8 @@ When your server sends a policy, Forager narrows it by the policy it is passed,
 records everything.
 
 A denied connection gets a `403`, and the record gets the event. The session goes on.
-Behind a wall, a policy can also limit a host to paths, and select the credentials, the
-tools and the image the run gets.
+A policy can also select the credentials the run gets, with or without a wall. Behind a
+wall, it can also limit a host to paths, and select the tools and the image.
 
 More: [docs/policy.md](docs/policy.md).
 
@@ -109,9 +111,9 @@ The proxy sees only programs that honour it. A **wall** makes the rest fail:
 - The session, the gateway, the policy and the access key secret stay outside. The
   record is written from outside.
 
-Credentials stay outside too. The machine defines them, and a run's policy selects them
-by name. Inside, the agent sees a placeholder. The proxy sets the real credential on the
-requests to the hosts it is for.
+Credentials stay outside too, with or without a wall. The machine defines them, and a
+run's policy selects them by name. The agent sees a placeholder. The proxy sets the real
+credential on the requests to the hosts it is for.
 
 A **tool**, a program of the machine's, runs outside as well. It is for what needs more
 than a credential, such as a request signed with a key.
@@ -132,6 +134,9 @@ Every event goes to files. With a server, the events it selects go there too:
   Ed25519 key, and every answer is verified under the server's key the machine pins.
 - The server can return the run's policy and variables, chosen by the run's labels. It
   can change the policy while the run goes.
+- A name or a value that contains `qak_` or `qrk_`, the start of an access key secret
+  or a run key, is sent and printed as a phrase in its place, such as `(a name that
+  contains a run key)`. [docs/server.md](docs/server.md) lists where.
 
 A server is your control plane, or your receiver. The package `receiver` is a worked
 example.

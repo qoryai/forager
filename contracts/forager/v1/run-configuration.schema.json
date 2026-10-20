@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/run-configuration.schema.json",
   "title": "Run configuration",
-  "description": "What a server answers, a signed 200, to a run's registration, the signed POST to its run endpoint, and to a reload by the run's id, the signed GET of the run endpoint followed by a slash and the run id: the server's policy for the run and the variables the agent's process receives, chosen by the server for the run, by the labels its registration sent. The registration's about never selects or changes a security policy. {\"version\": 1} is an answer of no policy. The digest the server sends beside it is the server's, and opaque to Forager. A member Forager does not recognise is ignored.",
+  "description": "What a server answers, a signed 200, to a run's registration, the signed POST to its run endpoint, and to a reload by the run's id, the signed GET of the run endpoint followed by a slash and the run id: the server's policy for the run, the image it starts in and the variables the agent's process receives, chosen by the server for the run, by the labels its registration sent. The registration's about never selects or changes a security policy. {\"version\": 1} is an answer of no policy. The digest the server sends beside it, X-Qory-Run-Configuration, is sha256= and the lower-case hex SHA-256 of the exact bytes of this document as the server sends it; an attach answer contains the digest of the document a reload of the run answers, without labels and about. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version"],
@@ -15,12 +15,27 @@
       "description": "The server's policy for the run, a policy document in the same shape as the machine's local policy. The policy the command passes, when there is one, narrows it: the node only takes away. Absent, the node's policy is the run's.",
       "$ref": "policy.schema.json"
     },
+    "image": {
+      "description": "The image the run starts in, a reference pinned by digest, NAME@sha256: and 64 lower-case hexadecimal digits, which the machine runs only under one of its images.allow prefixes. Any other value is refused, run_configuration_invalid: a value that is no string by the schema, and a string that is no reference pinned by digest, with a tag, in upper case, without a digest or the machine's name for an image, by Forager's check before the schema reads it. The run configuration, the server's policy and the node's policy name the same image wherever two of them name one. Fixed when the run starts. Absent, the run's policy selects the image.",
+      "$ref": "policy.schema.json#/$defs/image_reference"
+    },
     "variables": {
-      "description": "The variables the agent's process receives, by name, as the server resolved them among its levels: an object with the value each. The server's value of a name wins over every value the node passes for it; the run's fixed names win over the server's. Forager leaves out a name its deny list matches; a name it, the wall, the runtime's preparation, a placeholder or the harness's computed values set; a name the run's runtime declares or reserves; a name a value of the machine's is read from, such as a credential's variable; and, in an unwalled run, every one unless the node accepts them. A value is at most 4096 bytes of UTF-8 and contains no NUL, carriage return or line feed.",
+      "description": "The variables the agent's process receives, by name, as the server resolved them among its levels: an object with the value each. The server's value of a name wins over every value the node passes for it; the run's fixed names win over the server's. Forager leaves out a name its deny list matches, whose built-in QORY_* entry leaves in QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, the system and the repositories a run's preparation may use, by these names exactly; a name it, the wall, the runtime's preparation, a placeholder or the harness's computed values set; a name the run's runtime declares or reserves; a name a value of the machine's is read from, such as a credential's variable; and, in an unwalled run, every one unless the node accepts them. With an API credential among the run's credentials, Forager sets the runtime's model endpoint variable to its endpoint, and leaves every other value of it out as fixed. Without one, behind a wall, the runtime's denies do not leave out the value of the runtime's model endpoint variable: Forager leaves it out when it is not an https URL with a host Forager reads, or its host is none of the hosts of the run's model credential. A value is at most 4096 bytes of UTF-8 and contains no NUL, carriage return or line feed.",
       "type": "object",
       "maxProperties": 128,
       "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
       "additionalProperties": {"$ref": "#/$defs/variable"}
+    },
+    "credentials": {
+      "description": "The credentials whose values the server stores for the run, at most 8, each name once. The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it once, when a walled run starts, and sets each value in place of a credential of the machine's that claims one of its hosts; the credentials are fixed for the run.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {"$ref": "#/$defs/credential"}
+    },
+    "model_credential": {
+      "description": "The name of the model key the runtime starts with: an API credential of credentials, or a model key the machine defines and the run's policy selects. Required when the run has two or more model keys, of the server's and the machine's together; with one, that one is the start key. The gateway holds every model key of the run and sets only the start key, on requests to its endpoint's host that carry its placeholder; the session gives the runtime the start key's variable and endpoint alone. A name of no model key of the run, or of a credential without format, is run_configuration_invalid. Fixed when the run starts.",
+      "$ref": "#/$defs/credential_name"
     }
   },
   "$defs": {
@@ -32,6 +47,65 @@
       "properties": {
         "value": {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00\\r\\n]*$"}
       }
+    },
+    "credential": {
+      "description": "One credential whose value the server stores, with no value: the server seals it to the access key in its answer to the secrets request, secrets-answer.schema.json. An API credential, with format, is a model key, and the session gives it to the runtime's variable for that API format and auth. A host credential, with hosts, is any other secret.",
+      "oneOf": [{"$ref": "#/$defs/api_credential"}, {"$ref": "#/$defs/host_credential"}]
+    },
+    "api_credential": {
+      "description": "A model key: its name, the API format and endpoint it is for, how its value is set, and the prefixes a value must start with. The gateway sets the value on every path of the endpoint's host alone. The session gives the key to the variable the run's runtime's descriptor lists for the format and auth in model.keys, and sets the runtime's endpoint variable to endpoint, in place of every other value of it. A run whose runtime lists no key for the format, or none with this auth, is run_configuration_invalid.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "format", "endpoint", "auth"],
+      "properties": {
+        "name": {"description": "The credential's name, unique among the entries.", "$ref": "#/$defs/credential_name"},
+        "format": {"description": "The API format the endpoint serves.", "$ref": "api-format.schema.json"},
+        "endpoint": {"description": "The base URL of the model API, such as https://api.deepseek.com/anthropic.", "$ref": "#/$defs/endpoint"},
+        "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},
+        "key_prefixes": {"description": "The prefixes a value must start with, such as sk-ant-. The gateway refuses a value that starts with none of them when it loads it. Absent, any value is taken.", "$ref": "#/$defs/key_prefixes"}
+      }
+    },
+    "host_credential": {
+      "description": "Any other secret: its name, the hosts and paths its value is set on, how, and the variables the enclosure gets a placeholder in.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "hosts", "auth"],
+      "properties": {
+        "name": {"description": "The credential's name, unique among the entries.", "$ref": "#/$defs/credential_name"},
+        "hosts": {"description": "The hosts the value is set on, each exact: a DNS name or an IP literal, never a *. pattern.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/credential_host"}},
+        "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
+        "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},
+        "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start. A placeholder goes only into a variable for a credential: one that the run's runtime's descriptor denies, lists in its model overrides or reserves, reads its model endpoint or a model key from is run_configuration_invalid.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}}
+      }
+    },
+    "endpoint": {
+      "description": "A model API's base URL: https, a host, an optional port and path, and no user information, query or fragment, at most 2048 characters. Forager refuses, run_configuration_invalid, one whose host policy.EndpointHost does not read.",
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^https://[^/?#@\\s]+(/[^?#\\s]*)?$"
+    },
+    "key_prefixes": {
+      "description": "1 to 4 literal prefixes, each 1 to 32 characters of printable ASCII without a space, none twice.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[!-~]{1,32}$"}
+    },
+    "credential_name": {
+      "description": "A credential's name: 1 to 64 of a-z, 0-9, underscore, dot and dash, starting with a letter or a digit.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
+    },
+    "credential_host": {
+      "description": "An exact host: a lower-case DNS name whose last label starts with a letter, an IPv4 address of four decimal parts with no leading zero, or an IPv6 address of lower-case hex groups with no leading zero, without brackets or a zone. The server writes an IPv6 address in RFC 5952's form; the pattern does not check which run of zero groups :: replaces.",
+      "type": "string",
+      "maxLength": 253,
+      "anyOf": [
+        {"pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"},
+        {"pattern": "^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$"},
+        {"pattern": "^(((0|[1-9a-f][0-9a-f]{0,3}):){7}(0|[1-9a-f][0-9a-f]{0,3})|((0|[1-9a-f][0-9a-f]{0,3}):){1,7}:|((0|[1-9a-f][0-9a-f]{0,3}):){1,6}:(0|[1-9a-f][0-9a-f]{0,3})|((0|[1-9a-f][0-9a-f]{0,3}):){1,5}(:(0|[1-9a-f][0-9a-f]{0,3})){1,2}|((0|[1-9a-f][0-9a-f]{0,3}):){1,4}(:(0|[1-9a-f][0-9a-f]{0,3})){1,3}|((0|[1-9a-f][0-9a-f]{0,3}):){1,3}(:(0|[1-9a-f][0-9a-f]{0,3})){1,4}|((0|[1-9a-f][0-9a-f]{0,3}):){1,2}(:(0|[1-9a-f][0-9a-f]{0,3})){1,5}|(0|[1-9a-f][0-9a-f]{0,3}):(:(0|[1-9a-f][0-9a-f]{0,3})){1,6}|:((:(0|[1-9a-f][0-9a-f]{0,3})){1,7}|:))$"}
+      ]
     }
   }
 }

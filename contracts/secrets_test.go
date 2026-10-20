@@ -151,6 +151,7 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		"fixtures/enrolment/request-gateway.json":                 {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
 		"fixtures/enrolment/answer.json":                          {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
 		"fixtures/enrolment/answer-gateway.json":                  {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
+		"fixtures/enrolment/answer-adapter.json":                  {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
 		"fixtures/enrolment/refusal-key-limit.json":               {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 		"fixtures/enrolment/refusal-key-invalid.json":             {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 		"fixtures/enrolment/refusal-key-limit-rotation.json":      {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
@@ -185,6 +186,58 @@ func TestSecretsFixturesValidate(t *testing.T) {
 	request, _ := contracts.Document("fixtures/enrolment/request.json")
 	if schema("enrolment.schema.json#/$defs/answer")(request) == nil {
 		t.Error("the enrolment request passes as an answer")
+	}
+}
+
+// TestEnrolmentAnswerNodeKinds pins node_kind against node_id in the enrolment answer:
+// node with nd_, pool with np_, gateway with ng_ and adapter with na_ pass, and every
+// other pair is refused.
+func TestEnrolmentAnswerNodeKinds(t *testing.T) {
+	s := compile(t, "enrolment.schema.json")["enrolment.schema.json"]
+	kinds := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_"}
+	for kind := range kinds {
+		for _, prefix := range kinds {
+			var doc map[string]any
+			if err := json.Unmarshal(read(t, "fixtures/enrolment/answer.json"), &doc); err != nil {
+				t.Fatal(err)
+			}
+			doc["node_kind"], doc["node_id"] = kind, prefix+"f1xt0re000000000"
+			err := s.Validate(doc)
+			if want := kinds[kind] == prefix; want != (err == nil) {
+				t.Errorf("node_kind %s with an %s id: %v; want accepted %t", kind, prefix, err, want)
+			}
+		}
+	}
+}
+
+// TestEnrolmentCodePrefixes pins the prefixes of the enrolment request's code: qecn_,
+// qecp_, qecg_ and qeci_ in lower case pass, and qec_ alone, an unknown letter, qecx_,
+// and a prefix in upper case are refused, as a server refuses a malformed code, an
+// invalid request, 400. The refused codes are tested inline, as documents here.
+func TestEnrolmentCodePrefixes(t *testing.T) {
+	c, err := contracts.Compiler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Compile(contracts.Base + "/enrolment.schema.json#/$defs/request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(code string) any {
+		var doc any
+		if err := json.Unmarshal([]byte(`{"version":1,"code":"`+code+`","name":"build-01","public_key":"ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ","timestamp":1700000000,"proof":"FpoHd4N0bTpTLiGcpfTyn3ax8g-BoPaa-V9Lm5y8P2yi_IKuftZb_AYwlpykH6PfqBASCuS9ZOfbZU-eIB83CQ"}`), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	for prefix, want := range map[string]bool{
+		"qecn_": true, "qecp_": true, "qecg_": true, "qeci_": true,
+		"qec_": false, "qecx_": false, "QECN_": false,
+	} {
+		err := s.Validate(request(prefix + "F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg"))
+		if (err == nil) != want {
+			t.Errorf("a code with %s: %v; want accepted %t", prefix, err, want)
+		}
 	}
 }
 
@@ -813,6 +866,7 @@ func TestDeniedVariables(t *testing.T) {
 		"SSL_CERT_DIR", "GIT_SSL_CAPATH",
 		"DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY", "DOCKER_CONFIG",
 		"PATH",
+		"NODE_OPTIONS", "LD_PRELOAD", "BASH_ENV", "HOME",
 	} {
 		for _, n := range []string{name, strings.ToLower(name)} {
 			if !denied(n) {
@@ -843,8 +897,9 @@ func TestRunRefusedCodes(t *testing.T) {
 	want := []string{
 		"answer_unsigned", "apiary_public_key_missing", "bad_request", "batch_refused",
 		"credential_check_invalid", "credential_check_unreachable", "credential_expired",
-		"differs_from_credential", "engine_unreachable", "image_unknown", "instance_limit",
-		"invalid_request", "key_invalid", "key_limit", "labels_changed",
+		"differs_from_credential", "engine_unreachable", "image_not_allowed", "image_unknown",
+		"image_user_root", "instance_limit",
+		"invalid_request", "key_invalid", "key_limit", "labels_changed", "model_key_missing",
 		"mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run",
 		"mount_through_link", "not_found", "placeholder_conflict", "rate_limited", "run_attached",
 		"run_closed", "run_configuration_invalid", "run_configuration_superseded",
@@ -854,8 +909,8 @@ func TestRunRefusedCodes(t *testing.T) {
 		"tool_unknown", "unauthorized", "unavailable", "unsupported_contract_version",
 		"variable_reserved", "workspace_not_served", "wrong_gateway",
 	}
-	if len(want) != 42 {
-		t.Fatalf("%d codes in the test's list; want 42", len(want))
+	if len(want) != 45 {
+		t.Fatalf("%d codes in the test's list; want 45", len(want))
 	}
 	if got := slices.Sorted(slices.Values(s.Then.Properties.Code.Enum)); !slices.Equal(got, want) {
 		t.Errorf("run.refused codes %q; want %q", got, want)

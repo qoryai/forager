@@ -1,0 +1,9 @@
+# Start in an image named by its reference pinned by digest, one the machine's
+# images.allow covers: the image the repository's build made for its agent. The
+# machine runs it under its default image's runtime, as the wall's user.
+version: 1
+egress:
+  mode: enforce
+  allow:
+    - api.anthropic.com
+image: registry.example/agents/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2

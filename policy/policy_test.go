@@ -242,6 +242,168 @@ func TestHostHasOneForm(t *testing.T) {
 	}
 }
 
+// TestEndpointHostReadsAnHTTPSBaseURL pins the host read from a base URL: the scheme
+// https, no user information, a host in the form Host gives, no port or one from 1 to
+// 65535. Every other base URL has no host. The host does not depend on the path, query
+// or fragment, but a bad percent escape in the path or fragment leaves the URL with none.
+func TestEndpointHostReadsAnHTTPSBaseURL(t *testing.T) {
+	for _, c := range []struct{ raw, host string }{
+		{"https://api.anthropic.com", "api.anthropic.com"},
+		{"https://api.anthropic.com/", "api.anthropic.com"},
+		{"https://API.Anthropic.COM/v1", "api.anthropic.com"},
+		{"HTTPS://api.anthropic.com", "api.anthropic.com"},
+		{"https://api.anthropic.com./v1", "api.anthropic.com"},
+		{"https://api.anthropic.com:8443", "api.anthropic.com"},
+		{"https://api.anthropic.com:443/v1", "api.anthropic.com"},
+		{"https://api.anthropic.com:", "api.anthropic.com"},
+		{"https://api.anthropic.com/v1?beta=1#part", "api.anthropic.com"},
+		{"https://api.anthropic.com?%zz", "api.anthropic.com"},
+		{"https://api.anthropic.com/%zz", ""},
+		{"https://api.anthropic.com#%zz", ""},
+		{"https://api.anthropic.com/v 1", "api.anthropic.com"},
+		{"https://api.anthropic.com:1", "api.anthropic.com"},
+		{"https://api.anthropic.com:65535", "api.anthropic.com"},
+		{"https://[::1]:65535", "::1"},
+		{"https://127.0.0.1:8443", "127.0.0.1"},
+		{"https://[::1]:8443/", "::1"},
+		{"https://[2001:DB8::1]/v1", "2001:db8::1"},
+		{"https://api.anthropic.com@evil.example/", ""},
+		{"https://user:secret@api.anthropic.com/", ""},
+		{"https://@api.anthropic.com/", ""},
+		{"http://api.anthropic.com", ""},
+		{"wss://api.anthropic.com", ""},
+		{"https://", ""},
+		{"https:///v1", ""},
+		{"https://:8443", ""},
+		{"api.anthropic.com", ""},
+		{"//api.anthropic.com", ""},
+		{"/v1", ""},
+		{"https:api.anthropic.com", ""},
+		{"", ""},
+		{"https://api.anthropic.com..", ""},
+		{"https://127.1", ""},
+		{"https://0x7f000001", ""},
+		{"https://[::ffff:127.0.0.1]", ""},
+		{"https://[fe80::1%25en0]", ""},
+		{"https://[2001:0db8::1]", ""},
+		{"https://ａｐｉ.anthropic.com", ""},
+		{"https://api_x.anthropic.com", ""},
+		{"https://api%2Eanthropic.com", ""},
+		{"https://%61pi.anthropic.com", ""},
+		{"https://api.anthropic.com%25", ""},
+		{"https://%EF%BD%81pi.anthropic.com", ""},
+		{" https://api.anthropic.com", ""},
+		{"\thttps://api.anthropic.com", ""},
+		{"https://api.anthropic.com ", ""},
+		{"https://api .anthropic.com", ""},
+		{"https://api.anthropic.com\n", ""},
+		{"https:// api.anthropic.com", ""},
+		{"https://api.anthropic.com:84 43", ""},
+		{"https://api.anthropic.com:http", ""},
+		{"https://api.anthropic.com:99999", ""},
+		{"https://api.anthropic.com:65536", ""},
+		{"https://api.anthropic.com:0", ""},
+		{"https://api.anthropic.com:00", ""},
+		{"https://api.anthropic.com:+443", ""},
+		{"https://api.anthropic.com:-443", ""},
+		{"https://api.anthropic.com:99999999999999999999", ""},
+		{"https://[::1]:0", ""},
+	} {
+		host, ok := policy.EndpointHost(c.raw)
+		if host != c.host || ok != (c.host != "") {
+			t.Errorf("EndpointHost(%q) = %q, %v; want %q", c.raw, host, ok, c.host)
+		}
+	}
+}
+
+// TestCredentialForMatchesAsTheProxyDoes pins the hosts a credential covers: the host's
+// form under Host, then Match against the credential's hosts. A host with no form is
+// covered by none, though a pattern's suffix would match it.
+func TestCredentialForMatchesAsTheProxyDoes(t *testing.T) {
+	for _, c := range []struct {
+		hosts []string
+		host  string
+		ok    bool
+	}{
+		{[]string{"api.anthropic.com"}, "api.anthropic.com", true},
+		{[]string{"api.anthropic.com"}, "API.Anthropic.com.", true},
+		{[]string{"API.Anthropic.com"}, "api.anthropic.com", true},
+		{[]string{"api.anthropic.com"}, "anthropic.com", false},
+		{[]string{"api.anthropic.com"}, "x.api.anthropic.com", false},
+		{[]string{"api.anthropic.com"}, "api.anthropic.com:443", false},
+		{[]string{"*.github.com"}, "api.github.com", true},
+		{[]string{"*.github.com"}, "a.b.github.com", true},
+		{[]string{"*.github.com"}, "github.com", false},
+		{[]string{"*.github.com"}, "evilgithub.com", false},
+		{[]string{"*.github.com"}, "a b.github.com", false},
+		{[]string{"*.github.com"}, "%61pi.github.com", false},
+		{[]string{"*.github.com"}, "a_b.github.com", false},
+		{[]string{"api.anthropic.com", "*.github.com"}, "uploads.github.com", true},
+		{[]string{"127.0.0.1"}, "127.0.0.1", true},
+		{[]string{"127.0.0.1"}, "127.0.0.2", false},
+		{[]string{"*.0.0.1"}, "127.0.0.1", false},
+		{[]string{"::1"}, "::1", true},
+		{[]string{"2001:db8::1"}, "2001:DB8::1", true},
+		{[]string{"api.anthropic.com"}, "", false},
+		{nil, "api.anthropic.com", false},
+	} {
+		if ok := policy.CredentialFor(c.hosts, c.host); ok != c.ok {
+			t.Errorf("CredentialFor(%q, %q) = %v; want %v", c.hosts, c.host, ok, c.ok)
+		}
+	}
+}
+
+// TestCredentialForGivesAPrivateHostOnlyAnExactEntry pins the private hosts: an IP
+// literal in a private range, a name of one label and a name that ends in ".local",
+// ".internal" or ".home.arpa" are each covered only by an entry equal to them, never by
+// a "*." pattern, while any other name is still covered by a pattern.
+func TestCredentialForGivesAPrivateHostOnlyAnExactEntry(t *testing.T) {
+	for _, c := range []struct {
+		hosts []string
+		host  string
+		ok    bool
+	}{
+		{[]string{"*.local"}, "litellm.local", false},
+		{[]string{"*.local"}, "a.litellm.local", false},
+		{[]string{"*.litellm.local"}, "a.litellm.local", false},
+		{[]string{"litellm.local"}, "litellm.local", true},
+		{[]string{"LiteLLM.local"}, "litellm.local", true},
+		{[]string{"litellm.local"}, "LiteLLM.Local.", true},
+		{[]string{"*.local", "litellm.local"}, "litellm.local", true},
+		{[]string{"litellm.local"}, "other.local", false},
+		{[]string{"*.example.com"}, "api.example.com", true},
+		{[]string{"*.local.example.com"}, "api.local.example.com", true},
+		{[]string{"*.example.com"}, "api.example.com.local", false},
+		{[]string{"10.0.0.5"}, "10.0.0.5", true},
+		{[]string{"10.0.0.6"}, "10.0.0.5", false},
+		{[]string{"*.0.0.5"}, "10.0.0.5", false},
+		{[]string{"10.0.0.0/8"}, "10.0.0.5", false},
+		{[]string{"172.16.0.1"}, "172.16.0.1", true},
+		{[]string{"192.168.1.10"}, "192.168.1.10", true},
+		{[]string{"litellm"}, "litellm", true},
+		{[]string{"LiteLLM"}, "litellm.", true},
+		{[]string{"*.litellm"}, "litellm", false},
+		{[]string{"litellm.local"}, "litellm", false},
+		{[]string{"fd00::5"}, "fd00::5", true},
+		{[]string{"fd00::5"}, "FD00::5", true},
+		{[]string{"fd00::6"}, "fd00::5", false},
+		{[]string{"fc00::1"}, "fc00::1", true},
+		{[]string{"*.local"}, "fd00::5", false},
+		{[]string{"*.internal"}, "x.internal", false},
+		{[]string{"x.internal"}, "x.internal", true},
+		{[]string{"*.internal"}, "internal", false},
+		{[]string{"internal"}, "internal", true},
+		{[]string{"*.home.arpa"}, "x.home.arpa", false},
+		{[]string{"x.home.arpa"}, "x.home.arpa", true},
+		{[]string{"*.arpa"}, "x.home.arpa", false},
+		{[]string{"*.lan"}, "x.lan", true},
+	} {
+		if ok := policy.CredentialFor(c.hosts, c.host); ok != c.ok {
+			t.Errorf("CredentialFor(%q, %q) = %v; want %v", c.hosts, c.host, ok, c.ok)
+		}
+	}
+}
+
 // TestCoversFollowsTheGrammar pins what stands above what: a name under the same name
 // or a suffix above it, a pattern under the same pattern or a suffix above it, a suffix
 // never covers its own apex, and an IP literal stands under an identical entry alone,
@@ -353,8 +515,8 @@ func TestEveryFixtureReadsAsAPolicy(t *testing.T) {
 }
 
 // TestAPolicySelectsAnImageByName pins that a policy names the machine's image by the
-// machine's name for it and never by a reference, and that the selection is part of
-// what the digest pins.
+// machine's name for it, never by a reference with a tag, and that the selection is
+// part of what the digest pins.
 func TestAPolicySelectsAnImageByName(t *testing.T) {
 	l, err := policy.Read("enforce-image.yaml", fixture(t, "fixtures/policy/enforce-image.yaml"))
 	if err != nil {
@@ -577,6 +739,8 @@ func TestNarrowedImageIsOneBothAgreeOn(t *testing.T) {
 		{"agent", "", "agent"},
 		{"", "agent", "agent"},
 		{"", "", ""},
+		{imageRef, imageRef, imageRef},
+		{"", imageRef, imageRef},
 	} {
 		if l := narrowed(t, doc(tc.server), doc(tc.node)); l.Policy.Image != tc.want {
 			t.Errorf("server %q, node %q: %q", tc.server, tc.node, l.Policy.Image)
@@ -586,6 +750,12 @@ func TestNarrowedImageIsOneBothAgreeOn(t *testing.T) {
 	var r *accesskey.Refusal
 	if !errors.As(err, &r) || r.Code != refusal.ImageUnknown || !slices.Equal(r.Names, []string{"agent"}) {
 		t.Errorf("two images: %v", err)
+	}
+	// A name and a reference are two strings, never the same image, whatever the name
+	// stands for on the machine.
+	_, err = policy.Narrowed(fetched(t, doc(imageRef)), read(t, doc("agent")))
+	if !errors.As(err, &r) || r.Code != refusal.ImageUnknown || !slices.Equal(r.Names, []string{imageRef}) {
+		t.Errorf("a reference and a name: %v", err)
 	}
 }
 
@@ -647,5 +817,98 @@ func TestHostPathsTakesTheMostSpecificEntry(t *testing.T) {
 	}
 	if _, _, ok := policy.HostPaths(nil, "api.example"); ok {
 		t.Error("no rules hold a host")
+	}
+}
+
+// TestANarrowingRefusalPrintsAPhraseForASecret pins the two refusals of a server's
+// selection the node's policy does not list, of tools and of credentials: a name that
+// contains qak_ or qrk_ in any case prints the name's phrase, in the text and in a
+// refusal's names, each phrase once, and a clean name prints as it is.
+func TestANarrowingRefusalPrintsAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	read := func(doc string) *policy.Loaded {
+		t.Helper()
+		l, err := policy.Read("x.json", []byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	node := read(`{"version":1,"egress":{"mode":"observe","allow":[]},"tools":[],"credentials":[]}`)
+	for _, c := range []struct {
+		names   []string
+		shown   string
+		refused []string
+	}{
+		{[]string{"qak_a"}, ak, []string{ak}},
+		{[]string{"a.qrk_b"}, rk, []string{rk}},
+		{[]string{"qrk_a.qak_b"}, ak, []string{ak}},
+		{[]string{"files", "qak_a", "qak_b", "qrk_c"}, "files, " + ak + ", " + rk, []string{rk, ak, "files"}},
+		{[]string{"files", "more"}, "files, more", []string{"files", "more"}},
+	} {
+		var entries []string
+		for _, n := range c.names {
+			entries = append(entries, `{"name":"`+n+`"}`)
+		}
+		list := "[" + strings.Join(entries, ",") + "]"
+		_, err := policy.Narrowed(read(`{"version":1,"egress":{"mode":"observe","allow":[]},"tools":`+list+`}`), node)
+		var r *accesskey.Refusal
+		if want := "the server's policy selects the tools " + c.shown + ", which the node's policy does not list: tool_unknown: " + strings.Join(c.refused, ", "); !errors.As(err, &r) || err.Error() != want {
+			t.Errorf("tools %v:\n got %v\nwant %s", c.names, err, want)
+			continue
+		}
+		if !slices.Equal(r.Names, c.refused) {
+			t.Errorf("tools %v: the names %q, want %q", c.names, r.Names, c.refused)
+		}
+		tools := err.Error()
+		_, err = policy.Narrowed(read(`{"version":1,"egress":{"mode":"observe","allow":[]},"credentials":`+list+`}`), node)
+		if want := "the server's policy selects the credentials " + c.shown + ", which the node's policy does not list"; err == nil || err.Error() != want {
+			t.Errorf("credentials %v:\n got %v\nwant %s", c.names, err, want)
+			continue
+		}
+		for _, text := range []string{tools, err.Error()} {
+			if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+				t.Errorf("%v: a secret's prefix in %s", c.names, text)
+			}
+		}
+	}
+}
+
+// TestAnImageRefusalOfANarrowingPrintsAPhraseForASecret pins the image_unknown of a
+// server's policy whose image is not the node's: an image that contains qak_ or qrk_ in
+// any case prints the name's phrase in the detail and the names, and a clean image
+// prints as it is.
+func TestAnImageRefusalOfANarrowingPrintsAPhraseForASecret(t *testing.T) {
+	read := func(image string) *policy.Loaded {
+		t.Helper()
+		l, err := policy.Read("x.json", []byte(`{"version":1,"egress":{"mode":"observe"},"image":"`+image+`"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	for _, c := range []struct{ server, node, want string }{
+		{"qak_a", "base", "the server's policy selects the image (a name that contains an access key secret) and the node's policy the image base: image_unknown: (a name that contains an access key secret)"},
+		{"base", "a.qrk_b", "the server's policy selects the image base and the node's policy the image (a name that contains a run key): image_unknown: base"},
+		{"base", "other", "the server's policy selects the image base and the node's policy the image other: image_unknown: base"},
+	} {
+		_, err := policy.Narrowed(read(c.server), read(c.node))
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s, %s:\n got %v\nwant %s", c.server, c.node, err, c.want)
+		}
+	}
+}
+
+// TestAPolicyErrorPrintsAPhraseForASecret pins a policy document's error: a name or an
+// error's text that contains qak_ or qrk_ in any case prints the value's phrase, and
+// the error still wraps its cause.
+func TestAPolicyErrorPrintsAPhraseForASecret(t *testing.T) {
+	_, err := policy.Read("qak_policy.json", []byte(`{"version":1,"egress":{"mode":"observe"},"qrk_x":1}`))
+	if want := "policy (a value that contains an access key secret): (a value that contains a run key)"; err == nil || err.Error() != want {
+		t.Errorf("Read = %v, want %s", err, want)
+	}
+	cause := errors.New("no")
+	if e := (&policy.Error{Name: "p.json", Err: cause}); e.Error() != "policy p.json: no" || !errors.Is(e, cause) {
+		t.Errorf("a clean error: %v", e)
 	}
 }

@@ -2,10 +2,14 @@ package run
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
+	"unicode"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
@@ -28,8 +32,9 @@ type Policy struct {
 	// Tools are the tools of [Config.Tools] the run may reach, by name, nil and empty as
 	// for Credentials.
 	Tools []PolicyTool `json:"tools,omitzero"`
-	// Image is the name of the image of the machine's the run starts in; empty is the
-	// machine's default.
+	// Image is the image the run starts in: the machine's name for one of its images,
+	// or a reference pinned by digest under one of the machine's allowed prefixes;
+	// empty is the machine's default.
 	Image string `json:"image,omitempty"`
 }
 
@@ -54,9 +59,13 @@ type PolicyEgress struct {
 	// Allow are lower-case host names, or *. suffixes, in the contract's grammar. Nil
 	// and empty are the same: nothing, which under enforce reaches nothing.
 	Allow []string `json:"allow,omitempty"`
+	// AllowFirst are hosts the session may reach in either mode, each a lower-case host
+	// name or an IPv4 address, never a *. suffix: a host an entry matches exactly is
+	// allowed before Deny and Allow are consulted, with the entry as its rule.
+	AllowFirst []string `json:"allow_first,omitempty"`
 	// Deny are hosts the session may not reach, in the same grammar, in either mode: a
-	// host an entry covers is denied before Allow and before Mode are consulted, with
-	// the entry as its rule.
+	// host an entry covers is denied before Allow and before Mode are consulted, unless
+	// AllowFirst lists the host, with the entry as its rule.
 	Deny []string `json:"deny,omitempty"`
 	// Paths are the paths the session may ask of a host, by host. A host listed is one
 	// the proxy terminates TLS for.
@@ -77,7 +86,7 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 	if err != nil {
 		return nil, &policy.Error{Name: name, Err: err}
 	}
-	out := &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(p.Egress.Mode), Allow: p.Egress.Allow, Deny: p.Egress.Deny, Paths: p.Egress.Paths}, Image: p.Image}
+	out := &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(p.Egress.Mode), Allow: p.Egress.Allow, AllowFirst: p.Egress.AllowFirst, Deny: p.Egress.Deny, Paths: p.Egress.Paths}, Image: p.Image}
 	if p.Credentials != nil {
 		out.Credentials = []PolicyCredential{}
 	}
@@ -104,19 +113,22 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 // mode enforce the mode is enforce: a policy in mode observe limits no host and gets
 // the ceiling's allow list, and one in mode enforce gets its entries the
 // ceiling covers; an entry it does not cover is dropped, as a harness declaration's
-// is. The credentials, the tools and the image are the policy's: a ceiling defines
-// them and selects none. The run's record lists the ceiling's path rules in
-// dev.qory.run.policy_applied's ceiling_paths.
+// is. The allow_first list is each side's entries that the other side allows, the
+// ceiling's first, as [policy.Narrowed] combines it: an entry lifts the deny and allow
+// of the side that lists it alone. The credentials, the tools and the image are the
+// policy's: a ceiling defines them and selects none. The run's record lists the
+// ceiling's path rules in dev.qory.run.policy_applied's ceiling_paths.
 func (p *Policy) Under(ceiling *Policy) *Policy {
 	if ceiling == nil {
 		return p
 	}
 	deny := bothDeny(ceiling.Egress.Deny, p.Egress.Deny)
+	first := policy.First(ceiling.Egress.side(), p.Egress.side())
 	beside := sides(p.Egress.beside, []map[string][]string{ceiling.Egress.Paths}, ceiling.Egress.beside)
 	var out Policy
 	switch {
 	case ceiling.Egress.Mode != string(policy.Enforce):
-		if len(ceiling.Egress.Deny) == 0 && len(beside) == len(p.Egress.beside) {
+		if len(ceiling.Egress.Deny) == 0 && len(ceiling.Egress.AllowFirst) == 0 && len(beside) == len(p.Egress.beside) {
 			return p
 		}
 		out = *p
@@ -135,8 +147,13 @@ func (p *Policy) Under(ceiling *Policy) *Policy {
 		}
 		out = Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: allow}, Credentials: p.Credentials, Tools: p.Tools, Image: p.Image}
 	}
-	out.Egress.Deny, out.Egress.Paths, out.Egress.beside = deny, p.Egress.Paths, beside
+	out.Egress.AllowFirst, out.Egress.Deny, out.Egress.Paths, out.Egress.beside = first, deny, p.Egress.Paths, beside
 	return &out
+}
+
+// side is the egress section as one side of a policy decides a host by.
+func (e PolicyEgress) side() policy.Egress {
+	return policy.Egress{Mode: policy.Mode(e.Mode), Allow: e.Allow, AllowFirst: e.AllowFirst, Deny: e.Deny}
 }
 
 // sides are the sides of path rules of each list, in order, but those that list no
@@ -226,11 +243,65 @@ type Credential struct {
 	// Placeholders are variables the enclosure gets with a value that is no credential,
 	// for a program that does not start without one set.
 	Placeholders []string
+	// Format, Endpoint, OAuth and KeyPrefixes make the credential a model key, in place
+	// of Hosts and Placeholders: Format is its API format, one of
+	// api-format.schema.json; Endpoint the base URL of its API, whose host alone gets
+	// the key, on every path; OAuth marks a bearer as an OAuth token; and KeyPrefixes
+	// the prefixes its secret must start with, nil for any. The session gives the key
+	// to the runtime's variable for Format and the scheme, and sets the runtime's
+	// endpoint variable to Endpoint.
+	Format, Endpoint string
+	OAuth            bool
+	KeyPrefixes      []string
 }
 
 // Check refuses a definition that cannot be one, so a command reading the machine's
 // configuration says so before any run selects it.
 func (c Credential) Check() error { return credential.Definition(c).Check() }
+
+// Selection is one credential the gateway selects, [Config.Selects]: behind a separate
+// gateway, a run gets it, with or without a wall, when the server's policy selects no
+// credential. An
+// entry for a credential that takes no argument names the credential alone; one for a
+// credential that takes an argument names Label, Forge and Pattern as well.
+type Selection struct {
+	// Name is the credential's, one of [Config.Credentials].
+	Name string
+	// Label is the run's label whose value is the credential's argument; empty for a
+	// credential that takes none.
+	Label string
+	// Forge is the value the run's forge label must be: a run with another, or none,
+	// gets no credential of the entry.
+	Forge string
+	// Pattern is a regular expression the label's value must match whole: a run whose
+	// value it does not match gets no credential of the entry.
+	Pattern string
+}
+
+// WholeMatch compiles pattern as a [Selection]'s is matched: anchored, so a value
+// matches only when the pattern matches all of it. The error of a pattern that does not
+// compile alone is that one's; one that compiles alone and not anchored, such as a\Q,
+// whose quote takes the anchor's closing in, has the anchored form's.
+func WholeMatch(pattern string) (*regexp.Regexp, error) {
+	if _, err := regexp.Compile(pattern); err != nil {
+		return nil, err
+	}
+	return regexp.Compile(`^(?:` + pattern + `)$`)
+}
+
+// Spaced is text with every control character, C0, DEL and C1, and every format
+// character, Cf, the bidirectional overrides among them, a space, but those of keep:
+// what a line the gateway prints or answers holds of a value it did not choose, so the
+// value can neither break the line, send its reader's terminal an escape, nor show the
+// line in another order than it is written.
+func Spaced(text string, keep ...rune) string {
+	return strings.Map(func(r rune) rune {
+		if (unicode.IsControl(r) || unicode.Is(unicode.Cf, r)) && !slices.Contains(keep, r) {
+			return ' '
+		}
+		return r
+	}, text)
+}
 
 // Tool is one tool as the machine defines it, [Config.Tools]: a program the gateway
 // starts for the run, outside the enclosure, that serves hosts. The proxy ends the
@@ -276,8 +347,9 @@ type Discovery struct {
 }
 
 // Image is one image as the machine defines it: what an agent's enclosure is started
-// from, and how. A run's policy selects images by name and names no reference, so a
-// repository never chooses what it runs under.
+// from, and how. A run's policy selects one by name, or names one by its reference
+// pinned by digest under one of the machine's allowed prefixes, [Images.Allow], so a
+// repository chooses what it runs under only among what the machine allows.
 type Image struct {
 	// Name is what a policy, or [Images.Default], selects it by.
 	Name string
@@ -292,19 +364,25 @@ type Image struct {
 	// that runs a daemon in a container without privileges. Experimental: see
 	// contracts/forager/v1/README.md §The wall.
 	Docker bool
+	// Reference says the run's policy named the image by its reference, Ref, rather
+	// than by a name of the machine's: the run starts under the default's Runtime, with
+	// no Docker, and the wall fetches the image, unless the engine holds it by that
+	// digest, and refuses one whose user is root. It
+	// is the gateway's answer alone; no definition sets it.
+	Reference bool
 }
 
 // Check refuses a definition that cannot be one, so a command reading the machine's
 // configuration says so before any run selects it.
 func (i Image) Check() error {
 	if !imageNameShape.MatchString(i.Name) {
-		return fmt.Errorf("the image name %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", i.Name)
+		return fmt.Errorf("the image name %s is not 1 to 64 of a-z, 0-9, underscore, dot and dash", accesskey.ShownName(i.Name, true))
 	}
 	if i.Ref == "" {
-		return fmt.Errorf("image %s: the reference is empty", i.Name)
+		return fmt.Errorf("image %s: the reference is empty", accesskey.ShownName(i.Name, false))
 	}
 	if i.Docker && i.Runtime == "" {
-		return fmt.Errorf("image %s: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc", i.Name)
+		return fmt.Errorf("image %s: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc", accesskey.ShownName(i.Name, false))
 	}
 	return nil
 }
@@ -312,44 +390,82 @@ func (i Image) Check() error {
 var imageNameShape = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 
 // Images are the session's image table: the images the machine defines, which a run's
-// policy selects among by name, and the one a run starts in when its policy selects
-// none.
+// policy selects among by name, the one a run starts in when its policy selects none,
+// and the prefixes of the references a policy may name.
 type Images struct {
 	// Default is the image when the policy selects none: the name of one of Defined, or
 	// a reference.
 	Default string
 	// Defined are the images the machine defines.
 	Defined []Image
+	// Allow are the prefixes of the references pinned by digest a run's policy may name
+	// its image by ([policy.ImageAllowed]): none, nil, allows no reference. A list
+	// needs a Default, whose runtime such an image starts under.
+	Allow []string
+}
+
+// check refuses an image table that cannot be one: a definition that cannot be one, a
+// name defined twice, an allow entry that cannot be one ([policy.CheckImagePrefix]),
+// and an allow list without a default.
+func (im Images) check() error {
+	for _, d := range im.Defined {
+		if err := d.Check(); err != nil {
+			return err
+		}
+	}
+	seen := map[string]bool{}
+	for _, d := range im.Defined {
+		if seen[d.Name] {
+			return fmt.Errorf("the image %s is defined twice", accesskey.ShownName(d.Name, false))
+		}
+		seen[d.Name] = true
+	}
+	for _, entry := range im.Allow {
+		if err := policy.CheckImagePrefix(entry); err != nil {
+			return err
+		}
+	}
+	if len(im.Allow) > 0 && im.Default == "" {
+		return errors.New("images.allow needs a default image, whose runtime an image by reference starts under")
+	}
+	return nil
 }
 
 // resolve is the image a run starts in: the one its policy selects, or the default,
-// which is the name of one of the definitions or a reference.
+// which is the name of one of the definitions or a reference. A selection written as a
+// reference must be pinned by digest, run_configuration_invalid, and under one of
+// Allow, image_not_allowed; it starts under the default's runtime with no Docker.
 func (im Images) resolve(selected string) (Image, error) {
-	for _, d := range im.Defined {
-		if err := d.Check(); err != nil {
-			return Image{}, err
+	if err := im.check(); err != nil {
+		return Image{}, err
+	}
+	if err := policy.CheckImage(selected); err != nil {
+		return Image{}, err
+	}
+	if policy.ImageReference(selected) {
+		if _, ok := policy.ImageAllowed(im.Allow, selected); !ok {
+			return Image{}, refusal.New(refusal.ImageNotAllowed, []string{accesskey.ShownName(selected, false)},
+				"the image %s is under none of the machine's allowed prefixes (images.allow)", accesskey.ShownName(selected, false))
 		}
+		def := im.defaultImage()
+		return Image{Ref: selected, Runtime: def.Runtime, Reference: true}, nil
 	}
-	if len(im.Defined) > 0 {
-		seen := map[string]bool{}
-		for _, d := range im.Defined {
-			if seen[d.Name] {
-				return Image{}, fmt.Errorf("the image %s is defined twice", d.Name)
-			}
-			seen[d.Name] = true
-		}
+	if selected == "" {
+		return im.defaultImage(), nil
 	}
-	name := selected
-	if name == "" {
-		name = im.Default
-	}
-	if i := slices.IndexFunc(im.Defined, func(d Image) bool { return d.Name == name }); i >= 0 {
+	if i := slices.IndexFunc(im.Defined, func(d Image) bool { return d.Name == selected }); i >= 0 {
 		return im.Defined[i], nil
 	}
-	if selected != "" {
-		return Image{}, refusal.New(refusal.ImageUnknown, []string{selected}, "the policy selects the image %q, which this machine does not define", selected)
+	return Image{}, refusal.New(refusal.ImageUnknown, []string{accesskey.ShownName(selected, false)}, "the policy selects the image %s, which this machine does not define", accesskey.ShownName(selected, true))
+}
+
+// defaultImage is the image a run starts in when its policy selects none: the
+// definition Default names, or Default as a reference.
+func (im Images) defaultImage() Image {
+	if i := slices.IndexFunc(im.Defined, func(d Image) bool { return d.Name == im.Default }); i >= 0 {
+		return im.Defined[i]
 	}
-	return Image{Ref: im.Default}, nil
+	return Image{Ref: im.Default}
 }
 
 // Passing is a [Config.Passes] of the names of the variables the run passes a value

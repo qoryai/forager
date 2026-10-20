@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/qoryai/forager/contracts"
@@ -34,7 +35,8 @@ type GatewayRegistration struct {
 	Version int `json:"version"`
 	// RunID is the run's id: a UUID in the canonical lower-case form.
 	RunID string `json:"run_id"`
-	// Labels are the run's labels, information alone; none is left out.
+	// Labels are the run's labels; a separate gateway's selection of credentials can take
+	// a credential's argument from one. None is left out.
 	Labels map[string]string `json:"labels,omitempty"`
 	// About is what the run is about, information alone; nil is left out.
 	About *About `json:"about,omitempty"`
@@ -75,6 +77,8 @@ func (r GatewayRegistration) Body() ([]byte, error) {
 	if len(r.Labels) == 0 {
 		r.Labels = nil
 	}
+	// The body goes to Qory Apiary: labels and about as run.started sends them.
+	r.Labels, r.About = ShownLabels(r.Labels), ShownAbout(r.About)
 	if r.About.Empty() {
 		r.About = nil
 	}
@@ -146,7 +150,7 @@ func (a RegistrationAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(
 // [ErrNotAccepted]. The error names the URL and the status, and never contains the run
 // key. A caller that tries again sends the same body.
 func (c *Client) RegisterThroughGateway(ctx context.Context, runURL string, body []byte) (*RegistrationAnswer, error) {
-	what := "register " + runURL
+	what := "register " + accesskey.ShownValue(runURL, false)
 	var sent struct {
 		RunID string `json:"run_id"`
 	}
@@ -157,7 +161,7 @@ func (c *Client) RegisterThroughGateway(ctx context.Context, runURL string, body
 		h.Set("Content-Type", RegistrationContentType)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", what, err)
+		return nil, fmt.Errorf("%s: %w", what, accesskey.ShownError(err))
 	}
 	if err := a.notOK(what); err != nil {
 		return nil, err
@@ -308,8 +312,9 @@ func (a Attach) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
 
 // AttachAnswer is the server's signed 200 to an attach, run-attach-answer.schema.json:
 // the run's run configuration, as a direct registration's answer carries it, and the
-// labels and what the run is about, as the starter's registration gave them,
-// information alone, each absent when the registration had none.
+// labels and what the run is about, as the starter's registration gave them, each
+// absent when the registration had none; a separate gateway's selection of credentials
+// can take a credential's argument from a label.
 type AttachAnswer struct {
 	RunConfiguration *RunConfiguration
 	Labels           map[string]string
@@ -333,13 +338,13 @@ func (c *Client) Attach(ctx context.Context, runURL, runID string, body []byte) 
 	if !runIDShape.MatchString(runID) {
 		return nil, "", errors.New("the attach: the run id is not a UUID in the canonical lower-case form")
 	}
-	what := "attach " + runURL + "/" + runID
+	what := "attach " + accesskey.ShownValue(runURL+"/"+runID, false)
 	u := runURL + "/" + runID + "/attach"
 	a, err := c.send(ctx, http.MethodPost, u, body, MaxDocument, func(h http.Header) {
 		h.Set("Content-Type", RegistrationContentType)
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("%s: %w", what, err)
+		return nil, "", fmt.Errorf("%s: %w", what, accesskey.ShownError(err))
 	}
 	if err := a.notOK(what); err != nil {
 		return nil, "", err
@@ -383,7 +388,7 @@ func readAnswer(schemaName string, body []byte, out any) error {
 	if err := jsonv2.Unmarshal(body, &v); err != nil {
 		var syn *jsontext.SyntacticError
 		if errors.As(err, &syn) && syn.JSONPointer != "" {
-			return fmt.Errorf("it is not one JSON value in UTF-8 with each member name once, at %s", syn.JSONPointer)
+			return fmt.Errorf("it is not one JSON value in UTF-8 with each member name once, at %s", accesskey.ShownValue(string(syn.JSONPointer), false))
 		}
 		return errors.New("it is not one JSON value in UTF-8 with each member name once")
 	}

@@ -39,8 +39,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +51,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/policy"
 )
 
 // The headers of the contract and the content type of a delivery. HeaderRunID names
@@ -113,7 +116,11 @@ type Error struct {
 	Err  error
 }
 
-func (e *Error) Error() string { return "server " + e.Name + ": " + e.Err.Error() }
+// Error prints the name and the error's text as accesskey.ShownValue and
+// accesskey.ShownError print them.
+func (e *Error) Error() string {
+	return "server " + accesskey.ShownValue(e.Name, false) + ": " + accesskey.ShownError(e.Err).Error()
+}
 
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
@@ -129,7 +136,12 @@ type DocumentError struct {
 	Err       error
 }
 
-func (e *DocumentError) Error() string { return e.What + " " + e.URL + ": " + e.Err.Error() }
+// Error prints the URL as accesskey.ShownValue prints it. An error that can quote the
+// document is phrased where it is made, so a fixed reason that names a prefix, such as
+// a run key's, prints as it is.
+func (e *DocumentError) Error() string {
+	return e.What + " " + accesskey.ShownValue(e.URL, false) + ": " + e.Err.Error()
+}
 
 // Unwrap returns the underlying error.
 func (e *DocumentError) Unwrap() error { return e.Err }
@@ -155,9 +167,10 @@ func Read(name string, b []byte) (*Config, error) {
 // access key secret anywhere, in its bytes or, escaped, in a decoded string or member
 // name, is [accesskey.ErrSecretInDocument] before a schema reads it, and one that
 // contains a run key [accesskey.ErrRunKeyInDocument], so no schema error quotes the
-// secret.
+// secret. A key the pin lists is left out of that check as
+// [accesskey.SecretInPinDocument] leaves it out.
 func Parse(name string, b []byte) (*Config, error) {
-	if err := accesskey.SecretInDocument(string(b)); err != nil {
+	if err := accesskey.SecretInPinDocument(string(b), "apiary_public_key"); err != nil {
 		return nil, err
 	}
 	file := name
@@ -168,12 +181,12 @@ func Parse(name string, b []byte) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := accesskey.SecretInDocument(doc); err != nil {
+	if err := accesskey.SecretInPinDocument(doc, "apiary_public_key"); err != nil {
 		return nil, err
 	}
 	if m, ok := doc.(map[string]any); ok {
 		if pin, _ := m["apiary_public_key"].([]any); len(pin) == 0 {
-			return nil, &accesskey.Refusal{Code: accesskey.CodeApiaryPublicKeyMissing, Detail: "server " + name + ": no pinned apiary_public_key"}
+			return nil, &accesskey.Refusal{Code: accesskey.CodeApiaryPublicKeyMissing, Detail: "server " + accesskey.ShownValue(name, false) + ": no pinned apiary_public_key"}
 		}
 	}
 	var c Config
@@ -193,22 +206,24 @@ func decode(name, schemaName string, b []byte, out any) error {
 	if !strings.Contains(name, ".") {
 		name += ".json"
 	}
+	// The decoder's and the schema's errors can quote the document, so a value in them
+	// that contains qak_ or qrk_ in any case is accesskey.ShownError's phrase.
 	doc, err := contracts.Decode(name, b)
 	if err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	schema, err := contracts.Compile(schemaName)
 	if err != nil {
 		return err
 	}
 	if err := schema.Validate(doc); err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	j, err := json.Marshal(doc)
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(j, out)
+	return accesskey.ShownError(json.Unmarshal(j, out))
 }
 
 // Configuration is the configuration document the server answers discovery with:
@@ -266,8 +281,8 @@ func (c *Configuration) Wants(typ string) bool {
 }
 
 // RunConfiguration is the run configuration document: the server's policy for the run,
-// as the server's raw section, which the policy package reads, and the server's
-// variables.
+// as the server's raw section, which the policy package reads, the server's variables
+// and the image the run starts in.
 type RunConfiguration struct {
 	Version int `json:"version"`
 	// SecurityPolicy is nil when the document has none: the node's policy is then the
@@ -275,6 +290,66 @@ type RunConfiguration struct {
 	SecurityPolicy json.RawMessage `json:"security_policy,omitzero"`
 	// Variables are the server's variables, by name; nil when the document has none.
 	Variables map[string]Variable `json:"variables,omitzero"`
+	// Image is the image the run starts in, a reference pinned by digest; empty when
+	// the document names none, and the run's policy selects the image.
+	Image string `json:"image,omitzero"`
+	// Credentials are the credentials whose values the server stores for the run, in
+	// the document's order, each name once; nil when the document has none. The
+	// gateway fetches their values with the secrets request.
+	Credentials []RunCredential `json:"credentials,omitzero"`
+	// ModelCredential is the name of the model key the runtime starts with, an API
+	// credential of Credentials or a model key of the machine's; empty when the document
+	// names none, which a run with one model key may.
+	ModelCredential string `json:"model_credential,omitzero"`
+	// Computed is sha256= and the lower-case hex SHA-256 of the bytes the document was
+	// read from, which Forager computes itself: the digest a secrets request and the
+	// open of its answer use, never the answer's header. Empty for a document not read
+	// from bytes.
+	Computed string `json:"-"`
+}
+
+// RunCredential is one entry of a run configuration's credentials, with no value. An
+// API credential, a model key, has Format, Endpoint, Auth and KeyPrefixes; a host
+// credential has Hosts, Paths, Auth and Placeholders.
+type RunCredential struct {
+	Name string `json:"name"`
+	// Format is the API format of an API credential, one of api-format.schema.json;
+	// empty for a host credential.
+	Format string `json:"format,omitzero"`
+	// Endpoint is the base URL of an API credential's model API.
+	Endpoint string `json:"endpoint,omitzero"`
+	// KeyPrefixes are the prefixes an API credential's value must start with; nil for
+	// any value.
+	KeyPrefixes []string `json:"key_prefixes,omitzero"`
+	Hosts       []string `json:"hosts,omitzero"`
+	// Paths are nil for every path.
+	Paths        []string `json:"paths,omitzero"`
+	Auth         Auth     `json:"auth"`
+	Placeholders []string `json:"placeholders,omitzero"`
+}
+
+// Applies are the hosts and paths the credential's value is set on: for an API
+// credential the host [policy.EndpointHost] reads from its endpoint and every path, nil
+// paths; for a host credential its Hosts and Paths. An API credential whose endpoint
+// has no host applies to none.
+func (c RunCredential) Applies() (hosts, paths []string) {
+	if c.Format == "" {
+		return c.Hosts, c.Paths
+	}
+	host, ok := policy.EndpointHost(c.Endpoint)
+	if !ok {
+		return nil, nil
+	}
+	return []string{host}, nil
+}
+
+// Auth is how a value is set on a request, auth.schema.json: Scheme is bearer, basic
+// with Username, or header with Header. OAuth marks a bearer as an OAuth token.
+type Auth struct {
+	Scheme   string `json:"scheme"`
+	Header   string `json:"header,omitzero"`
+	Username string `json:"username,omitzero"`
+	OAuth    bool   `json:"oauth,omitzero"`
 }
 
 // Variable is one of a run configuration's variables: its value. A member beside it is
@@ -298,7 +373,7 @@ func (rc *RunConfiguration) Values() map[string]string {
 
 // Digests are what an answer says is in force: the server's digest of the
 // configuration document and of the run's run configuration, each empty when the answer
-// did not say. They are opaque: compared byte for byte, never recomputed.
+// did not say. Forager compares them byte for byte and does not recompute them.
 type Digests struct {
 	Configuration    string
 	RunConfiguration string
@@ -399,16 +474,16 @@ func (c *Client) send(ctx context.Context, method, u string, body []byte, max in
 	if v := c.Config.Via; v != nil {
 		var err error
 		if u, err = v.rebase(u); err != nil {
-			return nil, err
+			return nil, accesskey.ShownError(err)
 		}
 	}
 	hc, err := c.http()
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	if body == nil {
 		req.Body, req.ContentLength = nil, 0
@@ -437,12 +512,12 @@ func (c *Client) send(ctx context.Context, method, u string, body []byte, max in
 	req.Header.Set(HeaderSignature, sig)
 	resp, err := hc.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(max)+1))
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	a := &answer{status: resp.StatusCode, body: b}
 	if resp.StatusCode == http.StatusUnauthorized || len(b) > max || (resp.StatusCode != http.StatusOK && len(b) > MaxRefusal) {
@@ -510,10 +585,10 @@ func (c *Client) fetch(ctx context.Context, what, u, digestHeader, schemaName st
 func (c *Client) fetchBody(ctx context.Context, what, u, digestHeader string) ([]byte, string, error) {
 	a, err := c.send(ctx, http.MethodGet, u, nil, MaxDocument, nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("%s %s: %w", what, u, err)
+		return nil, "", fmt.Errorf("%s %s: %w", what, accesskey.ShownValue(u, false), accesskey.ShownError(err))
 	}
 	if a.status != http.StatusOK || !a.signed {
-		return nil, "", a.refusal(what + " " + u)
+		return nil, "", a.refusal(what + " " + accesskey.ShownValue(u, false))
 	}
 	digest := a.header.Get(digestHeader)
 	if digest == "" {
@@ -522,10 +597,16 @@ func (c *Client) fetchBody(ctx context.Context, what, u, digestHeader string) ([
 	return a.body, digest, nil
 }
 
+// errRunURLSecret refuses a run.url that contains qak_ or qrk_: the run's
+// run.policy_applied sends run.url as a URI, which no phrase is. Its text names
+// neither prefix, so accesskey.ShownError keeps it.
+var errRunURLSecret = errors.New("run.url contains the start of an access key secret or a run key, and run.policy_applied would send it as it is")
+
 // Discover fetches the configuration document from the server's well-known path and
 // returns it with the server's digest of it. An error, transport, status or a document
 // the schema refuses, means no run; it names the URL. A document without the run
-// endpoint is refused as one the schema refuses. A 401 is unauthorized, a signed
+// endpoint, or whose run.url contains qak_ or qrk_ in any case, is refused as one the
+// schema refuses. A 401 is unauthorized, a signed
 // refusal is the code its body contains, rate_limited say, and an answer that does not
 // verify is answer_unsigned, each an [*accesskey.Refusal].
 func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
@@ -540,6 +621,9 @@ func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
 	}
 	if conf.Run == nil || conf.Run.URL == "" {
 		return nil, "", &DocumentError{"configuration", u, errors.New("the document has no run endpoint, run.url")}
+	}
+	if accesskey.ContainsSecret(conf.Run.URL) {
+		return nil, "", &DocumentError{"configuration", u, errRunURLSecret}
 	}
 	return &conf, digest, nil
 }
@@ -583,6 +667,11 @@ func (r Registration) Body() ([]byte, error) {
 	if len(r.Labels) == 0 {
 		r.Labels = nil
 	}
+	// The body goes to Qory Apiary: labels and about as run.started sends them.
+	r.Labels, r.About = ShownLabels(r.Labels), ShownAbout(r.About)
+	if r.About.Empty() {
+		r.About = nil
+	}
 	return json.Marshal(r)
 }
 
@@ -602,12 +691,12 @@ var ErrNotAccepted = errors.New("the server did not accept the run")
 // The error names the URL and the status. A caller that tries again sends the same
 // body.
 func (c *Client) Register(ctx context.Context, runURL string, body []byte) (*RunConfiguration, string, error) {
-	what := "register " + runURL
+	what := "register " + accesskey.ShownValue(runURL, false)
 	a, err := c.send(ctx, http.MethodPost, runURL, body, MaxDocument, func(h http.Header) {
 		h.Set("Content-Type", RegistrationContentType)
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("%s: %w", what, err)
+		return nil, "", fmt.Errorf("%s: %w", what, accesskey.ShownError(err))
 	}
 	if a.signed && a.status == http.StatusGone {
 		return nil, "", fmt.Errorf("%s: status %d: %w", what, a.status, ErrNotAccepted)
@@ -632,15 +721,16 @@ func (c *Client) Register(ctx context.Context, runURL string, body []byte) (*Run
 // nothing more of the run.
 func (c *Client) RunConfiguration(ctx context.Context, runURL, runID string) (*RunConfiguration, string, error) {
 	u := runURL + "/" + runID
+	shown := accesskey.ShownValue(u, false)
 	a, err := c.send(ctx, http.MethodGet, u, nil, MaxDocument, nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("run configuration %s: %w", u, err)
+		return nil, "", fmt.Errorf("run configuration %s: %w", shown, accesskey.ShownError(err))
 	}
 	if a.signed && a.status == http.StatusGone {
-		return nil, "", fmt.Errorf("run configuration %s: status %d: %w", u, a.status, ErrNotAccepted)
+		return nil, "", fmt.Errorf("run configuration %s: status %d: %w", shown, a.status, ErrNotAccepted)
 	}
 	if a.status != http.StatusOK || !a.signed {
-		return nil, "", a.refusal("run configuration " + u)
+		return nil, "", a.refusal("run configuration " + shown)
 	}
 	return runConfigurationOf(a, u)
 }
@@ -678,14 +768,39 @@ func CheckLabels(labels map[string]string) error {
 		return fmt.Errorf("%d labels; a run carries at most %d", len(labels), MaxLabels)
 	}
 	for k, v := range labels {
-		if !labelKeyShape.MatchString(k) {
-			return fmt.Errorf("the label key %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", k)
+		if !labelKeyShape.MatchString(k) && !shownLabelKey(k) {
+			return fmt.Errorf("the label key %s is not 1 to 64 of a-z, 0-9, underscore, dot and dash", accesskey.ShownName(k, true))
 		}
 		if len(v) > 256 || !utf8.ValidString(v) {
-			return fmt.Errorf("the value of the label %s is longer than 256 bytes or not UTF-8", k)
+			return fmt.Errorf("the value of the label %s is longer than 256 bytes or not UTF-8", accesskey.ShownName(k, false))
 		}
 	}
 	return nil
+}
+
+// shownLabelKey reports whether k is one of the two phrases [ShownLabels] puts in
+// place of a label's key that contains qak_ or qrk_, which a label's key may be.
+func shownLabelKey(k string) bool {
+	return k == accesskey.ShownName("qak_", false) || k == accesskey.ShownName("qrk_", false)
+}
+
+// ShownLabels are a run's labels as Forager sends them to Qory Apiary, in run.started
+// and in a registration: each key and each value that contains qak_ or qrk_ in any case
+// is accesskey.ShownName's phrase in its place. Of two labels whose keys become the
+// same phrase, the one whose key sorts first is kept. Nil is nil.
+func ShownLabels(labels map[string]string) map[string]string {
+	if labels == nil {
+		return nil
+	}
+	out := make(map[string]string, len(labels))
+	for _, k := range slices.Sorted(maps.Keys(labels)) {
+		shown := accesskey.ShownName(k, false)
+		if _, ok := out[shown]; ok {
+			continue
+		}
+		out[shown] = accesskey.ShownName(labels[k], false)
+	}
+	return out
 }
 
 // digestShape is the shape of a server's digest as the events record it.

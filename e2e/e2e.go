@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -43,8 +44,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes/claude"
 	"github.com/qoryai/forager/wall"
@@ -54,15 +57,27 @@ import (
 const (
 	modeRelay    = "relay"
 	modeForward  = "forward"
+	modeExec     = "exec"
 	modeProbe    = "probe"
 	modeTool     = "tool"
 	modeNest     = "nest"
 	modeInner    = "inner"
 	modeRecorder = "recorder"
+	// modePrepare is the run's preparation, which runs inside before the probe.
+	modePrepare = "prepare"
 	// modeNeighbours is the probe in a container the agent started, privileged on the
 	// enclosure's own network, that looks for neighbours on the inside network.
 	modeNeighbours = "neighbours"
+	// modeSealed is the probe of a run whose credential Qory Apiary seals.
+	modeSealed = "sealed"
 )
+
+// ExecArgs are the arguments that make the helper run [session.Exec].
+var ExecArgs = []string{modeExec}
+
+// imageDeniedVar is a name the Claude runtime denies and no run of the suite sets,
+// which the suite's image by reference sets in its ENV: the run sees it unset.
+const imageDeniedVar = "ANTHROPIC_BEDROCK_BASE_URL"
 
 // RelayArgs are the arguments that make the helper run the relay.
 var RelayArgs = []string{modeRelay}
@@ -89,23 +104,37 @@ const (
 	credentialPath = "/inside-the-paths"
 )
 
-// What a runtime's credentials are in the suite: Claude Code's API key, set in
-// x-api-key, and its OAuth credential, set as a bearer, each a fake key in the suite's
-// own environment for a recorder of its own, with the variable Claude Code reads it
-// from inside as its stand-in. keyMark is in both keys and nowhere else: the full keys
-// are made when the suite runs, so they exist only in the suite's environment while it
-// runs.
+// What a runtime's credentials are in the suite: Claude Code's API key, a model key
+// of the machine's whose endpoint is the first recorder, set in x-api-key in place of
+// the key's placeholder in ANTHROPIC_API_KEY; and a bearer for the second recorder, a
+// host credential whose stand-in is in PROBE_OAUTH_TOKEN, a variable no model key is
+// read from. Each is a fake key in the suite's environment. keyMark is in both keys and
+// nowhere else: the full keys are made when the suite runs, so they exist only in the
+// suite's environment while it runs.
 const (
 	keyMark        = "-REAL-not-a-secret-"
 	apiKeyVar      = "QORY_WALLTEST_API_KEY"
 	oauthVar       = "QORY_WALLTEST_OAUTH_KEY"
 	apiKeyStandIn  = "ANTHROPIC_API_KEY"
-	oauthStandIn   = "CLAUDE_CODE_OAUTH_TOKEN"
+	oauthStandIn   = "PROBE_OAUTH_TOKEN"
 	apiKeyHeader   = "X-Api-Key"
 	modelPath      = "/v1/messages"
 	apiKeyCred     = "runtime-api-key"
 	oauthCred      = "runtime-oauth"
 	recordersCAVar = "PROBE_RECORDERS_CA"
+)
+
+// What the run's model key is without the recorders: a fake key in the suite's
+// environment, with keyMark, a model key of the machine's whose endpoint is Claude
+// Code's model host, sent as a bearer, so the session sets its placeholder in
+// ANTHROPIC_AUTH_TOKEN. A walled run whose gateway holds credentials needs a model
+// key. With the recorders, the API key is the run's one model key, since a run with no
+// control plane has no model_credential to choose between two. The allow list has the
+// host, as it must for a model key's endpoint host; the probe sends nothing to it.
+const (
+	modelKeyVar = "QORY_WALLTEST_MODEL_KEY"
+	modelHost   = "api.anthropic.com"
+	modelCred   = "runtime-model"
 )
 
 // What the suite's tool is: the test binary on this machine, serving a name that
@@ -120,9 +149,9 @@ const (
 const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 
 // Main makes the test binary the helper when it was started as one: the relay, the hook
-// forwarder, the probe, the start of a Docker of the agent's own, the probe in a
-// container the agent started, the search for neighbours in one, or a recorder. It
-// returns at once otherwise.
+// forwarder, the run's preparation, the probe, the start of a Docker of the agent's
+// own, the probe in a container the agent started, the search for neighbours in one, a
+// recorder, or the probe of a sealed credential. It returns at once otherwise.
 func Main() {
 	if len(os.Args) < 2 {
 		return
@@ -136,11 +165,15 @@ func Main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	case modeExec:
+		os.Exit(session.Exec(os.Args[2:], os.Stderr))
 	case modeForward:
 		if err := session.Forward(context.Background(), os.Stdin); err != nil {
 			fmt.Fprintln(os.Stderr, "forward:", err)
 		}
 		os.Exit(0)
+	case modePrepare:
+		os.Exit(prepare(os.Args[2:]))
 	case modeProbe:
 		os.Exit(probe(os.Args[2:]))
 	case modeTool:
@@ -154,6 +187,8 @@ func Main() {
 		os.Exit(neighboursProbe())
 	case modeRecorder:
 		os.Exit(serveRecorder())
+	case modeSealed:
+		os.Exit(sealedProbe())
 	}
 }
 
@@ -195,6 +230,9 @@ type Options struct {
 	// Forwarder is the hook forwarder's command inside the enclosure: the adapter's
 	// helper path, then "forward".
 	Forwarder []string
+	// Exec is the helper's exec inside the enclosure, which a walled run starts through:
+	// the adapter's helper path, then [ExecArgs].
+	Exec []string
 	// Probe is the helper's path inside the enclosure.
 	Probe string
 	// Hooks says the adapter carries the hook socket across on this machine. Where it
@@ -215,6 +253,15 @@ type Options struct {
 	// EngineID is the ID of the engine the adapter reaches, which the daemon inside must
 	// not be.
 	EngineID string
+	// Reference is an image pinned by its digest, with a shell at sh, whose user is not
+	// root, and RootReference one whose user is root: the cases of a run whose policy
+	// names its image by reference run in them. Allow is the machine's images.allow
+	// prefix that covers both. Without Reference those cases are skipped, and said so.
+	Reference, RootReference, Allow string
+	// RelayImage, when not nil, is the image the relay of the run of the id was created
+	// from, as the engine reports it while the run goes; the case of the relay's image
+	// asks it. Nil skips that case.
+	RelayImage func(runID string) (string, error)
 	// Recorders are three recorders: the first acts as the host of a runtime's API key,
 	// the second as the host of its OAuth credential, the third as a host the policy
 	// allows with no credential. Without them the checks of a runtime's key are skipped,
@@ -248,6 +295,7 @@ func Run(t *testing.T, o Options) {
 	keys := runtimeKeys{api: "sk-ant-test" + keyMark + "0001-" + strconv.Itoa(os.Getpid()), oauth: "sk-ant-oat01-test" + keyMark + "0002-" + strconv.Itoa(os.Getpid())}
 	t.Setenv(apiKeyVar, keys.api)
 	t.Setenv(oauthVar, keys.oauth)
+	t.Setenv(modelKeyVar, "sk-ant-test"+keyMark+"0003-"+strconv.Itoa(os.Getpid()))
 	var trusted error
 	if n := len(o.Recorders); n != 0 && n != 3 {
 		t.Fatalf("Recorders lists %d recorders; the suite takes three: the API key's host, the OAuth credential's host, and an allowed host with none", n)
@@ -286,7 +334,8 @@ func Run(t *testing.T, o Options) {
 		}
 	}
 	originHost := mustHost(t, o.Origin)
-	want := "[" + originHost + " allowed " + originHost + " denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address " + originHost + " denied " + originHost + " " + credentialHost + " denied " + credentialHost + " " + credentialHost + " allowed " + credentialHost + " " + toolHost + " allowed " + toolHost + " " + toolHost + " denied " + toolHost
+	// The preparation reaches the origin first, before the probe starts.
+	want := "[" + originHost + " allowed " + originHost + " " + originHost + " allowed " + originHost + " denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address " + originHost + " denied " + originHost + " " + credentialHost + " denied " + credentialHost + " " + credentialHost + " allowed " + credentialHost + " " + toolHost + " allowed " + toolHost + " " + toolHost + " denied " + toolHost
 	if len(origin.recorders) == 3 {
 		// A runtime's two credentials to their hosts, then the other host plainly and
 		// through a tunnel.
@@ -384,6 +433,24 @@ func Run(t *testing.T, o Options) {
 		t.Errorf("no session.ended among the events; the hook said: %s", p.Hook)
 	})
 	check("the exit status is the runtime's", r.res.ExitCode == 7, r.res.ExitCode)
+	// The preparation left its report in the workspace before the probe started, from
+	// the probe's namespaces, as its user, with its words as given, and reached the
+	// origin through the proxy, first; the record names it.
+	pr := p.Prepared
+	if pr == nil {
+		pr = &preparedReport{}
+	}
+	var preparation any
+	for _, e := range r.events {
+		if e["type"] == "dev.qory.run.started" {
+			preparation = e["data"].(map[string]any)["preparation"]
+		}
+	}
+	check("the preparation runs inside, before the runtime, through the proxy",
+		p.PreparedErr == "" && pr.Allowed == 200 && pr.Net != "" && pr.Net == p.Namespaces["net"] && pr.Mnt == p.Namespaces["mnt"] && pr.UID == p.UID &&
+			fmt.Sprint(pr.Args) == fmt.Sprint(preparationWords) && len(egress) > 1 && egress[0] == originHost+" allowed "+originHost &&
+			fmt.Sprint(preparation) == fmt.Sprint(append([]string{o.Probe, modePrepare}, preparationWords...)),
+		fmt.Sprintf("the probe found %+v (%s) in the workspace as it started, beside the probe's namespaces %v and uid %d; the first egress %v; run.started's preparation %v", *pr, p.PreparedErr, p.Namespaces, p.UID, egress, preparation))
 	for _, e := range r.events {
 		if e["type"] == "dev.qory.run.started" {
 			d := e["data"].(map[string]any)
@@ -397,6 +464,8 @@ func Run(t *testing.T, o Options) {
 		left, err := o.Leftovers(r.res.RunID)
 		check("Close removes everything", err == nil && len(left) == 0, fmt.Sprint(left, err))
 	}
+
+	byReference(t, o, origin, outside)
 
 	t.Run("the terminal crosses and a named host on this machine is reached", func(t *testing.T) {
 		origin.named = true
@@ -473,7 +542,7 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 		}
 		for name, vs := range h {
 			for _, v := range vs {
-				if strings.Contains(v, link.Placeholder) {
+				if strings.Contains(v, link.Placeholder) || strings.Contains(v, link.KeyPlaceholder(apiKeyCred)) {
 					t.Errorf("the stand-in reached the host in %s: %q", name, v)
 				}
 			}
@@ -493,7 +562,7 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 		arrived(t, 1, "Authorization", "Bearer "+keys.oauth, oauthCred, p.OAuthHost, p.OAuthHostErr)
 	})
 	t.Run(names[2], func(t *testing.T) {
-		if p.APIKeyStandIn != link.Placeholder || p.OAuthStandIn != link.Placeholder || len(p.KeySeen) != 0 || p.Environs == 0 {
+		if p.APIKeyStandIn != link.KeyPlaceholder(apiKeyCred) || p.OAuthStandIn != link.Placeholder || len(p.KeySeen) != 0 || p.Environs == 0 {
 			t.Errorf("%s is %q and %s is %q; a key was seen in %v; %d environments were read", apiKeyStandIn, p.APIKeyStandIn, oauthStandIn, p.OAuthStandIn, p.KeySeen, p.Environs)
 		}
 	})
@@ -504,7 +573,7 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 		reached := map[bool]bool{}
 		for _, req := range got[2] {
 			reached[req.TLS] = true
-			if req.Header.Get("Authorization") != "Bearer "+link.Placeholder || req.Header.Get(apiKeyHeader) != link.Placeholder {
+			if req.Header.Get("Authorization") != "Bearer "+link.Placeholder || req.Header.Get(apiKeyHeader) != link.KeyPlaceholder(apiKeyCred) {
 				t.Errorf("the other host got Authorization %q and %s %q, want the stand-ins", req.Header.Get("Authorization"), apiKeyHeader, req.Header.Get(apiKeyHeader))
 			}
 		}
@@ -641,9 +710,140 @@ type result struct {
 	out, errs, reports string
 }
 
+// byReference checks a run whose policy names its image by its reference pinned by
+// digest: one under no prefix of images.allow is refused before anything is made; one
+// whose user is root is refused by the wall, which leaves no container or network; and
+// one the machine allows starts, with its relay from the machine's default and its
+// workspace at /workspace, whatever its path on the machine.
+func byReference(t *testing.T, o Options, h hosts, outside string) {
+	t.Run("a digest outside images.allow is refused", func(t *testing.T) {
+		runID := event.NewRunID()
+		outsideAllow := "registry.invalid/walltest/app@sha256:" + strings.Repeat("0", 64)
+		_, err := runIn(t, o, variant{image: outsideAllow, allow: []string{"registry.invalid/other/"}, runID: runID}, false, h, outside)
+		var r *session.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.ImageNotAllowed {
+			t.Errorf("the run: %v, want image_not_allowed", err)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the refused run left %v (%v)", left, err)
+			}
+		}
+	})
+	if o.Reference == "" {
+		// A plain skip, also where the wall is required: an adapter's test that cannot
+		// make an image of a registry's leaves these cases to one that can.
+		reason := "the adapter's test names no image by reference"
+		if o.Docker {
+			reason = "an image by reference starts with no Docker inside, which the run of the suite without one checks"
+		}
+		for _, name := range []string{"an image whose user is root is refused", "the relay's image is the machine's", "the workspace is at /workspace",
+			"a name the image sets and the runtime denies is unset"} {
+			t.Run(name, func(t *testing.T) { t.Skip(reason) })
+		}
+		return
+	}
+	t.Run("an image whose user is root is refused", func(t *testing.T) {
+		runID := event.NewRunID()
+		_, err := runIn(t, o, variant{image: o.RootReference, allow: []string{o.Allow}, runID: runID}, false, h, outside)
+		var r *session.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.ImageUserRoot {
+			t.Errorf("the run: %v, want image_user_root", err)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the refused run left %v (%v)", left, err)
+			}
+		}
+	})
+	runID := event.NewRunID()
+	relay := make(chan string, 1)
+	v := variant{image: o.Reference, allow: []string{o.Allow}, runID: runID}
+	if o.RelayImage != nil {
+		v.started = func(ctx context.Context) {
+			// The relay exists from the wrap of the launch to the wall's close: the first
+			// answer while the run goes is its image.
+			for {
+				if image, err := o.RelayImage(runID); err == nil && image != "" {
+					relay <- image
+					return
+				}
+				select {
+				case <-ctx.Done():
+					relay <- ""
+					return
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+		}
+	}
+	r, err := runIn(t, o, v, false, h, outside)
+	t.Run("the relay's image is the machine's", func(t *testing.T) {
+		if o.RelayImage == nil {
+			t.Skip("the adapter's test cannot say what its relay was created from")
+		}
+		if err != nil {
+			t.Fatalf("the run did not start: %v", err)
+		}
+		if got := <-relay; got != o.Image {
+			t.Errorf("the relay was created from %q, want the machine's default %q", got, o.Image)
+		}
+	})
+	t.Run("the workspace is at /workspace", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("the run did not start: %v", err)
+		}
+		var started map[string]any
+		for _, e := range r.events {
+			if e["type"] == "dev.qory.run.started" {
+				started = e["data"].(map[string]any)
+			}
+		}
+		fetched, _ := started["image_fetch_ms"].(float64)
+		written, werr := os.ReadFile(filepath.Join(r.dir, "probe-was-here"))
+		if r.probe.Workdir != "/workspace" || r.probe.HostWorkspace || werr != nil || string(written) != "inside" || r.res.ExitCode != 7 ||
+			started["dir"] != "/workspace" || started["image"] != o.Reference || started["image_name"] != nil || fetched < 0 || started["image_fetch_ms"] == nil {
+			t.Errorf("the probe ran in %q, the workspace's path here seen inside %v, wrote %q (%v), exited %d; run.started %v",
+				r.probe.Workdir, r.probe.HostWorkspace, written, werr, r.res.ExitCode, started)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the run left %v (%v)", left, err)
+			}
+		}
+	})
+	t.Run("a name the image sets and the runtime denies is unset", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("the run did not start: %v", err)
+		}
+		if r.probe.ImageDenied != "unset" {
+			t.Errorf("the probe sees %s, which the image's ENV sets, %s; want it unset", imageDeniedVar, r.probe.ImageDenied)
+		}
+	})
+}
+
+// variant is what a run of the suite changes: the image its policy selects or names,
+// the machine's images.allow, the run's id, and what to do while the run goes.
+type variant struct {
+	image   string
+	allow   []string
+	runID   string
+	started func(ctx context.Context)
+}
+
 // run runs the probe as the runtime of a session behind the wall and reads what it
 // reported and what the session recorded.
 func run(t *testing.T, o Options, interactive bool, h hosts, outside string) result {
+	t.Helper()
+	r, err := runIn(t, o, variant{}, interactive, h, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// runIn is run of a variant, which returns why the run did not start.
+func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outside string) (result, error) {
 	t.Helper()
 	dir, runs := t.TempDir(), filepath.Join(t.TempDir(), "runs")
 	var out, errs, reports bytes.Buffer
@@ -655,7 +855,7 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		t.Fatal(err)
 	}
 	// The metadata address is in the list to show that no entry opens it.
-	allow := []string{mustHost(t, h.origin), "169.254.169.254", credentialHost, toolHost}
+	allow := []string{mustHost(t, h.origin), "169.254.169.254", credentialHost, toolHost, modelHost}
 	if h.named {
 		allow = append(allow, "127.0.0.1")
 	}
@@ -685,12 +885,17 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		"PROBE_DENIED=http://denied.invalid/",
 		"PROBE_OWN=" + h.own,
 		"PROBE_HOST_PORT=" + strconv.Itoa(h.port),
+		"PROBE_HOST_WORKSPACE=" + dir,
 	}
 	if o.Docker {
 		env = append(env, "PROBE_DOCKER=1")
 	}
 	policyCreds := []gateway.PolicyCredential{{Name: "suite"}}
 	creds := []gateway.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}}
+	if len(h.recorders) != 3 {
+		policyCreds = append(policyCreds, gateway.PolicyCredential{Name: modelCred})
+		creds = append(creds, gateway.Credential{Name: modelCred, Env: modelKeyVar, Format: "anthropic-messages", Endpoint: "https://" + modelHost, Scheme: "bearer"})
+	}
 	if len(h.recorders) == 3 {
 		cert, _ := authority()
 		env = append(env, "PROBE_API_KEY_HOST="+h.recorders[0], "PROBE_OAUTH_HOST="+h.recorders[1], "PROBE_OTHER_HOST="+h.recorders[2],
@@ -698,7 +903,8 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		allow = append(allow, h.recorders...)
 		policyCreds = append(policyCreds, gateway.PolicyCredential{Name: apiKeyCred}, gateway.PolicyCredential{Name: oauthCred})
 		creds = append(creds,
-			gateway.Credential{Name: apiKeyCred, Env: apiKeyVar, Hosts: []string{h.recorders[0]}, Scheme: "header", Header: apiKeyHeader, Paths: []string{"/v1/*"}, Placeholders: []string{apiKeyStandIn}},
+			gateway.Credential{Name: apiKeyCred, Env: apiKeyVar, Format: "anthropic-messages", Endpoint: "https://" + net.JoinHostPort(h.recorders[0], recorderTLS),
+				Scheme: "header", Header: apiKeyHeader, KeyPrefixes: []string{"sk-ant-"}},
 			gateway.Credential{Name: oauthCred, Env: oauthVar, Hosts: []string{h.recorders[1]}, Scheme: "bearer", Paths: []string{"/v1/*"}, Placeholders: []string{oauthStandIn}})
 	}
 	// With a runtime or a Docker the machine defines the image and the policy selects
@@ -708,6 +914,9 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 	if o.Runtime != "" || o.Docker {
 		images = []session.Image{{Name: "suite", Ref: o.Image, Runtime: o.Runtime, Docker: o.Docker}}
 		selected = "suite"
+	}
+	if v.image != "" {
+		selected = v.image
 	}
 	report := func(l string) {
 		t.Log("report:", l)
@@ -726,7 +935,7 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		Version:     "walltest",
 		Report:      report,
 	}, runs)
-	res, err := session.Run(ctx, session.Spec{
+	spec := session.Spec{
 		Runtime:        rt,
 		Command:        o.Probe,
 		Args:           []string{modeProbe, "--settings", settings},
@@ -739,15 +948,26 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		Stderr:         &errs,
 		Gateway:        g,
 		Forwarder:      o.Forwarder,
+		Exec:           o.Exec,
 		Wall:           o.Wall,
 		Image:          o.Image,
 		Images:         images,
+		ImagesAllow:    v.allow,
+		RunID:          v.runID,
+		Preparation:    append([]string{o.Probe, modePrepare}, preparationWords...),
 		ForagerVersion: "walltest",
 		Report:         report,
-	})
+	}
+	if v.started != nil {
+		going, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); v.started(going) }()
+		defer func() { stop(); <-done }()
+	}
+	res, err := session.Run(ctx, spec)
 	closeGateway()
 	if err != nil {
-		t.Fatalf("the run did not start: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errs.String())
+		return result{}, fmt.Errorf("the run did not start: %w\nstdout:\n%s\nstderr:\n%s", err, out.String(), errs.String())
 	}
 	reportsMu.Lock()
 	r := result{res: res, dir: dir, runs: runs, out: out.String(), errs: errs.String(),
@@ -780,5 +1000,5 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		}
 		r.events = append(r.events, m)
 	}
-	return r
+	return r, nil
 }

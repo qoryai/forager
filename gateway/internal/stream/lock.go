@@ -2,9 +2,12 @@ package stream
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // The locks in a run's record directory. The kernel holds each for as long as its
@@ -18,18 +21,33 @@ const (
 )
 
 // lock takes a lock of the run directory without waiting; [ErrRunning] when another
-// holds it. The returned function releases it. It is the session's lock, copied.
+// holds it. The returned function releases it. It is the session's lock, copied. A
+// lock that is a symbolic link is not opened.
 func lock(dir, name string) (func(), error) {
-	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0o644)
+	file := filepath.Join(dir, name)
+	f, err := os.OpenFile(file, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
-		return nil, err
+		if fi, lerr := os.Lstat(file); lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
+			return nil, linkError{"Remove the symbolic link at " + accesskey.ShownValue(file, false) +
+				". The gateway does not open the run directory's lock through a link.", err}
+		}
+		return nil, accesskey.ShownError(err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, ErrRunning
 		}
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	return func() { f.Close() }, nil
 }
+
+// linkError is an error whose text is text, and that wraps err.
+type linkError struct {
+	text string
+	err  error
+}
+
+func (e linkError) Error() string { return e.text }
+func (e linkError) Unwrap() error { return e.err }

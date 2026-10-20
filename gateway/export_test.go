@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,8 +12,13 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/server"
 )
+
+// AppliedIs matches the session's dev.qory.run.policy_applied whose members the
+// gateway decides are a.
+func AppliedIs(a map[string]any) func(*event.Event) bool { return appliedIs(a) }
 
 // BoundLine is the line the gateway answers the binding with under key, on a connection
 // whose exporter value is ekm.
@@ -78,6 +84,35 @@ func Held(g *Gateway) (runs, spent int) {
 	defer g.mu.Unlock()
 	return len(g.runs), len(g.spent)
 }
+
+// Tokens are the tokens of the credentials g's run of runID holds now, which its proxy
+// sets, by the credential's name.
+func Tokens(g *Gateway, runID string) map[string]string {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	out := map[string]string{}
+	for _, u := range lr.r.Uses() {
+		if u.Value != nil {
+			out[u.Name] = string(u.Value())
+			continue
+		}
+		out[u.Name] = u.Token()
+	}
+	return out
+}
+
+// Guarded reports whether the proxy of g's run of runID is guarded.
+func Guarded(g *Gateway, runID string) bool {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	return lr.px.Guarded()
+}
+
+// SetUpstreamRoots sets the roots every run's proxy verifies a terminated host's
+// certificate against.
+func SetUpstreamRoots(c *Config, roots *x509.CertPool) { c.upstreamRoots = roots }
 
 // SetOpened sets what is called once a run on the one address opened.
 func SetOpened(c *Config, f func()) { c.opened = f }
@@ -163,4 +198,13 @@ func WaitingConns(g *Gateway) int {
 	g.svc.conns.mu.Lock()
 	defer g.svc.conns.mu.Unlock()
 	return g.svc.conns.waiting.Len()
+}
+
+// RunLimitsOf are the limits the proxy of g's run of runID has.
+func RunLimitsOf(g *Gateway, runID string) RunLimits {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	l := lr.px.Limits()
+	return RunLimits{Connections: l.Connections, RequestsPerSecond: l.RequestsPerSecond, Burst: l.Burst}
 }

@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // About is what a run is about, as the caller passed it: dev.qory.run.started reports
@@ -279,4 +281,128 @@ func ReportedAbout(a *About) *About {
 		}
 	}
 	return &out
+}
+
+// ShownAbout is a checked About as Forager sends it to Qory Apiary, in run.started and
+// in a registration: a copy in which a value that contains qak_ or qrk_ in any case
+// does not appear. Kind, Title and each subject's Title are accesskey.ShownName's
+// phrase in place of such a value. A subject whose Type or Ref contains one is left
+// out, since neither form holds a phrase and a subject needs both, and so is a URL
+// that contains one. In Details, a string is accesskey.ShownValue's phrase and a
+// member name accesskey.ShownName's; of two members whose names become the same, the
+// first is kept. Details that grow past their bound are left out, and Details without
+// such a value are kept byte for byte. A nil About is nil.
+func ShownAbout(a *About) *About {
+	if a == nil {
+		return nil
+	}
+	out := *a
+	if !aboutContainsSecret(a) {
+		return &out
+	}
+	out.Kind, out.Title = accesskey.ShownName(a.Kind, false), accesskey.ShownName(a.Title, false)
+	out.Subjects = nil
+	for _, s := range a.Subjects {
+		if accesskey.ContainsSecret(s.Type) || accesskey.ContainsSecret(s.Ref) {
+			continue
+		}
+		if accesskey.ContainsSecret(s.URL) {
+			s.URL = ""
+		}
+		s.Title = accesskey.ShownName(s.Title, false)
+		out.Subjects = append(out.Subjects, s)
+	}
+	if !detailsAbsent(a.Details) && jsonSecrets(a.Details) != "" {
+		d, err := shownDetails(a.Details)
+		if err != nil || checkDetails(d) != "" {
+			d = nil
+		}
+		out.Details = d
+	}
+	return &out
+}
+
+// aboutContainsSecret reports whether a member of a, a decoded string or member name
+// of its Details among them, contains qak_ or qrk_ in any case.
+func aboutContainsSecret(a *About) bool {
+	if accesskey.ContainsSecret(a.Kind) || accesskey.ContainsSecret(a.Title) {
+		return true
+	}
+	for _, s := range a.Subjects {
+		for _, v := range []string{s.Type, s.Ref, s.URL, s.Title} {
+			if accesskey.ContainsSecret(v) {
+				return true
+			}
+		}
+	}
+	return !detailsAbsent(a.Details) && jsonSecrets(a.Details) != ""
+}
+
+// jsonSecrets are the strings and member names of the JSON d, as they decode, that
+// contain qak_ or qrk_ in any case, joined by spaces, so an escape such as \u0061
+// hides neither; empty when there are none. Bytes that do not decode as JSON are
+// checked as they are written.
+func jsonSecrets(d []byte) string {
+	dec := jsontext.NewDecoder(bytes.NewReader(d), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	var found []string
+	for {
+		tok, err := dec.ReadToken()
+		if err == io.EOF {
+			return strings.Join(found, " ")
+		}
+		if err != nil {
+			if accesskey.ContainsSecret(string(d)) {
+				return string(d)
+			}
+			return strings.Join(found, " ")
+		}
+		if tok.Kind() == '"' && accesskey.ContainsSecret(tok.String()) {
+			found = append(found, tok.String())
+		}
+	}
+}
+
+// shownDetails are Details with each string as accesskey.ShownValue shows it and each
+// member name as accesskey.ShownName shows it, the first of two members whose names
+// become the same kept, in the order written.
+func shownDetails(d json.RawMessage) (json.RawMessage, error) {
+	dec := jsontext.NewDecoder(bytes.NewReader(d))
+	var buf bytes.Buffer
+	enc := jsontext.NewEncoder(&buf)
+	var names []map[string]bool
+	for {
+		kind, n := dec.StackIndex(dec.StackDepth())
+		name := kind == '{' && n%2 == 0
+		tok, err := dec.ReadToken()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch tok.Kind() {
+		case '{':
+			names = append(names, map[string]bool{})
+		case '}':
+			names = names[:len(names)-1]
+		case '"':
+			if name {
+				shown := accesskey.ShownName(tok.String(), false)
+				if names[len(names)-1][shown] {
+					if err := dec.SkipValue(); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				names[len(names)-1][shown] = true
+				tok = jsontext.String(shown)
+			} else {
+				tok = jsontext.String(accesskey.ShownValue(tok.String(), false))
+			}
+		}
+		if err := enc.WriteToken(tok); err != nil {
+			return nil, err
+		}
+	}
+	return eventDetails(bytes.TrimSpace(buf.Bytes()))
 }

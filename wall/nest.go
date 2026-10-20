@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // Where things are inside an enclosure with a Docker of the agent's own.
@@ -24,11 +26,17 @@ const (
 	NestLog = "/var/log/qory-dockerd.log"
 	// nestStore is the daemon's store, a volume of the run's.
 	nestStore = "/var/lib/docker"
-	// nestConfig is the agent's docker configuration, DOCKER_CONFIG, unless the run
-	// sets a non-empty one: the proxy for the containers the agent starts. It is the
-	// agent's alone, in a directory of root's that the agent passes through.
+	// nestConfig is the agent's docker configuration, DOCKER_CONFIG, unless the
+	// enclosure's environment has a non-empty DOCKER_CONFIG, the image's included: the
+	// proxy for the containers the agent starts. It is the agent's alone, in a
+	// directory of root's that the agent passes through.
 	nestConfig = "/run/qory/docker"
 )
+
+// NestSets lists the variables [Nest] sets in the agent's environment for a run with
+// nested Docker: DOCKER_CONFIG, the agent's docker configuration, unless the
+// enclosure's environment has a non-empty DOCKER_CONFIG, the image's included.
+func NestSets() []string { return []string{"DOCKER_CONFIG"} }
 
 // nestWait is how long the daemon has to answer on its socket.
 const nestWait = 2 * 60
@@ -70,13 +78,13 @@ func userNamespaced(uidMap string) error {
 	for _, line := range strings.Split(strings.TrimSpace(uidMap), "\n") {
 		f := strings.Fields(line)
 		if len(f) != 3 {
-			return fmt.Errorf("nest: the user map %q cannot be read", strings.TrimSpace(uidMap))
+			return fmt.Errorf("nest: the user map %s cannot be read", accesskey.ShownValue(strings.TrimSpace(uidMap), true))
 		}
 		inside, err1 := strconv.ParseUint(f[0], 10, 32)
 		outside, err2 := strconv.ParseUint(f[1], 10, 32)
 		count, err3 := strconv.ParseUint(f[2], 10, 32)
 		if err1 != nil || err2 != nil || err3 != nil || count == 0 {
-			return fmt.Errorf("nest: the user map %q cannot be read", strings.TrimSpace(uidMap))
+			return fmt.Errorf("nest: the user map %s cannot be read", accesskey.ShownValue(strings.TrimSpace(uidMap), true))
 		}
 		if inside == 0 {
 			if outside == 0 {
@@ -134,7 +142,7 @@ func nestIDs(spec string, lookup func(kind, key string) (int, int, bool)) (int, 
 	if err != nil {
 		u, g, ok := lookup("name", name)
 		if !ok {
-			return 0, 0, fmt.Errorf("nest: the image has no user %q", name)
+			return 0, 0, fmt.Errorf("nest: the image has no user %s", accesskey.ShownName(name, true))
 		}
 		uid, gid = u, g
 	} else if !hasGroup {
@@ -148,7 +156,7 @@ func nestIDs(spec string, lookup func(kind, key string) (int, int, bool)) (int, 
 		if gid, err = strconv.Atoi(group); err != nil {
 			_, g, ok := lookup("group", group)
 			if !ok {
-				return 0, 0, fmt.Errorf("nest: the image has no group %q", group)
+				return 0, 0, fmt.Errorf("nest: the image has no group %s", accesskey.ShownName(group, true))
 			}
 			gid = g
 		}
@@ -208,12 +216,15 @@ func nestProxies(env func(string) string, resolve func(string) ([]string, error)
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" {
-		return nil, fmt.Errorf("nest: the proxy %q is not a URL", raw)
+		return nil, fmt.Errorf("nest: the proxy %s is not a URL", accesskey.ShownValue(raw, true))
 	}
 	if net.ParseIP(u.Hostname()) == nil {
 		addrs, err := resolve(u.Hostname())
 		if err != nil || len(addrs) == 0 {
-			return nil, fmt.Errorf("nest: the proxy's name %s does not resolve: %v", u.Hostname(), err)
+			if err != nil {
+				err = accesskey.ShownError(err)
+			}
+			return nil, fmt.Errorf("nest: the proxy's name %s does not resolve: %v", accesskey.ShownValue(u.Hostname(), false), err)
 		}
 		addr := addrs[0]
 		if i := slices.IndexFunc(addrs, func(a string) bool {

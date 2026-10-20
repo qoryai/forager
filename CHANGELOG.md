@@ -8,24 +8,547 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Core and contract
 
+#### Upgrading
+
+- A configuration document whose `run.url` contains `qak_` or `qrk_` in any case is
+  refused: `server.Client.Discover` returns a `*server.DocumentError`, and no run
+  starts. Before, the document was read and `run.policy_applied` sent `run.url` as it
+  was.
+- Set `HOME` in the image, as `ENV HOME`, if a run set it through the server's
+  variables, `--env`, `wall.env` or the harness's defaults: the session now leaves that
+  value out. A run that set `NODE_OPTIONS`, `LD_PRELOAD` or `BASH_ENV` that way gets
+  no value for them from those sources either, and a sealed credential needs another
+  placeholder than one of the four.
+- Return an empty digest from a `receiver.Handler.RunConfiguration` hook, or `sha256=`
+  and the lower-case hex SHA-256 of the document's bytes. The reference receiver
+  computes the digest itself. For any other digest from the hook, it answers a signed
+  `500` in place of the registration's, the attach's or the reload's answer, and no
+  digest on a batch's answer. Before, the receiver served the hook's digest as it was.
+- A walled run whose gateway holds credentials for it, and whose runtime's descriptor
+  lists model keys in `model.keys`, needs a model key: without a model key from the
+  control plane or forager.yaml, and without a value of a model key's variable from the
+  run, the machine, the harness, the runtime's preparation or what the run inherits, it
+  is `model_key_missing`. A setup whose walled Claude Code run has only a forge
+  credential and finds its model key in a mount, the image, its settings or a login
+  inside the run now stops: pass the key in the machine's variables, or define a model
+  key in forager.yaml. A run whose run answer has no `credential_hosts` starts as
+  before.
+- Rewrite a forager.yaml model credential as a model key: replace `hosts`, `paths` and
+  `placeholders` with `format` and `endpoint`, such as `{env: MODEL_API_KEY, format:
+  anthropic-messages, endpoint: https://api.anthropic.com, auth: {scheme: bearer,
+  oauth: true}}`. A credential without `format` whose `placeholders` list a variable the
+  runtime reads a model key from, such as `ANTHROPIC_API_KEY` or
+  `CLAUDE_CODE_OAUTH_TOKEN`, now stops the run, `run_configuration_invalid`.
+- A placeholder of the machine's credentials or tools that the runtime's descriptor
+  denies, lists in its model `overrides` or reads its model endpoint from, such as
+  `CLAUDE_CONFIG_DIR` or `ANTHROPIC_MODEL` for Claude Code, now stops the run,
+  `run_configuration_invalid`, and so does a tool's placeholder in a variable the
+  runtime reads a model key from, such as `ANTHROPIC_API_KEY`. Remove the placeholder
+  from forager.yaml.
+- `runtimes.json`: the claude runtime's `reserves`, `declares` and `one_of` are `[]`,
+  and its `model` has `keys`, the three variables Claude Code reads a model key from:
+  `ANTHROPIC_API_KEY` for the header `x-api-key`, `ANTHROPIC_AUTH_TOKEN` for a bearer,
+  and `CLAUDE_CODE_OAUTH_TOKEN` for a bearer with `oauth`. A server that offered a
+  runtime's declarations to choose a model key reads `model.keys` instead.
+- `dev.qory.run.refused` and the link's batches take the code `model_key_missing`, and
+  the session's `dev.qory.run.policy_applied` may have `credential_variables`. A
+  separate gateway older than the session refuses both: upgrade the gateway first.
+- A run without a wall whose policy selects credentials now starts, and the gateway
+  sets the credentials: before, it was `wall_required`. The agent's environment gets
+  each credential's placeholder, and the run trusts the gateway through `ca-bundle.pem`
+  in the run directory (Session, Added). A run without a wall on a machine with none of
+  `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`,
+  `/etc/ssl/ca-bundle.pem` and `/etc/ssl/cert.pem` now stops when the gateway gives it
+  an authority: install a CA bundle at one of those paths. Without a wall, the agent
+  can read every credential the machine already holds; run a brokered run on a machine
+  that holds none.
+- A run without a wall whose gateway holds credentials for it now gets the rules a
+  walled run gets: the start key's variable and endpoint, the endpoint rule and
+  `credential_variables` in `dev.qory.run.policy_applied`. A Claude Code run without a
+  wall and without a model key starts, and Claude Code can use the machine's Claude
+  login.
+
 #### Added
 
+- `security_policy.egress.allow_first` in `policy.schema.json`: up to 64 hosts, each a
+  lower-case host name or an IPv4 address in canonical form, with no `*.` pattern. In
+  either mode, a host an entry matches exactly is allowed before `deny` and `allow` are
+  checked, and recorded with the entry as its rule. A host below an entry is not
+  matched. The guard, `wall:host-form`, `wall:plain-request`, the run limits and `paths`
+  still apply, so behind a wall or a separate gateway a private network address still
+  needs a host listed by name in the node's allow list. When the node's policy narrows a
+  server's, or a session's narrowing narrows the gateway's, an entry lifts only the
+  `deny` and `allow` of the policy that lists it: a node's `deny` still denies a
+  server's entry, and under the node's `enforce` the node's `allow` must cover it. Under
+  `enforce`, an entry covers a credential's host or a tool's host in the checks at the
+  start and at a reload. A reload carries the list. `dev.qory.run.policy_applied` and
+  the link's `applied` report the list in force as `allow_first` when it has an entry.
+  `policy.Egress.AllowFirst` and `gateway.PolicyEgress.AllowFirst` contain it in Go.
+- `dev.qory.run.egress` takes the rules `wall:connection-limit` and `wall:rate-limit`:
+  a refusal by one of the run's limits, with `decision: denied` and `outcome: refused`,
+  at most one per limit per second for a run. `rule` has no enum, so only its
+  description in `events/run.egress.schema.json` changes.
+- A descriptor's `model` may list `keys`, 1 to 32 variables the runtime reads a model
+  key from, each `{format, auth, variable}`. The session refuses a descriptor whose key
+  is read from `HOME`, `LD_PRELOAD`, `NODE_OPTIONS` or `BASH_ENV` in any letter case,
+  whose format is not in `formats`, whose pair of format and auth appears twice, whose
+  variable is in `denies` or `overrides` or is the endpoint's variable, or whose
+  variable has another auth in `secrets.declares`. A `secrets.declares` name may not be one of those four
+  variables either. The Claude Code descriptor lists `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`, and `runtimes.json` lists them.
+- `auth.schema.json` has `oauth`, `true` and beside `bearer` alone: the value is an
+  OAuth token, such as a Claude subscription login's. The proxy sets it as any bearer,
+  and the session reads it to pick the runtime's variable.
+- The session gives the start key, the model key the runtime starts with, to the
+  runtime: of the descriptor's `model.keys`, the key whose format is the start key's
+  and whose auth has its scheme, its header's name, case ignored, and its `oauth`. The
+  key's variable is set to the start key's placeholder and joins the start key's
+  placeholders and the run's, so a value the run passes for it is
+  `placeholder_conflict`. The session sets the runtime's model endpoint variable,
+  `ANTHROPIC_BASE_URL` for Claude Code, to the start key's endpoint, and leaves out
+  every other value of it as `fixed`. The runtime's other model-key variables get no
+  value in the runtime's process environment: one from any source, the inherited
+  environment included, is left out as `fixed`, one the runtime's preparation sets is
+  left out too but not recorded as `fixed`, and behind a wall the name is unset
+  inside. When the run has an authority, a variable that points at the CA bundle is
+  still set to the bundle's path, even one of `model.keys`: one of `Spec.CAEnv`
+  without a wall, one of `CAEnv` of `wall.Docker` behind one. The session drops every
+  variable of `model.keys` and the endpoint variable from the `env` object of the
+  `--settings` file, which Claude Code applies, and the file's top-level `apiKeyHelper`,
+  `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides`, which
+  set a key, cloud credentials or model ids in place of the start key; a value in Claude
+  Code's other settings files can still reach it. A descriptor without a `model`
+  section, a format it lists no key for, and an auth no key of that format has are
+  `run_configuration_invalid`.
+- A model key's placeholder contains its name: `qory-`, the name and
+  `-sets-the-credential-outside-the-enclosure`, such as
+  `qory-model-sets-the-credential-outside-the-enclosure`, `link.KeyPlaceholder` in Go.
+  It ends as the stand-in does, so Claude Code's approval script covers it.
+- A placeholder goes only into a variable for a credential. The session refuses,
+  `run_configuration_invalid`, a placeholder of a host credential from the server that
+  the runtime's descriptor denies, lists in its model `overrides` or `reserves`, reads
+  its model `endpoint` from or reads a model key from; a host credential of the
+  machine's with a model key's variable among its placeholders; and one of the run
+  answer's `placeholders` that the descriptor denies, overrides or reads its endpoint
+  or a model key from, or that the runtime declares or reserves and no credential has.
+  A tool's placeholder, such as `GITHUB_TOKEN`, passes.
+- The link's run answer's `credential_hosts` has `auth` for a credential from the
+  server and for a model key of the machine's, and `format` and `endpoint` for a model
+  key from either. The run answer has `model_credential`, the start key's name.
+  `server.LinkCredentialHosts` has `Auth`, `Format` and `Endpoint`, and
+  `server.LinkRunAnswer` has `ModelCredential`.
+- `dev.qory.run.policy_applied`: behind a wall `credential_variables` lists the
+  variable each credential's placeholder is in, `{credential, name}`, with a name's
+  phrase in place of a credential's name or a variable that contains `qak_` or `qrk_`.
+  The gateway leaves `credential_variables`
+  out of the members it matches.
+- The refusal `model_key_missing`, in `refusal.Decides`: a run whose run answer has
+  `credential_hosts`, behind a wall or, without one, with a credential whose placeholder
+  is a model key's variable, whose runtime's `model` section has `keys`, and that has
+  no model key, as the contract's §Variables, A model key, says. Its names are the
+  model keys' variables.
+
+- The link's run answer has `credential_hosts`: the hosts and placeholders of each
+  credential the gateway holds for the run, so the session can tell which hosts the run's
+  credentials cover. `server.LinkRunAnswer.CredentialHosts` contains it, and is empty for
+  a gateway that sends none.
+- `api-format.schema.json`, the fixed list of model API formats: `anthropic-messages`,
+  `openai-responses`, `openai-chat` and `gemini`. A schema that uses the list refers to
+  the whole file with `$ref`.
+- A runtime descriptor may have `model`: the API formats the runtime sends, and where a
+  composer writes a run's model id, effort value and model endpoint, each in a flag, a
+  setting or a variable, the endpoint in a variable only. The Claude Code descriptor
+  has one, and `runtimes.json` lists it. In Go, a described runtime implements
+  `runtimes.Model`, whose `Model` method returns the section.
+- A descriptor's `model` may list `overrides`, the variables that would override the
+  model id or effort value a composer writes. Behind a wall the session leaves out the
+  server's, the run's, the machine's and the harness's value of each, the harness's
+  computed value included, records it as `denied`, and unsets the name inside when
+  nothing else sets it; without a wall nothing changes. The Claude Code descriptor
+  lists 12, among them `ANTHROPIC_MODEL` and `CLAUDE_CODE_EFFORT_LEVEL`.
+- `server.ShownLabels` and `server.ShownAbout`: a run's labels and what it is about as
+  Forager sends them to Qory Apiary. A label's key or value, and `about`'s `kind`,
+  `title` and a subject's `title`, that contains `qak_` or `qrk_` in any case is `(a
+  name that contains an access key secret)`, or `(a name that contains a run key)` when
+  it contains `qrk_` and no `qak_`. Of two labels whose keys become the same phrase, the
+  one whose key sorts first is kept. A subject whose `type` or `ref` contains a prefix
+  is left out, and so is a subject's `url` that contains one. In `details`, a string is
+  `(a value that contains …)` and a member name the name's phrase; of two members whose
+  names become the same, the first is kept, and details that grow past 8192 bytes are
+  left out. `accesskey.ShownError` takes nil and returns it.
+
+- `dev.qory.run.started` has `preparation`, the run's preparation as the caller gave it,
+  when the run has one.
+- The server's variables may set `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, the
+  system and the repositories a run's preparation may use: the built-in `QORY_*` deny
+  entry leaves the server's values of these two names in, by these names exactly. Set
+  by any other source, they stay reserved as any `QORY_` name.
 - `dev.qory.run.policy_applied` has `ceiling_paths`: the path rules of each ceiling a
   run's policy file was put under with `gateway.Policy.Under`, by host, one object per
   ceiling that has any. The link's `applied` carries it too.
+- A policy's `image` may name an image by its reference pinned by digest,
+  `NAME@sha256:` and 64 lower-case hexadecimal digits, as well as select one of the
+  machine's by name. A reference with a tag, without a digest or in upper case is
+  `run_configuration_invalid`, in a node's policy file and in a run configuration alike.
+  `policy.CheckImage`, `policy.CheckImagePrefix` and `policy.ImageAllowed` hold the
+  grammar and the prefix rule.
+- `policy.EndpointHost` reads the host of an `https` base URL, such as
+  `ANTHROPIC_BASE_URL`'s value, in the form `policy.Host` gives. `policy.CredentialFor`
+  reports whether a credential's hosts are for a host, by the rule the gateway's proxy
+  picks a request's credential by.
+- A run configuration's `image`: the image a run starts in, named by digest beside its
+  `security_policy` and run only under the machine's `images.allow`.
+- The refusals `image_not_allowed`, a reference under none of the machine's
+  `images.allow` prefixes, and `image_user_root`, an image whose user is root, both in
+  `refusal.Decides`.
+- `dev.qory.run.started` has `image_fetch_ms`, how long the wall took to find an image by
+  reference: its fetch included unless the engine holds it by that digest.
+- The link's run request has `images.allow`; its answer has `relay_image`, the image the
+  relay starts from, and `reference: true` on an `image` the policy names by reference.
+- A run configuration's `credentials`: at most 8 credentials whose values the server
+  stores for the run, with no value. An API credential, a model key, is `{name,
+  format, endpoint, auth, key_prefixes}`: the gateway sets its value on every path of
+  the endpoint's host alone. `endpoint` is `https`, with a host, an optional port and
+  path, and no user, query or fragment. A host credential is `{name, hosts, paths,
+  auth, placeholders}`, with exact hosts. Forager checks the member against
+  `run-configuration.schema.json`, and refuses a name twice, an `auth.header` that
+  frames the request or that the proxy sets, a placeholder that
+  `denied-variables.json` covers, and an endpoint from which `policy.EndpointHost`
+  reads no host, each `run_configuration_invalid`. `server.RunCredential` has `Format`,
+  `Endpoint` and `KeyPrefixes`, and `Applies` returns the hosts and paths a value is
+  set on.
+- `key_prefixes`, on an API credential, optional: 1 to 4 literal prefixes, each 1 to 32
+  characters of printable ASCII without a space. The gateway refuses a stored value
+  that starts with none of them, `run_configuration_invalid`, without printing the
+  value.
+- A run configuration's `model_credential`: the name of the start key, the model key
+  the runtime starts with, an API credential of `credentials` or a model key of the
+  machine's. A run with two or more model keys, the server's and the machine's
+  together, needs it; with one, that one is the start key. A name of a host
+  credential, of no model key of the run, and none beside two or more model keys are
+  `run_configuration_invalid`. A reload that names another fails, and the policy in
+  force stays. A reload whose start key differs from the run's fails too, without
+  `model_credential`: `start a new run to change the model key it starts
+  with`. `server.RunConfiguration` has `ModelCredential`, and
+  `server.CheckCredentials` takes it.
+- The gateway sets a run configuration's `credentials`, with or without a wall. When the run
+  starts it sends one secrets request under the access key, for the digest it computes of
+  the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value
+  in place of a credential of the machine's that claims one of its hosts, of the same
+  name or another. Without `secrets` in discovery, with a fixture pin or access
+  key, or with a value a header cannot hold, it is `run_configuration_invalid`. A reload with other `credentials` fails, and the policy
+  in force stays. A `TRACE` or `TRACK` through `CONNECT` to a host that gets one is
+  denied with the rule `wall:echo-method`. A run configuration without `credentials`
+  runs as before.
+- The secrets request, `secrets-request.schema.json`, a signed `POST` to discovery's
+  `secrets.url` for the values of a run configuration's `credentials`; its answer, the
+  envelope of `secrets-answer.schema.json`, sealed with HPKE base mode, X25519,
+  HKDF-SHA256 and AES-256-GCM, to the access key and signed under the server's key; and
+  the plaintext it opens to, `sealed-plaintext.schema.json`. `fixtures/sealed/` contains a
+  sealed answer with its vectors and an envelope refused at each step.
+- The reference receiver serves the secrets endpoint, at `receiver.DefaultSecretsPath`,
+  `/v1/secrets`, or `Handler.SecretsPath`, when the hook `Handler.Secrets` is set:
+  `func(run receiver.Run, credentials []string) (values [][]byte, refusal
+  *receiver.Refusal)`, one value for each credential of the run configuration in force.
+  It seals the values to the access key the request verified under with `sealed.Seal`,
+  signs the answer under the receiver's key and overwrites the values with zeros; it
+  logs and stores none. `receiver.AccessKey.StoredSecrets` allows a key stored secrets,
+  and discovery lists the configuration's `secrets` for such a key alone. A request is
+  refused in the contract's order, then as a reload of the run would be; a digest that
+  is not the one in force, or not one the run was answered with, is a signed `410`
+  `run_configuration_superseded`, and a `credentials` list other than the run
+  configuration's names in its order a signed `409` `credentials_differ`.
+  `receiver.MaxSecretsBody` is the bound of a request's body, 32 KiB.
+- Package `sealed`: `sealed.Open` checks a secrets answer in the contract's order and
+  opens it with an access key, returning the values by credential name as bytes that
+  `Values.Clear` overwrites. A `Values`, a `Value` or a `Sealing` prints no value with
+  any format verb, also as a field of a struct printed by reflection; `sealed.Seal`
+  seals and signs an answer, for a receiver and the tests. Each refusal is one of the
+  package's errors, and no error contains a value.
 
 #### Changed
 
-- The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
-  `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
+- `wall_required` has the names `tools`, `paths` and `image=<name>`, never
+  `credentials`. Its message for tools and path rules reads "run it with a wall: the
+  policy selects tools or has path rules, and without a wall a program that ignores
+  the proxy is bound by neither". The run answer's `certificate_authority` is present
+  with or without a wall, whenever the gateway reads inside HTTPS for the run, and
+  always with a server. The `wall:` rules of `dev.qory.run.egress` keep their names,
+  and `wall:echo-method` and `wall:ambiguous-path` now appear in the records of runs
+  without a wall too.
+- The built-in deny list, `denied-variables.json`, has `NODE_OPTIONS`, `LD_PRELOAD`,
+  `BASH_ENV` and `HOME`. A value of one of them from the server, the run, the machine,
+  the harness's defaults or the harness's computed values is left out and recorded as
+  `denied`; the value the run inherits applies. A run configuration's credential with
+  one of them as a placeholder is `run_configuration_invalid`.
+- Behind a wall, the session keeps a value of the runtime's model endpoint variable,
+  `ANTHROPIC_BASE_URL` for Claude Code, of the server, the run, the machine or the
+  harness's defaults, when its host is a host of the run's model credential in the
+  run answer's `credential_hosts`, and leaves any other value out in place of the
+  runtime's `denies`. The harness's computed value of it, which reached the runtime
+  whatever its host, is left out too when uncovered. The value the run inherits is not
+  checked. `dev.qory.run.policy_applied`'s `variables` records a kept value with
+  `kept`, and a value left out as `endpoint_uncovered` or `endpoint_unreadable`.
+  Without a wall nothing changes. In a run with a start key, the session sets the
+  variable to the start key's endpoint instead, and the endpoint rule does not apply.
+- A run configuration's digest, `X-Qory-Run-Configuration`, is `sha256=` and the
+  lower-case hex SHA-256 of the exact bytes of the document as the server sends it; the
+  contract called it opaque before.
+- The registration bodies, `server.Registration.Body` and
+  `server.GatewayRegistration.Body`, send the labels and about as `server.ShownLabels`
+  and `server.ShownAbout` give them, and so do `run.started` and the gateway's
+  `run.registered`. A separate gateway's selection reads the labels the attach answers
+  with, so a label value that contains `qak_` or `qrk_` gives no credential argument
+  (Gateway, Upgrading). `run.started.schema.json` admits the two name phrases as a
+  label's key, and `server.CheckLabels` takes them. The reference receiver keeps a
+  registration's labels and about as the two functions give them, and answers an
+  attach with that copy. `server.ShownAbout` keeps `details` byte for byte when no
+  string or member name in them contains a prefix, and the receiver keeps an about
+  without a prefix as the body has it.
+
+- `server.Client.Discover` refuses a configuration document whose `run.url` contains
+  `qak_` or `qrk_` in any case, as a document the schema refuses: `run.policy_applied`
+  sends `run.url` as a URI, and no phrase is one.
+
+- The Claude Code descriptor declares no secret and requires none: its `secrets` have
+  no `declares` and no `one_of` group, and in `runtimes.json` its `declares` and
+  `one_of` are `[]`, no longer `api_key` and `oauth_token` and the required group
+  `model_key` of both. Its model keys are in `model.keys`, and the run's model key is a
+  model key from the server or the machine. A descriptor may still define `declares`
+  and `one_of` groups.
+- Enrolment: an access key can belong to an adapter, `node_kind` `adapter` with an
+  `na_` id.
+- Enrolment: an enrolment code's prefix names the kind of key it enrols, `qecn_` a
+  node's, `qecp_` a node pool's, `qecg_` a gateway's and `qeci_` an integration's
+  (node_kind `adapter`), in place of `qec_`, which is refused. `accesskey.CodeKind`
+  reads the kind, and `EnrolmentRequest.VerifyAnswer` refuses a `201` of another kind
+  with an `accesskey.KindError`.
 - A new instance id is `i_` and 26 lower-case Crockford base32 characters, no longer 22
   base64url characters, so it can no longer contain an access key's or a run key's
   prefix by chance.
+- The `credentials` merge row: behind a separate gateway, a walled run gets the
+  gateway's selection when the server's selects none.
+- `dev.qory.run.policy_applied`'s `credentials` carry, as the argument, the value of the
+  run's label a gateway's selection took it from.
+- `wall:echo-method` covers a host of every credential, the machine's included, and
+  its denial is a `405`. `dev.qory.run.egress` takes the rule `wall:plain-request`, a
+  plain request to a host that gets a credential and that the policy allows, denied in
+  either mode. The contract's §Credentials has The answer: what the proxy replaces in
+  an answer from a host that gets a credential, and what it does not.
+
+#### Fixed
+
+- The server package printed a value as written in these messages, and now prints `(a
+  value that contains an access key secret)` or `(a value that contains a run key)` in
+  place of a value that contains `qak_` or `qrk_` in any case: a server document's name
+  and error; a URL in a request's or an answer's error, and the transport's error; the
+  decoder's and the schema's error of a document Qory Apiary answered; a pointer or a
+  member name in an answer's refusal; the gateway's proxy address, its certificate
+  authorities' file and its URL behind a separate gateway; the text of a gateway's
+  refusal; and an outcome's state. A variable's name, an image and a label's key print
+  the name's phrase. `accesskey.Refusal.Error` prints its names as
+  `accesskey.ShownNames` gives them. A run answer and a local link, as `fmt`,
+  `encoding/json` and `log/slog` print them, show the phrases in place of labels,
+  variables, documents, placeholders, reserved names, images, the socket and the files'
+  paths. An outcome's `reason` is sent as the name's phrase. `policy.Error`,
+  `internal/jcs`'s number error and the sink's reports print the value's phrase. A fixed
+  reason that names a prefix, such as a run key's "it does not start with qrk_", prints
+  as it is.
+
+- `json.Marshal` of a run answer whose `policy` or `applied` contains `qak_` or `qrk_`
+  failed, and a prefix written with an escape, such as `q\u0061k_`, printed as it was.
+  A string or member name in either document is now read decoded, and the document
+  prints as the value's phrase, a JSON string. A delivery's transport error, to the
+  server and over the link, a via's errors, the dial of a separate gateway and the
+  reference receiver's store file errors print the value's phrase in place of one that
+  quotes a URL, an address or a path with a prefix. They still wrap the error, so
+  `errors.Is` and `errors.As` find it. So do `link.Local.DialContext`'s error and the
+  reference receiver's `File.Close`.
+
+- A pin whose key contains `qak_` or `qrk_` in any case, about one key in 27,000, is
+  read: `server.Parse` and `accesskey.ParsePin` leave each entry's `public_key` that is
+  one valid key out of the secret check, written in a form
+  `accesskey.SecretInPinDocument` lists; the check still covers `alg`, the entry's
+  other members, a key that starts with `qak_` or `qrk_` in any case, and the rest of
+  the document. `accesskey.SecretInPinDocument` and `accesskey.SecretInPinEntry` hold
+  the rule.
 
 ### Gateway
 
+#### Upgrading
+
+- List a host that resolves to a private network address by name in the node's allow
+  list, or a walled run can no longer reach it.
+- Each run on a gateway now has limits: at most 256 connections open at once, and 50
+  requests a second with a burst of 200. A run past one gets `429 Too Many Requests`
+  with `Retry-After: 1`. Set `gateway.Config.RunLimits` higher if your runs need more.
+- A credential's selection gives no argument for a label whose value is `(a name that
+  contains an access key secret)` or `(a name that contains a run key)`, whatever its
+  `pattern` admits, `.+` among them. A separate gateway reads the labels from the
+  attach answer, where a value that contains `qak_` or `qrk_` in any case is that
+  phrase, so a label such as `repository=acme/qrk_x` gave its value as the argument
+  before and gives none now. The run's user is told the label is no argument.
+- A separate gateway refuses a run key whose instance id contains `qak_` or `qrk_` in
+  any case: the attach is answered `run_key_invalid`, 400. Before, the run attached and
+  `run.registered` sent the instance id as it was.
+- `gateway.Start` limits core dumps of the process that calls it and debugger access to
+  it, for the life of the process. On Linux it calls
+  `prctl(PR_SET_DUMPABLE, 0)`, so that a process of the same user without
+  `CAP_SYS_PTRACE` can no longer attach to the gateway's process or read it under
+  `/proc/<pid>/`. On macOS it calls `ptrace(PT_DENY_ATTACH)`, so a gateway's process
+  that a debugger traces exits at `Start` with status 45. On both it sets
+  `RLIMIT_CORE` to 0, soft and hard, which the programs it starts keep. A test binary
+  gets none of these settings. If a call fails, the gateway does not start, and the
+  error starts with the fix. Before, `Start` set nothing on the process.
+- A `TRACE` or `TRACK` through `CONNECT` to a host of a credential of the machine's is
+  now denied with the rule `wall:echo-method`, as one to a host of a credential from
+  Qory Apiary was. The denial is a `405` whose first line is "qory: use a method other
+  than TRACE or TRACK on this host."; before, a `403`. Use another method.
+- A plain request to a host that gets a credential and that the policy allows, `http://`
+  or an absolute-form `https://` sent without `CONNECT`, is now denied with the rule
+  `wall:plain-request` in either mode, and nothing reaches the host. The denial is a
+  `403` whose first line is "qory: send requests to this host as https:// through
+  CONNECT."; before, the request went on without the credential, and its answer was
+  passed on as the host sent it. Send such requests as `https://` through `CONNECT`.
+- A request through `CONNECT` to a host that gets a credential goes to the host with
+  `Accept-Encoding: identity`, and without `Range`, `If-Range`, `Upgrade` and
+  `Connection`. An answer with a body has no `Content-Length` and comes chunked; an
+  empty answer may have `Content-Length: 0`. If the host compresses its answer anyway,
+  the agent gets a `502` whose first line is "qory: remove this host's credential from
+  the policy, or serve the host through a tool."; a `101` is a `502` too. Before, the
+  answer was passed on as the host sent it.
+
+#### Added
+
+- `gateway.HardenProcess`, for qory to call first in `main`: it makes the calls with
+  which `Start` limits core dumps of the process and debugger access to it, before the
+  program reads its configuration, a key or its environment. Before, a debugger that
+  attached before `Start` could read the caller's `Config`, the TLS key and the
+  environment. `HardenProcess` locks no memory, and makes its calls in a test binary
+  too. `Start` makes them again, and the second call succeeds.
+- `gateway.Config.LockMemory`, `gateway.lock_memory` in `forager.yaml`, default
+  `false`: on Linux, `true` makes `Start` call `mlockall(MCL_CURRENT|MCL_FUTURE)`, so
+  that no page of the gateway's process goes to swap. It needs `RLIMIT_MEMLOCK`
+  unlimited, such as `LimitMEMLOCK=infinity` in a systemd unit; else the gateway does
+  not start, and the error starts with that fix. On other systems `true` stops the
+  gateway.
+- `gateway.Config.RunLimits`, `gateway.run_limits` in `forager.yaml`: the limits of
+  each run, the same for every run on the gateway, so that one run cannot slow down the
+  others. `Connections` is the most connections open at once, CONNECT tunnels and
+  plain requests in flight, 1 to 65536, default 256; the next is refused at once with
+  `429` and `Retry-After: 1`. `RequestsPerSecond`, 1 to 10000, default 50, and `Burst`,
+  1 to 100000, default 200, are a token bucket every CONNECT, plain request and request
+  inside a terminated tunnel takes from; a request waits up to 5 seconds for a token,
+  then is refused with `429` and `Retry-After: 1`. While `Connections` requests of the
+  run already wait, the next that needs a token is refused at once, with `429` and
+  `Retry-After: 1`. Each run has counters of its own.
+  Start refuses a field outside its range: `Set RunLimits.Connections to a number from
+  1 to 65536, or 0 for the default of 256. It is -3.`
+- A model key of the machine's: a `gateway.Credential` with `Format`, `Endpoint`,
+  `OAuth` and `KeyPrefixes` in place of `Hosts`, `Paths` and `Placeholders`, in
+  forager.yaml `{env|file|adapter, format, endpoint, auth: {scheme, header, username,
+  oauth}, key_prefixes}`. The gateway sets it on every path and on any port of the endpoint's host.
+  `Check` refuses a definition that cannot be one. A token from `env` or an adapter
+  that starts with none of `key_prefixes` stops the run, and a `file` token read again
+  that starts with none of them is not taken. An adapter's answer for a model key sets
+  it with the definition's scheme and lists no placeholders.
+- The gateway holds every model key of a run and its proxy sets only the start key,
+  on a request to the key's endpoint host that carries the key's placeholder in the
+  key's header or scheme. Two model keys may claim one host. Under `enforce`, the
+  run's allow list must cover a model key's endpoint host.
+- `gateway.Config.Selects`: behind a separate gateway, when the server's policy selects
+  no credential, a run, with or without a wall, gets the gateway's selection, a credential that takes an
+  argument taking it from a label of the run whose value matches the pattern named, for
+  a run whose `forge` label is the one named.
+- The gateway decides an image a policy names by reference: refused with
+  `image_not_allowed` under none of the request's `images.allow`, and otherwise the
+  run's image under the default's runtime. The answer carries `relay_image`, the
+  default's reference, for every walled run on a machine with a default image.
+- The gateway reads a run configuration's `image`, `server.RunConfiguration.Image`, as
+  the policy's image: the server's policy and the node's must name the same wherever
+  they name one, else `image_unknown`, and a reload that names another, or none in its
+  place, is refused. `server.CheckConfigurationImage` holds its rule.
+- The proxy replaces a credential's value with its placeholder in every answer from a
+  host that gets the credential: in the headers, those of a `1xx` and the trailer
+  included, in their names and values in any case, and in the body as it streams, a
+  copy split across two reads included. For
+  `basic` it also replaces the base64 of the username and the value, with or without
+  its padding, and it looks for each form percent-encoded and JSON-escaped too. See
+  [credentials](docs/credentials.md#what-the-agent-gets-back) for what it does not
+  replace.
+
 #### Changed
 
+- A certificate the proxy makes for an IP address has no common name; before, its
+  common name was the address.
+- A reload that brings tools, path rules or an image to a run without a wall fails, and
+  the policy in force stays. Before, a reload's path rules for such a run were dropped
+  from the policy, and its credentials failed it.
+- Behind a wall, and behind a separate gateway, only the node's policy opens the
+  gateway's machine: the guard reaches the machine's addresses only for an
+  `egress.allow` entry of `gateway.Config.Policy` that names the host itself and that
+  the run's policy allows, at the start and at each reload. An entry of a server's
+  `security_policy`, such as `localhost` or a name that resolves to `127.0.0.1`, no
+  longer opens it: list the host in the node's policy. With no server's policy the
+  node's policy opens what it names, as before.
+- Two messages start with the step that fixes them. The guard's `403` for a link-local
+  address, the machine's address or a private network address reads "qory: egress to
+  <host>:<port> denied by the gateway: to reach the gateway's machine or a private
+  network address, list the host itself, not a *. pattern, in the allow list of the
+  node's policy, and allow it in the run's policy; the gateway reaches either only for
+  such a host, and never a link-local or cloud metadata address". Two credentials that
+  claim one host are refused with "claim <host> in only one of the credentials <a> and
+  <b>; both claim it, and a host has one".
+- The proxy sets a credential on a private host only through a `hosts` entry equal to
+  the host, never through a `*.` pattern. A private host is an IP literal in
+  `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `fc00::/7`, a name of one label,
+  or a name that ends in `.local`, `.internal` or `.home.arpa`. A `forager.yaml`
+  credential whose hosts are `["*.local"]` no longer sets its key on `litellm.local`:
+  list `litellm.local` in the credential's hosts. `policy.CredentialFor` holds the rule.
+  `dev.qory.run.policy_applied`'s `terminated` leaves out a credential's `*.` pattern
+  that is for no host under the rule, such as `*.local`.
+- Behind a wall or behind a separate gateway, the gateway's proxy refuses the cloud
+  metadata addresses outside `169.254.0.0/16` and `fe80::/10`, as it refuses
+  `169.254.169.254`: `100.100.100.200` (Alibaba Cloud), `192.0.0.192` (Oracle Cloud
+  Compute Classic), `fd00:ec2::254` (AWS over IPv6), `fd20:ce::254` (Google Cloud
+  over IPv6), `168.63.129.16` (Azure WireServer), `fd00:ec2::23` (AWS EKS Pod
+  Identity Agent over IPv6), `fd00:a9fe:a9fe::1` (Akamai over IPv6) and `fd00:42::42`
+  (Scaleway over IPv6), and an IPv6 address that contains one of these IPv4
+  addresses: in its last 32 bits (`::/96`, `::ffff:0:0/96`, `::ffff:0:0:0/96`,
+  `64:ff9b::/96`), in bits 16 to 47 (`2002::/16`, 6to4), or at a position RFC 6052
+  defines for one after a prefix of 48, 56, 64 or 96 bits (`64:ff9b:1::/48`,
+  local-use NAT64). An exact `egress.allow` entry of the node's policy does not open
+  them. The guard's error for one reads "Use another host: the gateway refuses the
+  cloud metadata address <address>". The errors for a host that does not read as an
+  address, for a link-local address and for the machine's address end "the gateway
+  refuses it", where they ended "the wall refuses it", and the error for the machine's
+  address reads "no allow entry lists the host by name", where it read "no allow
+  entry names the host". A `403` page for a refused address ends "the gateway reaches
+  either only for such a host, and never a link-local or cloud metadata address".
+  Before, a request to `100.100.100.200` was dialled.
+- Behind a wall, and behind a separate gateway, the gateway's proxy dials a private
+  network address, in `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `0/8`,
+  `198.18/15`, `240/4`, `fc00::/7` or `fec0::/10`, only for a host that an
+  `egress.allow` entry of the node's policy lists by name and that the run's policy
+  allows, as it dials the gateway's machine. `240/4` includes the broadcast address
+  `255.255.255.255`. The same holds for an IPv6 address that contains an IPv4 address
+  of those ranges: in its last 32 bits (`::/96`, `::ffff:0:0/96`, `::ffff:0:0:0/96`,
+  `64:ff9b::/96`), in bits 16 to 47 (`2002::/16`, 6to4), or at a position RFC 6052
+  defines for one after a prefix of 48, 56, 64 or 96 bits (`64:ff9b:1::/48`, local-use
+  NAT64). The same holds as well for a name that resolves to such an address. An
+  address in `64:ff9b:1::/48` is refused where any of the four IPv4 addresses in it
+  would be: `64:ff9b:1::808:808`, with `8.8.8.8` at the 96-bit position, is refused
+  for a host not listed by name, since the other three positions contain addresses in
+  `0/8`.
+  A refused connection is recorded with the rule `wall:own-address` and answered with
+  the guard's `403`. The guard's error reads "List the host by name in
+  the allow list of the node's policy: <address> is a private network address, and
+  the gateway dials one only for a host listed there by name". An address in
+  `64:ff9b:1::/48` with this machine's address or a private network address at one of
+  its positions, and no link-local or cloud metadata address at any position, gets
+  this error too, with <address> the IPv6 address as dialled. A
+  run without a wall whose gateway runs on the session's machine is not changed.
+  Before, the proxy dialled these addresses for any host the policy allowed.
 - A run holds a copy of the path rules `gateway.Policy.Under` adds, taken and checked
   when it starts: the proxy and `ceiling_paths` keep them for the run whatever the
   caller's `Policy` holds afterwards.
@@ -33,18 +556,365 @@ release may change what an existing document does, and says so under Upgrading.
   and checked there: every run keeps them whatever the caller's `Config` holds
   afterwards.
 
-### Session
+#### Fixed
+
+- `gateway.Start` and `gateway.HardenProcess` stopped at the first call that failed.
+  On macOS, a failed `setrlimit(RLIMIT_CORE)` skipped `ptrace(PT_DENY_ATTACH)`, so a
+  debugger could still attach to the process. On Linux, a failed
+  `prctl(PR_SET_DUMPABLE, 0)` skipped `RLIMIT_CORE` 0, so the kernel could still write
+  a core dump of the process. Both now make every call and return every failure, one
+  line each, in the order of the calls, and each line starts with its fix. On macOS,
+  `PT_DENY_ATTACH` comes first. When `gateway.lock_memory` is true and locking fails,
+  `Start` makes these calls too, and its error starts with the locking failure.
+
+- The gateway opened a run directory's `gateway.lock`, and the session's `lock` for
+  `gateway.Resend`, through a symbolic link at their path, and the open made the file
+  the link points at when it did not exist. Both are now opened with O_NOFOLLOW, and a
+  link there fails with the fix first: "Remove the symbolic link at
+  /runs/<id>/gateway.lock. The gateway does not open the run directory's lock through
+  a link."
+
+- A panic in one of the gateway's goroutines, request handlers or accept loops ends
+  that goroutine, request or accepted connection alone, and closes the connection; an
+  accept loop accepts the next connection, and the gateway serves its other runs on.
+  `gateway.Config.Report` gets "run <id>: the gateway recovered from a panic and serves
+  on; send the stack below to Forager's maintainers", without "run <id>: " where the
+  panic is in no one run, and the stack after it, never the panic's value. A panic
+  while a run's events are sent, by the gateway or by the session, ends that batch
+  alone: the report is "the run's event sender recovered from a panic and sends the
+  next batch; send the stack below to Forager's maintainers", with the stack, and the
+  next batch is sent. After a panic, a run's reload starts again at the next answer
+  whose digest differs, and a credential's renewal goes on after the wait a failed
+  renewal gets. Before, a panic in a goroutine or an accept loop stopped the gateway
+  and every run, and Go printed the panic's value to standard error; net/http printed
+  a request handler's panic with its value to standard error, from the proxy, or wrote
+  it nowhere.
+- A `401` from a host to a request that the gateway's proxy set a credential on renews
+  the credential through its adapter at once, also when the session's `Connection`
+  header lists `X-Qory-Credential-Set`. Before, that header took the proxy's mark off
+  the request, and the credential was renewed only before its secret expired.
+- A request the gateway's proxy sets a credential on goes to its host over HTTP/1.1,
+  so no HTTP/2 header table (HPACK) on the connection keeps a copy of the credential.
+  A request without a credential goes on over HTTP/2 where the host offers it. Before,
+  a request with a credential went over HTTP/2 to a host that offered it.
+- When a run ends, the gateway's proxy closes every idle connection to a host it
+  terminates, so a connection that carried the run's credential does not outlive the
+  run. While the run goes on, an upstream connection idle for 90 seconds closes, and a
+  plain HTTP request's upstream connection closes when the request ends. Before, these
+  connections stayed open until the host closed them.
+- More of the gateway's messages and event members printed or sent a value as written,
+  and now print or send a phrase in place of one that contains `qak_` or `qrk_` in any
+  case. The name's phrase: an image in `image_unknown` and `image_not_allowed`, their
+  names included, in the refusal of an image that needs a wall, in a reload whose image
+  moved, and in the machine's image definitions; a selection's label and forge. The
+  value's phrase: a tool's program, the lines it writes, its start's error and a host
+  its definition gives; a path an adapter's answer claims, the decoder's and the
+  schema's error of the answer, and a definition's scheme and hosts; the run
+  configuration's URL; the proxy's answers to the run for an upstream error, a host
+  outside the form, a port, and a request's method and path; the record's, the server's
+  and the events' reports; the gateway's address and TLS files; a reload's failure;
+  `run.egress`'s `host`, `path`, `path_rule` and `request_method`; and
+  `run.policy_applied`'s `paths`, `ceiling_paths`, a credential's `hosts` and `paths`,
+  and `terminated`. The server's codes are sent as the server sent them.
+
+- More of the gateway's answers and errors sent or printed a value as written, and now
+  send or print a phrase in place of one that contains `qak_` or `qrk_` in any case.
+  The name's phrase: the `names` of a refusal on the link, `wall_required`'s
+  `image=<name>` among them, and a selection's pattern error. The value's phrase: the
+  errors of the gateway's address, its link socket and its directory, of a run's record
+  files, locks and resend, and of an enrolment's request. A separate gateway refuses a
+  run key whose instance id contains a prefix as `run_key_invalid`, as a registration's
+  is refused, since `run.registered` sends the instance id as it is.
+
+- Eight of the gateway's credential messages printed a credential's name or a
+  placeholder as written, so a secret pasted in place of one reached the error: the two
+  about the policy's selection, a name the machine does not define and a name selected
+  twice; the token that cannot be read; the allow-list check; and `Definition.Check`'s
+  name, source, argument and placeholder checks. In these eight, a name or placeholder
+  that contains `qak_` in any case now prints as `(a name that contains an access key
+  secret)`, and one that contains `qrk_` and no `qak_` as `(a name that contains a run
+  key)`. The rest of each message prints as before, and so does a name with neither.
+  This fix left the reason quoted after the name, such as an adapter's error output or
+  a regular expression's error, as it was. `accesskey.ShownName` holds the rule.
+- More of the gateway's and the session's messages, and three event members, printed a
+  name, an argument or a label's value as written. Each now prints `(a name that
+  contains an access key secret)` when it contains `qak_` in any case, and `(a name that
+  contains a run key)` when it contains `qrk_` and no `qak_`: the credential messages
+  about two credentials that claim one host, an adapter with a scheme, an argument for
+  env or file, env or file without hosts, and an argument the credential does not take
+  or the machine does not provide for, its name and the argument; the two lines a
+  renewal reports; the refusals of `Config.Selects`; the link's phrases for a
+  credential's program directory and file and a tool's program directory; the lines a
+  run is told when a selection entry gives it no credential, the entry's name, the run's
+  forge and the label's value among them, and the refusal of a selection the node's
+  policy does not list; the tool messages, a tool's name, argument and placeholder in
+  `Definition.Check`, `Choose` and `Check`, a tool that does not start, a tool that
+  exits while the run goes on, and the lines a tool writes; the refusals of a server's
+  tools and credentials that the node's policy does not list; the credential's name in
+  the tool check of a host a credential is for; a `placeholder_conflict` refusal's
+  detail and names, the gateway's for a credential's or a tool's placeholder and the
+  session's; `run.policy_applied`'s `credentials` `name` and `argument` and its
+  `variables` `name`; and the names of a `placeholder_conflict`'s `run.refused`. A
+  refusal's names, and a list of names in a message the `tool_unknown` and
+  `placeholder_conflict` refusals and the server's credentials refusal give, contain
+  each phrase once. Five parts that may quote a secret print `(a value that contains an
+  access key secret)` or `(a value that contains a run key)` in place of the whole part:
+  in the message of an adapter that fails, its path, its error and the first line of its
+  error output; the adapter's path in the other messages about its answer; the error of
+  a credential's file that cannot be read; the regular expression error of a
+  credential's or a tool's argument pattern and of a `Selects` pattern; and the error of
+  a server's `security_policy` that does not read as a policy. The rest of each message
+  prints as before, and so does a value with neither prefix.
+  `run.policy_applied.schema.json` admits the two name phrases as a variable's name.
+  `accesskey.ShownValue` holds the rule for a value, `accesskey.ShownError` for an
+  error's text, and `accesskey.ShownNames` for a list of names.
+- More run events sent a value of the run's as written, and now send `(a name that
+  contains an access key secret)` in place of one that contains `qak_` in any case, and
+  `(a name that contains a run key)` in place of one that contains `qrk_` and no `qak_`:
+  `run.policy_applied`'s `tools` `name` and `argument` and its `image`; `run.egress`'s
+  `credential` and `tool`; the `names` of a `run.refused` of every code, each phrase
+  once; and `run.started`'s `image`, `image_name`, each label's value, and `about`'s
+  `kind`, `title` and each subject's `title`. `run.started`'s `dir` is the value's
+  phrase, `(a value that contains …)`. `run.started.schema.json` admits
+  the two phrases as `image_name`, and `run.policy_applied.schema.json` as `image`. The
+  gateway accepts `run.started` labels as they are or as `server.ShownLabels` gives
+  them, and records and sends them as `server.ShownLabels` gives them. It phrases every
+  other member of a `run.started` that a session phrases too, `dir`, `command`, `args`,
+  `image` and `about` among them, so a session that sends a value as it is passes none
+  through; a `run.started` without such a value is sent byte for byte. The wall and the
+  agent get every value as it is.
+- A reload that changes a host's path rules, the policy's or those of the host's
+  credential, closes the connections open to that host, and the next connection is
+  held to the new rules. A request in flight on such a connection fails. A reload that
+  leaves a host's path rules equal closes none of its connections for that reason.
+  Before, a connection the gateway's proxy terminated kept the path rules it opened
+  under until it closed.
+- A reload that gives a host a credential closes the tunnels to that host that the
+  gateway's proxy passes TLS through, also a tunnel whose connection to the host the
+  proxy is still dialling during the reload, and the next connection to the host is
+  terminated. Before, such a tunnel stayed open, and the proxy masked nothing in the
+  answers on it, a credential's value included.
+- A reload that denies a host also closes a tunnel to it whose connection the gateway's
+  proxy is still dialling during the reload, once the dial returns, and records it as a
+  refused `run.egress` with the rule that denied it, as for a tunnel open before the
+  reload. Before, such a tunnel opened under the old policy and stayed open.
+- A request inside a connection the gateway's proxy terminates is decided under the
+  policy in force when the proxy reads the request. Its answer and its `run.egress`
+  show that policy's mode, and the event's `rule` is the entry of that policy that
+  matched the host. A request to a host that policy denies is refused with 403, also
+  before the reload closes the connection. Before, a request kept the mode and the
+  rule the connection opened under: after a reload from observe to enforce, a refused
+  request's answer read "denied by policy (mode observe)", its `run.egress` had
+  `mode: observe`, and an allowed request had an empty `rule`.
+- Behind a wall, and behind a separate gateway, a reload after which the gateway's
+  proxy no longer dials the gateway's machine or a private network address for a host
+  closes the connections open to that host: its tunnels, blind or terminated, and the
+  connections the proxy dialled for it, idle in the pool or in use. A host loses that
+  opening, for example, when the run's new policy no longer matches it by `allow` or
+  `allow_first`. A request in flight on such a connection fails, and the next
+  connection to the host is judged by the guard under the new policy. A reload that
+  leaves the host's opening as it was closes none of its connections for that reason.
+  Before, an open tunnel to the host kept reaching the address, and a new tunnel's
+  request reused a pooled connection to it with no new dial.
+
+### Wall
 
 #### Added
 
+- `wall.Request.Pull`: `wall.Docker` pulls the image before it makes any network, unless
+  the engine holds it by that digest, under a timeout, and refuses with `image_user_root`
+  an image whose user is root, a uid of 0 or a name its `/etc/passwd` maps to uid 0, or a
+  name it cannot map. A pull that fails leaves no container or network. `wall.Fetcher`
+  reports how long finding the image took, the pull included when there was one.
+- `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
+  `wall.Docker`'s CA names, which a run without one has unset when it denies them.
+- `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
+  that is not absolute or that overlaps `/qory`.
+
+#### Changed
+
+- The relay now starts from the machine's default image, never from the run's, when the
+  machine has a default image.
+
+#### Fixed
+
+- `wall.Docker`, the engine check, the nest and the relay printed a value as written in
+  their errors, and now print a phrase in place of one that contains `qak_` or `qrk_` in
+  any case: the name's phrase for a run id, an image, a container runtime, a user, a
+  group and a variable's name, the image's in an `image_user_root` refusal's detail and
+  names; the value's phrase for a path, a mount and its target, a limit, the helper, the
+  docker command, its output and its error, the engine's ids, the proxy and a relay's
+  forward. The engine command's error and the start of a command's output print the
+  value's phrase too, and so do the errors of making, writing and removing the
+  directory of a run's environment files.
+
+
+### Session
+
+#### Upgrading
+
+- Pass `--settings` at most once in a run without a wall, as behind one. A launch that
+  passes it more than once now does not start, with "runtime claude: Pass one --settings
+  file. This launch passes --settings more than once, and Claude Code reads only the last
+  one, so the run does not start." Before, the launch started and Claude Code read the
+  last file, without Forager's hooks.
+- Give the run a model key whose `endpoint` is the model endpoint, and do not set
+  `ANTHROPIC_BASE_URL` in the `env` of the `--settings` file: the session drops the
+  runtime's `denies` from that `env` in every run, and Claude Code's `denies` list
+  `ANTHROPIC_BASE_URL`. Before, a run without a start key kept a value of it there.
+- Give a walled run's `--mcp-config`, `--agents` and system-prompt files the mode its
+  wall's user can read, if that user is not the node's: a copy in the run directory has
+  its file's permission bits within 0644, less the umask, so the copy of a file of mode
+  0600 is 0600, and a wall whose user is another one cannot read it. Before, a copy was
+  0644 less the umask.
+
+#### Added
+
+- `runtimes.Attach.ModelVariables`, which the session sets in a run with a start key:
+  the variables of the runtime's `model.keys` and its model endpoint variable, from its
+  descriptor. The `claude-settings` installer drops each of these names, matched
+  exactly, from the `env` object of the `--settings` file when it copies the file into
+  the run's `settings.json`, walled or not: Claude Code applies that object over its
+  environment, so a value there could replace the start key's variable or endpoint.
+  Without a start key `ModelVariables` is empty; the installer still drops the endpoint
+  variable when the runtime's `denies` lists it, as Claude Code's does
+  (`DeniedVariables`).
+- A run without a wall gets its credentials' placeholders, set after the environment it
+  inherits, so a placeholder wins over an inherited value, which is then no
+  `placeholder_conflict`. The variables the machine's credentials are read from, the run
+  answer's `reserved`, are left out of what it inherits. When the gateway gives it an
+  authority, the session writes `ca-bundle.pem` into the run directory, the machine's
+  authorities and then the run's certificate, and points the names of
+  `session.Spec.CAEnv`, or `wall.DefaultCAEnv` when it is nil, at it.
+  `wall.BundleFiles` lists the files the machine's authorities are read from.
+- Claude Code's `approve-key.sh` runs behind a wall alone: without a wall, an
+  interactive Claude Code shows its approval prompt for the placeholder of
+  `ANTHROPIC_API_KEY`, once, and the approval stays in your configuration.
+- `session.Exec`, the helper's `exec`: `--unset NAME …`, then `--` and the program and
+  its arguments. It unsets the names and executes the program, found in `PATH`; a name
+  outside a variable's grammar exits 2, a program it does not find, or finds only
+  through `.` or an empty entry of `PATH`, 127 and one it cannot execute 126. A walled
+  run's launch starts through it when the run has names to unset, in front of the
+  preparation and the runtime's approval script, and `dev.qory.run.started` reports the
+  launch without it.
+- `session.Spec.ImagesAllow`, the machine's `images.allow`: the prefixes of the
+  references a policy may name its image by. A run in an image by reference starts
+  under the default's runtime, with no nested Docker, its workspace at `/workspace`
+  and the paths the session puts inside written there.
+- `session.Spec.Preparation`, a run's preparation: the program and then its arguments,
+  which the session runs inside the wall before the runtime, after the runtime's
+  preparation, with the runtime's environment and through the run's proxy, from
+  `preparation.sh` in the run directory. The runtime starts once it exits 0; one that
+  exits otherwise is the run's exit status. A spec with a preparation and no `Wall` is
+  refused.
 - `session.Spec.Written`, the places of this machine the caller records as writable by a
   walled run: the workspaces and the writable mounts of the walled runs it starts.
 - `runtimes.Attach.Readable`, which a runtime asks of a file of this machine, by its
   absolute path, before `Prepare` reads it, and which the session sets: it returns where
   the path resolves through every link, the file `Prepare` may read, and refuses a file
   a walled run could have written and a path with a `..` name.
+- `runtimes.Attach.ReadableDir`, which a runtime asks of a directory of this machine
+  before `Prepare` passes it to the program, and which the session sets: it refuses
+  what `Readable` refuses, and a directory that is or contains, as given or resolved,
+  by whole names and regardless of case, a place a walled run could have written.
+  `Readable` and `ReadableDir` refuse a path for such a place with a
+  `*runtimes.WrittenError`, whose `How` is `lies in`, `is reached through` or
+  `contains`, and whose `Place` is the place; its text is as before.
+- `session.RunsBinding(ctx, d, p)`, the walled runs still going on this machine whose
+  writable binds overlap p, an absolute path, by the registry's rule, each a
+  `session.WalledRun` of its run id and the absolute path of its entry. A bind overlaps
+  p when it is p, holds p or lies inside p, or when a name on the way to either is
+  looked up in the other, compared as written and as resolved through links, a `..` in
+  p after a link resolved from the link's target. An entry is asked after only when one
+  of its writable binds overlaps p, or one cannot be resolved now: the entry of such a
+  run that is over is removed, and an engine that cannot be asked is
+  `engine_unreachable`, naming the run and its entry, as is an entry whose lock is free
+  that cannot be read, with `EntryUnreadable` set on the refusal, in a sentence that
+  counts the run as still going, and a relative p is an error. The engine of an entry
+  is asked through d, the caller's `*wall.Docker`, by
+  `(*wall.Docker).RunContainersExist`, with the recorded command and selection;
+  `wall.RunContainersExist` is that method of a Docker with no field set, which a nil d
+  asks through. A run's check against the registry asks through its wall when it is a
+  `*wall.Docker`.
 
 #### Fixed
+
+- Without a wall, a launch that passed `--settings` more than once started, and Claude
+  Code read its last settings file, which the `claude-settings` installer had not
+  copied: the run had no Forager hooks, and that file's `env` was not filtered. A launch
+  that ended in a bare `--settings` got `--settings <path>` appended, so Claude Code
+  read `./--settings`. An unwalled launch that passes `--settings` more than once now
+  does not start either, with "runtime claude: Pass one --settings file. This launch
+  passes --settings more than once, and Claude Code reads only the last one, so the run
+  does not start." In an unwalled launch whose last argument is a bare `--settings`,
+  that flag is now given the path of the run's `settings.json`, as behind a wall.
+- The `claude-settings` installer copied the `env` object of the `--settings` file
+  with the names the session leaves out of the runtime's process environment: the
+  runtime's `denies`, such as `CLAUDE_CONFIG_DIR`, and, behind a wall, its model
+  `overrides`, such as `ANTHROPIC_MODEL`. Claude Code applies that object over its
+  environment, so a value there reached it. The session now passes these names from
+  the descriptor as `runtimes.Attach.DeniedVariables`, and the installer drops each of
+  them from the copy, matched regardless of case, walled or not and with or without a
+  start key.
+- The `claude-settings` installer copied the top-level `apiKeyHelper`,
+  `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides` of
+  the `--settings` file into the run's `settings.json`, so in a run with a start key
+  Claude Code could send another key or cloud credential than the start key: it ranks
+  `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`. In a run with a start key the copy
+  now leaves out these five members, walled or not. Without a start key it keeps them.
+- The session wrote `preparation.sh`, and Claude Code's runtime `settings.json`,
+  `approve-key.sh` and the copies of a walled launch's `--mcp-config`, `--agents` and
+  system-prompt files, in place in the run directory, so a link at one of those paths
+  made the write reach the file the link points at. Each is now written to a new file
+  beside it, with O_EXCL and its mode from creation, synced, renamed over the path, and
+  the directory synced: a link there is replaced, not followed, and a failed write
+  leaves no new file. `ca-bundle.pem` already went through a new file and a rename; the
+  sync, and its mode set from creation, are new for it. Each file's mode is 0644 less
+  the umask, as before; `ca-bundle.pem` was 0644 under any umask and now loses the
+  umask's bits too. A copy now has its file's permission bits within 0644, less the
+  umask, so a file only its owner reads gives a copy only its owner reads; before, a
+  copy was 0644 less the umask. These errors of the writes change:
+  - A directory at such a path fails the write with `rename <dir>/.<name>-<n>
+    <dir>/<name>: file exists` (EEXIST) where it failed with `open <dir>/<name>: is a
+    directory` (EISDIR).
+  - A missing run directory fails it with `open <dir>/.<name>-<n>: no such file or
+    directory`, which names the new file, where it named `<dir>/<name>`. For
+    `ca-bundle.pem` the error starts `open` where it started `createtemp`.
+  - The sync of the run directory after the rename can fail the write, with the file
+    already in place. Its ENOTSUP and EINVAL are ignored.
+
+- The run directory's lock and the lock of the registry of walled runs were opened
+  through a symbolic link at their path, and the open made the file the link points at
+  when it did not exist. Both are now opened with O_NOFOLLOW, and a link there fails
+  with the fix first: "Remove the symbolic link at /runs/<id>/lock. The session does
+  not open the run directory's lock through a link."
+
+- More of the session's messages and `run.started`'s members printed or sent a value as
+  written, and now print or send a phrase in place of one that contains `qak_` or `qrk_`
+  in any case. In `run.started`, `runtime`, `host`, `wall` and `container_runtime` are
+  the name's phrase; `dir`, `command`, each argument, `runtime_version` and each word
+  of `preparation` the value's; a label's key the name's; and `about` as
+  `server.ShownAbout` gives it. The paths in a mount's refusal,
+  `mount_contains_forager_files`, `mount_mode_conflict`, `mount_through_link` and the
+  checks of other walled runs, print the name's phrase in the names and the value's
+  phrase in the detail. The value's phrase is printed for the paths and errors of the
+  registry of walled runs, the written places, the variables' settings,
+  the images, `exec`, the descriptors, the socket, the runtimes, the catalog and the
+  Claude settings, and the reports of removing the wall, the socket and closing the
+  sinks. A `variable_reserved` refusal's detail and names print the name's phrase, its
+  names sorted.
+
+- `run.policy_applied`'s `harness_hosts` sent a host as written, and now sends the
+  value's phrase in place of one that contains `qak_` or `qrk_` in any case. These
+  errors print the value's phrase in place of one that quotes a path with a prefix,
+  and still wrap the error: the resend's, the run directory's files and lock, the
+  preparation script, the socket, the walk of the registry of walled runs, a wall's
+  binds and its wrap, `sink.File` and `sink.Delivered`, a hook's forward to the socket,
+  and `claude.Settings`' writes of the settings file and the approval script.
+  `run.started` sends `args` as
+  `[]` for a run with no arguments, where it sent `null`, which its schema refuses.
+  `run.started` sends `about` whenever the caller passed one that is not empty, as
+  `{}` when `server.ShownAbout` leaves out every member.
 
 - The `claude-settings` installer read the settings file the launch passes with
   `--settings` through links, wherever it lay, and copied it into the run directory,
@@ -57,10 +927,52 @@ release may change what an existing document does, and says so under Upgrading.
   not a regular file or is larger than 1 MiB. The path is made absolute once and that
   path is checked and opened. The open does not follow a link as the path's last part,
   and the file opened must be the one the path resolved to when it was checked. The run
-  then stops before the runtime starts, with "runtime claude: settings <path>: " and the
-  reason. Settings passed as a document are not checked, as before. The places also hold
-  the writable binds of the other walled runs in the registry, with or without a wall
-  for this run, and are worked out only when a settings file is to be read.
+  then stops before the runtime starts, with "runtime claude: ", the fix, and the
+  reason, such as "Pass the path of the file that <path> links to. This launch passes
+  --settings <path>, and that file is a link, so the run does not start." Settings
+  passed as a document are not checked, as before. The places also hold the writable
+  binds of the other walled runs in the registry, with or without a wall for this run,
+  and are worked out only when a settings file is to be read.
+- The `claude-settings` installer copied and checked only the first `--settings` of a
+  launch, and Claude Code reads only the last: a walled launch that passed two started
+  without Forager's hooks and with a file the session had not checked. A walled launch
+  that passes `--settings` more than once, in either form and anywhere in its
+  arguments, now does not start, with "runtime claude: Pass one --settings file. This
+  launch passes --settings more than once, and Claude Code reads only the last one, so
+  the run does not start." In a walled launch whose last argument is a bare
+  `--settings`, the session gives that flag the path of the run's settings, so the
+  launch passes one `--settings`. `runtimes.Attach.Walled` is set for a walled run.
+- The `claude-settings` installer passed a walled launch's `--mcp-config`, `--agents`,
+  `--plugin-dir`, `--plugin-dir-no-mcp` and `--add-dir` to Claude Code unchecked, so
+  Claude Code could load servers, agents, plugins or settings that an agent of a walled
+  run had written, and start the programs they name. In a walled launch, a path value
+  of these flags that starts with `~`, is relative or has a `..` part now does not
+  start, with "runtime claude: Replace ~/ref with an absolute path. This launch passes
+  --add-dir ~/ref, and inside the wall ~ is the home of the wall's user, which Forager
+  cannot check, so the run does not start." and the texts for the other two. An `--mcp-config` or
+  `--agents` file is checked as the `--settings` file is and passed as a copy in the run
+  directory, `mcp-config-<n>.json` or `agents-<n>.json`; a value Claude Code takes as
+  JSON passes unchanged. A text shows a value of `--mcp-config`, `--agents` or
+  `--settings` that contains `{` or `[`, or starts with white space or a format
+  character such as U+FEFF, as `(an --mcp-config value)`, `(an --agents value)` or `(a
+  --settings value)`, and the reason after "failed:" as `it is no file`, `it cannot be
+  read` or `it is no JSON object`, because such a value may be JSON with a token in it;
+  for `--settings` in an unwalled launch too. A `--plugin-dir` or `--plugin-dir-no-mcp` directory that lies
+  in, is reached through or contains a place a walled run can write, that holds a link
+  leading into one or a file with more than one name, or that has more than 10,000
+  entries, does not start; a `.zip` is checked as a file. An `--add-dir` directory is
+  checked the same way, with only `<dir>/.claude` and `<dir>/CLAUDE.md` read. Each text
+  starts with the fix, and the wall docs, § "No file read from a place an agent can
+  write", have each text. An unwalled launch starts as before.
+- Claude Code loads plugin directories from `CLAUDE_CODE_PLUGIN_DIRS` and adds
+  directories from `CLAUDE_RELAUNCH_SESSION_ADD_DIRS`, so a value set for a run went
+  past the checks of `--plugin-dir` and `--add-dir`. The Claude descriptor's `denies`
+  now lists both, and `contracts/forager/v1/runtimes.json` with it: a value of the
+  server's, the run's or the machine's no longer reaches the run, and a walled run has
+  them unset.
+- `CLAUDE_CODE_PLUGIN_SEED_DIR`, `CLAUDE_CODE_PLUGIN_CACHE_DIR` and
+  `CLAUDE_CODE_MANAGED_SETTINGS_PATH` lead Claude Code's plugin and settings loaders to
+  a directory or a file no check covers; the Claude descriptor now denies them too.
 - A walled run bound a mount or a workspace through a link that an agent of an earlier
   walled run, already ended, had left in a place it could write: the engine followed
   the link, so the run could bind any directory of this machine, writable. A place whose
@@ -69,14 +981,60 @@ release may change what an existing document does, and says so under Upgrading.
   as its names, as for a link inside a writable place of the run's.
 - `catalog.Lookup` read a descriptor in `dir` through a link, of any size. It now reads
   one only when its last part is no link, it is a regular file and it holds at most
-  1 MiB, and refuses one otherwise with "the descriptor <path>: " and the reason.
+  1 MiB, and refuses one otherwise with "Make the runtime descriptor <path> a readable regular file of at most 1 MiB, or remove it. It could not be read: " and the reason.
+- A `--settings` file whose content is `null` stopped the session with a panic. It now
+  does not start, with "runtime claude: Make the file /a/settings.json a JSON object.
+  The check of --settings /a/settings.json failed: it is null", as other settings that
+  are no JSON object.
+- A walled launch's `--add-dir` passed with a regular file, though Claude Code adds
+  only a directory. It now does not start, with "runtime claude: Pass an --add-dir path
+  to a directory. This launch passes --add-dir /home/notes.md, and that file is not a
+  directory, so the run does not start." A FIFO or other file that is not a regular
+  one, and a link to such a file or to a regular file, now get the same text. Before,
+  they were refused with "that file is not a regular file" or "that file is a link".
+
+#### Changed
+
+- A walled Claude Code launch checks and copies the files of `--system-prompt-file`,
+  `--append-system-prompt-file` and `--append-subagent-system-prompt-file`, as it does
+  `--settings`, and does not start with `--project-config-root`.
+- A walled run needs `session.Spec.Exec`, the command that makes the caller's binary
+  run `session.Exec` inside the enclosure, `{wall.HelperPath, "exec"}` for a binary that
+  runs it in its `exec` mode; a `Wall` without one is refused before the run starts.
+- Behind a wall, the runtime's declared and reserved variables that nothing sets are
+  unset inside, where they went in empty, which a program may read as set; and so is
+  every name the runtime denies or the node's `Variables.Deny` removes, by its exact
+  name, that nothing sets, so an image's `ENV` cannot set one, with one exception: with
+  nested Docker, `DOCKER_CONFIG` is never unset, and a non-empty value, the image's
+  included, takes the place of the wall's docker configuration, as the contract's
+  §The wall says. A name Forager, the wall or the preparation sets is never unset.
+- A bind in the registry of walled runs whose `writable` field is missing or null is
+  taken as writable, by a run's check against other runs, by the places a walled run
+  could have written and by `session.RunsBinding`.
+- The `engine_unreachable` sentence of a walled run now reads "The check for a
+  container of the walled run <id> failed, so this run does not start: <the error>",
+  and, for `session.RunsBinding`, "… so the run counts as still going: …".
 
 ### e2e and CI
+
+#### Added
+
+- The conformance suite checks that a run's preparation runs inside, before the runtime,
+  through the proxy.
+- The conformance suite checks a run in an image by reference: refused outside
+  `images.allow` and for a root user, leaving no container or network, its relay from
+  the machine's default, its workspace at `/workspace`, and a name its image's `ENV`
+  sets that the runtime denies unset. The Docker adapter's test pushes the images to a
+  registry it starts on the machine.
 
 #### Changed
 
 - The conformance suite passes the launch's settings file from outside the workspace,
   since the session refuses a settings file in it.
+- CI's Wall conformance job runs the e2e test
+  `TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy` with `QORY_WALL_REQUIRE`
+  set, so that the test fails on a machine with none of the CA bundles. Before, it ran
+  only in the e2e part job, where it skipped on such a machine and the job passed.
 
 ## [0.7.0] - 2026-10-12
 

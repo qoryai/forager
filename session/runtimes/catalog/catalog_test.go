@@ -3,10 +3,12 @@ package catalog_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
 
+	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/session/runtimes/catalog"
 	"github.com/qoryai/forager/session/runtimes/runtimetest"
 )
@@ -84,10 +86,10 @@ func TestLookupReadsOnlyAPlainDescriptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{
-		"codex": "the descriptor " + filepath.Join(dir, "codex.yaml") + ": it is a link",
-		"amp":   "the descriptor " + filepath.Join(dir, "amp.yaml") + ": it is not a regular file",
-		"pi":    "the descriptor " + filepath.Join(dir, "pi.yaml") + ": it is not a regular file",
-		"big":   "the descriptor " + filepath.Join(dir, "big.yaml") + ": it is larger than 1048576 bytes",
+		"codex": "Make the runtime descriptor " + filepath.Join(dir, "codex.yaml") + " a readable regular file of at most 1 MiB, or remove it. It could not be read: it is a link",
+		"amp":   "Make the runtime descriptor " + filepath.Join(dir, "amp.yaml") + " a readable regular file of at most 1 MiB, or remove it. It could not be read: it is not a regular file",
+		"pi":    "Make the runtime descriptor " + filepath.Join(dir, "pi.yaml") + " a readable regular file of at most 1 MiB, or remove it. It could not be read: it is not a regular file",
+		"big":   "Make the runtime descriptor " + filepath.Join(dir, "big.yaml") + " a readable regular file of at most 1 MiB, or remove it. It could not be read: it is larger than 1048576 bytes",
 	} {
 		if _, err := catalog.Lookup(name, dir); err == nil || err.Error() != want {
 			t.Errorf("%s: %v, want %q", name, err, want)
@@ -95,5 +97,42 @@ func TestLookupReadsOnlyAPlainDescriptor(t *testing.T) {
 	}
 	if rt, err := catalog.Lookup("codex", elsewhere); err != nil || rt.Name() != "codex" {
 		t.Errorf("the descriptor the link leads to: %v", err)
+	}
+}
+
+// TestClaudeSaysWhereItsModelGoes pins what qory reads of Claude Code through Lookup:
+// the runtime implements runtimes.Model, and its model section is the contract
+// descriptor's.
+func TestClaudeSaysWhereItsModelGoes(t *testing.T) {
+	rt, err := catalog.Lookup("claude", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := rt.(runtimes.Model)
+	if !ok {
+		t.Fatal("Claude Code does not implement runtimes.Model")
+	}
+	efforts := []string{"low", "medium", "high", "xhigh", "max"}
+	want := runtimes.ModelPlaces{
+		Formats: []string{"anthropic-messages"},
+		Model:   runtimes.Place{Flag: "--model"},
+		Effort: &runtimes.Effort{
+			Run:   runtimes.ValuedPlace{Place: runtimes.Place{Flag: "--effort"}, Values: efforts},
+			Agent: &runtimes.AgentPlace{Frontmatter: "effort", Values: efforts},
+		},
+		Endpoint: runtimes.Endpoint{Variable: "ANTHROPIC_BASE_URL"},
+		Keys: []runtimes.Key{
+			{Format: "anthropic-messages", Auth: runtimes.Auth{Scheme: "header", Header: "x-api-key"}, Variable: "ANTHROPIC_API_KEY"},
+			{Format: "anthropic-messages", Auth: runtimes.Auth{Scheme: "bearer"}, Variable: "ANTHROPIC_AUTH_TOKEN"},
+			{Format: "anthropic-messages", Auth: runtimes.Auth{Scheme: "bearer", OAuth: true}, Variable: "CLAUDE_CODE_OAUTH_TOKEN"},
+		},
+		Overrides: []string{
+			"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
+			"CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_AUTO_MODE_MODEL", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_EXTRA_BODY",
+		},
+	}
+	if got, ok := m.Model(); !ok || !reflect.DeepEqual(got, want) {
+		t.Errorf("model %v\n%+v\nwant\n%+v", ok, got, want)
 	}
 }

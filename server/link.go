@@ -139,22 +139,44 @@ type LinkNarrowingEgress struct {
 }
 
 // LinkImages are the session's images: its default, the name of one of Definitions or
-// a reference, and the images the machine defines, which a policy selects by name.
-// A reference may carry a registry's credentials in its user information: neither the
-// session's client nor the gateway logs or reports one.
+// a reference, the images the machine defines, which a policy selects by name, and the
+// prefixes of the references pinned by digest a policy may name, Allow. A reference
+// may carry a registry's credentials in its user information: neither the session's
+// client nor the gateway logs or reports one.
 type LinkImages struct {
 	Default     string      `json:"default,omitempty"`
 	Definitions []LinkImage `json:"definitions,omitempty"`
+	Allow       []string    `json:"allow,omitempty"`
 }
 
 // LinkImage is one image: its name, empty for the default given as a reference, its
 // reference, the container runtime the wall starts it under, empty for the engine's
-// default, and whether it gives the agent a Docker daemon of its own.
+// default, and whether it gives the agent a nested Docker daemon. In an answer,
+// Reference says the policy named the image by its reference pinned by digest.
 type LinkImage struct {
-	Name    string `json:"name,omitempty"`
-	Ref     string `json:"ref"`
-	Runtime string `json:"runtime,omitempty"`
-	Docker  bool   `json:"docker,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Ref       string `json:"ref"`
+	Runtime   string `json:"runtime,omitempty"`
+	Docker    bool   `json:"docker,omitempty"`
+	Reference bool   `json:"reference,omitempty"`
+}
+
+// LinkCredentialHosts is one credential the gateway holds for a run, as the run answer's
+// credential_hosts has it: its name, its hosts as the proxy matches them, which are the
+// hosts applied.credentials lists for it, and the variables the session sets to a
+// placeholder for it. Auth is how the proxy sets its value, for a credential from the
+// server and for a model key of the machine's; nil for every other. Format and Endpoint
+// are an API credential's, a model key's, whose Hosts are the endpoint's host alone:
+// the session gives the key to the variable the run's runtime lists for Format and
+// Auth, and sets the runtime's endpoint variable to Endpoint. Names and hosts alone,
+// never a secret.
+type LinkCredentialHosts struct {
+	Name         string   `json:"name"`
+	Hosts        []string `json:"hosts"`
+	Placeholders []string `json:"placeholders"`
+	Auth         *Auth    `json:"auth,omitempty"`
+	Format       string   `json:"format,omitempty"`
+	Endpoint     string   `json:"endpoint,omitempty"`
 }
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,
@@ -175,8 +197,8 @@ type LinkRunAnswer struct {
 	// connection to the gateway's proxy after the relay's preamble. A separate gateway
 	// gives none: the run key opens its proxy connections.
 	ProxySecret string `json:"proxy_secret,omitempty"`
-	// CertificateAuthority is the run's certificate authority, PEM, when the run has a
-	// wall and the gateway reads inside HTTPS for it.
+	// CertificateAuthority is the run's certificate authority, PEM, when the gateway
+	// reads inside HTTPS for the run, with or without a wall.
 	CertificateAuthority string `json:"certificate_authority,omitempty"`
 	// Placeholders are the variables the agent sees in place of a credential or a
 	// tool's secret.
@@ -185,13 +207,24 @@ type LinkRunAnswer struct {
 	// a walled run that passes one is refused with variable_reserved, and an unwalled
 	// run has its value left out.
 	Reserved []string `json:"reserved,omitempty"`
+	// CredentialHosts are the hosts and placeholders of each credential the gateway
+	// holds for the run, so the session can tell which hosts the run's credentials
+	// cover. Empty when the gateway holds none, or sends no credential_hosts.
+	CredentialHosts []LinkCredentialHosts `json:"credential_hosts,omitempty"`
+	// ModelCredential is the name of the model key the runtime starts with, an entry of
+	// CredentialHosts with Format; empty when the gateway holds no model key for the run.
+	ModelCredential string `json:"model_credential,omitempty"`
 	// Image is the image the run gets, when it has a wall.
 	Image *LinkImage `json:"image,omitempty"`
+	// RelayImage is the reference of the machine's default image, which the wall starts
+	// the run's relay from whatever image the run gets, when the run has a wall and the
+	// machine a default.
+	RelayImage string `json:"relay_image,omitempty"`
 	// Labels are the run's labels as the gateway holds them, which run.started reports.
 	Labels map[string]string `json:"labels,omitempty"`
 	// Applied are the members of dev.qory.run.policy_applied the gateway decides for
-	// the policy in force, a JSON object: every member but harness_hosts and variables,
-	// which the session adds. The gateway refuses a policy_applied whose other members
+	// the policy in force, a JSON object: every member but harness_hosts, variables and
+	// credential_variables, which the session adds. The gateway refuses a policy_applied whose other members
 	// are not these. Nil when the answer has none.
 	Applied json.RawMessage `json:"applied,omitzero"`
 }
@@ -211,7 +244,57 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	if s.ProxySecret != "" {
 		s.ProxySecret = redactedSecret
 	}
+	// A name or a value that contains qak_ or qrk_ in any case prints its phrase.
+	s.Labels = ShownLabels(a.Labels)
+	if a.Variables != nil {
+		s.Variables = make(map[string]Variable, len(a.Variables))
+		for _, name := range slices.Sorted(maps.Keys(a.Variables)) {
+			shown := accesskey.ShownName(name, false)
+			if _, ok := s.Variables[shown]; !ok {
+				s.Variables[shown] = Variable{Value: accesskey.ShownValue(a.Variables[name].Value, false)}
+			}
+		}
+	}
+	s.Policy, s.Applied = shownDocument(a.Policy), shownDocument(a.Applied)
+	s.Placeholders, s.Reserved = accesskey.ShownNames(a.Placeholders), accesskey.ShownNames(a.Reserved)
+	s.ModelCredential = accesskey.ShownName(a.ModelCredential, false)
+	if a.CredentialHosts != nil {
+		s.CredentialHosts = make([]LinkCredentialHosts, len(a.CredentialHosts))
+		for i, c := range a.CredentialHosts {
+			hosts := make([]string, len(c.Hosts))
+			for j, h := range c.Hosts {
+				hosts[j] = accesskey.ShownValue(h, false)
+			}
+			placeholders := accesskey.ShownNames(c.Placeholders)
+			if placeholders == nil && c.Placeholders != nil {
+				placeholders = []string{}
+			}
+			s.CredentialHosts[i] = LinkCredentialHosts{Name: accesskey.ShownName(c.Name, false), Hosts: hosts, Placeholders: placeholders,
+				Format: accesskey.ShownValue(c.Format, false), Endpoint: accesskey.ShownValue(c.Endpoint, false)}
+			if c.Auth != nil {
+				s.CredentialHosts[i].Auth = &Auth{Scheme: c.Auth.Scheme, Header: accesskey.ShownValue(c.Auth.Header, false), Username: accesskey.ShownValue(c.Auth.Username, false), OAuth: c.Auth.OAuth}
+			}
+		}
+	}
+	if a.Image != nil {
+		img := *a.Image
+		img.Name, img.Ref, img.Runtime = accesskey.ShownName(img.Name, false), accesskey.ShownName(img.Ref, false), accesskey.ShownName(img.Runtime, false)
+		s.Image = &img
+	}
+	s.RelayImage = accesskey.ShownName(a.RelayImage, false)
 	return s
+}
+
+// shownDocument is a document as it prints: the value's phrase, as a JSON string, in
+// place of all of it when a string or member name in it, as it decodes, contains qak_
+// or qrk_ in any case.
+func shownDocument(d json.RawMessage) json.RawMessage {
+	secrets := jsonSecrets(d)
+	if secrets == "" {
+		return d
+	}
+	b, _ := json.Marshal(accesskey.ShownValue(secrets, false))
+	return b
 }
 
 // Format prints a as fmt prints a struct, under every verb and flag, with its
@@ -237,10 +320,10 @@ func (a LinkRunAnswer) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("run_id", a.RunID),
 		slog.String("digest", a.Digest),
-		slog.Any("variables", names),
+		slog.Any("variables", accesskey.ShownNames(names)),
 		slog.String("proxy_secret", a.shown().ProxySecret),
-		slog.Any("placeholders", a.Placeholders),
-		slog.Any("reserved", a.Reserved),
+		slog.Any("placeholders", accesskey.ShownNames(a.Placeholders)),
+		slog.Any("reserved", accesskey.ShownNames(a.Reserved)),
 	)
 }
 
@@ -342,7 +425,7 @@ func NewLocalLink(l link.Local, userAgent string, digests func(Digests)) (*Link,
 	if l.Socket == "" && !l.IsInMemory() {
 		return nil, errors.New("the gateway's local link has no socket")
 	}
-	name := "the gateway's local link " + l.Socket
+	name := "the gateway's local link " + accesskey.ShownValue(l.Socket, false)
 	if l.IsInMemory() {
 		name = "the gateway's local link in this process"
 	}
@@ -369,7 +452,7 @@ func NewLocalLink(l link.Local, userAgent string, digests func(Digests)) (*Link,
 func (k *Link) dialLocal(ctx context.Context, l link.Local) (net.Conn, error) {
 	c, err := l.DialContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", k.name, err)
+		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
 	}
 	if l.IsInMemory() {
 		return c, nil
@@ -454,7 +537,7 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, most int
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, rd)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	if set != nil {
 		set(req.Header)
@@ -472,9 +555,9 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, most int
 		// no place a user knows: the error alone, the caller names the request.
 		var ue *url.Error
 		if errors.As(err, &ue) {
-			return nil, ue.Err
+			return nil, accesskey.ShownError(ue.Err)
 		}
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	defer resp.Body.Close()
 	// Behind a separate gateway the whole answer is read, up to the largest document,
@@ -485,7 +568,7 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, most int
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	one := func(name string) string {
 		if v := resp.Header.Values(name); len(v) == 1 {
@@ -497,7 +580,7 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, most int
 	if k.remote != nil {
 		if len(b) > limit {
 			// Too long to read whole, so its signature is never checked: no answer.
-			return nil, fmt.Errorf("the gateway at %s answered with a body longer than %d bytes", k.remote.url, limit)
+			return nil, fmt.Errorf("the gateway at %s answered with a body longer than %d bytes", accesskey.ShownValue(k.remote.url, false), limit)
 		}
 		if !k.remote.signed(used.get(), req, body, a, resp.Header.Values(HeaderSignature)) {
 			return nil, &GatewayKeyError{URL: k.remote.url}
@@ -595,16 +678,16 @@ func (a *linkAnswer) refusal(what string) error {
 	doc.Message = cleanMessage(doc.Message)
 	if a.status == http.StatusGone {
 		e := a.runEnd()
-		return &endError{Refusal: &accesskey.Refusal{Code: e.Code, Status: a.status, Detail: what, From: e.From, Text: doc.Message}, end: e}
+		return &endError{Refusal: &accesskey.Refusal{Code: e.Code, Status: a.status, Detail: what, From: e.From, Text: accesskey.ShownValue(doc.Message, false)}, end: e}
 	}
 	if a.status >= http.StatusInternalServerError && (doc.Error == "" || doc.Error == CodeInternal) {
-		return &StatusError{What: what, Status: a.status, Message: doc.Message}
+		return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false)}
 	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
-		r.Detail, r.From, r.Text = what, a.from(), doc.Message
+		r.Detail, r.From, r.Text = what, a.from(), accesskey.ShownValue(doc.Message, false)
 		return r
 	}
-	return &StatusError{What: what, Status: a.status, Message: doc.Message}
+	return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false)}
 }
 
 // MaxMessage is the most characters of a refusal's message the client keeps.
@@ -686,11 +769,11 @@ func (k *Link) fetch(ctx context.Context, what, method, u string, body []byte, s
 		// A gateway that failed the run key's pin is told in its own words.
 		return ke
 	} else if err != nil {
-		return fmt.Errorf("%s %s: %w", what, k.at(u), err)
+		return fmt.Errorf("%s %s: %w", what, accesskey.ShownValue(k.at(u), false), accesskey.ShownError(err))
 	}
 	k.hand(a)
 	if a.status != http.StatusOK {
-		return a.refusal(what + " " + k.at(u))
+		return a.refusal(what + " " + accesskey.ShownValue(k.at(u), false))
 	}
 	if err := readLinkDocument(schemaName, a.body, out); err != nil {
 		return &DocumentError{what, k.at(u), err}
@@ -720,7 +803,7 @@ func readLinkDocument(schemaName string, body []byte, out any) error {
 	if err := jsonv2.Unmarshal(body, &v); err != nil {
 		var syn *jsontext.SyntacticError
 		if errors.As(err, &syn) && syn.JSONPointer != "" {
-			return fmt.Errorf("it is not one JSON value in UTF-8 with each member name once, at %s", syn.JSONPointer)
+			return fmt.Errorf("it is not one JSON value in UTF-8 with each member name once, at %s", accesskey.ShownValue(string(syn.JSONPointer), false))
 		}
 		return errors.New("it is not one JSON value in UTF-8 with each member name once")
 	}
@@ -751,7 +834,7 @@ func readLinkDocument(schemaName string, body []byte, out any) error {
 func checkRunMembers(vars map[string]Variable, placeholders, reserved []string, image *LinkImage) error {
 	for name, v := range vars {
 		if len(v.Value) > MaxVariableValue {
-			return fmt.Errorf("the variable %s holds more than %d bytes", name, MaxVariableValue)
+			return fmt.Errorf("the variable %s holds more than %d bytes", accesskey.ShownName(name, false), MaxVariableValue)
 		}
 	}
 	for i, name := range placeholders {
@@ -813,7 +896,7 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // or about, which are the starter's registration's.
 func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
-		return nil, fmt.Errorf("%s: %w", k.name, err)
+		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
 	}
 	if !runIDShape.MatchString(req.RunID) {
 		return nil, fmt.Errorf("the run request: the run id is not a UUID in the canonical lower-case form")
@@ -855,7 +938,7 @@ func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (
 // the run, [Ended]; a coded refusal is an [*accesskey.Refusal].
 func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAnswer, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
-		return nil, fmt.Errorf("%s: %w", k.name, err)
+		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
 	}
 	if !runIDShape.MatchString(runID) {
 		return nil, errors.New("the reload: the run id is not a UUID in the canonical lower-case form")

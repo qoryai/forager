@@ -474,6 +474,33 @@ func TestBindsThatMayShareRunSideBySide(t *testing.T) {
 	}
 }
 
+// TestABindThatRecordsNoModeIsWritable pins a bind of a walled run still going whose
+// entry records no writable field for it, or null: it is taken as writable, so a
+// read-only mount inside it is refused, and the same mount starts once the bind is
+// recorded read-only.
+func TestABindThatRecordsNoModeIsWritable(t *testing.T) {
+	root := t.TempDir()
+	sub := mkdirs(t, filepath.Join(root, "sub"))
+	file := bound(t, bind{root, resolved(t, root), ""})
+	answer(t, true, nil)
+	for _, change := range []func(b map[string]any){
+		func(b map[string]any) { delete(b, "writable") },
+		func(b map[string]any) { b["writable"] = nil },
+	} {
+		rebind(t, file, 0, change)
+		sp := walledSpec(t, &openWall{})
+		sp.Mounts, sp.Dir = []wall.Mount{{Path: sub, ReadOnly: true}}, t.TempDir()
+		r := refusalOf(t, "mount_shared_with_run", runErr(sp))
+		if want := []string{sub, boundID, root}; !slices.Equal(r.Names, want) {
+			t.Errorf("names %q, want %q", r.Names, want)
+		}
+		readOnly(t, file, 0)
+		if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+			t.Errorf("inside a read-only bind: %+v, %v", res, err)
+		}
+	}
+}
+
 // TestAStaleEntryIsRemoved pins that an entry no session holds, that of a run whose
 // session died and whose engine holds no container of it, decides nothing and is
 // removed.

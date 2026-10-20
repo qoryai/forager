@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/server"
@@ -53,23 +54,23 @@ func checkService(cfg *Config) (*tls.Certificate, error) {
 	}
 	_, port, err := net.SplitHostPort(cfg.Listen)
 	if err != nil {
-		return nil, fmt.Errorf("the gateway's address %q is not host:port", cfg.Listen)
+		return nil, fmt.Errorf("the gateway's address %s is not host:port", accesskey.ShownValue(cfg.Listen, true))
 	}
 	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
-		return nil, fmt.Errorf("the gateway's address %q is not host:port", cfg.Listen)
+		return nil, fmt.Errorf("the gateway's address %s is not host:port", accesskey.ShownValue(cfg.Listen, true))
 	}
 	if cfg.TLS == nil {
-		return nil, fmt.Errorf("the gateway's address %s needs TLS, a certificate and its key: every connection of the link there is bound to its TLS", cfg.Listen)
+		return nil, fmt.Errorf("the gateway's address %s needs TLS, a certificate and its key: every connection of the link there is bound to its TLS", accesskey.ShownValue(cfg.Listen, false))
 	}
 	if cfg.Server == nil {
-		return nil, fmt.Errorf("the gateway's address %s needs a server and a gateway's access key: the gateway attaches each run there", cfg.Listen)
+		return nil, fmt.Errorf("the gateway's address %s needs a server and a gateway's access key: the gateway attaches each run there", accesskey.ShownValue(cfg.Listen, false))
 	}
 	if cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "" {
 		return nil, errors.New("the gateway's TLS needs a certificate file and a key file")
 	}
 	cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	if err != nil {
-		return nil, fmt.Errorf("the gateway's certificate %s and key %s: %w", cfg.TLS.CertFile, cfg.TLS.KeyFile, err)
+		return nil, fmt.Errorf("the gateway's certificate %s and key %s: %w", accesskey.ShownValue(cfg.TLS.CertFile, false), accesskey.ShownValue(cfg.TLS.KeyFile, false), accesskey.ShownError(err))
 	}
 	return &cert, nil
 }
@@ -141,14 +142,14 @@ type service struct {
 func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 	ln, err := net.Listen("tcp", g.cfg.Listen)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	s := &service{g: g, ln: ln, side: &side{remote: true, scheme: "https"}, edgeQ: newConnQueue(ln.Addr()), pending: map[net.Conn]struct{}{},
 		conns: newConnLimit(maxConns, maxSourceConns, maxBlockConns)}
 	s.tls = &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{*cert}, NextProtos: []string{"http/1.1"}}
 	// OPTIONS * goes to the handler too, which refuses it for its run key: no request
 	// without one keeps a connection open.
-	s.edge = &http.Server{Handler: g.edgeHandler(s.side), ReadHeaderTimeout: link.PreambleWait, ReadTimeout: edgeReadWait, MaxHeaderBytes: edgeMaxHeader,
+	s.edge = &http.Server{Handler: routine.Handler(g.report, g.edgeHandler(s.side)), ReadHeaderTimeout: link.PreambleWait, ReadTimeout: edgeReadWait, MaxHeaderBytes: edgeMaxHeader,
 		IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog(),
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if b, ok := c.(*boundConn); ok {
@@ -157,9 +158,9 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 			return ctx
 		}}
 	s.relay = g.newRelay(ln.Addr())
-	go s.edge.Serve(s.edgeQ)
+	routine.Go(g.report, func() { s.edge.Serve(s.edgeQ) })
 	s.wg.Add(1)
-	go s.accept()
+	routine.Go(g.report, s.accept)
 	return s, nil
 }
 
@@ -173,35 +174,33 @@ func (s *service) addr() string { return s.ln.Addr().String() }
 // once.
 func (s *service) accept() {
 	defer s.wg.Done()
-	var backoff time.Duration
-	for {
-		c, err := s.ln.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
-			time.Sleep(backoff)
-			continue
-		}
-		backoff = 0
-		h := s.conns.hold(c, sourceOf(c.RemoteAddr()))
-		if h == nil {
-			c.Close()
-			continue
-		}
-		c = h
-		s.mu.Lock()
-		if s.closed {
-			s.mu.Unlock()
-			c.Close()
-			return
-		}
-		s.pending[c] = struct{}{}
-		s.wg.Add(1)
-		s.mu.Unlock()
-		go s.route(c)
+	routine.Accept(s.g.report, s.take)
+}
+
+// take accepts one connection into *c and routes it in its own goroutine, for
+// [routine.Accept].
+func (s *service) take(c *net.Conn) (more, failed bool) {
+	raw, err := s.ln.Accept()
+	if err != nil {
+		return !errors.Is(err, net.ErrClosed), true
 	}
+	*c = raw
+	h := s.conns.hold(raw, sourceOf(raw.RemoteAddr()))
+	if h == nil {
+		raw.Close()
+		return true, false
+	}
+	*c = h
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		h.Close()
+		return false, false
+	}
+	s.pending[h] = struct{}{}
+	s.wg.Add(1)
+	routine.Go(s.g.report, func() { s.route(h) })
+	return true, false
 }
 
 // route reads c's first bytes within [link.PreambleWait], the TLS handshake among
@@ -625,6 +624,7 @@ func (s *service) close(ctx context.Context) error {
 	if errors.Is(err, net.ErrClosed) {
 		err = nil
 	}
+	err = accesskey.ShownError(err)
 	s.wg.Wait()
 	if serr := s.edge.Shutdown(ctx); serr != nil {
 		s.edge.Close()

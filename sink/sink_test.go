@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -668,4 +671,95 @@ func TestALinkSinkResendsTheSessionsLinesWithoutTheirSequence(t *testing.T) {
 	if err != nil || stopped || !accepted[ev.Sequence] || len(accepted) != 1 {
 		t.Errorf("delivered %v, stopped %v, %v", accepted, stopped, err)
 	}
+}
+
+// TestTheFileSinkPrintsAPhraseForASecretInItsDirectory pins the errors of the file sink
+// and of Delivered for a run directory whose path contains qak_ or qrk_: each is the
+// phrase, and each still wraps the error of the file system.
+func TestTheFileSinkPrintsAPhraseForASecretInItsDirectory(t *testing.T) {
+	for _, secret := range []string{"qak_FAKE", "QRK_FAKE"} {
+		base := filepath.Join(t.TempDir(), secret)
+		if err := os.MkdirAll(base, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		check := func(what string, err error, target error) {
+			t.Helper()
+			if err == nil {
+				t.Fatalf("%s %s: no error", secret, what)
+			}
+			if accesskey.ContainsSecret(err.Error()) || !errors.Is(err, target) {
+				t.Errorf("%s %s: %q, want a phrase that wraps %v", secret, what, err, target)
+			}
+		}
+		file := filepath.Join(base, "file")
+		if err := os.WriteFile(file, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := sink.NewFile(filepath.Join(file, "run"))
+		check("a directory under a file", err, syscall.ENOTDIR)
+		taken := filepath.Join(base, "taken")
+		if err := os.MkdirAll(taken, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(taken, sink.EventsFile), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err = sink.NewFile(taken)
+		check("an events file that exists", err, fs.ErrExist)
+		outputTaken := filepath.Join(base, "output")
+		if err := os.MkdirAll(outputTaken, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(outputTaken, sink.OutputFile), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err = sink.NewFile(outputTaken)
+		check("an output file that exists", err, fs.ErrExist)
+
+		f, err := sink.NewFile(filepath.Join(base, "run"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		e := event.NewEmitter(event.NewRunID(), nil)
+		check("a write after close", f.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"})), os.ErrClosed)
+		check("a second close", f.Close(context.Background()), os.ErrClosed)
+
+		delivered := filepath.Join(base, "delivered")
+		if err := os.MkdirAll(filepath.Join(delivered, sink.DeliveredFile), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = sink.Delivered(delivered)
+		check("a delivered.log that is a directory", err, syscall.EISDIR)
+	}
+}
+
+// TestAPanicInTheWorkerEndsOneBatchAlone pins that a panic while a batch is delivered
+// is reported with the stack and without the panic's value, and that the worker
+// delivers the next batch.
+func TestAPanicInTheWorkerEndsOneBatchAlone(t *testing.T) {
+	g := &linkGateway{answer: func(int) (int, string) { return http.StatusAccepted, "" }}
+	var calls atomic.Int32
+	reports := make(chan string, 4)
+	w := linkSink(t, g, sink.Config{Report: func(line string) { reports <- line }, OnDigests: func(server.Digests) {
+		if calls.Add(1) == 1 {
+			panic("Authorization: Bearer fake-key-0001")
+		}
+	}})
+	defer w.Close(context.Background())
+	e := event.NewEmitter(event.NewRunID(), nil)
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+	select {
+	case got := <-reports:
+		first, stack, _ := strings.Cut(got, "\n")
+		if first != "the run's event sender recovered from a panic and sends the next batch; send the stack below to Forager's maintainers" || stack == "" || strings.Contains(got, "fake-key-0001") {
+			t.Errorf("the report of the panic: %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the panic was not reported")
+	}
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 60, "interval_seconds": 30}))
+	waitFor(t, func() bool { return g.hits() == 2 })
 }

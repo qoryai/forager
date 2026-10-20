@@ -32,6 +32,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
@@ -88,30 +90,30 @@ var (
 // Check refuses a definition that cannot be one, before any run selects it.
 func (d Definition) Check() error {
 	if !nameShape.MatchString(d.Name) {
-		return fmt.Errorf("the tool name %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", d.Name)
+		return fmt.Errorf("the tool name %s is not 1 to 64 of a-z, 0-9, underscore, dot and dash", accesskey.ShownName(d.Name, true))
 	}
 	if len(d.Command) == 0 || d.Command[0] == "" {
-		return fmt.Errorf("tool %s: the command is empty", d.Name)
+		return fmt.Errorf("tool %s: the command is empty", accesskey.ShownName(d.Name, false))
 	}
 	if strings.Contains(d.Command[0], "${argument}") {
-		return fmt.Errorf("tool %s: the argument goes in the command's arguments, not in the program's name", d.Name)
+		return fmt.Errorf("tool %s: the argument goes in the command's arguments, not in the program's name", accesskey.ShownName(d.Name, false))
 	}
 	if d.Argument != "" {
-		if _, err := regexp.Compile(d.Argument); err != nil {
-			return fmt.Errorf("tool %s: argument: %w", d.Name, err)
+		if _, err := wholeMatch(d.Argument); err != nil {
+			return fmt.Errorf("tool %s: argument: %w", accesskey.ShownName(d.Name, false), accesskey.ShownError(err))
 		}
 	}
 	if len(d.Serves) == 0 {
-		return fmt.Errorf("tool %s serves no host; a tool is reached by the hosts it serves", d.Name)
+		return fmt.Errorf("tool %s serves no host; a tool is reached by the hosts it serves", accesskey.ShownName(d.Name, false))
 	}
 	for _, h := range d.Serves {
 		if !hostShape.MatchString(h) {
-			return fmt.Errorf("tool %s: %q is not a lower-case host name or a *. suffix", d.Name, h)
+			return fmt.Errorf("tool %s: %s is not a lower-case host name or a *. suffix", accesskey.ShownName(d.Name, false), accesskey.ShownValue(h, true))
 		}
 	}
 	for _, p := range d.Placeholders {
 		if !envShape.MatchString(p) {
-			return fmt.Errorf("tool %s: the placeholder %q is not a variable's name", d.Name, p)
+			return fmt.Errorf("tool %s: the placeholder %s is not a variable's name", accesskey.ShownName(d.Name, false), accesskey.ShownName(p, true))
 		}
 	}
 	return nil
@@ -124,13 +126,28 @@ func (d Definition) check(argument string) error {
 	}
 	switch {
 	case d.Argument == "" && argument != "":
-		return fmt.Errorf("tool %s takes no argument and the policy gives %q", d.Name, argument)
+		return fmt.Errorf("tool %s takes no argument and the policy gives %s", accesskey.ShownName(d.Name, false), accesskey.ShownName(argument, true))
 	case d.Argument != "":
-		if re := regexp.MustCompile(`^(?:` + d.Argument + `)$`); !re.MatchString(argument) {
-			return fmt.Errorf("tool %s: the argument %q is not one the machine provides for", d.Name, argument)
+		re, err := wholeMatch(d.Argument)
+		if err != nil {
+			return fmt.Errorf("tool %s: argument: %w", accesskey.ShownName(d.Name, false), accesskey.ShownError(err))
+		}
+		if !re.MatchString(argument) {
+			return fmt.Errorf("tool %s: the argument %s is not one the machine provides for", accesskey.ShownName(d.Name, false), accesskey.ShownName(argument, true))
 		}
 	}
 	return nil
+}
+
+// wholeMatch compiles pattern as a run's argument is matched: anchored, so an argument
+// matches only when the pattern matches all of it. The error of a pattern that does not
+// compile alone is that one's; one that compiles alone and not anchored, such as a\Q,
+// whose quote takes the anchor's closing in, has the anchored form's.
+func wholeMatch(pattern string) (*regexp.Regexp, error) {
+	if _, err := regexp.Compile(pattern); err != nil {
+		return nil, err
+	}
+	return regexp.Compile(`^(?:` + pattern + `)$`)
 }
 
 // Chosen is a tool a run's policy selects, with its argument: what is started.
@@ -147,11 +164,11 @@ func Choose(defs []Definition, selected []policy.Selected) ([]Chosen, error) {
 	for _, sel := range selected {
 		i := slices.IndexFunc(defs, func(d Definition) bool { return d.Name == sel.Name })
 		if i < 0 {
-			return nil, refusal.New(refusal.ToolUnknown, []string{sel.Name}, "the policy selects the tool %q, which this machine does not define", sel.Name)
+			return nil, refusal.New(refusal.ToolUnknown, []string{accesskey.ShownName(sel.Name, false)}, "the policy selects the tool %s, which this machine does not define", accesskey.ShownName(sel.Name, true))
 		}
 		def := defs[i]
 		if slices.ContainsFunc(out, func(c Chosen) bool { return c.Name == def.Name }) {
-			return nil, fmt.Errorf("the policy selects the tool %q twice", def.Name)
+			return nil, fmt.Errorf("the policy selects the tool %s twice", accesskey.ShownName(def.Name, true))
 		}
 		if err := def.check(sel.Argument); err != nil {
 			return nil, err
@@ -159,7 +176,7 @@ func Choose(defs []Definition, selected []policy.Selected) ([]Chosen, error) {
 		for _, host := range def.Serves {
 			for _, other := range out {
 				if claims(other.Serves, host) {
-					return nil, fmt.Errorf("the tools %s and %s both serve %s; a host has one", other.Name, def.Name, host)
+					return nil, fmt.Errorf("the tools %s and %s both serve %s; a host has one", accesskey.ShownName(other.Name, false), accesskey.ShownName(def.Name, false), host)
 				}
 			}
 		}
@@ -176,10 +193,10 @@ func Check(chosen []Chosen, mode policy.Mode, allow []string, claimed func(host 
 	for _, c := range chosen {
 		for _, host := range c.Serves {
 			if name := claimed(host); name != "" {
-				return fmt.Errorf("the tool %s and the credential %s both claim %s; a host has one", c.Name, name, host)
+				return fmt.Errorf("the tool %s and the credential %s both claim %s; a host has one", accesskey.ShownName(c.Name, false), accesskey.ShownName(name, false), host)
 			}
 			if mode == policy.Enforce && !slices.ContainsFunc(allow, func(entry string) bool { return policy.Covers(entry, host) }) {
-				return fmt.Errorf("the tool %s serves %s, which the run's allow list does not cover", c.Name, host)
+				return fmt.Errorf("the tool %s serves %s, which the run's allow list does not cover", accesskey.ShownName(c.Name, false), host)
 			}
 		}
 	}
@@ -221,6 +238,8 @@ type Running struct {
 	stderr  *os.File
 	drained chan struct{}
 	report  func(string)
+	// panics gets a panic of the tool's goroutines, under the run's id.
+	panics func(string)
 	// ready says the tool listens, from when its lines are the gateway's to report.
 	mu    sync.Mutex
 	ready bool
@@ -247,10 +266,10 @@ func (s *Set) Close() {
 	var wg sync.WaitGroup
 	for _, t := range s.Tools {
 		wg.Add(1)
-		go func() {
+		routine.Go(t.panics, func() {
 			defer wg.Done()
 			t.stop()
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -266,7 +285,7 @@ func Start(ctx context.Context, chosen []Chosen, runID string, env []string, rep
 		t, err := start(ctx, c, runID, env, report)
 		if err != nil {
 			set.Close()
-			return nil, fmt.Errorf("tool %s: %w", c.Name, err)
+			return nil, fmt.Errorf("tool %s: %w", accesskey.ShownName(c.Name, false), err)
 		}
 		set.Tools = append(set.Tools, t)
 	}
@@ -276,7 +295,7 @@ func Start(ctx context.Context, chosen []Chosen, runID string, env []string, rep
 func start(ctx context.Context, c Chosen, runID string, env []string, report func(string)) (*Running, error) {
 	dir, err := os.MkdirTemp("", socketDirPrefix)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	sock := filepath.Join(dir, "sock")
 	args := make([]string, len(c.Command)-1)
@@ -298,28 +317,30 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 		return nil, err
 	}
 	cmd.Stderr = w
-	t := &Running{Name: c.Name, Serves: c.Serves, Socket: sock, dir: dir, cmd: cmd, exited: make(chan struct{}), drained: make(chan struct{}), stderr: stderr, report: report}
+	t := &Running{Name: c.Name, Serves: c.Serves, Socket: sock, dir: dir, cmd: cmd, exited: make(chan struct{}), drained: make(chan struct{}), stderr: stderr, report: report,
+		panics: routine.ForRun(report, runID)}
 	err = cmd.Start()
 	w.Close()
 	if err != nil {
 		stderr.Close()
 		os.RemoveAll(dir)
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
-	go func() {
+	// A panic while the lines are read closes the pipe, so the tool never blocks on it.
+	routine.Go(t.panics, func() {
 		defer close(t.drained)
 		t.lines(stderr)
-	}()
-	go func() {
+	}, stderr)
+	routine.Go(t.panics, func() {
 		t.err = cmd.Wait()
 		close(t.exited)
 		t.mu.Lock()
 		gone := t.ready && !t.stopping
 		t.mu.Unlock()
 		if gone {
-			report(fmt.Sprintf("tool %s exited while the run goes on (%v); requests to it fail from now on", t.Name, t.err))
+			report(fmt.Sprintf("tool %s exited while the run goes on (%v); requests to it fail from now on", accesskey.ShownName(t.Name, false), accesskey.ShownError(t.err)))
 		}
-	}()
+	})
 	if err := t.listens(ctx); err != nil {
 		t.stop()
 		return nil, err
@@ -347,7 +368,7 @@ func (t *Running) lines(r io.Reader) {
 		}
 		t.mu.Unlock()
 		if ready {
-			t.report("tool " + t.Name + ": " + line)
+			t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + accesskey.ShownValue(line, false))
 		}
 	}
 	// A line longer than the buffer ends the scan; the rest is read and dropped, so the
@@ -370,7 +391,7 @@ func (t *Running) listens(ctx context.Context) error {
 			t.early = nil
 			t.mu.Unlock()
 			for _, line := range early {
-				t.report("tool " + t.Name + ": " + line)
+				t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + accesskey.ShownValue(line, false))
 			}
 			return nil
 		}
@@ -383,9 +404,9 @@ func (t *Running) listens(ctx context.Context) error {
 			case <-t.drained:
 			case <-time.After(time.Second):
 			}
-			return fmt.Errorf("%s exited before it listened: %v%s", t.cmd.Path, t.err, t.reason())
+			return fmt.Errorf("%s exited before it listened: %v%s", accesskey.ShownValue(t.cmd.Path, false), accesskey.ShownError(t.err), t.reason())
 		case <-deadline.C:
-			return fmt.Errorf("%s did not listen on %s within %s%s", t.cmd.Path, link.EnvToolListen, listenWait, t.reason())
+			return fmt.Errorf("%s did not listen on %s within %s%s", accesskey.ShownValue(t.cmd.Path, false), link.EnvToolListen, listenWait, t.reason())
 		case <-tick.C:
 		}
 	}
@@ -398,7 +419,7 @@ func (t *Running) reason() string {
 	if len(t.early) == 0 {
 		return ""
 	}
-	return ": " + t.early[len(t.early)-1]
+	return ": " + accesskey.ShownValue(t.early[len(t.early)-1], false)
 }
 
 // stop ends the tool and removes its socket's directory.

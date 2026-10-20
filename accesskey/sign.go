@@ -177,16 +177,17 @@ type Pin []ServerKey
 // [{"alg": "ed25519", "public_key": "<32 bytes, base64url>"}]. A member it does not
 // define is refused, and so is a member twice. It then runs [Pin.Check]. A pin that
 // contains an access key secret is [ErrSecretInDocument], and one that contains a run
-// key [ErrRunKeyInDocument], whose messages quote nothing.
+// key [ErrRunKeyInDocument], whose messages quote nothing; a key the pin lists is left
+// out of that check as [SecretInPinDocument] leaves it out.
 func ParsePin(b []byte) (Pin, error) {
-	if err := SecretInDocument(string(b)); err != nil {
+	if err := SecretInPinDocument(string(b), ""); err != nil {
 		return nil, err
 	}
 	var doc any
 	if err := jsonv2.Unmarshal(b, &doc); err != nil {
 		return nil, errors.New("the pin is not a JSON list of {alg, public_key}")
 	}
-	if err := SecretInDocument(doc); err != nil {
+	if err := SecretInPinDocument(doc, ""); err != nil {
 		return nil, err
 	}
 	var p Pin

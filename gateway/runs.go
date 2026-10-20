@@ -17,11 +17,13 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/runkey"
+	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/sink"
 )
@@ -282,7 +284,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		lr.release()
 		err = codeless(err)
 		if _, cerr := st.Close(g.base); cerr != nil {
-			g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, cerr))
+			g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(cerr)))
 		}
 		cancel()
 		return nil, true, err
@@ -304,7 +306,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			}
 			lr.release()
 			if derr := st.Discard(g.base); derr != nil {
-				g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, derr))
+				g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(derr)))
 			}
 			cancel()
 			return nil, false, err
@@ -315,6 +317,10 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		defer context.AfterFunc(how.request, stopAsk)()
 	}
 	var fetched *run.Fetched
+	// decideLabels are the labels the run is decided by: on the one address, those the
+	// attach's answer gives back of the starter's registration, which the run's selection
+	// takes its arguments from.
+	decideLabels := labels
 	if g.client != nil {
 		conf, confDigest := g.config()
 		var rc *server.RunConfiguration
@@ -323,14 +329,14 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		// The record's first line: the registration the server accepted, never posted.
 		var registered map[string]any
 		if remote {
-			rc, digest, registered, regErr = g.attach(ask, conf, req.RunID, how)
+			rc, digest, registered, decideLabels, regErr = g.attach(ask, conf, req.RunID, how)
 			var accepted *server.DocumentError
 			if registered == nil || (regErr != nil && !errors.As(regErr, &accepted)) {
 				// The run never attached: nothing of it is kept, so a later run request
 				// attaches it again, which the server answers alike for the same gateway.
 				lr.release()
 				if derr := st.Discard(g.base); derr != nil {
-					g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, derr))
+					g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(derr)))
 				}
 				cancel()
 				return nil, false, codeless(regErr)
@@ -397,10 +403,19 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if n := req.Narrowing; n != nil {
 		narrowing = &run.Narrowing{Allow: n.Egress.Allow, Deny: n.Egress.Deny}
 	}
+	var selects []run.Selection
+	if remote {
+		// The gateway's selection is for a run that attached with a run key alone.
+		selects = g.cfg.Selects
+	}
+	var secrets func(context.Context, string, []string) (sealed.Values, error)
+	if g.client != nil {
+		secrets = g.secrets(req.RunID)
+	}
 	r, err := run.Decide(run.Config{
-		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: labels, Wall: req.Wall,
-		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Images: images(req.Images), Passes: run.Passing(req.Passes), Report: g.report,
-		Narrowing: narrowing,
+		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
+		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: run.Passing(req.Passes), Report: g.report,
+		Narrowing: narrowing, Secrets: secrets,
 	})
 	if err != nil {
 		return fail(err)
@@ -424,11 +439,19 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if lr.px, err = proxy.New(pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, pol.Policy.Egress.Deny, lr.observe); err != nil {
 		return fail(err)
 	}
+	lr.px.ReportPanics(routine.ForRun(g.report, req.RunID))
+	lr.px.AllowFirst(pol.Policy.Egress.AllowFirst)
+	// Every run's counters are its own, at the limits Start checked.
+	lr.px.SetLimits(proxy.Limits{Connections: g.cfg.RunLimits.Connections, RequestsPerSecond: g.cfg.RunLimits.RequestsPerSecond, Burst: g.cfg.RunLimits.Burst})
+	if g.cfg.upstreamRoots != nil {
+		lr.px.TrustUpstream(g.cfg.upstreamRoots)
+	}
 	if req.Wall || remote {
 		// The proxy serves something that is not on this machine, so this machine's own
-		// addresses are not its to reach: an enclosure, or another machine.
-		// The names are the policy's own, never a session's narrowing's, which only
-		// narrows: a narrowing opens none of this machine's addresses.
+		// addresses and the private network addresses are not its to reach: an
+		// enclosure, or another machine. The names are entries of the node's policy,
+		// never of a server's policy or a session's narrowing: neither opens any of
+		// these addresses.
 		lr.px.Guard(r.GuardNames())
 	}
 	// The node's path rules, beside a server's, and those put beside the node's policy:
@@ -462,9 +485,6 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	lr.opened = true
 	lr.last = time.Now()
 	lr.mu.Unlock()
-	if !req.Wall {
-		authority = nil
-	}
 	lr.mu.Lock()
 	lr.answer = newSecretValue(string(lr.runAnswer(authority)))
 	lr.mu.Unlock()
@@ -533,7 +553,7 @@ func (lr *linkRun) arm() {
 	lr.mu.Lock()
 	lr.last = time.Now()
 	if !lr.ended {
-		lr.timer = time.AfterFunc(lr.g.quiet, lr.watch)
+		lr.timer = lr.watchAfter(lr.g.quiet)
 	}
 	lr.mu.Unlock()
 	if lr.live != nil {
@@ -577,6 +597,11 @@ func (lr *linkRun) touch() {
 	lr.mu.Unlock()
 }
 
+// watchAfter runs watch after d, a panic in it reported under the run's id.
+func (lr *linkRun) watchAfter(d time.Duration) *time.Timer {
+	return time.AfterFunc(d, func() { routine.Do(routine.ForRun(lr.g.report, lr.id), lr.watch) })
+}
+
 // watch ends the run when its session has asked nothing of it for the quiet time, and
 // otherwise looks again when that time would be up.
 func (lr *linkRun) watch() {
@@ -586,7 +611,7 @@ func (lr *linkRun) watch() {
 		return
 	}
 	if idle := time.Since(lr.last); idle < lr.g.quiet {
-		lr.timer = time.AfterFunc(lr.g.quiet-idle, lr.watch)
+		lr.timer = lr.watchAfter(lr.g.quiet - idle)
 		lr.mu.Unlock()
 		return
 	}
@@ -619,12 +644,15 @@ func (lr *linkRun) end(e ending) {
 	startedAt := lr.startedAt
 	discarded := lr.discarded
 	lr.mu.Unlock()
-	go func() {
+	report := routine.ForRun(lr.g.report, lr.id)
+	routine.Go(report, func() {
 		defer close(lr.done)
-		lr.release()
+		// A panic while the run lets go of what it holds still flushes its record and,
+		// on the one address, retires it.
+		routine.Do(report, lr.release)
 		if discarded {
 			if err := lr.st.Discard(lr.g.base); err != nil {
-				lr.g.report(fmt.Sprintf("run %s: closing its record: %v", lr.id, err))
+				lr.g.report(fmt.Sprintf("run %s: closing its record: %v", lr.id, accesskey.ShownError(err)))
 			}
 			lr.cancel()
 			return
@@ -647,25 +675,28 @@ func (lr *linkRun) end(e ending) {
 			// Flushed: the gateway lets go of it.
 			lr.g.retire(lr)
 		}
-	}()
+	})
 }
 
 // runAnswerDoc is the run answer as the gateway writes it,
 // contracts/forager/v1/link-run-answer.schema.json: on the one address without the
 // labels and the proxy secret.
 type runAnswerDoc struct {
-	Version              int                        `json:"version"`
-	RunID                string                     `json:"run_id"`
-	Labels               map[string]string          `json:"labels,omitzero"`
-	Policy               json.RawMessage            `json:"policy,omitempty"`
-	Digest               string                     `json:"digest,omitempty"`
-	Variables            map[string]server.Variable `json:"variables,omitempty"`
-	ProxySecret          string                     `json:"proxy_secret,omitempty"`
-	CertificateAuthority string                     `json:"certificate_authority,omitempty"`
-	Placeholders         []string                   `json:"placeholders,omitempty"`
-	Reserved             []string                   `json:"reserved,omitempty"`
-	Image                *server.LinkImage          `json:"image,omitempty"`
-	Applied              map[string]any             `json:"applied"`
+	Version              int                          `json:"version"`
+	RunID                string                       `json:"run_id"`
+	Labels               map[string]string            `json:"labels,omitzero"`
+	Policy               json.RawMessage              `json:"policy,omitempty"`
+	Digest               string                       `json:"digest,omitempty"`
+	Variables            map[string]server.Variable   `json:"variables,omitempty"`
+	ProxySecret          string                       `json:"proxy_secret,omitempty"`
+	CertificateAuthority string                       `json:"certificate_authority,omitempty"`
+	Placeholders         []string                     `json:"placeholders,omitempty"`
+	Reserved             []string                     `json:"reserved,omitempty"`
+	CredentialHosts      []server.LinkCredentialHosts `json:"credential_hosts,omitempty"`
+	ModelCredential      string                       `json:"model_credential,omitempty"`
+	Image                *server.LinkImage            `json:"image,omitempty"`
+	RelayImage           string                       `json:"relay_image,omitempty"`
+	Applied              map[string]any               `json:"applied"`
 }
 
 // reloadAnswerDoc is the reload answer as the gateway writes it,
@@ -705,7 +736,13 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	a := runAnswerDoc{
 		Version: 1, RunID: lr.id, Labels: lr.labels, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
 		ProxySecret: lr.secret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
-		Image: lr.image(), Applied: lr.given[len(lr.given)-1],
+		CredentialHosts: credentialHosts(lr.r.Held()), Image: lr.image(), Applied: lr.given[len(lr.given)-1],
+	}
+	if held := lr.r.Held(); held != nil {
+		a.ModelCredential = held.Start
+	}
+	if lr.wall {
+		a.RelayImage = lr.r.RelayImage()
 	}
 	if lr.remote {
 		a.Labels = nil
@@ -716,13 +753,32 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	return b
 }
 
+// credentialHosts are the run answer's credential_hosts: one entry per credential held,
+// from the same uses as appliedOf's credentials, with the auth of a credential from the
+// server and of a model key, and the format and endpoint of a model key; nil when the
+// run holds none.
+func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
+	if held == nil {
+		return nil
+	}
+	var out []server.LinkCredentialHosts
+	for _, c := range held.Credentials() {
+		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint}
+		if c.Stored || c.Format != "" {
+			e.Auth = &server.Auth{Scheme: c.Scheme, Header: c.Header, Username: c.Username, OAuth: c.OAuth}
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 // image is the image the run gets, behind a wall, when it has a reference.
 func (lr *linkRun) image() *server.LinkImage {
 	img := lr.r.Image()
 	if !lr.wall || img.Ref == "" {
 		return nil
 	}
-	return &server.LinkImage{Name: img.Name, Ref: img.Ref, Runtime: img.Runtime, Docker: img.Docker}
+	return &server.LinkImage{Name: img.Name, Ref: img.Ref, Runtime: img.Runtime, Docker: img.Docker, Reference: img.Reference}
 }
 
 // policyDocument is the policy in force as policy.schema.json defines it, and its
@@ -756,7 +812,7 @@ func images(li *server.LinkImages) run.Images {
 	if li == nil {
 		return run.Images{}
 	}
-	out := run.Images{Default: li.Default}
+	out := run.Images{Default: li.Default, Allow: li.Allow}
 	for _, d := range li.Definitions {
 		out.Defined = append(out.Defined, run.Image{Name: d.Name, Ref: d.Ref, Runtime: d.Runtime, Docker: d.Docker})
 	}
@@ -764,8 +820,8 @@ func images(li *server.LinkImages) run.Images {
 }
 
 // appliedOf is what dev.qory.run.policy_applied records of a policy that the gateway
-// decides, as today's session writes it: every member but the variables and the
-// harness's hosts, which are the session's. beside are the sides of path rules
+// decides, as today's session writes it: every member but the variables, the
+// credential variables and the harness's hosts, which are the session's. beside are the sides of path rules
 // [Policy.Under] put beside the run's policy, its ceiling_paths. It is in JSON's types,
 // as an event's data decodes.
 func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credential.Held, chosen []tool.Chosen, terminated []string) map[string]any {
@@ -777,34 +833,47 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 		deny = []string{}
 	}
 	a := map[string]any{"mode": string(pol.Policy.Egress.Mode), "allow": allow, "deny": deny, "source": pol.Source}
+	if len(pol.Policy.Egress.AllowFirst) > 0 {
+		a["allow_first"] = pol.Policy.Egress.AllowFirst
+	}
 	if pol.Source != "none" {
 		a["digest"] = pol.Digest
 	}
 	if pol.URL != "" {
+		// server.Client.Discover refuses a run.url that contains qak_ or qrk_, which no
+		// phrase can stand in for: the schema's url is a URI.
 		a["url"], a["run_configuration"] = pol.URL, pol.RunConfiguration
 	}
 	if pol.Node != nil {
 		np := map[string]any{"digest": pol.Node.Digest}
 		if len(pol.Node.Paths) > 0 {
-			np["paths"] = pol.Node.Paths
+			np["paths"] = shownPaths(pol.Node.Paths)
 		}
 		a["node_policy"] = np
 	}
 	if len(pol.Policy.Egress.Paths) > 0 {
-		a["paths"] = pol.Policy.Egress.Paths
+		a["paths"] = shownPaths(pol.Policy.Egress.Paths)
 	}
 	if len(beside) > 0 {
-		a["ceiling_paths"] = beside
+		sides := make([]map[string][]string, len(beside))
+		for i, side := range beside {
+			sides[i] = shownPaths(side)
+		}
+		a["ceiling_paths"] = sides
 	}
 	if held != nil && len(held.Uses) > 0 {
 		uses := make([]map[string]any, len(held.Uses))
 		for i, u := range held.Uses {
-			uses[i] = map[string]any{"name": u.Name, "hosts": u.Hosts, "scheme": u.Scheme}
+			// A name or an argument that contains qak_ or qrk_ in any case is sent as
+			// accesskey.ShownName's phrase in its place.
+			// A host or a path is accesskey.ShownValue's phrase in place of one that
+			// contains either.
+			uses[i] = map[string]any{"name": accesskey.ShownName(u.Name, false), "hosts": shownValues(u.Hosts), "scheme": u.Scheme}
 			if u.Argument != "" {
-				uses[i]["argument"] = u.Argument
+				uses[i]["argument"] = accesskey.ShownName(u.Argument, false)
 			}
 			if u.Paths != nil {
-				uses[i]["paths"] = u.Paths
+				uses[i]["paths"] = shownValues(u.Paths)
 			}
 		}
 		a["credentials"] = uses
@@ -812,22 +881,43 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 	if len(chosen) > 0 {
 		used := make([]map[string]any, len(chosen))
 		for i, c := range chosen {
-			used[i] = map[string]any{"name": c.Name, "hosts": c.Serves}
+			// As the credentials' name and argument.
+			used[i] = map[string]any{"name": accesskey.ShownName(c.Name, false), "hosts": c.Serves}
 			if c.Argument != "" {
-				used[i]["argument"] = c.Argument
+				used[i]["argument"] = accesskey.ShownName(c.Argument, false)
 			}
 		}
 		a["tools"] = used
 	}
 	if pol.Policy.Image != "" {
-		a["image"] = pol.Policy.Image
+		a["image"] = accesskey.ShownName(pol.Policy.Image, false)
 	}
 	if len(terminated) > 0 {
-		a["terminated"] = terminated
+		a["terminated"] = shownValues(terminated)
 	}
 	b, _ := json.Marshal(a)
 	var out map[string]any
 	json.Unmarshal(b, &out)
+	return out
+}
+
+// shownValues are values as an event sends them: each as accesskey.ShownValue shows it,
+// in order.
+func shownValues(values []string) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = accesskey.ShownValue(v, false)
+	}
+	return out
+}
+
+// shownPaths are path rules by host as an event sends them: each path as
+// accesskey.ShownValue shows it. A host's form has no underscore, so it is as it is.
+func shownPaths(paths map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(paths))
+	for host, p := range paths {
+		out[host] = shownValues(p)
+	}
 	return out
 }
 
@@ -851,7 +941,7 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	// numbered first, as today's session switched the policy and wrote its event in one
 	// step under its record's lock.
 	hold := lr.st.Hold()
-	refused := lr.px.SetPolicyOpening(in.Mode, in.Allow, in.Deny, d.Guard, in.Paths, d.Uses)
+	refused := lr.px.SetPolicyOpening(in.Mode, in.AllowFirst, in.Allow, in.Deny, d.Guard, in.Paths, d.Uses)
 	lr.r.Commit(d)
 	lr.posts.SetRunDigest(d.Policy.RunConfiguration)
 	lr.mu.Lock()
@@ -891,7 +981,7 @@ func appliedIs(a map[string]any) func(*event.Event) bool {
 func decided(data map[string]any) map[string]any {
 	own := map[string]any{}
 	for k, v := range data {
-		if k != "harness_hosts" && k != "variables" {
+		if k != "harness_hosts" && k != "variables" && k != "credential_variables" {
 			own[k] = v
 		}
 	}

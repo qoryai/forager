@@ -1,0 +1,4 @@
+{
+  "version": 1,
+  "image": "registry.example/agents/app:1"
+}

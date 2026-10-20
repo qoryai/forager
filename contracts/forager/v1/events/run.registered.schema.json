@@ -14,7 +14,7 @@
     "events": {"description": "The registration's events: the event types the server receives, as its configuration lists them.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "contract_version": {"description": "The registration's contract_version: the revision of this contract Forager implements, the same integer as the X-Qory-Contract-Version header.", "type": "integer", "minimum": 1},
     "interval_seconds": {"description": "The registration's interval_seconds: the heartbeat interval the run uses, in seconds.", "type": "integer", "minimum": 1, "maximum": 300},
-    "labels": {"description": "Behind a separate gateway, the labels of the starter's registration, as the attach's answer gives them back; information alone. Absent when the registration had none, and on a direct node's record, where dev.qory.run.started carries the run's labels.", "$ref": "run.started.schema.json#/properties/labels"},
+    "labels": {"description": "Behind a separate gateway, the labels of the starter's registration, as the attach's answer gives them back; a separate gateway's selection of credentials can take a credential's argument from one. Absent when the registration had none, and on a direct node's record, where dev.qory.run.started carries the run's labels.", "$ref": "run.started.schema.json#/properties/labels"},
     "about": {"description": "Behind a separate gateway, what the run is about, as the starter's registration gave it and the attach's answer gives it back; for display alone. Absent when the registration had none, and on a direct node's record, where dev.qory.run.started carries it.", "$ref": "run.started.schema.json#/properties/about"}
   }
 }

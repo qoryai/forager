@@ -13,9 +13,12 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -513,8 +516,8 @@ func TestEnrolmentAnswerPinsOnlyTheCodesKeys(t *testing.T) {
 		code string
 		pins int
 	}{
-		{"qec_F1XT0RE0000000000000000000." + k.SigningKey.Fingerprint, 1},
-		{"qec_F1XT0RE0000000000000000000." + k.SigningKey.Fingerprint + "." + k.NextSigningKey.Fingerprint, 2},
+		{"qecp_F1XT0RE0000000000000000000." + k.SigningKey.Fingerprint, 1},
+		{"qecp_F1XT0RE0000000000000000000." + k.SigningKey.Fingerprint + "." + k.NextSigningKey.Fingerprint, 2},
 	} {
 		r, err := accesskey.NewEnrolmentRequest(key, c.code, "build-01", time.Unix(1700000000, 0))
 		if err != nil {
@@ -527,6 +530,89 @@ func TestEnrolmentAnswerPinsOnlyTheCodesKeys(t *testing.T) {
 		}
 		if len(got.Pin) != c.pins || got.NodeKind != "pool" || !got.StoredSecrets {
 			t.Errorf("%s: pinned %d keys, %+v", c.code, len(got.Pin), got)
+		}
+	}
+}
+
+// TestEnrolmentAnswerNodeKinds pins node_kind against node_id in a signed answer to a
+// code of that kind: node with nd_, pool with np_, gateway with ng_ and adapter with na_
+// are accepted, and every other pair is refused.
+func TestEnrolmentAnswerNodeKinds(t *testing.T) {
+	k := keys(t)
+	signer := k.SigningKey.key(t)
+	codes := map[string]string{"node": accesskey.CodePrefixNode, "pool": accesskey.CodePrefixPool, "gateway": accesskey.CodePrefixGateway, "adapter": accesskey.CodePrefixAdapter}
+	kinds := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_"}
+	for kind := range kinds {
+		r, err := accesskey.NewEnrolmentRequest(k.accessKey(t), codes[kind]+"F1XT0RE0000000000000000000."+k.SigningKey.Fingerprint, "build-01", time.Unix(1700000000, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, prefix := range kinds {
+			id := prefix + "f1xt0re000000000"
+			body := []byte(`{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"` + id + `","node_kind":"` + kind + `","stored_secrets":false,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`)
+			a := accesskey.Answer{Enrolment: true, Status: 201, RequestSignature: r.Proof, Body: body}
+			got, err := r.VerifyAnswer(a, signer.SignAnswer(a))
+			switch {
+			case kinds[kind] == prefix && (err != nil || got.NodeID != id || got.NodeKind != kind):
+				t.Errorf("node_kind %s with %s: %+v, %v; want it accepted", kind, id, got, err)
+			case kinds[kind] != prefix && err == nil:
+				t.Errorf("node_kind %s with %s: accepted as %+v", kind, id, got)
+			}
+		}
+	}
+}
+
+// TestEnrolmentAnswerKindOfTheCode pins the 201's node_kind against the code's prefix:
+// an answer of the kind the prefix names is accepted, and one of another kind, its
+// node id of that kind, is a *KindError with the answer's node_kind, access key id and
+// node id, which names both kinds.
+func TestEnrolmentAnswerKindOfTheCode(t *testing.T) {
+	k := keys(t)
+	signer := k.SigningKey.key(t)
+	codes := map[string]string{"node": accesskey.CodePrefixNode, "pool": accesskey.CodePrefixPool, "gateway": accesskey.CodePrefixGateway, "adapter": accesskey.CodePrefixAdapter}
+	ids := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_"}
+	for codeKind, prefix := range codes {
+		r, err := accesskey.NewEnrolmentRequest(k.accessKey(t), prefix+"F1XT0RE0000000000000000000."+k.SigningKey.Fingerprint, "build-01", time.Unix(1700000000, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for kind, idPrefix := range ids {
+			id := idPrefix + "f1xt0re000000000"
+			body := []byte(`{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"` + id + `","node_kind":"` + kind + `","stored_secrets":false,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`)
+			a := accesskey.Answer{Enrolment: true, Status: 201, RequestSignature: r.Proof, Body: body}
+			got, err := r.VerifyAnswer(a, signer.SignAnswer(a))
+			if kind == codeKind {
+				if err != nil || got.NodeKind != kind {
+					t.Errorf("a %s code, node_kind %s: %+v, %v; want it accepted", codeKind, kind, got, err)
+				}
+				continue
+			}
+			var ke *accesskey.KindError
+			if !errors.As(err, &ke) {
+				t.Errorf("a %s code, node_kind %s: %+v, %v; want a *KindError", codeKind, kind, got, err)
+				continue
+			}
+			if ke.Kind != kind || ke.AccessKeyID != "ak_f1xt0re000000000" || ke.NodeID != id {
+				t.Errorf("a %s code, node_kind %s: %+v", codeKind, kind, ke)
+			}
+			if want := fmt.Sprintf("the enrolment answer: node_kind %q does not match the code's kind %q", kind, codeKind); err.Error() != want {
+				t.Errorf("a %s code, node_kind %s: %q; want %q", codeKind, kind, err, want)
+			}
+		}
+	}
+}
+
+// TestCheckNodeID pins the node id's form: nd_, np_, ng_ or na_ and 16 lower-case
+// Crockford base32 characters.
+func TestCheckNodeID(t *testing.T) {
+	for _, id := range []string{"nd_f1xt0re000000000", "np_f1xt0re000000000", "ng_f1xt0re000000000", "na_f1xt0re000000000"} {
+		if err := accesskey.CheckNodeID(id); err != nil {
+			t.Errorf("%s: %v", id, err)
+		}
+	}
+	for _, id := range []string{"nx_f1xt0re000000000", "nb_f1xt0re000000000", "ak_f1xt0re000000000", "ws_f1xt0re000000000", "na_f1xt0re00000000", "na_F1XT0RE000000000", "na_f1xt0re00000000u", ""} {
+		if err := accesskey.CheckNodeID(id); err == nil || !strings.Contains(err.Error(), "is not nd_, np_, ng_ or na_ and 16 lower-case Crockford base32 characters") {
+			t.Errorf("%s: %v", id, err)
 		}
 	}
 }
@@ -600,56 +686,167 @@ func TestEnrolmentAnswersHaveTheirOwnDomain(t *testing.T) {
 	}
 }
 
-// TestNormaliseCode pins the normalised form of an enrolment code: a code typed in
-// lower case or in groups normalises to the published one, I and L read as 1 and O as
-// 0, the fingerprints as issued; U, another character, a wrong length and a third
-// fingerprint are refused.
+// codePrefixes are the four prefixes of an enrolment code and the kind each names.
+var codePrefixes = []struct{ prefix, kind string }{
+	{accesskey.CodePrefixNode, "node"},
+	{accesskey.CodePrefixPool, "pool"},
+	{accesskey.CodePrefixGateway, "gateway"},
+	{accesskey.CodePrefixAdapter, "adapter"},
+}
+
+// mixedCase returns s with every other letter in upper case, from the first.
+func mixedCase(s string) string {
+	b := []byte(s)
+	for i := range b {
+		if i%2 == 0 {
+			b[i] = strings.ToUpper(string(b[i]))[0]
+		}
+	}
+	return string(b)
+}
+
+// TestCodePrefixes pins the four prefixes of an enrolment code, and that the code's
+// pattern in enrolment.schema.json allows exactly those four: qec, one of their letters,
+// and _.
+func TestCodePrefixes(t *testing.T) {
+	got := []string{accesskey.CodePrefixNode, accesskey.CodePrefixPool, accesskey.CodePrefixGateway, accesskey.CodePrefixAdapter}
+	if want := []string{"qecn_", "qecp_", "qecg_", "qeci_"}; !slices.Equal(got, want) {
+		t.Errorf("prefixes %q; want %q", got, want)
+	}
+	letters := ""
+	for _, p := range got {
+		rest, ok := strings.CutPrefix(p, "qec")
+		if !ok || len(rest) != 2 || rest[1] != '_' {
+			t.Fatalf("prefix %q is not qec, a letter and _", p)
+		}
+		letters += rest[:1]
+	}
+	var schema struct {
+		Defs struct {
+			Request struct {
+				Properties struct {
+					Code struct {
+						Pattern string `json:"pattern"`
+					} `json:"code"`
+				} `json:"properties"`
+			} `json:"request"`
+		} `json:"$defs"`
+	}
+	load(t, "enrolment.schema.json", &schema)
+	if got, want := schema.Defs.Request.Properties.Code.Pattern, `^qec[`+letters+`]_[0-9A-HJKMNP-TV-Z]{26}(\.[A-Za-z0-9_-]{22}){1,2}$`; got != want {
+		t.Errorf("the schema's code pattern %s; want %s", got, want)
+	}
+}
+
+// TestNormaliseCode pins the normalised form of an enrolment code: a code of each
+// prefix, typed with the prefix in upper, lower or mixed case, the rest in lower case
+// or in groups, normalises to the prefix in lower case and the published characters, I
+// and L read as 1 and O as 0, the fingerprints as issued; qec_ alone, an unknown
+// prefix, U, another character, a wrong length and a third fingerprint are refused,
+// with the error naming the four prefixes when the prefix is wrong.
 func TestNormaliseCode(t *testing.T) {
-	const want = "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg"
-	for _, in := range []string{
-		want,
-		"qec_f1xt0re0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
-		"qec_F1XT-0RE0-0000-0000-0000-0000-00.uoES-kuj1vk0sq0qoGlmAg",
-		"QEC_fixtore0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
-		"qec_FLXT0RE000000000000000000o.uoES-kuj1vk0sq0qoGlmAg",
-	} {
-		got, err := accesskey.NormaliseCode(in)
-		if err != nil || got != want {
-			t.Errorf("%s: %s, %v; want %s", in, got, err, want)
+	for _, p := range codePrefixes {
+		want := p.prefix + "F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg"
+		for _, in := range []string{
+			want,
+			p.prefix + "f1xt0re0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+			strings.ToUpper(p.prefix) + "F1XT-0RE0-0000-0000-0000-0000-00.uoES-kuj1vk0sq0qoGlmAg",
+			mixedCase(p.prefix) + "fixtore0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+			strings.ToUpper(p.prefix) + "FLXT0RE000000000000000000o.uoES-kuj1vk0sq0qoGlmAg",
+			mixedCase(p.prefix) + "f1xt-0re0-0000-0000-0000-0000-00.uoES-kuj1vk0sq0qoGlmAg",
+		} {
+			got, err := accesskey.NormaliseCode(in)
+			if err != nil || got != want {
+				t.Errorf("%s: %s, %v; want %s", in, got, err, want)
+			}
 		}
 	}
 	for _, in := range []string{
-		"qec_F1XT0RE000000000000000000U.uoES-kuj1vk0sq0qoGlmAg",
-		"qec_F1XT0RE00000000000000000*0.uoES-kuj1vk0sq0qoGlmAg",
-		"qec_F1XT0RE000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
-		"qec_F1XT0RE0000000000000000000",
-		"qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A.52vzzF--Ic7qH_eZWi5K2A",
-		"qec_F1XT0RE0000000000000000000.uoES+kuj1vk0sq0qoGlmAg",
+		"qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"QEC_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"qecx_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"qeca_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"qecn-F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"qecn_F1XT0RE0000000000000000000",
+	} {
+		_, err := accesskey.NormaliseCode(in)
+		if want := "an enrolment code is qecn_, qecp_, qecg_ or qeci_, 26 characters, then a dot and a fingerprint"; err == nil || err.Error() != want {
+			t.Errorf("%s: %v; want %q", in, err, want)
+		}
+	}
+	for _, in := range []string{
+		"qecn_F1XT0RE000000000000000000U.uoES-kuj1vk0sq0qoGlmAg",
+		"qecn_F1XT0RE00000000000000000*0.uoES-kuj1vk0sq0qoGlmAg",
+		"qecn_F1XT0RE000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"qecn_F1XT0RE0000000000000000000",
+		"qecn_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A.52vzzF--Ic7qH_eZWi5K2A",
+		"qecn_F1XT0RE0000000000000000000.uoES+kuj1vk0sq0qoGlmAg",
 		"qak_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
 	} {
 		if got, err := accesskey.NormaliseCode(in); err == nil {
 			t.Errorf("%s: accepted as %s", in, got)
 		}
 	}
-	two := "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A"
-	if got := accesskey.CodeFingerprints(two); len(got) != 2 || got[1] != "52vzzF--Ic7qH_eZWi5K2A" {
-		t.Errorf("fingerprints %v", got)
+	for _, p := range codePrefixes {
+		two := mixedCase(p.prefix) + "F1XT-0RE0-0000-0000-0000-0000-00.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A"
+		if got := accesskey.CodeFingerprints(two); !slices.Equal(got, []string{"uoES-kuj1vk0sq0qoGlmAg", "52vzzF--Ic7qH_eZWi5K2A"}) {
+			t.Errorf("%s: fingerprints %v", two, got)
+		}
+	}
+	if got := accesskey.CodeFingerprints("qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg"); got != nil {
+		t.Errorf("qec_: fingerprints %v; want none", got)
+	}
+}
+
+// TestCodeKind pins the kind each prefix names, in any case, and that a code
+// NormaliseCode refuses, qec_ alone or an unknown prefix among them, is an error with
+// NormaliseCode's text.
+func TestCodeKind(t *testing.T) {
+	for _, p := range codePrefixes {
+		for _, prefix := range []string{p.prefix, strings.ToUpper(p.prefix), mixedCase(p.prefix)} {
+			code := prefix + "f1xt-0re0-0000-0000-0000-0000-00.uoES-kuj1vk0sq0qoGlmAg"
+			if got, err := accesskey.CodeKind(code); err != nil || got != p.kind {
+				t.Errorf("%s: %q, %v; want %s", code, got, err, p.kind)
+			}
+		}
+	}
+	for _, code := range []string{
+		"qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"qecx_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"qecn_F1XT0RE000000000000000000U.uoES-kuj1vk0sq0qoGlmAg",
+		"qecn_F1XT0RE0000000000000000000",
+		"",
+	} {
+		got, err := accesskey.CodeKind(code)
+		_, normalise := accesskey.NormaliseCode(code)
+		if err == nil || got != "" || normalise == nil || err.Error() != normalise.Error() {
+			t.Errorf("%q: %q, %v; want NormaliseCode's error %v", code, got, err, normalise)
+		}
 	}
 }
 
 // TestPinCheckCode pins that a machine with a pin refuses a code whose fingerprints
-// name none of its keys, and that a machine without one accepts every code.
+// name none of its keys, and that a machine without one accepts every code, for a code
+// of each prefix in any case.
 func TestPinCheckCode(t *testing.T) {
 	k := keys(t)
-	code := "qec_F1XT0RE0000000000000000000." + k.SigningKey.Fingerprint
-	if err := k.SigningKey.pin().CheckCode(code); err != nil {
-		t.Error(err)
+	for _, p := range codePrefixes {
+		for _, prefix := range []string{p.prefix, strings.ToUpper(p.prefix), mixedCase(p.prefix)} {
+			code := prefix + "F1XT0RE0000000000000000000." + k.SigningKey.Fingerprint
+			if err := k.SigningKey.pin().CheckCode(code); err != nil {
+				t.Errorf("%s: %v", code, err)
+			}
+			if err := (accesskey.Pin{}).CheckCode(code); err != nil {
+				t.Errorf("%s: %v", code, err)
+			}
+			if err := k.NextSigningKey.pin().CheckCode(code); err == nil {
+				t.Errorf("%s: a code for another server's key is accepted", code)
+			}
+		}
 	}
-	if err := (accesskey.Pin{}).CheckCode(code); err != nil {
-		t.Error(err)
-	}
-	if err := k.NextSigningKey.pin().CheckCode(code); err == nil {
-		t.Error("a code for another server's key is accepted")
+	if err := k.SigningKey.pin().CheckCode("qec_F1XT0RE0000000000000000000." + k.SigningKey.Fingerprint); err == nil {
+		t.Error("a qec_ code is accepted under the pin")
 	}
 }
 
@@ -861,7 +1058,7 @@ func TestPostEnrols(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := accesskey.NewEnrolmentRequest(key, "qec_F1XT0RE0000000000000000000."+k.SigningKey.Fingerprint, "build-01", time.Now())
+	r, err := accesskey.NewEnrolmentRequest(key, "qecn_F1XT0RE0000000000000000000."+k.SigningKey.Fingerprint, "build-01", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -964,8 +1161,8 @@ func TestErrorsNeverQuoteASecret(t *testing.T) {
 	secret := keys(t).AccessKey.Secret
 	_, e1 := accesskey.ParsePublicKey(secret)
 	_, e2 := accesskey.ParsePin([]byte(`[{"alg":"ed25519","public_key":"` + secret + `"}]`))
-	_, e3 := accesskey.NormaliseCode("qec_F1XT0RE0000000000000000000." + secret)
-	r, _ := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	_, e3 := accesskey.NormaliseCode("qecn_F1XT0RE0000000000000000000." + secret)
+	r, _ := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qecn_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
 	_, e4 := r.Post(context.Background(), nil, "https://"+secret, "test")
 	for i, err := range []error{e1, e2, e3, e4, accesskey.CheckID(secret), accesskey.CheckInstanceID(secret), accesskey.CheckName(secret), accesskey.CheckNodeID(strings.ToUpper(secret))} {
 		if err == nil || strings.Contains(err.Error(), secret[4:]) || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret[4:])) {
@@ -994,7 +1191,7 @@ func TestErrorsNeverQuoteARunKey(t *testing.T) {
 	_, e1 := accesskey.ParsePublicKey(rk)
 	_, e2 := accesskey.ParsePin([]byte(`[{"alg":"ed25519","public_key":"` + rk + `"}]`))
 	_, e3 := accesskey.ParsePin([]byte(`[{"alg":"ed25519","` + rk + `":"x"}]`))
-	r, _ := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	r, _ := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qecn_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
 	_, e4 := r.Post(context.Background(), nil, "https://qory.example/?k="+rk, "test")
 	for i, err := range []error{e1, e2, e3, e4, accesskey.CheckID(rk), accesskey.CheckInstanceID(rk), accesskey.CheckName(rk), accesskey.CheckName(strings.ToUpper(rk[:12])), accesskey.CheckNodeID(rk)} {
 		if err == nil || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(payload)) || strings.Contains(strings.ToLower(err.Error()), "qrk_") {
@@ -1162,12 +1359,12 @@ func TestOnlyAGETOrAPOSTIsSigned(t *testing.T) {
 		}
 	}
 	for _, origin := range []string{"http://localhost:8787", "http://127.0.0.1:8787", "http://[::1]:8787"} {
-		r, _ := accesskey.NewEnrolmentRequest(key, "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+		r, _ := accesskey.NewEnrolmentRequest(key, "qecn_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
 		if _, err := r.Post(context.Background(), nil, origin, "test"); err != nil && strings.Contains(err.Error(), "neither https") {
 			t.Errorf("%s is refused as an origin", origin)
 		}
 	}
-	r, _ := accesskey.NewEnrolmentRequest(key, "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	r, _ := accesskey.NewEnrolmentRequest(key, "qecn_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
 	if _, err := r.Post(context.Background(), nil, "http://127.0.0.2:8787", "test"); err == nil || !strings.Contains(err.Error(), "neither https") {
 		t.Errorf("http to 127.0.0.2, which server.schema.json refuses: %v", err)
 	}
@@ -1212,5 +1409,140 @@ func TestWithoutVariablesTakesOutForagersOwn(t *testing.T) {
 	}
 	if accesskey.EnvRunKey != "QORY_RUN_KEY" {
 		t.Errorf("EnvRunKey is %q", accesskey.EnvRunKey)
+	}
+}
+
+// TestShownName pins the phrase a name that contains qak_ or qrk_ in any case is shown
+// as, the access key secret's when it contains both, and a clean name quoted or bare.
+func TestShownName(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	for _, c := range []struct {
+		name  string
+		quote bool
+		want  string
+	}{
+		{"qak_x", true, ak}, {"QAK_x", false, ak}, {"x.QaK_y", true, ak},
+		{"qrk_x", false, rk}, {"QRK_x", true, rk}, {"x.qRk_y", false, rk},
+		{"qrk_x.qak_y", true, ak}, {"QRK_x.QAK_y", false, ak},
+		{"model", true, `"model"`}, {"model", false, "model"}, {"qak-x", false, "qak-x"},
+	} {
+		if got := accesskey.ShownName(c.name, c.quote); got != c.want {
+			t.Errorf("ShownName(%q, %t) = %s, want %s", c.name, c.quote, got, c.want)
+		}
+	}
+}
+
+// TestShownValue pins the phrase a value that contains qak_ or qrk_ in any case is shown
+// as, the access key secret's when it contains both, and a clean value quoted or bare.
+func TestShownValue(t *testing.T) {
+	const ak, rk = "(a value that contains an access key secret)", "(a value that contains a run key)"
+	for _, c := range []struct {
+		value string
+		quote bool
+		want  string
+	}{
+		{"qak_x", true, ak}, {"QAK_x", false, ak}, {"x: QaK_y", true, ak},
+		{"qrk_x", false, rk}, {"QRK_x", true, rk}, {"x: qRk_y", false, rk},
+		{"qrk_x qak_y", true, ak}, {"QRK_x QAK_y", false, ak},
+		{"exit status 3", true, `"exit status 3"`}, {"exit status 3", false, "exit status 3"}, {"qak-x", false, "qak-x"},
+	} {
+		if got := accesskey.ShownValue(c.value, c.quote); got != c.want {
+			t.Errorf("ShownValue(%q, %t) = %s, want %s", c.value, c.quote, got, c.want)
+		}
+	}
+}
+
+// TestShownNames pins a list of names as a message or an event lists them: each shown
+// as ShownName shows it bare, in order, each phrase once, and a clean name as often as
+// it is given.
+func TestShownNames(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	for _, c := range []struct{ in, want []string }{
+		{nil, nil},
+		{[]string{"files", "QAK_a", "qrk_b", "x.qak_c", "QRK_d"}, []string{"files", ak, rk}},
+		{[]string{"qrk_a.qak_b", "qrk_c"}, []string{ak, rk}},
+		{[]string{"files", "files", "model"}, []string{"files", "files", "model"}},
+	} {
+		if got := accesskey.ShownNames(c.in); !slices.Equal(got, c.want) {
+			t.Errorf("ShownNames(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestShownError pins an error as a message wraps it: the same error when its text
+// contains neither prefix, and otherwise one whose text is the value's phrase and which
+// still wraps it.
+func TestShownError(t *testing.T) {
+	clean := errors.New("exit status 3")
+	if got := accesskey.ShownError(clean); got != clean {
+		t.Errorf("ShownError(%v) = %v, want the error itself", clean, got)
+	}
+	for text, want := range map[string]string{
+		"open /x/qak_y: no such file": "(a value that contains an access key secret)",
+		"QRK_x":                       "(a value that contains a run key)",
+		"qrk_x QaK_y":                 "(a value that contains an access key secret)",
+	} {
+		err := fmt.Errorf("wrapped: %w", errors.New(text))
+		got := accesskey.ShownError(err)
+		if got.Error() != want || !errors.Is(got, err) {
+			t.Errorf("ShownError(%q) = %q, wraps %v; want %q wrapping it", text, got, errors.Is(got, err), want)
+		}
+	}
+}
+
+// TestARefusalPrintsAPhraseForASecretInAName pins a refusal's text: a name the answer
+// gave that contains qak_ or qrk_ in any case prints the name's phrase, each phrase
+// once, and a clean name prints as it is.
+func TestARefusalPrintsAPhraseForASecretInAName(t *testing.T) {
+	r := accesskey.ReadRefusal(409, []byte(`{"error":"tool_unknown","names":["files","qak_x","QAK_y","qrk_z"]}`))
+	if want := "tool_unknown (status 409): files, (a name that contains an access key secret), (a name that contains a run key)"; r == nil || r.Error() != want {
+		t.Errorf("Error = %v, want %s", r, want)
+	}
+	if r.Names[1] != "qak_x" {
+		t.Errorf("the names changed: %q", r.Names)
+	}
+}
+
+// TestAnEnrolmentsDialErrorPrintsAPhraseForASecret pins the error of an enrolment that
+// fails before an answer: when its text contains qak_ or qrk_ in any case, a proxy's
+// address of the caller's client say, the error prints the value's phrase in its place,
+// and still wraps the client's error.
+func TestAnEnrolmentsDialErrorPrintsAPhraseForASecret(t *testing.T) {
+	key, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := accesskey.NewEnrolmentRequest(key, "qecn_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for proxy, phrase := range map[string]string{
+		"http://qak_fake.example:1": "(a value that contains an access key secret)",
+		"http://QRK_FAKE.example:1": "(a value that contains a run key)",
+	} {
+		p, _ := url.Parse(proxy)
+		hc := &http.Client{Transport: &http.Transport{
+			Proxy: http.ProxyURL(p),
+			DialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
+				return nil, fmt.Errorf("dial %s: connection refused", addr)
+			},
+		}}
+		for what, post := range map[string]func() error{
+			"Post": func() error {
+				_, err := r.Post(context.Background(), hc, "https://apiary.example", "qory/test")
+				return err
+			},
+			"PostVia": func() error {
+				_, err := r.PostVia(context.Background(), hc, "https://apiary.example", "https://gateway.example", "qory/test")
+				return err
+			},
+		} {
+			err := post()
+			want := "enrolment https://apiary.example" + accesskey.EnrolmentPath + ": " + phrase
+			var ue *url.Error
+			if err == nil || err.Error() != want || !errors.As(err, &ue) {
+				t.Errorf("%s through %s: %v, want %q wrapping a *url.Error", what, proxy, err, want)
+			}
+		}
 	}
 }

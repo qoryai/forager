@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/session/internal/socket"
@@ -36,11 +37,11 @@ func Overlap(mount, path string) string {
 func overlap(mount, path string) (string, error) {
 	m, err := split(mount, 0)
 	if err != nil {
-		return "", fmt.Errorf("cannot resolve the mount %s: %w", mount, err)
+		return "", fmt.Errorf("cannot resolve the mount %s: %w", pathShown(mount), accesskey.ShownError(err))
 	}
 	p, err := split(path, 0)
 	if err != nil {
-		return "", fmt.Errorf("cannot resolve Forager's file %s: %w", path, err)
+		return "", fmt.Errorf("cannot resolve Forager's file %s: %w", pathShown(path), accesskey.ShownError(err))
 	}
 	if ok, same := holds(m, p); ok {
 		if same {
@@ -74,7 +75,7 @@ const maxLinks = 40
 func split(p string, links int) (splitPath, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
-		return splitPath{}, err
+		return splitPath{}, accesskey.ShownError(err)
 	}
 	var tail []string
 	for dir := abs; ; {
@@ -83,7 +84,7 @@ func split(p string, links int) (splitPath, error) {
 			return splitPath{target, tail}, nil
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
-			return splitPath{}, err
+			return splitPath{}, accesskey.ShownError(err)
 		}
 		info, err := os.Lstat(dir)
 		switch {
@@ -91,24 +92,24 @@ func split(p string, links int) (splitPath, error) {
 			// A link whose target does not exist yet: the target, read from the
 			// link's own directory, resolved, is where the path leads once it does.
 			if links >= maxLinks {
-				return splitPath{}, fmt.Errorf("%s: too many links", abs)
+				return splitPath{}, fmt.Errorf("%s: too many links", pathShown(abs))
 			}
 			to, err := os.Readlink(dir)
 			if err != nil {
-				return splitPath{}, err
+				return splitPath{}, accesskey.ShownError(err)
 			}
 			if !filepath.IsAbs(to) {
 				parent, err := filepath.EvalSymlinks(filepath.Dir(dir))
 				if err != nil {
-					return splitPath{}, err
+					return splitPath{}, accesskey.ShownError(err)
 				}
 				to = filepath.Join(parent, to)
 			}
 			return split(filepath.Join(append([]string{to}, tail...)...), links+1)
 		case err == nil:
-			return splitPath{}, fmt.Errorf("%s exists and does not resolve", dir)
+			return splitPath{}, fmt.Errorf("%s exists and does not resolve", pathShown(dir))
 		case !errors.Is(err, fs.ErrNotExist):
-			return splitPath{}, err
+			return splitPath{}, accesskey.ShownError(err)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -211,7 +212,7 @@ func foragerFiles(spec Spec) []foragerFile {
 		foragerFile{wall.TempDirs(), "where the Docker wall's environment files are made"})
 	if f, ok := spec.Wall.(wall.Filer); ok {
 		for _, p := range f.Files() {
-			out = append(out, foragerFile{p, "one of the " + spec.Wall.Name() + " wall's files"})
+			out = append(out, foragerFile{p, "one of the " + accesskey.ShownName(spec.Wall.Name(), false) + " wall's files"})
 		}
 	}
 	// The run directories hold the record, and the session reads the runtime's settings
@@ -261,7 +262,16 @@ func lookups(p string) ([]lookup, error) {
 	if err != nil {
 		return nil, err
 	}
-	names := parts(abs)
+	looks, _, err := lookupsOf(abs, parts(abs))
+	return looks, err
+}
+
+// lookupsOf is [lookups] of the names of the absolute path abs, as they are given: a ..
+// name among them is followed from the directory the walk is in, as the filesystem
+// follows it, where a link may have led. It returns too where the walk ends when it
+// follows every name, through every link, and empty when it stops at a name that
+// does not exist.
+func lookupsOf(abs string, names []string) ([]lookup, string, error) {
 	cur := "/"
 	var out []lookup
 	links := 0
@@ -275,16 +285,16 @@ func lookups(p string) ([]lookup, error) {
 		}
 		at, err := split(cur, 0)
 		if err != nil {
-			return nil, err
+			return nil, "", accesskey.ShownError(err)
 		}
 		out = append(out, lookup{dir: cur, rest: append([]string(nil), names[i:]...), at: at})
 		next := filepath.Join(cur, names[i])
 		info, err := os.Lstat(next)
 		if errors.Is(err, fs.ErrNotExist) {
-			return out, nil
+			return out, "", nil
 		}
 		if err != nil {
-			return nil, err
+			return nil, "", accesskey.ShownError(err)
 		}
 		if info.Mode()&fs.ModeSymlink == 0 {
 			cur = next
@@ -292,11 +302,11 @@ func lookups(p string) ([]lookup, error) {
 		}
 		out[len(out)-1].link = true
 		if links++; links > maxLinks {
-			return nil, fmt.Errorf("%s: too many links", abs)
+			return nil, "", fmt.Errorf("%s: too many links", pathShown(abs))
 		}
 		to, err := os.Readlink(next)
 		if err != nil {
-			return nil, err
+			return nil, "", accesskey.ShownError(err)
 		}
 		if filepath.IsAbs(to) {
 			cur = "/"
@@ -304,7 +314,7 @@ func lookups(p string) ([]lookup, error) {
 		names = append(parts(to), names[i+1:]...)
 		i = -1
 	}
-	return out, nil
+	return out, cur, nil
 }
 
 // parts are the names of a path, as written.
@@ -338,7 +348,7 @@ func linkIn(out shown, ls []lookup) (string, error) {
 			return "", err
 		}
 		if info, err := os.Lstat(link); err != nil || info.Mode()&fs.ModeSymlink == 0 {
-			return "", fmt.Errorf("the link on the way, %s, is no link now", link)
+			return "", fmt.Errorf("the link on the way, %s, is no link now", pathShown(link))
 		}
 		return link, nil
 	}
@@ -411,11 +421,11 @@ type bindSource struct {
 func source(path, what, kind string, writable bool) (bindSource, error) {
 	at, err := split(path, 0)
 	if err != nil {
-		return bindSource{}, fmt.Errorf("cannot resolve %s: %w", what, err)
+		return bindSource{}, fmt.Errorf("cannot resolve %s: %w", what, accesskey.ShownError(err))
 	}
 	looks, err := lookups(path)
 	if err != nil {
-		return bindSource{}, fmt.Errorf("cannot resolve %s: %w", what, err)
+		return bindSource{}, fmt.Errorf("cannot resolve %s: %w", what, accesskey.ShownError(err))
 	}
 	b := bindSource{Path: path, Resolved: at.String(), Writable: writable, Kind: kind,
 		what: what, at: at, looks: looks}
@@ -433,9 +443,78 @@ type mountPlan struct {
 	// Dir is the working directory inside: the workspace, reached through the bind
 	// that holds it.
 	Dir string
+	// root is the path of the bind that holds the workspace, as Mounts lists it.
+	root string
 	// sources are the binds as the registry of walled runs lists them.
 	sources []bindSource
 }
+
+// workspaceInside is where a run whose policy names its image by its reference sees the
+// bind that holds its workspace: the working directory is workspaceInside, or a
+// directory under it, whatever its path on this machine.
+const workspaceInside = "/workspace"
+
+// atWorkspace is the plan of a run whose policy names its image by its reference: the
+// bind that holds the workspace shown at [workspaceInside], the working directory under
+// it, and inside, which writes a path of that bind's as the enclosure sees it, at
+// whole components ([translate]). Every other bind stays at the same path; one whose
+// path is, holds or lies under workspaceInside, the run directory's among them, is
+// refused, with no code.
+func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
+	if p.root == "" || p.root == string(filepath.Separator) {
+		return mountPlan{}, nil, fmt.Errorf("the workspace is reached through %s, which cannot be shown at %s", accesskey.ShownValue(p.root, true), workspaceInside)
+	}
+	out := p
+	out.Mounts = slices.Clone(p.Mounts)
+	for i, m := range out.Mounts {
+		if m.Path == p.root {
+			out.Mounts[i].Target = workspaceInside
+			continue
+		}
+		if under(workspaceInside, m.Path) || under(m.Path, workspaceInside) {
+			return mountPlan{}, nil, fmt.Errorf("%s is shown at the same path inside, which overlaps %s, where a run "+
+				"whose image its policy names by reference sees its workspace", pathShown(m.Path), workspaceInside)
+		}
+	}
+	inside := func(s string) string { return translate(s, p.root, workspaceInside) }
+	out.Dir = inside(p.Dir)
+	return out, inside, nil
+}
+
+// translate is s with every occurrence of the absolute path from, at whole components,
+// written as to: where from starts s or follows a separator of words, and ends s or is
+// followed by a slash or such a separator. /work/app becomes /workspace/app for /work,
+// and /workshop, /a/work and work stay as they are. A separator of words is a space, a
+// quote, a colon, as in a list of paths, an equals sign, as in --flag=path, or one of
+// the shell's characters that end a word.
+func translate(s, from, to string) string {
+	if from == "" || from == to {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for i := 0; i < len(s); {
+		j := strings.Index(s[i:], from)
+		if j < 0 {
+			break
+		}
+		j += i
+		end := j + len(from)
+		if (j == 0 || wordEnd(s[j-1])) && (end == len(s) || s[end] == '/' || wordEnd(s[end])) {
+			b.WriteString(s[last:j])
+			b.WriteString(to)
+			last, i = end, end
+			continue
+		}
+		i = j + 1
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// wordEnd reports whether c separates a path from what is beside it in a word or a
+// line: see [translate].
+func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c) >= 0 }
 
 // checkMounts refuses a caller's Forager file that is not an absolute path and, behind a
 // wall, the places the run lists that it cannot bind as they are, and returns what the
@@ -443,7 +522,9 @@ type mountPlan struct {
 // directory, read-only, and the hook socket's directory are Forager's, which it
 // keeps apart from every caller's place: the runs directory is one of Forager's
 // files, and so is where the sockets are made. A refusal's first name is always one of
-// the places exactly as the caller passed it:
+// the places exactly as the caller passed it, or [accesskey.ShownName]'s phrase in its
+// place when it contains qak_ or qrk_ in any case. Detail prints such a path as
+// [accesskey.ShownValue]'s phrase, and the names list each phrase once:
 //
 //   - mount_contains_forager_files: a place that is, contains or lies inside one of
 //     Forager's files, or a writable place that contains a directory a name on the way
@@ -468,7 +549,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 			return mountPlan{}, errors.New("a Forager file's path holds a NUL byte")
 		}
 		if !filepath.IsAbs(p) {
-			return mountPlan{}, fmt.Errorf("the Forager file %q is not an absolute path", p)
+			return mountPlan{}, fmt.Errorf("the Forager file %s is not an absolute path", accesskey.ShownValue(p, true))
 		}
 	}
 	if spec.Wall == nil {
@@ -484,7 +565,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	for i, f := range files {
 		ls, err := lookups(f.path)
 		if err != nil {
-			return mountPlan{}, fmt.Errorf("cannot resolve Forager's file %s: %w", f.path, err)
+			return mountPlan{}, fmt.Errorf("cannot resolve Forager's file %s: %w", pathShown(f.path), accesskey.ShownError(err))
 		}
 		fileLooks[i] = ls
 	}
@@ -497,18 +578,18 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 			if how != "" {
 				return mountPlan{}, &Refusal{
 					Code:   refusal.MountContainsForagerFiles,
-					Names:  []string{m.path, f.path},
-					Detail: fmt.Sprintf("%s %s %s %s, %s", m.what, m.path, how, f.path, f.what),
+					Names:  pathsShown(m.path, f.path),
+					Detail: fmt.Sprintf("%s %s %s %s, %s", m.what, pathShown(m.path), how, pathShown(f.path), f.what),
 				}
 			}
 		}
 		at, err := split(m.path, 0)
 		if err != nil {
-			return mountPlan{}, fmt.Errorf("cannot resolve %s %s: %w", m.what, m.path, err)
+			return mountPlan{}, fmt.Errorf("cannot resolve %s %s: %w", m.what, pathShown(m.path), accesskey.ShownError(err))
 		}
 		looks, err := lookups(m.path)
 		if err != nil {
-			return mountPlan{}, fmt.Errorf("cannot resolve %s %s: %w", m.what, m.path, err)
+			return mountPlan{}, fmt.Errorf("cannot resolve %s %s: %w", m.what, pathShown(m.path), accesskey.ShownError(err))
 		}
 		places[i].at, places[i].looks, places[i].bound = at, looks, filepath.Clean(m.path)
 		if !m.writable {
@@ -520,9 +601,9 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 			if l, ok := lookedUpIn(at, fileLooks[j]); ok {
 				return mountPlan{}, &Refusal{
 					Code:  refusal.MountContainsForagerFiles,
-					Names: []string{m.path, f.path},
+					Names: pathsShown(m.path, f.path),
 					Detail: fmt.Sprintf("%s %s contains %s, on the way to %s, %s",
-						m.what, m.path, l.entry(), f.path, f.what),
+						m.what, pathShown(m.path), pathShown(l.entry()), pathShown(f.path), f.what),
 				}
 			}
 		}
@@ -548,7 +629,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	for _, w := range spec.Written {
 		at, err := split(w, 0)
 		if err != nil {
-			return mountPlan{}, fmt.Errorf("cannot resolve the written place %s: %w", w, err)
+			return mountPlan{}, fmt.Errorf("Fix the error at the end of this message, then run the command again. Cannot resolve the written place %s: %w", pathShown(w), accesskey.ShownError(err))
 		}
 		out := shown{path: w, what: "the written place", writable: true, at: at}
 		for _, in := range places {
@@ -585,7 +666,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		}
 		plan.Mounts = append(plan.Mounts, wall.Mount{Path: p.bound, ReadOnly: !p.writable})
 		b := bindSource{Path: p.path, Resolved: p.at.String(), Writable: p.writable,
-			what: p.what + " " + p.path, at: p.at, looks: p.looks}
+			what: p.what + " " + pathShown(p.path), at: p.at, looks: p.looks}
 		for _, l := range p.looks {
 			b.Lookups = append(b.Lookups, l.entry())
 		}
@@ -599,12 +680,12 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	for outer[root] >= 0 {
 		if seen[root] {
 			return mountPlan{}, fmt.Errorf("the places the run lists lie inside each other "+
-				"through links: %s", places[root].path)
+				"through links: %s", pathShown(places[root].path))
 		}
 		seen[root] = true
 		root = outer[root]
 	}
-	plan.Dir = places[ws].bound
+	plan.Dir, plan.root = places[ws].bound, places[root].bound
 	if root != ws {
 		if rest, ok := within(places[root].at, places[ws].at); ok {
 			plan.Dir = filepath.Join(append([]string{places[root].bound}, rest...)...)
@@ -613,7 +694,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	if err := dirInBinds(plan.Dir, plan.Mounts); err != nil {
 		return mountPlan{}, err
 	}
-	run, err := source(runDir, "the run directory "+runDir, kindRun, false)
+	run, err := source(runDir, "the run directory "+pathShown(runDir), kindRun, false)
 	if err != nil {
 		return mountPlan{}, err
 	}
@@ -638,15 +719,17 @@ func throughLink(in, out shown) error {
 	}
 	link, err := linkIn(out, in.looks)
 	if err != nil {
-		return fmt.Errorf("%s %s is looked up inside %s %s and resolves "+
-			"outside it: %w", in.what, in.path, out.what, out.path, err)
+		return fmt.Errorf("List the path that %s %s resolves to, in place of the path given. "+
+			"The path is looked up inside %s %s and resolves outside it: %w", in.what, pathShown(in.path), out.what, pathShown(out.path),
+			accesskey.ShownError(err))
 	}
 	return &Refusal{
 		Code:  refusal.MountThroughLink,
-		Names: []string{in.path, link, out.path},
-		Detail: fmt.Sprintf("%s is reached through the link %s inside %s, which a "+
-			"walled agent can change: list the link's target itself",
-			in.path, link, out.path),
+		Names: pathsShown(in.path, link, out.path),
+		Detail: fmt.Sprintf("List the path that %s resolves to, in place of %s. %s is reached "+
+			"through the link %s inside %s, which a walled agent can change",
+			pathShown(in.path), pathShown(in.path), pathShown(in.path), pathShown(link),
+			pathShown(out.path)),
 	}
 }
 
@@ -658,7 +741,7 @@ func dirInBinds(dir string, mounts []wall.Mount) error {
 		return nil
 	}
 	return fmt.Errorf("the working directory inside, %s, lies in none of the places the "+
-		"enclosure binds: %v", dir, paths(mounts))
+		"enclosure binds: %v", pathShown(dir), eachShown(paths(mounts)))
 }
 
 // under reports whether path is dir or lies inside it, by the names of both, clean.
@@ -683,9 +766,9 @@ func modeConflict(in, out shown, same bool) *Refusal {
 	}
 	return &Refusal{
 		Code:  refusal.MountModeConflict,
-		Names: []string{in.path, out.path},
-		Detail: fmt.Sprintf("%s %s (%s) %s %s %s (%s): %s",
-			in.what, in.path, mode(in.writable), how, out.what, out.path, mode(out.writable), why),
+		Names: pathsShown(in.path, out.path),
+		Detail: fmt.Sprintf("%s %s (%s) %s %s %s (%s): %s", in.what, pathShown(in.path),
+			mode(in.writable), how, out.what, pathShown(out.path), mode(out.writable), why),
 	}
 }
 
@@ -700,13 +783,13 @@ func (s splitPath) String() string {
 func samePlan(start, now mountPlan) error {
 	if !slices.Equal(start.Mounts, now.Mounts) || len(start.sources) != len(now.sources) {
 		return fmt.Errorf("the places the run binds changed since it started: %v then, %v now",
-			paths(start.Mounts), paths(now.Mounts))
+			eachShown(paths(start.Mounts)), eachShown(paths(now.Mounts)))
 	}
 	for i, s := range start.sources {
 		n := now.sources[i]
 		if s.Resolved != n.Resolved {
 			return fmt.Errorf("%s resolved to %s when the run started and resolves to %s now",
-				s.what, s.Resolved, n.Resolved)
+				s.what, pathShown(s.Resolved), pathShown(n.Resolved))
 		}
 		// A name that did not exist at the start, the run directory's own among them, is
 		// looked up further now: the start's lookups are the first of now's, and a link
@@ -715,12 +798,12 @@ func samePlan(start, now mountPlan) error {
 			!slices.Equal(s.Lookups, n.Lookups[:len(s.Lookups)]) {
 			return fmt.Errorf("the way to %s changed since the run started: its names were "+
 				"looked up as %s, and are now looked up as %s", s.what,
-				strings.Join(s.Lookups, ", "), strings.Join(n.Lookups, ", "))
+				strings.Join(eachShown(s.Lookups), ", "), strings.Join(eachShown(n.Lookups), ", "))
 		}
 	}
 	if start.Dir != now.Dir {
 		return fmt.Errorf("the working directory inside was %s when the run started and is "+
-			"%s now", start.Dir, now.Dir)
+			"%s now", pathShown(start.Dir), pathShown(now.Dir))
 	}
 	return nil
 }
@@ -730,6 +813,25 @@ func paths(ms []wall.Mount) []string {
 	out := make([]string, len(ms))
 	for i, m := range ms {
 		out[i] = m.Path
+	}
+	return out
+}
+
+// pathShown is a path as a message prints it, bare: [accesskey.ShownValue]'s phrase in
+// its place when it contains qak_ or qrk_ in any case.
+func pathShown(p string) string { return accesskey.ShownValue(p, false) }
+
+// pathsShown are paths as a refusal's Names lists them: as [accesskey.ShownNames] lists
+// them, a name's phrase in place of a path that contains qak_ or qrk_ in any case, as
+// run.refused's names are, each phrase once.
+func pathsShown(ps ...string) []string { return accesskey.ShownNames(ps) }
+
+// eachShown is each of the paths as [pathShown] prints it, in order, every one kept:
+// for a message that lists them side by side.
+func eachShown(ps []string) []string {
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = pathShown(p)
 	}
 	return out
 }
@@ -745,7 +847,7 @@ func firstWallBinds(w wall.Wall) ([]bindSource, error) {
 	}
 	binds, err := b.Binds(wall.Launch{})
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	binds = append(binds, wall.Bind{Path: socket.Dirs(), Pattern: true})
 	return bindSources(binds)
@@ -760,7 +862,7 @@ func wallBinds(e wall.Enclosure, socketPath string, ca []byte) ([]bindSource, er
 	}
 	binds, err := b.Binds(wall.Launch{Socket: socketPath, CA: ca})
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	return bindSources(binds)
 }
@@ -769,9 +871,9 @@ func wallBinds(e wall.Enclosure, socketPath string, ca []byte) ([]bindSource, er
 func bindSources(binds []wall.Bind) ([]bindSource, error) {
 	var out []bindSource
 	for _, m := range binds {
-		what, kind := "Forager's directory "+m.Path, kindDir
+		what, kind := "Forager's directory "+pathShown(m.Path), kindDir
 		if m.Helper {
-			what, kind = "Forager's helper "+m.Path, kindHelper
+			what, kind = "Forager's helper "+pathShown(m.Path), kindHelper
 		}
 		src, err := source(m.Path, what, kind, !m.ReadOnly)
 		if err != nil {

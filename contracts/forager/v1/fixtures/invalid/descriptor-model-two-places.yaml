@@ -1,0 +1,10 @@
+# A place is exactly one of flag, setting and variable.
+version: 1
+runtime: amp
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]
+model:
+  formats: [anthropic-messages]
+  model: {flag: --model, variable: AMP_MODEL}
+  endpoint: {variable: AMP_BASE_URL}

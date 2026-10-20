@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"golang.org/x/sys/unix"
 )
 
@@ -40,7 +41,7 @@ func nest(user string, argv []string) error {
 	}
 	command, err := exec.LookPath(argv[0])
 	if err != nil {
-		return fmt.Errorf("nest: the launch: %w", err)
+		return fmt.Errorf("nest: the launch: %w", accesskey.ShownError(err))
 	}
 	log, err := os.OpenFile(NestLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -65,7 +66,7 @@ func nest(user string, argv []string) error {
 		if len(tail) > 2048 {
 			tail = tail[len(tail)-2048:]
 		}
-		return fmt.Errorf("%w; the daemon said:\n%s", err, bytes.TrimSpace(tail))
+		return fmt.Errorf("%w; the daemon said:\n%s", err, accesskey.ShownValue(string(bytes.TrimSpace(tail)), false))
 	}
 
 	env, err := nestAgentEnv(os.Environ(), func() (bool, error) {
@@ -116,7 +117,7 @@ func nest(user string, argv []string) error {
 	if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); err != nil && !errors.Is(err, unix.EINVAL) {
 		return fmt.Errorf("nest: clearing the ambient capabilities: %w", err)
 	}
-	return fmt.Errorf("nest: exec %s: %w", command, syscall.Exec(command, argv, env))
+	return fmt.Errorf("nest: exec %s: %w", accesskey.ShownValue(command, false), syscall.Exec(command, argv, env))
 }
 
 // nestAnswers waits until the daemon answers on its socket, or exits, or the time runs

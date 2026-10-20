@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/session/runtimes/claude"
 )
@@ -29,23 +31,38 @@ func TestClaudeCodeDeclaresItsModelCredential(t *testing.T) {
 		t.Fatal("Claude Code does not implement runtimes.Secrets")
 	}
 	d := s.Secrets()
+	if len(d.Declares) != 0 {
+		t.Errorf("declares %+v, want none: the model keys are in model.keys", d.Declares)
+	}
+	m, ok := rt.(runtimes.Model)
+	if !ok {
+		t.Fatal("Claude Code does not implement runtimes.Model")
+	}
+	places, _ := m.Model()
 	var names []string
-	for _, dc := range d.Declares {
-		names = append(names, dc.ID+"="+dc.Name+" "+dc.Auth.Scheme)
+	for _, k := range places.Keys {
+		names = append(names, k.Variable+" "+k.Auth.Scheme+" "+strconv.FormatBool(k.Auth.OAuth))
 	}
-	if want := []string{"api_key=ANTHROPIC_API_KEY header", "oauth_token=CLAUDE_CODE_OAUTH_TOKEN bearer"}; !reflect.DeepEqual(names, want) {
-		t.Errorf("declares %v, want %v", names, want)
+	if want := []string{"ANTHROPIC_API_KEY header false", "ANTHROPIC_AUTH_TOKEN bearer false", "CLAUDE_CODE_OAUTH_TOKEN bearer true"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("keys %v, want %v", names, want)
 	}
-	if len(d.OneOf) != 1 || d.OneOf[0].ID != "model_key" || !d.OneOf[0].Required || !reflect.DeepEqual(d.OneOf[0].Of, []string{"api_key", "oauth_token"}) {
-		t.Errorf("one_of %+v", d.OneOf)
+	if len(d.OneOf) != 0 {
+		t.Errorf("one_of %+v; want none", d.OneOf)
 	}
-	if !reflect.DeepEqual(d.Reserves, []string{"ANTHROPIC_AUTH_TOKEN"}) || !slices.Contains(d.Denies, "CLAUDE_CONFIG_DIR") {
+	if len(d.Reserves) != 0 || !slices.Contains(d.Denies, "CLAUDE_CONFIG_DIR") {
 		t.Errorf("reserves %v, denies %v", d.Reserves, d.Denies)
 	}
 }
 
-// prepare is the claude runtime's Prepare of `claude --model m` with a forwarder.
+// prepare is the claude runtime's walled Prepare of `claude --model m` with a
+// forwarder.
 func prepare(t *testing.T, dir string, interactive bool, placeholders ...string) runtimes.Launch {
+	t.Helper()
+	return prepareWalled(t, dir, interactive, true, placeholders...)
+}
+
+// prepareWalled is prepare, with a wall or without one.
+func prepareWalled(t *testing.T, dir string, interactive, walled bool, placeholders ...string) runtimes.Launch {
 	t.Helper()
 	rt, err := claude.New()
 	if err != nil {
@@ -53,7 +70,7 @@ func prepare(t *testing.T, dir string, interactive bool, placeholders ...string)
 	}
 	got, err := rt.Prepare(runtimes.Attach{
 		Launch: runtimes.Launch{Command: "claude", Args: []string{"--model", "m"}}, RunDir: dir,
-		Forwarder: []string{"/opt/q", "forward"}, Interactive: interactive, Placeholders: placeholders,
+		Forwarder: []string{"/opt/q", "forward"}, Interactive: interactive, Walled: walled, Placeholders: placeholders,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -62,26 +79,30 @@ func prepare(t *testing.T, dir string, interactive bool, placeholders ...string)
 }
 
 // TestPrepareApprovesTheAPIKeyStandInAlone pins when the launch goes through the
-// script: interactive, with ANTHROPIC_API_KEY among the stand-ins. With the OAuth
-// credential's stand-in, with none, or headless, Claude Code shows no approval prompt,
-// and the launch is the program itself.
+// script: interactive, walled, with ANTHROPIC_API_KEY among the stand-ins. With the
+// OAuth credential's stand-in, with none, or headless, Claude Code shows no approval
+// prompt, and the launch is the program itself. Without a wall the launch is the
+// program itself too: the script would write into the developer's configuration, so
+// Claude Code asks the person instead.
 func TestPrepareApprovesTheAPIKeyStandInAlone(t *testing.T) {
 	for _, c := range []struct {
 		name         string
 		interactive  bool
+		walled       bool
 		placeholders []string
 		through      bool
 	}{
-		{"api key, interactive", true, []string{"GH_TOKEN", "ANTHROPIC_API_KEY"}, true},
-		{"api key, headless", false, []string{"ANTHROPIC_API_KEY"}, false},
-		{"oauth, interactive", true, []string{"CLAUDE_CODE_OAUTH_TOKEN"}, false},
-		{"oauth, headless", false, []string{"CLAUDE_CODE_OAUTH_TOKEN"}, false},
-		{"neither, interactive", true, nil, false},
-		{"neither, headless", false, nil, false},
+		{"api key, interactive", true, true, []string{"GH_TOKEN", "ANTHROPIC_API_KEY"}, true},
+		{"api key, interactive, no wall", true, false, []string{"GH_TOKEN", "ANTHROPIC_API_KEY"}, false},
+		{"api key, headless", false, true, []string{"ANTHROPIC_API_KEY"}, false},
+		{"oauth, interactive", true, true, []string{"CLAUDE_CODE_OAUTH_TOKEN"}, false},
+		{"oauth, headless", false, true, []string{"CLAUDE_CODE_OAUTH_TOKEN"}, false},
+		{"neither, interactive", true, true, nil, false},
+		{"neither, headless", false, true, nil, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			got := prepare(t, dir, c.interactive, c.placeholders...)
+			got := prepareWalled(t, dir, c.interactive, c.walled, c.placeholders...)
 			settings := []string{"--model", "m", "--settings", filepath.Join(dir, "settings.json")}
 			script := filepath.Join(dir, claude.ApproveScript)
 			_, err := os.Stat(script)
@@ -234,7 +255,7 @@ func TestTheScriptApprovesTheStandInAndKeepsTheRest(t *testing.T) {
 			}
 			launch, err := rt.Prepare(runtimes.Attach{
 				Launch: runtimes.Launch{Command: "printf", Args: []string{"%s|", "an argument", "it's"}}, RunDir: dir,
-				Forwarder: []string{"/opt/q", "forward"}, Interactive: true, Placeholders: []string{"ANTHROPIC_API_KEY"},
+				Forwarder: []string{"/opt/q", "forward"}, Interactive: true, Walled: true, Placeholders: []string{"ANTHROPIC_API_KEY"},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -310,4 +331,16 @@ func decode(t *testing.T, s string) map[string]any {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// TestAModelKeysPlaceholderIsApprovedAsTheStandIn pins that the placeholder of a model
+// key, whose value contains the key's name, ends as the stand-in does, so the approval
+// the script writes covers it.
+func TestAModelKeysPlaceholderIsApprovedAsTheStandIn(t *testing.T) {
+	for _, name := range []string{"model", "a", "local-model.v2"} {
+		v := link.KeyPlaceholder(name)
+		if !strings.HasSuffix(v, approvedEntry) || !strings.Contains(v, name) || v == link.Placeholder {
+			t.Errorf("the placeholder of %s is %q; want one that contains the name and ends in %q", name, v, approvedEntry)
+		}
+	}
 }

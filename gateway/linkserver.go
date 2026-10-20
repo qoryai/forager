@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 )
@@ -23,11 +23,13 @@ import (
 // in this process, [linkListener.dial]. Any other is closed unanswered before anything
 // is read of it, and nothing is logged of it.
 type linkListener struct {
-	ln    net.Listener
-	uid   int
-	conns chan net.Conn
-	done  chan struct{}
-	once  sync.Once
+	ln  net.Listener
+	uid int
+	// report gets a panic of the listener's goroutines ([routine.Go]).
+	report func(string)
+	conns  chan net.Conn
+	done   chan struct{}
+	once   sync.Once
 
 	mu      sync.Mutex
 	pending map[net.Conn]struct{}
@@ -35,12 +37,13 @@ type linkListener struct {
 }
 
 // newLinkListener serves the connections of uid's processes on ln, and those made in
-// memory; a nil ln is no socket, and the connections made in memory alone.
-func newLinkListener(ln net.Listener, uid int) *linkListener {
-	l := &linkListener{ln: ln, uid: uid, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
+// memory; a nil ln is no socket, and the connections made in memory alone. report gets
+// a panic of the listener's goroutines.
+func newLinkListener(ln net.Listener, uid int, report func(string)) *linkListener {
+	l := &linkListener{ln: ln, uid: uid, report: report, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
 	if ln != nil {
 		l.wg.Add(1)
-		go l.accept()
+		routine.Go(report, l.accept)
 	}
 	return l
 }
@@ -49,31 +52,29 @@ func newLinkListener(ln net.Listener, uid int) *linkListener {
 // checked holds up no one else.
 func (l *linkListener) accept() {
 	defer l.wg.Done()
-	var backoff time.Duration
-	for {
-		c, err := l.ln.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
-			time.Sleep(backoff)
-			continue
-		}
-		backoff = 0
-		l.mu.Lock()
-		select {
-		case <-l.done:
-			l.mu.Unlock()
-			c.Close()
-			return
-		default:
-		}
-		l.pending[c] = struct{}{}
-		l.wg.Add(1)
-		l.mu.Unlock()
-		go l.check(c, false)
+	routine.Accept(l.report, l.take)
+}
+
+// take accepts one connection into *c and checks it in its own goroutine, for
+// [routine.Accept].
+func (l *linkListener) take(c *net.Conn) (more, failed bool) {
+	conn, err := l.ln.Accept()
+	if err != nil {
+		return !errors.Is(err, net.ErrClosed), true
 	}
+	*c = conn
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	select {
+	case <-l.done:
+		conn.Close()
+		return false, false
+	default:
+	}
+	l.pending[conn] = struct{}{}
+	l.wg.Add(1)
+	routine.Go(l.report, func() { l.check(conn, false) }, conn)
+	return true, false
 }
 
 // dial opens a connection to the link in this process's memory, one end of a
@@ -94,7 +95,7 @@ func (l *linkListener) dial(context.Context) (net.Conn, error) {
 	l.pending[served] = struct{}{}
 	l.wg.Add(1)
 	l.mu.Unlock()
-	go l.check(served, true)
+	routine.Go(l.report, func() { l.check(served, true) }, served)
 	return client, nil
 }
 
@@ -102,10 +103,16 @@ func (l *linkListener) dial(context.Context) (net.Conn, error) {
 // and closes it otherwise.
 func (l *linkListener) check(c net.Conn, inMemory bool) {
 	defer l.wg.Done()
+	forgotten := false
+	defer func() {
+		// After a panic in opens.
+		if !forgotten {
+			l.forget(c)
+		}
+	}()
 	ok := l.opens(c, inMemory)
-	l.mu.Lock()
-	delete(l.pending, c)
-	l.mu.Unlock()
+	l.forget(c)
+	forgotten = true
 	if !ok {
 		c.Close()
 		return
@@ -115,6 +122,13 @@ func (l *linkListener) check(c net.Conn, inMemory bool) {
 	case <-l.done:
 		c.Close()
 	}
+}
+
+// forget takes c off the connections being checked.
+func (l *linkListener) forget(c net.Conn) {
+	l.mu.Lock()
+	delete(l.pending, c)
+	l.mu.Unlock()
 }
 
 // opens reports whether c is a session's: its peer this process's user, by the uid the

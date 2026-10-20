@@ -38,8 +38,9 @@ type cachedLeaf struct {
 }
 
 // leafCap is how many hosts' certificates an authority keeps: past it, the least
-// recently used goes, and is made again when it is asked for. Every run's authority
-// answers for every host the run reaches, so its cache is bounded.
+// recently used goes, and is made again when it is asked for. The proxy asks for leaves
+// only for the hosts the run terminates ([terminator.covers]), and a "*." entry matches
+// any number of names, so the cache is bounded.
 var leafCap = 1024
 
 // caLife is how long a run's authority and its certificates are good for: longer than
@@ -132,6 +133,9 @@ func (c *CA) leaf(host string) (*tls.Certificate, error) {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	if ip := net.ParseIP(host); ip != nil {
+		// No common name: OpenSSL reads a common name that looks like a name as a
+		// name, and the certificate is for an address.
+		tmpl.Subject = pkix.Name{}
 		tmpl.IPAddresses = []net.IP{ip}
 	} else {
 		tmpl.DNSNames = []string{host}

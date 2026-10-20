@@ -12,9 +12,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"slices"
 	"strings"
 	"sync"
 
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 )
@@ -22,6 +25,11 @@ import (
 // AmbiguousPath is the rule a denial names when a request's path could be read two
 // ways: not a path entry, the proxy's own refusal, in either mode.
 const AmbiguousPath = "wall:ambiguous-path"
+
+// EchoMethod is the rule a denial names of a TRACE or a TRACK, which echo the
+// request's headers back, to a host a credential is for: a refusal of the proxy's, in
+// either mode, with a 405.
+const EchoMethod = "wall:echo-method"
 
 // Credential is one use of a credential the gateway holds for the session: the hosts it
 // goes to, how it is set, and the paths of those hosts the run may request.
@@ -37,6 +45,16 @@ type Credential struct {
 	// told when the host answered 401, which is a reason to ask for another.
 	Token    func() string
 	Rejected func()
+	// Value, for a credential from the server, returns a copy of its opened value's
+	// bytes, which the proxy clears once the header is set, in place of Token; Stored
+	// says the credential is the server's.
+	Value  func() []byte
+	Stored bool
+	// Placeholder, for a model key, is its placeholder's value: the proxy sets the key
+	// only on a request that carries it where the key goes, the header and the scheme
+	// the key is set with. Empty for every other credential, which the proxy sets on
+	// every request to its hosts.
+	Placeholder string
 }
 
 // Tool is a program of the machine's that serves hosts: the proxy hands every request
@@ -75,6 +93,7 @@ func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string,
 				return d.DialContext(ctx, "unix", sock)
 			},
 			DisableCompression: true,
+			IdleConnTimeout:    idleTimeout,
 		}
 	}
 	p.term.Store(&terminator{p: p, ca: ca, creds: creds, paths: paths, node: p.node, tools: tools})
@@ -88,7 +107,8 @@ func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string,
 func (p *Proxy) NodePaths(sides ...map[string][]string) { p.node = sides }
 
 // Terminated reports the hosts, as configured, the proxy terminates TLS for: under the
-// policy set last, when one was.
+// policy set last, when one was. A credential's "*." pattern that is for no host by
+// [policy.CredentialFor], such as "*.local", is left out.
 func (p *Proxy) Terminated() []string {
 	t := p.term.Load()
 	if t == nil {
@@ -98,7 +118,7 @@ func (p *Proxy) Terminated() []string {
 	seen := map[string]bool{}
 	for _, c := range t.creds {
 		for _, h := range c.Hosts {
-			if !seen[h] {
+			if !seen[h] && !privatePattern(h) {
 				seen[h] = true
 				out = append(out, h)
 			}
@@ -121,6 +141,19 @@ func (p *Proxy) Terminated() []string {
 		}
 	}
 	return out
+}
+
+// privatePattern reports whether entry is a "*." pattern that is for no host by
+// [policy.CredentialFor]: the name one label below it, such as a.local for "*.local",
+// has a form under [policy.Host] and is not for entry. The label a has no dot, so when
+// that name is private, every name under the pattern ends as it does and is private.
+func privatePattern(entry string) bool {
+	suffix, ok := strings.CutPrefix(entry, "*.")
+	if !ok {
+		return false
+	}
+	name, ok := policy.Host("a." + suffix)
+	return ok && !policy.CredentialFor([]string{entry}, name)
 }
 
 type terminator struct {
@@ -151,10 +184,11 @@ func (t *terminator) tool(host string) *Tool {
 	return nil
 }
 
-// credential is the credential that is for the host, if one is.
+// credential is the credential that is for the host, by [policy.CredentialFor], if one
+// is.
 func (t *terminator) credential(host string) *Credential {
 	for i := range t.creds {
-		if _, ok := policy.Match(t.creds[i].Hosts, host); ok {
+		if policy.CredentialFor(t.creds[i].Hosts, host) {
 			return &t.creds[i]
 		}
 	}
@@ -185,6 +219,34 @@ func (t *terminator) rules(host string) [][]string {
 	return out
 }
 
+// samePaths reports whether the host's path rules under t and under o are equal: the
+// rules of each side that lists the host, and the paths of the credential for it.
+func (t *terminator) samePaths(o *terminator, host string) bool {
+	a, b := t.credentialPaths(host), o.credentialPaths(host)
+	return slices.EqualFunc(t.pathRules(host), o.pathRules(host), slices.Equal[[]string]) &&
+		(a == nil) == (b == nil) && slices.Equal(a, b)
+}
+
+// pathRules are [terminator.rules], none when t is nil.
+func (t *terminator) pathRules(host string) [][]string {
+	if t == nil {
+		return nil
+	}
+	return t.rules(host)
+}
+
+// credentialPaths are the paths of the credential for the host; nil when none is, or
+// when it covers every path.
+func (t *terminator) credentialPaths(host string) []string {
+	if t == nil {
+		return nil
+	}
+	if c := t.credential(host); c != nil {
+		return c.Paths
+	}
+	return nil
+}
+
 // ruled reports whether either side has path rules for the host.
 func (t *terminator) ruled(host string) bool { return len(t.rules(host)) > 0 }
 
@@ -196,13 +258,13 @@ func (t *terminator) covers(host string) bool {
 	return t.ruled(host) || t.credential(host) != nil || t.tool(host) != nil
 }
 
-// path decides one request's path. A path that could be read two ways is denied in
-// either mode; a path that misses the rules of a side that lists its host is denied
-// under enforce, with no rule. A path every such side matches has the narrowest entry
-// that matched as its rule. The credential is set only on a path its own rules match,
-// whatever the mode: observing is no reason to hand a credential to a path nobody
-// configured.
-func (t *terminator) path(host, escaped string) (clean, rule string, allowed, credentialed bool) {
+// path decides one request's path under mode. A path that could be read two ways is
+// denied in either mode; a path that misses the rules of a side that lists its host is
+// denied under enforce, with no rule. A path every such side matches has the narrowest
+// entry that matched as its rule. The credential is set only on a path its own rules
+// match, whatever the mode: observing is no reason to hand a credential to a path
+// nobody configured.
+func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule string, allowed, credentialed bool) {
 	clean, ok := policy.CleanPath(escaped)
 	if !ok {
 		return escaped, AmbiguousPath, false, false
@@ -228,7 +290,7 @@ func (t *terminator) path(host, escaped string) (clean, rule string, allowed, cr
 		}
 		allowed = allowed && ok
 	}
-	if !allowed && t.p.rules.Load().mode == policy.Observe {
+	if !allowed && mode == policy.Observe {
 		allowed = true
 	}
 	return clean, rule, allowed, credentialed
@@ -255,6 +317,15 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			// The request's own trailer, which the server fills once the body is read:
 			// a copy made before that would carry none.
 			r.Out.Trailer = r.In.Trailer
+			if masked(r.In) != nil {
+				// The value is replaced in the answer only where it can be read: in
+				// an uncompressed body, whole, and on a connection that stays HTTP. A
+				// range of the body could hold part of the value.
+				r.Out.Header.Set("Accept-Encoding", "identity")
+				for _, h := range []string{"Range", "If-Range", "Upgrade", "Connection"} {
+					r.Out.Header.Del(h)
+				}
+			}
 		},
 		Transport:     t.p.upstream(),
 		FlushInterval: -1,
@@ -263,29 +334,86 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			if d, ok := settle(resp.Request, resp, nil); ok {
 				t.p.observe(d)
 			}
-			if c := t.credential(d.Host); c != nil && resp.StatusCode == http.StatusUnauthorized && c.Rejected != nil && resp.Request.Header.Get(setBy) == c.Name {
+			if c := t.credential(d.Host); c != nil && resp.StatusCode == http.StatusUnauthorized && c.Rejected != nil && resp.Request.Context().Value(keyedKey{}) == c.Name {
 				c.Rejected()
+			}
+			if masked(resp.Request) == nil {
+				return nil
+			}
+			// The request went upstream without its Upgrade: a connection that
+			// switched could carry the value unread.
+			if resp.StatusCode == http.StatusSwitchingProtocols {
+				return errUnaskedSwitch
+			}
+			if coding := encoded(resp); coding != "" {
+				clean, _ := policy.CleanPath(resp.Request.URL.EscapedPath())
+				withheld(resp, coding, resp.Request.Method, d.Host, clean)
 			}
 			return nil
 		},
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clean, rule, allowed, credentialed := t.path(d.Host, r.URL.EscapedPath())
+		// The token first, then the host's decision and the path's, under the policy in
+		// force now: a reload since the connection opened changes the mode and the rule
+		// of the requests in it, and a host the reload denies is refused here before the
+		// reload closes the connection. The host's decision takes no token and no
+		// connection, and is recorded only with the request.
+		rated := t.p.take(r.Context())
+		now := t.p.decide(d.Method, d.Host, d.Port)
 		req := d
-		req.Method, req.RequestMethod, req.Path, req.PathRule = "HTTPS", r.Method, clean, rule
-		req.Allowed, req.RequestID = allowed, newRequestID()
+		req.Method, req.RequestMethod, req.Mode, req.Rule, req.RequestID = "HTTPS", r.Method, now.Mode, now.Rule, newRequestID()
+		if !now.Allowed {
+			// A host the policy refuses reaches no tool and has no path decision.
+			clean, ok := policy.CleanPath(r.URL.EscapedPath())
+			if !ok {
+				clean = r.URL.EscapedPath()
+			}
+			req.Path, req.Allowed, req.Outcome = clean, false, Refused
+			if rated != nil {
+				t.p.limited(w, req, RateLimit, rated)
+				return
+			}
+			t.p.observe(req)
+			deny(w, req)
+			return
+		}
+		clean, rule, allowed, credentialed := t.path(d.Host, r.URL.EscapedPath(), now.Mode)
+		req.Path, req.PathRule, req.Allowed = clean, rule, allowed
 		tl := t.tool(d.Host)
 		if tl != nil {
 			req.Tool = tl.Name
 		}
+		if rated != nil {
+			t.p.limited(w, req, RateLimit, rated)
+			return
+		}
 		c := t.credential(d.Host)
+		if c != nil && (strings.EqualFold(r.Method, "TRACE") || strings.EqualFold(r.Method, "TRACK")) {
+			req.Allowed, req.PathRule, req.Outcome = false, EchoMethod, Refused
+			t.p.observe(req)
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			fmt.Fprintf(w, "qory: use a method other than TRACE or TRACK on this host.\n"+
+				"qory: %s %s%s denied by the gateway: this host gets a credential from the gateway, and the answer to TRACE or TRACK contains the request's headers\n", r.Method, d.Host, accesskey.ShownValue(clean, false))
+			return
+		}
 		r.Header.Del(setBy)
-		if allowed && credentialed && c != nil && tl == nil {
-			if name, value, ok := c.header(); ok {
-				r.Header.Set(name, value)
-				r.Header.Set(setBy, c.Name)
-				req.Credential = c.Name
+		// Every answer from a host that gets a credential has its value replaced with
+		// the placeholder, on a path that gets none as well: the host may send back a
+		// value it received before.
+		keyed := false
+		var mask *masker
+		if allowed && c != nil && tl == nil {
+			v := c.secret()
+			if credentialed && c.carries(r.Header) {
+				if name, value, ok := c.header(v); ok {
+					r.Header.Set(name, value)
+					r.Header.Set(setBy, c.Name)
+					req.Credential, keyed = c.Name, true
+				}
 			}
+			mask = c.masker(v)
+			clear(v)
 		}
 		if !allowed {
 			req.Outcome = Refused
@@ -293,10 +421,10 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusForbidden)
 			if rule == AmbiguousPath {
-				fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: the path could be read two ways\n", r.Method, d.Host, clean)
+				fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: the path could be read two ways\n", accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false))
 				return
 			}
-			fmt.Fprintf(w, "qory: %s %s%s denied by policy (mode %s): no path rule of the run's covers it\n", r.Method, d.Host, clean, req.Mode)
+			fmt.Fprintf(w, "qory: %s %s%s denied by policy (mode %s): no path rule of the run's covers it\n", accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false), req.Mode)
 			return
 		}
 		if tl != nil {
@@ -305,11 +433,20 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		}
 		// The request is recorded once its outcome is known: when the response's
 		// headers arrive, or when the transport fails.
-		ctx := context.WithValue(t.p.dialContext(r.Context(), d), pendingKey{}, &pending{d: req})
-		rp.ServeHTTP(w, r.WithContext(ctx))
+		ctx := context.WithValue(t.p.dialContext(r.Context(), req), pendingKey{}, &pending{d: req, mask: mask})
+		if keyed {
+			// In the context, since the session's Connection header can take any header
+			// off the request before it reaches the transport, the mark among them.
+			ctx = context.WithValue(ctx, keyedKey{}, req.Credential)
+		}
+		if mask == nil {
+			rp.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		serveMasked(rp, w, r.WithContext(ctx), mask)
 	})
 	ln := &once{conn: conn, done: make(chan struct{})}
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: t.p.srv.ReadHeaderTimeout, ConnState: func(_ net.Conn, s http.ConnState) {
+	srv := &http.Server{Handler: routine.Handler(t.p.reportPanic, handler), ReadHeaderTimeout: t.p.srv.ReadHeaderTimeout, ConnState: func(_ net.Conn, s http.ConnState) {
 		if s == http.StateClosed || s == http.StateHijacked {
 			ln.Close()
 		}
@@ -326,6 +463,16 @@ type pendingKey struct{}
 type pending struct {
 	d    Decision
 	once sync.Once
+	// mask replaces the credential's value in the answer, when the host gets one.
+	mask *masker
+}
+
+// masked is the masker of the request's answer, nil when its host gets no credential.
+func masked(r *http.Request) *masker {
+	if p, ok := r.Context().Value(pendingKey{}).(*pending); ok {
+		return p.mask
+	}
+	return nil
 }
 
 // settle returns the request's decision with its outcome, and the status of resp when
@@ -356,45 +503,103 @@ func settle(r *http.Request, resp *http.Response, err error) (Decision, bool) {
 // transport takes it off again.
 const setBy = "X-Qory-Credential-Set"
 
-// header is the header that carries the token.
-func (c *Credential) header() (string, string, bool) {
-	token := c.Token()
-	if token == "" {
+// carries reports whether a request's headers carry the credential's placeholder as
+// the credential sets its token, or the credential has none.
+func (c *Credential) carries(h http.Header) bool {
+	if c.Placeholder == "" {
+		return true
+	}
+	name, value, ok := c.header([]byte(c.Placeholder))
+	return ok && h.Get(name) == value
+}
+
+// secret is a copy of the credential's value as it is now, which the caller clears:
+// a credential from the server's opened value, or the token. It is empty when there is
+// none.
+func (c *Credential) secret() []byte {
+	if c.Value != nil {
+		return c.Value()
+	}
+	return []byte(c.Token())
+}
+
+// header is the header that carries the value v, which stays the caller's to clear.
+// Every buffer this builds is cleared before it returns.
+// The header's value is a Go string, since http.Header holds strings: one copy per
+// request that cannot be cleared, and the copies the transport makes as it writes the
+// request, in its buffers. The request goes over HTTP/1.1 ([Proxy.upstream]), so no
+// header compression's table keeps one.
+func (c *Credential) header(v []byte) (string, string, bool) {
+	if len(v) == 0 {
 		return "", "", false
+	}
+	join := func(prefix string, b []byte) string {
+		out := make([]byte, 0, len(prefix)+len(b))
+		out = append(append(out, prefix...), b...)
+		defer clear(out)
+		return string(out)
 	}
 	switch c.Scheme {
 	case "bearer":
-		return "Authorization", "Bearer " + token, true
+		return "Authorization", join("Bearer ", v), true
 	case "basic":
-		return "Authorization", "Basic " + base64.StdEncoding.EncodeToString([]byte(c.Username+":"+token)), true
+		pair := make([]byte, 0, len(c.Username)+1+len(v))
+		pair = append(append(append(pair, c.Username...), ':'), v...)
+		defer clear(pair)
+		enc := make([]byte, base64.StdEncoding.EncodedLen(len(pair)))
+		base64.StdEncoding.Encode(enc, pair)
+		defer clear(enc)
+		return "Authorization", join("Basic ", enc), true
 	case "header":
-		return c.Header, token, true
+		return c.Header, join("", v), true
 	}
 	return "", "", false
 }
 
 // upstream is the transport to the real hosts of terminated connections: verified
-// against this machine's roots, dialled through the proxy's guarded dialler.
+// against this machine's roots, dialled through the proxy's guarded dialler. A request
+// the proxy set a credential on goes over HTTP/1.1 alone: over HTTP/2 the connection's
+// header table (HPACK) would keep a copy of the credential for as long as it is open.
 func (p *Proxy) upstream() http.RoundTripper {
 	p.upOnce.Do(func() {
-		p.up = &unmark{&http.Transport{Proxy: nil, DialContext: p.dialHost, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS}}
+		h1 := new(http.Protocols)
+		h1.SetHTTP1(true)
+		p.up = &unmark{
+			rt:    &http.Transport{Proxy: nil, DialContext: p.dialHost, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS.Clone(), IdleConnTimeout: idleTimeout},
+			keyed: &http.Transport{Proxy: nil, DialContext: p.dialHost, Protocols: h1, DisableCompression: true, TLSClientConfig: p.upstreamTLS.Clone(), IdleConnTimeout: idleTimeout},
+		}
 	})
 	return p.up
 }
 
-// unmark takes the proxy's own mark off a request before it leaves.
-type unmark struct{ rt http.RoundTripper }
+// keyedKey marks the context of a request the proxy set a credential on, with the
+// credential's name.
+type keyedKey struct{}
+
+// unmark takes the proxy's own mark off a request before it leaves, and sends a
+// request whose context has [keyedKey] by keyed.
+type unmark struct{ rt, keyed http.RoundTripper }
+
+// CloseIdleConnections closes the idle connections of both transports.
+func (u *unmark) CloseIdleConnections() {
+	closeIdle(u.rt)
+	closeIdle(u.keyed)
+}
 
 // RoundTrip sends the request on without the mark.
 func (u *unmark) RoundTrip(r *http.Request) (*http.Response, error) {
+	rt := u.rt
+	if r.Context().Value(keyedKey{}) != nil {
+		rt = u.keyed
+	}
 	if r.Header.Get(setBy) == "" {
-		return u.rt.RoundTrip(r)
+		return rt.RoundTrip(r)
 	}
 	out := r.Clone(r.Context())
 	out.Header.Del(setBy)
 	// The trailer is filled once the body is read; a clone's copy would stay empty.
 	out.Trailer = r.Trailer
-	resp, err := u.rt.RoundTrip(out)
+	resp, err := rt.RoundTrip(out)
 	if resp != nil {
 		resp.Request = r
 	}
@@ -432,16 +637,16 @@ func (l *once) Close() error {
 // Addr is the connection's.
 func (l *once) Addr() net.Addr { return l.conn.LocalAddr() }
 
-// plainPath decides a plain request's path by the policy's rules. No credential is ever
-// set on a connection that is not encrypted.
-func (t *terminator) plainPath(host, escaped string) (string, string, bool) {
+// plainPath decides a plain request's path by the policy's rules, under mode. No
+// credential is ever set on a connection that is not encrypted.
+func (t *terminator) plainPath(host, escaped string, mode policy.Mode) (string, string, bool) {
 	if t == nil {
 		return "", "", true
 	}
 	if !t.ruled(host) && t.credential(host) == nil && t.tool(host) == nil {
 		return "", "", true
 	}
-	clean, rule, allowed, _ := t.path(host, escaped)
+	clean, rule, allowed, _ := t.path(host, escaped, mode)
 	return clean, rule, allowed
 }
 
@@ -460,7 +665,7 @@ func (t *terminator) failed(w http.ResponseWriter, r *http.Request, err error) {
 			return
 		}
 	}
-	http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
+	http.Error(w, "upstream: "+accesskey.ShownError(err).Error(), http.StatusBadGateway)
 }
 
 // toTool hands a request the proxy let through to the tool that serves its host, with

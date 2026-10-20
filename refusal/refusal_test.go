@@ -12,8 +12,8 @@ import (
 // gateway's, and a gateway decides its own and none of Forager's.
 func TestDeciders(t *testing.T) {
 	forager := []string{
-		RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved,
-		PlaceholderConflict, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
+		RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot,
+		VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable,
 	}
 	gateway := []string{RunIDUsed}
@@ -51,19 +51,36 @@ func TestByGateway(t *testing.T) {
 }
 
 // TestNeedsWallSaysWhatARunAlwaysSaid pins the text of a run without a wall whose policy
-// selects what needs one, rebuilt from the link's names word for word: the credentials'
-// before the image's.
+// selects what needs one, rebuilt from the link's names word for word: the fix for
+// tools and path rules first, and the image's text for an image alone.
 func TestNeedsWallSaysWhatARunAlwaysSaid(t *testing.T) {
-	const selects = "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"
+	const selects = "run it with a wall: the policy selects tools or has path rules, and without a wall a program that ignores the proxy is bound by neither"
 	for names, want := range map[string]string{
-		"credentials":            selects,
-		"tools":                  selects,
-		"paths":                  selects,
-		"credentials,image=base": selects,
-		"image=base":             `the policy selects the image "base", which needs a wall: without one the runtime is this machine's process`,
+		"tools":            selects,
+		"paths":            selects,
+		"tools,paths":      selects,
+		"tools,image=base": selects,
+		"image=base":       `the policy selects the image "base", which needs a wall: without one the runtime is this machine's process`,
+		// A name the gateway's link sends as its phrase prints as the image's phrase does.
+		"image=qrk_FAKE":                         `the policy selects the image (a name that contains a run key), which needs a wall: without one the runtime is this machine's process`,
+		"image=(a name that contains a run key)": `the policy selects the image (a name that contains a run key), which needs a wall: without one the runtime is this machine's process`,
 	} {
 		if got := (&NeedsWall{Names: strings.Split(names, ",")}).Error(); got != want {
 			t.Errorf("%s: %s", names, got)
 		}
+	}
+}
+
+// TestShownListsAPhraseForASecret pins Shown: a name that contains qak_ or qrk_ in any
+// case is its phrase, a clean name is as it is, and New lists a phrase two names give
+// once.
+func TestShownListsAPhraseForASecret(t *testing.T) {
+	got := New(RunConfigurationInvalid, Shown("x-qak_one", "model", "QAK_two", "qrk_three"), "refused").Names
+	want := []string{"(a name that contains a run key)", "(a name that contains an access key secret)", "model"}
+	if !slices.Equal(got, want) {
+		t.Errorf("names %q, want %q", got, want)
+	}
+	if Shown() != nil {
+		t.Error("Shown() is not nil")
 	}
 }

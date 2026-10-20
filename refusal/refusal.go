@@ -30,11 +30,23 @@ const (
 	// ImageUnknown is an image the machine does not define, or a server's image other
 	// than the one the node's policy selects.
 	ImageUnknown = "image_unknown"
+	// ImageNotAllowed is an image a policy names by its reference pinned by digest
+	// that no prefix of the machine's images.allow covers: its name is the reference.
+	ImageNotAllowed = "image_not_allowed"
+	// ImageUserRoot is an image a policy names by its reference whose user is root, as
+	// the wall reads it from the image after it fetches it, or finds the engine holds it
+	// by that digest: its name is the reference.
+	ImageUserRoot = "image_user_root"
 	// VariableReserved is a walled run whose environment passes a QORY_ variable, or a
 	// variable a machine value is read from, into the enclosure.
 	VariableReserved = "variable_reserved"
 	// PlaceholderConflict is a run that passes a value for a placeholder.
 	PlaceholderConflict = "placeholder_conflict"
+	// ModelKeyMissing is a run whose gateway holds credentials for it, none of them a
+	// model key for the runtime's model host, and to which the node passes no value for
+	// a variable the runtime reads a model key from: behind a wall, or without one when a
+	// credential has a placeholder of such a variable. Its names are those variables.
+	ModelKeyMissing = "model_key_missing"
 	// MountContainsForagerFiles is a walled run with a mount that is, contains or lies
 	// inside one of Forager's files: its names are the mount and the file, in that
 	// order.
@@ -65,8 +77,8 @@ const (
 // refusal of the run's own configuration rather than of an answer of the server's.
 func Decides(code string) bool {
 	switch code {
-	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved,
-		PlaceholderConflict, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
+	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot,
+		VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable:
 		return true
 	}
@@ -98,6 +110,18 @@ func New(code string, names []string, format string, a ...any) *accesskey.Refusa
 	return &accesskey.Refusal{Code: code, Names: sorted, Detail: fmt.Sprintf(format, a...)}
 }
 
+// Shown are names as a refusal lists them: each that contains an access key secret or
+// a run key, [accesskey.ContainsSecret], is its phrase, [accesskey.ShownName] unquoted,
+// since a refusal's names reach its text and the answer that carries it. [New] lists a
+// phrase two names give once. Nil when names is empty.
+func Shown(names ...string) []string {
+	var out []string
+	for _, n := range names {
+		out = append(out, accesskey.ShownName(n, false))
+	}
+	return out
+}
+
 // ByGateway is the refusal [New] makes, decided by a gateway: its From is
 // [accesskey.FromGateway].
 func ByGateway(code string, names []string, format string, a ...any) *accesskey.Refusal {
@@ -108,15 +132,15 @@ func ByGateway(code string, names []string, format string, a ...any) *accesskey.
 
 // WallRequired is the gateway's link's code, and the link's alone, of a run without a
 // wall whose policy in force selects what needs one: a 403 from the gateway whose names
-// are credentials, tools and paths, each one the policy selects, or image=<name>. It is
-// not one of [Decides] and never appears in an event: the session turns it back into
-// the error it gives today, [NeedsWall].
+// are tools and paths, each one the policy selects, or image=<name>. A credential needs
+// no wall. It is not one of [Decides] and never appears in an event: the session turns
+// it back into the error it gives today, [NeedsWall].
 const WallRequired = "wall_required"
 
 // NeedsWall is a run without a wall whose policy selects what needs one, with the names
-// of [WallRequired]: credentials, tools and paths, each one the policy selects, and
-// image=<name> for an image it selects. Its Error is the text a run refused for it has
-// always had, word for word, the credentials' before the image's.
+// of [WallRequired]: tools and paths, each one the policy selects, and image=<name> for
+// an image it selects. Its Error starts with the fix for tools and paths, and is the
+// image's text, word for word as it has always been, for an image alone.
 type NeedsWall struct {
 	Names []string
 }
@@ -124,8 +148,8 @@ type NeedsWall struct {
 func (e *NeedsWall) Error() string {
 	for _, n := range e.Names {
 		if image, ok := strings.CutPrefix(n, "image="); ok && len(e.Names) == 1 {
-			return fmt.Sprintf("the policy selects the image %q, which needs a wall: without one the runtime is this machine's process", image)
+			return fmt.Sprintf("the policy selects the image %s, which needs a wall: without one the runtime is this machine's process", accesskey.ShownName(image, !accesskey.IsNamePhrase(image)))
 		}
 	}
-	return "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"
+	return "run it with a wall: the policy selects tools or has path rules, and without a wall a program that ignores the proxy is bound by neither"
 }

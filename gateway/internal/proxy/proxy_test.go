@@ -48,6 +48,13 @@ func (o *observer) observe(d proxy.Decision) {
 	o.seen = append(o.seen, d)
 }
 
+// count returns the number of decisions observed so far.
+func (o *observer) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.seen)
+}
+
 func (o *observer) last(t *testing.T) proxy.Decision {
 	t.Helper()
 	o.mu.Lock()
@@ -271,6 +278,15 @@ func TestGuardRefusesThisMachineAndLinkLocal(t *testing.T) {
 		{"http://localhost" + port, 403, proxy.GuardRule},
 		{"http://169.254.169.254/latest/meta-data/", 403, proxy.GuardRule},
 		{"http://[::1]" + port, 403, proxy.GuardRule},
+		// The cloud metadata addresses outside the link-local ranges.
+		{"http://100.100.100.200/latest/meta-data/", 403, proxy.GuardRule},
+		{"http://192.0.0.192/2007-08-29/meta-data", 403, proxy.GuardRule},
+		{"http://[fd00:ec2::254]/latest/meta-data/", 403, proxy.GuardRule},
+		{"http://[fd20:ce::254]/computeMetadata/v1", 403, proxy.GuardRule},
+		{"http://168.63.129.16/?comp=versions", 403, proxy.GuardRule},
+		{"http://[fd00:ec2::23]/v1/credentials", 403, proxy.GuardRule},
+		{"http://[fd00:a9fe:a9fe::1]/v1/instance", 403, proxy.GuardRule},
+		{"http://[fd00:42::42]/conf", 403, proxy.GuardRule},
 		// A name that resolves to loopback passes the decision and is refused when
 		// dialled, recorded then as the wall's denial.
 		{"http://localtest.me" + port, 403, proxy.GuardRule},
@@ -293,10 +309,46 @@ func TestGuardRefusesThisMachineAndLinkLocal(t *testing.T) {
 	}
 }
 
+// TestGuardRefusesAMetadataAddressInAConnect pins that a CONNECT to a cloud metadata
+// address outside the link-local ranges is refused at the decision, before any dial,
+// with the wall's rule and the page that names the metadata addresses, whatever the
+// allow list contains.
+func TestGuardRefusesAMetadataAddressInAConnect(t *testing.T) {
+	var o observer
+	metadata := []string{"100.100.100.200", "fd00:ec2::254", "168.63.129.16", "fd00:ec2::23", "fd00:a9fe:a9fe::1", "fd00:42::42"}
+	p, err := proxy.Listen("", policy.Observe, metadata, nil, o.observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.Guard(metadata)
+	for _, target := range []string{"100.100.100.200:443", "[fd00:ec2::254]:443", "168.63.129.16:443", "[fd00:ec2::23]:443", "[fd00:a9fe:a9fe::1]:443", "[fd00:42::42]:443"} {
+		c, err := net.Dial("tcp", p.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+		resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+		if err != nil {
+			t.Fatalf("CONNECT %s: %v", target, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		c.Close()
+		d := o.last(t)
+		if resp.StatusCode != 403 || !strings.HasSuffix(string(body), "and never a link-local or cloud metadata address\n") {
+			t.Errorf("CONNECT %s: %d %q", target, resp.StatusCode, body)
+		}
+		if d.Method != "CONNECT" || d.Rule != proxy.GuardRule || d.Allowed || d.Outcome != proxy.Refused {
+			t.Errorf("CONNECT %s: decision %+v", target, d)
+		}
+	}
+}
+
 // TestGuardOpensThisMachineToAHostThePolicyNames pins the other half: an allow entry
 // that names the host itself reaches this machine through a guarded proxy, in observe
 // mode as well, recorded with that entry as its rule; a *. suffix over the host does
-// not, and no entry opens the link-local range.
+// not, and no entry opens the link-local range or a cloud metadata address.
 func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "the local server") }))
 	defer origin.Close()
@@ -305,11 +357,11 @@ func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 		var o observer
 		// Only a host the policy names itself opens this machine, not one under a
 		// suffix it lists.
-		p, err := proxy.Listen("", mode, []string{"127.0.0.1", "app.localtest.me", "169.254.169.254"}, nil, o.observe)
+		p, err := proxy.Listen("", mode, []string{"127.0.0.1", "app.localtest.me", "169.254.169.254", "100.100.100.200", "192.0.0.192", "fd00:ec2::254", "fd20:ce::254", "168.63.129.16", "fd00:ec2::23", "fd00:a9fe:a9fe::1", "fd00:42::42"}, nil, o.observe)
 		if err != nil {
 			t.Fatal(err)
 		}
-		p.Guard([]string{"127.0.0.1", "*.localtest.me", "169.254.169.254"})
+		p.Guard([]string{"127.0.0.1", "*.localtest.me", "169.254.169.254", "100.100.100.200", "192.0.0.192", "fd00:ec2::254", "fd20:ce::254", "168.63.129.16", "fd00:ec2::23", "fd00:a9fe:a9fe::1", "fd00:42::42"})
 		resp, err := through(t, p, nil).Get(origin.URL)
 		if err != nil {
 			t.Fatal(err)
@@ -319,7 +371,7 @@ func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 		if d := o.last(t); string(body) != "the local server" || !d.Allowed || d.Rule != "127.0.0.1" {
 			t.Errorf("%s: a named host: %q, decision %+v", mode, body, d)
 		}
-		for _, u := range []string{"http://app.localtest.me" + port, "http://169.254.169.254/"} {
+		for _, u := range []string{"http://app.localtest.me" + port, "http://169.254.169.254/", "http://100.100.100.200/", "http://192.0.0.192/", "http://[fd00:ec2::254]/", "http://[fd20:ce::254]/", "http://168.63.129.16/", "http://[fd00:ec2::23]/", "http://[fd00:a9fe:a9fe::1]/", "http://[fd00:42::42]/"} {
 			resp, err := through(t, p, nil).Get(u)
 			if err != nil {
 				t.Fatal(err)
@@ -560,6 +612,239 @@ func TestSetPolicySwapsTheCredentialsWithThePolicy(t *testing.T) {
 	}
 }
 
+// terminated opens a CONNECT to at, host:port, that the proxy terminates, and returns
+// a function that sends a GET for a path on that one connection.
+func terminated(t *testing.T, p *proxy.Proxy, at string, trusted *x509.CertPool) func(path string) (int, string, error) {
+	t.Helper()
+	c, err := net.Dial("tcp", p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", at, at)
+	line := make([]byte, len("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	if _, err := io.ReadFull(c, line); err != nil || !strings.HasPrefix(string(line), "HTTP/1.1 200") {
+		t.Fatalf("CONNECT %s: %q %v", at, line, err)
+	}
+	host, _, _ := net.SplitHostPort(at)
+	tc := tls.Client(c, &tls.Config{RootCAs: trusted, ServerName: host, NextProtos: []string{"http/1.1"}})
+	br := bufio.NewReader(tc)
+	return func(path string) (int, string, error) {
+		fmt.Fprintf(tc, "GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", path, at)
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			return 0, "", err
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b), err
+	}
+}
+
+// TestSetPolicyClosesATunnelWhosePathRulesChange pins a reload's path rules: a
+// terminated connection to a host whose path rules the reload narrows, the policy's or
+// its credential's, is closed, so no request in it is decided by the old rules, and the
+// next connection is held to the new ones. A reload that leaves the host's path rules
+// equal leaves the connection open.
+func TestSetPolicyClosesATunnelWhosePathRulesChange(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "from the origin") }))
+	defer origin.Close()
+	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	at := net.JoinHostPort(host, port)
+	cred := func(paths ...string) []proxy.Credential {
+		return []proxy.Credential{{Name: "product", Hosts: []string{host}, Scheme: "bearer", Paths: paths, Token: func() string { return "the-token" }}}
+	}
+	for _, c := range []struct {
+		name               string
+		paths, narrowPaths map[string][]string
+		creds, narrowCreds []proxy.Credential
+	}{
+		{name: "the policy's paths", paths: map[string][]string{host: {"/a/*", "/b/*"}}, narrowPaths: map[string][]string{host: {"/a/*"}}},
+		{name: "the credential's paths", creds: cred("/a/*", "/b/*"), narrowCreds: cred("/a/*")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, err := proxy.Listen("", policy.Enforce, []string{host}, nil, func(proxy.Decision) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			roots := x509.NewCertPool()
+			roots.AddCert(origin.Certificate())
+			p.TrustUpstream(roots)
+			ca, err := proxy.NewCA("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Terminate(ca, c.creds, c.paths, nil)
+			trusted := x509.NewCertPool()
+			trusted.AppendCertsFromPEM(ca.PEM())
+			send := terminated(t, p, at, trusted)
+			if code, body, err := send("/b/x"); err != nil || code != 200 {
+				t.Fatalf("before the reload: %d %q %v", code, body, err)
+			}
+			// Another host's path rules change; this host's stay equal.
+			equal := map[string][]string{"other.example": {"/*"}}
+			for h, rules := range c.paths {
+				equal[h] = rules
+			}
+			p.SetPolicy(policy.Enforce, []string{host}, nil, equal, c.creds)
+			if code, body, err := send("/b/x"); err != nil || code != 200 {
+				t.Errorf("after a reload that leaves the host's path rules equal: %d %q %v", code, body, err)
+			}
+			p.SetPolicy(policy.Enforce, []string{host}, nil, c.narrowPaths, c.narrowCreds)
+			if code, body, err := send("/b/x"); err == nil {
+				t.Errorf("the connection opened under the old path rules answered %d %q", code, body)
+			}
+			if code, body, err := terminated(t, p, at, trusted)("/b/x"); err != nil || code != 403 {
+				t.Errorf("a connection opened after the reload: %d %q %v", code, body, err)
+			}
+		})
+	}
+}
+
+// TestSetPolicyClosesATunnelToAHostItNowTerminates pins a reload that gives a host a
+// credential with no paths: a tunnel the proxy passes TLS through to that host is
+// closed, so the host's answer to a request with the credential comes back only over a
+// terminated connection, and a tunnel to another host stays open.
+func TestSetPolicyClosesATunnelToAHostItNowTerminates(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	p, err := proxy.Listen("", policy.Enforce, []string{"127.0.0.1", "localhost"}, nil, func(proxy.Decision) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	ca, err := proxy.NewCA("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Terminate(ca, nil, nil, nil)
+	open := func(host string) net.Conn {
+		c, err := net.Dial("tcp", p.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		fmt.Fprintf(c, "CONNECT %s:%s HTTP/1.1\r\nHost: %s:%s\r\n\r\n", host, port, host, port)
+		line := make([]byte, len("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		if _, err := io.ReadFull(c, line); err != nil || !strings.HasPrefix(string(line), "HTTP/1.1 200") {
+			t.Fatalf("CONNECT %s: %q %v", host, line, err)
+		}
+		return c
+	}
+	stays, goes := open("127.0.0.1"), open("localhost")
+	creds := []proxy.Credential{{Name: "product", Hosts: []string{"localhost"}, Scheme: "bearer", Token: func() string { return "fake-token" }}}
+	if refused := p.SetPolicy(policy.Enforce, []string{"127.0.0.1", "localhost"}, nil, nil, creds); len(refused) != 0 {
+		t.Fatalf("SetPolicy returned %+v", refused)
+	}
+	var ne net.Error
+	if _, err := goes.Read(make([]byte, 1)); err == nil || errors.As(err, &ne) && ne.Timeout() {
+		t.Errorf("the tunnel to the host the reload terminates is still open: %v", err)
+	}
+	fmt.Fprint(stays, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	if b := make([]byte, 12); func() error { _, err := io.ReadFull(stays, b); return err }() != nil || string(b) != "HTTP/1.1 200" {
+		t.Errorf("the tunnel to the other host answered %q", b)
+	}
+}
+
+// TestARequestInATunnelIsDecidedUnderTheModeInForce pins the mode and the rule of a
+// request inside a terminated connection: after a reload, the next request in a
+// connection opened before it is decided under the policy in force, and its answer and
+// its record give that policy's mode and allow entry. From observe with no allow entry
+// to enforce that allows the host, the request has the allow entry as its rule, and a
+// path outside the path rules is refused under enforce. From enforce to observe with no
+// allow list, the request has no rule. A host the new policy denies is refused before
+// the reload closes the connection, as one request recorded once, with no CONNECT.
+func TestARequestInATunnelIsDecidedUnderTheModeInForce(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "from the origin") }))
+	defer origin.Close()
+	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	paths := map[string][]string{host: {"/a/*"}}
+	open := func(t *testing.T, mode policy.Mode, allow []string) (*proxy.Proxy, *observer, func(string) (int, string, error)) {
+		t.Helper()
+		o := &observer{}
+		p, err := proxy.Listen("", mode, allow, nil, o.observe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { p.Close() })
+		roots := x509.NewCertPool()
+		roots.AddCert(origin.Certificate())
+		p.TrustUpstream(roots)
+		ca, err := proxy.NewCA("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Terminate(ca, nil, paths, nil)
+		trusted := x509.NewCertPool()
+		trusted.AppendCertsFromPEM(ca.PEM())
+		return p, o, terminated(t, p, net.JoinHostPort(host, port), trusted)
+	}
+
+	t.Run("observe to enforce", func(t *testing.T) {
+		p, o, send := open(t, policy.Observe, nil)
+		if code, body, err := send("/b/x"); err != nil || code != 200 {
+			t.Fatalf("under observe: %d %q %v", code, body, err)
+		}
+		if d := o.last(t); d.Path != "/b/x" || !d.Allowed || d.Mode != policy.Observe || d.Rule != "" {
+			t.Errorf("under observe the request was recorded as %+v", d)
+		}
+		p.SetPolicy(policy.Enforce, []string{host}, nil, paths, nil)
+		if code, body, err := send("/a/x"); err != nil || code != 200 {
+			t.Fatalf("under enforce, a path the rules allow: %d %q %v", code, body, err)
+		}
+		if d := o.last(t); d.Path != "/a/x" || !d.Allowed || d.Mode != policy.Enforce || d.Rule != host {
+			t.Errorf("under enforce the allowed request was recorded as %+v", d)
+		}
+		code, body, err := send("/b/x")
+		if err != nil || code != 403 || !strings.Contains(body, "denied by policy (mode enforce)") {
+			t.Errorf("under enforce: %d %q %v", code, body, err)
+		}
+		if d := o.last(t); d.Path != "/b/x" || d.Allowed || d.Outcome != proxy.Refused || d.Mode != policy.Enforce || d.Rule != host {
+			t.Errorf("under enforce the refused request was recorded as %+v", d)
+		}
+	})
+
+	t.Run("enforce to observe", func(t *testing.T) {
+		p, o, send := open(t, policy.Enforce, []string{host})
+		if code, body, err := send("/a/x"); err != nil || code != 200 {
+			t.Fatalf("under enforce: %d %q %v", code, body, err)
+		}
+		if d := o.last(t); !d.Allowed || d.Mode != policy.Enforce || d.Rule != host {
+			t.Errorf("under enforce the request was recorded as %+v", d)
+		}
+		p.SetPolicy(policy.Observe, nil, nil, paths, nil)
+		if code, body, err := send("/a/x"); err != nil || code != 200 {
+			t.Fatalf("under observe: %d %q %v", code, body, err)
+		}
+		if d := o.last(t); !d.Allowed || d.Mode != policy.Observe || d.Rule != "" {
+			t.Errorf("under observe the request was recorded as %+v", d)
+		}
+	})
+
+	t.Run("a host the reload denies, before the connection closes", func(t *testing.T) {
+		p, o, send := open(t, policy.Enforce, []string{host})
+		if code, body, err := send("/a/x"); err != nil || code != 200 {
+			t.Fatalf("under enforce: %d %q %v", code, body, err)
+		}
+		before := o.count()
+		p.StoreRules(policy.Enforce, nil)
+		code, body, err := send("/a/x")
+		if err != nil || code != 403 || !strings.Contains(body, "denied by policy (mode enforce)") {
+			t.Errorf("after the rules deny the host: %d %q %v", code, body, err)
+		}
+		if n := o.count() - before; n != 1 {
+			t.Errorf("the refused request was recorded %d times", n)
+		}
+		if d := o.last(t); d.Method != "HTTPS" || d.Path != "/a/x" || d.Allowed || d.Outcome != proxy.Refused || d.Mode != policy.Enforce || d.Rule != "" || d.PathRule != "" {
+			t.Errorf("the refused request was recorded as %+v", d)
+		}
+	})
+}
+
 // TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt pins a model provider's two
 // credentials, the OAuth one set as a bearer and the API key set in a header of its
 // own: the host the credential is for gets the key in the credential's header, once,
@@ -722,6 +1007,183 @@ func TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt(t *testing.T) {
 			}
 			if set != 2 {
 				t.Errorf("the record lists the credential on %d requests, want 2: %+v", set, decisions)
+			}
+		})
+	}
+}
+
+// TestAModelKeyIsSetOnlyOnARequestThatCarriesItsPlaceholder pins a credential with a
+// Placeholder, the start model key: the proxy sets it on a request to its host that
+// carries the placeholder where the key goes, the header and the scheme the key is set
+// with, and on no other: a request with the shared placeholder, another model key's
+// placeholder, the placeholder in another header or in another scheme's form, or none,
+// reaches the host as the session sent it, and the record lists the credential on the
+// one request alone.
+func TestAModelKeyIsSetOnlyOnARequestThatCarriesItsPlaceholder(t *testing.T) {
+	const key = "sk-ant-fake-value-not-a-secret"
+	placeholder := link.KeyPlaceholder("model")
+	for _, c := range []struct {
+		name, scheme, header, set, prefix, other string
+	}{
+		{"in x-api-key", "header", "X-Api-Key", "X-Api-Key", "", "Authorization"},
+		{"as a bearer", "bearer", "", "Authorization", "Bearer ", "X-Api-Key"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var mu sync.Mutex
+			got := map[string]http.Header{}
+			model := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				got[r.URL.Path] = r.Header.Clone()
+				mu.Unlock()
+			}))
+			defer model.Close()
+			host, port, _ := net.SplitHostPort(model.Listener.Addr().String())
+			var decisions []proxy.Decision
+			p, err := proxy.Listen("", policy.Enforce, []string{host}, nil, func(d proxy.Decision) { mu.Lock(); decisions = append(decisions, d); mu.Unlock() })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			creds := []proxy.Credential{{
+				Name: "model", Hosts: []string{host}, Scheme: c.scheme, Header: c.header,
+				Token: func() string { return key }, Placeholder: placeholder,
+			}}
+			ca, err := proxy.NewCA("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots := x509.NewCertPool()
+			roots.AddCert(model.Certificate())
+			p.TrustUpstream(roots)
+			p.Terminate(ca, creds, nil, nil)
+			trusted := x509.NewCertPool()
+			trusted.AppendCertsFromPEM(ca.PEM())
+			proxyURL, _ := url.Parse(p.URL())
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
+			sent := map[string][2]string{
+				"/carries":         {c.set, c.prefix + placeholder},
+				"/shared":          {c.set, c.prefix + link.Placeholder},
+				"/another-key":     {c.set, c.prefix + link.KeyPlaceholder("other")},
+				"/another-header":  {c.other, placeholder},
+				"/bearer-in-place": {c.set, "Bearer " + placeholder},
+				"/none":            {},
+			}
+			if c.scheme == "bearer" {
+				// A bearer's placeholder without its scheme word.
+				sent["/bearer-in-place"] = [2]string{c.set, placeholder}
+			}
+			for path, h := range sent {
+				req, _ := http.NewRequest("GET", "https://"+net.JoinHostPort(host, port)+path, nil)
+				if h[0] != "" {
+					req.Header.Set(h[0], h[1])
+				}
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Fatalf("%s: %v", path, err)
+				}
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if v := got["/carries"].Values(c.set); len(v) != 1 || v[0] != c.prefix+key {
+				t.Errorf("the request that carries the placeholder got %s %q, want the key once", c.set, v)
+			}
+			for path, h := range sent {
+				if path == "/carries" {
+					continue
+				}
+				seen := got[path]
+				if seen == nil {
+					t.Errorf("%s did not reach the host", path)
+					continue
+				}
+				if h[0] != "" && seen.Get(h[0]) != h[1] {
+					t.Errorf("%s: the host got %s %q, want the session's %q", path, h[0], seen.Get(h[0]), h[1])
+				}
+				for name, vs := range seen {
+					for _, v := range vs {
+						if strings.Contains(v, key) {
+							t.Errorf("%s got the key in %s", path, name)
+						}
+					}
+				}
+			}
+			set := 0
+			for _, d := range decisions {
+				if d.Credential == "model" {
+					set++
+					if d.Path != "/carries" {
+						t.Errorf("the record lists the credential on %s", d.Path)
+					}
+				}
+			}
+			if set != 1 {
+				t.Errorf("the record lists the credential on %d requests, want 1", set)
+			}
+		})
+	}
+}
+
+// TestAModelKeyIsMaskedWithItsPlaceholder pins the answer of a host that sends a model
+// key back, in a header and in the body: the session reads the key's placeholder, the
+// one of the key's name, in its place, and neither the key nor the shared placeholder.
+func TestAModelKeyIsMaskedWithItsPlaceholder(t *testing.T) {
+	const key = "sk-ant-fake-value-not-a-secret"
+	placeholder := link.KeyPlaceholder("model")
+	for _, c := range []struct {
+		name, scheme, header, set, prefix string
+	}{
+		{"in x-api-key", "header", "X-Api-Key", "X-Api-Key", ""},
+		{"as a bearer", "bearer", "", "Authorization", "Bearer "},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			model := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got := strings.TrimPrefix(r.Header.Get(c.set), c.prefix)
+				w.Header().Set("X-Echo", got)
+				io.WriteString(w, `{"key":"`+got+`"}`)
+			}))
+			defer model.Close()
+			host, port, _ := net.SplitHostPort(model.Listener.Addr().String())
+			p, err := proxy.Listen("", policy.Enforce, []string{host}, nil, func(proxy.Decision) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			creds := []proxy.Credential{{
+				Name: "model", Hosts: []string{host}, Scheme: c.scheme, Header: c.header,
+				Token: func() string { return key }, Placeholder: placeholder,
+			}}
+			ca, err := proxy.NewCA("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots := x509.NewCertPool()
+			roots.AddCert(model.Certificate())
+			p.TrustUpstream(roots)
+			p.Terminate(ca, creds, nil, nil)
+			trusted := x509.NewCertPool()
+			trusted.AppendCertsFromPEM(ca.PEM())
+			proxyURL, _ := url.Parse(p.URL())
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
+			req, _ := http.NewRequest("GET", "https://"+net.JoinHostPort(host, port)+"/echo", nil)
+			req.Header.Set(c.set, c.prefix+placeholder)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if got := resp.Header.Get("X-Echo"); got != placeholder {
+				t.Errorf("the answer's header is %q, want %q", got, placeholder)
+			}
+			if want := `{"key":"` + placeholder + `"}`; string(b) != want {
+				t.Errorf("the answer's body is %q, want %q", b, want)
+			}
+			for _, s := range []string{resp.Header.Get("X-Echo"), string(b)} {
+				if strings.Contains(s, key) || strings.Contains(s, link.Placeholder) {
+					t.Errorf("the answer contains the key or the shared placeholder: %q", s)
+				}
 			}
 		})
 	}

@@ -1,10 +1,15 @@
 package wall
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -39,6 +44,28 @@ type recorder struct {
 	version string
 	noIPv6  bool
 	ipv6    bool
+	// user is the image's user as a JSON value, the User of the Config image inspect
+	// prints, or none for a Config without one and null for no Config; files are the files
+	// docker cp reads out of a container, by the path inside.
+	user  string
+	files map[string]string
+	// held are the repository digests the engine lists for the image a run names by its
+	// reference; nil is an engine that has no such image. down has the engine answer
+	// no image inspect of the repository digests at all.
+	held []string
+	down bool
+	// stderr, when set, has the inspect of the repository digests exit 1 with it on
+	// standard error, as an *exec.ExitError carries it.
+	stderr string
+	// pulledUser, when set, is the image's user once a docker pull has run, in place of
+	// user: an image the engine held without its Config until the pull.
+	pulledUser string
+	// endless is the file of a container whose docker cp writes without end, a header
+	// for an enormous file and then zeros; streamed counts what was read of it, and
+	// stopped says the reader closed it before its end.
+	endless  string
+	streamed int64
+	stopped  bool
 }
 
 func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
@@ -80,8 +107,79 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 	return nil, nil
 }
 func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error) {
-	r.lines, r.envs = append(r.lines, words(argv)), append(r.envs, env)
+	line := words(argv)
+	r.lines, r.envs = append(r.lines, line), append(r.envs, env)
+	if r.pulledUser != "" && slices.ContainsFunc(r.lines, func(l string) bool { return strings.HasPrefix(l, "docker pull ") }) {
+		r.user = r.pulledUser
+	}
+	switch {
+	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.stderr != "":
+		return nil, &exec.ExitError{Stderr: []byte(r.stderr + "\n")}
+	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.down:
+		return nil, errors.New("exit status 1: Cannot connect to the Docker daemon. Is the docker daemon running?")
+	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.held == nil:
+		return nil, errors.New("exit status 1: Error response from daemon: No such image: " + argv[len(argv)-1])
+	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' "):
+		b, _ := json.Marshal(r.held)
+		return append(b, '\n'), nil
+	case strings.Contains(line, " image inspect ") && r.user == "none":
+		return []byte(`{"Env":["PATH=/bin"],"Cmd":["sh"]}` + "\n"), nil
+	case strings.Contains(line, " image inspect ") && r.user == "null":
+		return []byte("null\n"), nil
+	case strings.Contains(line, " image inspect ") && r.user != "":
+		return []byte(`{"Env":["PATH=/bin"],"User":` + r.user + "}\n"), nil
+	case strings.Contains(line, " cp --follow-link "):
+		_, inside, _ := strings.Cut(argv[len(argv)-2], ":")
+		if f, ok := r.files[inside]; ok {
+			return tarred(f), nil
+		}
+	}
 	return nil, errors.New("no such file")
+}
+
+func (r *recorder) stdout(ctx context.Context, argv, env []string) (io.ReadCloser, error) {
+	if _, inside, _ := strings.Cut(argv[len(argv)-2], ":"); r.endless != "" && inside == r.endless {
+		r.lines, r.envs = append(r.lines, words(argv)), append(r.envs, env)
+		var head bytes.Buffer
+		w := tar.NewWriter(&head)
+		w.WriteHeader(&tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1 << 40})
+		w.Flush()
+		return &endless{r: r, rest: io.MultiReader(&head, zeros{})}, nil
+	}
+	out, err := r.output(ctx, argv, env)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(out)), nil
+}
+
+// endless is a docker cp that never ends, counted into its recorder.
+type endless struct {
+	r    *recorder
+	rest io.Reader
+}
+
+func (e *endless) Read(b []byte) (int, error) {
+	n, err := e.rest.Read(b)
+	e.r.streamed += int64(n)
+	return n, err
+}
+
+func (e *endless) Close() error { e.r.stopped = true; return nil }
+
+// zeros is an endless stream of zero bytes.
+type zeros struct{}
+
+func (zeros) Read(b []byte) (int, error) { clear(b); return len(b), nil }
+
+// tarred is a tar stream of one file, as docker cp writes one.
+func tarred(content string) []byte {
+	var b bytes.Buffer
+	w := tar.NewWriter(&b)
+	w.WriteHeader(&tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(content))})
+	w.Write([]byte(content))
+	w.Close()
+	return b.Bytes()
 }
 
 // fails reports whether the recorder fails the command: fail holds substrings of the

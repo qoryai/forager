@@ -7,11 +7,13 @@ import (
 	"io/fs"
 	"path"
 	"sort"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // RuntimesFile is the path, in the contract directory, of the file that lists the
-// secrets of every runtime the contract ships a descriptor for, the file a server
-// vendors.
+// secrets and the model section of every runtime the contract ships a descriptor for,
+// the file a server vendors.
 const RuntimesFile = "runtimes.json"
 
 // runtimesFile is the document of [RuntimesFile].
@@ -21,7 +23,8 @@ type runtimesFile struct {
 }
 
 // runtimeEntry is one runtime of [RuntimesFile]. Every list is present, empty when the
-// descriptor has none, so a reader finds the same members for every runtime.
+// descriptor has none, so a reader finds the same members for every runtime. Model is
+// the one member that is absent when the descriptor has none.
 type runtimeEntry struct {
 	Name            string             `json:"name"`
 	Title           string             `json:"title"`
@@ -30,6 +33,20 @@ type runtimeEntry struct {
 	CredentialFiles []string           `json:"credential_files"`
 	Declares        []declarationEntry `json:"declares"`
 	OneOf           []groupEntry       `json:"one_of"`
+	Model           *modelEntry        `json:"model,omitempty"`
+}
+
+// modelEntry is the model section of a runtime in [RuntimesFile], in the descriptor's
+// shape: formats, model and endpoint always, effort, keys and overrides when the
+// descriptor has them, and in effort agent when it has that. A place has only the member that is
+// set.
+type modelEntry struct {
+	Formats   []string `json:"formats"`
+	Model     Place    `json:"model"`
+	Effort    *Effort  `json:"effort,omitempty"`
+	Endpoint  Endpoint `json:"endpoint"`
+	Keys      []Key    `json:"keys,omitempty"`
+	Overrides []string `json:"overrides,omitempty"`
 }
 
 // declarationEntry is one declaration of a runtime in [RuntimesFile]; paths is absent
@@ -53,7 +70,8 @@ type groupEntry struct {
 
 // Runtimes renders [RuntimesFile] from the descriptors of a contract directory, such as
 // contracts.FS: every runtimes/<name>/descriptor.yaml, sorted by name, with its name,
-// its title and its secrets, the lists in the descriptor's order. The output is
+// its title, its secrets, the lists in the descriptor's order, and its model section
+// when it has one. The output is
 // indented JSON ending in a newline, the same bytes for the same descriptors. A
 // descriptor without a title, or whose runtime is not its directory's name, is an
 // error.
@@ -77,10 +95,10 @@ func Runtimes(fsys fs.FS) ([]byte, error) {
 			return nil, err
 		}
 		if d.Runtime != dir.Name() {
-			return nil, fmt.Errorf("%s describes %q; want the directory's name", p, d.Runtime)
+			return nil, fmt.Errorf("%s describes %q; want the directory's name", accesskey.ShownValue(p, false), d.Runtime)
 		}
 		if d.Title == "" {
-			return nil, fmt.Errorf("%s has no title; %s lists one for every runtime", p, RuntimesFile)
+			return nil, fmt.Errorf("%s has no title; %s lists one for every runtime", accesskey.ShownValue(p, false), RuntimesFile)
 		}
 		doc.Runtimes = append(doc.Runtimes, entry(d))
 	}
@@ -117,6 +135,9 @@ func entry(d *Descriptor) runtimeEntry {
 	}
 	for _, g := range s.OneOf {
 		e.OneOf = append(e.OneOf, groupEntry{ID: g.ID, Required: g.Required, Of: list(g.Of)})
+	}
+	if m := d.Model; m != nil {
+		e.Model = &modelEntry{Formats: m.Formats, Model: m.Model, Effort: m.Effort, Endpoint: m.Endpoint, Keys: m.Keys, Overrides: m.Overrides}
 	}
 	return e
 }

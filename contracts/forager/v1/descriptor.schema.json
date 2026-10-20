@@ -134,11 +134,11 @@
             "properties": {
               "id": {"description": "The declaration's id, unique among the declarations.", "$ref": "#/$defs/declared"},
               "title": {"description": "What the secret is, for a person choosing one.", "type": "string", "minLength": 1, "maxLength": 128},
-              "name": {"description": "The variable the runtime reads the secret from.", "$ref": "#/$defs/name"},
+              "name": {"description": "The variable the runtime reads the secret from.", "$ref": "#/$defs/key_variable"},
               "hosts": {"description": "The hosts the value is set on: exact DNS names, no wildcard, no IP literal.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/exact_host"}},
               "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
               "auth": {
-                "description": "How the value is set on a request, a scheme from the closed set.",
+                "description": "How the value is set on a request, a scheme from the closed set. A variable that is also a key's in model.keys has the same auth there.",
                 "$ref": "auth.schema.json"
               }
             }
@@ -160,7 +160,7 @@
           }
         },
         "reserves": {
-          "description": "Variables the runtime reads a credential from beside the declared ones. Behind a wall, a declared or reserved variable that neither a placeholder, the run nor the runtime's preparation sets goes in empty.",
+          "description": "Variables the runtime reads a credential from beside the declared ones. Behind a wall, a declared or reserved variable that nothing sets, neither a placeholder, the run, the runtime's preparation, Forager nor the wall, is unset inside.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
@@ -179,6 +179,65 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": {"type": "string", "pattern": "^(~/|/)."}
+        }
+      }
+    },
+    "model": {
+      "description": "The model API formats the runtime sends its requests in, where a composer writes a run's model id, effort value and model endpoint for the runtime, and the variables it reads a model key from. runtimes.json lists it for every descriptor that has one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["formats", "model", "endpoint"],
+      "properties": {
+        "formats": {
+          "description": "The model API formats the runtime sends its requests in, each from api-format.schema.json.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "api-format.schema.json"}
+        },
+        "model": {"description": "Where the run's model id goes.", "$ref": "#/$defs/place"},
+        "effort": {
+          "description": "Where an effort value goes, and the values the runtime accepts there. Absent, the runtime has no place for one.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["run"],
+          "properties": {
+            "run": {"description": "Where the run's effort value goes.", "$ref": "#/$defs/valued_place"},
+            "agent": {"description": "Where an agent's effort value goes, in the agent's file. Absent, the runtime has no place for an agent's effort.", "$ref": "#/$defs/agent_place"}
+          }
+        },
+        "endpoint": {
+          "description": "Where the base URL of the run's model API goes: always a variable.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["variable"],
+          "properties": {
+            "variable": {"description": "The variable the runtime reads the base URL from.", "$ref": "#/$defs/name"}
+          }
+        },
+        "keys": {
+          "description": "The variables the runtime reads a model key from, one per API format and auth: the session gives an API credential's placeholder to the variable of the key whose format is the credential's and whose auth has the credential's scheme, the same header name, case ignored, and the same oauth. Each format is one of formats, each pair of format and auth appears once, and a variable is none of denies, overrides and the endpoint's variable.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["format", "auth", "variable"],
+            "properties": {
+              "format": {"description": "The API format the key is for.", "$ref": "api-format.schema.json"},
+              "auth": {"description": "How the runtime sends the key.", "$ref": "auth.schema.json"},
+              "variable": {"description": "The variable the runtime reads the key from.", "$ref": "#/$defs/key_variable"}
+            }
+          }
+        },
+        "overrides": {
+          "description": "The variables that would override the model id or effort value a composer writes. Behind a wall the session leaves each one's value out, of the server's, the run's, the machine's and the harness's values, the harness's computed values included, records it as denied, and unsets the name inside when nothing else sets it. Without a wall they change nothing.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/name"}
         }
       }
     },
@@ -269,7 +328,49 @@
     }
   },
   "$defs": {
+    "place": {
+      "description": "Where a value goes, exactly one of: flag, an argument the runtime is started with, which takes the value; setting, a dotted key in the JSON settings file the launch passes; variable, an environment variable.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "flag": {"$ref": "#/$defs/flag"},
+        "setting": {"$ref": "#/$defs/setting"},
+        "variable": {"$ref": "#/$defs/name"}
+      },
+      "oneOf": [{"required": ["flag"]}, {"required": ["setting"]}, {"required": ["variable"]}]
+    },
+    "valued_place": {
+      "description": "A place, and in values the values the runtime accepts there.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["values"],
+      "properties": {
+        "flag": {"$ref": "#/$defs/flag"},
+        "setting": {"$ref": "#/$defs/setting"},
+        "variable": {"$ref": "#/$defs/name"},
+        "values": {"$ref": "#/$defs/values"}
+      },
+      "oneOf": [{"required": ["flag"]}, {"required": ["setting"]}, {"required": ["variable"]}]
+    },
+    "agent_place": {
+      "description": "Where a value goes in an agent's file: frontmatter, a key of the file's frontmatter, and in values the values the runtime accepts there.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frontmatter", "values"],
+      "properties": {
+        "frontmatter": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"},
+        "values": {"$ref": "#/$defs/values"}
+      }
+    },
+    "flag": {"type": "string", "pattern": "^--[a-z][a-z0-9-]{0,63}$"},
+    "setting": {"type": "string", "maxLength": 256, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
+    "values": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"}},
     "declared": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+    "key_variable": {
+      "description": "A variable a runtime reads a key from: a variable's name other than HOME, LD_PRELOAD, NODE_OPTIONS and BASH_ENV, which change what runs. The schema refuses them in upper case; Forager refuses them in any letter case.",
+      "allOf": [{"$ref": "#/$defs/name"}, {"not": {"enum": ["HOME", "LD_PRELOAD", "NODE_OPTIONS", "BASH_ENV"]}}]
+    },
     "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
     "exact_host": {"type": "string", "maxLength": 253,
       "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"}

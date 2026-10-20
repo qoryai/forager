@@ -154,10 +154,15 @@ func TestAnEngineThatCannotBeAskedStopsTheRun(t *testing.T) {
 		engine *wall.Engine
 		write  string
 		cause  string
+		// whole is set when the cause is the whole error, so the detail must be the
+		// sentence and then the cause, exactly.
+		whole bool
 	}{
-		{"the engine fails", &leftEngine, "", "Cannot connect to the Docker daemon"},
-		{"no engine", nil, "", "records no engine"},
-		{"unreadable", &leftEngine, "{", "cannot be read"},
+		{"the engine fails", &leftEngine, "",
+			"wall docker: /opt/left/docker ps: exit status 1: " +
+				"Cannot connect to the Docker daemon", true},
+		{"no engine", nil, "", "records no engine", false},
+		{"unreadable", &leftEngine, "{", "cannot be read", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -171,11 +176,14 @@ func TestAnEngineThatCannotBeAskedStopsTheRun(t *testing.T) {
 			sp := walledSpec(t, w)
 			sp.Mounts, sp.Dir = []wall.Mount{{Path: t.TempDir()}}, t.TempDir()
 			r := refusalOf(t, "engine_unreachable", runErr(sp))
-			prefix := "Docker could not be asked whether the walled run " + leftID +
-				" is still going, so the run does not start: "
+			prefix := "The check for a container of the walled run " + leftID +
+				" failed, so this run does not start: "
 			if !slices.Equal(r.Names, []string{leftID, file}) || !filepath.IsAbs(r.Names[1]) ||
 				!strings.HasPrefix(r.Detail, prefix) || !strings.Contains(r.Detail, c.cause) {
 				t.Errorf("names %q, detail %q", r.Names, r.Detail)
+			}
+			if c.whole && r.Detail != prefix+c.cause {
+				t.Errorf("detail %q, want %q", r.Detail, prefix+c.cause)
 			}
 			if w.req.RunID != "" || w.wrapped {
 				t.Error("the wall was prepared")

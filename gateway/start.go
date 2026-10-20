@@ -20,6 +20,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/gateway/internal/tool"
@@ -38,12 +39,34 @@ const (
 // defaultHeartbeat is the interval when the config names none.
 const defaultHeartbeat = 30 * time.Second
 
+// checkRunLimits sets each field of l that is zero to its default, and refuses one
+// outside its range.
+func checkRunLimits(l *RunLimits) error {
+	for _, f := range []struct {
+		name         string
+		v            *int
+		most, normal int
+	}{
+		{"Connections", &l.Connections, 65536, 256},
+		{"RequestsPerSecond", &l.RequestsPerSecond, 10000, 50},
+		{"Burst", &l.Burst, 100000, 200},
+	} {
+		if *f.v == 0 {
+			*f.v = f.normal
+		}
+		if *f.v < 1 || *f.v > f.most {
+			return fmt.Errorf("Set RunLimits.%s to a number from 1 to %d, or 0 for the default of %d. It is %d.", f.name, f.most, f.normal, *f.v)
+		}
+	}
+	return nil
+}
+
 // Gateway is a gateway serving sessions on its local link, or those of other machines
 // on its one address with [Config.Listen]: it opens each run, decides its connections by
 // its policy through its proxy, numbers its events and sends them to the server.
 type Gateway struct {
-	// cfg is the Config Start was given, with the copies of the Server, the credentials
-	// and the tools Start took and checked.
+	// cfg is the Config Start was given, with the copies of the Server, the credentials,
+	// the tools and the gateway's selection Start took and checked.
 	cfg      Config
 	report   func(string)
 	interval int
@@ -111,14 +134,28 @@ type Gateway struct {
 // in a private directory of its own, and the shared proxy listener on loopback; with
 // Listen, its one address alone. It serves sessions until Close, and sends nothing more
 // before a session opens a run. It holds a copy of the Server and its pin, and a copy of
-// the credentials and the tools, every list of each definition included, which it
-// checks and every run reads: what the caller changes in them later changes nothing.
+// the credentials and the tools, every list of each definition included, and of
+// [Config.Selects], which it checks and every run reads: what the caller changes in
+// them later changes nothing.
 //
-// Start refuses, before anything starts, a Listen that is not host:port, a Listen
+// Start refuses, before anything starts, a field of [Config.RunLimits] outside its
+// range, a Listen that is not host:port, a Listen
 // without TLS or without a Server, TLS files it cannot read or whose certificate and key
-// do not match, and TLS without a Listen; and once discovery is read, a Listen whose
-// access key is not a gateway's, whose node id is not ng_, and a gateway's access key,
-// ng_, without a Listen.
+// do not match, and TLS without a Listen; Selects without a Listen, and an entry of
+// Selects that names no credential of Credentials or one another entry names, names a
+// Label, a Forge or a Pattern for a credential that takes no argument, leaves out any of
+// them for one that takes an argument, or whose pattern does not compile; and once
+// discovery is read, a Listen whose access key is not a gateway's, whose node id is not
+// ng_, and a gateway's access key, ng_, without a Listen.
+//
+// Before it starts anything, Start limits core dumps of this process and debugger
+// access to it: on Linux it makes the process non-dumpable,
+// PR_SET_DUMPABLE 0, and on macOS it calls ptrace(PT_DENY_ATTACH); on both it sets
+// RLIMIT_CORE to 0, soft and hard. A test binary gets none of these. With
+// [Config.LockMemory], on Linux, it locks the process's memory out of swap. What it sets
+// stays for the life of the process, after Close too. When a call fails, Start makes
+// the other calls, and its error contains every failure, in the order of the calls,
+// each starting on a new line with its fix.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.Server != nil {
 		s := *cfg.Server
@@ -126,6 +163,8 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		cfg.Server = &s
 	}
 	cfg.Credentials, cfg.Tools = copyCredentials(cfg.Credentials), copyTools(cfg.Tools)
+	// A Selection holds strings alone: the list's copy shares nothing with it.
+	cfg.Selects = slices.Clone(cfg.Selects)
 	cert, err := checkService(&cfg)
 	if err != nil {
 		return nil, err
@@ -142,6 +181,9 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.Heartbeat < time.Second || cfg.Heartbeat > server.MaxInterval*time.Second || cfg.Heartbeat%time.Second != 0 {
 		return nil, fmt.Errorf("the heartbeat interval %s is not a whole number of seconds from 1 to the %d the link's discovery announces at most", cfg.Heartbeat, server.MaxInterval)
 	}
+	if err := checkRunLimits(&cfg.RunLimits); err != nil {
+		return nil, err
+	}
 	if cfg.Policy != nil {
 		b, _ := json.Marshal(cfg.Policy)
 		if _, err := policy.Read("policy", b); err != nil {
@@ -156,10 +198,16 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 			return nil, err
 		}
 	}
+	if err := checkSelects(&cfg); err != nil {
+		return nil, err
+	}
 	for _, t := range cfg.Tools {
 		if err := t.Check(); err != nil {
 			return nil, err
 		}
+	}
+	if err := hardenProcess(cfg.LockMemory); err != nil {
+		return nil, err
 	}
 	report := cfg.Report
 	if report == nil {
@@ -186,7 +234,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 			}
 		}
 		if cfg.Listen != "" && !strings.HasPrefix(conf.NodeID, "ng_") {
-			return nil, fmt.Errorf("the access key's node %s is not a gateway, ng_: the gateway's address %s needs a gateway's access key", conf.NodeID, cfg.Listen)
+			return nil, fmt.Errorf("the access key's node %s is not a gateway, ng_: the gateway's address %s needs a gateway's access key", conf.NodeID, accesskey.ShownValue(cfg.Listen, false))
 		}
 		if cfg.Listen == "" && strings.HasPrefix(conf.NodeID, "ng_") {
 			return nil, fmt.Errorf("the access key's node %s is a gateway, ng_: a gateway without an address needs a node's access key, nd_ or np_", conf.NodeID)
@@ -230,6 +278,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
+	g.proxies.ReportPanics(report)
 	g.stream = stream.New(stream.Config{Dir: cfg.Dir, RunDir: cfg.RunDir, Events: cfg.Events, Report: report, CloseWait: cfg.closeWait})
 	g.discovery, _ = json.Marshal(server.LinkDiscovery{
 		Version: 1,
@@ -243,17 +292,52 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.uid != nil {
 		uid = *cfg.uid
 	}
-	g.link = newLinkListener(g.ln, uid)
-	g.http = &http.Server{Handler: g.handler(localSide), ReadHeaderTimeout: link.PreambleWait, ErrorLog: quietLog()}
-	go g.http.Serve(g.link)
+	g.link = newLinkListener(g.ln, uid, report)
+	g.http = &http.Server{Handler: routine.Handler(report, g.handler(localSide)), ReadHeaderTimeout: link.PreambleWait, ErrorLog: quietLog()}
+	routine.Go(report, func() { g.http.Serve(g.link) })
 	ok = true
 	return g, nil
 }
 
+// checkSelects refuses a [Config.Selects] the gateway cannot hold: a selection without
+// a Listen, whose runs alone it is for; and an entry that names no credential of
+// Credentials, or one another entry names; that names a Label, a Forge or a Pattern for
+// a credential that takes no argument; that leaves out any of them for one that takes
+// an argument; or whose pattern does not compile as a label's value is matched, whole.
+func checkSelects(cfg *Config) error {
+	if len(cfg.Selects) > 0 && cfg.Listen == "" {
+		return errors.New("gateway: Selects is for the runs on the gateway's address, and it has no Listen")
+	}
+	for i, s := range cfg.Selects {
+		j := slices.IndexFunc(cfg.Credentials, func(c Credential) bool { return c.Name == s.Name })
+		if j < 0 {
+			return fmt.Errorf("gateway: Selects names %s, which is no credential of Credentials", accesskey.ShownName(s.Name, false))
+		}
+		if slices.ContainsFunc(cfg.Selects[:i], func(o Selection) bool { return o.Name == s.Name }) {
+			return fmt.Errorf("gateway: Selects names %s twice", accesskey.ShownName(s.Name, false))
+		}
+		if cfg.Credentials[j].Argument == "" {
+			for _, f := range []struct{ name, value string }{{"Label", s.Label}, {"Forge", s.Forge}, {"Pattern", s.Pattern}} {
+				if f.value != "" {
+					return fmt.Errorf("gateway: Selects %s: %s takes no argument, so %s does not apply", accesskey.ShownName(s.Name, false), accesskey.ShownName(s.Name, false), f.name)
+				}
+			}
+			continue
+		}
+		if s.Label == "" || s.Forge == "" || s.Pattern == "" {
+			return fmt.Errorf("gateway: Selects %s: %s takes an argument, so it needs Label, Forge and Pattern", accesskey.ShownName(s.Name, false), accesskey.ShownName(s.Name, false))
+		}
+		if _, err := run.WholeMatch(s.Pattern); err != nil {
+			return fmt.Errorf("gateway: Selects %s: the pattern does not compile: %s", accesskey.ShownName(s.Name, false), accesskey.ShownValue(err.Error(), false))
+		}
+	}
+	return nil
+}
+
 // copyCredentials is a copy of credentials that shares nothing with them: the list and
-// each definition's Adapter, Hosts, Paths and Placeholders are new, so a change to the
-// credentials the copy was taken from leaves the copy as it was. Nil when credentials
-// is, and each list nil where the definition's is.
+// each definition's Adapter, Hosts, Paths, Placeholders and KeyPrefixes are new, so a
+// change to the credentials the copy was taken from leaves the copy as it was. Nil
+// when credentials is, and each list nil where the definition's is.
 func copyCredentials(credentials []Credential) []Credential {
 	if credentials == nil {
 		return nil
@@ -261,7 +345,7 @@ func copyCredentials(credentials []Credential) []Credential {
 	out := make([]Credential, len(credentials))
 	for i, c := range credentials {
 		c.Adapter, c.Hosts, c.Paths = slices.Clone(c.Adapter), slices.Clone(c.Hosts), slices.Clone(c.Paths)
-		c.Placeholders = slices.Clone(c.Placeholders)
+		c.Placeholders, c.KeyPrefixes = slices.Clone(c.Placeholders), slices.Clone(c.KeyPrefixes)
 		out[i] = c
 	}
 	return out
@@ -288,22 +372,22 @@ func copyTools(tools []Tool) []Tool {
 func (g *Gateway) listenLink() error {
 	dir, err := os.MkdirTemp("", link.LinkDirPrefix)
 	if err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	socket := filepath.Join(dir, link.LinkSocketName)
 	if err := os.Chmod(dir, link.LinkDirMode); err != nil {
 		os.RemoveAll(dir)
-		return err
+		return accesskey.ShownError(err)
 	}
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		os.RemoveAll(dir)
-		return err
+		return accesskey.ShownError(err)
 	}
 	if err := os.Chmod(socket, link.LinkSocketMode); err != nil {
 		ln.Close()
 		os.RemoveAll(dir)
-		return err
+		return accesskey.ShownError(err)
 	}
 	g.dir, g.ln = dir, ln
 	return nil
@@ -376,7 +460,7 @@ func (g *Gateway) String() string {
 	if where == "" {
 		where = "in memory"
 	}
-	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + where + "}"
+	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + accesskey.ShownValue(where, false) + "}"
 }
 
 // Format prints g as String does, under every verb and flag: never its secret.
@@ -401,17 +485,17 @@ func (g *Gateway) files() []link.File {
 	for _, c := range g.cfg.Credentials {
 		if len(c.Adapter) > 0 {
 			for _, d := range program.Dirs(c.Adapter[0]) {
-				out = append(out, link.File{Path: d, What: "the directory of the credential " + c.Name + "'s program"})
+				out = append(out, link.File{Path: d, What: "the directory of the credential " + accesskey.ShownName(c.Name, false) + "'s program"})
 			}
 		}
 		if c.File != "" {
-			out = append(out, link.File{Path: c.File, What: "the file the credential " + c.Name + " is read from"})
+			out = append(out, link.File{Path: c.File, What: "the file the credential " + accesskey.ShownName(c.Name, false) + " is read from"})
 		}
 	}
 	for _, t := range g.cfg.Tools {
 		if len(t.Command) > 0 {
 			for _, d := range program.Dirs(t.Command[0]) {
-				out = append(out, link.File{Path: d, What: "the directory of the tool " + t.Name + "'s program"})
+				out = append(out, link.File{Path: d, What: "the directory of the tool " + accesskey.ShownName(t.Name, false) + "'s program"})
 			}
 		}
 	}
@@ -504,7 +588,7 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	}
 	cancel()
 	if g.dir != "" {
-		errs = append(errs, os.RemoveAll(g.dir))
+		errs = append(errs, accesskey.ShownError(os.RemoveAll(g.dir)))
 	}
 	g.cancel()
 	g.closeErr = errors.Join(errs...)

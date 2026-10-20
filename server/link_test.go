@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -451,6 +452,36 @@ func TestAnAnswerTheLinkRefusesQuotesNoValue(t *testing.T) {
 	}
 	if _, err := k.Reload(context.Background(), "http://localhost/v1/run-configuration", "../"+runID); err == nil {
 		t.Error("a reload of a run id that is none was sent")
+	}
+}
+
+// TestARunAnswerHasTheCredentialHostsItCarries pins that the session reads
+// credential_hosts into CredentialHosts, each credential's name, hosts and placeholders
+// as the gateway sent them, and that an answer without the member, as a gateway that
+// does not send it writes, still opens the run with none.
+func TestARunAnswerHasTheCredentialHostsItCarries(t *testing.T) {
+	with := strings.Replace(runAnswer, `"reserved":`, `"credential_hosts":[{"name":"model","hosts":["api.model.example"],"placeholders":["MODEL_KEY"]},{"name":"git","hosts":["git.example","api.git.example"],"placeholders":[]}],"reserved":`, 1)
+	want := []server.LinkCredentialHosts{
+		{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_KEY"}},
+		{Name: "git", Hosts: []string{"git.example", "api.git.example"}, Placeholders: []string{}},
+	}
+	for name, c := range map[string]struct {
+		body string
+		want []server.LinkCredentialHosts
+	}{
+		"with credential_hosts":    {with, want},
+		"without credential_hosts": {runAnswer, nil},
+	} {
+		g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, 200, c.body) }))
+		k, _ := newLink(t, g)
+		a, err := k.OpenRun(context.Background(), "http://localhost/v1/run-configuration", server.LinkRunRequest{RunID: runID})
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if !reflect.DeepEqual(a.CredentialHosts, c.want) {
+			t.Errorf("%s: credential hosts %+v, want %+v", name, a.CredentialHosts, c.want)
+		}
 	}
 }
 

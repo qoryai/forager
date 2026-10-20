@@ -7,7 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -17,7 +21,9 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/gateway/internal/run"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 )
 
@@ -236,42 +242,48 @@ func TestSettledIsWhatTheServerAnsweredAndForagerRefused(t *testing.T) {
 	}
 }
 
-// From session_test.go TestAReloadIsAsStrictAsAStart: without a wall, path rules the
-// proxy cannot hold take their hosts out of the allow list and the user is told; a
-// policy that selects credentials fails the reload and the policy in force stays; and
-// a run configuration that is the one in force is not put in force again.
+// From session_test.go TestAReloadIsAsStrictAsAStart: an unwalled run with a server
+// has the run's authority from the start; a reload that brings path rules, which need
+// a wall, fails, and the policy in force stays, though the run has an authority; a
+// reload that selects a credential puts it in force; and a run configuration that is
+// the one in force is not put in force again.
 func TestAReloadIsAsStrictAsAStart(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
 	var said reports
-	r := open(t, run.Config{RunID: runID, Server: true, Report: said.report, Fetched: served(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, digest('1'))})
-	if r.NeedsCA() {
-		t.Fatal("an unwalled run with nothing to terminate has an authority")
+	r := open(t, run.Config{RunID: runID, Server: true, Report: said.report, Fetched: served(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, digest('1')),
+		Credentials: []run.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.example"}, Scheme: "bearer"}}})
+	if !r.NeedsCA() {
+		t.Fatal("an unwalled run with a server has no authority")
 	}
 
 	paths := `{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1","api.example"],"paths":{"127.0.0.1":["/ok/*"]}}}`
-	d, err := reload(t, r, served(paths, digest('2')))
-	if err != nil {
-		t.Fatal(err)
+	_, err := reload(t, r, served(paths, digest('2')))
+	var nw *refusal.NeedsWall
+	if !errors.As(err, &nw) || !slices.Equal(nw.Names, []string{"paths"}) || !strings.Contains(err.Error(), "run it with a wall") ||
+		!strings.Contains(err.Error(), "run configuration "+runURL+": ") || !strings.HasSuffix(err.Error(), "; the policy in force stays") {
+		t.Errorf("path rules without a wall: %v", err)
 	}
-	if fmt.Sprint(d.Policy.Policy.Egress.Allow) != "[api.example]" || d.Policy.Policy.Egress.Paths != nil || d.Policy.RunConfiguration != digest('2') || len(d.Uses) != 0 {
-		t.Errorf("the decision %+v", d.Policy.Policy)
-	}
-	if !said.reported("path rules, which need a wall") {
-		t.Error("nobody was told the path rules are not held")
-	}
-	r.Commit(d)
-
-	_, err = reload(t, r, served(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]},"credentials":[{"name":"model"}]}`, digest('3')))
-	if err == nil || !strings.Contains(err.Error(), "selects credentials, which need a wall") || !strings.Contains(err.Error(), "run configuration "+runURL+": ") || !strings.HasSuffix(err.Error(), "; the policy in force stays") {
-		t.Errorf("credentials without a wall: %v", err)
-	}
-	if r.RunConfiguration() != digest('2') || fmt.Sprint(r.Policy().Policy.Egress.Allow) != "[api.example]" {
+	if r.RunConfiguration() != digest('1') || fmt.Sprint(r.Policy().Policy.Egress.Allow) != "[127.0.0.1]" {
 		t.Errorf("the policy in force after a failed reload %+v", r.Policy())
 	}
 
+	creds := `{"version":1,"egress":{"mode":"enforce","allow":["api.example"]},"credentials":[{"name":"model"}]}`
+	d, err := reload(t, r, served(creds, digest('3')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.CredentialsChanged || len(d.Uses) != 1 || d.Uses[0].Name != "model" || d.Policy.RunConfiguration != digest('3') {
+		t.Errorf("a credential without a wall: changed %v, uses %v", d.CredentialsChanged, d.Uses)
+	}
+	r.Commit(d)
+
 	// The document in force, under its own digest: nothing is put in force.
-	d, err = reload(t, r, served(paths, digest('2')))
+	d, err = reload(t, r, served(creds, digest('3')))
 	if err != nil || !d.Unchanged {
 		t.Errorf("the run configuration in force: %+v, %v", d, err)
+	}
+	if len(said.said) != 0 {
+		t.Errorf("the user was told %v", said.said)
 	}
 }
 
@@ -301,7 +313,7 @@ func TestARunWhoseToolsCannotHoldDoesNotStart(t *testing.T) {
 		want   string
 		code   string
 	}{
-		"no wall":                      {func(c *run.Config) { c.Wall = false }, "need a wall", ""},
+		"no wall":                      {func(c *run.Config) { c.Wall = false }, "run it with a wall", ""},
 		"a tool nobody defined":        {func(c *run.Config) { c.Tools = nil }, "does not define", "tool_unknown"},
 		"an argument not provided for": {func(c *run.Config) { c.Node.Tools[0].Argument = "acme/shop/x" }, "not one the machine provides for", ""},
 		"a host a credential is for": {func(c *run.Config) {
@@ -444,6 +456,72 @@ func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
 	_, err = reload(t, r, served(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"model"}]}`, digest('2')))
 	if code, names := refusalOf(err); code != "placeholder_conflict" || !slices.Equal(names, []string{"MODEL_TOKEN"}) {
 		t.Errorf("a placeholder the run passes a value for, at a reload: %v", err)
+	}
+}
+
+// modelKeysDoc is a run configuration whose policy selects the machine's model keys
+// first and second and its host credential git, with model_credential set to start.
+func modelKeysDoc(start, allow string) string {
+	return `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","api.other-model.example","git.example"` + allow + `]},` +
+		`"credentials":[{"name":"first"},{"name":"second"},{"name":"git"}]},"model_credential":"` + start + `"}`
+}
+
+// TestOnlyTheStartModelKeyReachesTheProxy pins ProxyUses for a run with two model keys
+// of the machine's and a host credential: the proxy gets the model key that
+// model_credential names, with its placeholder's value, link.KeyPlaceholder of its
+// name, and the host credential with none; the gateway holds the other model key and
+// the proxy never gets it. A reload with the same model_credential is put in force, and
+// one that names the other model key is refused with the policy in force staying.
+func TestOnlyTheStartModelKeyReachesTheProxy(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
+	cfg := run.Config{
+		RunID: runID, Wall: true, Server: true,
+		Credentials: []run.Credential{
+			{Name: "first", Env: "QORY_TEST_MODEL_TOKEN", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Scheme: "header", Header: "x-api-key"},
+			{Name: "second", Env: "QORY_TEST_MODEL_TOKEN", Format: "openai-responses", Endpoint: "https://api.other-model.example/v1", Scheme: "bearer"},
+			{Name: "git", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"git.example"}, Scheme: "bearer"},
+		},
+		Fetched: document(t, modelKeysDoc("second", ""), digest('1')),
+	}
+	r := open(t, cfg)
+	if held := r.Held(); held == nil || held.Start != "second" || len(held.Uses) != 3 {
+		t.Fatalf("held %+v", held)
+	}
+	type use struct{ name, placeholder, scheme string }
+	shown := func(uses []proxy.Credential) []use {
+		out := make([]use, len(uses))
+		for i, u := range uses {
+			out[i] = use{u.Name, u.Placeholder, u.Scheme}
+		}
+		return out
+	}
+	want := []use{{"second", link.KeyPlaceholder("second"), "bearer"}, {"git", "", "bearer"}}
+	if got := shown(r.Uses()); !slices.Equal(got, want) {
+		t.Errorf("the proxy's uses %+v, want %+v", got, want)
+	}
+	if got := shown(run.ProxyUses(r.Held())); !slices.Equal(got, want) {
+		t.Errorf("ProxyUses %+v, want %+v", got, want)
+	}
+	if u := r.Uses()[0]; !slices.Equal(u.Hosts, []string{"api.other-model.example"}) || u.Token() != "sk-ant-fake-value" {
+		t.Errorf("the start key's use %+v", u)
+	}
+	d, err := reload(t, r, document(t, modelKeysDoc("second", `,"b.example"`), digest('2')))
+	if err != nil {
+		t.Fatalf("a reload with the same model_credential: %v", err)
+	}
+	r.Commit(d)
+	if got := shown(d.Uses); !slices.Equal(got, want) {
+		t.Errorf("the reload's uses %+v, want %+v", got, want)
+	}
+	_, err = reload(t, r, document(t, modelKeysDoc("first", ""), digest('3')))
+	if want := "run configuration " + runURL + ": start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays"; err == nil || err.Error() != want {
+		t.Errorf("a reload with another model_credential:\n got %v\nwant %s", err, want)
+	}
+	if r.RunConfiguration() != digest('2') || r.Held().Start != "second" {
+		t.Errorf("after a refused reload: %q, start %q", r.RunConfiguration(), r.Held().Start)
+	}
+	if got := shown(run.ProxyUses(nil)); len(got) != 0 {
+		t.Errorf("ProxyUses of no credentials %+v", got)
 	}
 }
 
@@ -677,7 +755,7 @@ func TestPassingIsTheNamesTheRunPasses(t *testing.T) {
 func TestTheNodesPathsBesideAServersPolicy(t *testing.T) {
 	node := &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "observe", Paths: map[string][]string{"git.example.com": {"/acme/*"}}}}
 	fetched := served(`{"version":1,"egress":{"mode":"observe"}}`, digest('1'))
-	if _, err := run.Decide(run.Config{Node: node, Fetched: fetched}); err == nil || !strings.Contains(err.Error(), "need a wall") {
+	if _, err := run.Decide(run.Config{Node: node, Fetched: fetched}); err == nil || !strings.Contains(err.Error(), "run it with a wall") {
 		t.Errorf("the node's paths without a wall: %v", err)
 	}
 	r := open(t, run.Config{RunID: runID, Node: node, Wall: true, Fetched: fetched})
@@ -786,11 +864,11 @@ func TestASessionsNarrowingOnlyNarrows(t *testing.T) {
 }
 
 // TestANarrowingOpensNoneOfTheMachinesAddresses pins the guard's names under a
-// session's narrowing: those of the policy before it, and only when that policy
-// enforces. Under observe, or no policy, a narrowing's allow opens nothing; under
-// enforce, a narrowed entry the policy does not name itself opens nothing either, the
-// policy's own names being the only ones; and without a narrowing the names are the
-// allow list's, as today.
+// session's narrowing: those of the node's policy, and only when the policy before the
+// narrowing enforces. Under observe, or no policy, a narrowing's allow opens nothing;
+// under enforce, a narrowed entry the node's policy does not name itself opens nothing
+// either, nor does a "*." pattern; and without a narrowing the names are the node's
+// allow list's.
 func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
 	loaded := func(mode policy.Mode, allow ...string) *policy.Loaded {
 		return &policy.Loaded{Policy: policy.Policy{Version: 1, Egress: policy.Egress{Mode: mode, Allow: allow}}, Source: "config"}
@@ -803,13 +881,89 @@ func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
 	}{
 		"no policy":                      {policy.None(), narrowing, nil},
 		"observe":                        {loaded(policy.Observe, "127.0.0.1"), narrowing, nil},
-		"enforce, a host it names":       {loaded(policy.Enforce, "127.0.0.1", "*.example"), narrowing, []string{"127.0.0.1", "*.example"}},
-		"enforce, a host it only covers": {loaded(policy.Enforce, "*.example"), &run.Narrowing{Allow: []string{"api.example"}}, []string{"*.example"}},
+		"enforce, a host it names":       {loaded(policy.Enforce, "127.0.0.1", "*.example"), narrowing, []string{"127.0.0.1"}},
+		"enforce, a host it only covers": {loaded(policy.Enforce, "*.example"), &run.Narrowing{Allow: []string{"api.example"}}, nil},
 		"no narrowing, observe":          {loaded(policy.Observe, "127.0.0.1"), nil, []string{"127.0.0.1"}},
 	} {
-		if got := run.GuardNames(c.pol, c.n); !slices.Equal(got, c.want) {
+		if got := run.GuardNames(c.pol, c.pol, c.n); !slices.Equal(got, c.want) {
 			t.Errorf("%s: %v", name, got)
 		}
+	}
+}
+
+// TestOnlyTheNodesPolicyOpensTheMachine pins that an entry of a server's policy never
+// opens this machine's addresses: the guard's names are entries of the node's policy
+// that the policy in force allows, at the start and at a reload. A guarded proxy given
+// those names refuses localhost by the guard's rule where the node's policy does not
+// name it, and reaches it where it does; a local policy alone opens what it names, as
+// before.
+func TestOnlyTheNodesPolicyOpensTheMachine(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "the local server") }))
+	defer origin.Close()
+	port := origin.URL[strings.LastIndex(origin.URL, ":"):]
+	node := func(mode string, allow ...string) *run.Policy {
+		return &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: mode, Allow: allow}}
+	}
+	localhost := `{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}}`
+	for _, c := range []struct {
+		name    string
+		node    *run.Policy
+		fetched *run.Fetched
+		want    []string
+	}{
+		{"a server's localhost under a node that observes", node("observe"), served(localhost, digest('a')), nil},
+		{"a server's localhost under a node that enforces it", node("enforce", "localhost"), served(localhost, digest('a')), []string{"localhost"}},
+		{"a server's localhost with no node's policy", nil, served(localhost, digest('a')), nil},
+		{"a server's name that resolves to this machine", nil, served(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1.nip.io"]}}`, digest('a')), nil},
+		{"a local policy alone", node("enforce", "localhost", "*.example"), nil, []string{"localhost"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := open(t, run.Config{RunID: runID, Node: c.node, Server: c.fetched != nil, Fetched: c.fetched})
+			if got := r.GuardNames(); !slices.Equal(got, c.want) {
+				t.Errorf("the guard's names: %q, want %q", got, c.want)
+			}
+			e := r.Policy().Policy.Egress
+			p, err := proxy.Listen("", e.Mode, e.Allow, e.Deny, func(proxy.Decision) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			p.Guard(r.GuardNames())
+			proxyURL, _ := url.Parse(p.URL())
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+			resp, err := client.Get("http://localhost" + port + "/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			opened := slices.Contains(c.want, "localhost")
+			if reached := resp.StatusCode == 200 && string(body) == "the local server"; reached != opened {
+				t.Errorf("localhost through the guarded proxy: %d %q, want reached %v", resp.StatusCode, body, opened)
+			}
+			if !opened && (resp.StatusCode != 403 || !strings.Contains(string(body), "to reach the gateway's machine or a private network address, list the host itself, not a *. pattern, in the allow list of the node's policy, and allow it in the run's policy; the gateway reaches either only for such a host, and never a link-local or cloud metadata address")) {
+				t.Errorf("localhost: %d %q, want the guard's refusal", resp.StatusCode, body)
+			}
+		})
+	}
+	// A reload takes the names from the node's policy in the same way.
+	for _, c := range []struct {
+		name string
+		node *run.Policy
+		want []string
+	}{
+		{"a node that observes", node("observe"), nil},
+		{"a node that enforces localhost", node("enforce", "localhost", "api.example"), []string{"localhost"}},
+	} {
+		r := open(t, run.Config{RunID: runID, Node: c.node, Server: true, Fetched: served(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, digest('a'))})
+		d, err := reload(t, r, served(localhost, digest('b')))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if !slices.Equal(d.Guard, c.want) {
+			t.Errorf("%s: a reload's names %q, want %q", c.name, d.Guard, c.want)
+		}
+		d.Discard()
 	}
 }
 
@@ -852,5 +1006,126 @@ func TestAPolicyEntryOutsideTheHostFormIsRefusedWhereverItIsRead(t *testing.T) {
 	var pe *policy.Error
 	if !errors.As(err, &pe) {
 		t.Errorf("a ceiling's paths key 127.1: %v, want a *policy.Error", err)
+	}
+}
+
+// pinned is an image a policy names by its reference pinned by digest.
+const pinned = "registry.example/agents/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+
+// TestAnImageByReferenceIsOneTheMachineAllows pins an image a policy names by its
+// reference: under a prefix of images.allow it starts under the default's runtime,
+// with no Docker, marked as a reference; under none it is image_not_allowed; with no
+// list none is allowed; one with a tag is run_configuration_invalid; and the relay's
+// image is the default's reference whatever the run's.
+func TestAnImageByReferenceIsOneTheMachineAllows(t *testing.T) {
+	defined := []run.Image{{Name: "base", Ref: "example.com/agent:1", Runtime: "sysbox-runc"}, images[1]}
+	decide := func(image string, im run.Images) (*run.Run, error) {
+		return run.Decide(run.Config{RunID: runID, Wall: true, Images: im,
+			Node: &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "observe"}, Image: image}})
+	}
+	r, err := decide(pinned, run.Images{Default: "base", Defined: defined, Allow: []string{"registry.example/agents"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (run.Image{Ref: pinned, Runtime: "sysbox-runc", Reference: true}); r.Image() != want || r.RelayImage() != "example.com/agent:1" {
+		t.Errorf("the image %+v, the relay's %q; want %+v and the default's", r.Image(), r.RelayImage(), want)
+	}
+	r, err = decide(pinned, run.Images{Default: "example.com/other:2", Allow: []string{"registry.example/"}})
+	if err != nil || r.Image() != (run.Image{Ref: pinned, Reference: true}) || r.RelayImage() != "example.com/other:2" {
+		t.Errorf("under a default by reference: %+v, %q, %v", r.Image(), r.RelayImage(), err)
+	}
+	if r, err := decide("with-docker", run.Images{Default: "base", Defined: defined}); err != nil || r.RelayImage() != "example.com/agent:1" || r.Image() != images[1] {
+		t.Errorf("a named image's relay: %+v, %q, %v", r.Image(), r.RelayImage(), err)
+	}
+	for name, c := range map[string]struct {
+		image string
+		im    run.Images
+		code  string
+		want  string
+	}{
+		"under no prefix":        {pinned, run.Images{Default: "base", Defined: defined, Allow: []string{"registry.example/agents-other", "registry.example:5000"}}, "image_not_allowed", "under none of the machine's allowed prefixes (images.allow)"},
+		"with no list":           {pinned, run.Images{Default: "base", Defined: defined}, "image_not_allowed", "images.allow"},
+		"with a tag":             {"registry.example/agents/app:1", run.Images{Default: "base", Defined: defined, Allow: []string{"registry.example/"}}, "run_configuration_invalid", "not pinned by digest"},
+		"an entry of *":          {pinned, run.Images{Default: "base", Defined: defined, Allow: []string{"*"}}, "", "every image"},
+		"an empty entry":         {pinned, run.Images{Default: "base", Defined: defined, Allow: []string{""}}, "", "every image"},
+		"a list with no default": {pinned, run.Images{Allow: []string{"registry.example/"}}, "", "needs a default image"},
+	} {
+		_, err := decide(c.image, c.im)
+		code, names := refusalOf(err)
+		if err == nil || code != c.code || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v (%q), want %q with %q", name, err, code, c.code, c.want)
+		}
+		if code == "image_not_allowed" && !slices.Equal(names, []string{pinned}) {
+			t.Errorf("%s: the names %q", name, names)
+		}
+	}
+}
+
+// TestAReloadKeepsAnImageByReference pins that a run started in an image by reference
+// keeps it: a reload that names the same reference takes effect, one that names the
+// default, another reference or a reference outside the list does not.
+func TestAReloadKeepsAnImageByReference(t *testing.T) {
+	doc := `{"version":1,"egress":{"mode":"observe"},"image":"%s"}`
+	other := strings.Replace(pinned, "agents/app", "agents/other", 1)
+	im := run.Images{Default: "base", Defined: images, Allow: []string{"registry.example/agents/"}}
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Images: im, Fetched: served(fmt.Sprintf(doc, pinned), digest('1'))})
+	if !r.Image().Reference {
+		t.Fatalf("the run started in %+v", r.Image())
+	}
+	if d, err := reload(t, r, served(fmt.Sprintf(doc, pinned), digest('2'))); err != nil || d.Image != r.Image() {
+		t.Errorf("the same reference: %+v, %v", d, err)
+	}
+	for _, image := range []string{"base", other, "elsewhere.example/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"} {
+		if _, err := reload(t, r, served(fmt.Sprintf(doc, image), digest('3'))); err == nil {
+			t.Errorf("a reload to %s took effect", image)
+		}
+	}
+}
+
+// TestAReloadKeepsTheStartKey pins that, without model_credential, a reload that
+// selects another model key of the machine's than the run started with, or none, is
+// refused, one that selects the same key is accepted, and one that selects a model key
+// for a run that started with none is refused.
+func TestAReloadKeepsTheStartKey(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
+	doc := func(key string) string {
+		return `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","api.other-model.example"]},` +
+			`"credentials":[{"name":"` + key + `"}]}}`
+	}
+	cfg := run.Config{
+		RunID: runID, Wall: true, Server: true,
+		Credentials: []run.Credential{
+			{Name: "first", Env: "QORY_TEST_MODEL_TOKEN", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Scheme: "header", Header: "x-api-key"},
+			{Name: "second", Env: "QORY_TEST_MODEL_TOKEN", Format: "openai-responses", Endpoint: "https://api.other-model.example/v1", Scheme: "bearer"},
+		},
+		Fetched: document(t, doc("first"), digest('1')),
+	}
+	r := open(t, cfg)
+	if r.Held().Start != "first" {
+		t.Fatalf("start %q", r.Held().Start)
+	}
+	_, err := reload(t, r, document(t, doc("second"), digest('2')))
+	if want := "run configuration " + runURL + `: start a new run to change the model key it starts with: the run started with "first", and this run configuration selects "second"; the policy in force stays`; err == nil || err.Error() != want {
+		t.Errorf("a reload with another model key:\n got %v\nwant %s", err, want)
+	}
+	if r.RunConfiguration() != digest('1') || r.Held().Start != "first" {
+		t.Errorf("after a refused reload: %q, start %q", r.RunConfiguration(), r.Held().Start)
+	}
+	none := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}}`
+	_, err = reload(t, r, document(t, none, digest('3')))
+	if want := "run configuration " + runURL + `: start a new run to change the model key it starts with: the run started with "first", and this run configuration selects no model key; the policy in force stays`; err == nil || err.Error() != want {
+		t.Errorf("a reload with no model key:\n got %v\nwant %s", err, want)
+	}
+	if _, err := reload(t, r, document(t, doc("first"), digest('4'))); err != nil {
+		t.Errorf("a reload with the same model key: %v", err)
+	}
+	cfg.Fetched = document(t, none, digest('5'))
+	r = open(t, cfg)
+	if r.Held().Start != "" {
+		t.Fatalf("start %q", r.Held().Start)
+	}
+	_, err = reload(t, r, document(t, doc("first"), digest('6')))
+	if want := "run configuration " + runURL + `: start a new run to change the model key it starts with: the run started with no model key, and this run configuration selects "first"; the policy in force stays`; err == nil || err.Error() != want {
+		t.Errorf("a reload that adds a model key:\n got %v\nwant %s", err, want)
 	}
 }

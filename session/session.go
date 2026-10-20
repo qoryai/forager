@@ -26,6 +26,7 @@ import (
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/socket"
+	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/sink"
 	"github.com/qoryai/forager/wall"
@@ -48,6 +49,8 @@ type Spec struct {
 	// from what is merely inherited (contracts/forager/v1/README.md §Variables). The
 	// access key's variables, QORY_ACCESS_KEY_SECRET, QORY_ACCESS_KEY_ID and
 	// QORY_APIARY_PUBLIC_KEY, are left out of what the session gets from any of them.
+	// Without a Wall the variables the machine's credentials are read from are left out
+	// of it too, and a placeholder wins over a value of it.
 	Env []string
 	Dir string
 	// LaunchFixed is the values the harness computes itself, NAME=value. They are fixed
@@ -92,8 +95,30 @@ type Spec struct {
 	// enclosure whose only route out leads to the gateway's proxy, in the image the
 	// gateway's run answer gives, with Dir as its workspace and working directory.
 	// Command, Args and Forwarder are then paths inside the enclosure. Nil means no wall:
-	// the runtime is this machine's process, and enforcement is cooperative.
+	// the runtime is this machine's process, and enforcement is cooperative. The
+	// gateway sets the values of the run's credentials either way: the runtime sees
+	// only their placeholders.
 	Wall wall.Wall
+	// CAEnv are the variables that point a program at the run's bundle when the run has
+	// no Wall and the gateway gives it an authority; qory is to set it from wall.ca_env.
+	// Nil means [wall.DefaultCAEnv]. Behind a Wall the wall sets its names for the
+	// bundle instead.
+	CAEnv []string
+	// Preparation is the run's preparation, the program and then its arguments, which
+	// the session runs inside the wall before the runtime: after the runtime's
+	// preparation, as the runtime's user, in Dir, with the runtime's environment, through
+	// the run's proxy and with its placeholders, so it reaches what the policy allows
+	// with the credentials the policy selects. The session starts the runtime through a
+	// script it writes into the run directory, PreparationScript, with /bin/sh, so an
+	// image for such a run contains /bin/sh. The script runs the preparation with no
+	// input and its output where the runtime's goes, and starts the runtime once the
+	// preparation exits 0. A preparation that exits otherwise ends the run with its exit
+	// status, and the runtime never starts. A stop during the preparation asks it to
+	// leave with SIGTERM, whatever the stop signal, and the runtime never starts.
+	// dev.qory.run.started reports the preparation as given, and the script as its
+	// command and args. Empty means none. A preparation needs a Wall and a program that
+	// is not empty.
+	Preparation []string
 	// Image is the agent's image under a Wall when the policy selects none: the name
 	// of one of Images, or a reference.
 	Image string
@@ -102,6 +127,15 @@ type Spec struct {
 	// image a run starts in is fixed when it starts. The run request carries them, so
 	// the gateway resolves the policy's selection against them.
 	Images []Image
+	// ImagesAllow are the prefixes of the references pinned by digest a run's policy may
+	// name its image by, for qory images.allow: an entry covers a reference that starts
+	// with it when the entry ends in / or @, or the reference's next character is / or
+	// @. Nil allows no reference. A list needs an Image, the default: an image by
+	// reference starts under the default's runtime, with no nested Docker,
+	// as the wall's user, its workspace at /workspace inside, and the wall fetches it,
+	// unless the engine holds it by that digest, and refuses one whose user is root,
+	// image_user_root. A reference no entry covers is no run, image_not_allowed.
+	ImagesAllow []string
 	// Mounts are what the enclosure shows of this machine, each at its own path: the
 	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
 	// one of the same mode is reached through the outer one, which alone is bound; one of
@@ -132,7 +166,8 @@ type Spec struct {
 	// run, mount_through_link. A relative path is taken from the working directory.
 	Written []string
 	// Declared is the egress the harness declared, nil when nothing was. It is
-	// reported in dev.qory.run.policy_applied as harness_hosts and decides nothing:
+	// reported in dev.qory.run.policy_applied as harness_hosts, a host that contains
+	// qak_ or qrk_ in any case as accesskey.ShownValue's phrase, and decides nothing:
 	// the policy alone decides.
 	Declared []string
 	// RunsDir holds the run directories; empty means Dir/.qory/runs. It is one of
@@ -141,6 +176,16 @@ type Spec struct {
 	// Forwarder is the command the Runtime installs as the program's hook: it reads the
 	// hook's input and forwards it to the socket. Empty means no hooks are installed.
 	Forwarder []string
+	// Exec is the command, a path inside the enclosure, that makes the caller's binary
+	// run [Exec] there: {wall.HelperPath, "exec"} for a binary that runs it in its exec
+	// mode. Behind a wall the session starts the launch through it when the run has
+	// names to unset, in front of everything else the launch starts, after the wall's
+	// programs, with the names the run has that nothing sets
+	// and wins with, the runtime's declared, reserved and denied names, its model
+	// overrides and the node's denied ones, so the runtime sees them unset, never as the
+	// image's values or empty.
+	// dev.qory.run.started reports the launch without it. A Wall needs one.
+	Exec []string
 	// ForagerVersion is reported in the events.
 	ForagerVersion string
 	// RunID is the run's id when a parent already made one; empty means a new one, or
@@ -166,9 +211,9 @@ type Spec struct {
 	// Behind a RemoteGateway what the run is about is its starter's registration's:
 	// About is neither sent nor reported.
 	About *About
-	// Timeout is how long the runtime may run; zero means no limit. At the limit the
-	// runtime is stopped the way the context ending stops it, and run.exited carries
-	// the reason.
+	// Timeout is how long the runtime may run, the run's preparation included; zero
+	// means no limit. At the limit the runtime is stopped the way the context ending
+	// stops it, and run.exited carries the reason.
 	Timeout time.Duration
 	// StopSignal is the signal that asks the runtime to leave when the session stops it,
 	// at the Timeout or the context's end: one CheckStopSignal passes. A runtime may
@@ -280,7 +325,7 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // form. [Run] checks it; a command checks it first to call it a mistake of its user's.
 func CheckRunID(id string) error {
 	if !runIDShape.MatchString(id) {
-		return fmt.Errorf("the run id %q is not a UUID in the canonical lower-case form", id)
+		return fmt.Errorf("the run id %s is not a UUID in the canonical lower-case form", accesskey.ShownName(id, true))
 	}
 	return nil
 }
@@ -397,6 +442,12 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err := checkHarnessHome(spec.HarnessHome); err != nil {
 		return nil, err
 	}
+	if err := checkPreparation(spec); err != nil {
+		return nil, err
+	}
+	if err := checkExec(spec); err != nil {
+		return nil, err
+	}
 	runID := spec.RunID
 	switch {
 	case runID == "" && keyRunID != "":
@@ -436,7 +487,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			v := e.Engine(ctx)
 			engine = &v
 		}
-		if listed, err = register(runID, append(plan.sources, wallOwn...), engine); err != nil {
+		docker, _ := spec.Wall.(*wall.Docker)
+		if listed, err = register(runID, append(plan.sources, wallOwn...), engine,
+			docker); err != nil {
 			return nil, err
 		}
 		defer listed.release()
@@ -450,7 +503,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	interactive := spec.Interactive && !rt.Headless(spec.Args)
 	leave := rt.Stop()
 	if err := CheckStopSignal(leave.Signal); err != nil {
-		return nil, fmt.Errorf("runtime %s: %w", rt.Name(), err)
+		return nil, fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), err)
 	}
 	if spec.StopSignal == "" {
 		spec.StopSignal = leave.Signal
@@ -512,7 +565,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The local link's proxy is on loopback; a separate gateway's is its one address,
 	// which the link's discovery checked.
 	if err == nil && local != nil && !loopback(disc.Proxy.Address) {
-		err = fmt.Errorf("the gateway's discovery names the proxy %q, which is no address on loopback: the local link's proxy is on this machine", disc.Proxy.Address)
+		err = fmt.Errorf("the gateway's discovery names the proxy %s, which is no address on loopback: the local link's proxy is on this machine", accesskey.ShownValue(disc.Proxy.Address, true))
 	}
 	if err == nil && disc.Events.IntervalSeconds < 1 {
 		err = errors.New("the link's discovery names no heartbeat interval")
@@ -523,7 +576,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// A run id that has a record is no run, as it always was: the run's stream, which
 	// the gateway writes beside the session's record, is checked first.
 	if _, err := os.Lstat(filepath.Join(dir, sink.EventsFile)); err == nil {
-		return nil, &fs.PathError{Op: "open", Path: filepath.Join(dir, sink.EventsFile), Err: syscall.EEXIST}
+		return nil, accesskey.ShownError(&fs.PathError{Op: "open", Path: filepath.Join(dir, sink.EventsFile), Err: syscall.EEXIST})
 	}
 	discovered := time.Now()
 	interval := time.Duration(disc.Events.IntervalSeconds) * time.Second
@@ -601,7 +654,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		case errors.As(err, &r) && refusal.Decides(r.Code):
 			data := map[string]any{"code": r.Code}
 			if len(r.Names) > 0 {
-				data["names"] = r.Names
+				data["names"] = eventNames(r.Names)
 			}
 			write(event.RunRefused, data)
 		}
@@ -643,39 +696,108 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// authority and the members of policy_applied it decides.
 	// An answer without an image is a machine whose default names none: the wall is
 	// asked for none, and refuses it as it always has.
+	// An image the policy names by its reference starts as the default does, and the
+	// relay starts from the machine's default whatever the run's image is.
 	var img Image
+	byReference, relayImage := false, ""
 	if spec.Wall != nil && answer.Image != nil {
 		img = Image{Name: answer.Image.Name, Ref: answer.Image.Ref, Runtime: answer.Image.Runtime, Docker: answer.Image.Docker}
+		byReference, relayImage = answer.Image.Reference, answer.RelayImage
+	}
+	// A run whose policy names its image by its reference sees its workspace at
+	// /workspace, whatever its path here, and every path Forager puts inside is written
+	// as the enclosure sees it. What the server, the run or the machine set is theirs,
+	// and left as it is. Any other run sees each place at its own path.
+	shown, inside := plan, func(s string) string { return s }
+	if byReference {
+		if shown, inside, err = plan.atWorkspace(); err != nil {
+			return fail(err)
+		}
 	}
 	members, err := appliedMembers(answer.Applied)
 	if err != nil {
 		return fail(err)
 	}
 	reserved := slices.Concat(answer.Reserved, reservedOf(spec.Gateway))
+	// Without a wall the run inherits the starting process's environment, which may
+	// contain the variables the machine's credentials are read from: their values stay
+	// the gateway's, so the agent's environment has only the placeholders.
+	if spec.Wall == nil {
+		spec.Env = withoutNames(spec.Env, reserved)
+	}
+	// The runtime chooses the variable of the start key, the API credential the run
+	// starts with: from here on it is one of the credential's placeholders and of the
+	// run's, and key sets it and the runtime's endpoint variable.
+	credentialHosts, placeholderNames, key, err := chosen(rt, answer.CredentialHosts, answer.Placeholders, answer.ModelCredential)
+	if err != nil {
+		return fail(err)
+	}
 	var authority []byte
-	if spec.Wall != nil && answer.CertificateAuthority != "" {
+	if answer.CertificateAuthority != "" {
 		authority = []byte(answer.CertificateAuthority)
+	}
+	// Without a wall the run's tools trust the authority through a bundle in the run
+	// directory, the machine's authorities and the run's certificate, which the
+	// variables of caEnv point at, as the wall's do inside.
+	var caVars []string
+	if spec.Wall == nil && authority != nil {
+		if caVars, err = writeBundle(dir, caEnv(spec), authority); err != nil {
+			return fail(err)
+		}
 	}
 	// The runtime prepares the launch before the variables are resolved, because what it
 	// sets is Forager's own and wins over a server's variable of the same name. Behind
 	// a wall the run directory goes in read-only, apart from every place the run binds:
 	// the settings are read from it, and the record in it is not the agent's to rewrite
-	// or move. Behind a wall the runtime learns the placeholders the run sets. A file
-	// the runtime reads from this machine is refused when a walled run could have
-	// written it: one in a place of Spec.Written, in a writable bind of another walled
-	// run in the registry or, behind a wall, in a writable bind of this run's.
-	written := func() ([]string, error) { return writtenPlaces(spec, runID, plan, wallOwn) }
+	// or move. The runtime learns whether the run is walled, and the placeholders the
+	// run sets, with or without a wall. A file the runtime reads from this machine is refused
+	// when a walled run could have written it: one in a place of Spec.Written, in a
+	// writable bind of another walled run in the registry or, behind a wall, in a
+	// writable bind of this run's. A directory the runtime passes is refused as well
+	// when it contains such a place. The places are worked out once, for both.
+	written := sync.OnceValues(func() ([]string, error) { return writtenPlaces(spec, runID, plan, wallOwn) })
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
-		Readable: readable(written)}
-	if spec.Wall != nil {
-		attach.Placeholders = slices.Clone(answer.Placeholders)
+		Readable: readable(written), ReadableDir: readableDir(written),
+		Walled: spec.Wall != nil, Placeholders: slices.Clone(placeholderNames), ModelVariables: key.modelVariables(),
+		DeniedVariables: deniedVariables(rt, spec.Wall != nil)}
+	if byReference {
+		attach.Inside = inside
 	}
 	if prepared, err = rt.Prepare(attach); err != nil {
-		return fail(fmt.Errorf("runtime %s: %w", rt.Name(), err))
+		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
-	vars, emptied, err := resolve(spec, rt, answer.Values(), prepared, answer.Placeholders, reserved)
+	// The run's preparation runs inside, after the runtime's, and starts the launch as
+	// the runtime prepared it.
+	if prepared, err = withPreparation(dir, insideAll(spec.Preparation, inside), prepared); err != nil {
+		return fail(err)
+	}
+	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
+	// A value the runtime's preparation sets for one of key.Others is left out, walled
+	// or not; behind a wall the name is then unset inside.
+	prepared.Env = withoutNames(prepared.Env, key.Others)
+	// The harness's values are Forager's to write as the enclosure sees them.
+	harness := spec
+	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)
+	try := func(s Spec) (variables.Resolved, []string, error) {
+		return resolve(s, rt, answer.Values(), credentialHosts, prepared, placeholderNames, reserved, img.Docker, authority != nil, names(caVars), key)
+	}
+	vars, unset, err := try(harness)
 	if err != nil {
+		return fail(err)
+	}
+	// The runtime's other model-key variables do not reach it from the environment the
+	// run inherits either, walled or not: it would send their values to the start key's
+	// endpoint.
+	spec.Env = withoutNames(spec.Env, key.Others)
+	ownEnv := []string{EnvRunID + "=" + runID}
+	if spec.HarnessHome != "" {
+		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
+	}
+	if key.Endpoint != "" {
+		ownEnv = append(ownEnv, key.Endpoint)
+	}
+	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared, placeholderNames); err != nil {
 		return fail(err)
 	}
 	if spec.OnVariables != nil {
@@ -700,13 +822,14 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// run key inside TLS.
 	bind, secret, relayToken := link.Loopback, answer.ProxySecret, answer.ProxySecret
 	if spec.Wall != nil {
-		if enclosure, err = spec.Wall.Prepare(runCtx, wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker}); err != nil {
+		req := wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker, RelayImage: relayImage, Pull: byReference}
+		if enclosure, err = spec.Wall.Prepare(runCtx, req); err != nil {
 			return fail(err)
 		}
 		defer func() {
 			// The run's context may be what ended the run; the wall is removed regardless.
 			if err := enclosure.Close(context.WithoutCancel(ctx)); err != nil {
-				spec.Report("removing the wall: " + err.Error())
+				spec.Report("removing the wall: " + accesskey.ShownError(err).Error())
 				// Its containers may outlive the run: the entry stays, and is the run's
 				// while one of them exists.
 				listed.keep()
@@ -761,7 +884,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			write(typ, data)
 		}
 	}
-	go sock.Serve(records, func(err error) { spec.Report("socket: " + err.Error()) })
+	go sock.Serve(records, func(err error) { spec.Report("socket: " + accesskey.ShownError(err).Error()) })
 	closeSocket := sync.OnceFunc(func() { sock.Close() })
 	defer closeSocket()
 
@@ -770,18 +893,17 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// starts it inside, which sets the proxy and socket variables by the addresses the
 	// enclosure reaches them on. The environment is what the run inherits, then the
 	// variables as resolved, the harness's computed values, what the runtime's
-	// preparation sets and Forager's own, each over the ones before, and behind a
-	// wall the placeholders and, empty, the runtime's declared and reserved variables
-	// nothing sets, so an image's own value for one does not reach the runtime. The
-	// resolution has left out every value of a fixed name, so what wins here by position
-	// is what the record says.
-	ownEnv := []string{EnvRunID + "=" + runID}
-	if spec.HarnessHome != "" {
-		ownEnv = append(ownEnv, EnvHarnessHome+"="+spec.HarnessHome)
-	}
+	// preparation sets and Forager's own, each over the ones before, without a wall the
+	// variables of the run's bundle, and last the placeholders, so a placeholder wins
+	// over a value the run inherits. The resolution has left out every value of a fixed name, so
+	// what wins here by position is what the record says. Behind a wall the launch
+	// starts through Exec when the run has names to unset, which unsets the runtime's declared, reserved and denied
+	// variables, its model overrides and the node's denied ones that nothing sets, so an image's value for
+	// one does not reach the runtime; the record names the launch without it. ownEnv
+	// is set before the variables are checked.
 	launch := wall.Launch{
 		Command: command, Args: args, Dir: spec.Dir,
-		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, fwd.Env(), []string{EnvSocket + "=" + sock.Path()}, ownEnv),
+		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, fwd.Env(), []string{EnvSocket + "=" + sock.Path()}, ownEnv, caVars, placeholders(placeholderNames, key)),
 	}
 	if enclosure != nil {
 		// The places again, just before the enclosure binds them, and the wall's own
@@ -806,15 +928,16 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if err := listed.update(append(again.sources, binds...)); err != nil {
 			return fail(err)
 		}
+		inner, innerArgs := withExec(spec.Exec, unset, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
-			Command: command, Args: args, Dir: plan.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(answer.Placeholders), emptied),
+			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
+			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key)),
 			CA:    authority,
-			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: plan.Mounts, Limits: spec.Limits,
+			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: relayToken,
 		})
 		if err != nil {
-			return fail(err)
+			return fail(accesskey.ShownError(err))
 		}
 	}
 
@@ -824,12 +947,23 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(errRunClosed)
 	}
 	start := time.Now()
+	// A value of the run's that contains qak_ or qrk_ in any case is sent as a phrase in
+	// its place: accesskey.ShownName's for the runtime, the host, the wall, the image,
+	// its name and its container runtime; accesskey.ShownValue's for the directory, the
+	// command, each argument, the runtime's version and each word of the preparation;
+	// and server.ShownLabels' and server.ShownAbout's for the labels and about.
 	started := map[string]any{
-		"opened_by": event.OpenedBySession, "runtime": rt.Name(), "command": command, "args": args,
-		"dir": spec.Dir, "interactive": interactive, "forager_version": spec.ForagerVersion, "host": hostname(),
+		"opened_by": event.OpenedBySession, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(command, false), "args": shownValues(args),
+		"dir": accesskey.ShownValue(spec.Dir, false), "interactive": interactive, "forager_version": spec.ForagerVersion, "host": accesskey.ShownName(hostname(), false),
+	}
+	if byReference {
+		started["dir"] = accesskey.ShownValue(shown.Dir, false)
 	}
 	if v := rt.Version(); v != "" {
-		started["runtime_version"] = v
+		started["runtime_version"] = accesskey.ShownValue(v, false)
+	}
+	if len(spec.Preparation) > 0 {
+		started["preparation"] = shownValues(spec.Preparation)
 	}
 	// The pseudo-terminal's size is in the record, so a replay can lay the redraws of
 	// a full-screen program over each other: the size it starts with here, each change
@@ -840,40 +974,52 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		started["terminal"] = map[string]any{"cols": cols, "rows": rows}
 	}
 	if spec.Wall != nil {
-		started["wall"] = spec.Wall.Name()
-		started["image"] = img.Ref
+		started["wall"] = accesskey.ShownName(spec.Wall.Name(), false)
+		started["image"] = accesskey.ShownName(img.Ref, false)
 		if img.Name != "" {
-			started["image_name"] = img.Name
+			started["image_name"] = accesskey.ShownName(img.Name, false)
 		}
 		if img.Runtime != "" {
-			started["container_runtime"] = img.Runtime
+			started["container_runtime"] = accesskey.ShownName(img.Runtime, false)
 		}
 		if img.Docker {
 			started["docker"] = true
+		}
+		if f, ok := enclosure.(wall.Fetcher); ok {
+			if took, fetched := f.ImageFetch(); fetched {
+				started["image_fetch_ms"] = took.Milliseconds()
+			}
 		}
 	}
 	// The labels are the run's as the gateway holds them. Behind a separate gateway
 	// neither they nor what the run is about are the session's: the starter's
 	// registration holds them.
 	if len(answer.Labels) > 0 && remote == nil {
-		started["labels"] = answer.Labels
+		started["labels"] = server.ShownLabels(answer.Labels)
 	}
 	if about := server.ReportedAbout(spec.About); about != nil && remote == nil {
-		started["about"] = about
+		started["about"] = server.ShownAbout(about)
 	}
 	write(event.RunStarted, started)
 	// policyApplied is the policy_applied event of the members the gateway decides, for
 	// the policy in force at the start and for each one a reload puts in its place:
 	// those members as the gateway gives them, and the session's own, the run's
-	// variables as resolved at the start and the harness's hosts.
+	// variables as resolved at the start, the variables its credentials' placeholders
+	// are in, and the harness's hosts.
+	credentialVars := credentialVariables(credentialHosts)
 	policyApplied := func(members map[string]any) map[string]any {
 		a := maps.Clone(members)
 		if a == nil {
 			a = map[string]any{}
 		}
-		a["variables"] = vars.Applied
+		a["variables"] = shownVariables(vars.Applied)
+		if credentialVars != nil {
+			a["credential_variables"] = credentialVars
+		} else {
+			delete(a, "credential_variables")
+		}
 		if spec.Declared != nil {
-			a["harness_hosts"] = spec.Declared
+			a["harness_hosts"] = shownValues(spec.Declared)
 		} else {
 			delete(a, "harness_hosts")
 		}
@@ -991,7 +1137,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	closeCtx, cancel := context.WithTimeout(context.Background(), closeWait)
 	defer cancel()
 	if err := closeSinks(closeCtx); err != nil {
-		spec.Report("closing the sinks: " + err.Error())
+		spec.Report("closing the sinks: " + accesskey.ShownError(err).Error())
 	}
 	res.Undelivered = posts.Undelivered()
 	return res, nil
@@ -1022,7 +1168,7 @@ func refused(err error, fail, quit func(error) (*Result, error), own func(string
 		r.Detail = "the gateway"
 		data := map[string]any{"code": r.Code}
 		if len(r.Names) > 0 {
-			data["names"] = r.Names
+			data["names"] = eventNames(r.Names)
 		}
 		if r.From == accesskey.FromApiary && r.Status != 0 {
 			data["status"] = r.Status
@@ -1033,7 +1179,7 @@ func refused(err error, fail, quit func(error) (*Result, error), own func(string
 	var status *server.StatusError
 	if errors.As(err, &status) && status.Status >= 500 {
 		if status.Message != "" {
-			return quit(errors.New(status.Message))
+			return quit(errors.New(accesskey.ShownValue(status.Message, false)))
 		}
 		return quit(fmt.Errorf("the gateway answered the run request with status %d", status.Status))
 	}
@@ -1045,7 +1191,7 @@ func linkImages(spec Spec) *server.LinkImages {
 	if spec.Image == "" && len(spec.Images) == 0 {
 		return nil
 	}
-	out := &server.LinkImages{Default: spec.Image}
+	out := &server.LinkImages{Default: spec.Image, Allow: spec.ImagesAllow}
 	for _, d := range spec.Images {
 		out.Definitions = append(out.Definitions, server.LinkImage{Name: d.Name, Ref: d.Ref, Runtime: d.Runtime, Docker: d.Docker})
 	}
@@ -1095,12 +1241,55 @@ func withDefaults(spec Spec) Spec {
 	return spec
 }
 
+// insideAll are words, each written as inside writes it.
+func insideAll(words []string, inside func(string) string) []string {
+	if words == nil {
+		return nil
+	}
+	out := make([]string, len(words))
+	for i, w := range words {
+		out[i] = inside(w)
+	}
+	return out
+}
+
+// insideValues are NAME=value entries, each value written as inside writes it.
+func insideValues(env []string, inside func(string) string) []string {
+	if env == nil {
+		return nil
+	}
+	out := make([]string, len(env))
+	for i, kv := range env {
+		name, value, ok := strings.Cut(kv, "=")
+		if out[i] = kv; ok {
+			out[i] = name + "=" + inside(value)
+		}
+	}
+	return out
+}
+
+// withoutNames are the NAME=value entries of env whose name is none of names.
+func withoutNames(env, names []string) []string {
+	if len(names) == 0 {
+		return env
+	}
+	return slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
+		name, _, _ := strings.Cut(kv, "=")
+		return slices.Contains(names, name)
+	})
+}
+
 // placeholders are the variables a program wants set before it starts, with a value
-// that is no credential.
-func placeholders(names []string) []string {
+// that is no credential: [link.Placeholder], and the start key's variable its
+// placeholder, [link.KeyPlaceholder].
+func placeholders(names []string, key keyed) []string {
+	variable, _, _ := strings.Cut(key.Variable, "=")
 	out := make([]string, len(names))
 	for i, n := range names {
 		out[i] = n + "=" + link.Placeholder
+		if n == variable {
+			out[i] = key.Variable
+		}
 	}
 	return out
 }
@@ -1172,4 +1361,32 @@ func loopback(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// shownVariables are the run's variables as its dev.qory.run.policy_applied sends them:
+// each entry as it is, with its name as accesskey.ShownName shows it, bare, in the
+// order of the names before. Two names that give one phrase are two entries with that
+// phrase.
+func shownVariables(applied []variables.Entry) []variables.Entry {
+	out := make([]variables.Entry, len(applied))
+	for i, e := range applied {
+		out[i] = e
+		out[i].Name = accesskey.ShownName(e.Name, false)
+	}
+	return out
+}
+
+// eventNames are a refusal's names as its dev.qory.run.refused sends them: as
+// accesskey.ShownNames lists them, so a phrase two names give is sent once, as the
+// schema holds the names unique.
+func eventNames(names []string) []string { return accesskey.ShownNames(names) }
+
+// shownValues are values as an event sends them: each as accesskey.ShownValue shows it,
+// in order. A nil list is an empty one, as the event's arrays are never null.
+func shownValues(values []string) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = accesskey.ShownValue(v, false)
+	}
+	return out
 }

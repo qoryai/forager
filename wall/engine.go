@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // Engine is what reaches the container engine a run's enclosure is in, as a session
@@ -194,19 +196,37 @@ func podman(command string) bool { return filepath.Base(command) == "podman" }
 
 // RunContainersExist reports whether the engine holds a container labelled with the
 // run's id, in any state: a container that is created, paused or stopped can be started
-// again with its binds.
+// again with its binds. It is [Docker.RunContainersExist] of a Docker with no field
+// set.
 func RunContainersExist(ctx context.Context, e Engine, runID string) (bool, error) {
-	return runContainersExist(ctx, hostSystem{}, e, runID)
+	return (&Docker{}).RunContainersExist(ctx, e, runID)
+}
+
+// RunContainersExist reports whether the engine e, an earlier run's as its session
+// recorded it, holds a container labelled with the run's id, in any state: a container
+// that is created, paused or stopped can be started again with its binds. It runs e's
+// command with e's variables in place of those of this process that select an engine,
+// through the adapter's host commands, and asks the engine for its id first when e
+// records one, so that another engine does not answer. A nil Docker is one with no
+// field set.
+func (d *Docker) RunContainersExist(
+	ctx context.Context, e Engine, runID string,
+) (bool, error) {
+	var sys system = hostSystem{}
+	if d != nil && d.sys != nil {
+		sys = d.sys
+	}
+	return runContainersExist(ctx, sys, e, runID)
 }
 
 func runContainersExist(
 	ctx context.Context, sys system, e Engine, runID string,
 ) (bool, error) {
 	if e.Wall != "docker" {
-		return false, fmt.Errorf("wall: the %q wall's engine cannot be asked", e.Wall)
+		return false, fmt.Errorf("wall: the %s wall's engine cannot be asked", accesskey.ShownName(e.Wall, true))
 	}
 	if !runIDShape.MatchString(runID) {
-		return false, fmt.Errorf("wall docker: the run id %q cannot name a container", runID)
+		return false, fmt.Errorf("wall docker: the run id %s cannot name a container", accesskey.ShownName(runID, true))
 	}
 	if e.Command == "" {
 		return false, errors.New("wall docker: the engine has no command")
@@ -214,7 +234,7 @@ func runContainersExist(
 	for _, kv := range e.Env {
 		name, _, _ := strings.Cut(kv, "=")
 		if !slices.Contains(engineVariables, name) {
-			return false, fmt.Errorf("wall docker: %s does not select an engine", name)
+			return false, fmt.Errorf("wall docker: %s does not select an engine", accesskey.ShownName(name, false))
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, existsWait)
@@ -233,18 +253,19 @@ func runContainersExist(
 	if e.ID != "" {
 		id, err := engineID(ctx, sys, e)
 		if err != nil {
-			return false, fmt.Errorf("wall docker: %s info: %w", e.Command, err)
+			return false, fmt.Errorf("wall docker: %s info: %w", accesskey.ShownValue(e.Command, false), accesskey.ShownError(err))
 		}
 		if id != e.ID {
-			return false, fmt.Errorf("wall docker: %s reaches the engine %q, not %q, the "+
-				"one the run was in", e.Command, id, e.ID)
+			return false, fmt.Errorf("wall docker: %s reaches the engine %s, not %s, the "+
+				"one the run was in", accesskey.ShownValue(e.Command, false),
+				accesskey.ShownValue(id, true), accesskey.ShownValue(e.ID, true))
 		}
 	}
 	argv := []string{e.Command, "ps", "--all", "--quiet",
 		"--filter", "label=dev.qory.run=" + runID}
 	out, err := sys.engine(ctx, argv, e.Env)
 	if err != nil {
-		return false, fmt.Errorf("wall docker: %s ps: %w", e.Command, err)
+		return false, fmt.Errorf("wall docker: %s ps: %w", accesskey.ShownValue(e.Command, false), accesskey.ShownError(err))
 	}
 	return len(bytes.TrimSpace(out)) > 0, nil
 }
@@ -275,7 +296,7 @@ func (hostSystem) engine(ctx context.Context, argv, env []string) ([]byte, error
 	out, err := engineCommand(ctx, argv, env).Output()
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && len(bytes.TrimSpace(exit.Stderr)) > 0 {
-		return out, fmt.Errorf("%w: %s", err, bytes.TrimSpace(exit.Stderr))
+		return out, fmt.Errorf("%w: %s", accesskey.ShownError(err), accesskey.ShownValue(string(bytes.TrimSpace(exit.Stderr)), false))
 	}
-	return out, err
+	return out, accesskey.ShownError(err)
 }

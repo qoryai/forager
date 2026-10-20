@@ -1,0 +1,6 @@
+# allow_first takes a host itself, never a *. pattern.
+version: 1
+egress:
+  mode: observe
+  allow_first:
+    - "*.example"

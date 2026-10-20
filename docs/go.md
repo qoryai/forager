@@ -77,10 +77,11 @@ For each run the session, over the gateway's link:
    behind a wall, the machine's images;
 3. applies the run answer: on the local link the proxy secret goes to the session's
    forwarder, or behind a wall to the wall's relay, and never into the agent's
-   environment; behind a wall, the
-   run's certificate authority and the placeholders go into the enclosure; the image is
-   the one the answer names; the variables the gateway sets are not the session's to
-   set;
+   environment; with or without a wall, the placeholders go into the agent's
+   environment, and the run's certificate authority into the bundle its programs
+   trust: behind a wall the enclosure's, and without one `ca-bundle.pem` in the run
+   directory, which the variables of `CAEnv` point at; behind a wall the image is the
+   one in the answer; the variables the gateway sets are not the session's to set;
 4. records `dev.qory.run.started`, with the gateway's labels on the local link, and
    `dev.qory.run.policy_applied` with the members the gateway decides, and the run's
    variables and the harness's hosts beside them, and posts every event of the run to
@@ -97,6 +98,13 @@ reaches the socket can post a batch into a local run whose id it knows, fetch th
 configuration again, or end the run. `gateway.Start` with `gateway.Config.NoLinkSocket`
 serves no socket, only the link in memory, to a session in the same process as the
 gateway.
+
+`gateway.Start` limits core dumps of the process that calls it and debugger access to
+it, and with `gateway.Config.LockMemory`, on Linux, out of swap. The
+settings stay for the life of the process. Call `gateway.HardenProcess` first in
+`main` to limit core dumps and debugger access before the program reads its
+configuration, a key or its environment; `Start` makes the same calls again. See
+[the gateway's process](credentials.md#the-gateways-process).
 
 The agent reaches the gateway's proxy through the session's forwarder, on loopback.
 On the local link every connection to the proxy opens with the relay's preamble and the
@@ -127,8 +135,21 @@ A refusal the gateway or the server answers with a code returns a `*session.Refu
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
 the refusal's `message`, the text such a run returns, such as
 `register https://qory.example/v1/runs: instance_limit (status 409)`. A run whose policy
-needs a wall and has none returns the error such a run always had, and so does a run
-the gateway could not open for a reason without a code.
+needs a wall and has none returns the error of [`wall_required`](../contracts/forager/v1/README.md#the-gateways-link)
+as the session words it, and so does a run the gateway could not open for a reason
+without a code.
+
+A panic in one of the gateway's goroutines, request handlers or accept loops ends that
+goroutine, request or accepted connection alone: the connection closes, an accept loop
+accepts the next connection, and the gateway serves its other runs on.
+`gateway.Config.Report` gets "run <id>: the gateway recovered from a panic and serves
+on; send the stack below to Forager's maintainers", without "run <id>: " where the
+panic is in no one run, and the stack on the lines after it. A panic while a run's
+events are sent, by the gateway or by the session, ends that batch alone: the report is
+"the run's event sender recovered from a panic and sends the next batch; send the stack
+below to Forager's maintainers", with the stack, and the next batch is sent. Neither
+report nor any log contains the panic's value, which may contain a request's header or
+a credential.
 
 ## A separate gateway
 
@@ -163,6 +184,10 @@ link. Its `gateway.Config` sets it:
   sees the run keys they carry, in each attach and in each accepted registration answer
   the gateway relays; one that only tunnels them sees the server's host and port.
   `Listen` needs it.
+- `Selects`: behind a separate gateway, the credentials a run gets, with or without a
+  wall, when the server's policy selects none. An entry that takes an argument names
+  the run's label it takes, the forge the run's `forge` label must be, and the pattern
+  the label's value must match whole.
 
 A separate gateway runs no sessions on the gateway's machine: it makes no local link, in
 memory or on a socket, and no proxy listener on loopback, and a session that dials its
@@ -181,12 +206,21 @@ run that was open before `410` `run_closed`.
 certificate and its key: every connection of the link there is bound to its TLS", or
 without a `Server`, "the gateway's address <address> needs a server and a gateway's
 access key: the gateway attaches each run there", certificate and key files it cannot
-read or that do not match, and `TLS` without `Listen`; and once discovery is read, an
-access key that is not a gateway's, "the access key's node <node id> is not a gateway,
-ng_: the gateway's address <address> needs a gateway's access key". Without `Listen`,
-once discovery is read, it refuses a gateway's access key, "the access key's node
-<node id> is a gateway, ng_: a gateway without an address needs a node's access key,
-nd_ or np_".
+read or that do not match, and `TLS` without `Listen`; `Selects` without `Listen`,
+"gateway: Selects is for the runs on the gateway's address, and it has no Listen", and
+an entry of `Selects` that names no credential of `Credentials`, "gateway: Selects names
+<name>, which is no credential of Credentials", or one another entry names, "gateway:
+Selects names <name> twice", that names a `Label` for a credential that takes no
+argument, "gateway: Selects <name>: <name> takes no argument, so Label does not apply",
+and likewise a `Forge` or a `Pattern`, that leaves out any of the three for one that
+takes an argument, "gateway: Selects <name>: <name> takes an argument, so it needs
+Label, Forge and Pattern", or whose pattern does not compile as a label's value is
+matched, whole, "gateway: Selects <name>: the pattern does not compile: <reason>"; and
+once discovery is read, an access key that is not a gateway's, "the access key's node
+<node id> is not a gateway, ng_: the gateway's address <address> needs a gateway's
+access key". Without `Listen`, once discovery is read, it refuses a gateway's access
+key, "the access key's node <node id> is a gateway, ng_: a gateway without an address
+needs a node's access key, nd_ or np_".
 
 ### The session behind a separate gateway
 
@@ -352,7 +386,8 @@ A program that needs custom code implements the interface.
 ## The spec
 
 - `Declared` is the egress the harness declared. The record reports it as
-  `harness_hosts`, and it decides nothing. `nil` means no declaration.
+  `harness_hosts`, a host that contains `qak_` or `qrk_` as the value's phrase in its
+  place, and it decides nothing. `nil` means no declaration.
 - `Interactive` runs the session on a pseudo-terminal.
   - The exception: an argument the runtime's descriptor lists as headless is among
     `Args`, such as `-p` for Claude Code. Then the session runs on pipes.
@@ -361,7 +396,17 @@ A program that needs custom code implements the interface.
 - `Forwarder` is the command installed as the runtime's hook. It must call
   `session.Forward(ctx, os.Stdin)`. That passes the hook's input to the run, over a
   socket whose address is in the environment.
-- `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go).
+- `CAEnv` lists the names of the variables that point at `ca-bundle.pem` in the run
+  directory, the bundle of a run without a wall: the machine's authorities, then the
+  run's certificate. The session writes the bundle when the gateway's answer has an
+  authority. Nil means `wall.DefaultCAEnv`: `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
+  `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `AWS_CA_BUNDLE`.
+  Forager takes the names from `CAEnv` alone. The caller sets it: `qory` is to set it
+  from `wall.ca_env`. Behind a `Wall`, the wall sets the names for the enclosure's
+  bundle instead.
+- `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go). A walled
+  run needs `Exec`, the command that calls `session.Exec` inside the enclosure, which
+  the launch starts through when the run has names to unset.
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
   files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
 - `Written` are the places of this machine a walled run can write, as the caller records
@@ -369,9 +414,19 @@ A program that needs custom code implements the interface.
   file the runtime reads from this machine, the one Claude Code is passed with
   `--settings`, is refused when it lies in one of them or in a writable bind of another
   walled run, and behind a `Wall` when it lies in a writable bind of this run's, the
-  workspace among them. Behind a `Wall`, a place whose path goes through a link inside
-  one of them and does not resolve into it is no run, `mount_through_link`. See
+  workspace among them. Behind a `Wall`, Claude Code's `--mcp-config`, `--agents`,
+  `--plugin-dir`, `--plugin-dir-no-mcp` and `--add-dir` values are checked against the
+  same places. An `--mcp-config` or `--agents` file is passed as a copy in the run
+  directory. A directory may not lie in or contain one of them, nor hold a link that
+  leads into one, and a `.zip` may not lie in one; both are passed as they are. Behind a
+  `Wall`, a place whose path goes through a link inside one of them and does not
+  resolve into it is no run, `mount_through_link`. See
   [no file read from a place an agent can write](wall.md#no-file-read-from-a-place-an-agent-can-write).
+- `Preparation` is the run's preparation, the program and then its arguments: the
+  session runs it inside the wall before the runtime, through the run's proxy, and
+  starts the runtime once it exits 0. A preparation that exits otherwise is the run's
+  exit status, and the runtime never starts. It needs a `Wall`, and `Timeout` counts
+  it. See [the contract](../contracts/forager/v1/README.md#the-wall).
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
   link the gateway hands out, `(*gateway.Gateway).LocalLink()`, or a
   `session.RemoteGateway` on a separate machine (see

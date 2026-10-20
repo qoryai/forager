@@ -226,6 +226,10 @@ type verified struct {
 	seen   *http.Request
 	body   []byte
 	runDoc string
+	// secretsStatus and secretsBody are the answer to a secrets request, 200 when the
+	// status is 0.
+	secretsStatus int
+	secretsBody   string
 }
 
 func newVerified(t *testing.T) *verified {
@@ -290,6 +294,15 @@ func newVerified(t *testing.T) *verified {
 			w.Header().Set(server.HeaderRunConfiguration, "sha256="+strings.Repeat("1", 64))
 			w.Header().Set("ETag", `"sha256=`+strings.Repeat("1", 64)+`"`)
 			reply(200, v.runDoc)
+		case r.URL.Path == "/v1/secrets" && r.Method == http.MethodPost:
+			if r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("secrets headers %v", r.Header)
+			}
+			status := v.secretsStatus
+			if status == 0 {
+				status = 200
+			}
+			reply(status, v.secretsBody)
 		case r.URL.Path == "/v1/events" && r.Method == http.MethodPost:
 			if r.Header.Get("Content-Type") != server.ContentType || r.Header.Get(server.HeaderDelivery) == "" {
 				t.Errorf("POST headers %v", r.Header)
@@ -346,7 +359,8 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	}{"without workspaces": {node, "", run, false},
 		"without the run endpoint": {node, workspaces, "", false}, "with a trailing slash": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs/"}`, false},
 		"with a query": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs?x=1"}`, false}, "with a fragment": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs#x"}`, false},
-		"of a gateway's key without workspaces": {gateway, "", run, true}, "of a gateway's key with workspaces": {gateway, workspaces, run, false}} {
+		"of a gateway's key without workspaces": {gateway, "", run, true}, "of a gateway's key with workspaces": {gateway, workspaces, run, false},
+		"with qak_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/qak_FAKE/runs"}`, false}, "with QRK_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/QRK_FAKE"}`, false}} {
 		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			doc := []byte(`{"version":1,"node_id":"` + d.node + `",` + d.workspaces + `"events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + d.run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
 			w.Header().Set(server.HeaderConfiguration, "sha256=c0")

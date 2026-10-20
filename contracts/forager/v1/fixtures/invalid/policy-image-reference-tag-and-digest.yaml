@@ -1,0 +1,5 @@
+# A reference pinned by digest carries no tag beside it.
+version: 1
+egress:
+  mode: enforce
+image: registry.example/agents/app:1@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2

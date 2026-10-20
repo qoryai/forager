@@ -27,9 +27,10 @@ import (
 )
 
 // TestDockerClaudeCodeThroughTheWall runs Claude Code itself behind the Docker adapter
-// against a recorder that answers as the Messages API, which ANTHROPIC_BASE_URL points
-// Claude Code at: with an API key and with an OAuth credential, each a fake key the
-// session sets outside, headless and interactive. The variables Claude Code reads a
+// against a recorder that answers as the Messages API, the endpoint of a model key of
+// the machine's, which the session sets in ANTHROPIC_BASE_URL: with an API key and
+// with an OAuth credential, each a fake key the proxy sets outside, headless and
+// interactive. The variables Claude Code reads a
 // model credential from that the run does not set a stand-in in are set empty, so each
 // run also checks that Claude Code reads an empty one as unset and uses the stand-in.
 // Claude Code answers with the recorder's text; every request the recorder gets
@@ -81,8 +82,8 @@ func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 		t.Fatalf("this machine's roots are not the suite's authority: %v", err)
 	}
 	pid := strconv.Itoa(os.Getpid())
-	apiKey := claudeCredential{scheme: "header", header: apiKeyHeader, standIn: apiKeyStandIn, unset: oauthStandIn, key: "sk-ant-test" + keyMark + "0001-" + pid}
-	oauth := claudeCredential{scheme: "bearer", header: "Authorization", prefix: "Bearer ", standIn: oauthStandIn, unset: apiKeyStandIn, key: "sk-ant-oat01-test" + keyMark + "0002-" + pid}
+	apiKey := claudeCredential{scheme: "header", header: apiKeyHeader, standIn: apiKeyStandIn, unset: claudeOAuthVariable, key: "sk-ant-test" + keyMark + "0001-" + pid}
+	oauth := claudeCredential{scheme: "bearer", oauth: true, header: "Authorization", prefix: "Bearer ", standIn: claudeOAuthVariable, unset: apiKeyStandIn, key: "sk-ant-oat01-test" + keyMark + "0002-" + pid}
 	run := claudeRun{command: command, recorder: name, host: host, helper: helper, image: image}
 	t.Run("api key in x-api-key", func(t *testing.T) { run.check(t, apiKey, false) })
 	t.Run("oauth as a bearer", func(t *testing.T) { run.check(t, oauth, false) })
@@ -90,17 +91,35 @@ func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 	t.Run("interactive oauth", func(t *testing.T) { run.check(t, oauth, true) })
 }
 
-// claudeCredential is one model credential of Claude Code's: how the proxy sets it, the
-// header it arrives in at the recorder with its prefix, the variable Claude Code reads
-// its stand-in from, the variable of the other credential, which the run sets empty,
-// and the fake key.
+// claudeOAuthVariable is the variable Claude Code reads an OAuth token from.
+const claudeOAuthVariable = "CLAUDE_CODE_OAUTH_TOKEN"
+
+// claudeCredential is one model key of Claude Code's: how the proxy sets it, whether
+// it is an OAuth token, the header it arrives in at the recorder with its prefix, the
+// variable Claude Code reads its stand-in from, the variable of the other credential,
+// which the run sets empty, and the fake key.
 type claudeCredential struct {
-	scheme, header, prefix, standIn, unset, key string
+	scheme  string
+	oauth   bool
+	header  string
+	prefix  string
+	standIn string
+	unset   string
+	key     string
 }
 
 // claudeRun is what the runs of TestDockerClaudeCodeThroughTheWall share.
 type claudeRun struct {
 	command, recorder, host, helper, image string
+}
+
+// modelKey is the machine's model key of c, model, whose endpoint is the recorder.
+func (r claudeRun) modelKey(c claudeCredential) gateway.Credential {
+	k := gateway.Credential{Name: "model", Env: apiKeyVar, Format: "anthropic-messages", Endpoint: "https://" + r.host + ":" + recorderTLS, Scheme: c.scheme, OAuth: c.oauth}
+	if c.scheme == "header" {
+		k.Header = c.header
+	}
+	return k
 }
 
 // check runs Claude Code once with the credential, headless or interactive, and checks
@@ -119,7 +138,7 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 		Policy: &gateway.Policy{Version: 1,
 			Egress:      gateway.PolicyEgress{Mode: "enforce", Allow: []string{r.host}},
 			Credentials: []gateway.PolicyCredential{{Name: "model"}}},
-		Credentials: []gateway.Credential{{Name: "model", Env: apiKeyVar, Hosts: []string{r.host}, Scheme: c.scheme, Header: c.header, Placeholders: []string{c.standIn}}},
+		Credentials: []gateway.Credential{r.modelKey(c)},
 		Version:     "walltest",
 		Report:      func(l string) { t.Log("report:", l) },
 	}, runs)
@@ -129,7 +148,6 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 		Args:    []string{"-p", "Reply with one word."},
 		Env: []string{
 			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-			"ANTHROPIC_BASE_URL=https://" + r.host + ":" + recorderTLS,
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 			"DISABLE_AUTOUPDATER=1",
 			// Empty means unset: Claude Code reads ANTHROPIC_AUTH_TOKEN first and the
@@ -141,6 +159,7 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 		RunsDir:        runs,
 		Gateway:        g,
 		Forwarder:      []string{wall.HelperPath, "forward"},
+		Exec:           append([]string{wall.HelperPath}, ExecArgs...),
 		Wall:           &wall.Docker{Command: r.command, Helper: r.helper, RelayArgs: RelayArgs, NestArgs: NestArgs},
 		Image:          r.image,
 		ForagerVersion: "walltest",
@@ -217,7 +236,7 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 		}
 		for header, vs := range req.Header {
 			for _, v := range vs {
-				if strings.Contains(v, link.Placeholder) {
+				if strings.Contains(v, link.KeyPlaceholder("model")) {
 					t.Errorf("%s %s carried the stand-in in %s", req.Method, req.Path, header)
 				}
 			}

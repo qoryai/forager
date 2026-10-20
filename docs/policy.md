@@ -7,10 +7,11 @@ Forager observes and enforces egress through a proxy it owns.
 
 | Mode      | What it does                                                   |
 | --------- | -------------------------------------------------------------- |
-| `enforce` | Records every connection; denies every host outside `allow`    |
+| `enforce` | Records every connection; denies every host outside `allow` and `allow_first` |
 | `observe` | Records every connection; denies only the hosts `deny` covers  |
 
-`deny` applies in either mode, whatever `allow` lists.
+`deny` applies in either mode, whatever `allow` lists. `allow_first` is checked before
+`deny` and `allow`: a host it lists is allowed in either mode, though `deny` covers it.
 
 ## Hosts
 
@@ -19,16 +20,21 @@ Forager observes and enforces egress through a proxy it owns.
 - a name, such as `api.anthropic.com`,
 - or `*.` and a name, for every host below it.
 
+`allow_first` lists hosts themselves: a name or an IPv4 address, never a `*.` pattern,
+at most 64 entries. A host below an entry is not matched. Behind a wall, the guard and
+the path rules still apply to a host `allow_first` lists.
+
 ## What else a policy selects
 
-Behind a wall, a policy does more:
+A policy selects more. `credentials` applies with or without a wall; the others need a
+wall, and a run without one does not start (`wall_required`):
 
-| Field          | What it does                              |
-| -------------- | ----------------------------------------- |
-| `egress.paths` | Limits a host to paths                    |
-| `credentials`  | Selects the machine's credentials by name |
-| `tools`        | Selects the machine's tools by name       |
-| `image`        | Selects the machine's image by name       |
+| Field          | What it does                                                       |
+| -------------- | ------------------------------------------------------------------ |
+| `egress.paths` | Limits a host to paths                                             |
+| `credentials`  | Selects the machine's credentials by name                          |
+| `tools`        | Selects the machine's tools by name                                |
+| `image`        | Selects the machine's image by name, or an allowed image by digest |
 
 The machine defines the credentials, the tools and the images. A policy selects among
 them. See [credentials](credentials.md), [tools](credentials.md#tools) and
@@ -69,13 +75,17 @@ server, so what the node contributes can only narrow the run:
 | `egress.mode`  | `enforce` when either side sets it                                        |
 | `egress.allow` | the hosts both sides allow; a side under `observe` allows every host      |
 | `egress.deny`  | both sides' entries                                                       |
+| `egress.allow_first` | each side's entries the other side allows: a node's `deny` still denies a server's entry |
 | `egress.paths` | a request to a host either side lists must match an entry of each side that lists it |
 | `tools`        | the server's selection, within the node's `tools` when it has that member |
 | `image`        | the one both select, or the one a side selects                            |
 
 - A tool the node's `tools` does not list is no run, `tool_unknown`. `tools: []` allows
   none.
-- Two different images are no run, `image_unknown`.
+- Two different images are no run, `image_unknown`. The server's run configuration may
+  name the image too, by reference only, in its `image` member beside its
+  `security_policy`: the run configuration, the server's policy and the node's policy
+  name the same image wherever two of them name one, else `image_unknown`.
 - The record reports the policy the table computes, and the node's policy as
   `node_policy`: its digest and its paths.
 
@@ -94,6 +104,10 @@ gateway:
     mode: enforce                       # or observe: record everything, deny only what deny names
     allow: [api.anthropic.com, "*.github.com"]
     deny: [gist.github.com]             # denied in either mode, whatever allow says
+  run_limits:                           # optional; the same for every run on this gateway
+    connections: 256                    # open at once, 1 to 65536
+    requests_per_second: 50             # 1 to 10000
+    burst: 200                          # requests at once after a pause, 1 to 100000
   server:                               # optional
     url: https://qory.example
     access_key_id: ak_f1xt0re000000000  # or QORY_ACCESS_KEY_ID in the environment
@@ -106,6 +120,34 @@ gateway:
   [where the policy comes from](#where-the-policy-comes-from).
 - Without `gateway.egress`, and with no other policy, everything is allowed and recorded.
 - `gateway.server` defines the server Forager reports to. See [the server](server.md).
+- `gateway.lock_memory`, on Linux, keeps the gateway's memory out of swap. See
+  [keep the memory out of swap](credentials.md#keep-the-memory-out-of-swap).
+- `gateway.run_limits` limits each run on the gateway, so that one run cannot slow down
+  the others. Each run has counters of its own. A field you leave out is its default.
+  See [run limits](#run-limits).
+
+## Run limits
+
+Each run on a gateway can have at most `connections` connections open at once: `CONNECT`
+tunnels and plain HTTP requests in flight. The next one gets `429 Too Many Requests` with
+`Retry-After: 1` at once.
+
+Each run can send `requests_per_second` requests a second, and up to `burst` at once
+after a pause. Every `CONNECT`, plain request and request inside a tunnel the gateway
+terminates counts. A request past the limit waits up to 5 seconds, then gets `429 Too Many
+Requests` with `Retry-After: 1`. While `connections` requests of the run already wait, the
+next request past the limit gets the `429` at once.
+
+The body of each `429` says which limit refused the request and its value, such as:
+
+```
+qory: retry in 1 second. This run's requests came faster than 50 a second, the most gateway.run_limits.requests_per_second allows, and this request waited 5 seconds.
+```
+
+The record has a `dev.qory.run.egress` with `decision: denied` and the rule
+`wall:connection-limit` or `wall:rate-limit`, at most one per limit per second. The
+details: the contract's
+[policy section](../contracts/forager/v1/README.md#the-policy).
 
 ## A denied connection
 
@@ -128,7 +170,8 @@ The hosts the harness's modules declare are reported. They decide nothing. The p
 list decides.
 
 The spec's `Declared` is the egress the harness declared. The record reports it as
-`harness_hosts`. `nil` means no declaration.
+`harness_hosts`, a host that contains `qak_` or `qrk_` as the value's phrase in its
+place. `nil` means no declaration.
 
 ## Behind a wall
 

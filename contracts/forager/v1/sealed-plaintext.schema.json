@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/sealed-plaintext.schema.json",
+  "title": "Sealed plaintext",
+  "description": "What the envelope of secrets-answer.schema.json opens to: the digest, the requested credentials and a value for each, nothing else. Whoever opens it checks run_configuration against the digest it computed and credentials against the set it requested. values has exactly one value for each name of credentials, sorted by credential. A member the schema does not define is refused, and so is a member name twice in one object.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "run_configuration", "credentials", "values"],
+  "properties": {
+    "version": {
+      "description": "The document format. A version other than 1 is refused.",
+      "const": 1
+    },
+    "run_configuration": {
+      "description": "The digest of the run configuration the values were sealed for, sha256= and 64 lower-case hex digits.",
+      "type": "string",
+      "pattern": "^sha256=[0-9a-f]{64}$"
+    },
+    "credentials": {
+      "description": "The credentials of the request, sorted.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {"$ref": "run-configuration.schema.json#/$defs/credential_name"}
+    },
+    "values": {
+      "description": "The values, one per credential, sorted by credential.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["credential", "value"],
+        "properties": {
+          "credential": {"description": "The credential's name, one of credentials.", "$ref": "run-configuration.schema.json#/$defs/credential_name"},
+          "value": {"description": "The value: UTF-8 text of 1 to 16384 bytes with no NUL; the schema's maxLength counts characters and bounds it from above. A value set in a header must also have no control character other than tab and no leading or trailing space or tab.", "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\x00]+$"}
+        }
+      }
+    }
+  }
+}

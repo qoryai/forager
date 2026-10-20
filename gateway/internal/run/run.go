@@ -20,16 +20,22 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/tool"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 )
 
@@ -47,7 +53,9 @@ type Config struct {
 	// Fetched is the run configuration the server answered for the run's labels; nil
 	// when the run has no server, or the server names no run configuration.
 	Fetched *Fetched
-	// Labels are the run's labels, as the run configuration is asked for by them.
+	// Labels are the run's labels: on the local link, those the run configuration is
+	// asked for by; behind a separate gateway, those the attach's answer gives back of
+	// the starter's registration, which the gateway's selection of credentials reads.
 	Labels map[string]string
 	// Wall says the run's agent runs behind a wall.
 	Wall bool
@@ -55,6 +63,11 @@ type Config struct {
 	// among them by name.
 	Credentials []Credential
 	Tools       []Tool
+	// Selects are the gateway's selection among Credentials, for a run that attached
+	// with a run key behind a separate gateway; nil on the local link. The run gets it,
+	// by its labels, with or without a wall, when the run configuration's policy selects
+	// no credential, at the start and at every reload.
+	Selects []Selection
 	// Images are the images the run's policy selects among, and the one it starts in
 	// when the policy selects none; they mean something only behind a wall.
 	Images Images
@@ -69,16 +82,23 @@ type Config struct {
 	// to check, with [Run.Conflict].
 	Passes func(name string) bool
 	// Report receives one line per thing the run reports to its user: a credential's
-	// renewal that failed, a tool's standard error, path rules a reload cannot hold.
+	// renewal that failed, a tool's standard error, and an entry of the gateway's
+	// selection whose credential the run does not get.
 	// Nil reports nothing.
 	Report func(string)
+	// Secrets fetches the values of the credentials of the run configuration the run
+	// starts with, by their names in the document's order, under digest, the digest
+	// Forager computed of the document's bytes, and opens them: the secrets request,
+	// once per run. Nil when the server's discovery lists no secrets endpoint; a run
+	// configuration with credentials is then refused.
+	Secrets func(ctx context.Context, digest string, credentials []string) (sealed.Values, error)
 }
 
 // Fetched is one run configuration as the server answered it.
 type Fetched struct {
 	// URL is where it was fetched from, the configuration document's run section.
 	URL string
-	// Digest is the server's digest of it, opaque, from the answer's header.
+	// Digest is the server's digest of it, from the answer's header.
 	Digest string
 	// Document is the document; nil is one with no member.
 	Document *server.RunConfiguration
@@ -98,12 +118,20 @@ type Run struct {
 	node   *policy.Loaded
 	beside []map[string][]string
 	// start is the policy pinned at the start: the run's tools are fixed by it, and
-	// img is the image it resolved to, fixed too.
-	start  *policy.Loaded
-	img    Image
+	// img is the image it resolved to, fixed too, and named the image its run
+	// configuration named, empty when it named none.
+	start *policy.Loaded
+	img   Image
+	named string
+	// relay is the reference of the machine's default image, which the wall starts the
+	// run's relay from whatever image the run gets.
+	relay  string
 	served map[string]string
 	server bool
-	chosen []tool.Chosen
+	// patterns are the compiled patterns of [Config.Selects], by index, nil for an entry
+	// whose credential takes no argument.
+	patterns []*regexp.Regexp
+	chosen   []tool.Chosen
 	// terminates says the proxy holds the run's authority, from the start on.
 	terminates bool
 
@@ -112,21 +140,43 @@ type Run struct {
 	// digest of the run configuration in force, empty when none was fetched.
 	pol *policy.Loaded
 	// guard are the names the guard opens under pol ([Run.GuardNames]), and read those
-	// of each policy Read made that a reload has not decided yet.
+	// of each policy Read made that a reload has not decided yet, and images the image
+	// its run configuration named, when it named one.
 	guard     []string
 	read      map[*policy.Loaded][]string
+	images    map[*policy.Loaded]string
 	held      *credential.Held
 	runDigest string
+	// creds are the credentials and the model_credential of each run configuration Read
+	// read that a reload has not decided yet.
+	creds map[*policy.Loaded]storedSet
+
+	// stored are the credentials of the run configuration the run started with, and
+	// values their values as they opened, fixed for the run and cleared by Close.
+	// storedModel is its model_credential, empty when it names none.
+	stored      []server.RunCredential
+	storedModel string
+	values      sealed.Values
+}
+
+// storedSet is what a run configuration says of the run's credentials: its credentials
+// and its model_credential.
+type storedSet struct {
+	creds []server.RunCredential
+	model string
 }
 
 // Decide is the policy a run starts under, and refuses a run that cannot have it: the
 // node's policy, the server's run configuration narrowed by it, or none, mode observe.
-// A run without a wall refuses a policy that selects credentials or tools or has path
-// rules, the node's beside a server's and a ceiling's the node's policy was put under
-// included, and one that selects an image, a [*refusal.NeedsWall]. Behind a wall the
-// policy's image is resolved among [Config.Images]: a definition that cannot be
-// one, a name defined twice and a name the machine does not define, image_unknown, are
-// no run.
+// A run without a wall refuses a policy that selects tools or has path rules, the
+// node's beside a server's and a ceiling's the node's policy was put under included,
+// and one that selects an image, a [*refusal.NeedsWall]: its credentials are the
+// gateway's to set with or without a wall. Behind a wall the
+// policy's image, or the one the run configuration names, is resolved among
+// [Config.Images]: a definition that cannot be
+// one, a name defined twice, an allow list that cannot be one, a name the machine does
+// not define, image_unknown, a reference not pinned by digest, run_configuration_invalid,
+// and one under none of the allowed prefixes, image_not_allowed, are no run.
 func Decide(cfg Config) (*Run, error) {
 	if cfg.Report == nil {
 		cfg.Report = func(string) {}
@@ -139,6 +189,17 @@ func Decide(cfg Config) (*Run, error) {
 	r.tools = make([]tool.Definition, len(cfg.Tools))
 	for i, t := range cfg.Tools {
 		r.tools[i] = tool.Definition(t)
+	}
+	r.patterns = make([]*regexp.Regexp, len(cfg.Selects))
+	for i, s := range cfg.Selects {
+		if s.Label == "" {
+			continue
+		}
+		re, err := WholeMatch(s.Pattern)
+		if err != nil {
+			return nil, accesskey.ShownError(err)
+		}
+		r.patterns[i] = re
 	}
 	pol := policy.None()
 	if cfg.Node != nil {
@@ -154,7 +215,7 @@ func Decide(cfg Config) (*Run, error) {
 		r.node, pol = node, node
 	}
 	if cfg.Fetched == nil {
-		r.guard = GuardNames(pol, cfg.Narrowing)
+		r.guard = GuardNames(r.node, pol, cfg.Narrowing)
 		pol = Narrow(pol, cfg.Narrowing)
 	} else {
 		fetched, err := r.Read(*cfg.Fetched)
@@ -162,7 +223,8 @@ func Decide(cfg Config) (*Run, error) {
 			return nil, err
 		}
 		pol = fetched
-		r.guard = r.takeGuard(fetched)
+		set := r.takeCreds(fetched)
+		r.guard, r.named, r.stored, r.storedModel = r.takeGuard(fetched), r.takeNamed(fetched), set.creds, set.model
 		if cfg.Fetched.Document != nil {
 			r.served = cfg.Fetched.Document.Values()
 		}
@@ -173,25 +235,27 @@ func Decide(cfg Config) (*Run, error) {
 			return nil, err
 		}
 	}
+	if len(r.stored) > 0 && cfg.Secrets == nil {
+		return nil, refusal.New(refusal.RunConfigurationInvalid, nil,
+			"run configuration %s: enrol an access key allowed stored secrets: the document has credentials, and the control plane's configuration document lists no secrets endpoint for this access key", accesskey.ShownValue(cfg.Fetched.URL, false))
+	}
 	if cfg.Wall {
 		img, err := cfg.Images.resolve(pol.Policy.Image)
 		if err != nil {
 			return nil, err
 		}
-		r.img = img
+		r.img, r.relay = img, cfg.Images.defaultImage().Ref
 	}
 	r.start, r.pol = pol, pol
 	return r, nil
 }
 
 // needsWall refuses what a policy selects that needs a wall, a [*refusal.NeedsWall]
-// naming it: credentials, tools and path rules, the node's beside a server's and the
-// sides beside the node's policy, beside, included, and an image.
+// naming it: tools and path rules, the node's beside a server's and the sides beside
+// the node's policy, beside, included, and an image. Credentials need none: a program
+// that ignores the proxy sends only their placeholders.
 func needsWall(pol *policy.Loaded, beside bool) error {
 	var names []string
-	if len(pol.Policy.Credentials) > 0 {
-		names = append(names, "credentials")
-	}
 	if len(pol.Policy.Tools) > 0 {
 		names = append(names, "tools")
 	}
@@ -210,15 +274,24 @@ func needsWall(pol *policy.Loaded, beside bool) error {
 // Hold resolves the credentials the policy in force selects and chooses its tools,
 // beside them: a credential that does not resolve, a tool that cannot be chosen or
 // that cannot be beside the credentials, and a placeholder [Config.Passes] says the run
-// passes a value for, are no run. It is called once, after [Decide].
+// passes a value for, are no run. When the run configuration the run starts with has
+// credentials, it first fetches and opens their values with [Config.Secrets], and
+// refuses a value that a header cannot hold. It is called once, after [Decide].
 func (r *Run) Hold(ctx context.Context) error {
+	if len(r.stored) > 0 {
+		if err := r.open(ctx); err != nil {
+			return err
+		}
+	}
 	held, err := r.hold(ctx, r.start)
 	if err != nil {
+		r.clearValues()
 		return err
 	}
 	chosen, err := r.choose(held)
 	if err != nil {
 		held.Close()
+		r.clearValues()
 		return err
 	}
 	r.mu.Lock()
@@ -226,7 +299,7 @@ func (r *Run) Hold(ctx context.Context) error {
 	r.mu.Unlock()
 	r.chosen = chosen
 	pol := r.start
-	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || (r.cfg.Wall && r.server)
+	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || r.server
 	return nil
 }
 
@@ -242,8 +315,9 @@ func Open(ctx context.Context, cfg Config) (*Run, error) {
 	return r, nil
 }
 
-// Close stops the renewals of the credentials the run holds. The tools are the
-// caller's to stop, with the set [Run.StartTools] returned.
+// Close stops the renewals of the credentials the run holds, and overwrites the values
+// of the run configuration's credentials. The tools are the caller's to stop, with the
+// set [Run.StartTools] returned.
 func (r *Run) Close() {
 	r.mu.Lock()
 	held := r.held
@@ -252,6 +326,76 @@ func (r *Run) Close() {
 	if held != nil {
 		held.Close()
 	}
+	r.clearValues()
+}
+
+// open fetches and opens the values of the start's run configuration's credentials,
+// under the digest Forager computed of the document's bytes, and refuses a value a
+// header cannot hold and a model key's value that starts with none of its
+// key_prefixes.
+func (r *Run) open(ctx context.Context) error {
+	names := make([]string, len(r.stored))
+	for i, c := range r.stored {
+		names[i] = c.Name
+	}
+	digest := ""
+	if d := r.cfg.Fetched.Document; d != nil {
+		digest = d.Computed
+	}
+	values, err := r.cfg.Secrets(ctx, digest, names)
+	if err != nil {
+		return err
+	}
+	for i, name := range names {
+		v, _ := values.Value(name)
+		if !HeaderValue(v) {
+			values.Clear()
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
+				"run configuration %s: store another value of the credential %s in the control plane: its value has a control character, or a space or tab at its start or end, which a header value cannot have", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true))
+		}
+		if prefixes := r.stored[i].KeyPrefixes; !credential.KeyMatches(prefixes, v) {
+			values.Clear()
+			shown := make([]string, len(prefixes))
+			for j, p := range prefixes {
+				shown[j] = accesskey.ShownValue(p, true)
+			}
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
+				"run configuration %s: store in the control plane a value of the credential %s that starts with %s: the stored value starts with none of its key_prefixes", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true), strings.Join(shown, " or "))
+		}
+	}
+	r.mu.Lock()
+	r.values = values
+	r.mu.Unlock()
+	return nil
+}
+
+// clearValues overwrites the opened values of the run configuration's credentials,
+// under r.mu, so it never overlaps the copy a request takes ([Run.storedUses]).
+func (r *Run) clearValues() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.values.Clear()
+	r.values = sealed.Values{}
+}
+
+// HeaderValue reports whether v, UTF-8, holds the contract's rule for a value set in a
+// header: no control character but tab, of C0, DEL and C1, and no space or tab at its
+// start or end. Every value from the server is held to it, whatever its scheme.
+func HeaderValue(v []byte) bool {
+	if len(v) == 0 || v[0] == ' ' || v[0] == '\t' || v[len(v)-1] == ' ' || v[len(v)-1] == '\t' {
+		return false
+	}
+	for i := 0; i < len(v); {
+		c, size := utf8.DecodeRune(v[i:])
+		if c == utf8.RuneError && size <= 1 {
+			return false
+		}
+		if c != '\t' && (c < 0x20 || (c >= 0x7f && c <= 0x9f)) {
+			return false
+		}
+		i += size
+	}
+	return true
 }
 
 // RunID is the run's id.
@@ -322,6 +466,10 @@ func (r *Run) Uses() []proxy.Credential { return ProxyUses(r.Held()) }
 // wall, and a Ref alone when the default is a reference.
 func (r *Run) Image() Image { return r.img }
 
+// RelayImage is the reference of the machine's default image, which the wall starts
+// the run's relay from: empty without a wall, or when the machine has no default.
+func (r *Run) RelayImage() string { return r.relay }
+
 // Chosen are the run's tools, fixed when it starts.
 func (r *Run) Chosen() []tool.Chosen { return r.chosen }
 
@@ -374,9 +522,10 @@ func (r *Run) Conflict(passes func(name string) bool) error {
 }
 
 // NeedsCA says the run has an authority of its own: for the hosts a credential is for,
-// the hosts its tools serve and the hosts with path rules, and behind a wall with a
-// server always, since a reload may bring a run configuration with path rules or
-// credentials, and the enclosure trusts only what it was given at start.
+// the hosts its tools serve and the hosts with path rules, and with a server always,
+// with or without a wall, since a reload may bring a run configuration with
+// credentials or path rules, and the agent's tools trust only what they were given at
+// the start.
 func (r *Run) NeedsCA() bool { return r.terminates }
 
 // ToolEnv is the environment a tool gets: Forager's own, without the variables the
@@ -400,63 +549,208 @@ func (r *Run) StartTools(ctx context.Context) (*tool.Set, error) {
 
 // Read reads a run configuration the server answered: the policy it puts in force,
 // beside its URL and digest. Without a security_policy it is the node's, or none. With
-// one, it is the server's, narrowed by the node's when the run has one. A
-// security_policy the schema refuses is run_configuration_invalid.
+// one, it is the server's, narrowed by the node's when the run has one. An image the
+// run configuration names is the policy's image selection, which the server's policy
+// and the node's must name as well when they name one, else image_unknown. When the
+// server's side selects no credential, the run's credentials are the gateway's
+// selection, [Config.Selects], capped by the node's credentials member.
+// A security_policy the schema refuses, and an image that is not a reference pinned by
+// digest, are run_configuration_invalid.
 func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	var fetched *policy.Loaded
 	if f.Document != nil && f.Document.SecurityPolicy != nil {
 		var err error
 		if fetched, err = policy.Read("run-configuration", f.Document.SecurityPolicy); err != nil {
-			return nil, refusal.New(refusal.RunConfigurationInvalid, nil, "run configuration %s: %v", f.URL, err)
+			return nil, refusal.New(refusal.RunConfigurationInvalid, nil, "run configuration %s: %s", accesskey.ShownValue(f.URL, false), accesskey.ShownValue(err.Error(), false))
 		}
 		fetched.Source = "fetched"
 	}
+	if f.Document != nil {
+		if err := server.CheckCredentials(f.Document.Credentials, f.Document.ModelCredential); err != nil {
+			return nil, fmt.Errorf("run configuration %s: %w", accesskey.ShownValue(f.URL, false), err)
+		}
+	}
 	pol, err := inForce(fetched, r.node, f.URL, f.Digest)
+	named := ""
+	if err == nil && f.Document != nil && f.Document.Image != "" {
+		named = f.Document.Image
+		err = nameImage(pol, fetched, r.node, named)
+	}
+	if err == nil && len(r.cfg.Selects) > 0 && (fetched == nil || len(fetched.Policy.Credentials) == 0) {
+		err = r.selects(pol)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("run configuration %s: %w", f.URL, err)
+		return nil, fmt.Errorf("run configuration %s: %w", accesskey.ShownValue(f.URL, false), err)
 	}
 	out := Narrow(pol, r.cfg.Narrowing)
 	r.mu.Lock()
 	if r.read == nil {
 		r.read = map[*policy.Loaded][]string{}
 	}
-	r.read[out] = GuardNames(pol, r.cfg.Narrowing)
+	r.read[out] = GuardNames(r.node, pol, r.cfg.Narrowing)
+	if f.Document != nil && (len(f.Document.Credentials) > 0 || f.Document.ModelCredential != "") {
+		if r.creds == nil {
+			r.creds = map[*policy.Loaded]storedSet{}
+		}
+		r.creds[out] = storedSet{f.Document.Credentials, f.Document.ModelCredential}
+	}
+	if named != "" {
+		if r.images == nil {
+			r.images = map[*policy.Loaded]string{}
+		}
+		r.images[out] = named
+	}
 	r.mu.Unlock()
 	return out, nil
 }
 
-// takeGuard is the guard's names of a policy [Run.Read] made, forgotten once taken; the
-// policy's own allow list for one it did not make.
+// nameImage puts the image a run configuration names in pol, the policy it puts in
+// force, as the policy's image selection. It refuses an image that is not a reference
+// pinned by digest, run_configuration_invalid, and one that the server's policy,
+// fetched, or the node's selects another image than, image_unknown: a name and a
+// reference of one image are two.
+func nameImage(pol, fetched, node *policy.Loaded, image string) error {
+	if err := server.CheckConfigurationImage(image); err != nil {
+		return err
+	}
+	for _, side := range []struct {
+		what string
+		pol  *policy.Loaded
+	}{{"server's", fetched}, {"node's", node}} {
+		if side.pol != nil && side.pol.Policy.Image != "" && side.pol.Policy.Image != image {
+			return refusal.New(refusal.ImageUnknown, []string{accesskey.ShownName(image, false)}, "the run configuration names the image %s, and the %s policy the image %s", accesskey.ShownName(image, false), side.what, accesskey.ShownName(side.pol.Policy.Image, false))
+		}
+	}
+	pol.Policy.Image = image
+	return nil
+}
+
+// selects puts the gateway's selection, [Config.Selects], in the credentials of pol, a
+// policy [Run.Read] made whose server's side selects none, narrowed by the node's
+// credentials member whenever the node's policy has one, beside a server's policy or
+// alone in force, as the server's selection is: a selected credential the member does
+// not list is no run. An entry for a credential that takes an argument gives none when
+// the run's labels do not satisfy it, and the run's user is told why: a label it takes
+// that the run does not have, the forge label among them, a forge label of another
+// value, or a value outside its pattern or that is a name's phrase
+// ([accesskey.IsNamePhrase]). Nothing is resolved here: the policy's
+// credentials are resolved as any are, the argument checked against the definition's
+// pattern before its adapter runs.
+func (r *Run) selects(pol *policy.Loaded) error {
+	id := r.cfg.RunID
+	var selected []policy.Selected
+	for i, s := range r.cfg.Selects {
+		if s.Label == "" {
+			selected = append(selected, policy.Selected{Name: s.Name})
+			continue
+		}
+		name := accesskey.ShownName(s.Name, false)
+		forge, ok := r.labels["forge"]
+		if !ok {
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, "forge", name))
+			continue
+		}
+		if forge != s.Forge {
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Forge, false)), Spaced(accesskey.ShownName(forge, false)), name))
+			continue
+		}
+		value, ok := r.labels[s.Label]
+		if !ok {
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Label, false)), name))
+			continue
+		}
+		// A value that is a name's phrase, as a separate gateway reads the labels from
+		// the attach answer, is no argument, whatever the pattern admits.
+		if accesskey.IsNamePhrase(value) || !r.patterns[i].MatchString(value) {
+			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(accesskey.ShownName(s.Label, false)), Spaced(accesskey.ShownName(value, false)), name, name))
+			continue
+		}
+		selected = append(selected, policy.Selected{Name: s.Name, Argument: value})
+	}
+	if r.node != nil && r.node.Policy.Credentials != nil {
+		var out []string
+		for _, sel := range selected {
+			if !slices.ContainsFunc(r.node.Policy.Credentials, func(b policy.Selected) bool {
+				return b.Name == sel.Name && (b.Argument == "" || b.Argument == sel.Argument)
+			}) {
+				out = append(out, accesskey.ShownName(sel.Name, false))
+			}
+		}
+		if len(out) > 0 {
+			return fmt.Errorf("the gateway selects the credentials %s, which the node's policy does not list", strings.Join(out, ", "))
+		}
+	}
+	if len(selected) > 0 || len(pol.Policy.Credentials) > 0 {
+		// The selection is the run's credentials. With the node's policy alone in force,
+		// its credentials member is the selection's cap, as beside a server's policy, and
+		// not the run's; a member that lists none is kept as written when nothing is
+		// selected.
+		pol.Policy.Credentials = selected
+	}
+	return nil
+}
+
+// takeGuard is the guard's names of a policy [Run.Read] made, forgotten once taken;
+// [GuardNames] of the node's policy and p for one it did not make.
 func (r *Run) takeGuard(p *policy.Loaded) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	names, ok := r.read[p]
 	if !ok {
-		return p.Policy.Egress.Allow
+		return GuardNames(r.node, p, r.cfg.Narrowing)
 	}
 	delete(r.read, p)
 	return names
 }
 
-// GuardNames are the names a guarded proxy opens, this machine's own addresses
-// reached for them, under pol narrowed by n: the entries of pol's own allow list, as
-// its owner wrote them, never a narrowing's. A session's narrowing only narrows, so it
-// opens nothing pol does not: under a pol that enforces, pol's names, which the
-// narrowed allow list must allow as well; under one that observes, or none, no name
-// at all, since every name its allow list holds is the narrowing's to choose. A nil n
-// is pol's allow list, as without a narrowing.
-func GuardNames(pol *policy.Loaded, n *Narrowing) []string {
-	if n == nil {
-		return pol.Policy.Egress.Allow
-	}
-	if pol.Policy.Egress.Mode != policy.Enforce {
+// takeCreds is the credentials and the model_credential of the run configuration of a
+// policy [Run.Read] made, empty when it has neither, and forgets them.
+func (r *Run) takeCreds(p *policy.Loaded) storedSet {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c := r.creds[p]
+	delete(r.creds, p)
+	return c
+}
+
+// takeNamed is the image the run configuration of a policy [Run.Read] made named,
+// empty when it named none, and forgets it.
+func (r *Run) takeNamed(p *policy.Loaded) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	named := r.images[p]
+	delete(r.images, p)
+	return named
+}
+
+// GuardNames are the names a guarded proxy opens, this machine's own addresses and the
+// private network addresses reached for them, under pol, the policy in force before n
+// narrows it: the entries of the node's policy's allow list that name a host itself,
+// not a "*." pattern, and that pol's allow list matches by [policy.Match] or its
+// allow_first list by [policy.Exact]. A server's policy, which pol may be or contain,
+// opens nothing: with no node's policy, nil, there is no name. A session's narrowing
+// only narrows, so it opens nothing either: under a pol that observes, no name at all,
+// since every name its allow list holds is the narrowing's to choose. A nil n is no
+// narrowing.
+func GuardNames(node, pol *policy.Loaded, n *Narrowing) []string {
+	if node == nil || (n != nil && pol.Policy.Egress.Mode != policy.Enforce) {
 		return nil
 	}
-	return slices.Clone(pol.Policy.Egress.Allow)
+	var out []string
+	for _, entry := range node.Policy.Egress.Allow {
+		if strings.HasPrefix(entry, "*.") {
+			continue
+		}
+		_, allowed := policy.Match(pol.Policy.Egress.Allow, entry)
+		if _, first := policy.Exact(pol.Policy.Egress.AllowFirst, entry); allowed || first {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // GuardNames are the names a guarded proxy opens under the policy in force:
-// [GuardNames] of the policy before the session's narrowing.
+// [GuardNames] of the node's policy and the policy before the session's narrowing.
 func (r *Run) GuardNames() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -521,14 +815,12 @@ func Settled(err error) bool {
 type Decision struct {
 	// Unchanged says the run configuration is the one in force: nothing is set.
 	Unchanged bool
-	// Policy is the policy put in force, as dev.qory.run.policy_applied records it:
-	// without the path rules, and without their hosts in its allow list, when the
-	// proxy cannot hold them.
+	// Policy is the policy put in force, as dev.qory.run.policy_applied records it.
 	Policy *policy.Loaded
 	// Uses are its credentials as the proxy sets them.
 	Uses []proxy.Credential
-	// Guard are the names a guarded proxy opens under it ([GuardNames]): those of the
-	// policy before the session's narrowing.
+	// Guard are the names a guarded proxy opens under it ([GuardNames]): entries of the
+	// node's policy that the policy before the session's narrowing allows.
 	Guard []string
 	// Image is the image the policy resolves to, the one the run started in: a reload
 	// that resolves to another is refused. Zero without a wall.
@@ -549,59 +841,70 @@ func (d *Decision) Discard() {
 
 // Reload decides what a run configuration read with [Run.Read] puts in force. One
 // that is the one in force is [Decision.Unchanged]. A reload is as strict as a start:
-// what a start refuses, a policy that selects credentials without the run's authority,
-// an image without a wall, a credential that does not resolve, fails the reload, and
-// the policy in force stays; and the run's tools and image are fixed when it starts.
-// The image compared is the one the selection resolves to, so naming the machine's
-// default, or no longer naming it, is no change. Path rules
-// the proxy cannot hold, for want of the run's authority, take their hosts out of the
-// allow list instead, so they are not reached on every path, and the caller's user is
-// told.
+// what a start refuses, path rules or an image without a wall, a credential that does
+// not resolve, fails the reload, and the policy in force stays; and the run's tools
+// and image are fixed when it starts. Whether a name needs a wall is decided by the
+// run's wall, as [Decide] decides it, never by the run's authority, which every run
+// with a server has. The image compared is the one the selection resolves to, so
+// naming the machine's default, or no longer naming it, is no change; an image the run
+// configuration names is fixed by the string, so one that differs from the start's,
+// appears or disappears is refused.
 func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error) {
-	guard := r.takeGuard(next)
+	guard, named, creds := r.takeGuard(next), r.takeNamed(next), r.takeCreds(next)
 	if next.RunConfiguration == r.RunConfiguration() {
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
-	d, err := r.decide(ctx, next)
+	if !sameCredentials(creds.creds, r.stored) {
+		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false))
+	}
+	if creds.model != r.storedModel {
+		return nil, fmt.Errorf("run configuration %s: start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays", accesskey.ShownValue(next.URL, false))
+	}
+	d, err := r.decide(ctx, next, named)
 	if d != nil {
 		d.Guard = guard
 	}
 	if err != nil {
-		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", next.URL, err)
+		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", accesskey.ShownValue(next.URL, false), err)
 	}
 	return d, nil
 }
 
-// decide is the reload's check of one policy.
-func (r *Run) decide(ctx context.Context, next *policy.Loaded) (*Decision, error) {
+// decide is the reload's check of one policy, whose run configuration named the image
+// named, empty when it named none.
+func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*Decision, error) {
 	in := *next
 	if !sameSelection(in.Policy.Tools, r.start.Policy.Tools) {
 		return nil, errors.New("the run configuration selects other tools than the run started with; a run's tools are fixed when it starts")
 	}
 	if !r.cfg.Wall {
 		if in.Policy.Image != "" {
-			return nil, fmt.Errorf("the run configuration selects the image %q, which needs a wall", in.Policy.Image)
+			return nil, fmt.Errorf("the run configuration selects the image %s, which needs a wall", accesskey.ShownName(in.Policy.Image, true))
 		}
+		// What a start without a wall refuses, a reload refuses too: the run's authority
+		// does not decide it, since every run with a server has one.
+		if err := needsWall(&in, len(r.beside) > 0); err != nil {
+			return nil, err
+		}
+	} else if named != r.named {
+		return nil, r.imageMoved(named)
 	} else if next, err := r.cfg.Images.resolve(in.Policy.Image); err != nil {
 		return nil, err
 	} else if next != r.img {
 		return nil, errors.New("the run configuration selects another image than the run started in; a run's image is fixed when it starts")
 	}
-	if !r.terminates {
-		if len(in.Policy.Credentials) > 0 {
-			return nil, errors.New("the run configuration selects credentials, which need a wall")
-		}
-		if len(in.Policy.Egress.Paths) > 0 {
-			in.Policy.Egress.Allow = withoutHeld(in.Policy.Egress.Allow, in.Policy.Egress.Paths)
-			in.Policy.Egress.Paths = nil
-			r.cfg.Report("the run configuration has path rules, which need a wall; the hosts they hold are taken out of the allow list")
-		}
-	}
 	fresh, err := r.hold(ctx, &in)
 	if err != nil {
 		return nil, err
 	}
-	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Allow, claimedBy(fresh)); err != nil {
+	// Without model_credential the start key is the run's one model key, and a reload
+	// may select another: the runtime started with the first one's variable and
+	// endpoint, so the start key is fixed as well.
+	if started := startOf(r.Held()); fresh.Start != started {
+		fresh.Close()
+		return nil, fmt.Errorf("start a new run to change the model key it starts with: the run started with %s, and this run configuration selects %s", shownKey(started), shownKey(fresh.Start))
+	}
+	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Listed(), claimedBy(fresh)); err != nil {
 		fresh.Close()
 		return nil, err
 	}
@@ -610,6 +913,20 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded) (*Decision, error
 		Image:              r.img,
 		CredentialsChanged: !sameSelection(in.Policy.Credentials, r.Policy().Policy.Credentials),
 	}, nil
+}
+
+// imageMoved refuses a reload whose run configuration names the image named, or none,
+// when the start's named another, or none: the image a run starts in is fixed.
+func (r *Run) imageMoved(named string) error {
+	started := r.img.Ref
+	if r.img.Name != "" {
+		started = r.img.Name
+	}
+	started = accesskey.ShownName(started, false)
+	if named == "" {
+		return fmt.Errorf("the run configuration names no image, and the run started in %s, which its run configuration named", started)
+	}
+	return fmt.Errorf("the run configuration names the image %s, and the run started in %s", accesskey.ShownName(named, false), started)
 }
 
 // Commit puts a decision the caller set on the proxy in force: its policy and its
@@ -628,14 +945,16 @@ func (r *Run) Commit(d *Decision) {
 	}
 }
 
-// hold resolves the credentials a policy selects, as the machine defines them, and
-// refuses a placeholder the run passes a value for: at the start and at every reload
-// alike.
+// hold resolves the credentials a policy selects, as the machine defines them, beside
+// the run configuration's credentials the run started with, which replace a machine's
+// credential that claims one of their hosts, and refuses a placeholder the run passes
+// a value for: at the start and at every reload alike.
 func (r *Run) hold(ctx context.Context, pol *policy.Loaded) (*credential.Held, error) {
-	held, err := credential.Resolve(ctx, r.defs, pol.Policy.Credentials, pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, r.cfg.Report)
+	held, err := credential.ResolveWith(ctx, r.defs, pol.Policy.Credentials, r.storedUses(), r.storedModel, pol.Policy.Egress.Mode, pol.Policy.Egress.Listed(), r.cfg.Report)
 	if err != nil {
 		return nil, err
 	}
+	held.ReportPanics(routine.ForRun(r.cfg.Report, r.cfg.RunID))
 	if r.cfg.Passes != nil {
 		for _, name := range held.Placeholders {
 			if r.cfg.Passes(name) {
@@ -656,7 +975,7 @@ func (r *Run) choose(held *credential.Held) ([]tool.Chosen, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := tool.Check(chosen, pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, claimedBy(held)); err != nil {
+	if err := tool.Check(chosen, pol.Policy.Egress.Mode, pol.Policy.Egress.Listed(), claimedBy(held)); err != nil {
 		return nil, err
 	}
 	if r.cfg.Passes != nil {
@@ -670,11 +989,13 @@ func (r *Run) choose(held *credential.Held) ([]tool.Chosen, error) {
 }
 
 func credentialConflict(name string) error {
-	return refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", name)
+	shown := accesskey.ShownName(name, false)
+	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", shown)
 }
 
 func toolConflict(name string) error {
-	return refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside", name)
+	shown := accesskey.ShownName(name, false)
+	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside", shown)
 }
 
 // inForce is the policy a run configuration puts in force. Without a security_policy it
@@ -740,6 +1061,38 @@ func claimedBy(held *credential.Held) func(string) string {
 	}
 }
 
+// storedUses are the run configuration's credentials the run started with, as the
+// credential package holds them. Each one's Value copies the opened value under r.mu,
+// as [Run.clearValues] clears it, so a request that is still being served when the run
+// ends copies the value whole or gets none, and never reads bytes while they are
+// overwritten.
+func (r *Run) storedUses() []credential.Stored {
+	out := make([]credential.Stored, len(r.stored))
+	for i, c := range r.stored {
+		name := c.Name
+		hosts, paths := c.Applies()
+		out[i] = credential.Stored{Name: name, Hosts: hosts, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header,
+			Paths: paths, Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth, Value: func() []byte {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+				b, _ := r.values.Value(name)
+				return slices.Clone(b)
+			}}
+	}
+	return out
+}
+
+// sameCredentials reports whether two run configurations' credentials are the same
+// entries, in any order.
+func sameCredentials(a, b []server.RunCredential) bool {
+	order := func(s []server.RunCredential) []server.RunCredential {
+		s = slices.Clone(s)
+		slices.SortFunc(s, func(x, y server.RunCredential) int { return strings.Compare(x.Name, y.Name) })
+		return s
+	}
+	return reflect.DeepEqual(order(a), order(b))
+}
+
 // sameSelection reports whether two selections, of tools or of credentials, are the
 // same, in any order.
 func sameSelection(a, b []policy.Selected) bool {
@@ -753,35 +1106,29 @@ func sameSelection(a, b []policy.Selected) bool {
 	return slices.Equal(order(a), order(b))
 }
 
-// withoutHeld is an allow list without the hosts path rules hold, for a proxy that
-// cannot hold them: an entry goes when it is a held host, stands under one or stands
-// above one, since what stays would be reached on every path. Under enforce the hosts
-// are then denied and recorded like any other.
-func withoutHeld(allow []string, paths map[string][]string) []string {
-	out := []string{}
-	for _, entry := range allow {
-		keep := true
-		for host := range paths {
-			if policy.Covers(host, entry) || policy.Covers(entry, host) {
-				keep = false
-				break
-			}
-		}
-		if keep {
-			out = append(out, entry)
-		}
-	}
-	return out
-}
-
-// ProxyUses are held credentials as the proxy sets them.
+// ProxyUses are held credentials as the proxy sets them. Of the model keys, the start
+// key alone, [credential.Held.Start], is among them, with its placeholder's value: the
+// gateway holds the others and sets none of them.
 func ProxyUses(held *credential.Held) []proxy.Credential {
 	if held == nil {
 		return nil
 	}
-	uses := make([]proxy.Credential, len(held.Uses))
-	for i, u := range held.Uses {
-		uses[i] = proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths, Token: u.Token, Rejected: u.Rejected}
+	uses := make([]proxy.Credential, 0, len(held.Uses))
+	for _, u := range held.Uses {
+		if u.Format != "" && u.Name != held.Start {
+			continue
+		}
+		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths}
+		if u.Format != "" {
+			c.Placeholder = link.KeyPlaceholder(u.Name)
+		}
+		if u.Stored {
+			// The server's value: no renewal, and no Token, so it stays bytes.
+			c.Value, c.Stored = u.Value, true
+		} else {
+			c.Token, c.Rejected = u.Token, u.Rejected
+		}
+		uses = append(uses, c)
 	}
 	return uses
 }
@@ -801,15 +1148,20 @@ func Egress(d proxy.Decision) map[string]any {
 	if d.Allowed {
 		decision = "allowed"
 	}
-	data := map[string]any{"host": d.Host, "port": d.Port, "method": d.Method, "decision": decision, "mode": string(d.Mode), "rule": d.Rule, "outcome": d.Outcome}
+	// The host, the path, its rule and the request's method are as the run sent them or
+	// the policy gives them: a value that contains qak_ or qrk_ in any case is
+	// accesskey.ShownValue's phrase in its place.
+	data := map[string]any{"host": accesskey.ShownValue(d.Host, false), "port": d.Port, "method": d.Method, "decision": decision, "mode": string(d.Mode), "rule": d.Rule, "outcome": d.Outcome}
 	if d.Path != "" {
-		data["request_method"], data["path"], data["path_rule"] = d.RequestMethod, d.Path, d.PathRule
+		data["request_method"], data["path"], data["path_rule"] = accesskey.ShownValue(d.RequestMethod, false), accesskey.ShownValue(d.Path, false), accesskey.ShownValue(d.PathRule, false)
 	}
+	// A credential's or a tool's name that contains qak_ or qrk_ in any case is sent as
+	// accesskey.ShownName's phrase in its place.
 	if d.Credential != "" {
-		data["credential"] = d.Credential
+		data["credential"] = accesskey.ShownName(d.Credential, false)
 	}
 	if d.Tool != "" {
-		data["tool"] = d.Tool
+		data["tool"] = accesskey.ShownName(d.Tool, false)
 	}
 	if d.RequestID != "" {
 		data["request_id"] = d.RequestID
@@ -818,4 +1170,20 @@ func Egress(d proxy.Decision) map[string]any {
 		data["status"] = d.Status
 	}
 	return data
+}
+
+// startOf is the start key of held, empty when held is nil or has none.
+func startOf(held *credential.Held) string {
+	if held == nil {
+		return ""
+	}
+	return held.Start
+}
+
+// shownKey is a start key's name as a message shows it, or "no model key".
+func shownKey(name string) string {
+	if name == "" {
+		return "no model key"
+	}
+	return accesskey.ShownName(name, true)
 }

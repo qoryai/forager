@@ -1,9 +1,12 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/session/internal/variables"
 )
 
@@ -19,10 +22,14 @@ import (
 // variable_reserved; any run refuses a value for a placeholder, placeholder_conflict.
 // The deny list, the contract's denied-variables.json, the runtime's denies and Deny,
 // then leaves out a value of the server, Run, Machine or LaunchDefaults; the built-in
-// list alone leaves out one of LaunchFixed. The server's are left out of a run without
-// a wall unless Unwalled is [UnwalledAccept]. A value that loses is left out and the
-// run starts; dev.qory.run.policy_applied records each name, its source and what lost,
-// never a value, and [Spec.OnVariables] receives the same.
+// list alone leaves out one of LaunchFixed. The server's values of QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES, the system and the repositories a run's preparation may use,
+// as the server sets them, are the two QORY_ names it leaves in, by these names
+// exactly: the runtime's denies and Deny still apply to them, and a value of any other
+// source is held to the rules of any QORY_ name. The server's are left out of a run
+// without a wall unless Unwalled is [UnwalledAccept]. A value that loses is left out
+// and the run starts; dev.qory.run.policy_applied records each name, its source and
+// what lost, never a value, and [Spec.OnVariables] receives the same.
 type Variables struct {
 	// Run are the run's own variables, NAME=value: for qory, --env. They apply with or
 	// without a wall.
@@ -48,10 +55,18 @@ type Variables struct {
 type Applied []AppliedVariable
 
 // AppliedVariable is one name: the source whose value the run applies, empty when none
-// does, and the values that lost, the highest source first.
+// does, the values that lost, the highest source first, and, behind a wall, why the
+// endpoint rule kept the value of the runtime's model endpoint variable, nil otherwise.
 type AppliedVariable struct {
 	Name, From string
 	Lost       []Loss
+	Kept       *Kept
+}
+
+// Kept is why the endpoint rule kept a value: [KeptEndpointCovered], and the name of
+// the model credential whose hosts include the value's host.
+type Kept struct {
+	Why, Credential string
 }
 
 // Loss is one source's value that lost, and why.
@@ -73,6 +88,10 @@ const (
 	WhyDenied     = variables.WhyDenied
 	WhyFixed      = variables.WhyFixed
 	WhyUnwalled   = variables.WhyUnwalled
+
+	WhyEndpointUncovered  = variables.WhyEndpointUncovered
+	WhyEndpointUnreadable = variables.WhyEndpointUnreadable
+	KeptEndpointCovered   = variables.KeptEndpointCovered
 )
 
 // applied is the record of a resolution as [Spec.OnVariables] receives it.
@@ -84,6 +103,9 @@ func applied(entries []variables.Entry) Applied {
 			lost[j] = Loss{From: l.From, Why: l.Why}
 		}
 		out[i] = AppliedVariable{Name: e.Name, From: e.From, Lost: lost}
+		if e.Kept != nil {
+			out[i].Kept = &Kept{Why: e.Kept.Why, Credential: e.Kept.Credential}
+		}
 	}
 	return out
 }
@@ -95,8 +117,9 @@ const (
 )
 
 // Image is one image as the machine defines it, [Spec.Images]: what an agent's
-// enclosure is started from, and how. A run's policy selects images by name and names
-// no reference, so a repository never chooses what it runs under.
+// enclosure is started from, and how. A run's policy selects one by name, or names one
+// by its reference pinned by digest under one of [Spec.ImagesAllow], so a repository
+// chooses what it runs under only among what the machine allows.
 type Image struct {
 	// Name is what a policy, or [Spec.Image], selects it by.
 	Name string
@@ -116,13 +139,13 @@ type Image struct {
 // configuration says so before any run selects it.
 func (i Image) Check() error {
 	if !imageNameShape.MatchString(i.Name) {
-		return fmt.Errorf("the image name %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", i.Name)
+		return fmt.Errorf("the image name %s is not 1 to 64 of a-z, 0-9, underscore, dot and dash", accesskey.ShownName(i.Name, true))
 	}
 	if i.Ref == "" {
-		return fmt.Errorf("image %s: the reference is empty", i.Name)
+		return fmt.Errorf("image %s: the reference is empty", accesskey.ShownName(i.Name, false))
 	}
 	if i.Docker && i.Runtime == "" {
-		return fmt.Errorf("image %s: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc", i.Name)
+		return fmt.Errorf("image %s: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc", accesskey.ShownName(i.Name, false))
 	}
 	return nil
 }
@@ -131,8 +154,10 @@ var imageNameShape = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 
 // checkImages refuses the machine's image table when it cannot be one, before the run
 // request is sent: a definition that cannot be one, a Docker of the agent's own without
-// a runtime among them, and a name defined twice. The gateway resolves the policy's
-// selection against the table; these checks have no code.
+// a runtime among them, a name defined twice, an entry of ImagesAllow that cannot be
+// one, an empty one, *, or one that is not the start of a reference in lower case, and
+// an ImagesAllow without a default Image. The gateway resolves the policy's selection
+// against the table; these checks have no code.
 func checkImages(spec Spec) error {
 	for _, d := range spec.Images {
 		if err := d.Check(); err != nil {
@@ -142,9 +167,17 @@ func checkImages(spec Spec) error {
 	seen := map[string]bool{}
 	for _, d := range spec.Images {
 		if seen[d.Name] {
-			return fmt.Errorf("the image %s is defined twice", d.Name)
+			return fmt.Errorf("the image %s is defined twice", accesskey.ShownName(d.Name, false))
 		}
 		seen[d.Name] = true
+	}
+	for _, entry := range spec.ImagesAllow {
+		if err := policy.CheckImagePrefix(entry); err != nil {
+			return err
+		}
+	}
+	if len(spec.ImagesAllow) > 0 && spec.Image == "" {
+		return errors.New("images.allow needs a default image, whose runtime an image by reference starts under")
 	}
 	return nil
 }

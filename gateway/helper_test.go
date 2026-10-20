@@ -28,6 +28,7 @@ import (
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/receiver"
+	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 )
 
@@ -119,6 +120,9 @@ type control struct {
 	// workspace unless asGateway made them a gateway key's, with no workspaces.
 	node       string
 	workspaces []string
+	// runURL, when set, is the configuration document's run.url in place of the run
+	// endpoint's.
+	runURL string
 	// attaches are the body of every attach as it came, each try included, and
 	// attachLabels and attachAbout what an attach's answer gives back of the starter's
 	// registration.
@@ -135,6 +139,69 @@ type control struct {
 	// attachInstances and deliveryInstances are the X-Qory-Instance-Id of every attach
 	// and of every request to the events endpoint, in the order they came.
 	attachInstances, deliveryInstances []string
+
+	// accessKey is the key the control takes requests from, signer the key it signs
+	// with, and pin the pin of signer.
+	accessKey, signer *accesskey.Key
+	pin               accesskey.Pin
+	// secrets, when set, makes discovery list the secrets endpoint, whose answer seals
+	// these values; secretsAnswer, when set, answers the request in its place; and
+	// secretsRequests are the bodies of the secrets requests, as they came.
+	secrets         map[string]string
+	secretsAnswer   func(req server.SecretsRequest, sig string) (int, []byte)
+	secretsRequests [][]byte
+	// secretsURL, when set, is the secrets endpoint's URL discovery lists, in place of
+	// the control's secretsPath; a query after the path still reaches answerSecrets.
+	secretsURL string
+	// attachedRuns are the runs whose attach the control answered.
+	attachedRuns map[string]bool
+}
+
+// secretsPath is the control's secrets endpoint.
+const secretsPath = "/v1/secrets"
+
+// answerSecrets answers a secrets request as Qory Apiary does: a request signed by the
+// control's access key gets the values sealed to it for the request's run, digest and
+// credentials, signed; or secretsAnswer's answer.
+func (c *control) answerSecrets(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	sig := r.Header.Get(server.HeaderSignature)
+	if r.Method != http.MethodPost || !c.accessKey.PublicKey().VerifyRequest(accesskey.Request{AccessKeyID: r.Header.Get(server.HeaderAccessKeyID),
+		InstanceID: r.Header.Get(server.HeaderInstanceID), Method: r.Method, Target: r.URL.RequestURI(), Body: body}, sig) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	var req server.SecretsRequest
+	json.Unmarshal(body, &req)
+	c.mu.Lock()
+	c.secretsRequests = append(c.secretsRequests, body)
+	values, answer := maps.Clone(c.secrets), c.secretsAnswer
+	c.mu.Unlock()
+	status, out := http.StatusOK, []byte(nil)
+	if answer != nil {
+		status, out = answer(req, sig)
+	} else {
+		out = c.seal(req, values, sealed.Expiry(time.Now()))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: status, RequestSignature: sig, Body: out}))
+	w.WriteHeader(status)
+	w.Write(out)
+}
+
+// seal is the secrets answer that seals values to the control's access key for the
+// request, with exp.
+func (c *control) seal(req server.SecretsRequest, values map[string]string, exp uint64) []byte {
+	s := sealed.Sealing{AccessKeyID: testKey, PublicKey: c.accessKey.PublicKey(), RunID: req.RunID, RunConfiguration: req.RunConfiguration,
+		Credentials: req.Credentials, Exp: exp}
+	for _, name := range req.Credentials {
+		s.Values = append(s.Values, sealed.NewValue(name, []byte(values[name])))
+	}
+	b, err := sealed.Seal(s, c.signer)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 // runsPath is the control's run endpoint.
@@ -142,17 +209,25 @@ const runsPath = receiver.DefaultRunPath
 
 func newControl(t *testing.T) *control {
 	t.Helper()
+	return newControlWith(t, testAccessKey, testSigner)
+}
+
+// newControlWith is a control whose access key is accessKey's and which signs with
+// signer, the gateway's pin.
+func newControlWith(t *testing.T, accessKey, signer *accesskey.Key) *control {
+	t.Helper()
 	received := filepath.Join(t.TempDir(), "received.jsonl")
 	store, err := receiver.OpenFile(received)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &control{store: store, received: received, node: testNode, workspaces: []string{testWorkspace}}
+	c := &control{store: store, received: received, node: testNode, workspaces: []string{testWorkspace}, accessKey: accessKey, signer: signer,
+		pin: accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}}
 	h := &receiver.Handler{
 		Keys: func(k string) (receiver.AccessKey, bool) {
-			return receiver.AccessKey{PublicKey: testAccessKey.PublicKey()}, k == testKey
+			return receiver.AccessKey{PublicKey: c.accessKey.PublicKey(), StoredSecrets: true}, k == testKey
 		},
-		Signer:        testSigner,
+		Signer:        c.signer,
 		Store:         store,
 		Stop:          func(string) bool { return c.stop.Load() },
 		Admit:         func(string, string) bool { return !c.limit.Load() },
@@ -167,7 +242,9 @@ func newControl(t *testing.T) *control {
 			if c.run == nil {
 				return receiver.NoPolicy, "", nil
 			}
-			return c.run, c.digest, nil
+			// The receiver computes the digest of the bytes; c.digest is the digest of
+			// the answers the control writes itself.
+			return c.run, "", nil
 		},
 	}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -206,6 +283,10 @@ func newControl(t *testing.T) *control {
 			c.attach(w, r)
 			return
 		}
+		if r.URL.Path == secretsPath {
+			c.answerSecrets(w, r)
+			return
+		}
 		if c.drop.Load() && r.URL.Path == "/v1/events" {
 			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
 				conn.Close()
@@ -226,13 +307,17 @@ func newControl(t *testing.T) *control {
 		}
 		if gone || (c.closed.Load() && r.URL.Path == "/v1/events") {
 			body := []byte(`{"error":"run_closed"}`)
-			w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: http.StatusGone, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
+			w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: http.StatusGone, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
 			w.WriteHeader(http.StatusGone)
 			w.Write(body)
 			return
 		}
 		if e := c.end.Load(); e != nil && r.URL.Path == "/v1/events" {
 			c.withEnd(w, r, h, *e)
+			return
+		}
+		if id, ok := strings.CutPrefix(r.URL.Path, runsPath+"/"); ok && r.Method == http.MethodGet && c.wasAttached(id) {
+			c.reloadAttached(w, r, h)
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -245,16 +330,29 @@ func newControl(t *testing.T) *control {
 // configuration is the control's configuration document and its digest.
 func (c *control) configuration() ([]byte, string) {
 	c.mu.Lock()
-	node, workspaces := c.node, c.workspaces
+	node, workspaces, runURL := c.node, c.workspaces, c.runURL
 	c.mu.Unlock()
-	pin, _ := json.Marshal(testPin)
+	if runURL == "" {
+		runURL = c.srv.URL + runsPath
+	}
+	pin, _ := json.Marshal(c.pin)
 	doc := `{"version":1,"node_id":"` + node + `"`
 	if workspaces != nil {
 		ws, _ := json.Marshal(workspaces)
 		doc += `,"workspaces":` + string(ws)
 	}
 	doc += `,"apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
-	doc += `,"run":{"url":"` + c.srv.URL + runsPath + `"}}`
+	doc += `,"run":{"url":"` + runURL + `"}`
+	c.mu.Lock()
+	if c.secrets != nil || c.secretsAnswer != nil {
+		secretsURL := c.srv.URL + secretsPath
+		if c.secretsURL != "" {
+			secretsURL = c.secretsURL
+		}
+		doc += `,"secrets":{"url":"` + secretsURL + `"}`
+	}
+	c.mu.Unlock()
+	doc += `}`
 	return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
 }
 
@@ -292,7 +390,7 @@ func (c *control) attach(w http.ResponseWriter, r *http.Request) {
 	if ref := c.attachRefusal.Load(); ref != nil {
 		body := []byte(`{"error":"` + ref.Code + `"}`)
 		w.Header().Set(server.HeaderConfiguration, conf)
-		w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: ref.Status, RequestSignature: sig, Body: body, Configuration: conf}))
+		w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: ref.Status, RequestSignature: sig, Body: body, Configuration: conf}))
 		w.WriteHeader(ref.Status)
 		w.Write(body)
 		return
@@ -306,11 +404,48 @@ func (c *control) attach(w http.ResponseWriter, r *http.Request) {
 		m["about"] = about
 	}
 	body, _ := json.Marshal(m)
+	c.mu.Lock()
+	if c.attachedRuns == nil {
+		c.attachedRuns = map[string]bool{}
+	}
+	c.attachedRuns[strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, runsPath+"/"), "/attach")] = true
+	c.mu.Unlock()
 	w.Header().Set(server.HeaderConfiguration, conf)
 	w.Header().Set(server.HeaderRunConfiguration, digest)
 	w.Header().Set("ETag", `"`+digest+`"`)
-	w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: sig, Body: body, Configuration: conf, RunConfiguration: digest}))
+	w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: sig, Body: body, Configuration: conf, RunConfiguration: digest}))
 	w.Write(body)
+}
+
+// wasAttached reports whether the control answered an attach of the run.
+func (c *control) wasAttached(runID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.attachedRuns[runID]
+}
+
+// reloadAttached answers a reload of an attached run as the receiver does, and, where
+// the receiver has no registration of it yet because the control answered the attach,
+// as Qory Apiary does: the run configuration it serves, its bytes as they are, signed.
+func (c *control) reloadAttached(w http.ResponseWriter, r *http.Request, h http.Handler) {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusNotFound {
+		maps.Copy(w.Header(), rec.Header())
+		w.WriteHeader(rec.Code)
+		w.Write(rec.Body.Bytes())
+		return
+	}
+	c.mu.Lock()
+	doc, digest := c.run, c.digest
+	c.mu.Unlock()
+	_, conf := c.configuration()
+	sig := r.Header.Get(server.HeaderSignature)
+	w.Header().Set(server.HeaderConfiguration, conf)
+	w.Header().Set(server.HeaderRunConfiguration, digest)
+	w.Header().Set("ETag", `"`+digest+`"`)
+	w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: sig, Body: doc, Configuration: conf, RunConfiguration: digest}))
+	w.Write(doc)
 }
 
 // attached are the bodies of the attaches the control was sent.
@@ -345,22 +480,32 @@ func (c *control) withEnd(w http.ResponseWriter, r *http.Request, h http.Handler
 	}
 	body, _ := json.Marshal(map[string]any{"end": end})
 	maps.Copy(w.Header(), rec.Header())
-	w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: rec.Code, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body,
+	w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: rec.Code, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body,
 		Configuration: rec.Header().Get(server.HeaderConfiguration), RunConfiguration: rec.Header().Get(server.HeaderRunConfiguration)}))
 	w.WriteHeader(rec.Code)
 	w.Write(body)
 }
 
-// serve makes the control serve a run configuration with the policy, under a digest
-// of the test's choosing: sha256= and 64 hex digits.
+// serve makes the control serve a run configuration with the policy. The answers the
+// control writes itself, an attach's and an attached run's reload, carry a digest of
+// the test's choosing: sha256= and 64 hex digits; the receiver's carry the digest of
+// the document's bytes.
 func (c *control) serve(policy string, digest byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.run, c.digest = []byte(`{"version":1,"security_policy":`+policy+`}`), "sha256="+strings.Repeat(string(digest), 64)
 }
 
+// serveDocument makes the control serve the run configuration document doc, under a
+// digest as serve's.
+func (c *control) serveDocument(doc string, digest byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.run, c.digest = []byte(doc), "sha256="+strings.Repeat(string(digest), 64)
+}
+
 func (c *control) server() *gateway.Server {
-	return &gateway.Server{Version: 1, URL: c.srv.URL, AccessKeyID: testKey, ApiaryPublicKey: testPin, AccessKey: testAccessKey, InstanceID: testInstance}
+	return &gateway.Server{Version: 1, URL: c.srv.URL, AccessKeyID: testKey, ApiaryPublicKey: c.pin, AccessKey: c.accessKey, InstanceID: testInstance}
 }
 
 // lines are the events the control stored, decoded.
