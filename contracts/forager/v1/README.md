@@ -812,14 +812,13 @@ environment: a value of each, from the server, the run, the machine, the harness
 defaults, the harness's computed values or the environment the run inherits, is left
 out and recorded as `fixed`. A value the runtime's preparation sets is left out too, and
 is not recorded as `fixed`. Behind a wall the name is unset inside, so an image's value
-does not reach the runtime either. The runtime would send such a value to the start key's
-endpoint. For Claude Code with a start key in `ANTHROPIC_API_KEY`, no value of
-`ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` reaches its process environment. A
-variable that `Spec.CAEnv` lists is set to the CA bundle's path, even one of
-`model.keys` (§Variables, The model endpoint). The session does not read or change the
-files the runtime reads: Claude Code also applies the `env` object of a settings file,
-such as the run's `settings.json` or the workspace's `.claude/settings.json`, so a
-value set there can reach Claude Code.
+does not reach the runtime either. The runtime would send such a value to the start
+key's endpoint. For Claude Code with a start key in `ANTHROPIC_API_KEY`, no value of
+`ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` reaches its process environment,
+with two exceptions (§Variables, The model endpoint). When the run has an authority, a
+variable that points at the CA bundle is set to the bundle's path, even one of
+`model.keys`. The session does not filter the `env` object of a settings file, which
+Claude Code applies, so a value set there can reach Claude Code.
 
 For Claude Code:
 
@@ -1068,11 +1067,19 @@ to it as well, and the endpoint rule does not apply. The runtime's other variabl
 `model.keys` (§Credentials, The variable of a model key) are left out the same way, the
 value the run inherits and the one the runtime's preparation sets included, and the
 session sets none of them in the runtime's process environment. One exception applies:
-a variable that `Spec.CAEnv` lists, which qory reads from the machine's `wall.ca_env`,
-is set to the CA bundle's path, and no check compares it with `model.keys`. These rules
-cover the process environment only. Claude Code also applies the `env` object of its
-settings files, and the session does not read or change them, so a value of the
-endpoint variable or of a model-key variable set there can reach Claude Code.
+when the run has an authority, a variable that points at the CA bundle is set to the
+bundle's path, even one of `model.keys`. Without a wall these are the names the caller
+gives in `Spec.CAEnv`, or `wall.DefaultCAEnv` when it is nil; `qory` is to set it from
+`wall.ca_env`. Behind a wall they are the names in `CAEnv` of `wall.Docker`, or
+`wall.DefaultCAEnv` when it is nil, each set to `/qory/ca-bundle.pem`. No check compares
+these names with `model.keys`, and a walled run does not unset them. These rules cover
+the process environment only. The session does not filter the `env` object of a
+settings file, which Claude Code applies. It copies the `env` of the `--settings` file
+into the run's `settings.json` unchanged. It does not read Claude Code's other settings
+files, such as `~/.claude/settings.json`, or the workspace's `.claude/settings.json`,
+which Claude Code reads unless the launch passes `--setting-sources user`. So a value of
+the endpoint variable or of a model-key variable set in one of them can reach Claude
+Code.
 
 In a run without a start key, the endpoint rule sets whether a value of the
 endpoint variable applies: behind a wall, and without one for a run whose answer has
@@ -1133,11 +1140,12 @@ out and recorded as `fixed`: the fixed value applies. The server's value of a va
 the run's runtime declares, reserves or reads a model key from (its descriptor's
 `model.keys`), where the stand-in goes or which is unset, and of
 one a value of the machine's is read from, such as a credential's `env` (§Credentials),
-whose value stays outside the enclosure, is left out and recorded as `denied`. A value
-the node passes for a variable the runtime declares, reserves or reads a model key from
-reaches the runtime as passed, unless it is a placeholder of the run
-(`placeholder_conflict`). In a run with a start key, a value the node passes for
-another variable of `model.keys` is left out and recorded as `fixed` (§Credentials, The
+whose value stays outside the enclosure, is left out and recorded as `denied`, apart
+from the other variables of `model.keys` in a run with a start key. A value the node
+passes for a variable the runtime declares, reserves or reads a model key from reaches
+the runtime as passed, unless it is a placeholder of the run (`placeholder_conflict`).
+In a run with a start key, a value the server or the node passes for another variable
+of `model.keys` is left out and recorded as `fixed`, not `denied` (§Credentials, The
 variable of a model key). Behind a wall, every variable the runtime declares, reserves
 or reads a model key from that neither a
 placeholder, a source, the runtime's preparation, Forager nor the wall sets is unset

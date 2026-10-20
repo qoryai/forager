@@ -96,11 +96,12 @@ release may change what an existing document does, and says so under Upgrading.
   value in the runtime's process environment: one from any source, the inherited
   environment included, is left out as `fixed`, one the runtime's preparation sets is
   left out too but not recorded as `fixed`, and behind a wall the name is unset
-  inside. A
-  variable in `Spec.CAEnv` is still set to the CA bundle's path. The session does not
-  read or change a settings file's `env` object, which Claude Code applies. A
-  descriptor without a `model` section, a format it lists no key for, and an auth no
-  key of that format has are `run_configuration_invalid`.
+  inside. When the run has an authority, a variable that points at the CA bundle is
+  still set to the bundle's path, even one of `model.keys`: one of `Spec.CAEnv`
+  without a wall, one of `CAEnv` of `wall.Docker` behind one. The session does not
+  filter a settings file's `env` object, which Claude Code applies. A descriptor
+  without a `model` section, a format it lists no key for, and an auth no key of that
+  format has are `run_configuration_invalid`.
 - A model key's placeholder contains its name: `qory-`, the name and
   `-sets-the-credential-outside-the-enclosure`, such as
   `qory-model-sets-the-credential-outside-the-enclosure`, `link.KeyPlaceholder` in Go.
