@@ -552,7 +552,9 @@ func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
 // and the private network addresses ([rules.opens]), and every connection dialled for
 // that host, idle or in use: the next one is judged by the guard under the new policy.
 // A host that keeps its opening, or keeps none, loses none of its connections for that
-// reason.
+// reason. A tunnel that the proxy puts on its list during the reload, after a dial the
+// reload did not wait for, is checked the same way once it is on the list and closed
+// for the same reasons; the proxy hands a denial of it to the observer, not the caller.
 func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	return p.SetPolicyOpening(mode, nil, allow, deny, allow, paths, creds)
 }
@@ -598,22 +600,58 @@ func (p *Proxy) SetPolicyOpening(mode policy.Mode, first, allow, deny, names []s
 		c.Close()
 	}
 	for _, t := range open {
-		d := p.decide(t.d.Method, t.d.Host, t.d.Port)
-		switch {
-		case !d.Allowed:
-			refused = append(refused, d)
-		case t.terminated && before.credentialName(t.d.Host) != after.credentialName(t.d.Host):
-		case !t.terminated && after.covers(t.d.Host):
-		case !before.samePaths(after, t.d.Host):
-		case old.opens(t.d.Host) && !r.opens(t.d.Host):
-		default:
+		d, closes := p.outdated(t, before, after, old, r)
+		if !closes {
 			continue
+		}
+		if !d.Allowed {
+			refused = append(refused, d)
 		}
 		for _, c := range t.conns {
 			c.Close()
 		}
 	}
 	return refused
+}
+
+// outdated reports whether a reload from the terminator before and the rules old to
+// the terminator after and the rules r closes t, and returns the host's decision under
+// the policy in force. The reload closes a tunnel to a host that policy denies, a
+// terminated tunnel whose credential is another one now, or none, a tunnel the proxy
+// passes TLS through to a host after terminates, a tunnel to a host whose path rules
+// are other ones now, and a tunnel to a host r no longer opens.
+func (p *Proxy) outdated(t *tunnel, before, after *terminator, old, r *rules) (Decision, bool) {
+	d := p.decide(t.d.Method, t.d.Host, t.d.Port)
+	switch {
+	case !d.Allowed:
+	case t.terminated && before.credentialName(t.d.Host) != after.credentialName(t.d.Host):
+	case !t.terminated && after.covers(t.d.Host):
+	case !before.samePaths(after, t.d.Host):
+	case old.opens(t.d.Host) && !r.opens(t.d.Host):
+	default:
+		return d, false
+	}
+	return d, true
+}
+
+// tracked is [Proxy.track] for a tunnel decided under the terminator term and the
+// rules old, with the check a reload makes: when the policy in force closes the
+// tunnel, tracked closes its ends, hands a denial to the observer, and returns false.
+func (p *Proxy) tracked(d Decision, terminated bool, term *terminator, old *rules, conns ...net.Conn) (*tunnel, bool) {
+	t := p.track(d, terminated, conns...)
+	// A reload stores the terminator and the rules before it takes p.tmu to list the
+	// tunnels, and track takes p.tmu: a reload whose list missed t is in force here.
+	now, closes := p.outdated(t, term, p.term.Load(), old, p.rules.Load())
+	if !closes {
+		return t, true
+	}
+	if !now.Allowed {
+		p.observe(now)
+	}
+	for _, c := range conns {
+		c.Close()
+	}
+	return t, false
 }
 
 // opens reports whether the rules open this machine's addresses and the private
@@ -1012,6 +1050,9 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	// The token first, then the decision: a reload during the wait is the policy the
 	// tunnel is decided by.
 	rated := p.take(r.Context())
+	// The rules and the terminator before the decision: a terminated tunnel is served
+	// by this terminator, and [Proxy.tracked] checks both against a reload since.
+	old, term := p.rules.Load(), p.term.Load()
 	d := p.decide(http.MethodConnect, host, port)
 	if rated != nil {
 		p.limited(w, d, RateLimit, rated)
@@ -1028,7 +1069,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer p.release()
-	if p.term.Load().covers(d.Host) {
+	if term.covers(d.Host) {
 		// A terminated connection is recorded request by request instead.
 		hj, ok := w.(http.Hijacker)
 		if !ok {
@@ -1042,9 +1083,13 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		// net/http does not close a hijacked connection, after a panic either.
 		defer client.Close()
 		// Tracked before the client hears 200: a reload that lands once the client has
-		// the line, and before the tunnel is on the list, would otherwise miss it.
-		t := p.track(d, true, client)
+		// the line, and before the tunnel is on the list, would otherwise miss it. A
+		// reload since the decision closes it here.
+		t, open := p.tracked(d, true, term, old, client)
 		defer p.untrack(t)
+		if !open {
+			return
+		}
 		if _, err := buf.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err == nil {
 			err = buf.Flush()
 		}
@@ -1057,7 +1102,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 		defer cancel()
 		defer context.AfterFunc(p.stopped, cancel)()
-		p.term.Load().serve(ctx, client, d, net.JoinHostPort(d.Host, strconv.Itoa(d.Port)))
+		term.serve(ctx, client, d, net.JoinHostPort(d.Host, strconv.Itoa(d.Port)))
 		return
 	}
 	upstream, err := p.dialHost(p.dialContext(r.Context(), d), "tcp", net.JoinHostPort(d.Host, strconv.Itoa(d.Port)))
@@ -1087,9 +1132,13 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	// Closed after a panic too, as above.
 	defer client.Close()
 	defer upstream.Close()
-	// Tracked before the client hears 200, for the same reason as above.
-	t := p.track(d, false, client, upstream)
+	// Tracked before the client hears 200, for the same reason as above. A reload
+	// during the dial closes the tunnel here.
+	t, open := p.tracked(d, false, term, old, client, upstream)
 	defer p.untrack(t)
+	if !open {
+		return
+	}
 	if _, err := buf.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err == nil {
 		err = buf.Flush()
 	}
