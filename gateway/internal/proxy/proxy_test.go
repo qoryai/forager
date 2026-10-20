@@ -606,6 +606,97 @@ func TestSetPolicySwapsTheCredentialsWithThePolicy(t *testing.T) {
 	}
 }
 
+// terminated opens a CONNECT to at, host:port, that the proxy terminates, and returns
+// a function that sends a GET for a path on that one connection.
+func terminated(t *testing.T, p *proxy.Proxy, at string, trusted *x509.CertPool) func(path string) (int, string, error) {
+	t.Helper()
+	c, err := net.Dial("tcp", p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", at, at)
+	line := make([]byte, len("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	if _, err := io.ReadFull(c, line); err != nil || !strings.HasPrefix(string(line), "HTTP/1.1 200") {
+		t.Fatalf("CONNECT %s: %q %v", at, line, err)
+	}
+	host, _, _ := net.SplitHostPort(at)
+	tc := tls.Client(c, &tls.Config{RootCAs: trusted, ServerName: host, NextProtos: []string{"http/1.1"}})
+	br := bufio.NewReader(tc)
+	return func(path string) (int, string, error) {
+		fmt.Fprintf(tc, "GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", path, at)
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			return 0, "", err
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b), err
+	}
+}
+
+// TestSetPolicyClosesATunnelWhosePathRulesChange pins a reload's path rules: a
+// terminated connection to a host whose path rules the reload narrows, the policy's or
+// its credential's, is closed, so no request in it is decided by the old rules, and the
+// next connection is held to the new ones. A reload that leaves the host's path rules
+// equal leaves the connection open.
+func TestSetPolicyClosesATunnelWhosePathRulesChange(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "from the origin") }))
+	defer origin.Close()
+	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	at := net.JoinHostPort(host, port)
+	cred := func(paths ...string) []proxy.Credential {
+		return []proxy.Credential{{Name: "product", Hosts: []string{host}, Scheme: "bearer", Paths: paths, Token: func() string { return "the-token" }}}
+	}
+	for _, c := range []struct {
+		name               string
+		paths, narrowPaths map[string][]string
+		creds, narrowCreds []proxy.Credential
+	}{
+		{name: "the policy's paths", paths: map[string][]string{host: {"/a/*", "/b/*"}}, narrowPaths: map[string][]string{host: {"/a/*"}}},
+		{name: "the credential's paths", creds: cred("/a/*", "/b/*"), narrowCreds: cred("/a/*")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, err := proxy.Listen("", policy.Enforce, []string{host}, nil, func(proxy.Decision) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			roots := x509.NewCertPool()
+			roots.AddCert(origin.Certificate())
+			p.TrustUpstream(roots)
+			ca, err := proxy.NewCA("test", p.Terminating(c.creds, c.paths, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Terminate(ca, c.creds, c.paths, nil)
+			trusted := x509.NewCertPool()
+			trusted.AppendCertsFromPEM(ca.PEM())
+			send := terminated(t, p, at, trusted)
+			if code, body, err := send("/b/x"); err != nil || code != 200 {
+				t.Fatalf("before the reload: %d %q %v", code, body, err)
+			}
+			// Another host's path rules change; this host's stay equal.
+			equal := map[string][]string{"other.example": {"/*"}}
+			for h, rules := range c.paths {
+				equal[h] = rules
+			}
+			p.SetPolicy(policy.Enforce, []string{host}, nil, equal, c.creds)
+			if code, body, err := send("/b/x"); err != nil || code != 200 {
+				t.Errorf("after a reload that leaves the host's path rules equal: %d %q %v", code, body, err)
+			}
+			p.SetPolicy(policy.Enforce, []string{host}, nil, c.narrowPaths, c.narrowCreds)
+			if code, body, err := send("/b/x"); err == nil {
+				t.Errorf("the connection opened under the old path rules answered %d %q", code, body)
+			}
+			if code, body, err := terminated(t, p, at, trusted)("/b/x"); err != nil || code != 403 {
+				t.Errorf("a connection opened after the reload: %d %q %v", code, body, err)
+			}
+		})
+	}
+}
+
 // TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt pins a model provider's two
 // credentials, the OAuth one set as a bearer and the API key set in a header of its
 // own: the host the credential is for gets the key in the credential's header, once,

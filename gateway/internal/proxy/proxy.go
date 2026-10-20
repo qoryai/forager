@@ -476,7 +476,9 @@ func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
 // returned, refused, for the caller to record: the caller writes the policy's own event
 // first and these after it. A terminated connection to a host whose credential is
 // another one now, or none, is closed as well and not recorded, since nothing was
-// denied: the next connection carries what the new policy selects.
+// denied: the next connection carries what the new policy selects. So is a connection
+// to a host whose path rules are other ones now: the next connection is held to the
+// new rules. A host whose path rules are equal keeps its connections.
 func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	return p.SetPolicyOpening(mode, allow, deny, allow, paths, creds)
 }
@@ -515,6 +517,7 @@ func (p *Proxy) SetPolicyOpening(mode policy.Mode, allow, deny, names []string, 
 		case !d.Allowed:
 			refused = append(refused, d)
 		case t.terminated && before.credentialName(t.d.Host) != after.credentialName(t.d.Host):
+		case !before.samePaths(after, t.d.Host):
 		default:
 			continue
 		}

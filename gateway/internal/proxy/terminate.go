@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"slices"
 	"strings"
 	"sync"
 
@@ -260,6 +261,34 @@ func (t *terminator) rules(host string) [][]string {
 		}
 	}
 	return out
+}
+
+// samePaths reports whether the host's path rules under t and under o are equal: the
+// rules of each side that lists the host, and the paths of the credential for it.
+func (t *terminator) samePaths(o *terminator, host string) bool {
+	a, b := t.credentialPaths(host), o.credentialPaths(host)
+	return slices.EqualFunc(t.pathRules(host), o.pathRules(host), slices.Equal[[]string]) &&
+		(a == nil) == (b == nil) && slices.Equal(a, b)
+}
+
+// pathRules are [terminator.rules], none when t is nil.
+func (t *terminator) pathRules(host string) [][]string {
+	if t == nil {
+		return nil
+	}
+	return t.rules(host)
+}
+
+// credentialPaths are the paths of the credential for the host; nil when none is, or
+// when it covers every path.
+func (t *terminator) credentialPaths(host string) []string {
+	if t == nil {
+		return nil
+	}
+	if c := t.credential(host); c != nil {
+		return c.Paths
+	}
+	return nil
 }
 
 // ruled reports whether either side has path rules for the host.

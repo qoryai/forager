@@ -633,6 +633,12 @@ release may change what an existing document does, and says so under Upgrading.
   `image` and `about` among them, so a session that sends a value as it is passes none
   through; a `run.started` without such a value is sent byte for byte. The wall and the
   agent get every value as it is.
+- A reload that changes a host's path rules, the policy's or those of the host's
+  credential, closes the connections open to that host, and the next connection is
+  held to the new rules. A request in flight on such a connection fails. A reload that
+  leaves a host's path rules equal closes none of its connections. Before, a
+  connection the gateway's proxy terminated kept the path rules it opened under until
+  it closed.
 
 ### Wall
 
