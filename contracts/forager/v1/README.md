@@ -1085,7 +1085,10 @@ image is named by its reference, a path in it is written as the enclosure sees i
 session does not read Claude Code's other settings files, such as
 `~/.claude/settings.json`, or the workspace's `.claude/settings.json`, which Claude Code
 reads unless the launch passes `--setting-sources user`. So a value of the endpoint
-variable or of a model-key variable set in one of them can reach Claude Code.
+variable or of a model-key variable set in one of them can reach Claude Code. Without a
+wall, a launch that passes `--settings` more than once, or ends in a bare `--settings`,
+gives Claude Code a settings file the session does not copy, so its `env` is not
+filtered.
 
 In a run without a start key, the endpoint rule sets whether a value of the
 endpoint variable applies: behind a wall, and without one for a run whose answer has
