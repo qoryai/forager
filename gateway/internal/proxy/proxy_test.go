@@ -887,6 +887,70 @@ func TestAModelKeyIsSetOnlyOnARequestThatCarriesItsPlaceholder(t *testing.T) {
 	}
 }
 
+// TestAModelKeyIsMaskedWithItsPlaceholder pins the answer of a host that sends a model
+// key back, in a header and in the body: the session reads the key's placeholder, the
+// one of the key's name, in its place, and neither the key nor the shared placeholder.
+func TestAModelKeyIsMaskedWithItsPlaceholder(t *testing.T) {
+	const key = "sk-ant-fake-value-not-a-secret"
+	placeholder := link.KeyPlaceholder("model")
+	for _, c := range []struct {
+		name, scheme, header, set, prefix string
+	}{
+		{"in x-api-key", "header", "X-Api-Key", "X-Api-Key", ""},
+		{"as a bearer", "bearer", "", "Authorization", "Bearer "},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			model := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got := strings.TrimPrefix(r.Header.Get(c.set), c.prefix)
+				w.Header().Set("X-Echo", got)
+				io.WriteString(w, `{"key":"`+got+`"}`)
+			}))
+			defer model.Close()
+			host, port, _ := net.SplitHostPort(model.Listener.Addr().String())
+			p, err := proxy.Listen("", policy.Enforce, []string{host}, nil, func(proxy.Decision) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			creds := []proxy.Credential{{
+				Name: "model", Hosts: []string{host}, Scheme: c.scheme, Header: c.header,
+				Token: func() string { return key }, Placeholder: placeholder,
+			}}
+			ca, err := proxy.NewCA("test", p.Terminating(creds, nil, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots := x509.NewCertPool()
+			roots.AddCert(model.Certificate())
+			p.TrustUpstream(roots)
+			p.Terminate(ca, creds, nil, nil)
+			trusted := x509.NewCertPool()
+			trusted.AppendCertsFromPEM(ca.PEM())
+			proxyURL, _ := url.Parse(p.URL())
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
+			req, _ := http.NewRequest("GET", "https://"+net.JoinHostPort(host, port)+"/echo", nil)
+			req.Header.Set(c.set, c.prefix+placeholder)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if got := resp.Header.Get("X-Echo"); got != placeholder {
+				t.Errorf("the answer's header is %q, want %q", got, placeholder)
+			}
+			if want := `{"key":"` + placeholder + `"}`; string(b) != want {
+				t.Errorf("the answer's body is %q, want %q", b, want)
+			}
+			for _, s := range []string{resp.Header.Get("X-Echo"), string(b)} {
+				if strings.Contains(s, key) || strings.Contains(s, link.Placeholder) {
+					t.Errorf("the answer contains the key or the shared placeholder: %q", s)
+				}
+			}
+		})
+	}
+}
+
 // TestDenyIsDecidedFirstInEitherMode pins the deny list: a host it covers is refused
 // under observe as under enforce, before the dial, with the first matching entry as
 // the rule; it beats an allow entry of any shape, a host both lists name included; a

@@ -42,13 +42,19 @@ func (c *Credential) masker(v []byte) *masker {
 	if len(v) == 0 {
 		return nil
 	}
+	// A model key is masked with the placeholder of its name, every other credential
+	// with the shared one.
+	placeholder := link.Placeholder
+	if c.Placeholder != "" {
+		placeholder = c.Placeholder
+	}
 	m := &masker{}
-	m.add(v, []byte(link.Placeholder))
+	m.add(v, []byte(placeholder))
 	if c.Scheme == "basic" {
 		pair := make([]byte, 0, len(c.Username)+1+len(v))
 		pair = append(append(append(pair, c.Username...), ':'), v...)
 		defer clear(pair)
-		stand := []byte(c.Username + ":" + link.Placeholder)
+		stand := []byte(c.Username + ":" + placeholder)
 		// A padded form comes first: at the same place the longest find wins, so a copy
 		// with its padding gets the placeholder's.
 		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
