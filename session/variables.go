@@ -464,11 +464,11 @@ func checkPlaceholders(rt runtimes.Runtime, credentials []server.LinkCredentialH
 					accesskey.ShownName(p, false), shown, runtime)
 			case why != "":
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: the descriptor of the runtime %s %s, and a placeholder goes only into a variable for a credential",
+					"remove %s from the placeholders of the credential %s in the run configuration: the descriptor of the runtime %s %s, and a placeholder goes only into a variable for a credential",
 					accesskey.ShownName(p, false), shown, runtime, why)
 			case slices.Contains(decl.Reserves, p):
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: the descriptor of the runtime %s lists it in reserves, and a placeholder goes only into a variable for a credential",
+					"remove %s from the placeholders of the credential %s in the run configuration: the descriptor of the runtime %s lists it in reserves, and a placeholder goes only into a variable for a credential",
 					accesskey.ShownName(p, false), shown, runtime)
 			}
 		}

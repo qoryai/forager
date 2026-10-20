@@ -339,15 +339,15 @@ func TestAPlaceholderGoesOnlyIntoACredentialsVariable(t *testing.T) {
 		detail       string
 	}{
 		{"a variable the runtime denies", []map[string]any{model(), sealed("forge", "api.github.com", "CLAUDE_CONFIG_DIR")}, []string{"CLAUDE_CONFIG_DIR"}, nil, []string{"forge"},
-			`remove CLAUDE_CONFIG_DIR from the placeholders of the credential "forge" in Qory Apiary's run configuration: the descriptor of the runtime claude lists it in denies, and a placeholder goes only into a variable for a credential`},
+			`remove CLAUDE_CONFIG_DIR from the placeholders of the credential "forge" in the run configuration: the descriptor of the runtime claude lists it in denies, and a placeholder goes only into a variable for a credential`},
 		{"a model override", []map[string]any{model(), sealed("forge", "api.github.com", "ANTHROPIC_MODEL")}, []string{"ANTHROPIC_MODEL"}, nil, []string{"forge"},
-			`remove ANTHROPIC_MODEL from the placeholders of the credential "forge" in Qory Apiary's run configuration: the descriptor of the runtime claude lists it in its model overrides, and a placeholder goes only into a variable for a credential`},
+			`remove ANTHROPIC_MODEL from the placeholders of the credential "forge" in the run configuration: the descriptor of the runtime claude lists it in its model overrides, and a placeholder goes only into a variable for a credential`},
 		{"the model endpoint's variable", []map[string]any{model(), sealed("forge", "api.github.com", endpointVariable)}, []string{endpointVariable},
 			func(rt runtimes.Runtime) runtimes.Runtime { return &allowsEndpoint{Runtime: rt} }, []string{"forge"},
-			`remove ANTHROPIC_BASE_URL from the placeholders of the credential "forge" in Qory Apiary's run configuration: the descriptor of the runtime claude has it as its model endpoint's variable, and a placeholder goes only into a variable for a credential`},
+			`remove ANTHROPIC_BASE_URL from the placeholders of the credential "forge" in the run configuration: the descriptor of the runtime claude has it as its model endpoint's variable, and a placeholder goes only into a variable for a credential`},
 		{"a variable the runtime reserves", []map[string]any{model(), sealed("forge", "api.github.com", "MODEL_SESSION")}, []string{"MODEL_SESSION"},
 			func(rt runtimes.Runtime) runtimes.Runtime { return &reservesSession{Runtime: rt} }, []string{"forge"},
-			`remove MODEL_SESSION from the placeholders of the credential "forge" in Qory Apiary's run configuration: the descriptor of the runtime claude lists it in reserves, and a placeholder goes only into a variable for a credential`},
+			`remove MODEL_SESSION from the placeholders of the credential "forge" in the run configuration: the descriptor of the runtime claude lists it in reserves, and a placeholder goes only into a variable for a credential`},
 		{"a model key's variable of a host credential", []map[string]any{sealed("model", "api.anthropic.com", apiKeyVariable)}, []string{apiKeyVariable}, nil, []string{"model"},
 			`remove ANTHROPIC_API_KEY from the placeholders of the credential "model" in the run configuration: the runtime claude reads a model key from it, and only a credential with an API sets it`},
 		{"a second key in another credential", []map[string]any{model(), sealed("forge", "api.github.com", oauthVariable)}, []string{oauthVariable}, nil, []string{"forge"},
@@ -703,4 +703,66 @@ func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestAPreparationsOtherKeyVariablesDoNotReachTheRuntime pins that, beside a start key
+// in ANTHROPIC_API_KEY, a value the runtime's preparation sets for ANTHROPIC_AUTH_TOKEN
+// or CLAUDE_CODE_OAUTH_TOKEN does not reach the agent, with or without a wall. Behind a
+// wall each name is unset inside and not set.
+func TestAPreparationsOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
+	others := []string{authTokenVariable, oauthVariable}
+	for _, walled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("walled %v", walled), func(t *testing.T) {
+			sp, g := specGateway(t)
+			out := dumpsEnv(t, &sp)
+			sp.Runtime = &preparesKeys{Runtime: sp.Runtime, keys: others}
+			w := &imageWall{}
+			if walled {
+				sp.Wall, sp.Image = w, "example.com/agent:1"
+			}
+			answering(g, []map[string]any{model()}, nil)
+			if _, err := session.Run(context.Background(), sp); err != nil {
+				t.Fatal(err)
+			}
+			got := envOf(t, out)
+			if got[apiKeyVariable] != link.KeyPlaceholder("model") {
+				t.Errorf("%s=%q; want the start key's placeholder", apiKeyVariable, got[apiKeyVariable])
+			}
+			var names []string
+			if walled {
+				names, _ = unsetIn(t, w.got)
+			}
+			for _, k := range others {
+				if v, ok := got[k]; ok {
+					t.Errorf("%s=%q reached the agent", k, v)
+				}
+				if walled && (!slices.Contains(names, k) || len(entriesOf(w.got.Env, k)) > 0) {
+					t.Errorf("unset %q, the wall's environment %q; want %s unset and not set", names, entriesOf(w.got.Env, k), k)
+				}
+			}
+		})
+	}
+}
+
+// preparesKeys is a runtime whose preparation sets each of keys to a fake value.
+type preparesKeys struct {
+	runtimes.Runtime
+	keys []string
+}
+
+func (p *preparesKeys) Prepare(a runtimes.Attach) (runtimes.Launch, error) {
+	l, err := p.Runtime.Prepare(a)
+	l.Env = slices.Clone(l.Env)
+	for _, k := range p.keys {
+		l.Env = append(l.Env, k+"=sk-fake-prepared")
+	}
+	return l, err
+}
+
+func (p *preparesKeys) Secrets() runtimes.Declarations {
+	return p.Runtime.(runtimes.Secrets).Secrets()
+}
+
+func (p *preparesKeys) Model() (runtimes.ModelPlaces, bool) {
+	return p.Runtime.(runtimes.Model).Model()
 }

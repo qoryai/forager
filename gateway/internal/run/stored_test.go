@@ -100,7 +100,7 @@ func opensOnce(t *testing.T, wall bool) {
 	}
 	other := strings.Replace(same, `"scheme":"bearer"`, `"scheme":"basic","username":"x"`, 1)
 	_, err = reload(t, r, computed(t, other, digest('3')))
-	if err == nil || err.Error() != "run configuration "+runURL+": start a new run to use other credentials; a run's credentials from Qory Apiary are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays" {
+	if err == nil || err.Error() != "run configuration "+runURL+": start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays" {
 		t.Errorf("a reload with other credentials: %v", err)
 	}
 	none := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}}`
@@ -141,7 +141,7 @@ func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
 		"a name twice":      {twice, true, &secrets{value: "v"}, "run_configuration_invalid", `list the credential "model" once`, false},
 		"a reserved header": {reserved, true, &secrets{value: "v"}, "run_configuration_invalid", `in another header than "Proxy-Authorization"`, false},
 		"Secrets fails":     {storedDoc, true, &secrets{err: errors.New("secrets https://apiary.example/v1/secrets: the envelope is for another run configuration")}, "", "for another run configuration", true},
-		"a carriage return": {storedDoc, true, &secrets{value: "opened\rvalue"}, "run_configuration_invalid", `store another value of the credential "model" in Qory Apiary`, true},
+		"a carriage return": {storedDoc, true, &secrets{value: "opened\rvalue"}, "run_configuration_invalid", `store another value of the credential "model" in the control plane`, true},
 		"a trailing tab":    {storedDoc, true, &secrets{value: "opened-value\t"}, "run_configuration_invalid", "which a header value cannot have", true},
 		"a C1 control":      {storedDoc, true, &secrets{value: "opened\u0085value"}, "run_configuration_invalid", "which a header value cannot have", true},
 		"not UTF-8":         {storedDoc, true, &secrets{value: "opened\xffvalue"}, "", "UTF-8", true},

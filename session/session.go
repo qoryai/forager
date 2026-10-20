@@ -772,6 +772,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(err)
 	}
 	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
+	// A value the runtime's preparation sets for one of key.Others is left out, walled
+	// or not; behind a wall the name is then unset inside.
+	prepared.Env = withoutNames(prepared.Env, key.Others)
 	// The harness's values are Forager's to write as the enclosure sees them.
 	harness := spec
 	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)

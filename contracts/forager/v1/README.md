@@ -809,11 +809,12 @@ variables:
 
 The runtime's other variables of `model.keys` get no value: a value of each, from the
 server, the run, the machine, the harness's defaults, the harness's computed values or
-the environment the run inherits, is left out and recorded as `fixed`, and behind a wall
-the name is unset inside, so an image's value does not reach the runtime either. The
-runtime would send such a value to the start key's endpoint. For Claude Code with a
-start key in `ANTHROPIC_API_KEY`, no value of `ANTHROPIC_AUTH_TOKEN` or
-`CLAUDE_CODE_OAUTH_TOKEN` reaches it.
+the environment the run inherits, is left out and recorded as `fixed`, a value the
+runtime's preparation sets is left out too, and behind a wall the name is unset inside,
+so an image's value does not reach the runtime either. The runtime would send such a
+value to the start key's endpoint. For Claude Code with a start key in
+`ANTHROPIC_API_KEY`, no value of `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`
+reaches it.
 
 For Claude Code:
 
@@ -1060,7 +1061,8 @@ value of the server, the run, the machine, the harness's defaults or the harness
 computed values is left out and recorded as `fixed`, the value the run inherits loses
 to it as well, and the endpoint rule does not apply. The runtime's other variables of
 `model.keys` (§Credentials, The variable of a model key) are left out the same way, the
-value the run inherits included, and none of them is set.
+value the run inherits and the one the runtime's preparation sets included, and none of
+them is set.
 
 In a run without a start key, the endpoint rule sets whether a value of the
 endpoint variable applies: behind a wall, and without one for a run whose answer has

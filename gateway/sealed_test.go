@@ -178,7 +178,7 @@ func walledBody() string {
 func TestCredentialsNeedTheSecretsEndpoint(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, nil)
 	status, got := h.refusalOf("/v1/run-configuration", walledBody())
-	want := "run configuration " + c.srv.URL + runsPath + ": enrol an access key allowed stored secrets: the document has credentials, and Qory Apiary's configuration document lists no secrets endpoint for this access key: run_configuration_invalid"
+	want := "run configuration " + c.srv.URL + runsPath + ": enrol an access key allowed stored secrets: the document has credentials, and the control plane's configuration document lists no secrets endpoint for this access key: run_configuration_invalid"
 	if status != http.StatusForbidden || got["error"] != "run_configuration_invalid" || got["message"] != want {
 		t.Errorf("%d %v", status, got)
 	}
@@ -250,7 +250,7 @@ func TestASealedAnswerThatDoesNotOpenIsNoRun(t *testing.T) {
 			return http.StatusConflict, []byte(`{"error":"secrets_not_allowed"}`)
 		}, status: http.StatusConflict, code: "secrets_not_allowed", message: "secrets "},
 		"a line feed": {values: map[string]string{"model": "a\nvalue"}, status: http.StatusForbidden, code: "run_configuration_invalid",
-			message: `store another value of the credential "model" in Qory Apiary: its value has a control character, or a space or tab at its start or end, which a header value cannot have`},
+			message: `store another value of the credential "model" in the control plane: its value has a control character, or a space or tab at its start or end, which a header value cannot have`},
 		"a leading space": {values: map[string]string{"model": " " + sealedValue}, status: http.StatusForbidden, code: "run_configuration_invalid",
 			message: "which a header value cannot have"},
 	} {
@@ -417,7 +417,7 @@ func TestAReloadKeepsTheCredentialsFixed(t *testing.T) {
 	// Other credentials: the hosts differ.
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","c.example"]}},"credentials":[{"name":"model","hosts":["c.example"],"auth":{"scheme":"bearer"}}]}`, 'c')
 	h.post(logged(runID))
-	line := "start a new run to use other credentials; a run's credentials from Qory Apiary are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays"
+	line := "start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays"
 	eventually(t, "the failed reload's report", func() bool {
 		h.post(heartbeat(runID))
 		return h.reported(line)
