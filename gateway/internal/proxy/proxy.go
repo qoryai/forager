@@ -536,7 +536,7 @@ func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
 // longer opens this machine's addresses and the private network addresses
 // ([rules.opens]), and every connection dialled for that host, idle or in use: the next
 // one is judged by the guard under the new policy. A host that keeps its opening, or
-// keeps none, keeps its connections.
+// keeps none, loses none of its connections for that reason.
 func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	return p.SetPolicyOpening(mode, nil, allow, deny, allow, paths, creds)
 }
@@ -670,8 +670,10 @@ func (p *Proxy) untrack(t *tunnel) {
 	p.tmu.Unlock()
 }
 
-// namedKey marks the context of a connection whose host is one of the guard's names,
-// with the host as decided.
+// namedKey marks the context of a dial that the guard judges as for a host that is one
+// of the guard's names. [Proxy.dialContext] sets it to the host as decided, which
+// [Proxy.dialHost] reads; [Proxy.guard] sets it to true to check the IPv4 addresses
+// inside an address for a link-local or metadata address alone.
 type namedKey struct{}
 
 // named reports whether the host is one of the guard's names, which alone open this

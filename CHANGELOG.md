@@ -710,9 +710,9 @@ release may change what an existing document does, and says so under Upgrading.
   opening, for example, when the run's new policy no longer matches it by `allow` or
   `allow_first`. A request in flight on such a connection fails, and the next
   connection to the host is judged by the guard under the new policy. A reload that
-  leaves the host's opening as it was closes none of its connections. Before, an open
-  tunnel to the host kept reaching the address, and a new tunnel's request reused a
-  pooled connection to it with no new dial.
+  leaves the host's opening as it was closes none of its connections for that reason.
+  Before, an open tunnel to the host kept reaching the address, and a new tunnel's
+  request reused a pooled connection to it with no new dial.
 
 ### Wall
 

@@ -2,8 +2,10 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -268,4 +270,74 @@ func TestAReloadThatTakesTheGuardNameAwayClosesARequestInFlight(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAReloadDuringTheDialOfAGuardNameClosesTheConnection pins that a reload that takes
+// the guard name's opening away while the connection to the host is being dialled,
+// before the connection is on the proxy's list, closes that connection: the dial
+// returns after the reload, the CONNECT gets the guard's refusal, and the list is empty.
+func TestAReloadDuringTheDialOfAGuardNameClosesTheConnection(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "origin") }))
+	defer origin.Close()
+	g := newGuardedName(t, policy.Enforce, nil, []string{"db.corp.example"}, origin.Listener.Addr().String(), nil)
+	inner := g.p.dial
+	var first net.Conn
+	g.p.dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := inner(ctx, network, addr)
+		if first == nil && err == nil {
+			first = c
+			g.p.SetPolicyOpening(policy.Enforce, nil, []string{"db.corp.example"}, nil, nil, nil, nil)
+		}
+		return c, err
+	}
+	_, _, code := g.open(t, 80)
+	if code != http.StatusForbidden || g.seen.at(-1).Rule != GuardRule || g.seen.at(-1).Outcome != Refused {
+		t.Errorf("CONNECT after a reload during the dial: %d, decision %+v; want the guard's refusal", code, g.seen.at(-1))
+	}
+	if got := g.rec.take(); len(got) != 1 || !strings.HasPrefix(got[0], "10.1.2.3:") {
+		t.Errorf("dialled %v; want 10.1.2.3 once, before the reload", got)
+	}
+	if first == nil {
+		t.Fatal("the dial made no connection")
+	}
+	if _, err := first.Write([]byte("GET / HTTP/1.0\r\n\r\n")); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("the connection dialled before the reload: write %v; want it closed", err)
+	}
+	if n := dialledCount(g.p); n != 0 {
+		t.Errorf("the list has %d entries; want 0", n)
+	}
+}
+
+// TestAReloadBeforeTheDialOfAGuardNameDialsNothing pins that a reload that takes the
+// guard name's opening away after the connection's decision and before its dial dials
+// nothing at the host's private address: the dial gets the guard's refusal, and the
+// list is empty.
+func TestAReloadBeforeTheDialOfAGuardNameDialsNothing(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "origin") }))
+	defer origin.Close()
+	g := newGuardedName(t, policy.Enforce, nil, []string{"db.corp.example"}, origin.Listener.Addr().String(), nil)
+	ctx := g.p.dialContext(context.Background(), Decision{Host: "db.corp.example", Rule: "db.corp.example", Allowed: true})
+	g.p.SetPolicyOpening(policy.Enforce, nil, []string{"db.corp.example"}, nil, nil, nil, nil)
+	c, err := g.p.dialHost(ctx, "tcp", "db.corp.example:80")
+	if err == nil {
+		c.Close()
+	}
+	var ge *guardError
+	if !errors.As(err, &ge) {
+		t.Errorf("dial after a reload before it: %v; want the guard's refusal", err)
+	}
+	if got := g.rec.take(); len(got) != 0 {
+		t.Errorf("dialled %v; want nothing", got)
+	}
+	if n := dialledCount(g.p); n != 0 {
+		t.Errorf("the list has %d entries; want 0", n)
+	}
+}
+
+// dialledCount is the number of connections on p's list of connections dialled for a
+// guard name.
+func dialledCount(p *Proxy) int {
+	p.tmu.Lock()
+	defer p.tmu.Unlock()
+	return len(p.dialled)
 }
