@@ -684,6 +684,16 @@ release may change what an existing document does, and says so under Upgrading.
   rule the connection opened under: after a reload from observe to enforce, a refused
   request's answer read "denied by policy (mode observe)", its `run.egress` had
   `mode: observe`, and an allowed request had an empty `rule`.
+- Behind a wall, and behind a separate gateway, a reload after which the gateway's
+  proxy no longer dials the gateway's machine or a private network address for a host
+  closes the connections open to that host: its tunnels, blind or terminated, and the
+  connections the proxy dialled for it, idle in the pool or in use. A host loses that
+  opening, for example, when the run's new policy no longer matches it by `allow` or
+  `allow_first`. A request in flight on such a connection fails, and the next
+  connection to the host is judged by the guard under the new policy. A reload that
+  leaves the host's opening as it was closes none of its connections. Before, an open
+  tunnel to the host kept reaching the address, and a new tunnel's request reused a
+  pooled connection to it with no new dial.
 
 ### Wall
 

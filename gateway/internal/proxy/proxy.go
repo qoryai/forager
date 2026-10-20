@@ -40,7 +40,9 @@
 // everything else, decided and recorded, in either mode, when the node's policy names
 // it and the run's allow list or the allow_first list allows it. Under a session's
 // narrowing of a policy that observes, the gateway passes no name, and none of these
-// addresses is reached. Without the guard the way around a wall is through the proxy.
+// addresses is reached. A reload after which the policy no longer opens these addresses
+// to a host closes the connections to that host ([Proxy.SetPolicyOpening]). Without the
+// guard the way around a wall is through the proxy.
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
 // TLS itself, reads each request's path and sets a credential on it, or hands it to the
@@ -170,6 +172,9 @@ type Proxy struct {
 	tunnels map[*tunnel]struct{}
 	// shut says Close has closed the tunnels: one tracked after is closed at once.
 	shut bool
+	// dialled are the connections dialled for one of the guard's names, so a reload
+	// that takes the name's opening away can close them, idle or in use.
+	dialled map[*namedConn]struct{}
 	// stopped ends with Close, and with it the requests a terminated tunnel sends on.
 	stopped context.Context
 	stop    context.CancelFunc
@@ -248,7 +253,7 @@ func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*
 	if err := mode.Validate(); err != nil {
 		return nil, err
 	}
-	p := &Proxy{observe: observe, tunnels: map[*tunnel]struct{}{}}
+	p := &Proxy{observe: observe, tunnels: map[*tunnel]struct{}{}, dialled: map[*namedConn]struct{}{}}
 	p.stopped, p.stop = context.WithCancel(context.Background())
 	p.rules.Store(&rules{mode: mode, allow: allow, deny: deny})
 	// The guard checks the address a name resolved to, at the moment of the connection,
@@ -499,7 +504,12 @@ func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
 // another one now, or none, is closed as well and not recorded, since nothing was
 // denied: the next connection carries what the new policy selects. So is a connection
 // to a host whose path rules are other ones now: the next connection is held to the
-// new rules. A host whose path rules are equal keeps its connections.
+// new rules. A host whose path rules are equal keeps its connections. A guarded proxy
+// also closes, without a record, the tunnels to a host for which the new policy no
+// longer opens this machine's addresses and the private network addresses
+// ([rules.opens]), and every connection dialled for that host, idle or in use: the next
+// one is judged by the guard under the new policy. A host that keeps its opening, or
+// keeps none, keeps its connections.
 func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	return p.SetPolicyOpening(mode, nil, allow, deny, allow, paths, creds)
 }
@@ -526,13 +536,24 @@ func (p *Proxy) SetPolicyOpening(mode policy.Mode, first, allow, deny, names []s
 	if after != nil {
 		p.term.Store(after)
 	}
-	p.rules.Store(r)
+	old := p.rules.Swap(r)
 	p.tmu.Lock()
 	open := make([]*tunnel, 0, len(p.tunnels))
 	for t := range p.tunnels {
 		open = append(open, t)
 	}
+	// A connection put on the list after this finds the new rules when it is dialled
+	// ([Proxy.dialHost]).
+	var closing []*namedConn
+	for c := range p.dialled {
+		if !r.opens(c.host) {
+			closing = append(closing, c)
+		}
+	}
 	p.tmu.Unlock()
+	for _, c := range closing {
+		c.Close()
+	}
 	for _, t := range open {
 		d := p.decide(t.d.Method, t.d.Host, t.d.Port)
 		switch {
@@ -540,6 +561,7 @@ func (p *Proxy) SetPolicyOpening(mode policy.Mode, first, allow, deny, names []s
 			refused = append(refused, d)
 		case t.terminated && before.credentialName(t.d.Host) != after.credentialName(t.d.Host):
 		case !before.samePaths(after, t.d.Host):
+		case old.opens(t.d.Host) && !r.opens(t.d.Host):
 		default:
 			continue
 		}
@@ -548,6 +570,52 @@ func (p *Proxy) SetPolicyOpening(mode policy.Mode, first, allow, deny, names []s
 		}
 	}
 	return refused
+}
+
+// opens reports whether the rules open this machine's addresses and the private
+// network addresses to host: one of the guard's names is the host itself, and the
+// allow_first list or the allow list lets the host through, the deny list for the
+// allow list's part.
+func (r *rules) opens(host string) bool {
+	if _, ok := policy.Match(r.opened, host); !ok {
+		return false
+	}
+	if _, ok := policy.Exact(r.first, host); ok {
+		return true
+	}
+	if _, ok := policy.Match(r.deny, host); ok {
+		return false
+	}
+	_, ok := policy.Match(r.allow, host)
+	return ok
+}
+
+// namedConn is a connection dialled for one of the guard's names, on the proxy's list
+// until it is closed.
+type namedConn struct {
+	net.Conn
+	host string
+	p    *Proxy
+	once sync.Once
+}
+
+// Close closes the connection and takes it off the list.
+func (c *namedConn) Close() error {
+	c.once.Do(func() {
+		c.p.tmu.Lock()
+		delete(c.p.dialled, c)
+		c.p.tmu.Unlock()
+	})
+	return c.Conn.Close()
+}
+
+// CloseWrite closes the connection's writing side, when it has one, as [relay] does at
+// the end of a copy.
+func (c *namedConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
 }
 
 // track remembers an open connection until untrack; after Close, it closes its ends
@@ -575,7 +643,8 @@ func (p *Proxy) untrack(t *tunnel) {
 	p.tmu.Unlock()
 }
 
-// namedKey marks the context of a connection whose host is one of the guard's names.
+// namedKey marks the context of a connection whose host is one of the guard's names,
+// with the host as decided.
 type namedKey struct{}
 
 // named reports whether the host is one of the guard's names, which alone open this
@@ -1025,7 +1094,38 @@ func closeWrite(c net.Conn) {
 // resolver keeps such a name without a dot and would not find it rooted. An IP address
 // is dialled as given. A failed lookup names the host as decided, without the dot.
 // Every connection to a host the session asked for is dialled here.
+//
+// A connection dialled for one of the guard's names ([Proxy.dialContext]) is on the
+// proxy's list until it closes, for [Proxy.SetPolicyOpening] to close. When the policy
+// in force no longer opens the host, the address is judged without the name, before
+// the dial and again once the connection is on the list: a reload during the dial may
+// have passed the list before the connection was on it.
 func (p *Proxy) dialHost(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, _ := ctx.Value(namedKey{}).(string)
+	if host == "" {
+		return p.dialAt(ctx, network, addr)
+	}
+	unnamed := context.WithValue(ctx, namedKey{}, nil)
+	if !p.rules.Load().opens(host) {
+		return p.dialAt(unnamed, network, addr)
+	}
+	c, err := p.dialAt(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	nc := &namedConn{Conn: c, host: host, p: p}
+	p.tmu.Lock()
+	p.dialled[nc] = struct{}{}
+	p.tmu.Unlock()
+	if p.rules.Load().opens(host) {
+		return nc, nil
+	}
+	nc.Close()
+	return p.dialAt(unnamed, network, addr)
+}
+
+// dialAt is [Proxy.dialHost] for one connection, with no list.
+func (p *Proxy) dialAt(ctx context.Context, network, addr string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil || host == "" || strings.HasSuffix(host, ".") {
 		return p.dial(ctx, network, addr)
@@ -1102,7 +1202,7 @@ func unrooted(err error, host string) error {
 // for it.
 func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 	if p.named(d.Host, d.Rule != "") {
-		return context.WithValue(ctx, namedKey{}, true)
+		return context.WithValue(ctx, namedKey{}, d.Host)
 	}
 	return ctx
 }
