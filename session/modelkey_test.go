@@ -704,3 +704,65 @@ func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 		}
 	}
 }
+
+// TestAPreparationsOtherKeyVariablesDoNotReachTheRuntime pins that, beside a start key
+// in ANTHROPIC_API_KEY, a value the runtime's preparation sets for ANTHROPIC_AUTH_TOKEN
+// or CLAUDE_CODE_OAUTH_TOKEN does not reach the agent, with or without a wall. Behind a
+// wall each name is unset inside and not set.
+func TestAPreparationsOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
+	others := []string{authTokenVariable, oauthVariable}
+	for _, walled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("walled %v", walled), func(t *testing.T) {
+			sp, g := specGateway(t)
+			out := dumpsEnv(t, &sp)
+			sp.Runtime = &preparesKeys{Runtime: sp.Runtime, keys: others}
+			w := &imageWall{}
+			if walled {
+				sp.Wall, sp.Image = w, "example.com/agent:1"
+			}
+			answering(g, []map[string]any{model()}, nil)
+			if _, err := session.Run(context.Background(), sp); err != nil {
+				t.Fatal(err)
+			}
+			got := envOf(t, out)
+			if got[apiKeyVariable] != link.KeyPlaceholder("model") {
+				t.Errorf("%s=%q; want the start key's placeholder", apiKeyVariable, got[apiKeyVariable])
+			}
+			var names []string
+			if walled {
+				names, _ = unsetIn(t, w.got)
+			}
+			for _, k := range others {
+				if v, ok := got[k]; ok {
+					t.Errorf("%s=%q reached the agent", k, v)
+				}
+				if walled && (!slices.Contains(names, k) || len(entriesOf(w.got.Env, k)) > 0) {
+					t.Errorf("unset %q, the wall's environment %q; want %s unset and not set", names, entriesOf(w.got.Env, k), k)
+				}
+			}
+		})
+	}
+}
+
+// preparesKeys is a runtime whose preparation sets each of keys to a fake value.
+type preparesKeys struct {
+	runtimes.Runtime
+	keys []string
+}
+
+func (p *preparesKeys) Prepare(a runtimes.Attach) (runtimes.Launch, error) {
+	l, err := p.Runtime.Prepare(a)
+	l.Env = slices.Clone(l.Env)
+	for _, k := range p.keys {
+		l.Env = append(l.Env, k+"=sk-fake-prepared")
+	}
+	return l, err
+}
+
+func (p *preparesKeys) Secrets() runtimes.Declarations {
+	return p.Runtime.(runtimes.Secrets).Secrets()
+}
+
+func (p *preparesKeys) Model() (runtimes.ModelPlaces, bool) {
+	return p.Runtime.(runtimes.Model).Model()
+}

@@ -94,7 +94,8 @@ release may change what an existing document does, and says so under Upgrading.
   `ANTHROPIC_BASE_URL` for Claude Code, to the start key's endpoint, and leaves out
   every other value of it as `fixed`. The runtime's other model-key variables get no
   value: one from any source, the inherited environment included, is left out as
-  `fixed`, and behind a wall the name is unset inside. A descriptor without a `model` section, a format
+  `fixed`, one the runtime's preparation sets is left out too, and behind a wall the
+  name is unset inside. A descriptor without a `model` section, a format
   it lists no key for, and an auth no key of that format has are
   `run_configuration_invalid`.
 - A model key's placeholder contains its name: `qory-`, the name and

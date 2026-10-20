@@ -170,9 +170,9 @@ The session also sets `ANTHROPIC_BASE_URL` to the endpoint. Every other value of
 `ANTHROPIC_BASE_URL`, from the server, `--env`, `wall.env`, the harness or the shell, is
 left out. Claude Code's other key variables get no value either: with the start key in
 `ANTHROPIC_API_KEY`, a value of `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` from
-any of these sources is left out, and behind a wall the image's value is unset. If the
-runtime reads no key for the format or the `auth`, the run stops with
-`run_configuration_invalid`.
+any of these sources or the runtime's preparation is left out, and behind a wall the
+image's value is unset. If the runtime reads no key for the format or the `auth`, the
+run stops with `run_configuration_invalid`.
 
 A run may have several model keys, from `forager.yaml` and from the control plane. The
 gateway holds every one and sets only the start key, the one the runtime starts with.
