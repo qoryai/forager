@@ -179,9 +179,11 @@ out, and behind a wall the image's value is unset. Two exceptions apply:
   names in `CAEnv` of `wall.Docker`. A nil list means `wall.DefaultCAEnv`.
 - The session does not filter the `env` object of a settings file, which Claude Code
   applies. It copies the `env` of the `--settings` file into the run's `settings.json`
-  unchanged. It does not read `~/.claude/settings.json`, or the workspace's
-  `.claude/settings.json`, which Claude Code reads unless the launch passes
-  `--setting-sources user`. A value set in one of these files can reach Claude Code.
+  without filtering it. In a run whose image is named by its reference, a path in it is
+  written as the enclosure sees it. The session does not read `~/.claude/settings.json`,
+  or the workspace's `.claude/settings.json`, which Claude Code reads unless the launch
+  passes `--setting-sources user`. A value set in one of these files can reach Claude
+  Code.
 
 If the runtime reads no key for the format or the `auth`, the run stops with
 `run_configuration_invalid`.

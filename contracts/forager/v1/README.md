@@ -815,10 +815,10 @@ is not recorded as `fixed`. Behind a wall the name is unset inside, so an image'
 does not reach the runtime either. The runtime would send such a value to the start
 key's endpoint. For Claude Code with a start key in `ANTHROPIC_API_KEY`, no value of
 `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` reaches its process environment,
-with two exceptions (§Variables, The model endpoint). When the run has an authority, a
+with one exception (§Variables, The model endpoint): when the run has an authority, a
 variable that points at the CA bundle is set to the bundle's path, even one of
-`model.keys`. The session does not filter the `env` object of a settings file, which
-Claude Code applies, so a value set there can reach Claude Code.
+`model.keys`. Claude Code also applies the `env` object of a settings file, which the
+session does not filter, so a value set there can reach Claude Code.
 
 For Claude Code:
 
@@ -1075,11 +1075,12 @@ gives in `Spec.CAEnv`, or `wall.DefaultCAEnv` when it is nil; `qory` is to set i
 these names with `model.keys`, and a walled run does not unset them. These rules cover
 the process environment only. The session does not filter the `env` object of a
 settings file, which Claude Code applies. It copies the `env` of the `--settings` file
-into the run's `settings.json` unchanged. It does not read Claude Code's other settings
-files, such as `~/.claude/settings.json`, or the workspace's `.claude/settings.json`,
-which Claude Code reads unless the launch passes `--setting-sources user`. So a value of
-the endpoint variable or of a model-key variable set in one of them can reach Claude
-Code.
+into the run's `settings.json` without filtering it. In a run whose image is named by
+its reference, a path in it is written as the enclosure sees it. The session does not
+read Claude Code's other settings files, such as `~/.claude/settings.json`, or the
+workspace's `.claude/settings.json`, which Claude Code reads unless the launch passes
+`--setting-sources user`. So a value of the endpoint variable or of a model-key
+variable set in one of them can reach Claude Code.
 
 In a run without a start key, the endpoint rule sets whether a value of the
 endpoint variable applies: behind a wall, and without one for a run whose answer has
