@@ -807,14 +807,19 @@ variables:
   start key's `endpoint`. Every other value of the endpoint variable loses to it, and
   the endpoint rule does not apply (§Variables, The model endpoint).
 
-The runtime's other variables of `model.keys` get no value: a value of each, from the
-server, the run, the machine, the harness's defaults, the harness's computed values or
-the environment the run inherits, is left out and recorded as `fixed`, a value the
-runtime's preparation sets is left out too, and behind a wall the name is unset inside,
-so an image's value does not reach the runtime either. The runtime would send such a
-value to the start key's endpoint. For Claude Code with a start key in
-`ANTHROPIC_API_KEY`, no value of `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`
-reaches it.
+The runtime's other variables of `model.keys` get no value in the runtime's process
+environment: a value of each, from the server, the run, the machine, the harness's
+defaults, the harness's computed values or the environment the run inherits, is left
+out and recorded as `fixed`. A value the runtime's preparation sets is left out too, and
+is not recorded as `fixed`. Behind a wall the name is unset inside, so an image's value
+does not reach the runtime either. The runtime would send such a value to the start key's
+endpoint. For Claude Code with a start key in `ANTHROPIC_API_KEY`, no value of
+`ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` reaches its process environment. A
+variable that `Spec.CAEnv` lists is set to the CA bundle's path, even one of
+`model.keys` (§Variables, The model endpoint). The session does not read or change the
+files the runtime reads: Claude Code also applies the `env` object of a settings file,
+such as the run's `settings.json` or the workspace's `.claude/settings.json`, so a
+value set there can reach Claude Code.
 
 For Claude Code:
 
@@ -1061,8 +1066,13 @@ value of the server, the run, the machine, the harness's defaults or the harness
 computed values is left out and recorded as `fixed`, the value the run inherits loses
 to it as well, and the endpoint rule does not apply. The runtime's other variables of
 `model.keys` (§Credentials, The variable of a model key) are left out the same way, the
-value the run inherits and the one the runtime's preparation sets included, and none of
-them is set.
+value the run inherits and the one the runtime's preparation sets included, and the
+session sets none of them in the runtime's process environment. One exception applies:
+a variable that `Spec.CAEnv` lists, which qory reads from the machine's `wall.ca_env`,
+is set to the CA bundle's path, and no check compares it with `model.keys`. These rules
+cover the process environment only. Claude Code also applies the `env` object of its
+settings files, and the session does not read or change them, so a value of the
+endpoint variable or of a model-key variable set there can reach Claude Code.
 
 In a run without a start key, the endpoint rule sets whether a value of the
 endpoint variable applies: behind a wall, and without one for a run whose answer has
@@ -1126,7 +1136,9 @@ one a value of the machine's is read from, such as a credential's `env` (§Crede
 whose value stays outside the enclosure, is left out and recorded as `denied`. A value
 the node passes for a variable the runtime declares, reserves or reads a model key from
 reaches the runtime as passed, unless it is a placeholder of the run
-(`placeholder_conflict`). Behind a wall, every variable the runtime declares, reserves
+(`placeholder_conflict`). In a run with a start key, a value the node passes for
+another variable of `model.keys` is left out and recorded as `fixed` (§Credentials, The
+variable of a model key). Behind a wall, every variable the runtime declares, reserves
 or reads a model key from that neither a
 placeholder, a source, the runtime's preparation, Forager nor the wall sets is unset
 inside the enclosure, so an image's `ENV` cannot set one, and the runtime never sees it

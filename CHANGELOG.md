@@ -93,11 +93,14 @@ release may change what an existing document does, and says so under Upgrading.
   `placeholder_conflict`. The session sets the runtime's model endpoint variable,
   `ANTHROPIC_BASE_URL` for Claude Code, to the start key's endpoint, and leaves out
   every other value of it as `fixed`. The runtime's other model-key variables get no
-  value: one from any source, the inherited environment included, is left out as
-  `fixed`, one the runtime's preparation sets is left out too, and behind a wall the
-  name is unset inside. A descriptor without a `model` section, a format
-  it lists no key for, and an auth no key of that format has are
-  `run_configuration_invalid`.
+  value in the runtime's process environment: one from any source, the inherited
+  environment included, is left out as `fixed`, one the runtime's preparation sets is
+  left out too but not recorded as `fixed`, and behind a wall the name is unset
+  inside. A
+  variable in `Spec.CAEnv` is still set to the CA bundle's path. The session does not
+  read or change a settings file's `env` object, which Claude Code applies. A
+  descriptor without a `model` section, a format it lists no key for, and an auth no
+  key of that format has are `run_configuration_invalid`.
 - A model key's placeholder contains its name: `qory-`, the name and
   `-sets-the-credential-outside-the-enclosure`, such as
   `qory-model-sets-the-credential-outside-the-enclosure`, `link.KeyPlaceholder` in Go.

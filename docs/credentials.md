@@ -168,10 +168,14 @@ Claude Code:
 
 The session also sets `ANTHROPIC_BASE_URL` to the endpoint. Every other value of
 `ANTHROPIC_BASE_URL`, from the server, `--env`, `wall.env`, the harness or the shell, is
-left out. Claude Code's other key variables get no value either: with the start key in
-`ANTHROPIC_API_KEY`, a value of `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` from
-any of these sources or the runtime's preparation is left out, and behind a wall the
-image's value is unset. If the runtime reads no key for the format or the `auth`, the
+left out. Claude Code's other key variables get no value in its process environment
+either: with the start key in `ANTHROPIC_API_KEY`, a value of `ANTHROPIC_AUTH_TOKEN` or
+`CLAUDE_CODE_OAUTH_TOKEN` from any of these sources or the runtime's preparation is left
+out, and behind a wall the image's value is unset. A variable listed in `wall.ca_env` is
+set to the CA bundle's path, even one of these. Claude Code also applies the `env`
+object of a settings file, such as `~/.claude/settings.json` or the workspace's
+`.claude/settings.json`, and the session does not read or change it: a value set there
+can reach Claude Code. If the runtime reads no key for the format or the `auth`, the
 run stops with `run_configuration_invalid`.
 
 A run may have several model keys, from `forager.yaml` and from the control plane. The

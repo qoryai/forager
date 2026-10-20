@@ -187,7 +187,8 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentia
 	// does an empty one, which a program may read as set. A value the run passes for
 	// one stays the agent's, one the preparation sets stays the runtime's, and a name
 	// Forager or the wall sets, the nested daemon's DOCKER_CONFIG among them, keeps the
-	// value they give it, since the helper's exec runs after them.
+	// value they give it, since the helper's exec runs after them. Run has already
+	// removed key.Others from the preparation's values, so those names are unset.
 	var unset []string
 	if spec.Wall != nil {
 		set := slices.Concat(names(withoutNames(spec.Env, key.Others)), names(vars.Env), names(vars.Fixed), names(prepared.Env), placeholderNames, walls)
