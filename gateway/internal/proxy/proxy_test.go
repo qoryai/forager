@@ -703,6 +703,53 @@ func TestSetPolicyClosesATunnelWhosePathRulesChange(t *testing.T) {
 	}
 }
 
+// TestSetPolicyClosesATunnelToAHostItNowTerminates pins a reload that gives a host a
+// credential with no paths: a tunnel the proxy passes TLS through to that host is
+// closed, so the host's answer to a request with the credential comes back only over a
+// terminated connection, and a tunnel to another host stays open.
+func TestSetPolicyClosesATunnelToAHostItNowTerminates(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	p, err := proxy.Listen("", policy.Enforce, []string{"127.0.0.1", "localhost"}, nil, func(proxy.Decision) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	ca, err := proxy.NewCA("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Terminate(ca, nil, nil, nil)
+	open := func(host string) net.Conn {
+		c, err := net.Dial("tcp", p.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		fmt.Fprintf(c, "CONNECT %s:%s HTTP/1.1\r\nHost: %s:%s\r\n\r\n", host, port, host, port)
+		line := make([]byte, len("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		if _, err := io.ReadFull(c, line); err != nil || !strings.HasPrefix(string(line), "HTTP/1.1 200") {
+			t.Fatalf("CONNECT %s: %q %v", host, line, err)
+		}
+		return c
+	}
+	stays, goes := open("127.0.0.1"), open("localhost")
+	creds := []proxy.Credential{{Name: "product", Hosts: []string{"localhost"}, Scheme: "bearer", Token: func() string { return "fake-token" }}}
+	if refused := p.SetPolicy(policy.Enforce, []string{"127.0.0.1", "localhost"}, nil, nil, creds); len(refused) != 0 {
+		t.Fatalf("SetPolicy returned %+v", refused)
+	}
+	var ne net.Error
+	if _, err := goes.Read(make([]byte, 1)); err == nil || errors.As(err, &ne) && ne.Timeout() {
+		t.Errorf("the tunnel to the host the reload terminates is still open: %v", err)
+	}
+	fmt.Fprint(stays, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	if b := make([]byte, 12); func() error { _, err := io.ReadFull(stays, b); return err }() != nil || string(b) != "HTTP/1.1 200" {
+		t.Errorf("the tunnel to the other host answered %q", b)
+	}
+}
+
 // TestARequestInATunnelIsDecidedUnderTheModeInForce pins the mode and the rule of a
 // request inside a terminated connection: after a reload, the next request in a
 // connection opened before it is decided under the policy in force, and its answer and

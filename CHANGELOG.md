@@ -689,6 +689,10 @@ release may change what an existing document does, and says so under Upgrading.
   leaves a host's path rules equal closes none of its connections for that reason.
   Before, a connection the gateway's proxy terminated kept the path rules it opened
   under until it closed.
+- A reload that gives a host a credential closes the tunnels to that host that the
+  gateway's proxy passes TLS through, and the next connection to the host is
+  terminated. Before, such a tunnel stayed open, and the proxy masked nothing in the
+  answers on it, a credential's value included.
 - A request inside a connection the gateway's proxy terminates is decided under the
   policy in force when the proxy reads the request. Its answer and its `run.egress`
   show that policy's mode, and the event's `rule` is the entry of that policy that

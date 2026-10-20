@@ -2314,7 +2314,8 @@ member).
    takes effect.
 2. A tunnel open to a host the new policy denies is closed by the proxy and recorded as
    a denied `dev.qory.run.egress` with `outcome: refused` and the rule that denied it.
-3. A host the new policy terminates TLS for is terminated on its next connection.
+3. A host the new policy terminates TLS for is terminated on its next connection. A
+   tunnel open to it that the proxy passes TLS through is closed, and not recorded.
 
 What is still undelivered when the run ends is spooled to the run directory's
 `undelivered/` as batch files with their delivery ids, and Forager reports the count
