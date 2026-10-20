@@ -694,9 +694,9 @@ release may change what an existing document does, and says so under Upgrading.
 - A reload that changes a host's path rules, the policy's or those of the host's
   credential, closes the connections open to that host, and the next connection is
   held to the new rules. A request in flight on such a connection fails. A reload that
-  leaves a host's path rules equal closes none of its connections. Before, a
-  connection the gateway's proxy terminated kept the path rules it opened under until
-  it closed.
+  leaves a host's path rules equal closes none of its connections for that reason.
+  Before, a connection the gateway's proxy terminated kept the path rules it opened
+  under until it closed.
 - A request inside a connection the gateway's proxy terminates is decided under the
   policy in force when the proxy reads the request. Its answer and its `run.egress`
   show that policy's mode, and the event's `rule` is the entry of that policy that

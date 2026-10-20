@@ -544,11 +544,11 @@ func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
 // another one now, or none, is closed as well and not recorded, since nothing was
 // denied: the next connection carries what the new policy selects. So is a connection
 // to a host whose path rules are other ones now: the next connection is held to the
-// new rules. A host whose path rules are equal keeps its connections. A guarded proxy
-// also closes, without a record, the tunnels to a host for which the new policy no
-// longer opens this machine's addresses and the private network addresses
-// ([rules.opens]), and every connection dialled for that host, idle or in use: the next
-// one is judged by the guard under the new policy. A host that keeps its opening, or
+// new rules. A host whose path rules are equal keeps its connections for that reason.
+// A guarded proxy also closes, without a record, the tunnels to a host for which the
+// new policy no longer opens this machine's addresses and the private network
+// addresses ([rules.opens]), and every connection dialled for that host, idle or in
+// use: the next one is judged by the guard under the new policy. A host that keeps its opening, or
 // keeps none, loses none of its connections for that reason.
 func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	return p.SetPolicyOpening(mode, nil, allow, deny, allow, paths, creds)
