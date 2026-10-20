@@ -101,7 +101,9 @@ gateway.
 
 `gateway.Start` limits core dumps of the process that calls it and debugger access to
 it, and with `gateway.Config.LockMemory`, on Linux, out of swap. The
-settings stay for the life of the process. See
+settings stay for the life of the process. Call `gateway.HardenProcess` first in
+`main` to limit core dumps and debugger access before the program reads its
+configuration, a key or its environment; `Start` makes the same calls again. See
 [the gateway's process](credentials.md#the-gateways-process).
 
 The agent reaches the gateway's proxy through the session's forwarder, on loopback.

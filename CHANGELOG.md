@@ -404,6 +404,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `gateway.HardenProcess`, for qory to call first in `main`: it makes the calls with
+  which `Start` limits core dumps of the process and debugger access to it, before the
+  program reads its configuration, a key or its environment. Before, a debugger that
+  attached before `Start` could read the caller's `Config`, the TLS key and the
+  environment. `HardenProcess` locks no memory, and makes its calls in a test binary
+  too. `Start` makes them again, and the second call succeeds.
 - `gateway.Config.LockMemory`, `gateway.lock_memory` in `forager.yaml`, default
   `false`: on Linux, `true` makes `Start` call `mlockall(MCL_CURRENT|MCL_FUTURE)`, so
   that no page of the gateway's process goes to swap. It needs `RLIMIT_MEMLOCK`
@@ -543,6 +549,10 @@ release may change what an existing document does, and says so under Upgrading.
   and every run, and Go printed the panic's value to standard error; net/http printed
   a request handler's panic with its value to standard error, from the proxy, or wrote
   it nowhere.
+- A `401` from a host to a request that the gateway's proxy set a credential on renews
+  the credential through its adapter at once, also when the session's `Connection`
+  header lists `X-Qory-Credential-Set`. Before, that header took the proxy's mark off
+  the request, and the credential was renewed only before its secret expired.
 - A request the gateway's proxy sets a credential on goes to its host over HTTP/1.1,
   so no HTTP/2 header table (HPACK) on the connection keeps a copy of the credential.
   A request without a credential goes on over HTTP/2 where the host offers it. Before,
@@ -959,6 +969,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The conformance suite passes the launch's settings file from outside the workspace,
   since the session refuses a settings file in it.
+- CI's Wall conformance job runs the e2e test
+  `TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy` with `QORY_WALL_REQUIRE`
+  set, so that the test fails on a machine with none of the CA bundles. Before, it ran
+  only in the e2e part job, where it skipped on such a machine and the job passed.
 
 ## [0.7.0] - 2026-10-12
 

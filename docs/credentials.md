@@ -279,6 +279,11 @@ to it:
 The settings stay for the life of the process, after `Close` too. In `qory run` the
 session runs in that process, so the settings apply to it as well.
 
+The caller's configuration, the TLS key and the environment are in memory before
+`Start` runs. A Go program calls `gateway.HardenProcess` first in `main`: it makes the
+same calls then, with the same errors, and in a test binary too. `Start` makes them
+again, and the second call succeeds. `HardenProcess` locks no memory.
+
 - A program the process starts keeps `RLIMIT_CORE` at 0. On Linux it is dumpable again
   after its `execve`.
 - On macOS, a process that a debugger traces exits at `Start` with status 45
