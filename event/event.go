@@ -35,11 +35,20 @@ const (
 	PolicyApplied = "dev.qory.run.policy_applied"
 	RunExited     = "dev.qory.run.exited"
 	RunRefused    = "dev.qory.run.refused"
+	// SessionStarted and SessionExited mark one session of a run: its join, before
+	// the runtime starts, and its end.
+	SessionStarted = "dev.qory.session.started"
+	SessionExited  = "dev.qory.session.exited"
 )
 
 // OpenedBySession is what opened a run, the opened_by of dev.qory.run.started: a
-// session around a runtime.
+// session around a runtime. The contract no longer accepts it; the session writes it
+// until it opens the run with Open.
 const OpenedBySession = "session"
+
+// OpenedByRun is the opened_by of dev.qory.run.started that the contract accepts:
+// Forager's open of a run at its gateway, before any session joins it.
+const OpenedByRun = "run"
 
 // Forager's own reasons of dev.qory.run.exited, why a run ended other than by the
 // runtime's own exit. A reason is an open code: one of these, or the code the run's
@@ -47,9 +56,9 @@ const OpenedBySession = "session"
 // names quiet, credential_expired, credential_check_unreachable,
 // credential_check_invalid, run_ended_at_issuer, issuer_unreachable and
 // issuer_answer_invalid, which Forager never writes. The session writes timeout,
-// interrupted and run_closed, and in its own record the code of the gateway's 410,
-// batch_refused among them; the resend of a record writes gateway_lost; the gateway
-// writes the others.
+// interrupted and run_closed, the close of a run with no join writes no_session, and
+// the session in the session's record the code of the gateway's 410, batch_refused among
+// them; the resend of a record writes gateway_lost; the gateway writes the others.
 const (
 	ReasonTimeout = "timeout"
 	// ReasonInterrupted is a session's run stopped from where it was started, cancelled:
@@ -65,6 +74,9 @@ const (
 	// gateway's 410 to the session's later requests, the reason of the gateway's own
 	// dev.qory.run.exited, and of the session's in its own record after it.
 	ReasonBatchRefused = "batch_refused"
+	// ReasonNoSession is a run closed with no join, failed with exit code -1: its host
+	// work, such as a fetch or a compose, failed before the first session.
+	ReasonNoSession = "no_session"
 )
 
 // The states of dev.qory.run.exited, how a run ended: it ended well, it ended badly, or
@@ -86,7 +98,8 @@ func IsState(s string) bool {
 var reserved = map[string]bool{
 	ReasonTimeout: true, ReasonInterrupted: true, ReasonStopped: true,
 	ReasonSessionLost: true, ReasonGatewayLost: true, ReasonBatchRefused: true, ReasonRunClosed: true,
-	"quiet": true, "credential_expired": true, "credential_check_unreachable": true, "credential_check_invalid": true,
+	ReasonNoSession: true,
+	"quiet":         true, "credential_expired": true, "credential_check_unreachable": true, "credential_check_invalid": true,
 	"run_ended_at_issuer": true, "issuer_unreachable": true, "issuer_answer_invalid": true,
 }
 

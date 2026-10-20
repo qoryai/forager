@@ -47,6 +47,8 @@
             "dev.qory.run.policy_applied",
             "dev.qory.run.exited",
             "dev.qory.run.refused",
+            "dev.qory.session.started",
+            "dev.qory.session.exited",
             "dev.qory.runtime.started",
             "dev.qory.runtime.prompt_submitted",
             "dev.qory.runtime.tool_started",
@@ -207,6 +209,32 @@
             },
             "data": {
               "$ref": "events/run.refused.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.started"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.started.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.started.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.exited"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.exited.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.exited.schema.json"
             }
           }
         },

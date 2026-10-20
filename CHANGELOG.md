@@ -73,8 +73,55 @@ release may change what an existing document does, and says so under Upgrading.
   `events/session.*.schema.json`. Rename the types a receiver, a configuration's
   `events.types` or a descriptor of yours lists; an event with an old name fails
   validation against the schemas. The data of each event is unchanged.
+- Take a session's runtime members from `dev.qory.session.started`, not
+  `dev.qory.run.started`: `runtime`, `runtime_version`, `command`, `args`, `dir`,
+  `interactive`, `terminal`, `image`, `image_name`, `container_runtime`, `docker`,
+  `image_fetch_ms` and `preparation`. `dev.qory.run.started` keeps `opened_by`,
+  `forager_version`, `host`, `wall`, `labels` and `about`, and requires only the first
+  two. Its `opened_by` is `run`; a `dev.qory.run.started` with `opened_by: "session"`
+  fails validation, and a link batch with one is `400` `invalid_request`.
+- Read how a session ended from its `dev.qory.session.exited`, and how the run ended
+  from `dev.qory.run.exited`, which the close writes once, with the caller's outcome.
+  The run's `exit_code` is the last session's, `124` at the run's time limit, or `-1`
+  when no session ran, and its `duration_ms` counts from `dev.qory.run.started`, the
+  host work included. A link batch's `dev.qory.run.exited` with `timeout` and an exit
+  code other than `124` is `400` `invalid_request`.
+- Show the reason `no_session` of a `dev.qory.run.exited`, `failed` with `exit_code`
+  `-1`: a run closed with no session after its host work failed. A starter's reason
+  `no_session` is dropped, as any reserved code is.
+- Expect several `dev.qory.run.policy_applied` per run: one at the open with an empty
+  `variables`, one per session with that session's `variables`,
+  `credential_variables` and `harness_hosts`, and one per reload.
+- Expect `dev.qory.run.log` with `stream: stderr` and `dev.qory.run.egress` before the
+  first `dev.qory.session.started`: the run's host work, such as a fetch or a compose.
+- Read `elapsed_seconds` of `dev.qory.run.heartbeat` as seconds since the open's
+  discovery of its gateway's link.
 
 #### Added
+
+- `dev.qory.session.started`, `events/session.started.schema.json`: one per session
+  that joins a run, before its runtime starts, with `session`, its number from 1, and
+  the runtime members that `dev.qory.run.started` contained before, from `runtime` to
+  `preparation`.
+- `harness` in `dev.qory.session.started`: the harness sources the session's compose
+  used, one `{source, commit}` per source, `source` as it is configured and `commit`
+  the full commit id, 40 or 64 hexadecimal characters. Optional; never empty.
+- `dev.qory.session.exited`, `events/session.exited.schema.json`: one per join, with
+  `session`, `state`, `exit_code`, `signal`, `reason` and `duration_ms`. The runtime's
+  exit decides the state, as it decided the state of `dev.qory.run.exited` before. A
+  refused join is `failed` with `exit_code` `-1`, `duration_ms` `0` and the refusal's
+  code as `reason`, and has no `dev.qory.session.started`; the run stays open.
+- The reason `no_session` of `dev.qory.run.exited`, reserved: the run was closed with no
+  join, `failed` with `exit_code` `-1`.
+- The join request on the gateway's link, `POST <run.url>/<run_id>/sessions` on both
+  transports, `link-join-request.schema.json`, with `version`, `passes` and an optional
+  `model_credential`, and its answer, `link-join-answer.schema.json`, with `version`,
+  `session` and `model_credential`. The gateway answers a join it does not accept with
+  `400` `invalid_request`, `403` `placeholder_conflict` or a `410` for a run that has
+  ended, and with no new code.
+- `ca-bundle.pem` in the run directory for every run with a certificate authority,
+  walled or not, for the run's host work: the machine's bundle and the run's
+  certificate, never a key.
 
 - `security_policy.egress.allow_first` in `policy.schema.json`: up to 64 hosts, each a
   lower-case host name or an IPv4 address in canonical form, with no `*.` pattern. In
@@ -273,6 +320,31 @@ release may change what an existing document does, and says so under Upgrading.
   package's errors, and no error contains a value.
 
 #### Changed
+
+- `dev.qory.run.started` is written at the open of a run, before its host work and
+  before any session, with `opened_by: "run"`. It requires only `opened_by` and
+  `forager_version`, and keeps `host`, `wall`, `labels` and `about`.
+- `dev.qory.run.exited` is written once, at the close, with the caller's outcome:
+  `state` any of the three, `reason` none, `timeout`, `interrupted` or `no_session`, and
+  `exit_code` the run's exit code, no longer the runtime's exit status.
+- `dev.qory.run.policy_applied` is written at the open with an empty `variables`, at
+  each join with that session's `variables`, `credential_variables` and
+  `harness_hosts`, and at each reload, as before.
+- `dev.qory.run.log` is one chunk of a session's output, or of the run's host work
+  before the first `dev.qory.session.started`, which the caller writes with
+  `stream: stderr`. The data is unchanged.
+- The run answer's `model_credential` is the run's start key, the key a session starts
+  with when its join request names none; the join answer's `model_credential` is the
+  key each session starts with.
+- In the contract, several host credentials may claim one host when each has `paths`
+  and no path of one overlaps a path of another: the proxy sets the credential whose
+  paths match the request, and a request no credential's paths match gets none. A
+  credential without `paths` stays alone on its hosts. The gateway does not apply this
+  rule yet: two credentials on one host are still no run.
+- In the contract, a request on a host with a credential passes with no credential set
+  when the policy's `egress.paths` for the host match it and no credential's paths do.
+  The gateway does not apply this rule yet: under `enforce` it still denies such a
+  request.
 
 - `wall_required` has the names `tools`, `paths` and `image=<name>`, never
   `credentials`. Its message for tools and path rules reads "run it with a wall: the

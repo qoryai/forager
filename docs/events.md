@@ -60,32 +60,46 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 
 ## Forager's events
 
-| Type                          | When                                                         |
-| ----------------------------- | ------------------------------------------------------------ |
-| `dev.qory.run.registered`     | Line 1 of the gateway's record, with a server; never posted  |
-| `dev.qory.run.started`        | The run is open: the runtime is about to start               |
-| `dev.qory.run.policy_applied` | Right after; again when a new policy takes effect            |
-| `dev.qory.run.log`            | One per chunk of output                                      |
-| `dev.qory.run.resized`        | The pseudo-terminal was resized                              |
-| `dev.qory.run.egress`         | One per connection, or per request on a terminated host      |
-| `dev.qory.run.heartbeat`      | Every interval while the runtime runs, 30 seconds by default |
-| `dev.qory.run.exited`         | The run ended: the result, the last event                    |
+| Type                          | When                                                                       |
+| ----------------------------- | -------------------------------------------------------------------------- |
+| `dev.qory.run.registered`     | Line 1 of the gateway's record, with a server; never posted                |
+| `dev.qory.run.started`        | The run is open, before its host work and before any session               |
+| `dev.qory.run.policy_applied` | After the open; after each session's start; when a new policy takes effect |
+| `dev.qory.session.started`    | A session joined the run: its runtime is about to start                    |
+| `dev.qory.run.log`            | One per chunk of a session's output, or of host work before any session    |
+| `dev.qory.run.resized`        | The pseudo-terminal was resized                                            |
+| `dev.qory.run.egress`         | One per connection, or per request on a terminated host                    |
+| `dev.qory.run.heartbeat`      | Every interval while the run is open, 30 seconds by default                |
+| `dev.qory.session.exited`     | A session ended, or its join was refused                                   |
+| `dev.qory.run.exited`         | The run ended: the result, the last event                                  |
 
 Forager heartbeats while the session runs: the session sends one every interval the
 gateway's discovery announces, `gateway.Config.Heartbeat`, and the gateway ends a run
-whose session sends nothing for three. The exit status of a run is the runtime's.
+whose session sends nothing for three. The exit code of a run is its last session's,
+124 at the run's time limit, and -1 when no session ran.
 
-`dev.qory.run.started` says what opened the run, in `opened_by`: `session`, a session
-around a runtime, as above.
+`dev.qory.run.started` says what opened the run, in `opened_by`: `run`, Forager's open
+of the run at its gateway, before any session. Each session then has a
+`dev.qory.session.started`, with its number from 1 in `session`, the runtime, the
+command and the image, and a `dev.qory.session.exited`, with how the session ended: the
+runtime's exit decides `succeeded` or `failed`, and `cancelled` comes with `timeout` or
+`interrupted`. A join that is refused has only a `dev.qory.session.exited`, `failed`
+with exit code -1 and the refusal's code, such as `mount_mode_conflict`, as its reason.
+
+`dev.qory.session.started` contains `harness` when the caller passes it: one entry per
+harness source the session's compose used, each with `source`, the source as it is
+configured, and `commit`, the full commit id compose used, 40 or 64 hexadecimal
+characters.
 
 Every `dev.qory.run.exited` says how the run ended in `state`: `succeeded`, `failed` or
-`cancelled`, stopped before it said how it went. A runtime that exits by itself is
-`succeeded` on 0 and `failed` otherwise. A run its starter ends with an outcome has
-that outcome. When a run ends other than by the runtime exiting by itself, or its
-starter gives a reason, `dev.qory.run.exited` says why in `reason`: an open code,
-Forager's or the starter's, carried as given. The session writes `timeout`, `cancelled`,
-and `interrupted`, `cancelled`, a run stopped from where it was started (a Ctrl-C), and
-posts them. The gateway writes the others: `session_lost`, `failed`, the session was
+`cancelled`, stopped before it said how it went. The close of the run writes the
+outcome its caller gives. A run its starter ends with an outcome has that outcome. When
+the close's outcome has a reason, or the run ends without a close, or its starter gives
+a reason, `dev.qory.run.exited` says why in `reason`: an open code, Forager's or the
+starter's, carried as given. The close writes `timeout`, `cancelled`, `interrupted`,
+`cancelled`, a run stopped from where it was started (a Ctrl-C), and `no_session`,
+`failed`, a run closed with no session after its host work failed, such as a fetch,
+and posts them. The gateway writes the others: `session_lost`, `failed`, the session was
 silent; `batch_refused`, `failed`, the gateway refused a batch from the run's session
 (see the contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
 gave no outcome, or the starter's outcome and reason when it gave one; and sending a

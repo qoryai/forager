@@ -51,7 +51,7 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 		schema, member string
 		want           []string
 	}{
-		{"events/run.started.schema.json", "opened_by", []string{event.OpenedBySession}},
+		{"events/run.started.schema.json", "opened_by", []string{event.OpenedByRun}},
 	} {
 		doc, err := contracts.Document(c.schema)
 		if err != nil {
@@ -73,7 +73,7 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	pattern := regexp.MustCompile(reason["pattern"].(string))
 	description := reason["description"].(string)
 	for _, code := range []string{event.ReasonTimeout, event.ReasonInterrupted, event.ReasonRunClosed, event.ReasonGatewayLost,
-		event.ReasonSessionLost, event.ReasonStopped, event.ReasonBatchRefused,
+		event.ReasonSessionLost, event.ReasonStopped, event.ReasonBatchRefused, event.ReasonNoSession,
 		"quiet", "credential_expired", "credential_check_unreachable", "credential_check_invalid",
 		"run_ended_at_issuer", "issuer_unreachable", "issuer_answer_invalid"} {
 		if !pattern.MatchString(code) {
@@ -106,7 +106,7 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]+_[a-z0-9_]+|\btimeout\b|\binterrupted\b|\bquiet\b|\bstopped\b`).FindAllString(listed, -1) {
 		want = append(want, w)
 	}
-	if len(want) != 14 {
+	if len(want) != 15 {
 		t.Fatalf("the description names %d reserved codes: %v", len(want), want)
 	}
 	for _, code := range want {
@@ -124,8 +124,8 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 			t.Errorf("%q is reserved", code)
 		}
 	}
-	// A session's batch may carry timeout and interrupted, its own.
-	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted}} {
+	// A session's batch may carry timeout, interrupted and no_session, the close's.
+	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted, event.ReasonNoSession}} {
 		doc, err := contracts.Document(name)
 		if err != nil {
 			t.Fatal(err)

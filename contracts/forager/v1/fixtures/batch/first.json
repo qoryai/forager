@@ -9,7 +9,43 @@
     "sequence": "0000000002",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
     "data": {
-      "opened_by": "session",
+      "opened_by": "run",
+      "forager_version": "0.4.0",
+      "host": "dev-laptop"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000009001",
+    "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+    "type": "dev.qory.run.policy_applied",
+    "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+    "time": "2026-09-16T12:00:00.125Z",
+    "sequence": "0000000003",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.policy_applied.schema.json",
+    "data": {
+      "mode": "enforce",
+      "allow": [
+        "api.anthropic.com",
+        "github.com",
+        "*.github.com"
+      ],
+      "source": "config",
+      "digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "variables": []
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000009002",
+    "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+    "type": "dev.qory.session.started",
+    "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+    "time": "2026-09-16T12:00:00.120Z",
+    "sequence": "0000000004",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/session.started.schema.json",
+    "data": {
+      "session": 1,
       "runtime": "claude",
       "runtime_version": "2.1.273",
       "command": "claude",
@@ -24,9 +60,7 @@
       "terminal": {
         "cols": 120,
         "rows": 40
-      },
-      "forager_version": "0.4.0",
-      "host": "dev-laptop"
+      }
     }
   },
   {
@@ -36,7 +70,7 @@
     "type": "dev.qory.run.policy_applied",
     "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
     "time": "2026-09-16T12:00:00.125Z",
-    "sequence": "0000000003",
+    "sequence": "0000000005",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.policy_applied.schema.json",
     "data": {
       "mode": "enforce",
@@ -62,7 +96,7 @@
     "type": "dev.qory.runtime.started",
     "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
     "time": "2026-09-16T12:00:01.400Z",
-    "sequence": "0000000004",
+    "sequence": "0000000006",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/runtime.started.schema.json",
     "data": {
       "session_id": "0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90",
@@ -78,7 +112,7 @@
     "type": "dev.qory.run.log",
     "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
     "time": "2026-09-16T12:00:01.450Z",
-    "sequence": "0000000005",
+    "sequence": "0000000007",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.log.schema.json",
     "data": {
       "stream": "terminal",

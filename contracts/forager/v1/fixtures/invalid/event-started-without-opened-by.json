@@ -8,14 +8,6 @@
   "sequence": "0000000002",
   "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
   "data": {
-    "runtime": "claude",
-    "command": "claude",
-    "args": [
-      "-p",
-      "Reply pong"
-    ],
-    "dir": "/home/dev/app",
-    "interactive": false,
     "forager_version": "0.7.0",
     "host": "dev-laptop"
   }
