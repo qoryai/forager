@@ -677,10 +677,13 @@ release may change what an existing document does, and says so under Upgrading.
   connection the gateway's proxy terminated kept the path rules it opened under until
   it closed.
 - A request inside a connection the gateway's proxy terminates is decided under the
-  mode in force when the proxy reads the request, and its answer and its `run.egress`
-  give that mode. Before, they gave the mode the connection opened under: after a
-  reload from observe to enforce, a refused request's answer read "denied by policy
-  (mode observe)", and its `run.egress` had `mode: observe`.
+  policy in force when the proxy reads the request. Its answer and its `run.egress`
+  show that policy's mode, and the event's `rule` is the entry of that policy that
+  matched the host. A request to a host that policy denies is refused with 403, also
+  before the reload closes the connection. Before, a request kept the mode and the
+  rule the connection opened under: after a reload from observe to enforce, a refused
+  request's answer read "denied by policy (mode observe)", its `run.egress` had
+  `mode: observe`, and an allowed request had an empty `rule`.
 
 ### Wall
 

@@ -397,14 +397,32 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		},
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The token first, then the path's decision, under the mode in force now: a
-		// reload since the connection opened changes the mode of the requests in it.
+		// The token first, then the host's decision and the path's, under the policy in
+		// force now: a reload since the connection opened changes the mode and the rule
+		// of the requests in it, and a host the reload denies is refused here before the
+		// reload closes the connection. The host's decision takes no token and no
+		// connection, and is recorded only with the request.
 		rated := t.p.take(r.Context())
-		mode := t.p.rules.Load().mode
-		clean, rule, allowed, credentialed := t.path(d.Host, r.URL.EscapedPath(), mode)
+		now := t.p.decide(d.Method, d.Host, d.Port)
 		req := d
-		req.Method, req.RequestMethod, req.Path, req.PathRule, req.Mode = "HTTPS", r.Method, clean, rule, mode
-		req.Allowed, req.RequestID = allowed, newRequestID()
+		req.Method, req.RequestMethod, req.Mode, req.Rule, req.RequestID = "HTTPS", r.Method, now.Mode, now.Rule, newRequestID()
+		if !now.Allowed {
+			// A host the policy refuses reaches no tool and has no path decision.
+			clean, ok := policy.CleanPath(r.URL.EscapedPath())
+			if !ok {
+				clean = r.URL.EscapedPath()
+			}
+			req.Path, req.Allowed, req.Outcome = clean, false, Refused
+			if rated != nil {
+				t.p.limited(w, req, RateLimit, rated)
+				return
+			}
+			t.p.observe(req)
+			deny(w, req)
+			return
+		}
+		clean, rule, allowed, credentialed := t.path(d.Host, r.URL.EscapedPath(), now.Mode)
+		req.Path, req.PathRule, req.Allowed = clean, rule, allowed
 		tl := t.tool(d.Host)
 		if tl != nil {
 			req.Tool = tl.Name
@@ -459,7 +477,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		}
 		// The request is recorded once its outcome is known: when the response's
 		// headers arrive, or when the transport fails.
-		ctx := context.WithValue(t.p.dialContext(r.Context(), d), pendingKey{}, &pending{d: req, mask: mask})
+		ctx := context.WithValue(t.p.dialContext(r.Context(), req), pendingKey{}, &pending{d: req, mask: mask})
 		if keyed {
 			// In the context, since the session's Connection header can take any header
 			// off the request before it reaches the transport, the mark among them.

@@ -48,6 +48,13 @@ func (o *observer) observe(d proxy.Decision) {
 	o.seen = append(o.seen, d)
 }
 
+// count returns the number of decisions observed so far.
+func (o *observer) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.seen)
+}
+
 func (o *observer) last(t *testing.T) proxy.Decision {
 	t.Helper()
 	o.mu.Lock()
@@ -697,46 +704,99 @@ func TestSetPolicyClosesATunnelWhosePathRulesChange(t *testing.T) {
 	}
 }
 
-// TestARequestInATunnelIsDecidedUnderTheModeInForce pins the mode of a request inside
-// a terminated connection: after a reload from observe to enforce, the next request in
-// a connection opened under observe is decided under enforce, and its answer and its
-// record give enforce.
+// TestARequestInATunnelIsDecidedUnderTheModeInForce pins the mode and the rule of a
+// request inside a terminated connection: after a reload, the next request in a
+// connection opened before it is decided under the policy in force, and its answer and
+// its record give that policy's mode and allow entry. From observe with no allow entry
+// to enforce that allows the host, the request has the allow entry as its rule, and a
+// path outside the path rules is refused under enforce. From enforce to observe with no
+// allow list, the request has no rule. A host the new policy denies is refused before
+// the reload closes the connection, as one request recorded once, with no CONNECT.
 func TestARequestInATunnelIsDecidedUnderTheModeInForce(t *testing.T) {
 	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "from the origin") }))
 	defer origin.Close()
 	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
-	var o observer
-	p, err := proxy.Listen("", policy.Observe, []string{host}, nil, o.observe)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer p.Close()
-	roots := x509.NewCertPool()
-	roots.AddCert(origin.Certificate())
-	p.TrustUpstream(roots)
 	paths := map[string][]string{host: {"/a/*"}}
-	ca, err := proxy.NewCA("test", p.Terminating(nil, paths, nil))
-	if err != nil {
-		t.Fatal(err)
+	open := func(t *testing.T, mode policy.Mode, allow []string) (*proxy.Proxy, *observer, func(string) (int, string, error)) {
+		t.Helper()
+		o := &observer{}
+		p, err := proxy.Listen("", mode, allow, nil, o.observe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { p.Close() })
+		roots := x509.NewCertPool()
+		roots.AddCert(origin.Certificate())
+		p.TrustUpstream(roots)
+		ca, err := proxy.NewCA("test", p.Terminating(nil, paths, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Terminate(ca, nil, paths, nil)
+		trusted := x509.NewCertPool()
+		trusted.AppendCertsFromPEM(ca.PEM())
+		return p, o, terminated(t, p, net.JoinHostPort(host, port), trusted)
 	}
-	p.Terminate(ca, nil, paths, nil)
-	trusted := x509.NewCertPool()
-	trusted.AppendCertsFromPEM(ca.PEM())
-	send := terminated(t, p, net.JoinHostPort(host, port), trusted)
-	if code, body, err := send("/b/x"); err != nil || code != 200 {
-		t.Fatalf("under observe: %d %q %v", code, body, err)
-	}
-	if d := o.last(t); d.Path != "/b/x" || !d.Allowed || d.Mode != policy.Observe {
-		t.Errorf("under observe the request was recorded as %+v", d)
-	}
-	p.SetPolicy(policy.Enforce, []string{host}, nil, map[string][]string{host: {"/a/*"}}, nil)
-	code, body, err := send("/b/x")
-	if err != nil || code != 403 || !strings.Contains(body, "denied by policy (mode enforce)") {
-		t.Errorf("under enforce: %d %q %v", code, body, err)
-	}
-	if d := o.last(t); d.Path != "/b/x" || d.Allowed || d.Outcome != proxy.Refused || d.Mode != policy.Enforce {
-		t.Errorf("under enforce the request was recorded as %+v", d)
-	}
+
+	t.Run("observe to enforce", func(t *testing.T) {
+		p, o, send := open(t, policy.Observe, nil)
+		if code, body, err := send("/b/x"); err != nil || code != 200 {
+			t.Fatalf("under observe: %d %q %v", code, body, err)
+		}
+		if d := o.last(t); d.Path != "/b/x" || !d.Allowed || d.Mode != policy.Observe || d.Rule != "" {
+			t.Errorf("under observe the request was recorded as %+v", d)
+		}
+		p.SetPolicy(policy.Enforce, []string{host}, nil, paths, nil)
+		if code, body, err := send("/a/x"); err != nil || code != 200 {
+			t.Fatalf("under enforce, a path the rules allow: %d %q %v", code, body, err)
+		}
+		if d := o.last(t); d.Path != "/a/x" || !d.Allowed || d.Mode != policy.Enforce || d.Rule != host {
+			t.Errorf("under enforce the allowed request was recorded as %+v", d)
+		}
+		code, body, err := send("/b/x")
+		if err != nil || code != 403 || !strings.Contains(body, "denied by policy (mode enforce)") {
+			t.Errorf("under enforce: %d %q %v", code, body, err)
+		}
+		if d := o.last(t); d.Path != "/b/x" || d.Allowed || d.Outcome != proxy.Refused || d.Mode != policy.Enforce || d.Rule != host {
+			t.Errorf("under enforce the refused request was recorded as %+v", d)
+		}
+	})
+
+	t.Run("enforce to observe", func(t *testing.T) {
+		p, o, send := open(t, policy.Enforce, []string{host})
+		if code, body, err := send("/a/x"); err != nil || code != 200 {
+			t.Fatalf("under enforce: %d %q %v", code, body, err)
+		}
+		if d := o.last(t); !d.Allowed || d.Mode != policy.Enforce || d.Rule != host {
+			t.Errorf("under enforce the request was recorded as %+v", d)
+		}
+		p.SetPolicy(policy.Observe, nil, nil, paths, nil)
+		if code, body, err := send("/a/x"); err != nil || code != 200 {
+			t.Fatalf("under observe: %d %q %v", code, body, err)
+		}
+		if d := o.last(t); !d.Allowed || d.Mode != policy.Observe || d.Rule != "" {
+			t.Errorf("under observe the request was recorded as %+v", d)
+		}
+	})
+
+	t.Run("a host the reload denies, before the connection closes", func(t *testing.T) {
+		p, o, send := open(t, policy.Enforce, []string{host})
+		if code, body, err := send("/a/x"); err != nil || code != 200 {
+			t.Fatalf("under enforce: %d %q %v", code, body, err)
+		}
+		before := o.count()
+		p.StoreRules(policy.Enforce, nil)
+		code, body, err := send("/a/x")
+		if err != nil || code != 403 || !strings.Contains(body, "denied by policy (mode enforce)") {
+			t.Errorf("after the rules deny the host: %d %q %v", code, body, err)
+		}
+		if n := o.count() - before; n != 1 {
+			t.Errorf("the refused request was recorded %d times", n)
+		}
+		if d := o.last(t); d.Method != "HTTPS" || d.Path != "/a/x" || d.Allowed || d.Outcome != proxy.Refused || d.Mode != policy.Enforce || d.Rule != "" || d.PathRule != "" {
+			t.Errorf("the refused request was recorded as %+v", d)
+		}
+	})
 }
 
 // TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt pins a model provider's two
