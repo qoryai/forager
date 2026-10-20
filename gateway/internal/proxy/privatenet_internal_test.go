@@ -149,8 +149,9 @@ func refusal(host string) string {
 // TestTheGuardsErrorForAPrivateAddressStartsWithTheFix pins the guard's error for a
 // private network address, the address an IPv6 address carries named as the IPv4
 // address, and that a named host passes. An address in 64:ff9b:1::/48 with this
-// machine's or a private network address at one of its four positions is named as
-// dialled, as a private network address: 64:ff9b:1::808:808 reads 0.0.0.0 at three.
+// machine's or a private network address at one of its four positions, and no
+// link-local or metadata address at any, is named as dialled, as a private network
+// address: 64:ff9b:1::808:808 reads 0.0.0.0 at two positions and 0.0.0.8 at a third.
 func TestTheGuardsErrorForAPrivateAddressStartsWithTheFix(t *testing.T) {
 	p, err := Listen("", policy.Observe, nil, nil, nil)
 	if err != nil {

@@ -274,8 +274,8 @@ func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*
 // read as an address is refused, never dialled unjudged. An address that carries an
 // IPv4 address ([carried]) is also judged by that IPv4 address, and refused where it
 // would be. An address with more than one position for it is judged by each, and when
-// one of them is this machine's or a private network address, the address as dialled
-// is refused as a private network address.
+// one of them is this machine's or a private network address and none is a link-local
+// or metadata address, the address as dialled is refused as a private network address.
 func (p *Proxy) guard(ctx context.Context, address string) error {
 	if !p.guarded.Load() {
 		return nil
@@ -544,12 +544,12 @@ func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
 // another one now, or none, is closed as well and not recorded, since nothing was
 // denied: the next connection carries what the new policy selects. So is a connection
 // to a host whose path rules are other ones now: the next connection is held to the
-// new rules. A host whose path rules are equal keeps its connections for that reason.
-// A guarded proxy also closes, without a record, the tunnels to a host for which the
-// new policy no longer opens this machine's addresses and the private network
-// addresses ([rules.opens]), and every connection dialled for that host, idle or in
-// use: the next one is judged by the guard under the new policy. A host that keeps its opening, or
-// keeps none, loses none of its connections for that reason.
+// new rules. A host whose path rules are equal loses none of its connections for that
+// reason. A guarded proxy also closes, without a record, the tunnels to a host for
+// which the new policy no longer opens this machine's addresses and the private
+// network addresses ([rules.opens]), and every connection dialled for that host, idle
+// or in use: the next one is judged by the guard under the new policy. A host that
+// keeps its opening, or keeps none, loses none of its connections for that reason.
 func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	return p.SetPolicyOpening(mode, nil, allow, deny, allow, paths, creds)
 }
