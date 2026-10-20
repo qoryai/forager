@@ -479,17 +479,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
-- A run's certificate authority has name constraints: it is good only for the names the
-  proxy terminates when the run starts and the names under them, and for the addresses
-  it terminates. A `*.` entry permits the name under it, so `*.example.com` also covers
-  `example.com`; an IPv4 address is a /32 and an IPv6 address a /128. With no address
-  every address is excluded. With no name only `invalid` is permitted, a name that
-  never resolves, and a reload adds no name. A program that checks the constraints
-  rejects a certificate the key makes for any other host. A reload that sets a
-  credential or path rules for a host outside them fails with `start a new run to set a
-  credential on <host>` or `start a new run to set path rules on <host>`, and the
-  policy in force stays; before, the reload put it in force. A certificate for an
-  address has no common name.
+- A certificate the proxy makes for an IP address has no common name; before, its
+  common name was the address.
 - A reload that brings tools, path rules or an image to a run without a wall fails, and
   the policy in force stays. Before, a reload's path rules for such a run were dropped
   from the policy, and its credentials failed it.

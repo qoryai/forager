@@ -86,12 +86,11 @@ func TestAToolIsHandedWhatThePathRuleLetThrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	paths, tools := map[string][]string{toolHost: {"/media/acme/shop/*"}}, []proxy.Tool{{Name: "files", Hosts: []string{toolHost}, Socket: sock}}
-	ca, err := proxy.NewCA("test", p.Terminating(nil, paths, tools))
+	ca, err := proxy.NewCA("test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, nil, paths, tools)
+	p.Terminate(ca, nil, map[string][]string{toolHost: {"/media/acme/shop/*"}}, []proxy.Tool{{Name: "files", Hosts: []string{toolHost}, Socket: sock}})
 	if got := p.Terminated(); len(got) != 1 || got[0] != toolHost {
 		t.Errorf("the terminated hosts are %v", got)
 	}
@@ -197,12 +196,11 @@ func TestUnderObserveAToolGetsNoRuleForAPathNoneCovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	paths, tools := map[string][]string{toolHost: {"/media/acme/shop/*"}}, []proxy.Tool{{Name: "files", Hosts: []string{toolHost}, Socket: sock}}
-	ca, err := proxy.NewCA("test", p.Terminating(nil, paths, tools))
+	ca, err := proxy.NewCA("test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, nil, paths, tools)
+	p.Terminate(ca, nil, map[string][]string{toolHost: {"/media/acme/shop/*"}}, []proxy.Tool{{Name: "files", Hosts: []string{toolHost}, Socket: sock}})
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())
 	proxyURL, _ := url.Parse(p.URL())
@@ -247,12 +245,12 @@ func TestTheSessionCannotSpeakForTheProxyToATool(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	paths := map[string][]string{toolHost: {"/media/acme/shop/*"}}
-	tools := []proxy.Tool{{Name: "files", Hosts: []string{"*.tools.internal"}, Socket: sock}}
-	ca, err := proxy.NewCA("test", p.Terminating(nil, paths, tools))
+	ca, err := proxy.NewCA("test")
 	if err != nil {
 		t.Fatal(err)
 	}
+	paths := map[string][]string{toolHost: {"/media/acme/shop/*"}}
+	tools := []proxy.Tool{{Name: "files", Hosts: []string{"*.tools.internal"}, Socket: sock}}
 	p.Terminate(ca, nil, paths, tools)
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())

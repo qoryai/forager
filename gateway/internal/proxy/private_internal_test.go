@@ -34,7 +34,7 @@ func TestAPatternSetsNoKeyOnALocalName(t *testing.T) {
 		{"an exact x.local entry", []string{"x.local"}, "Bearer " + key, "model"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			up, err := upstreamCA()
+			up, err := NewCA("upstream")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -62,12 +62,11 @@ func TestAPatternSetsNoKeyOnALocalName(t *testing.T) {
 			roots := x509.NewCertPool()
 			roots.AppendCertsFromPEM(up.PEM())
 			p.TrustUpstream(roots)
-			creds := []Credential{{Name: "model", Hosts: c.hosts, Scheme: "bearer", Token: func() string { return key }}}
-			ca, err := NewCA("test", p.Terminating(creds, nil, nil))
+			ca, err := NewCA("test")
 			if err != nil {
 				t.Fatal(err)
 			}
-			p.Terminate(ca, creds, nil, nil)
+			p.Terminate(ca, []Credential{{Name: "model", Hosts: c.hosts, Scheme: "bearer", Token: func() string { return key }}}, nil, nil)
 
 			// The session trusts the run's authority and, for a tunnel, the origin's.
 			trusted := x509.NewCertPool()
@@ -144,16 +143,15 @@ func TestTerminatedLeavesOutACredentialPatternForNoHost(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer p.Close()
+			ca, err := NewCA("test")
+			if err != nil {
+				t.Fatal(err)
+			}
 			var tools []Tool
 			if c.tools != nil {
 				tools = []Tool{{Name: "tool", Hosts: c.tools, Socket: "/nonexistent.sock"}}
 			}
-			creds := []Credential{{Name: "model", Hosts: c.creds, Scheme: "bearer", Token: func() string { return "x" }}}
-			ca, err := NewCA("test", p.Terminating(creds, c.paths, tools))
-			if err != nil {
-				t.Fatal(err)
-			}
-			p.Terminate(ca, creds, c.paths, tools)
+			p.Terminate(ca, []Credential{{Name: "model", Hosts: c.creds, Scheme: "bearer", Token: func() string { return "x" }}}, c.paths, tools)
 			if got := p.Terminated(); !slices.Equal(got, c.want) {
 				t.Errorf("Terminated() = %q, want %q", got, c.want)
 			}

@@ -20,7 +20,7 @@ import (
 // credential, also when the session's Connection header lists the proxy's mark, and a
 // request to a terminated host without a credential arrives over HTTP/2, as before.
 func TestARequestThatCarriesACredentialGoesOverHTTP1(t *testing.T) {
-	up, err := NewCA("upstream", []string{"key.example", "marked.example", "other.example"})
+	up, err := NewCA("upstream")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,13 +47,12 @@ func TestARequestThatCarriesACredentialGoesOverHTTP1(t *testing.T) {
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(up.PEM())
 	p.TrustUpstream(roots)
-	creds := []Credential{{Name: "key", Hosts: []string{"key.example", "marked.example"}, Scheme: "bearer", Token: func() string { return "fake-key-0001" }}}
-	paths := map[string][]string{"other.example": {"/*"}}
-	ca, err := NewCA("test", p.Terminating(creds, paths, nil))
+	ca, err := NewCA("test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, creds, paths, nil)
+	p.Terminate(ca, []Credential{{Name: "key", Hosts: []string{"key.example", "marked.example"}, Scheme: "bearer", Token: func() string { return "fake-key-0001" }}},
+		map[string][]string{"other.example": {"/*"}}, nil)
 
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())
@@ -92,7 +91,7 @@ func TestARequestThatCarriesACredentialGoesOverHTTP1(t *testing.T) {
 // Rejected, also when the session's Connection header lists the proxy's mark, which
 // takes the mark off the request before the answer is read.
 func TestA401ToAKeyedRequestStartsTheRenewalWhateverItsConnectionHeader(t *testing.T) {
-	up, err := NewCA("upstream", []string{"key.example"})
+	up, err := NewCA("upstream")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +116,7 @@ func TestA401ToAKeyedRequestStartsTheRenewalWhateverItsConnectionHeader(t *testi
 	rejected := 0
 	creds := []Credential{{Name: "key", Hosts: []string{"key.example"}, Scheme: "bearer", Token: func() string { return "fake-key-0001" },
 		Rejected: func() { mu.Lock(); rejected++; mu.Unlock() }}}
-	ca, err := NewCA("test", p.Terminating(creds, nil, nil))
+	ca, err := NewCA("test")
 	if err != nil {
 		t.Fatal(err)
 	}

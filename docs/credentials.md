@@ -67,11 +67,6 @@ A credential's secret comes from one of three sources:
   header table (HPACK) keeps a copy of the secret. Other requests may use HTTP/2.
 - When the run ends, the gateway closes every idle connection to a credential's host.
   While the run goes on, a connection idle for 90 seconds closes.
-- The authority's certificate has name constraints: it is good only for the names the
-  proxy terminates when the run starts and the names under them (`*.example.com` also
-  covers `example.com`), and for the addresses it terminates. A program that checks
-  them rejects a certificate the key makes for any other host. A reload that sets a
-  credential or path rules for a host outside them fails; start a new run for it.
 - A placeholder has the value `qory-sets-the-credential-outside-the-enclosure`. A model
   key's placeholder contains the key's name, such as
   `qory-model-sets-the-credential-outside-the-enclosure` for the key `model`. The proxy

@@ -68,12 +68,11 @@ func proxyOf(t *testing.T, r *run.Run, sock string) (*proxy.Proxy, func() proxy.
 	if sides := r.NodePaths(); len(sides) > 0 {
 		px.NodePaths(sides...)
 	}
-	tools := []proxy.Tool{{Name: "host", Hosts: []string{pathHost}, Socket: sock}}
-	ca, err := proxy.NewCA(runID, px.Terminating(nil, pol.Policy.Egress.Paths, tools))
+	ca, err := proxy.NewCA(runID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	px.Terminate(ca, nil, pol.Policy.Egress.Paths, tools)
+	px.Terminate(ca, nil, pol.Policy.Egress.Paths, []proxy.Tool{{Name: "host", Hosts: []string{pathHost}, Socket: sock}})
 	return px, func() proxy.Decision {
 		mu.Lock()
 		defer mu.Unlock()

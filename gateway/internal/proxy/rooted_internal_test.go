@@ -34,7 +34,7 @@ type origins struct {
 func newOrigins(t *testing.T) *origins {
 	t.Helper()
 	o := &origins{}
-	up, err := upstreamCA()
+	up, err := NewCA("upstream")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,12 +124,11 @@ func rootedProxy(t *testing.T) (*Proxy, *dials, *decisions, *origins, *CA) {
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(o.up.PEM())
 	p.TrustUpstream(roots)
-	paths := map[string][]string{"key.example": {"/*"}, "127.0.0.2": {"/*"}, "vault": {"/*"}}
-	ca, err := NewCA("test", p.Terminating(nil, paths, nil))
+	ca, err := NewCA("test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, nil, paths, nil)
+	p.Terminate(ca, nil, map[string][]string{"key.example": {"/*"}, "127.0.0.2": {"/*"}, "vault": {"/*"}}, nil)
 	return p, rec, seen, o, ca
 }
 

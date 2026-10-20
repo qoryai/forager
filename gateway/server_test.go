@@ -3,10 +3,13 @@ package gateway_test
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -16,6 +19,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -432,29 +436,73 @@ func TestTheGatewayReloadsARun(t *testing.T) {
 	}
 }
 
-// TestAReloadSetsNoCredentialOutsideTheRunsAuthority pins the run's authority, good
-// only for the hosts terminated when the run started: a reload with the same hosts is
-// put in force, one that selects a credential for another host fails, the user is
-// told, and the policy and the credentials in force stay.
-func TestAReloadSetsNoCredentialOutsideTheRunsAuthority(t *testing.T) {
-	t.Setenv("GATEWAY_TEST_A_KEY", "a-value")
-	t.Setenv("GATEWAY_TEST_B_KEY", "b-value")
+// TestAReloadTerminatesAHostTheRunDidNotTerminateAtItsStart pins a reload that brings
+// path rules and a credential for a host the proxy did not terminate when the run
+// started: the reload is put in force, and the next connection to that host is
+// terminated under the run's authority, gets the credential, and is held to the path
+// rules. The run starts with a credential on a.example alone; the reload adds one on
+// localhost, the one name that reaches an origin on this machine, with the path rule
+// /allowed/*.
+func TestAReloadTerminatesAHostTheRunDidNotTerminateAtItsStart(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_A_KEY", "fake-a-value-0001")
+	t.Setenv("GATEWAY_TEST_B_KEY", "fake-b-value-0002")
+	certFile, keyFile, roots := testCertificate(t, t.TempDir())
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var got []string
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization"))
+		mu.Unlock()
+		io.WriteString(w, "origin")
+	}))
+	origin.Config.ErrorLog = log.New(io.Discard, "", 0)
+	origin.TLS = &tls.Config{Certificates: []tls.Certificate{pair}}
+	origin.StartTLS()
+	defer origin.Close()
+	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+
 	creds := []gateway.Credential{
 		{Name: "a", Env: "GATEWAY_TEST_A_KEY", Hosts: []string{"a.example"}, Scheme: "bearer"},
-		{Name: "b", Env: "GATEWAY_TEST_B_KEY", Hosts: []string{"b.example"}, Scheme: "bearer"},
+		{Name: "b", Env: "GATEWAY_TEST_B_KEY", Hosts: []string{"localhost"}, Scheme: "bearer"},
 	}
+	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"a.example", "localhost"}}}
 	c := newControl(t)
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"}]}`, 'a')
-	h := start(t, gateway.Config{Server: c.server(), Credentials: creds})
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","localhost"]},"credentials":[{"name":"a"}]}`, 'a')
+	cfg := gateway.Config{Server: c.server(), Credentials: creds, Policy: node}
+	gateway.SetUpstreamRoots(&cfg, roots)
+	h := start(t, cfg)
 	a := h.open(server.LinkRunRequest{Wall: true})
 	runID := a.RunID
 	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
 		t.Fatalf("the first batch: %+v", d)
 	}
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example"]},"credentials":[{"name":"a"}]}`, 'b')
+	trusted := x509.NewCertPool()
+	trusted.AppendCertsFromPEM([]byte(a.CertificateAuthority))
+	agent := relay(h.g.Addr(), a.ProxySecret)
+	agent.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: trusted}
+	get := func(path string) (*http.Response, error) {
+		resp, err := agent.Get("https://localhost:" + port + path)
+		if err == nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+		return resp, err
+	}
+	// Before the reload the proxy passes localhost's TLS through, so the origin's
+	// certificate fails under the run's authority alone.
+	var unknown x509.UnknownAuthorityError
+	if _, err := get("/allowed/x"); !errors.As(err, &unknown) {
+		t.Fatalf("before the reload, a connection to localhost: %v, want an unknown authority", err)
+	}
+
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","localhost"],"paths":{"localhost":["/allowed/*"]}},"credentials":[{"name":"a"},{"name":"b"}]}`, 'b')
 	h.post(logged(runID))
 	var reloaded *server.LinkReloadAnswer
-	eventually(t, "the reload with the same hosts", func() bool {
+	eventually(t, "the reload", func() bool {
 		h.post(heartbeat(runID))
 		r, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
 		if err == nil && r.Digest != a.Digest {
@@ -466,83 +514,31 @@ func TestAReloadSetsNoCredentialOutsideTheRunsAuthority(t *testing.T) {
 	if d := h.post(applied(runID, reloaded.Applied)); !d.Accepted() {
 		t.Errorf("the reload's policy_applied: %+v", d)
 	}
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"},{"name":"b"}]}`, 'c')
-	h.post(logged(runID))
-	line := "start a new run to set a credential on b.example; the run's certificate covers only the hosts it terminated when it started and the names under them; the policy in force stays"
-	eventually(t, "the refused reload's report", func() bool {
-		h.post(heartbeat(runID))
-		return h.reported(line)
-	})
-	again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
-	if err != nil || again.Digest != reloaded.Digest {
-		t.Errorf("after a refused reload: %v %+v", err, again)
+	if got, want := gateway.Tokens(h.g, runID), map[string]string{"a": "fake-a-value-0001", "b": "fake-b-value-0002"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("after the reload the proxy sets %v, want %v", got, want)
 	}
-	if got, want := gateway.Tokens(h.g, runID), map[string]string{"a": "a-value"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("after a refused reload the proxy sets %v, want %v", got, want)
+	resp, err := get("/allowed/x")
+	if err != nil {
+		t.Fatalf("the allowed path after the reload: %v", err)
 	}
-	// Path rules for another host: refused as well, with their own text.
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"],"paths":{"b.example":["/v1/*"]}},"credentials":[{"name":"a"}]}`, 'd')
-	h.post(logged(runID))
-	line = "start a new run to set path rules on b.example; the run's certificate covers only the hosts it terminated when it started and the names under them; the policy in force stays"
-	eventually(t, "the refused reload's report of path rules", func() bool {
-		h.post(heartbeat(runID))
-		return h.reported(line)
-	})
-	if again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID); err != nil || again.Digest != reloaded.Digest {
-		t.Errorf("after a refused reload of path rules: %v %+v", err, again)
+	if resp.StatusCode != http.StatusOK || resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		t.Fatalf("the allowed path after the reload: %d", resp.StatusCode)
 	}
-	h.post(exited(runID))
-	h.close()
-}
-
-// TestARefusedReloadStopsTheRenewalsItStarted pins the credentials a reload outside the
-// run's authority resolved: their renewals stop when it is refused. The adapter of b,
-// which only the refused reload selects, answers a token that expires in 5 minutes and
-// 1 second, so a renewal that went on would ask it again once the 30 seconds between
-// two askings pass.
-func TestARefusedReloadStopsTheRenewalsItStarted(t *testing.T) {
-	dir := t.TempDir()
-	token := filepath.Join(dir, "a-token")
-	if err := os.WriteFile(token, []byte("a-value"), 0o600); err != nil {
-		t.Fatal(err)
+	if leaf := resp.TLS.PeerCertificates[0]; leaf.VerifyHostname("localhost") != nil || !slices.Equal(leaf.DNSNames, []string{"localhost"}) {
+		t.Errorf("the leaf for localhost has the names %q", leaf.DNSNames)
 	}
-	asked := filepath.Join(dir, "b-asked")
-	adapter := filepath.Join(dir, "b-adapter")
-	expires := time.Now().Add(5*time.Minute + time.Second).UTC().Format(time.RFC3339)
-	script := "#!/bin/sh\necho asked >> '" + asked + "'\n" +
-		`printf '{"version":1,"token":"b-value","expires_at":"` + expires + `","apply":[{"hosts":["b.example"],"scheme":"bearer"}]}\n'` + "\n"
-	if err := os.WriteFile(adapter, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	resp, err = get("/other")
+	if err != nil {
+		t.Fatalf("the other path after the reload: %v", err)
 	}
-	creds := []gateway.Credential{
-		{Name: "a", File: token, Hosts: []string{"a.example"}, Scheme: "bearer"},
-		{Name: "b", Adapter: []string{adapter}, Hosts: []string{"b.example"}},
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("the other path after the reload: %d, want %d", resp.StatusCode, http.StatusForbidden)
 	}
-	c := newControl(t)
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"}]}`, 'a')
-	h := start(t, gateway.Config{Server: c.server(), Credentials: creds})
-	a := h.open(server.LinkRunRequest{Wall: true})
-	runID := a.RunID
-	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
-		t.Fatalf("the first batch: %+v", d)
+	mu.Lock()
+	if want := []string{"GET /allowed/x Bearer fake-b-value-0002"}; !slices.Equal(got, want) {
+		t.Errorf("the origin got %q, want %q", got, want)
 	}
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"},{"name":"b"}]}`, 'b')
-	h.post(logged(runID))
-	eventually(t, "the refused reload's report", func() bool {
-		h.post(heartbeat(runID))
-		return h.reported("start a new run to set a credential on b.example")
-	})
-	count := func() int {
-		b, _ := os.ReadFile(asked)
-		return strings.Count(string(b), "asked")
-	}
-	if n := count(); n != 1 {
-		t.Fatalf("b's adapter was asked %d times by the reload, want 1", n)
-	}
-	time.Sleep(35 * time.Second)
-	if n := count(); n != 1 {
-		t.Errorf("b's adapter was asked %d times; the refused reload's renewal went on", n)
-	}
+	mu.Unlock()
 	h.post(exited(runID))
 	h.close()
 }

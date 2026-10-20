@@ -137,7 +137,7 @@ func maskedProxy(t *testing.T) (*http.Client, *decisions, func() []echoed) {
 // to the plain echo origin.
 func maskedProxyIn(t *testing.T, mode policy.Mode) (*http.Client, *Proxy, *decisions, func() []echoed) {
 	t.Helper()
-	up, err := NewCA("upstream", []string{"bearer.example", "basic.example", "plain.example"})
+	up, err := NewCA("upstream")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,17 +154,15 @@ func maskedProxyIn(t *testing.T, mode policy.Mode) (*http.Client, *Proxy, *decis
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(up.PEM())
 	p.TrustUpstream(roots)
-	value := []byte(fakeKey)
-	creds := []Credential{
-		{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Value: func() []byte { return slices.Clone(value) }, Stored: true},
-		{Name: "basic", Hosts: []string{"basic.example"}, Scheme: "basic", Username: "x-access-token", Token: func() string { return fakeToken }},
-	}
-	paths := map[string][]string{"plain.example": {"/*"}}
-	ca, err := NewCA("test", p.Terminating(creds, paths, nil))
+	ca, err := NewCA("test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, creds, paths, nil)
+	value := []byte(fakeKey)
+	p.Terminate(ca, []Credential{
+		{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Value: func() []byte { return slices.Clone(value) }, Stored: true},
+		{Name: "basic", Hosts: []string{"basic.example"}, Scheme: "basic", Username: "x-access-token", Token: func() string { return fakeToken }},
+	}, map[string][]string{"plain.example": {"/*"}}, nil)
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())
 	proxyURL, _ := url.Parse(p.URL())
@@ -275,7 +273,7 @@ func TestAPlainRequestToAKeyedHostIsRefusedBeforeItsPath(t *testing.T) {
 		}
 		creds := []Credential{{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Token: func() string { return fakeKey }}}
 		paths := map[string][]string{"bearer.example": {"/ok/*"}}
-		ca, err := NewCA("test", p.Terminating(creds, paths, nil))
+		ca, err := NewCA("test")
 		if err != nil {
 			t.Fatal(err)
 		}

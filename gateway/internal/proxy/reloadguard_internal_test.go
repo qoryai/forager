@@ -51,7 +51,7 @@ func newGuardedName(t *testing.T, mode policy.Mode, first, allow []string, origi
 	roots.AppendCertsFromPEM(upstream.PEM())
 	p.TrustUpstream(roots)
 	g.paths = map[string][]string{"db.corp.example": {"/*"}}
-	ca, err := NewCA("test", p.Terminating(nil, g.paths, nil))
+	ca, err := NewCA("test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func newGuardedName(t *testing.T, mode policy.Mode, first, allow []string, origi
 // tlsOrigin is a TLS server for db.corp.example under its own authority.
 func tlsOrigin(t *testing.T, h http.Handler) (*httptest.Server, *CA) {
 	t.Helper()
-	up, err := NewCA("upstream", []string{"db.corp.example"})
+	up, err := NewCA("upstream")
 	if err != nil {
 		t.Fatal(err)
 	}

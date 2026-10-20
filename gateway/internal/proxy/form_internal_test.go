@@ -95,12 +95,11 @@ func formProxy(t *testing.T, mode policy.Mode, allow, deny []string) (*Proxy, *d
 	t.Cleanup(func() { p.Close() })
 	rec := &dials{plain: plain.Listener.Addr().String(), secure: secure.Listener.Addr().String()}
 	p.dial = rec.dial
-	paths := map[string][]string{"key.example": {"/*"}}
-	ca, err := NewCA("test", p.Terminating(nil, paths, nil))
+	ca, err := NewCA("test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, nil, paths, nil)
+	p.Terminate(ca, nil, map[string][]string{"key.example": {"/*"}}, nil)
 	return p, rec, seen
 }
 
