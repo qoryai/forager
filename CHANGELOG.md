@@ -522,25 +522,35 @@ release may change what an existing document does, and says so under Upgrading.
   Compute Classic), `fd00:ec2::254` (AWS over IPv6), `fd20:ce::254` (Google Cloud
   over IPv6), `168.63.129.16` (Azure WireServer), `fd00:ec2::23` (AWS EKS Pod
   Identity Agent over IPv6), `fd00:a9fe:a9fe::1` (Akamai over IPv6) and `fd00:42::42`
-  (Scaleway over IPv6), and an IPv6 address that contains one of these IPv4 addresses
-  in its last 32 bits (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`). An exact
-  `egress.allow` entry of the node's policy does not open them. The guard's error for
-  one reads "Use another host: the gateway refuses the cloud metadata address
-  <address>". The errors for a host that does not read as an address, for a
-  link-local address and for the machine's address end "the gateway refuses it",
-  where they ended "the wall refuses it", and the error for the machine's address
-  reads "no allow entry lists the host by name", where it read "no allow entry names
-  the host". A `403` page for a refused address ends "the gateway reaches either only
-  for such a host, and never a link-local or cloud metadata address". Before, a request
-  to `100.100.100.200` was dialled.
+  (Scaleway over IPv6), and an IPv6 address that contains one of these IPv4
+  addresses: in its last 32 bits (`::/96`, `::ffff:0:0/96`, `::ffff:0:0:0/96`,
+  `64:ff9b::/96`), in bits 16 to 47 (`2002::/16`, 6to4), or at a position RFC 6052
+  defines for one after a prefix of 48, 56, 64 or 96 bits (`64:ff9b:1::/48`,
+  local-use NAT64). An exact `egress.allow` entry of the node's policy does not open
+  them. The guard's error for one reads "Use another host: the gateway refuses the
+  cloud metadata address <address>". The errors for a host that does not read as an
+  address, for a link-local address and for the machine's address end "the gateway
+  refuses it", where they ended "the wall refuses it", and the error for the machine's
+  address reads "no allow entry lists the host by name", where it read "no allow
+  entry names the host". A `403` page for a refused address ends "the gateway reaches
+  either only for such a host, and never a link-local or cloud metadata address".
+  Before, a request to `100.100.100.200` was dialled.
 - Behind a wall, and behind a separate gateway, the gateway's proxy dials a private
-  network address, in `10/8`, `172.16/12`, `192.168/16`, `100.64/10` or `fc00::/7`,
-  only for a host that an `egress.allow` entry of the node's policy lists by name and
-  that the run's policy allows, as it dials the gateway's machine. The same holds for
-  an IPv6 address that contains an IPv4 address of those ranges in its last 32 bits
-  (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`), and for a name that resolves to such an
-  address. A refused connection is recorded with the rule `wall:own-address` and
-  answered with the guard's `403`. The guard's error reads "List the host by name in
+  network address, in `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `0/8`,
+  `198.18/15`, `240/4`, `fc00::/7` or `fec0::/10`, only for a host that an
+  `egress.allow` entry of the node's policy lists by name and that the run's policy
+  allows, as it dials the gateway's machine. `240/4` includes the broadcast address
+  `255.255.255.255`. The same holds for an IPv6 address that contains an IPv4 address
+  of those ranges: in its last 32 bits (`::/96`, `::ffff:0:0/96`, `::ffff:0:0:0/96`,
+  `64:ff9b::/96`), in bits 16 to 47 (`2002::/16`, 6to4), or at a position RFC 6052
+  defines for one after a prefix of 48, 56, 64 or 96 bits (`64:ff9b:1::/48`, local-use
+  NAT64). The same holds as well for a name that resolves to such an address. An
+  address in `64:ff9b:1::/48` is refused where any of the four IPv4 addresses in it
+  would be: `64:ff9b:1::808:808`, with `8.8.8.8` at the 96-bit position, is refused
+  for a host not listed by name, since the other three positions contain addresses in
+  `0/8`.
+  A refused connection is recorded with the rule `wall:own-address` and answered with
+  the guard's `403`. The guard's error reads "List the host by name in
   the allow list of the node's policy: <address> is a private network address, and
   the gateway dials one only for a host listed there by name". A run without a wall
   whose gateway runs on the session's machine is not changed. Before, the proxy

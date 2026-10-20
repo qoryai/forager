@@ -161,6 +161,13 @@ Two flags change one run:
 
 ## The guard
 
+In this section, an IPv6 address contains an IPv4 address in its last 32 bits in
+`::/96`, `::ffff:0:0/96`, `::ffff:0:0:0/96` and `64:ff9b::/96`, and in bits 16 to 47 in
+`2002::/16` (6to4). An address in `64:ff9b:1::/48` (local-use NAT64) contains one at
+each of the four positions RFC 6052 defines for an IPv4 address after a prefix of 48,
+56, 64 or 96 bits, and the guard refuses the address where any of the four would be
+refused.
+
 Behind a wall or behind a separate gateway, the proxy is guarded:
 
 - It never dials link-local addresses, the cloud metadata service among them, or these
@@ -183,14 +190,13 @@ Behind a wall or behind a separate gateway, the proxy is guarded:
     <https://www.scaleway.com/en/developers/api/instance/>
 
   It also refuses an IPv6 address that contains `100.100.100.200`, `192.0.0.192` or
-  `168.63.129.16` in its last 32 bits (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`).
+  `168.63.129.16`.
 - It dials the node itself, and a private network address in `10/8`, `172.16/12`,
-  `192.168/16`, `100.64/10` or `fc00::/7`, only for a host that an `egress.allow`
-  entry of the node's policy lists by its name, and that the run's policy allows. A
-  `*.` entry above that host is not enough, and an entry of a server's policy never
-  opens the node or a private network address. The same holds for an IPv6 address that
-  contains an IPv4 address of those ranges in its last 32 bits (`::/96`,
-  `::ffff:0:0:0/96`, `64:ff9b::/96`).
+  `192.168/16`, `100.64/10`, `0/8`, `198.18/15`, `240/4`, `fc00::/7` or `fec0::/10`,
+  only for a host that an `egress.allow` entry of the node's policy lists by its name,
+  and that the run's policy allows. A `*.` entry above that host is not enough, and an
+  entry of a server's policy never opens the node or a private network address. The
+  same holds for an IPv6 address that contains an IPv4 address of those ranges.
 
 The node's policy is the one the command passes, `gateway.Config.Policy` in Go. In
 `qory` it is the `gateway.egress` section of `~/.config/qory/forager.yaml`.

@@ -3765,7 +3765,15 @@ starving a machine, not an agent inside.
 
 The proxy is part of the list, because it dials from outside on behalf of what is
 inside: behind a wall or behind a separate gateway it is **guarded**, and what is on Forager's machine or
-a private network is not reached by default. Two rules, in either mode, observe included:
+a private network is not reached by default.
+
+An IPv6 address contains an IPv4 address in its last 32 bits in `::/96` (other than
+`::1` and `::`), `::ffff:0:0/96`, `::ffff:0:0:0/96` and `64:ff9b::/96`, and in bits 16
+to 47 in `2002::/16` (6to4). An address in `64:ff9b:1::/48` (local-use NAT64) contains
+one at each of the four positions RFC 6052 defines for an IPv4 address after a prefix
+of 48, 56, 64 or 96 bits, with bits 64 to 71 skipped.
+
+Two rules, in either mode, observe included:
 
 - The link-local range, where a cloud keeps its metadata service, is refused whatever
   the allow list contains. So are the metadata addresses outside that range:
@@ -3773,11 +3781,10 @@ a private network is not reached by default. Two rules, in either mode, observe 
   `fd00:ec2::254` (AWS, over IPv6), `fd20:ce::254` (Google Cloud, over IPv6),
   `168.63.129.16` (Azure WireServer), `fd00:ec2::23` (AWS EKS Pod Identity Agent, over
   IPv6), `fd00:a9fe:a9fe::1` (Akamai, over IPv6) and `fd00:42::42` (Scaleway, over
-  IPv6), and an IPv6 address that contains one of the three IPv4 addresses in its last
-  32 bits
-  (`::/96`, `::ffff:0:0:0/96`, `64:ff9b::/96`).
+  IPv6), and an IPv6 address that contains one of the three IPv4 addresses.
 - Forager's machine, loopback and every address it has, and the private network
-  ranges `10/8`, `172.16/12`, `192.168/16`, `100.64/10` and `fc00::/7` are refused
+  ranges `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `0/8`, `198.18/15`, `240/4`,
+  `fc00::/7` and `fec0::/10` are refused
   unless an `egress.allow` entry of the node's policy lists the host itself and the
   run's policy allows the host. A `*.` suffix over it does not count, and neither does a name a
   harness declares under such a suffix, an entry of a server's `security_policy` or a
@@ -3792,9 +3799,9 @@ a private network is not reached by default. Two rules, in either mode, observe 
   enclosure.
 
 An address is judged as itself, an IPv6 address without its zone, and one that does not
-read is refused. An address in `::/96` (other than `::1` and `::`), `::ffff:0:0:0/96`
-or `64:ff9b::/96` is also judged by the IPv4 address in its last 32 bits, and refused
-where that address would be.
+read is refused. An IPv6 address that contains an IPv4 address is also judged by that
+IPv4 address, and refused where that address would be. An address in `64:ff9b:1::/48`
+is refused where any of the four IPv4 addresses it contains would be.
 
 A refusal the proxy can make without resolving, a literal address or `localhost`, is a
 `denied` `dev.qory.run.egress` with the rule `wall:own-address` and a `403`; a name that

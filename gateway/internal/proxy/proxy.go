@@ -273,7 +273,7 @@ func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*
 // address is judged as itself, an IPv6 address without its zone, and one that does not
 // read as an address is refused, never dialled unjudged. An address that carries an
 // IPv4 address ([carried]) is also judged by that IPv4 address, and refused where it
-// would be.
+// would be; an address with more than one position for it, by each.
 func (p *Proxy) guard(ctx context.Context, address string) error {
 	if !p.guarded.Load() {
 		return nil
@@ -289,8 +289,19 @@ func (p *Proxy) guard(ctx context.Context, address string) error {
 	if err := judge(ctx, host, ip); err != nil {
 		return err
 	}
-	if v4 := carried(ip); v4 != nil {
-		return judge(ctx, v4.String(), v4)
+	// A link-local or metadata address first, which no name opens: the error for one
+	// is the error it gets inside 64:ff9b::/96, whatever the other positions read.
+	inside := carried(ip)
+	opened := context.WithValue(ctx, namedKey{}, true)
+	for _, v4 := range inside {
+		if err := judge(opened, v4.String(), v4); err != nil {
+			return err
+		}
+	}
+	for _, v4 := range inside {
+		if err := judge(ctx, v4.String(), v4); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -310,28 +321,44 @@ func judge(ctx context.Context, host string, ip net.IP) error {
 	return nil
 }
 
-// carriers are the IPv6 ranges whose addresses the guard also judges by the IPv4
-// address in their last 32 bits: ::/96, the IPv4-compatible addresses; ::ffff:0:0:0/96,
-// the IPv4-translated ones; and 64:ff9b::/96, the well-known NAT64 prefix. An IPv4
-// address mapped into IPv6 is judged as IPv4 already.
-var carriers = []netip.Prefix{
-	netip.MustParsePrefix("::/96"),
-	netip.MustParsePrefix("::ffff:0:0:0/96"),
-	netip.MustParsePrefix("64:ff9b::/96"),
+// carriers are the IPv6 ranges whose addresses the guard also judges by an IPv4 address
+// inside them, each with the bytes of the address that IPv4 address is read from:
+//   - ::/96, the IPv4-compatible addresses; ::ffff:0:0:0/96, the IPv4-translated ones;
+//     and 64:ff9b::/96, the well-known NAT64 prefix: the last 32 bits.
+//   - 2002::/16, 6to4 (RFC 3056): bits 16 to 47.
+//   - 64:ff9b:1::/48, the local-use NAT64 prefix (RFC 8215): each position RFC 6052,
+//     section 2.2, defines for an IPv4 address after a prefix of 48, 56, 64 or 96 bits,
+//     with bits 64 to 71, the u octet, skipped.
+//
+// An IPv4 address mapped into IPv6, ::ffff:0:0/96, is judged as IPv4 already.
+var carriers = []struct {
+	prefix netip.Prefix
+	at     [][4]int
+}{
+	{netip.MustParsePrefix("::/96"), [][4]int{{12, 13, 14, 15}}},
+	{netip.MustParsePrefix("::ffff:0:0:0/96"), [][4]int{{12, 13, 14, 15}}},
+	{netip.MustParsePrefix("64:ff9b::/96"), [][4]int{{12, 13, 14, 15}}},
+	{netip.MustParsePrefix("2002::/16"), [][4]int{{2, 3, 4, 5}}},
+	{netip.MustParsePrefix("64:ff9b:1::/48"), [][4]int{{6, 7, 9, 10}, {7, 9, 10, 11}, {9, 10, 11, 12}, {12, 13, 14, 15}}},
 }
 
-// carried is the IPv4 address in the last 32 bits of ip when ip is in one of
-// [carriers], or nil. :: and ::1 carry none: they are this machine's as they are.
-func carried(ip net.IP) net.IP {
+// carried are the IPv4 addresses inside ip, one per position, when ip is in one of
+// [carriers], or none. :: and ::1 carry none: they are this machine's as they are.
+func carried(ip net.IP) []net.IP {
 	a, ok := netip.AddrFromSlice(ip)
 	if !ok || !a.Is6() || a.Is4In6() || a.IsUnspecified() || a.IsLoopback() {
 		return nil
 	}
-	for _, r := range carriers {
-		if r.Contains(a) {
-			b := a.As16()
-			return net.IPv4(b[12], b[13], b[14], b[15])
+	b := a.As16()
+	for _, c := range carriers {
+		if !c.prefix.Contains(a) {
+			continue
 		}
+		out := make([]net.IP, 0, len(c.at))
+		for _, at := range c.at {
+			out = append(out, net.IPv4(b[at[0]], b[at[1]], b[at[2]], b[at[3]]))
+		}
+		return out
 	}
 	return nil
 }
@@ -697,13 +724,20 @@ func metadata(ip net.IP) bool {
 
 // privateRanges are the private network ranges a guarded proxy dials only for one of
 // the guard's names: 10/8, 172.16/12 and 192.168/16 (RFC 1918), 100.64/10, the shared
-// address space (RFC 6598), and fc00::/7, the unique local IPv6 addresses (RFC 4193).
+// address space (RFC 6598), 0/8, "this network" (RFC 791), 198.18/15, the benchmarking
+// range (RFC 2544), 240/4, the reserved range with the broadcast address in it
+// (RFC 1112), fc00::/7, the unique local IPv6 addresses (RFC 4193), and fec0::/10, the
+// site-local IPv6 addresses (RFC 3879).
 var privateRanges = []netip.Prefix{
 	netip.MustParsePrefix("10.0.0.0/8"),
 	netip.MustParsePrefix("172.16.0.0/12"),
 	netip.MustParsePrefix("192.168.0.0/16"),
 	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
 	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fec0::/10"),
 }
 
 // private reports whether ip is in one of [privateRanges]. An IPv4 address mapped into

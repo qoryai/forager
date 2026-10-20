@@ -71,19 +71,22 @@ func (r *resolvingDial) take() []string {
 }
 
 // TestTheWallDialsAPrivateAddressOnlyForAGuardName pins that behind a wall a private
-// network address, 10/8, 172.16/12, 192.168/16, 100.64/10 or fc00::/7, is refused by the
-// wall's rule, in either mode, with the guard's 403, recorded as refused and never
-// connected, unless one of the guard's names is the host itself and the allow list
-// allows it: then it is connected. That holds for a literal address, for a name the
-// hosts file or a name server resolves to one, and for an IPv6 address that carries one
-// in its last 32 bits. A *. guard name over the host opens nothing.
+// network address, 10/8, 172.16/12, 192.168/16, 100.64/10, 0/8, 198.18/15, 240/4,
+// fc00::/7 or fec0::/10, is refused by the wall's rule, in either mode, with the guard's
+// 403, recorded as refused and never connected, unless one of the guard's names is the
+// host itself and the allow list allows it: then it is connected. That holds for a
+// literal address, for a name the hosts file or a name server resolves to one, and for
+// an IPv6 address that contains one: in its last 32 bits, in 6to4 and in the local-use
+// NAT64 prefix. A *. guard name over the host opens nothing.
 func TestTheWallDialsAPrivateAddressOnlyForAGuardName(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "origin") }))
 	defer origin.Close()
 	file := &hostsEntries{names: map[string][]netip.Addr{
-		"nas":    {netip.MustParseAddr("192.168.1.20")},
-		"nat64":  {netip.MustParseAddr("64:ff9b::a01:203")},
-		"compat": {netip.MustParseAddr("::ac10:505")},
+		"nas":     {netip.MustParseAddr("192.168.1.20")},
+		"nat64":   {netip.MustParseAddr("64:ff9b::a01:203")},
+		"compat":  {netip.MustParseAddr("::ac10:505")},
+		"sixto4":  {netip.MustParseAddr("2002:c0a8:114::")},
+		"local64": {netip.MustParseAddr("64:ff9b:1:808:8:808:a01:203")},
 	}}
 	resolved := map[string][]netip.Addr{
 		"svc.corp.example.": {netip.MustParseAddr("100.64.1.1")},
@@ -92,7 +95,8 @@ func TestTheWallDialsAPrivateAddressOnlyForAGuardName(t *testing.T) {
 	// An IPv6 address that carries an IPv4 one is not in canonical form as a host, so
 	// the hosts file gives it.
 	for _, host := range []string{"10.1.2.3", "172.16.5.5", "192.168.1.20", "100.64.1.1", "fd12::5",
-		"nas", "nat64", "compat", "svc.corp.example", "v6.corp.example"} {
+		"0.1.2.3", "198.18.0.5", "240.0.0.5", "fec0::5", "2002:a00:1::",
+		"nas", "nat64", "compat", "sixto4", "local64", "svc.corp.example", "v6.corp.example"} {
 		authority := net.JoinHostPort(host, "80")
 		for _, j := range []struct {
 			name    string
@@ -154,12 +158,18 @@ func TestTheGuardsErrorForAPrivateAddressStartsWithTheFix(t *testing.T) {
 	p.Guard(nil)
 	named := context.WithValue(context.Background(), namedKey{}, true)
 	for address, shown := range map[string]string{
-		"10.0.0.1":        "10.0.0.1",
-		"fd12::5":         "fd12::5",
-		"64:ff9b::a00:1":  "10.0.0.1",
-		"::ffff:0:c0a8:1": "192.168.0.1",
-		"::6440:1":        "100.64.0.1",
-		"fd12::5%eth0":    "fd12::5%eth0",
+		"10.0.0.1":                  "10.0.0.1",
+		"fd12::5":                   "fd12::5",
+		"64:ff9b::a00:1":            "10.0.0.1",
+		"::ffff:0:c0a8:1":           "192.168.0.1",
+		"::6440:1":                  "100.64.0.1",
+		"fd12::5%eth0":              "fd12::5%eth0",
+		"0.1.2.3":                   "0.1.2.3",
+		"198.18.0.1":                "198.18.0.1",
+		"240.0.0.1":                 "240.0.0.1",
+		"fec0::1":                   "fec0::1",
+		"2002:a00:1::":              "10.0.0.1",
+		"64:ff9b:1:808:8:808:a00:1": "10.0.0.1",
 	} {
 		err := p.guard(context.Background(), net.JoinHostPort(address, "80"))
 		var ge *guardError
@@ -169,6 +179,40 @@ func TestTheGuardsErrorForAPrivateAddressStartsWithTheFix(t *testing.T) {
 		}
 		if err := p.guard(named, net.JoinHostPort(address, "80")); err != nil {
 			t.Errorf("%s named: %v, want it let through", address, err)
+		}
+	}
+}
+
+// TestTheGuardsErrorForAnAddressIn6to4OrLocalNAT64 pins that a link-local or cloud
+// metadata address inside 2002::/16 or 64:ff9b:1::/48 gets the guard's error that the
+// same address gets inside 64:ff9b::/96, named or not, also when another position of
+// the address reads an address that a name opens.
+func TestTheGuardsErrorForAnAddressIn6to4OrLocalNAT64(t *testing.T) {
+	p, err := Listen("", policy.Observe, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.Guard(nil)
+	named := context.WithValue(context.Background(), namedKey{}, true)
+	for address, old := range map[string]string{
+		"2002:a9fe:a9fe::":               "64:ff9b::a9fe:a9fe",
+		"64:ff9b:1:a9fe:a9:fe08:808:808": "64:ff9b::a9fe:a9fe",
+		"64:ff9b:1:8a9:fe:a9fe:808:808":  "64:ff9b::a9fe:a9fe",
+		"64:ff9b:1:808:a9:fea9:fe08:808": "64:ff9b::a9fe:a9fe",
+		"64:ff9b:1::a9fe:a9fe":           "64:ff9b::a9fe:a9fe",
+		"2002:6464:64c8::":               "64:ff9b::6464:64c8",
+		"64:ff9b:1:6464:64:c808:808:808": "64:ff9b::6464:64c8",
+		"64:ff9b:1:808:8:808:6464:64c8":  "64:ff9b::6464:64c8",
+	} {
+		want := p.guard(context.Background(), net.JoinHostPort(old, "80"))
+		if want == nil {
+			t.Fatalf("%s: let through", old)
+		}
+		for _, ctx := range []context.Context{context.Background(), named} {
+			if err := p.guard(ctx, net.JoinHostPort(address, "80")); err == nil || err.Error() != want.Error() {
+				t.Errorf("%s (named %v): %v, want %q", address, ctx == named, err, want)
+			}
 		}
 	}
 }
