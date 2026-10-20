@@ -821,3 +821,61 @@ func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 		})
 	}
 }
+
+// TestTheSettingsCopyKeepsNoCredentialHelper pins that, beside an OAuth start key, the
+// run's settings.json keeps none of apiKeyHelper, awsAuthRefresh, awsCredentialExport,
+// gcpAuthRefresh and modelOverrides from the --settings file: Claude Code ranks the
+// key helper's output above CLAUDE_CODE_OAUTH_TOKEN, and the others set cloud
+// credentials or model ids. Without a start key the copy keeps them.
+func TestTheSettingsCopyKeepsNoCredentialHelper(t *testing.T) {
+	helpers := map[string]any{
+		"apiKeyHelper":        "/bin/echo sk-fake-helper-key",
+		"awsAuthRefresh":      "/bin/true",
+		"awsCredentialExport": "/bin/true",
+		"gcpAuthRefresh":      "/bin/true",
+		"modelOverrides":      map[string]any{"claude-fake": "fake-provider-model"},
+	}
+	for _, c := range []struct {
+		name  string
+		hosts []map[string]any
+		kept  bool
+	}{
+		{"oauth start key", []map[string]any{apiKey("model", "anthropic-messages", modelEndpoint, "oauth")}, false},
+		{"no start key", nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			passed := filepath.Join(t.TempDir(), "launch-settings.json")
+			doc := map[string]any{"permissions": map[string]any{"allow": []string{"Bash"}}}
+			for k, v := range helpers {
+				doc[k] = v
+			}
+			if err := os.WriteFile(passed, must(json.Marshal(doc)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			sp.Args = []string{"--settings", passed}
+			answering(g, c.hosts, nil)
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+			var got map[string]any
+			if err := json.Unmarshal(b, &got); err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range helpers {
+				v, ok := got[name]
+				switch {
+				case c.kept && string(must(json.Marshal(v))) != string(must(json.Marshal(want))):
+					t.Errorf("%s is %v, want %v", name, v, want)
+				case !c.kept && ok:
+					t.Errorf("%s is %v in the run's settings.json", name, v)
+				}
+			}
+			if got["permissions"] == nil || got["hooks"] == nil {
+				t.Errorf("settings.json without the launch's permissions or the hooks:\n%s", b)
+			}
+		})
+	}
+}

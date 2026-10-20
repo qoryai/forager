@@ -100,12 +100,14 @@ release may change what an existing document does, and says so under Upgrading.
   still set to the bundle's path, even one of `model.keys`: one of `Spec.CAEnv`
   without a wall, one of `CAEnv` of `wall.Docker` behind one. The session drops every
   variable of `model.keys` and the endpoint variable from the `env` object of the
-  `--settings` file, which Claude Code applies; a value in Claude Code's other settings
-  files can still reach it. Without a wall, a launch that passes `--settings` more than
-  once, or ends in a bare `--settings`, gives Claude Code a settings file the session
-  does not copy, so its `env` is not filtered. A descriptor without a `model` section, a
-  format it lists no key for, and an auth no key of that format has are
-  `run_configuration_invalid`.
+  `--settings` file, which Claude Code applies, and the file's top-level `apiKeyHelper`,
+  `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides`, which
+  set a key, cloud credentials or model ids in place of the start key; a value in Claude
+  Code's other settings files can still reach it. Without a wall, a launch that passes
+  `--settings` more than once, or ends in a bare `--settings`, gives Claude Code a
+  settings file the session does not copy, so its `env` is not filtered. A descriptor
+  without a `model` section, a format it lists no key for, and an auth no key of that
+  format has are `run_configuration_invalid`.
 - A model key's placeholder contains its name: `qory-`, the name and
   `-sets-the-credential-outside-the-enclosure`, such as
   `qory-model-sets-the-credential-outside-the-enclosure`, `link.KeyPlaceholder` in Go.
@@ -745,6 +747,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- The `claude-settings` installer copied the top-level `apiKeyHelper`,
+  `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides` of
+  the `--settings` file into the run's `settings.json`, so in a run with a start key
+  Claude Code could send another key or cloud credential than the start key: it ranks
+  `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`. In a run with a start key the copy
+  now leaves out these five members, walled or not. Without a start key it keeps them.
 - The session wrote `preparation.sh`, and Claude Code's runtime `settings.json`,
   `approve-key.sh` and the copies of a walled launch's `--mcp-config`, `--agents` and
   system-prompt files, in place in the run directory, so a link at one of those paths

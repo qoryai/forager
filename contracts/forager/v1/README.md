@@ -819,10 +819,14 @@ with one exception (§Variables, The model endpoint): when the run has an author
 variable that points at the CA bundle is set to the bundle's path, even one of
 `model.keys`. Claude Code also applies the `env` object of a settings file: the session
 drops every variable of `model.keys` and the endpoint variable from the `env` of the
-`--settings` file, and does not read Claude Code's other settings files, so a value set
-in one of them can reach Claude Code (§Variables, The model endpoint). Without a wall, a
-launch that passes `--settings` more than once, or ends in a bare `--settings`, gives
-Claude Code a settings file the session does not copy, so its `env` is not filtered.
+`--settings` file. It also drops the file's top-level `apiKeyHelper`, `awsAuthRefresh`,
+`awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides`: Claude Code ranks
+`apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`, and the others set cloud credentials or
+a provider's model ids. The session does not read Claude Code's other settings files, so
+a value set in one of them can reach Claude Code (§Variables, The model endpoint).
+Without a wall, a launch that passes `--settings` more than once, or ends in a bare
+`--settings`, gives Claude Code a settings file the session does not copy, so its `env`
+is not filtered.
 
 For Claude Code:
 
@@ -1080,9 +1084,13 @@ these names with `model.keys`, and a walled run does not unset them. Claude Code
 applies the `env` object of a settings file. The session copies the `env` of the
 `--settings` file into the run's `settings.json` without the endpoint variable and the
 variables of `model.keys`, the start key's included, matched by exact name, and keeps
-every other member; without a start key it copies the `env` as it is. In a run whose
-image is named by its reference, a path in it is written as the enclosure sees it. The
-session does not read Claude Code's other settings files, such as
+every other member; without a start key it copies the `env` as it is. In a run with a
+start key the copy also leaves out the file's top-level `apiKeyHelper`,
+`awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides`: Claude
+Code ranks `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`, and the others set cloud
+credentials or a provider's model ids. Without a start key the copy keeps them. In a run
+whose image is named by its reference, a path in it is written as the enclosure sees it.
+The session does not read Claude Code's other settings files, such as
 `~/.claude/settings.json`, or the workspace's `.claude/settings.json`, which Claude Code
 reads unless the launch passes `--setting-sources user`. So a value of the endpoint
 variable or of a model-key variable set in one of them can reach Claude Code. Without a

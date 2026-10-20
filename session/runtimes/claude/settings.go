@@ -32,8 +32,10 @@ const maxSettings = 1 << 20
 // A file is read only when its path has no ".." name, [runtimes.Attach.Readable] passes
 // it, its last part is no link, it is a regular file, it is the file Readable judged
 // and it holds at most 1 MiB. Of its "env" object, the copy keeps no member whose
-// name is in [runtimes.Attach.ModelVariables]. In a walled launch whose last
-// argument is a bare --settings, that flag is given the path of the run's settings.
+// name is in [runtimes.Attach.ModelVariables]. In a run with a start key, the copy
+// keeps no top-level member whose name is in [credentialSettings]. In a walled launch
+// whose last argument is a bare --settings, that flag is given the path of the run's
+// settings.
 // A walled launch whose arguments pass --settings more than once is refused before
 // anything is read: Claude Code reads only the last one, so the run would start
 // without Forager's hooks and with a file that was not checked. So is a walled launch
@@ -69,6 +71,9 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 // errSettingsMoreThanOnce refuses a walled launch that passes --settings more than once.
 var errSettingsMoreThanOnce = errors.New("Pass one --settings file. This launch passes --settings more than once, " +
 	"and Claude Code reads only the last one, so the run does not start.")
+
+// credentialSettings outrank the start key: apiKeyHelper, cloud credentials, model ids.
+var credentialSettings = []string{"apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "gcpAuthRefresh", "modelOverrides"}
 
 // settingsFlag is the flag whose file or document Claude Code reads its settings from.
 const settingsFlag = "--settings"
@@ -162,6 +167,12 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		if env, ok := settings["env"].(map[string]any); ok {
 			for _, name := range model {
 				delete(env, name)
+			}
+		}
+		// model is empty without a start key.
+		if len(model) > 0 {
+			for _, name := range credentialSettings {
+				delete(settings, name)
 			}
 		}
 	}

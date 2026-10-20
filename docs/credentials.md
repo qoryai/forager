@@ -180,14 +180,17 @@ in `CAEnv` of `wall.Docker`. A nil list means `wall.DefaultCAEnv`.
 Claude Code also applies the `env` object of a settings file. The session copies the
 `env` of the `--settings` file into the run's `settings.json` without
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and
-`ANTHROPIC_BASE_URL`, and keeps the other members. In a run whose image is named by its
-reference, a path in it is written as the enclosure sees it. The session does not read
-Claude Code's other settings files, such as `~/.claude/settings.json`, or the
-workspace's `.claude/settings.json`, which Claude Code reads unless the launch passes
-`--setting-sources user`. A value set in one of them can reach Claude Code. Without a
-wall, a launch that passes `--settings` more than once, or ends in a bare `--settings`,
-gives Claude Code a settings file the session does not copy, so its `env` is not
-filtered.
+`ANTHROPIC_BASE_URL`, and keeps the other members. It also leaves out the file's
+top-level `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and
+`modelOverrides`: Claude Code ranks `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`, and
+the others set cloud credentials or a provider's model ids. In a run whose image is
+named by its reference, a path in it is written as the enclosure sees it. The session
+does not read Claude Code's other settings files, such as `~/.claude/settings.json`, or
+the workspace's `.claude/settings.json`, which Claude Code reads unless the launch
+passes `--setting-sources user`. A value set in one of them can reach Claude Code.
+Without a wall, a launch that passes `--settings` more than once, or ends in a bare
+`--settings`, gives Claude Code a settings file the session does not copy, so its `env`
+is not filtered.
 
 If the runtime reads no key for the format or the `auth`, the run stops with
 `run_configuration_invalid`.
