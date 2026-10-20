@@ -686,7 +686,7 @@ release may change what an existing document does, and says so under Upgrading.
   exactly, from the `env` object of the `--settings` file when it copies the file into
   the run's `settings.json`, walled or not: Claude Code applies that object over its
   environment, so a value there could replace the start key's variable or endpoint.
-  Without a start key the installer copies the `env` object as it is.
+  Without a start key the installer drops none of these names.
 - A run without a wall gets its credentials' placeholders, set after the environment it
   inherits, so a placeholder wins over an inherited value, which is then no
   `placeholder_conflict`. The variables the machine's credentials are read from, the run
@@ -747,6 +747,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- The `claude-settings` installer copied the `env` object of the `--settings` file
+  with the names the session leaves out of the runtime's process environment: the
+  runtime's `denies`, such as `CLAUDE_CONFIG_DIR`, and, behind a wall, its model
+  `overrides`, such as `ANTHROPIC_MODEL`. Claude Code applies that object over its
+  environment, so a value there reached it. The session now passes these names from
+  the descriptor as `runtimes.Attach.DeniedVariables`, and the installer drops each of
+  them from the copy, matched regardless of case, walled or not and with or without a
+  start key.
 - The `claude-settings` installer copied the top-level `apiKeyHelper`,
   `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides` of
   the `--settings` file into the run's `settings.json`, so in a run with a start key

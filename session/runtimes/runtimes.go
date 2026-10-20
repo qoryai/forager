@@ -91,6 +91,12 @@ type Attach struct {
 	// reach the program's environment leaves these names out of the copy. Empty when
 	// the run has no start key.
 	ModelVariables []string
+	// DeniedVariables are the runtime's denies and, behind a wall, its model
+	// overrides, from its descriptor: the names the session leaves out of the values
+	// of the server, the run, the machine and the harness's defaults, with or without
+	// a start key. A runtime that copies a file whose values reach the program's
+	// environment leaves these names out of the copy, regardless of case.
+	DeniedVariables []string
 	// Inside, when not nil, writes a path of this machine's as the enclosure sees it,
 	// in a string that may hold one: a runtime applies it to what it copies into the
 	// run directory of the caller's, so a path it names still leads where it led. The

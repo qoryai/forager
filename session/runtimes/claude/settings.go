@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/qoryai/forager/accesskey"
@@ -32,10 +33,11 @@ const maxSettings = 1 << 20
 // A file is read only when its path has no ".." name, [runtimes.Attach.Readable] passes
 // it, its last part is no link, it is a regular file, it is the file Readable judged
 // and it holds at most 1 MiB. Of its "env" object, the copy keeps no member whose
-// name is in [runtimes.Attach.ModelVariables]. In a run with a start key, the copy
-// keeps no top-level member whose name is in [credentialSettings]. In a walled launch
-// whose last argument is a bare --settings, that flag is given the path of the run's
-// settings.
+// name is in [runtimes.Attach.ModelVariables], nor one whose name is in
+// [runtimes.Attach.DeniedVariables], regardless of case. In a run with a start key,
+// the copy keeps no top-level member whose name is in [credentialSettings]. In a
+// walled launch whose last argument is a bare --settings, that flag is given the path
+// of the run's settings.
 // A walled launch whose arguments pass --settings more than once is refused before
 // anything is read: Claude Code reads only the last one, so the run would start
 // without Forager's hooks and with a file that was not checked. So is a walled launch
@@ -60,7 +62,7 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 			return runtimes.Launch{}, err
 		}
 	}
-	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.Walled)
+	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.DeniedVariables, a.Walled)
 	if err != nil {
 		return runtimes.Launch{}, err
 	}
@@ -129,7 +131,7 @@ func flagCount(args []string, flag string) int {
 }
 
 func settingsArgs(events []string, args []string, dir string, forwarder []string,
-	readable func(string) (string, error), inside func(string) string, model []string, walled bool) ([]string, error) {
+	readable func(string) (string, error), inside func(string) string, model, denied []string, walled bool) ([]string, error) {
 	settings := map[string]any{}
 	at := -1
 	for i, a := range args {
@@ -163,10 +165,15 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 			settings = insideValues(settings, inside).(map[string]any)
 		}
 		// Claude Code applies the env object to its environment, over the start key's
-		// variable and endpoint the session sets.
+		// variable and endpoint the session sets and over the names it leaves out.
 		if env, ok := settings["env"].(map[string]any); ok {
 			for _, name := range model {
 				delete(env, name)
+			}
+			for name := range env {
+				if slices.ContainsFunc(denied, func(d string) bool { return strings.EqualFold(d, name) }) {
+					delete(env, name)
+				}
 			}
 		}
 		// model is empty without a start key.

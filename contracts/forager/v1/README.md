@@ -1082,21 +1082,22 @@ gives in `Spec.CAEnv`, or `wall.DefaultCAEnv` when it is nil; `qory` is to set i
 `wall.DefaultCAEnv` when it is nil, each set to `/qory/ca-bundle.pem`. No check compares
 these names with `model.keys`, and a walled run does not unset them. Claude Code also
 applies the `env` object of a settings file. The session copies the `env` of the
-`--settings` file into the run's `settings.json` without the endpoint variable and the
-variables of `model.keys`, the start key's included, matched by exact name, and keeps
-every other member; without a start key it copies the `env` as it is. In a run with a
-start key the copy also leaves out the file's top-level `apiKeyHelper`,
-`awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides`: Claude
-Code ranks `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`, and the others set cloud
-credentials or a provider's model ids. Without a start key the copy keeps them. In a run
-whose image is named by its reference, a path in it is written as the enclosure sees it.
-The session does not read Claude Code's other settings files, such as
-`~/.claude/settings.json`, or the workspace's `.claude/settings.json`, which Claude Code
-reads unless the launch passes `--setting-sources user`. So a value of the endpoint
-variable or of a model-key variable set in one of them can reach Claude Code. Without a
-wall, a launch that passes `--settings` more than once, or ends in a bare `--settings`,
-gives Claude Code a settings file the session does not copy, so its `env` is not
-filtered.
+`--settings` file into the run's `settings.json` without the names it leaves out of the
+runtime's process environment: in every run the runtime's `denies` and, behind a wall,
+its model `overrides`, matched regardless of case, and in a run with a start key the
+endpoint variable and the variables of `model.keys`, the start key's included, matched
+by exact name. It keeps every other member. In a run with a start key the copy also
+leaves out the file's top-level `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`,
+`gcpAuthRefresh` and `modelOverrides`: Claude Code ranks `apiKeyHelper` above
+`CLAUDE_CODE_OAUTH_TOKEN`, and the others set cloud credentials or a provider's model
+ids. Without a start key the copy keeps them. In a run whose image is named by its
+reference, a path in it is written as the enclosure sees it. The session does not read
+Claude Code's other settings files, such as `~/.claude/settings.json`, or the
+workspace's `.claude/settings.json`, which Claude Code reads unless the launch passes
+`--setting-sources user`. So a value of the endpoint variable or of a model-key variable
+set in one of them can reach Claude Code. Without a wall, a launch that passes
+`--settings` more than once, or ends in a bare `--settings`, gives Claude Code a
+settings file the session does not copy, so its `env` is not filtered.
 
 In a run without a start key, the endpoint rule sets whether a value of the
 endpoint variable applies: behind a wall, and without one for a run whose answer has

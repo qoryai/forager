@@ -773,7 +773,8 @@ func (p *preparesKeys) Model() (runtimes.ModelPlaces, bool) {
 // the run's settings.json keeps no value of a Claude Code model-key variable or of
 // ANTHROPIC_BASE_URL from the env object of the --settings file, which Claude Code
 // applies over its environment, and keeps the other members and the hooks. Without a
-// start key the env object is kept as the file has it.
+// start key the model-key variables are kept, and ANTHROPIC_BASE_URL, which the
+// descriptor denies, is not.
 func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 	env := map[string]any{
 		authTokenVariable:    "sk-fake-auth-token",
@@ -788,7 +789,8 @@ func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 		want  map[string]any
 	}{
 		{"start key", []map[string]any{model()}, map[string]any{"QORY_TEST_KEPT": "kept"}},
-		{"no start key", nil, env},
+		{"no start key", nil, map[string]any{authTokenVariable: "sk-fake-auth-token", oauthVariable: "sk-fake-oauth-token",
+			apiKeyVariable: "sk-fake-api-key", "QORY_TEST_KEPT": "kept"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sp, g := specGateway(t)
@@ -875,6 +877,55 @@ func TestTheSettingsCopyKeepsNoCredentialHelper(t *testing.T) {
 			}
 			if got["permissions"] == nil || got["hooks"] == nil {
 				t.Errorf("settings.json without the launch's permissions or the hooks:\n%s", b)
+			}
+		})
+	}
+}
+
+// TestTheSettingsEnvSetsNoDeniedVariable pins that the run's settings.json keeps no
+// value of a variable Claude Code's descriptor denies, in any case, from the env object
+// of the --settings file, walled or not, and behind a wall none of a variable of its
+// model overrides either, as the session leaves those names out of the process
+// environment. Without a wall an override's value is kept.
+func TestTheSettingsEnvSetsNoDeniedVariable(t *testing.T) {
+	env := map[string]any{
+		"CLAUDE_CONFIG_DIR":        "/settings/config",
+		"anthropic_custom_headers": "X-Fake: 1",
+		"ANTHROPIC_MODEL":          "fake-model",
+		"QORY_TEST_KEPT":           "kept",
+	}
+	for _, c := range []struct {
+		name   string
+		walled bool
+		want   map[string]any
+	}{
+		{"walled", true, map[string]any{"QORY_TEST_KEPT": "kept"}},
+		{"unwalled", false, map[string]any{"ANTHROPIC_MODEL": "fake-model", "QORY_TEST_KEPT": "kept"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			if c.walled {
+				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			}
+			passed := filepath.Join(t.TempDir(), "launch-settings.json")
+			if err := os.WriteFile(passed, must(json.Marshal(map[string]any{"env": env})), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			sp.Args = []string{"--settings", passed}
+			answering(g, nil, nil)
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+			var doc struct {
+				Env map[string]any `json:"env"`
+			}
+			if err := json.Unmarshal(b, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := must(json.Marshal(doc.Env)), must(json.Marshal(c.want)); string(got) != string(want) {
+				t.Errorf("env is %s, want %s", got, want)
 			}
 		})
 	}

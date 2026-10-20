@@ -396,6 +396,21 @@ func modelOf(rt runtimes.Runtime) (runtimes.ModelPlaces, bool) {
 	return runtimes.ModelPlaces{}, false
 }
 
+// deniedVariables are rt's denies and, when walled, its model overrides, each once:
+// the names [variables.Resolve] adds to the deny list.
+func deniedVariables(rt runtimes.Runtime, walled bool) []string {
+	out := slices.Clone(secretsOf(rt).Denies)
+	if walled {
+		places, _ := modelOf(rt)
+		for _, name := range places.Overrides {
+			if !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
 // keyVariables are the variables of rt's model keys, each once.
 func keyVariables(rt runtimes.Runtime) []string {
 	places, _ := modelOf(rt)
