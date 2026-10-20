@@ -675,10 +675,10 @@ release may change what an existing document does, and says so under Upgrading.
   file. This launch passes --settings more than once, and Claude Code reads only the last
   one, so the run does not start." Before, the launch started and Claude Code read the
   last file, without Forager's hooks.
-- Set the model endpoint in the run, not in the `env` of the `--settings` file. The
-  session drops the runtime's `denies` from that `env` in every run, and Claude Code's
-  `denies` list `ANTHROPIC_BASE_URL`. Before, a run without a start key kept a value of it
-  there.
+- Give the run a model key whose `endpoint` is the model endpoint, and do not set
+  `ANTHROPIC_BASE_URL` in the `env` of the `--settings` file: the session drops the
+  runtime's `denies` from that `env` in every run, and Claude Code's `denies` list
+  `ANTHROPIC_BASE_URL`. Before, a run without a start key kept a value of it there.
 - Give a walled run's `--mcp-config`, `--agents` and system-prompt files the mode its
   wall's user can read, if that user is not the node's: a copy in the run directory has
   its file's permission bits within 0644, less the umask, so the copy of a file of mode

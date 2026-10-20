@@ -1086,12 +1086,12 @@ case, and in a run with a start key the endpoint variable and the variables of
 member. In a run with a start key the copy also leaves out the file's top-level
 `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and
 `modelOverrides`: Claude Code ranks `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`, and
-the others set cloud credentials or a provider's model ids. Without a start key the copy keeps them. In a run whose image is named by its
-reference, a path in it is written as the enclosure sees it. The session does not read
-Claude Code's other settings files, such as `~/.claude/settings.json`, or the
-workspace's `.claude/settings.json`, which Claude Code reads unless the launch passes
-`--setting-sources user`. So a value of the endpoint variable or of a model-key variable
-set in one of them can reach Claude Code.
+the others set cloud credentials or a provider's model ids. Without a start key the copy
+keeps them. In a run whose image is named by its reference, a path in it is written as
+the enclosure sees it. The session does not read Claude Code's other settings files,
+such as `~/.claude/settings.json`, or the workspace's `.claude/settings.json`, which
+Claude Code reads unless the launch passes `--setting-sources user`. So a value of the
+endpoint variable or of a model-key variable set in one of them can reach Claude Code.
 
 In a run without a start key, the endpoint rule sets whether a value of the
 endpoint variable applies: behind a wall, and without one for a run whose answer has
