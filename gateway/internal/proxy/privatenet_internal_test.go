@@ -148,7 +148,9 @@ func refusal(host string) string {
 
 // TestTheGuardsErrorForAPrivateAddressStartsWithTheFix pins the guard's error for a
 // private network address, the address an IPv6 address carries named as the IPv4
-// address, and that a named host passes.
+// address, and that a named host passes. An address in 64:ff9b:1::/48 with this
+// machine's or a private network address at one of its four positions is named as
+// dialled, as a private network address: 64:ff9b:1::808:808 reads 0.0.0.0 at three.
 func TestTheGuardsErrorForAPrivateAddressStartsWithTheFix(t *testing.T) {
 	p, err := Listen("", policy.Observe, nil, nil, nil)
 	if err != nil {
@@ -158,18 +160,22 @@ func TestTheGuardsErrorForAPrivateAddressStartsWithTheFix(t *testing.T) {
 	p.Guard(nil)
 	named := context.WithValue(context.Background(), namedKey{}, true)
 	for address, shown := range map[string]string{
-		"10.0.0.1":                  "10.0.0.1",
-		"fd12::5":                   "fd12::5",
-		"64:ff9b::a00:1":            "10.0.0.1",
-		"::ffff:0:c0a8:1":           "192.168.0.1",
-		"::6440:1":                  "100.64.0.1",
-		"fd12::5%eth0":              "fd12::5%eth0",
-		"0.1.2.3":                   "0.1.2.3",
-		"198.18.0.1":                "198.18.0.1",
-		"240.0.0.1":                 "240.0.0.1",
-		"fec0::1":                   "fec0::1",
-		"2002:a00:1::":              "10.0.0.1",
-		"64:ff9b:1:808:8:808:a00:1": "10.0.0.1",
+		"10.0.0.1":                       "10.0.0.1",
+		"fd12::5":                        "fd12::5",
+		"64:ff9b::a00:1":                 "10.0.0.1",
+		"::ffff:0:c0a8:1":                "192.168.0.1",
+		"::6440:1":                       "100.64.0.1",
+		"fd12::5%eth0":                   "fd12::5%eth0",
+		"0.1.2.3":                        "0.1.2.3",
+		"198.18.0.1":                     "198.18.0.1",
+		"240.0.0.1":                      "240.0.0.1",
+		"fec0::1":                        "fec0::1",
+		"2002:a00:1::":                   "10.0.0.1",
+		"64:ff9b:1:808:8:808:a00:1":      "64:ff9b:1:808:8:808:a00:1",
+		"64:ff9b:1::808:808":             "64:ff9b:1::808:808",
+		"64:ff9b:1:a00:0:108:808:808":    "64:ff9b:1:a00:0:108:808:808",
+		"64:ff9b:1::7f00:1":              "64:ff9b:1::7f00:1",
+		"64:ff9b:1:808:8:808:a00:1%eth0": "64:ff9b:1:808:8:808:a00:1%eth0",
 	} {
 		err := p.guard(context.Background(), net.JoinHostPort(address, "80"))
 		var ge *guardError

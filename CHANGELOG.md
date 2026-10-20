@@ -552,9 +552,11 @@ release may change what an existing document does, and says so under Upgrading.
   A refused connection is recorded with the rule `wall:own-address` and answered with
   the guard's `403`. The guard's error reads "List the host by name in
   the allow list of the node's policy: <address> is a private network address, and
-  the gateway dials one only for a host listed there by name". A run without a wall
-  whose gateway runs on the session's machine is not changed. Before, the proxy
-  dialled these addresses for any host the policy allowed.
+  the gateway dials one only for a host listed there by name". An address in
+  `64:ff9b:1::/48` with this machine's address or a private network address at one of
+  its positions gets this error too, with <address> the IPv6 address as dialled. A
+  run without a wall whose gateway runs on the session's machine is not changed.
+  Before, the proxy dialled these addresses for any host the policy allowed.
 - A run holds a copy of the path rules `gateway.Policy.Under` adds, taken and checked
   when it starts: the proxy and `ceiling_paths` keep them for the run whatever the
   caller's `Policy` holds afterwards.

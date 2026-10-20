@@ -273,7 +273,9 @@ func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*
 // address is judged as itself, an IPv6 address without its zone, and one that does not
 // read as an address is refused, never dialled unjudged. An address that carries an
 // IPv4 address ([carried]) is also judged by that IPv4 address, and refused where it
-// would be; an address with more than one position for it, by each.
+// would be. An address with more than one position for it is judged by each, and when
+// one of them is this machine's or a private network address, the address as dialled
+// is refused as a private network address.
 func (p *Proxy) guard(ctx context.Context, address string) error {
 	if !p.guarded.Load() {
 		return nil
@@ -298,8 +300,14 @@ func (p *Proxy) guard(ctx context.Context, address string) error {
 			return err
 		}
 	}
+	// Inside 64:ff9b:1::/48, a prefix for local use (RFC 8215), the refusal names the
+	// address as dialled: a position the network does not use may read 0.0.0.0 or a
+	// private address that is not the destination.
 	for _, v4 := range inside {
 		if err := judge(ctx, v4.String(), v4); err != nil {
+			if len(inside) > 1 {
+				return privateAddr(host)
+			}
 			return err
 		}
 	}
@@ -316,9 +324,14 @@ func judge(ctx context.Context, host string, ip net.IP) error {
 	case own(ip) && ctx.Value(namedKey{}) == nil:
 		return &guardError{host + " is this machine's address and no allow entry lists the host by name; the gateway refuses it"}
 	case private(ip) && ctx.Value(namedKey{}) == nil:
-		return &guardError{"List the host by name in the allow list of the node's policy: " + host + " is a private network address, and the gateway dials one only for a host listed there by name"}
+		return privateAddr(host)
 	}
 	return nil
+}
+
+// privateAddr is the guard's refusal of a private network address, written as host.
+func privateAddr(host string) error {
+	return &guardError{"List the host by name in the allow list of the node's policy: " + host + " is a private network address, and the gateway dials one only for a host listed there by name"}
 }
 
 // carriers are the IPv6 ranges whose addresses the guard also judges by an IPv4 address
