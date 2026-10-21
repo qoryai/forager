@@ -85,6 +85,10 @@ command and the image, and a `dev.qory.session.exited`, with how the session end
 runtime's exit decides `succeeded` or `failed`, and `cancelled` comes with `timeout` or
 `interrupted`. A join that is refused has only a `dev.qory.session.exited`, `failed`
 with exit code -1 and the refusal's code, such as `mount_mode_conflict`, as its reason.
+A session whose wall fails to start has its `dev.qory.session.started`, then its
+`dev.qory.session.exited`, `failed` with exit code -1 and no reason, or the refusal's
+code as its reason when the wall refused with one, such as `image_user_root`, an image
+whose user is root.
 When the run ends while a session runs, that session's `dev.qory.session.exited` comes
 right before the run's `dev.qory.run.exited`, with the same state and reason and exit
 code -1. So every `dev.qory.session.started` has its `dev.qory.session.exited`.

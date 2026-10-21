@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/internal/linktest"
+	refusals "github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/wall"
@@ -397,32 +399,53 @@ func TestAJoinAfterAReloadRecordsTheReload(t *testing.T) {
 	}
 }
 
-// prepareFailing is a wall whose Prepare fails with no code, as a pull that fails.
-type prepareFailing struct{ openWall }
-
-func (w *prepareFailing) Prepare(context.Context, wall.Request) (wall.Enclosure, error) {
-	return nil, errors.New("wall docker: pull example.com/agent:1: exit status 1")
+// prepareFailing is a wall whose Prepare fails with err: a refusal with a code, as an
+// image that runs as root, or an error with none, as a pull that fails.
+type prepareFailing struct {
+	openWall
+	err error
 }
 
-// TestAPrepareFailureFollowsTheSessionsStart pins a wall that fails to prepare with no
-// code: the join returns the error, and the record has session.started, then
-// session.exited failed with -1 and no reason.
+func (w *prepareFailing) Prepare(context.Context, wall.Request) (wall.Enclosure, error) {
+	return nil, w.err
+}
+
+// TestAPrepareFailureFollowsTheSessionsStart pins a wall that fails to prepare, with
+// a refusal's code or with none: the join returns the error, and the record and the
+// link have session.started, then session.exited failed with -1, with the refusal's
+// code as its reason, or no reason for a failure with no code.
 func TestAPrepareFailureFollowsTheSessionsStart(t *testing.T) {
-	sp, _ := specGateway(t)
-	sp.Wall, sp.Image = &prepareFailing{}, "example.com/agent:1"
-	ctx := context.Background()
-	r, err := session.Open(ctx, opened(sp))
-	if err != nil {
-		t.Fatal(err)
+	for _, c := range []struct {
+		err    error
+		reason string
+	}{
+		{refusals.New(refusals.ImageUserRoot, []string{"example.com/agent:1"}, "the image %s runs as root; a run's image runs as the wall's user", "example.com/agent:1"), refusals.ImageUserRoot},
+		{errors.New("wall docker: pull example.com/agent:1: exit status 1"), ""},
+	} {
+		sp, g := specGateway(t)
+		sp.Wall, sp.Image = &prepareFailing{err: c.err}, "example.com/agent:1"
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Join(ctx, sp.SessionSpec); !errors.Is(err, c.err) {
+			t.Errorf("%q: the join: %v", c.reason, err)
+		}
+		closed, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		startedThenExited(t, "the record", events(t, &session.Result{Dir: closed.Dir}), c.reason)
+		startedThenExited(t, "the link", g.Events(), c.reason)
 	}
-	if _, err := r.Join(ctx, sp.SessionSpec); err == nil || !strings.Contains(err.Error(), "pull example.com/agent:1") {
-		t.Errorf("the join: %v", err)
-	}
-	closed, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	evs := events(t, &session.Result{Dir: closed.Dir})
+}
+
+// startedThenExited fails the test unless evs have one session.started, then one
+// session.exited failed with -1 that its schema accepts, with reason as its reason, or
+// no reason when reason is empty.
+func startedThenExited(t *testing.T, where string, evs []map[string]any, reason string) {
+	t.Helper()
 	var order []string
 	for _, e := range evs {
 		if e["type"] == "dev.qory.session.started" || e["type"] == "dev.qory.session.exited" {
@@ -430,10 +453,21 @@ func TestAPrepareFailureFollowsTheSessionsStart(t *testing.T) {
 		}
 	}
 	if !slices.Equal(order, []string{"dev.qory.session.started", "dev.qory.session.exited"}) {
-		t.Fatalf("the record %q", order)
+		t.Fatalf("%s: %q", where, order)
 	}
 	exited := data(ofType(evs, "dev.qory.session.exited")[0])
-	if exited["state"] != "failed" || exited["exit_code"] != float64(-1) || exited["reason"] != nil {
-		t.Errorf("session.exited %v", exited)
+	want := any(reason)
+	if reason == "" {
+		want = nil
+	}
+	if exited["state"] != "failed" || exited["exit_code"] != float64(-1) || exited["reason"] != want {
+		t.Errorf("%s: session.exited %v, want failed, -1 and the reason %q", where, exited, reason)
+	}
+	schema, err := contracts.Compile("events/session.exited.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(exited); err != nil {
+		t.Errorf("%s: the session.exited does not validate: %v", where, err)
 	}
 }

@@ -121,7 +121,8 @@ release may change what an existing document does, and says so under Upgrading.
   code as `reason`, and has no `dev.qory.session.started`; the run stays open. A
   failure at the join after `dev.qory.session.started` and before the runtime starts,
   such as an image fetch or a wall's start that fails, is `failed` with `exit_code`
-  `-1` and no `reason`. When the gateway ends the run while a join with a
+  `-1` and no `reason`, or the refusal's code as `reason` when the wall refused with
+  one, such as `image_user_root`. When the gateway ends the run while a join with a
   `dev.qory.session.started` is open, the gateway writes that session's
   `dev.qory.session.exited` first, with the `state`, the `reason` and the `exit_code`
   `-1` of its `dev.qory.run.exited`; the resend of a record that ends with

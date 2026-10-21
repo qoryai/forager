@@ -120,9 +120,9 @@ func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 // dev.qory.session.exited: succeeded with exit_code 0, failed with any other exit
 // status or a signal, both with no reason, cancelled with timeout or with interrupted,
 // whatever the exit status or the signal, a refused join's, failed with -1 and a code
-// the session decides, and a failure at the join, failed with -1 and no reason, are
-// taken; any other is refused, and the run ends failed,
-// batch_refused.
+// the session decides, and a failure at the join after the session.started, failed
+// with -1 and no reason, or the wall's refusal's code, are taken; any other is refused,
+// and the run ends failed, batch_refused.
 func TestTheSessionExitedTheRuntimesExitDecides(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
@@ -135,8 +135,10 @@ func TestTheSessionExitedTheRuntimesExitDecides(t *testing.T) {
 		{map[string]any{"state": "cancelled", "exit_code": -1, "signal": "SIGTERM", "reason": "timeout"}, true},
 		{map[string]any{"state": "cancelled", "exit_code": 130, "reason": "interrupted"}, true},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "mount_mode_conflict"}, true},
-		// A failure at the join before the runtime starts.
+		// A failure at the join before the runtime starts, with no code and with the
+		// wall's refusal's.
 		{map[string]any{"state": "failed", "exit_code": -1}, true},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_user_root"}, true},
 		{map[string]any{"state": "succeeded", "exit_code": -1}, false},
 		{map[string]any{"state": "failed", "exit_code": 0}, false},
 		{map[string]any{"state": "succeeded", "exit_code": 1}, false},

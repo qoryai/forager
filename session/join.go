@@ -39,11 +39,12 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // spec the session refuses, writes nothing. A join the gateway refuses with a 403, or
 // that fails the session's checks, writes dev.qory.session.exited, failed with -1, the
 // refusal's code as its reason when the session decides that code, and duration_ms 0;
-// a refusal with a code is a [*Refusal], the wall's refusals among them. Any other
-// failure once the wall is being prepared, such as an image that cannot be fetched or
-// a wall that does not start, writes dev.qory.session.started, then
-// dev.qory.session.exited, failed with -1 and no reason. The run stays open: what
-// follows is the caller's.
+// a refusal with a code is a [*Refusal]. A failure once the wall is being prepared,
+// such as an image that runs as root, an image that cannot be fetched or a wall that
+// does not start, writes dev.qory.session.started, then dev.qory.session.exited, failed
+// with -1, with the refusal's code as its reason when the wall refused with a code the
+// session decides, and no reason otherwise. The run stays open: what follows is the
+// caller's.
 //
 // Once the runtime runs, its exit is the result and not an error. The context ending
 // stops the runtime, and so does the run being closed from outside; a runtime that
@@ -179,13 +180,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// started says dev.qory.session.started is written, and start is when.
 	started := false
 	var start time.Time
-	// fail ends a session that does not start, with its dev.qory.session.exited: the
-	// one of a refused join before dev.qory.session.started, failed with -1 and no
-	// reason after it.
+	// failWith ends a session that does not start, with its dev.qory.session.exited:
+	// the one of a refused join before dev.qory.session.started, and after it failed
+	// with -1, with reason as its reason unless reason is empty.
 	// A run the gateway closed meanwhile has the gateway's dev.qory.session.exited in
 	// its stream already: the session's goes to its record alone, with the state and
 	// the reason the run was closed with.
-	fail := func(err error) (*Result, error) {
+	failWith := func(err error, reason string) (*Result, error) {
 		if errors.Is(context.Cause(runCtx), errRunClosed) {
 			e := r.closedBy.get()
 			state, reason := recorded(e)
@@ -204,10 +205,15 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			r.refusedJoin(n, err)
 			return nil, err
 		}
-		r.write(event.SessionExited, map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": time.Since(start).Milliseconds()})
+		exited := map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": time.Since(start).Milliseconds()}
+		if reason != "" {
+			exited["reason"] = reason
+		}
+		r.write(event.SessionExited, exited)
 		r.lastExit = -1
 		return nil, err
 	}
+	fail := func(err error) (*Result, error) { return failWith(err, "") }
 	// Behind a wall, a place the session lists that contains one of Forager's files, or
 	// that a walled agent of another run still going can change, is a refused join,
 	// before anything starts. The run's entry among the walled runs still going lists
@@ -352,11 +358,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if spec.Wall != nil {
 		req := wall.Request{RunID: r.id, Image: r.img.Ref, Runtime: r.img.Runtime, Docker: r.img.Docker, RelayImage: r.relayImage, Pull: r.byReference}
 		if enclosure, err = spec.Wall.Prepare(runCtx, req); err != nil {
-			// A refusal, such as an image that runs as root, is a refused join; any
-			// other failure, such as a pull, follows the session's start.
+			// Every failure of the wall follows the session's start. A refusal's code,
+			// such as an image that runs as root, is the reason the session ended;
+			// another failure, such as a pull, has no reason.
+			sessionStarted()
 			var ref *Refusal
-			if !errors.As(err, &ref) {
-				sessionStarted()
+			if errors.As(err, &ref) && refusal.Decides(ref.Code) {
+				return failWith(err, ref.Code)
 			}
 			return fail(err)
 		}

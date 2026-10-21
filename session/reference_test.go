@@ -191,8 +191,8 @@ func refusedIn(t *testing.T, sp runSpec) map[string]any {
 
 // TestARunWhoseImageByReferenceCannotHoldDoesNotStart pins what stops a run in an image
 // by reference: an allow list that cannot be one, before the gateway hears of the run;
-// the gateway's image_not_allowed; the wall's image_user_root, a refused join recorded
-// and posted;
+// the gateway's image_not_allowed; the wall's image_user_root, after the session's
+// start, the code as the reason of its session.exited, recorded and posted;
 // and a place of the run's at /workspace, before the wall is asked.
 func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	for name, change := range map[string]func(*runSpec){
@@ -237,8 +237,8 @@ func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	if !errors.As(err, &r) || !slices.Equal(r.Names, []string{pinned}) {
 		t.Errorf("image_user_root names %v", err)
 	}
-	joinRefused(t, sp, refusals.ImageUserRoot)
-	joinRefusedOnLink(t, g, refusals.ImageUserRoot)
+	startedThenExited(t, "the record", events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)}), refusals.ImageUserRoot)
+	startedThenExited(t, "the link", g.Events(), refusals.ImageUserRoot)
 
 	sp, g = specGateway(t, "FAKE_EXIT=0")
 	byReference(g)

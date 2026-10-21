@@ -196,9 +196,9 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // with its certificate authority, and one without a policy, a reload answer with and
 // without a policy and one whose applied has ceiling_paths, a batch of a session's events without sequence, a batch of
 // a run.refused with a code the session decides, a batch of a session.exited and a run.exited
-// with timeout, two with interrupted, one of a refused join, one of a failure at the join
-// after its session.started and one of a run closed with
-// no session, a join request with and without model_credential, a join answer with and
+// with timeout, two with interrupted, one of a refused join, two of a failure at the join
+// after its session.started, with no reason and with the wall's refusal's code, and one
+// of a run closed with no session, a join request with and without model_credential, a join answer with and
 // without model_credential, and refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
