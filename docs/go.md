@@ -125,7 +125,7 @@ At each `Join` the session:
 3. records `dev.qory.session.started`, with the runtime, the command, `terminal`, the
    image and the harness's sources, and `dev.qory.run.policy_applied` with the session's
    variables, the credential variables and the harness's hosts;
-4. behind a wall, records the image step, for an image the policy names by reference,
+4. behind a wall, records the image step, when the policy's image is a reference,
    around the wall's preparation up to the image's fetch and the check of its user, and
    the wall step, `start the wall`, around the rest of the wall's start up to the
    runtime's start;
@@ -133,8 +133,10 @@ At each `Join` the session:
    returns once the gateway accepted that batch, or the run ended.
 
 A join the gateway refuses, `403`, or that fails the session's checks, ends its join
-step `failed` with `-1`, records `dev.qory.session.exited` with the refusal's code,
-`failed`, `-1` and `duration_ms` 0, and returns a `*session.Refusal`. A session that
+step `failed` with `-1` and records `dev.qory.session.exited` `failed`, `-1` and
+`duration_ms` 0. A `403`, or a check with a refusal code, gives that code as `reason`
+and returns a `*session.Refusal`. A check failure with no code has no `reason` and
+returns a plain error. A session that
 fails after `dev.qory.session.started` and before its runtime starts, at the image's
 pull or the wall's start, writes the error's text as a line of the session and of the
 step, ends the step `failed` with `-1`, and records `dev.qory.session.exited` `failed`
@@ -237,7 +239,8 @@ failed and its lines:
   run's next step number, shared with each join's steps, and returns a `*session.Step`.
   `kind` is `event.StepFetch` or `event.StepCompose`. The run's masker replaces each
   forwarder's password in `name`, and a `name` that contains `qak_` or `qrk_` is a
-  phrase in its place.
+  phrase in its place. Pass a `name` with no URL userinfo, token or other credential:
+  `StartStep` writes any other secret in `name` as given.
 - `(*session.Step).Log(b)` writes the step's lines, such as what the fetch or the
   compose prints: each line is a `dev.qory.run.log` with `stream` `stderr`, the step's
   number as `step` and no `session`, cut at 4096 bytes as a session's lines on pipes

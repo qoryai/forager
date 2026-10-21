@@ -61,7 +61,7 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 //
 // The join writes its steps, numbered on from the run's last step: the join step, join
 // session <n>, from the join request to right before dev.qory.session.started, and,
-// behind a wall, the image step, for an image the policy names by reference, and the
+// behind a wall, the image step, when the policy's image is a reference, and the
 // wall step, up to the runtime's start. A refused join ends its join step failed with
 // -1 before its dev.qory.session.exited. Join returns an error and writes nothing while
 // a host step of [Run.StartStep] is open.
@@ -213,10 +213,10 @@ func (r *Run) refusedJoin(n int, err error) {
 // session runs the session that joined as number n, from its checks to its
 // dev.qory.session.exited. joined is the join step, open: it ends succeeded with -1
 // right before dev.qory.session.started, or failed with -1 before the
-// dev.qory.session.exited of a join the session's checks refuse.
+// dev.qory.session.exited of a join that fails the session's checks.
 //
 // Behind a wall the session's start has two steps after dev.qory.session.started. The
-// image step, for an image the policy names by its reference, spans the wall's
+// image step, when the policy's image is a reference, spans the wall's
 // preparation up to the end of the image's fetch and the check of its user,
 // wall.Request.Fetched. The wall step spans the rest: the wall's networks, the
 // forwarder, the hook socket, the second check of the places and the wall's Wrap, up to
@@ -446,9 +446,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	// The wall comes before the forwarder, because it says where the forwarder must
 	// listen, and goes after everything else, because the forwarder outlives the last
-	// connection. The session starts once the wall is prepared: the image is found and
-	// the enclosure's networks exist. A failure from here on follows the session's
-	// dev.qory.session.started.
+	// connection. The session starts before the wall: dev.qory.session.started and the
+	// session's policy_applied come first, then the image and wall steps, so a failure
+	// of the wall follows the session's dev.qory.session.started.
 	var enclosure wall.Enclosure
 	// relayToken is what the wall's relay opens every connection with: the run's proxy
 	// secret on one machine; behind a separate gateway a secret of this session's

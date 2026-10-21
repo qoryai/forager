@@ -127,7 +127,7 @@ release may change what an existing document does, and says so under Upgrading.
 - Each join's steps: a `join` step, `join session <n>`, around the join request and the
   session's checks, before `dev.qory.session.started`, `failed` with `-1` for a refused
   join, before its `dev.qory.session.exited`; and behind a wall, after
-  `dev.qory.session.started`, an `image` step for an image the policy names by
+  `dev.qory.session.started`, an `image` step when the policy's image is a
   reference, with the reference as its name, around the fetch and the check of the
   image's user, and a `wall` step, `start the wall`, around the rest of the wall's
   start. A failure with no code in either step has its text as a line of the session

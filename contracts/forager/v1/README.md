@@ -310,7 +310,7 @@ them on. After step 9 it closes the wall, which removes everything it created, a
 the tools.
 `dev.qory.run.started` contains `wall`, and `dev.qory.session.started` contains `image`,
 and `image_name`, `container_runtime` and `docker` when the image is one the machine
-defines. The image's fetch, when the policy names the image by reference, and the
+defines. The image's fetch, when the policy's image is a reference, and the
 wall's start are the session's image and wall steps (§The events, Steps).
 
 When the session and the gateway are two processes, the requests of steps 3 and 8 go
@@ -1381,7 +1381,7 @@ The types, one namespace. Forager's:
 | `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
 | `dev.qory.run.started` | the run is open: the open wrote it, before the run's host work and before any session; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `host`, behind a wall `wall`; and `labels` when the caller passes any, and `about` when the caller passes one |
 | `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `preparation` when the run has a wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used |
-| `dev.qory.run.policy_applied` | right after `dev.qory.run.started`, with an empty `variables`; right after each `dev.qory.session.started`, with that session's `variables`, `credential_variables` and `harness_hosts`; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `allow_first`, `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
+| `dev.qory.run.policy_applied` | right after `dev.qory.run.started`, with an empty `variables`; right after each `dev.qory.session.started` and before the session's wall starts, also for a session whose wall then fails to start, with that session's `variables`, `credential_variables` and `harness_hosts`; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `allow_first`, `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.step_started` | a step of the run's host work started, such as a fetch or a compose; after `dev.qory.run.started`, numbered from 1 in the order the steps start (Steps, below) | `step`, `name`, `kind` |
 | `dev.qory.run.step_exited` | a step ended; one per step, after its `dev.qory.run.step_started` and after every `dev.qory.run.log` of the step | `step`, `state`, `exit_code`, `duration_ms` |
 | `dev.qory.run.log` | one per chunk of a session's output, with the session's number as `session`, or of the run's host work outside every session, which the caller writes with `stream: stderr` and no `session`, and with the step's number as `step` inside a step: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes`, `session`, `step` |
@@ -1477,12 +1477,16 @@ join or between two joins (`(*session.Run).StartStep`). Each join writes its ste
 1. **The join step**, `join`, with the name `join session <n>`, the number the gateway
    gives the next join. It spans the join request and the session's checks, and ends right
    before the session's `dev.qory.session.started`, `succeeded` with `exit_code` `-1`. A
-   refused join ends it `failed` with `-1`, then writes its `dev.qory.session.exited`
-   with the refusal's code. A session does not lie inside a join step.
-2. **The image step**, `image`, with the image's reference as its name, behind a wall whose
-   policy names the image by its reference. It comes after `dev.qory.session.started`
-   and the session's `dev.qory.run.policy_applied`, and spans the wall's preparation up
-   to the end of the image's fetch and the check of its user (§Images).
+   join the gateway refuses, or that fails the session's checks, ends it `failed` with
+   `-1`; then the session writes the join's `dev.qory.session.exited`, with the
+   refusal's code when the failure has one. A session does not lie inside a join step.
+2. **The image step**, `image`, with the image's reference as its name, behind a wall
+   when the policy's image is a reference. It comes after `dev.qory.session.started`
+   and the session's `dev.qory.run.policy_applied`. The session writes that
+   `dev.qory.run.policy_applied` right after `dev.qory.session.started` and before the
+   wall, also for a session whose wall then fails to start. The image step spans the
+   wall's preparation up to the end of the image's fetch and the check of its user
+   (§Images).
 3. **The wall step**, `wall`, with the name `start the wall`, behind every wall. It spans the
    rest of the wall's start: the wall's networks, the session's forwarder and hook
    socket, the second check of the session's places and the launch's wrapping, up to
@@ -1500,12 +1504,15 @@ a step is the exception. The gateway writes the open session's
 `dev.qory.session.exited` and the run's `dev.qory.run.exited` and nothing for the step,
 and the resend of a record that ends with `gateway_lost` does the same. So the run's
 stream has no `dev.qory.run.step_exited` for that step. The session writes that
-step's `dev.qory.run.step_exited` in `session.jsonl` alone, `cancelled` with `-1`.
+step's `dev.qory.run.step_exited` in `session.jsonl` alone, with the step's outcome.
 
 The run's masker replaces each forwarder's password in a step's `name`, and a `name`
 that contains `qak_` or `qrk_` in any case is `(a value that contains an access key
 secret)` in its place, or `(a value that contains a run key)` when it contains `qrk_`
-and no `qak_`, as `dir` of `dev.qory.session.started` is.
+and no `qak_`, as `dir` of `dev.qory.session.started` is. The caller's `name` must
+contain no URL userinfo, token or other credential: the masker replaces only the
+forwarders' passwords, and the phrase replaces only a `name` that contains `qak_` or
+`qrk_`, so any other secret in a `name` is written as given.
 
 ```json
 {"step": 1, "name": "fetch github.com/example-org/app", "kind": "fetch"}

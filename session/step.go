@@ -31,8 +31,12 @@ type Step struct {
 //
 // An error means nothing is written: the kind is not fetch or compose, the name is
 // empty, a session of the run is running, another host step is open, or the run is
-// closed. Host steps go before the first join and between joins, never during one, and
-// Join refuses to start while a host step is open.
+// closed. Host steps go before the first join and between joins, never during one: Join
+// returns an error and writes nothing while a host step is open.
+//
+// The name must contain no URL userinfo, token or other credential. The masker
+// replaces only the forwarders' passwords, and accesskey.ShownValue replaces only a
+// name that contains qak_ or qrk_; any other secret in name is written as given.
 func (r *Run) StartStep(kind, name string) (*Step, error) {
 	if kind != event.StepFetch && kind != event.StepCompose {
 		return nil, fmt.Errorf("start a host step of kind fetch or compose, not %s: Join writes the join, image and wall steps", accesskey.ShownValue(kind, true))
@@ -141,7 +145,8 @@ func (r *Run) stepName(name string) string {
 }
 
 // post writes an event to every sink, or, once the gateway closed the run, to the
-// session's record alone: the gateway takes no more of the run's events.
+// session's record alone: the gateway answers every later batch of the run with a 410
+// and writes none of its events.
 func (r *Run) post(typ string, data any) {
 	if r.closing.Err() != nil {
 		r.own(typ, data)

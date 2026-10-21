@@ -417,13 +417,13 @@ func TestAFailureAfterTheAnswerIsPosted(t *testing.T) {
 		t.Fatalf("posted %v, want %v", got, want)
 	}
 	ev := g.Events()
-	if got := data(ev[3]); got["state"] != "failed" || got["exit_code"] != float64(-1) {
+	if got := data(ofType(ev, "dev.qory.run.step_exited")[0]); got["state"] != "failed" || got["exit_code"] != float64(-1) {
 		t.Errorf("the join step's step_exited %v", got)
 	}
-	if got := data(ev[4]); got["reason"] != "variable_reserved" || got["state"] != "failed" || got["exit_code"] != float64(-1) || got["duration_ms"] != float64(0) {
+	if got := data(ofType(ev, "dev.qory.session.exited")[0]); got["reason"] != "variable_reserved" || got["state"] != "failed" || got["exit_code"] != float64(-1) || got["duration_ms"] != float64(0) {
 		t.Errorf("session.exited %v", got)
 	}
-	if got := data(ev[3]); got["reason"] != nil || got["state"] != "failed" || got["exit_code"] != float64(-1) {
+	if got := data(ofType(ev, "dev.qory.run.exited")[0]); got["reason"] != nil || got["state"] != "failed" || got["exit_code"] != float64(-1) {
 		t.Errorf("run.exited %v", got)
 	}
 }

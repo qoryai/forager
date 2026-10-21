@@ -112,10 +112,11 @@ type Request struct {
 	// digest, and refuses one whose user is root, image_user_root. Such an image never
 	// gets nested Docker.
 	Pull bool
-	// Fetched, when set, is called once from Prepare when the fetch of an image with
-	// Pull and the check of its user have passed, before the wall makes anything else:
-	// the session records the fetch as the run's image step and the rest as its wall
-	// step. A wall that fetches nothing never calls it.
+	// Fetched, when set, is called at most once, on the goroutine that calls Prepare and
+	// before Prepare returns, when the fetch of an image with Pull and the check of its
+	// user have passed, before the wall makes anything else: the session records the
+	// fetch as the run's image step and the rest as its wall step. A wall that fetches
+	// nothing never calls it.
 	Fetched func()
 }
 

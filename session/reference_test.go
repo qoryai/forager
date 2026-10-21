@@ -28,7 +28,8 @@ const pinned = "registry.example/agents/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
 // targetWall is an open wall that shows a mount at its Target, as the Docker adapter
 // does: the launch it returns starts in the workspace's directory on this machine. It
 // fetched the image, as an adapter does for a run whose image is named by reference,
-// and calls the request's Fetched then, or refuses with what refuse holds.
+// and calls the request's Fetched then, or, when refuse is set, returns refuse from
+// Prepare.
 type targetWall struct {
 	openWall
 	refuse error
