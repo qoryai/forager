@@ -30,9 +30,9 @@ import (
 // RemoteTLS is how a gateway's certificate is trusted: the full chain, for the host name
 // of the gateway's URL, against the system's roots, or, when CAFile is set, against the
 // authorities of that file alone; and, when CertificateSHA256 is set, the pin of the
-// certificate's public key besides. [Via] carries it toward a gateway that relays to the
-// server, and [NewRemoteLink] checks the chain of a separate gateway's certificate with
-// it, the zero RemoteTLS on a run's edge.
+// certificate's public key besides. [Via] has its fields for a gateway that relays to
+// the server, and [NewRemoteLink] checks the chain of a separate gateway's certificate
+// with it: on a run's edge, the TLS field of session.RemoteGateway.
 type RemoteTLS struct {
 	// CAFile is a PEM file of the authorities the gateway's certificate chains to. Set,
 	// it replaces the system's roots for this link; empty means the system's roots.
@@ -42,6 +42,13 @@ type RemoteTLS struct {
 	// "=". Set, only a certificate with that key is accepted, and its chain is still
 	// checked. Empty means no pin.
 	CertificateSHA256 string
+}
+
+// Check refuses a RemoteTLS a link cannot use: a CAFile that cannot be read or has no
+// PEM certificate, and a CertificateSHA256 not in its form. It connects to nothing.
+func (r RemoteTLS) Check() error {
+	_, err := r.config("")
+	return err
 }
 
 // pinShape is a pin's form: 32 bytes in standard base64 with padding.

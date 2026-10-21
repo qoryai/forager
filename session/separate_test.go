@@ -93,7 +93,7 @@ func TestASessionRunsBehindASeparateGateway(t *testing.T) {
 	g.SetInterval(30)
 	runID := event.NewRunID()
 	key := g.RunKey(t, runID)
-	r := newSepRun(t, session.RemoteGateway{RunKey: key})
+	r := newSepRun(t, remoteGateway(g, key))
 	r.sp.Env = append(r.sp.Env, session.EnvRunKey+"="+key)
 	res, closed, err := runClosed(context.Background(), r.sp)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestARunKeyTheSessionCannotReadIsNoRun(t *testing.T) {
 			t.Errorf("%s: a run directory %v, or the runtime started", name, entries)
 		}
 	}
-	r := newSepRun(t, session.RemoteGateway{RunKey: key})
+	r := newSepRun(t, remoteGateway(g, key))
 	r.sp.RunID = event.NewRunID()
 	if _, err := run(context.Background(), r.sp); err == nil || !strings.HasPrefix(err.Error(), "the run id "+r.sp.RunID+" is not the one QORY_RUN_KEY names, ") {
 		t.Errorf("another run id: %v", err)
@@ -187,7 +187,7 @@ func TestAGatewayThatCannotProveItsKeyStartsNoRun(t *testing.T) {
 	} {
 		g := startRemote(t)
 		g.SetProof(p)
-		r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())})
+		r := newSepRun(t, remoteGateway(g, g.RunKey(t, event.NewRunID())))
 		_, err := run(context.Background(), r.sp)
 		if want := "the gateway at " + g.URL() + " could not prove it holds a key the run key names"; err == nil || err.Error() != want {
 			t.Errorf("%s: %v, want %q", name, err, want)
@@ -205,7 +205,7 @@ func TestAnAnswerUnderAnotherKeyStartsNoRun(t *testing.T) {
 	for _, unsigned := range []bool{false, true} {
 		g := startRemote(t)
 		g.AnswerUnderUnnamedKey(t, unsigned)
-		r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())})
+		r := newSepRun(t, remoteGateway(g, g.RunKey(t, event.NewRunID())))
 		_, err := run(context.Background(), r.sp)
 		if want := "the gateway at " + g.URL() + " answered under a key the run key does not name"; err == nil || err.Error() != want {
 			t.Errorf("unsigned %v: %v, want %q", unsigned, err, want)
@@ -221,7 +221,7 @@ func TestAnAnswerUnderAnotherKeyStartsNoRun(t *testing.T) {
 func TestARemoteGatewayPrintsByItsURL(t *testing.T) {
 	g := linktest.StartRemoteFake(t)
 	key := g.RunKey(t, event.NewRunID())
-	gw := session.RemoteGateway{RunKey: key}
+	gw := remoteGateway(g, key)
 	want := "session.RemoteGateway{" + g.URL() + "}"
 	for _, out := range []string{fmt.Sprint(gw), fmt.Sprintf("%#v", gw), fmt.Sprintf("%+v", &gw), gw.String()} {
 		if out != want {
@@ -246,7 +246,7 @@ func TestAResendTakesTheSessionsRecordAlone(t *testing.T) {
 	g := linktest.StartRemoteFake(t)
 	runID := "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e71"
 	dir := filepath.Join(t.TempDir(), runID)
-	spec := session.ResendSpec{Gateway: session.RemoteGateway{RunKey: g.RunKey(t, runID)}, Dir: dir, ForagerVersion: "test"}
+	spec := session.ResendSpec{Gateway: remoteGateway(g, g.RunKey(t, runID)), Dir: dir, ForagerVersion: "test"}
 	if _, err := session.Resend(context.Background(), spec); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("no record: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestOutputLogHasNoForwarderPasswordBehindASeparateGateway(t *testing.T) {
 	g := startRemote(t)
 	g.SetInterval(30)
 	key := g.RunKey(t, event.NewRunID())
-	r := newSepRun(t, session.RemoteGateway{RunKey: key})
+	r := newSepRun(t, remoteGateway(g, key))
 	r.sp.Env = append(r.sp.Env, session.EnvRunKey+"="+key)
 	r.sp.Args = []string{"-c", `env > "$0"; env; exec "$1"`, r.envFile, os.Args[0]}
 	res, err := run(context.Background(), r.sp)

@@ -221,13 +221,12 @@ func TestARunThroughARealSeparateGateway(t *testing.T) {
 		g.Close(ctx)
 	})
 	url := "https://" + g.Addr()
-	t.Cleanup(session.TrustRemote(url, caFile))
 
 	sp := spec(t)
 	sleeps(&sp, 30*time.Second)
 	sp.Timeout = 20 * time.Second
 	sp.RunID = event.NewRunID()
-	sp.Gateway = session.RemoteGateway{RunKey: a.runKey(t, sp.RunID, url, a.key)}
+	sp.Gateway = session.RemoteGateway{RunKey: a.runKey(t, sp.RunID, url, a.key), TLS: server.RemoteTLS{CAFile: caFile}}
 	own := filepath.Join(sp.RunsDir, sp.RunID)
 	applied := func() []map[string]any {
 		return ofType(events(t, &session.Result{Dir: own}), "dev.qory.run.policy_applied")

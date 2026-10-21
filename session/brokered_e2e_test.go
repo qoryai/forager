@@ -13,6 +13,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/wall"
 )
@@ -138,9 +139,8 @@ func TestAnUnwalledRunThroughARealSeparateGatewayIsBrokered(t *testing.T) {
 		g.Close(ctx)
 	})
 	url := "https://" + g.Addr()
-	t.Cleanup(session.TrustRemote(url, caFile))
 	sp, env := brokeredSpec(t)
-	sp.Gateway = session.RemoteGateway{RunKey: a.runKey(t, sp.RunID, url, a.key)}
+	sp.Gateway = session.RemoteGateway{RunKey: a.runKey(t, sp.RunID, url, a.key), TLS: server.RemoteTLS{CAFile: caFile}}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
