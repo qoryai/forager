@@ -331,12 +331,12 @@ func TestAPlaceholderConflictPrintsAPhraseForASecret(t *testing.T) {
 				cfg := modelConfig()
 				cfg.Credentials[0].Placeholders = []string{name}
 				return cfg
-			}, " is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside"},
+			}, " is a placeholder of a credential the gateway holds outside the enclosure, and the session passes a value for it inside"},
 			"a tool": {func() run.Config {
 				cfg := toolConfig()
 				cfg.Tools[0].Placeholders = []string{name}
 				return cfg
-			}, " is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside"},
+			}, " is a placeholder of a tool the gateway starts outside the enclosure, and the session passes a value for it inside"},
 		} {
 			cfg := c.cfg()
 			cfg.Passes = func(n string) bool { return n == name }

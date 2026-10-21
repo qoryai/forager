@@ -89,6 +89,39 @@ func TestAJoinTheGatewayDoesNotAccept(t *testing.T) {
 	}
 }
 
+// TestAJoinWhileAnotherJoinIsOpen pins the join while another join of the run is open,
+// from that join's 200 until the gateway numbers its dev.qory.session.exited: 400
+// invalid_request from the gateway, numbered not, before and after the open join's
+// dev.qory.session.started; once that session exited, the next join is session 2.
+func TestAJoinWhileAnotherJoinIsOpen(t *testing.T) {
+	h := start(t, gateway.Config{})
+	a := h.open(server.LinkRunRequest{})
+	runID := a.RunID
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	h.joined(runID)
+	refused := func(when string) {
+		t.Helper()
+		var r *accesskey.Refusal
+		if _, err := h.join(runID); !errors.As(err, &r) || r.Status != http.StatusBadRequest || r.Code != "invalid_request" || r.From != "gateway" || r.Error() != "a join while another join of the run is open" {
+			t.Errorf("a join %s: %v", when, err)
+		}
+	}
+	refused("before session 1 started")
+	if d := h.post(sessionStarted(runID, 1)); !d.Accepted() {
+		t.Fatalf("session 1: %+v", d)
+	}
+	refused("while session 1 runs")
+	if d := h.post(sessionExited(runID, 1)); !d.Accepted() {
+		t.Fatalf("session 1's exit: %+v", d)
+	}
+	if n := h.joined(runID); n != 2 {
+		t.Errorf("the join after session 1 exited is session %d", n)
+	}
+	h.post(sessionStarted(runID, 2), sessionExited(runID, 2), exited(runID))
+}
+
 // TestAPlaceholderConflictFailsOnlyThatJoin pins a join whose passes contain a
 // credential's placeholder: a 403 placeholder_conflict from the gateway, numbered, so
 // the session's dev.qory.session.exited of it is taken and its
@@ -143,11 +176,13 @@ func TestAPlaceholderConflictFailsOnlyThatJoin(t *testing.T) {
 }
 
 // TestTheSessionEventsFollowTheJoins pins the batch checks of the session events,
-// each in a run of its own: a dev.qory.session.started of a number no join was given,
-// a second dev.qory.session.started of one session, a dev.qory.session.started while
-// another session runs, a dev.qory.session.exited of no join, a second one of one
-// session, and a dev.qory.run.exited while a join is open are refused, and the run
-// ends failed, batch_refused.
+// each in a run that no other case uses: a dev.qory.session.started of a number no
+// join was given, a second dev.qory.session.started of one session, one after the
+// session's dev.qory.session.exited, a dev.qory.session.exited of no join, a second one
+// of one session, and a dev.qory.run.exited while a join is open are refused, and the
+// run ends failed, batch_refused. The internal test
+// TestASessionStartedWhileAnotherJoinIsOpen pins the session.started while another
+// join is open, which the join route never lets happen.
 func TestTheSessionEventsFollowTheJoins(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
@@ -161,22 +196,22 @@ func TestTheSessionEventsFollowTheJoins(t *testing.T) {
 		{"twice", 1, func(id string) []map[string]any {
 			return []map[string]any{sessionStarted(id, 1), sessionStarted(id, 1)}
 		}, "a second session.started of one session"},
-		{"after its exit", 1, func(id string) []map[string]any {
+		{"again after its exit", 1, func(id string) []map[string]any {
 			return []map[string]any{sessionStarted(id, 1), sessionExited(id, 1), sessionStarted(id, 1)}
 		}, "a second session.started of one session"},
-		{"while another runs", 2, func(id string) []map[string]any {
-			return []map[string]any{sessionStarted(id, 1), sessionStarted(id, 2)}
-		}, "a session.started while another session runs"},
+		{"after its exit", 1, func(id string) []map[string]any {
+			return []map[string]any{sessionExited(id, 1), sessionStarted(id, 1)}
+		}, "a session.started after its session.exited"},
 		{"an exit of no join", 1, func(id string) []map[string]any { return []map[string]any{sessionExited(id, 2)} }, "a session.exited of no join the gateway numbered"},
 		{"two exits", 1, func(id string) []map[string]any {
 			return []map[string]any{sessionStarted(id, 1), sessionExited(id, 1), sessionExited(id, 1)}
 		}, "a second session.exited of one session"},
 		{"a run.exited while a session runs", 1, func(id string) []map[string]any {
 			return []map[string]any{sessionStarted(id, 1), exited(id)}
-		}, "a run.exited while a session runs"},
+		}, "a run.exited while a join is open"},
 		{"a run.exited before an open join's session started", 1, func(id string) []map[string]any {
 			return []map[string]any{exited(id)}
-		}, "a run.exited while a session runs"},
+		}, "a run.exited while a join is open"},
 	} {
 		a := h.open(server.LinkRunRequest{})
 		if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
@@ -199,7 +234,8 @@ func TestTheSessionEventsFollowTheJoins(t *testing.T) {
 // gateway while a join is open: the gateway writes that session's
 // dev.qory.session.exited, with the state and the reason of its ending and exit_code
 // -1, then the run's dev.qory.run.exited. A join the gateway answered whose session
-// has not started yet is open too, and its dev.qory.session.exited has duration_ms 0.
+// has no dev.qory.session.started gets no event: the record ends with the run's
+// dev.qory.run.exited alone.
 func TestTheGatewaysSessionExitedComesBeforeItsRunExited(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, startSession := range []bool{true, false} {
@@ -226,11 +262,12 @@ func TestTheGatewaysSessionExitedComesBeforeItsRunExited(t *testing.T) {
 		validEvents(t, rec)
 		n := len(rec)
 		s, r := rec[n-2], rec[n-1]
-		if s.Type != event.SessionExited || s.Data["session"] != 1.0 || s.Data["state"] != "failed" || s.Data["reason"] != "batch_refused" || s.Data["exit_code"] != -1.0 || s.Data["signal"] != nil {
-			t.Errorf("started %v: the gateway's session.exited %s %v", startSession, s.Type, s.Data)
-		}
-		if !startSession && s.Data["duration_ms"] != 0.0 {
-			t.Errorf("a session not started: duration %v", s.Data["duration_ms"])
+		if !startSession {
+			if want := []string{event.RunStarted, event.PolicyApplied, event.RunExited}; !slices.Equal(types(rec), want) {
+				t.Errorf("a session not started: record %v", types(rec))
+			}
+		} else if s.Type != event.SessionExited || s.Data["session"] != 1.0 || s.Data["state"] != "failed" || s.Data["reason"] != "batch_refused" || s.Data["exit_code"] != -1.0 || s.Data["signal"] != nil {
+			t.Errorf("the gateway's session.exited %s %v", s.Type, s.Data)
 		}
 		if r.Data["state"] != "failed" || r.Data["reason"] != "batch_refused" || r.Data["exit_code"] != -1.0 {
 			t.Errorf("started %v: the gateway's run.exited %v", startSession, r.Data)

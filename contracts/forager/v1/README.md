@@ -3127,13 +3127,14 @@ The answer is a `200`, `application/json`, whose body is a
   holds no model key for the run.
 
 A join is open from the gateway's `200` to it until the gateway receives the session's
-`dev.qory.session.exited`.
+`dev.qory.session.exited`. The gateway refuses a join while another join of the run is
+open.
 
 The gateway answers a join it does not accept with a code that already exists:
 
 | Status | Code | When |
 |---|---|---|
-| `400` | `invalid_request` | a body the schema refuses, a member it does not define among them; a `model_credential` that names no model key of the run; and on the local link a `run_id` of no run of this gateway's |
+| `400` | `invalid_request` | a body the schema refuses, a member it does not define among them; a `model_credential` that names no model key of the run; a join while another join of the run is open; and on the local link a `run_id` of no run of this gateway's |
 | `400` | `run_key_invalid` | behind a separate gateway, a `run_id` that is not the run key's |
 | `403` | `placeholder_conflict` | a placeholder of a credential or a tool the gateway holds for the run among `passes`; the run stays open |
 | `410` | the code of the run's end | a run that has ended, with the code and the `from` of its end at the gateway, as for a reload (The end of a run at the gateway, below) |
@@ -3220,7 +3221,8 @@ its events:
   `dev.qory.run.exited` while a join is open, from the gateway's `200` to it until the
   gateway numbers its `dev.qory.session.exited`;
 - is a `dev.qory.session.started` whose `session` is not the number of a join the
-  gateway answered `200`, or the second of one number; or a `dev.qory.session.exited`
+  gateway answered `200`, or the second of one number, or one after the
+  `dev.qory.session.exited` of its number; or a `dev.qory.session.exited`
   whose `session` is the number of no join the gateway answered `200` or `403`, or the
   second of one number; or a `dev.qory.session.started` while another session of the
   run has no `dev.qory.session.exited`;
@@ -3272,10 +3274,11 @@ record again, through `gateway.Resend`, the resend writes `dev.qory.run.exited` 
 `session_lost`, `batch_refused`, `stopped` or the starter's outcome, it writes the run's
 `dev.qory.run.exited` itself, with the state and the reason of that ending (§The events,
 How a run ends) and `exit_code: -1`, as with `session_lost`: it holds no exit status of
-the runtime's. When a join is open (Joining a session, above), the gateway first writes
-that session's `dev.qory.session.exited`, with the same `state`, `reason` and
-`exit_code: -1`, no `signal`, and `duration_ms` from the session's
-`dev.qory.session.started` to the run's end; the `dev.qory.run.exited` follows it. The
+the runtime's. When a join with a `dev.qory.session.started` is open (Joining a session,
+above), the gateway first writes that session's `dev.qory.session.exited`, with the same
+`state`, `reason` and `exit_code: -1`, no `signal`, and `duration_ms` from the session's
+`dev.qory.session.started` to the run's end; the `dev.qory.run.exited` follows it. An
+open join with no `dev.qory.session.started` gets no event. The
 gateway numbers both events into the run's stream and delivers them toward the server.
 It answers the session's next request on the link, and every one after it, with a `410`.
 Every `410` on the link is a `link-refusal.schema.json` document, its `from` what ended

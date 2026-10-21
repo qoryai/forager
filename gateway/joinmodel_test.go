@@ -3,6 +3,7 @@ package gateway_test
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
@@ -18,9 +20,11 @@ import (
 
 // TestAJoinSetsItsModelKey pins the model key the proxy sets for each session: a run
 // with the model keys first, its start key, and second, both on the endpoint's host.
-// Session 1 joins with none named and gets first; session 2 joins naming second, and
-// while it runs the proxy sets second alone, so a request with first's placeholder gets
-// no key; once session 2 exited the proxy sets first again.
+// Session 1 joins with none named and gets first; a join naming second while session 1
+// runs is a 400, and the proxy sets first until session 1's session.exited. Session 2
+// then joins naming second, and while it runs the proxy sets second alone, so a request
+// with first's placeholder gets no key; once session 2 exited the proxy sets first
+// again.
 func TestAJoinSetsItsModelKey(t *testing.T) {
 	t.Setenv("GATEWAY_TEST_FIRST_KEY", "fake-first-value-0001")
 	t.Setenv("GATEWAY_TEST_SECOND_KEY", "fake-second-value-0002")
@@ -93,6 +97,13 @@ func TestAJoinSetsItsModelKey(t *testing.T) {
 	if v := send("first"); v != "fake-first-value-0001" {
 		t.Errorf("session 1, first's placeholder: %q", v)
 	}
+	var r *accesskey.Refusal
+	if _, err := h.linkOf(runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{Passes: []string{}, ModelCredential: "second"}); !errors.As(err, &r) || r.Status != http.StatusBadRequest || r.Code != "invalid_request" {
+		t.Fatalf("join 2 while session 1 runs: %v", err)
+	}
+	if v := send("first"); v != "fake-first-value-0001" {
+		t.Errorf("session 1 after the refused join, first's placeholder: %q", v)
+	}
 	h.post(sessionExited(runID, 1))
 
 	two, err := h.linkOf(runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{Passes: []string{}, ModelCredential: "second"})
@@ -116,7 +127,7 @@ func TestAJoinSetsItsModelKey(t *testing.T) {
 	mu.Lock()
 	n := len(got)
 	mu.Unlock()
-	if n != 5 {
+	if n != 6 {
 		t.Errorf("the origin got %d requests", n)
 	}
 	if _, err := h.linkOf(runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{ModelCredential: "third"}); err == nil {

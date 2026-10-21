@@ -679,7 +679,7 @@ func TestAWalledRunWithACredential(t *testing.T) {
 	}
 	h.post(exited(u.RunID))
 	// Each message is today's session's error text.
-	want := "API_TOKEN is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside: placeholder_conflict: API_TOKEN"
+	want := "API_TOKEN is a placeholder of a credential the gateway holds outside the enclosure, and the session passes a value for it inside: placeholder_conflict: API_TOKEN"
 	body, _ := json.Marshal(server.LinkJoinRequest{Version: 1, Passes: []string{"API_TOKEN"}})
 	if status, got := h.refusalOf("/v1/run-configuration/"+a.RunID+"/sessions", string(body)); status != http.StatusForbidden || got["message"] != want {
 		t.Errorf("placeholder_conflict's message %d %q", status, got["message"])
