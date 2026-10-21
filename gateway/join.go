@@ -32,6 +32,9 @@ type join struct {
 	accepted bool
 	// passes are the names of the variables the session passes a value for.
 	passes []string
+	// model is the model key the session starts with, the join answer's; empty when
+	// the run holds none.
+	model string
 	// started and exited say the run's stream numbered the session's
 	// dev.qory.session.started and dev.qory.session.exited; startedAt is the time of
 	// the former.
@@ -145,13 +148,18 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	}
 	conflict := lr.r.Conflict(run.Passing(req.Passes))
 	lr.mu.Lock()
-	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes)}
+	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes), model: model}
 	lr.joins = append(lr.joins, j)
 	digest := lr.reloadDigest
 	lr.mu.Unlock()
 	if conflict != nil {
 		refuseOpen(w, conflict)
 		return
+	}
+	if model != "" {
+		// From the join's 200 until its session.exited the proxy sets the session's
+		// model key in place of the start key.
+		lr.px.SetModelKey(model)
 	}
 	g.answerHeaders(s, w, r, digest)
 	w.Header().Set("Content-Type", server.LinkContentType)

@@ -360,9 +360,10 @@ release may change what an existing document does, and says so under Upgrading.
   `paths` stays alone on its hosts. Two credentials whose paths overlap are no run:
   "give the credentials <a> and <b> paths that do not overlap on <host>, or claim it in
   only one of them: their paths <p> and <q> overlap".
-- A request on a host with a credential passes with no credential set when the
+- A request on a host with a credential passes with no credential set when the run
   policy's `egress.paths` for the host match it and no credential's paths do, under
-  `enforce` too.
+  `enforce` too. Every other list of path rules that lists the host, the node's or a
+  ceiling's, must match it as well.
 - `wall_required` has the names `tools`, `paths` and `image=<name>`, never
   `credentials`. Its message for tools and path rules reads "run it with a wall: the
   policy selects tools or has path rules, and without a wall a program that ignores

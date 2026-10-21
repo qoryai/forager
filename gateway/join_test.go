@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
@@ -143,8 +145,9 @@ func TestAPlaceholderConflictFailsOnlyThatJoin(t *testing.T) {
 // TestTheSessionEventsFollowTheJoins pins the batch checks of the session events,
 // each in a run of its own: a dev.qory.session.started of a number no join was given,
 // a second dev.qory.session.started of one session, a dev.qory.session.started while
-// another session runs, a dev.qory.session.exited of no join, and a second one of one
-// session are refused, and the run ends failed, batch_refused.
+// another session runs, a dev.qory.session.exited of no join, a second one of one
+// session, and a dev.qory.run.exited while a join is open are refused, and the run
+// ends failed, batch_refused.
 func TestTheSessionEventsFollowTheJoins(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
@@ -168,6 +171,12 @@ func TestTheSessionEventsFollowTheJoins(t *testing.T) {
 		{"two exits", 1, func(id string) []map[string]any {
 			return []map[string]any{sessionStarted(id, 1), sessionExited(id, 1), sessionExited(id, 1)}
 		}, "a second session.exited of one session"},
+		{"a run.exited while a session runs", 1, func(id string) []map[string]any {
+			return []map[string]any{sessionStarted(id, 1), exited(id)}
+		}, "a run.exited while a session runs"},
+		{"a run.exited before an open join's session started", 1, func(id string) []map[string]any {
+			return []map[string]any{exited(id)}
+		}, "a run.exited while a session runs"},
 	} {
 		a := h.open(server.LinkRunRequest{})
 		if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
@@ -297,4 +306,44 @@ func TestAReloadIsCheckedAgainstTheOpenJoinsPasses(t *testing.T) {
 		t.Errorf("a join after the reload: %v", err)
 	}
 	h.post(exited(runID))
+}
+
+// TestAResendEndsTheOpenSessionGatewayLost pins the resend of the record of a run whose
+// gateway stopped while session 1 ran: the record gets that session's
+// dev.qory.session.exited, failed, exit_code -1 and gateway_lost, then the run's
+// dev.qory.run.exited, and every event validates against its schema.
+func TestAResendEndsTheOpenSessionGatewayLost(t *testing.T) {
+	c := newControl(t)
+	cfg := gateway.Config{Server: c.server()}
+	gateway.SetCloseWait(&cfg, 300*time.Millisecond)
+	h := start(t, cfg)
+	a := h.open(server.LinkRunRequest{})
+	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied))
+	h.joined(a.RunID)
+	if d := h.post(sessionStarted(a.RunID, 1), logged(a.RunID)); !d.Accepted() {
+		t.Fatalf("session 1: %+v", d)
+	}
+	if _, err := h.g.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: filepath.Join(h.dir, "runs", a.RunID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Completed || r.State != "failed" || r.Reason != "gateway_lost" {
+		t.Errorf("resend %+v", r)
+	}
+	rec := h.record(a.RunID)
+	validEvents(t, rec)
+	n := len(rec)
+	if n < 2 {
+		t.Fatalf("record %v", types(rec))
+	}
+	s, e := rec[n-2], rec[n-1]
+	if s.Type != event.SessionExited || s.Data["session"] != 1.0 || s.Data["state"] != "failed" || s.Data["exit_code"] != -1.0 || s.Data["reason"] != "gateway_lost" {
+		t.Errorf("the open session ends %s %v", s.Type, s.Data)
+	}
+	if e.Type != event.RunExited || e.Data["state"] != "failed" || e.Data["exit_code"] != -1.0 || e.Data["reason"] != "gateway_lost" {
+		t.Errorf("the run ends %s %v", e.Type, e.Data)
+	}
 }

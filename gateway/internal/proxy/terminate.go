@@ -99,6 +99,19 @@ func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string,
 	p.term.Store(&terminator{p: p, ca: ca, creds: creds, paths: paths, node: p.node, tools: tools})
 }
 
+// SetModelKey sets the model key, by its name, that the proxy sets from now on: of the
+// credentials with a Placeholder, the model keys, it sets this one alone and none of
+// the others, whose values it still replaces in every answer. The gateway sets the key
+// of the session that runs, and the run's start key between sessions.
+func (p *Proxy) SetModelKey(name string) { p.model.Store(&name) }
+
+// setsModelKey reports whether the proxy sets the model key of that name: the one
+// [Proxy.SetModelKey] set, or any before it is called.
+func (p *Proxy) setsModelKey(name string) bool {
+	m := p.model.Load()
+	return m == nil || *m == name
+}
+
 // NodePaths sets the sides of path rules beside the policy's, each held apart: the
 // node's policy's when it narrows a server's, and those of a ceiling the node's policy
 // was put under. A request to a host a side lists must match an entry of it as well as
@@ -202,10 +215,15 @@ func (t *terminator) credentials(host string) []*Credential {
 
 // credentialFor is the credential of the host the proxy sets on a request for the
 // clean path: the first without paths, which covers every path, or whose paths match
-// the path. rule is the credential's path that matched, empty for one without paths.
+// the path, of the model keys only the one [Proxy.SetModelKey] set. rule is the credential's path that matched, empty for one without paths.
 // It is nil when no credential of the host matches.
 func (t *terminator) credentialFor(host, clean string) (c *Credential, rule string) {
 	for _, c := range t.credentials(host) {
+		if c.Placeholder != "" && !t.p.setsModelKey(c.Name) {
+			// A model key of the run's that is not the one the running session starts
+			// with.
+			continue
+		}
 		if c.Paths == nil {
 			return c, ""
 		}
@@ -284,8 +302,8 @@ func (t *terminator) covers(host string) bool {
 // enforce, with no rule. A path every such side matches has the narrowest entry that
 // matched as its rule. On a host with credentials, the credential whose paths match is
 // set ([terminator.credentialFor]); a path no credential's paths match gets none, and
-// passes under enforce only when a side lists the host and every side that lists it
-// matches the path. The credential is set only on a path its paths match, whatever the
+// passes under enforce only when the run policy's path rules list the host and every
+// side that lists it matches the path. The credential is set only on a path its paths match, whatever the
 // mode: observing is no reason to send a credential to a path nobody configured.
 func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule string, allowed bool, c *Credential) {
 	clean, ok := policy.CleanPath(escaped)
@@ -311,7 +329,11 @@ func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule s
 		c, r = t.credentialFor(host, clean)
 		switch {
 		case c == nil:
-			allowed = allowed && len(rules) > 0
+			// Only the run policy's path rules let a request pass with no credential;
+			// each other side that lists the host has matched it above.
+			if _, _, listed := policy.HostPaths(t.paths, host); !listed {
+				allowed, rule = false, ""
+			}
 		case rule == "":
 			rule = r
 		}

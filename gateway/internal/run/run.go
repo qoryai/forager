@@ -1106,18 +1106,16 @@ func sameSelection(a, b []policy.Selected) bool {
 	return slices.Equal(order(a), order(b))
 }
 
-// ProxyUses are held credentials as the proxy sets them. Of the model keys, the start
-// key alone, [credential.Held.Start], is among them, with its placeholder's value: the
-// gateway holds the others and sets none of them.
+// ProxyUses are held credentials as the proxy sets them, every model key among them
+// with its placeholder's value. The proxy sets one model key at a time, the one the
+// gateway names with [proxy.Proxy.SetModelKey]: the start key, [credential.Held.Start],
+// or the key a session joined with.
 func ProxyUses(held *credential.Held) []proxy.Credential {
 	if held == nil {
 		return nil
 	}
 	uses := make([]proxy.Credential, 0, len(held.Uses))
 	for _, u := range held.Uses {
-		if u.Format != "" && u.Name != held.Start {
-			continue
-		}
 		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths}
 		if u.Format != "" {
 			c.Placeholder = link.KeyPlaceholder(u.Name)

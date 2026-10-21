@@ -476,6 +476,10 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
 		authority = ca.PEM()
 	}
+	if held := r.Held(); held != nil && held.Start != "" {
+		// Before any session joins, and between sessions, the proxy sets the start key.
+		lr.px.SetModelKey(held.Start)
+	}
 	if !remote {
 		// On the one address the run key opens the run's proxy, bound to its connection.
 		secret, err := proxy.NewSecret()

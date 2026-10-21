@@ -568,6 +568,11 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			if why := closeRule(data, len(joins) > 0); why != "" {
 				return why
 			}
+			for _, j := range joins {
+				if j.open() {
+					return "a run.exited while a session runs"
+				}
+			}
 			final = true
 		case event.SessionStarted:
 			n := sessionOf(data)
@@ -666,6 +671,10 @@ func (lr *linkRun) joined(ev event.Event) {
 	j := lr.joins[n-1]
 	if ev.Type == event.SessionExited {
 		j.exited = true
+		if held := lr.r.Held(); j.accepted && j.model != "" && held != nil && held.Start != "" {
+			// The session ended: the proxy sets the start key again.
+			lr.px.SetModelKey(held.Start)
+		}
 		return
 	}
 	j.started = true

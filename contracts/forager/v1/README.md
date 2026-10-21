@@ -500,8 +500,9 @@ the credential that the proxy sets on it match it. A credential without `paths` 
 host's only credential and covers every path. Of the credentials with `paths`, the proxy
 sets the one whose paths match the request; no path of one overlaps a path of another
 (§Credentials). A request that no credential's `paths` match passes with no credential
-set when the policy's `egress.paths` for the host match it, so a public repository on a
-host whose credential is for another repository is reached with no token on its
+set when the run policy's `egress.paths` for the host match it, and every other list
+that lists the host, the node's or a ceiling's, matches it too, so a public repository
+on a host whose credential is for another repository is reached with no token on its
 requests. The comparison is exact, case
 included: on a host that ignores case this denies a spelling the host accepts,
 never the reverse, so whoever writes a path writes it as the host does. A path
@@ -629,7 +630,7 @@ closed set, `bearer`, `basic` with a `username`, `header` with a header's name; 
 adapter chooses among what the gateway implements and adds nothing to it. A credential
 with `paths` is set on those and no other, so one repository's credential does not open
 another organization's on the same host. A path that no credential of the host matches,
-such as the host's GraphQL endpoint, is reached only when the policy's `egress.paths`
+such as the host's GraphQL endpoint, is reached only when the run policy's `egress.paths`
 for the host match it, and then with no credential set (§The policy, Matching a path). A
 definition may set `hosts` and `paths` for an adapter: the most the adapter may claim.
 For `env` and `file`, which have no adapter to define the use, the definition's `hosts`,
@@ -3211,7 +3212,9 @@ its events:
   `timeout`, `interrupted` and `no_session`. A session's batch contains only the close's
   `dev.qory.run.exited`, with the caller's outcome, its time limit, its stop from where
   it was started or a close with no join, and the gateway writes the event of every
-  other reason itself (The end of a run at the gateway, below);
+  other reason itself (The end of a run at the gateway, below); or is a
+  `dev.qory.run.exited` while a join is open, from the gateway's `200` to it until the
+  gateway numbers its `dev.qory.session.exited`;
 - is a `dev.qory.session.started` whose `session` is not the number of a join the
   gateway answered `200`, or the second of one number; or a `dev.qory.session.exited`
   whose `session` is the number of no join the gateway answered `200` or `403`, or the

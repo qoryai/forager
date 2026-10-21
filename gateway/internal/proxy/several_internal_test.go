@@ -160,21 +160,31 @@ func TestAPathNoCredentialMatchesHasThePolicysRule(t *testing.T) {
 		{Name: "product", Hosts: []string{"github.com"}, Paths: []string{"/example-org/product.git/*"}},
 		{Name: "harness", Hosts: []string{"github.com"}, Paths: []string{"/operator-org/harness.git/*"}},
 	}
+	public := map[string][]string{"github.com": {"/public-org/*"}}
 	for _, c := range []struct {
 		paths      map[string][]string
+		node       map[string][]string
 		path, rule string
 		allowed    bool
 		credential string
 	}{
-		{map[string][]string{"github.com": {"/public-org/*"}}, "/public-org/tool.git/info/refs", "/public-org/*", true, ""},
-		{map[string][]string{"github.com": {"/public-org/*"}}, "/other-org/x", "", false, ""},
-		{map[string][]string{"github.com": {"/*"}}, "/operator-org/harness.git/info/refs", "/*", true, "harness"},
-		{nil, "/example-org/product.git/info/refs", "/example-org/product.git/*", true, "product"},
-		{nil, "/public-org/tool.git/info/refs", "", false, ""},
+		{public, nil, "/public-org/tool.git/info/refs", "/public-org/*", true, ""},
+		{public, nil, "/other-org/x", "", false, ""},
+		{map[string][]string{"github.com": {"/*"}}, nil, "/operator-org/harness.git/info/refs", "/*", true, "harness"},
+		{nil, nil, "/example-org/product.git/info/refs", "/example-org/product.git/*", true, "product"},
+		{nil, nil, "/public-org/tool.git/info/refs", "", false, ""},
+		// Only the run policy's rules let a path pass with no credential: the node's
+		// alone do not, and beside the run policy's they must match too.
+		{nil, public, "/public-org/tool.git/info/refs", "", false, ""},
+		{public, public, "/public-org/tool.git/info/refs", "/public-org/*", true, ""},
+		{public, map[string][]string{"github.com": {"/example-org/*"}}, "/public-org/tool.git/info/refs", "", false, ""},
 	} {
 		p, err := New(policy.Enforce, []string{"github.com"}, nil, func(Decision) {})
 		if err != nil {
 			t.Fatal(err)
+		}
+		if c.node != nil {
+			p.NodePaths(c.node)
 		}
 		p.Terminate(nil, creds, c.paths, nil)
 		_, rule, allowed, cred := p.term.Load().path("github.com", c.path, policy.Enforce)
@@ -183,7 +193,7 @@ func TestAPathNoCredentialMatchesHasThePolicysRule(t *testing.T) {
 			name = cred.Name
 		}
 		if rule != c.rule || allowed != c.allowed || name != c.credential {
-			t.Errorf("%v %s: %v with the rule %q and the credential %q, want %v with %q and %q", c.paths, c.path, allowed, rule, name, c.allowed, c.rule, c.credential)
+			t.Errorf("%v, node %v, %s: %v with the rule %q and the credential %q, want %v with %q and %q", c.paths, c.node, c.path, allowed, rule, name, c.allowed, c.rule, c.credential)
 		}
 	}
 }
