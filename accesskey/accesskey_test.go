@@ -686,12 +686,13 @@ func TestEnrolmentAnswersHaveTheirOwnDomain(t *testing.T) {
 	}
 }
 
-// codePrefixes are the four prefixes of an enrolment code and the kind each names.
+// codePrefixes are the five prefixes of an enrolment code and the kind each names.
 var codePrefixes = []struct{ prefix, kind string }{
 	{accesskey.CodePrefixNode, "node"},
 	{accesskey.CodePrefixPool, "pool"},
 	{accesskey.CodePrefixGateway, "gateway"},
 	{accesskey.CodePrefixAdapter, "adapter"},
+	{accesskey.CodePrefixRun, "run"},
 }
 
 // mixedCase returns s with every other letter in upper case, from the first.
@@ -705,12 +706,12 @@ func mixedCase(s string) string {
 	return string(b)
 }
 
-// TestCodePrefixes pins the four prefixes of an enrolment code, and that the code's
-// pattern in enrolment.schema.json allows exactly those four: qec, one of their letters,
+// TestCodePrefixes pins the five prefixes of an enrolment code, and that the code's
+// pattern in enrolment.schema.json allows exactly those five: qec, one of their letters,
 // and _.
 func TestCodePrefixes(t *testing.T) {
-	got := []string{accesskey.CodePrefixNode, accesskey.CodePrefixPool, accesskey.CodePrefixGateway, accesskey.CodePrefixAdapter}
-	if want := []string{"qecn_", "qecp_", "qecg_", "qeci_"}; !slices.Equal(got, want) {
+	got := []string{accesskey.CodePrefixNode, accesskey.CodePrefixPool, accesskey.CodePrefixGateway, accesskey.CodePrefixAdapter, accesskey.CodePrefixRun}
+	if want := []string{"qecn_", "qecp_", "qecg_", "qeci_", "qecr_"}; !slices.Equal(got, want) {
 		t.Errorf("prefixes %q; want %q", got, want)
 	}
 	letters := ""
@@ -743,7 +744,7 @@ func TestCodePrefixes(t *testing.T) {
 // or in groups, normalises to the prefix in lower case and the published characters, I
 // and L read as 1 and O as 0, the fingerprints as issued; qec_ alone, an unknown
 // prefix, U, another character, a wrong length and a third fingerprint are refused,
-// with the error naming the four prefixes when the prefix is wrong.
+// with the error listing the five prefixes when the prefix is wrong.
 func TestNormaliseCode(t *testing.T) {
 	for _, p := range codePrefixes {
 		want := p.prefix + "F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg"
@@ -771,7 +772,7 @@ func TestNormaliseCode(t *testing.T) {
 		"qecn_F1XT0RE0000000000000000000",
 	} {
 		_, err := accesskey.NormaliseCode(in)
-		if want := "an enrolment code is qecn_, qecp_, qecg_ or qeci_, 26 characters, then a dot and a fingerprint"; err == nil || err.Error() != want {
+		if want := "an enrolment code is qecn_, qecp_, qecg_, qeci_ or qecr_, 26 characters, then a dot and a fingerprint"; err == nil || err.Error() != want {
 			t.Errorf("%s: %v; want %q", in, err, want)
 		}
 	}

@@ -1,5 +1,5 @@
 {
-  "note": "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, an attach and its answer, an outcome and its answer, a binding of a connection to the gateway, and an answer of the gateway on its link. go generate ./runkey writes them from the fixture keys of keys.json.",
+  "note": "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, a run code's redemption and its answer, an attach and its answer, an outcome and its answer, a binding of a connection to the gateway, and an answer of the gateway on its link. go generate ./runkey writes them from the fixture keys of keys.json.",
   "run_key": {
     "note": "The run key of run-key-payload.json, signed under the fixture signing key of the server: the signed message is the domain line, a line feed, then the payload bytes; the run key is qrk_, the payload in base64url without padding, a dot, and the signature in base64url without padding.",
     "payload": "fixtures/known-answers/run-key-payload.json",
@@ -106,6 +106,31 @@
       "signature": "WkxQ9RxDH-xSH8dQGKlDFfKs3qzKItRrRs-HamCdcezMMJRFWHRda0WT6f1l9lZnxiX-y3a2Pb8p3FDnF-IdBg"
     }
   ],
+  "run_enrolment": {
+    "note": "The redemption of a run code: the request of enrolment-run-request.json, its proof under the fixture access key secret over the five lines qory-enrol-ed25519-v1, the code, the public key, the name and the timestamp; then the 201 of enrolment-run-answer.json, the run's id and the run key of run-key-payload.json, signed under the fixture signing key with the domain line qory-enrol-answer-ed25519-v1 and the request's proof as line 3.",
+    "request": "fixtures/known-answers/enrolment-run-request.json",
+    "proof_lines": [
+      "qory-enrol-ed25519-v1",
+      "qecr_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+      "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+      "run-01",
+      "1791720000"
+    ],
+    "proof_length": 138,
+    "proof": "Vk6wlEpWPUu3qfmdJ2XAa5_3BxOedkHtfyz_IWtNpjTsNCzQ9iAXxV5ydPGqTqWCSb3boiJg3JPZ9m849gzAAQ",
+    "answer": "fixtures/known-answers/enrolment-run-answer.json",
+    "body_length": 859,
+    "lines": [
+      "qory-enrol-answer-ed25519-v1",
+      "201",
+      "Vk6wlEpWPUu3qfmdJ2XAa5_3BxOedkHtfyz_IWtNpjTsNCzQ9iAXxV5ydPGqTqWCSb3boiJg3JPZ9m849gzAAQ",
+      "0e4bc2729eea3af3971908136d78455abafdf5d7a991e8161652aaf048ec1e49",
+      "",
+      ""
+    ],
+    "length": 186,
+    "signature": "YnJwN3VR0ld6waIbbhFfvzIaGmEpIK_VSMKIu0WgVx8qGieBY5sLO3aQIIv_jMRmvJF28oQW0SyBVSxvaOmPCg"
+  },
   "binding": {
     "note": "The binding of a connection to the gateway, for the fixed exporter value ekm, the 32 bytes counting up from 129, in place of the one a connection derives with the label: the gateway signs the three lines under the fixture gateway key, and answers QORY-BIND with bound_line, QORY-BOUND, a space, the fingerprint, a space, the signature in base64url without padding, and a newline.",
     "ekm": "8182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0",

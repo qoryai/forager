@@ -22,8 +22,9 @@ import (
 // because the access key has no id yet.
 const EnrolmentPath = "/.well-known/qory-enrolment"
 
-// The prefixes of an enrolment code, one for each kind of key it enrols. A prefix is
-// read in any case and written in lower case in the normalised form.
+// The prefixes of an enrolment code: one for each kind of key it enrols, and one for a
+// run code, which enrols no key and redeems a run's run key. A prefix is read in any
+// case and written in lower case in the normalised form.
 const (
 	// CodePrefixNode starts the enrolment code of a node's access key.
 	CodePrefixNode = "qecn_"
@@ -33,15 +34,23 @@ const (
 	CodePrefixGateway = "qecg_"
 	// CodePrefixAdapter starts the enrolment code of an adapter's access key.
 	CodePrefixAdapter = "qeci_"
+	// CodePrefixRun starts a run code: the code a provisioner puts in a machine's start
+	// data in place of the run key. It enrols no access key: its 201 is the run's run
+	// key, [EnrolmentRequest.VerifyRunAnswer].
+	CodePrefixRun = "qecr_"
 )
 
+// kindRun is the kind [CodeKind] returns for a run code.
+const kindRun = "run"
+
 // codeKinds maps each prefix of an enrolment code to the node_kind of the key the code
-// enrols.
+// enrols, and the run code's prefix to run.
 var codeKinds = []struct{ prefix, kind string }{
 	{CodePrefixNode, "node"},
 	{CodePrefixPool, "pool"},
 	{CodePrefixGateway, "gateway"},
 	{CodePrefixAdapter, "adapter"},
+	{CodePrefixRun, kindRun},
 }
 
 // errCodeShape is the error of a code without one of the prefixes or without a dot,
@@ -93,7 +102,7 @@ func crockford(c rune) (rune, bool) {
 
 // NormaliseCode returns an enrolment code in the form the request sends and the proof
 // covers: its prefix in lower case, [CodePrefixNode], [CodePrefixPool],
-// [CodePrefixGateway] or [CodePrefixAdapter], the 26 characters of the code in upper
+// [CodePrefixGateway], [CodePrefixAdapter] or [CodePrefixRun], the 26 characters of the code in upper
 // case with I and L read as 1, O as 0 and hyphens removed, then "." and the fingerprint
 // of the server's key, and during a rotation of it a second "." and the next key's
 // fingerprint, each as issued. So a person may type the code in either case and in
@@ -136,7 +145,8 @@ func NormaliseCode(code string) (string, error) {
 }
 
 // CodeKind returns the node_kind of the key an enrolment code enrols, as its prefix
-// names it: node, pool, gateway or adapter. A code [NormaliseCode] refuses is an error.
+// names it: node, pool, gateway or adapter; for a run code, [CodePrefixRun], it
+// returns run. A code [NormaliseCode] refuses is an error.
 func CodeKind(code string) (string, error) {
 	normal, err := NormaliseCode(code)
 	if err != nil {
@@ -245,19 +255,49 @@ var enrolmentRefusals = map[int][]string{
 	http.StatusTooManyRequests: {CodeRateLimited},
 }
 
-// KindError is VerifyAnswer's error for a verified 201 whose node_kind is not the kind
-// its code's prefix names: the server enrolled the key, so the code is used and the key
-// is active, and the client does not install it.
+// KindError is the error of a verified 201 that is not of the kind of its code's
+// prefix, [CodeKind]: an access key's enrolment of another node_kind, a run's run key to
+// an access key's code, or an access key's enrolment to a run code. The server
+// accepted the code, so the code is used, and the client installs nothing of the
+// answer. When the answer enrols an access key, that key is active.
 type KindError struct {
-	// Kind is the answer's node_kind; AccessKeyID and NodeID are the answer's.
-	Kind, AccessKeyID, NodeID string
+	// Kind is the answer's node_kind, or run for a run's run key; AccessKeyID and
+	// NodeID are an access key's answer's, and RunID a run's answer's.
+	Kind, AccessKeyID, NodeID, RunID string
 	// codeKind is the kind the code's prefix names.
 	codeKind string
 }
 
-// Error names the answer's node_kind and the kind the code's prefix names.
+// Error returns the answer's kind and the kind of the code's prefix.
 func (e *KindError) Error() string {
+	switch {
+	case e.codeKind == kindRun:
+		return fmt.Sprintf("use another run code: the server's 201 to the run code enrols an access key of node_kind %q and contains no run key; the code is used", e.Kind)
+	case e.Kind == kindRun:
+		return fmt.Sprintf("use another enrolment code: the server's 201 to the code of node_kind %q contains a run's run key and no access key id; the code is used", e.codeKind)
+	}
 	return fmt.Sprintf("the enrolment answer: node_kind %q does not match the code's kind %q", e.Kind, e.codeKind)
+}
+
+// errRunCode is the error of an access key's enrolment method for a run code.
+var errRunCode = errors.New("redeem a run code with PostRunVia, PostRun or VerifyRunAnswer: the request's code is a run code, qecr_, and PostVia, Post and VerifyAnswer enrol an access key")
+
+// forKey refuses a request whose code is a run code: an access key's enrolment method
+// reads no run's answer.
+func (r *EnrolmentRequest) forKey() error {
+	if kind, err := CodeKind(r.Code); err == nil && kind == kindRun {
+		return errRunCode
+	}
+	return nil
+}
+
+// forRun refuses a request whose code enrols an access key: a run code's method reads
+// no access key's answer.
+func (r *EnrolmentRequest) forRun() error {
+	if kind, err := CodeKind(r.Code); err == nil && kind != kindRun {
+		return fmt.Errorf("enrol an access key with PostVia, Post or VerifyAnswer: the request's code enrols an access key of node_kind %q, and PostRunVia, PostRun and VerifyRunAnswer redeem a run code", kind)
+	}
+	return nil
 }
 
 // VerifyAnswer reads the server's answer to the request. A 201, a signed 409 and a
@@ -268,54 +308,28 @@ func (e *KindError) Error() string {
 // a proof that does not verify under it, is answer_unsigned too, and so is a 429 sent
 // unsigned, per source address. A 201's pin is then the entries whose fingerprints the
 // code carries. A verified 201 whose node_kind is not the kind the code's prefix names,
-// [CodeKind], is a [*KindError]. A verified 409 is a [*Refusal] with its code, key_invalid or key_limit,
+// [CodeKind], is a [*KindError], and so is a verified run's answer, [RunAnswer]. A verified 409 is a [*Refusal] with its code, key_invalid or key_limit,
 // and a verified 429 one with rate_limited, too many attempts with the code; a verified
 // refusal with another code is an error. A 401, unsigned, is unauthorized: the code was
 // used, has expired or was cancelled. Any other answer is answer_unsigned. A caller acts
 // on a refusal's code, and never on the status of an answer_unsigned: an answer that
-// does not verify may come from anyone on the path.
+// does not verify may come from anyone on the path. A request with a run code is an
+// error, and nothing is read: [EnrolmentRequest.VerifyRunAnswer] reads its answer.
 func (r *EnrolmentRequest) VerifyAnswer(a Answer, signature string) (*EnrolmentAnswer, error) {
-	// The answer is an enrolment answer whatever the caller passed: only a signature
-	// under the enrolment answer's own domain line verifies.
-	a.Enrolment, a.RequestSignature = true, r.Proof
-	fingerprints := CodeFingerprints(r.Code)
-	if len(fingerprints) == 0 {
-		return nil, errors.New("the request's code is not an enrolment code")
+	if err := r.forKey(); err != nil {
+		return nil, err
 	}
-	unsigned := &Refusal{Code: CodeAnswerUnsigned, Status: a.Status, Detail: "enrolment"}
-	// verified reports whether the answer verifies under the listed key whose
-	// fingerprint the code carries first.
-	verified := func(keys Pin) bool {
-		for _, k := range keys {
-			if pub, err := ParsePublicKey(k.PublicKey); err == nil && k.Alg == "ed25519" && pub.Fingerprint() == fingerprints[0] {
-				return (Pin{k}).VerifyAnswer(a, signature)
-			}
-		}
-		return false
-	}
-	switch a.Status {
-	case http.StatusUnauthorized:
-		return nil, &Refusal{Code: CodeUnauthorized, Status: a.Status, Detail: "enrolment: the code was used, has expired or was cancelled"}
-	case http.StatusConflict, http.StatusTooManyRequests:
-		var ref struct {
-			Error           string   `json:"error"`
-			Names           []string `json:"names"`
-			ApiaryPublicKey Pin      `json:"apiary_public_key"`
-		}
-		if len(a.Body) > MaxAnswer || jsonv2.Unmarshal(a.Body, &ref, jsonv2.RejectUnknownMembers(true)) != nil || !verified(ref.ApiaryPublicKey) {
-			return nil, unsigned
-		}
-		if !slices.Contains(enrolmentRefusals[a.Status], ref.Error) {
-			return nil, fmt.Errorf("enrolment: a signed %d with a code this package does not read",
-				a.Status)
-		}
-		return nil, &Refusal{Code: ref.Error, Status: a.Status, Names: ref.Names, Detail: "enrolment", From: FromApiary}
-	case http.StatusCreated:
-	default:
-		return nil, unsigned
+	verified, unsigned, err := r.created(&a, signature)
+	if err != nil {
+		return nil, err
 	}
 	var ans EnrolmentAnswer
 	if err := jsonv2.Unmarshal(a.Body, &ans, jsonv2.RejectUnknownMembers(true)); err != nil || !verified(ans.ApiaryPublicKey) {
+		var run RunAnswer
+		if jsonv2.Unmarshal(a.Body, &run, jsonv2.RejectUnknownMembers(true)) == nil && verified(run.ApiaryPublicKey) {
+			kind, _ := CodeKind(r.Code)
+			return nil, &KindError{Kind: kindRun, RunID: run.RunID, codeKind: kind}
+		}
 		return nil, unsigned
 	}
 	if err := ans.check(); err != nil {
@@ -324,15 +338,71 @@ func (r *EnrolmentRequest) VerifyAnswer(a Answer, signature string) (*EnrolmentA
 	if kind, _ := CodeKind(r.Code); ans.NodeKind != kind {
 		return nil, &KindError{Kind: ans.NodeKind, AccessKeyID: ans.AccessKeyID, NodeID: ans.NodeID, codeKind: kind}
 	}
-	for _, k := range ans.ApiaryPublicKey {
-		if pub, err := ParsePublicKey(k.PublicKey); err == nil && slices.Contains(fingerprints, pub.Fingerprint()) {
-			ans.Pin = append(ans.Pin, k)
-		}
-	}
-	if err := ans.Pin.Check(); err != nil {
+	if ans.Pin, err = r.pinOf(ans.ApiaryPublicKey); err != nil {
 		return nil, fmt.Errorf("the enrolment answer: %w", err)
 	}
 	return &ans, nil
+}
+
+// created reads what every enrolment answer shares and returns, for a 201, verified,
+// which reports whether the answer verifies under the listed key whose fingerprint is
+// the code's first, and unsigned, the answer_unsigned of this answer. Every other
+// status is an error: a 401 unauthorized, a signed 409 or 429 a [*Refusal] with its
+// code, and the rest answer_unsigned.
+func (r *EnrolmentRequest) created(a *Answer, signature string) (verified func(Pin) bool, unsigned *Refusal, err error) {
+	// The answer is an enrolment answer whatever the caller passed: only a signature
+	// under the enrolment answer's own domain line verifies.
+	a.Enrolment, a.RequestSignature = true, r.Proof
+	fingerprints := CodeFingerprints(r.Code)
+	if len(fingerprints) == 0 {
+		return nil, nil, errors.New("the request's code is not an enrolment code")
+	}
+	unsigned = &Refusal{Code: CodeAnswerUnsigned, Status: a.Status, Detail: "enrolment"}
+	verified = func(keys Pin) bool {
+		for _, k := range keys {
+			if pub, err := ParsePublicKey(k.PublicKey); err == nil && k.Alg == "ed25519" && pub.Fingerprint() == fingerprints[0] {
+				return (Pin{k}).VerifyAnswer(*a, signature)
+			}
+		}
+		return false
+	}
+	switch a.Status {
+	case http.StatusUnauthorized:
+		return nil, nil, &Refusal{Code: CodeUnauthorized, Status: a.Status, Detail: "enrolment: the code was used, has expired or was cancelled"}
+	case http.StatusConflict, http.StatusTooManyRequests:
+		var ref struct {
+			Error           string   `json:"error"`
+			Names           []string `json:"names"`
+			ApiaryPublicKey Pin      `json:"apiary_public_key"`
+		}
+		if len(a.Body) > MaxAnswer || jsonv2.Unmarshal(a.Body, &ref, jsonv2.RejectUnknownMembers(true)) != nil || !verified(ref.ApiaryPublicKey) {
+			return nil, nil, unsigned
+		}
+		if !slices.Contains(enrolmentRefusals[a.Status], ref.Error) {
+			return nil, nil, fmt.Errorf("enrolment: a signed %d with a code this package does not read",
+				a.Status)
+		}
+		return nil, nil, &Refusal{Code: ref.Error, Status: a.Status, Names: ref.Names, Detail: "enrolment", From: FromApiary}
+	case http.StatusCreated:
+		return verified, unsigned, nil
+	}
+	return nil, nil, unsigned
+}
+
+// pinOf returns the keys of a verified 201's apiary_public_key whose fingerprints are in
+// the code, after [Pin.Check].
+func (r *EnrolmentRequest) pinOf(listed Pin) (Pin, error) {
+	fingerprints := CodeFingerprints(r.Code)
+	var pin Pin
+	for _, k := range listed {
+		if pub, err := ParsePublicKey(k.PublicKey); err == nil && slices.Contains(fingerprints, pub.Fingerprint()) {
+			pin = append(pin, k)
+		}
+	}
+	if err := pin.Check(); err != nil {
+		return nil, err
+	}
+	return pin, nil
 }
 
 // check refuses an answer the schema refuses.
@@ -359,12 +429,17 @@ func (a *EnrolmentAnswer) check() error {
 // answer, as [EnrolmentRequest.VerifyAnswer] reads it. serverURL is the server's
 // origin, https or http to a loopback address; hc is the client, nil for one with a
 // ten-second timeout, and in either case one that follows no redirect and keeps no
-// cookie; userAgent is sent as User-Agent.
+// cookie; userAgent is sent as User-Agent. A request with a run code is an error, and
+// nothing is sent: [EnrolmentRequest.PostRun] redeems one.
 func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL, userAgent string) (*EnrolmentAnswer, error) {
-	if err := checkOrigin(serverURL); err != nil {
+	if err := r.forKey(); err != nil {
 		return nil, err
 	}
-	return r.post(ctx, hc, serverURL, serverURL, userAgent)
+	a, sig, err := r.direct(ctx, hc, serverURL, userAgent)
+	if err != nil {
+		return nil, err
+	}
+	return r.VerifyAnswer(a, sig)
 }
 
 // PostVia sends the request to the server's enrolment endpoint through the gateway at
@@ -376,31 +451,55 @@ func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL,
 // client, and is required: it carries the gateway's trust, so the caller builds it
 // with the transport of the server package's Via.Transport, which uses no proxy of the
 // environment, TLS 1.3 alone and the via's ca_file and pin. A nil hc is an error, and
-// nothing is sent. The copy of hc used follows no redirect and keeps no cookie.
+// nothing is sent. The copy of hc used follows no redirect and keeps no cookie. A
+// request with a run code is an error, and nothing is sent:
+// [EnrolmentRequest.PostRunVia] redeems one.
 func (r *EnrolmentRequest) PostVia(ctx context.Context, hc *http.Client, serverURL, viaURL, userAgent string) (*EnrolmentAnswer, error) {
-	if hc == nil {
-		return nil, errors.New("an enrolment through a gateway needs a client with the gateway's trust, built from the server package's Via.Transport")
-	}
-	if err := checkOrigin(serverURL); err != nil {
+	if err := r.forKey(); err != nil {
 		return nil, err
 	}
-	if err := checkOrigin(viaURL); err != nil || !strings.HasPrefix(viaURL, "https://") {
-		return nil, fmt.Errorf("the via URL %s is not an https origin, scheme and host only", shown(viaURL))
-	}
-	return r.post(ctx, hc, serverURL, viaURL, userAgent)
-}
-
-// post sends the request to the enrolment endpoint under sendTo, the server's origin
-// or a gateway's, and verifies the answer; errors name the endpoint under serverURL.
-func (r *EnrolmentRequest) post(ctx context.Context, hc *http.Client, serverURL, sendTo, userAgent string) (*EnrolmentAnswer, error) {
-	body, err := json.Marshal(r)
+	a, sig, err := r.via(ctx, hc, serverURL, viaURL, userAgent)
 	if err != nil {
 		return nil, err
+	}
+	return r.VerifyAnswer(a, sig)
+}
+
+// direct checks serverURL and sends the request to the server's enrolment endpoint.
+func (r *EnrolmentRequest) direct(ctx context.Context, hc *http.Client, serverURL, userAgent string) (Answer, string, error) {
+	if err := checkOrigin(serverURL); err != nil {
+		return Answer{}, "", err
+	}
+	return r.send(ctx, hc, serverURL, serverURL, userAgent)
+}
+
+// via checks hc, serverURL and viaURL and sends the request to the server's enrolment
+// endpoint through the gateway at viaURL.
+func (r *EnrolmentRequest) via(ctx context.Context, hc *http.Client, serverURL, viaURL, userAgent string) (Answer, string, error) {
+	if hc == nil {
+		return Answer{}, "", errors.New("an enrolment through a gateway needs a client with the gateway's trust, built from the server package's Via.Transport")
+	}
+	if err := checkOrigin(serverURL); err != nil {
+		return Answer{}, "", err
+	}
+	if err := checkOrigin(viaURL); err != nil || !strings.HasPrefix(viaURL, "https://") {
+		return Answer{}, "", fmt.Errorf("the via URL %s is not an https origin, scheme and host only", shown(viaURL))
+	}
+	return r.send(ctx, hc, serverURL, viaURL, userAgent)
+}
+
+// send sends the request to the enrolment endpoint under sendTo, the server's origin
+// or a gateway's, and returns the answer unread and its signature header; errors name
+// the endpoint under serverURL.
+func (r *EnrolmentRequest) send(ctx context.Context, hc *http.Client, serverURL, sendTo, userAgent string) (Answer, string, error) {
+	body, err := json.Marshal(r)
+	if err != nil {
+		return Answer{}, "", err
 	}
 	u := strings.TrimSuffix(serverURL, "/") + EnrolmentPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(sendTo, "/")+EnrolmentPath, bytes.NewReader(body))
 	if err != nil {
-		return nil, ShownError(err)
+		return Answer{}, "", ShownError(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
@@ -414,22 +513,22 @@ func (r *EnrolmentRequest) post(ctx context.Context, hc *http.Client, serverURL,
 	client.Jar = nil
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("enrolment %s: %w", ShownValue(u, false), ShownError(err))
+		return Answer{}, "", fmt.Errorf("enrolment %s: %w", ShownValue(u, false), ShownError(err))
 	}
 	defer resp.Body.Close()
 	answer, err := io.ReadAll(io.LimitReader(resp.Body, MaxAnswer+1))
 	if err != nil {
-		return nil, fmt.Errorf("enrolment %s: %w", ShownValue(u, false), ShownError(err))
+		return Answer{}, "", fmt.Errorf("enrolment %s: %w", ShownValue(u, false), ShownError(err))
 	}
 	sig := ""
 	if v := resp.Header.Values(HeaderSignature); len(v) == 1 {
 		sig = v[0]
 	}
-	return r.VerifyAnswer(Answer{
+	return Answer{
 		Status: resp.StatusCode, Body: answer,
 		Configuration:    resp.Header.Get(HeaderConfiguration),
 		RunConfiguration: resp.Header.Get(HeaderRunConfiguration),
-	}, sig)
+	}, sig, nil
 }
 
 // checkOrigin refuses a server URL that is not an origin, https or http to a loopback
