@@ -268,9 +268,9 @@ func TestAPathWithADotDotIsNotReadable(t *testing.T) {
 				t.Errorf("Readable: %v", err)
 			}
 			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-				Launch:   runtimes.Launch{Command: "claude", Args: []string{"--settings", path}},
-				RunDir:   t.TempDir(),
-				Readable: session.Readable([]string{ws}),
+				Launch:     runtimes.Launch{Command: "claude", Args: []string{"--settings", path}},
+				SessionDir: t.TempDir(),
+				Readable:   session.Readable([]string{ws}),
 			})
 			want := `Pass the path ` + path + ` without "..". This launch passes --settings ` + path +
 				`, and the path has a ".." part, so the run does not start.`
@@ -420,7 +420,7 @@ func TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun(t *testing.T) {
 		if err != nil || res.ExitCode != 0 {
 			t.Fatalf("the run: %+v, %v", res, err)
 		}
-		if b, err := os.ReadFile(filepath.Join(res.Dir, "mcp-config-1.json")); err != nil || string(b) != `{"mcpServers":{}}` {
+		if b, err := os.ReadFile(filepath.Join(res.SessionDir, "mcp-config-1.json")); err != nil || string(b) != `{"mcpServers":{}}` {
 			t.Errorf("the copy: %s, %v", b, err)
 		}
 	})
@@ -474,11 +474,11 @@ func TestAQoryShapedWalledLaunchStarts(t *testing.T) {
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("the run: %+v, %v", res, err)
 	}
-	b, err := os.ReadFile(filepath.Join(res.Dir, "mcp-config-1.json"))
+	b, err := os.ReadFile(filepath.Join(res.SessionDir, "mcp-config-1.json"))
 	if want, _ := os.ReadFile(filepath.Join(home, "mcp.json")); err != nil || string(b) != string(want) {
 		t.Errorf("the copy of the servers: %s, %v", b, err)
 	}
-	b, err = os.ReadFile(filepath.Join(res.Dir, "append-system-prompt-file-1.md"))
+	b, err = os.ReadFile(filepath.Join(res.SessionDir, "append-system-prompt-file-1.md"))
 	if want, _ := os.ReadFile(filepath.Join(home, "launch", "CLAUDE.md")); err != nil || string(b) != string(want) {
 		t.Errorf("the copy of the launch's instructions: %s, %v", b, err)
 	}

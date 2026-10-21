@@ -28,7 +28,7 @@ func TestSettingsPrintsAPhraseForASecret(t *testing.T) {
 		{clean, "Pass a --settings path that exists on this machine. The check of --settings " + clean + " failed: "},
 	} {
 		_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-			Launch: runtimes.Launch{Args: []string{"--settings", c.settings}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+			Launch: runtimes.Launch{Args: []string{"--settings", c.settings}}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 		})
 		if c.settings == clean {
 			if err == nil || !strings.HasPrefix(err.Error(), c.want) || !strings.HasSuffix(err.Error(), "absent.json: no such file or directory") {
@@ -61,7 +61,7 @@ func TestSettingsJSONValueIsAPhrase(t *testing.T) {
 	} {
 		for _, args := range [][]string{{"--settings", c.value}, {"--settings=" + c.value}} {
 			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-				Launch: runtimes.Launch{Args: args}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+				Launch: runtimes.Launch{Args: args}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 			})
 			if err == nil || err.Error() != c.want || strings.Contains(err.Error(), "fake-token-123") {
 				t.Errorf("%q: %v, want %q", args, err, c.want)

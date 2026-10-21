@@ -120,7 +120,7 @@ func TestThePreparationRunsBeforeTheRuntime(t *testing.T) {
 	}
 	evs := events(t, res)
 	started := sessionStarted(t, evs)
-	script := filepath.Join(res.Dir, session.PreparationScript)
+	script := filepath.Join(res.SessionDir, session.PreparationScript)
 	if started["command"] != "/bin/sh" || started["args"].([]any)[0] != script || started["args"].([]any)[1] != "/bin/sh" {
 		t.Errorf("session.started command %v args %v", started["command"], started["args"])
 	}
@@ -237,7 +237,7 @@ func TestAPreparationNeedsAWallAndAProgram(t *testing.T) {
 	if _, ok := started["preparation"]; ok || started["command"] != "/bin/sh" || started["args"].([]any)[0] != "-c" {
 		t.Errorf("session.started %v", started)
 	}
-	if _, err := os.Stat(filepath.Join(res.Dir, session.PreparationScript)); err == nil {
+	if _, err := os.Stat(filepath.Join(res.SessionDir, session.PreparationScript)); err == nil {
 		t.Error("a run without a preparation has its script")
 	}
 }

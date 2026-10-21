@@ -276,10 +276,10 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 		t.Errorf("the record lists %d requests through the proxy, and the recorder received %d", egress, len(reqs))
 	}
 
-	script := filepath.Join(res.Dir, claude.ApproveScript)
+	script := filepath.Join(res.SessionDir, claude.ApproveScript)
 	_, err = os.Stat(script)
 	if through := interactive && c.standIn == apiKeyStandIn; through != (err == nil) {
-		t.Errorf("the run directory has %s: %v, want %v", claude.ApproveScript, err == nil, through)
+		t.Errorf("the session directory has %s: %v, want %v", claude.ApproveScript, err == nil, through)
 	}
 	if interactive {
 		b, err := os.ReadFile(config)

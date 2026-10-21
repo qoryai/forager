@@ -216,7 +216,8 @@ func foragerFiles(spec runSpec) []foragerFile {
 		}
 	}
 	// The run directories hold the record, and the session reads the runtime's settings
-	// from them; a run's own is shown to its enclosure read-only, and to no other: no
+	// from a session's directory in them; the directory of the session that runs is
+	// shown to its enclosure read-only, and nothing else of a run directory is: no
 	// place of this run's holds the runs directory, and a walled run with a bind that
 	// is, holds or lies inside the run directory of another walled run still going does
 	// not start (checkShared).
@@ -436,7 +437,7 @@ func source(path, what, kind string, writable bool) (bindSource, error) {
 }
 
 // mountPlan is what the enclosure of a walled run binds: the outermost of the places
-// the run lists, each once, and then the run directory, read-only.
+// the run lists, each once, and then the session's directory, read-only.
 type mountPlan struct {
 	// Mounts are the binds, as [wall.Launch] lists them.
 	Mounts []wall.Mount
@@ -458,7 +459,7 @@ const workspaceInside = "/workspace"
 // bind that holds the workspace shown at [workspaceInside], the working directory under
 // it, and inside, which writes a path of that bind's as the enclosure sees it, at
 // whole components ([translate]). Every other bind stays at the same path; one whose
-// path is, holds or lies under workspaceInside, the run directory's among them, is
+// path is, holds or lies under workspaceInside, the session's directory among them, is
 // refused, with no code.
 func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 	if p.root == "" || p.root == string(filepath.Separator) {
@@ -518,8 +519,9 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 
 // checkMounts refuses a caller's Forager file that is not an absolute path and, behind a
 // wall, the places the run lists that it cannot bind as they are, and returns what the
-// enclosure binds. The places are the run's own, SessionSpec.Mounts and the workspace; the run
-// directory, read-only, and the hook socket's directory are Forager's, which it
+// enclosure binds. The places are the run's own, SessionSpec.Mounts and the workspace; the
+// session's directory in the run directory, sessionDir, read-only, and the hook socket's
+// directory are Forager's, which it
 // keeps apart from every caller's place: the runs directory is one of Forager's
 // files, and so is where the sockets are made. A refusal's first name is always one of
 // the places exactly as the caller passed it, or [accesskey.ShownName]'s phrase in its
@@ -543,7 +545,7 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 // reaches it through the outer one, at the same path. So no bound place is reached
 // through a directory another bound place lets the agent write. The workspace is
 // writable, and is the working directory inside, in one of the binds.
-func checkMounts(spec runSpec, runDir string) (mountPlan, error) {
+func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 	for _, p := range spec.ForagerFiles {
 		if strings.ContainsRune(p, 0) {
 			return mountPlan{}, errors.New("a Forager file's path holds a NUL byte")
@@ -694,11 +696,13 @@ func checkMounts(spec runSpec, runDir string) (mountPlan, error) {
 	if err := dirInBinds(plan.Dir, plan.Mounts); err != nil {
 		return mountPlan{}, err
 	}
+	// The registry lists the run directory, which holds the session's: no other walled
+	// run binds a part of it.
 	run, err := runDirSource(spec.OpenSpec, runDir)
 	if err != nil {
 		return mountPlan{}, err
 	}
-	plan.Mounts = append(plan.Mounts, wall.Mount{Path: runDir, ReadOnly: true})
+	plan.Mounts = append(plan.Mounts, wall.Mount{Path: sessionDir, ReadOnly: true})
 	plan.sources = append(plan.sources, run)
 	return plan, nil
 }

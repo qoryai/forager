@@ -374,7 +374,7 @@ func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	if !strings.Contains(string(out), `"type":"result"`) || !strings.Contains(string(out), "fake runtime: starting") {
 		t.Errorf("output.log %q", out)
 	}
-	settings, _ := os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+	settings, _ := os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 	if !strings.Contains(string(settings), `"echo existing"`) || !strings.Contains(string(settings), `"permissions"`) || strings.Count(string(settings), os.Args[0]) != 11 {
 		t.Errorf("settings.json:\n%s", settings)
 	}
@@ -411,7 +411,7 @@ func runWithSettingsEnv(t *testing.T, sp runSpec) (*session.Result, error) {
 func runWithSettingsEnvClosed(t *testing.T, sp runSpec) (*session.Result, *session.Closed, error) {
 	t.Helper()
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
-	sp.Env = append(sp.Env, "FAKE_SETTINGS="+filepath.Join(sp.RunsDir, sp.RunID, "settings.json"))
+	sp.Env = append(sp.Env, "FAKE_SETTINGS="+filepath.Join(sp.RunsDir, sp.RunID, session.SessionsDir, "1", "settings.json"))
 	return runClosed(context.Background(), sp)
 }
 
@@ -867,7 +867,7 @@ func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T)
 			if !res.TimedOut || res.ExitCode != c.code {
 				t.Errorf("result %+v", res)
 			}
-			if got.RunDir != res.Dir || got.Launch.Command != "sh" || len(got.Forwarder) == 0 {
+			if got.SessionDir != res.SessionDir || got.Launch.Command != "sh" || len(got.Forwarder) == 0 {
 				t.Errorf("Prepare was given %+v", got)
 			}
 			started := ofType(events(t, res), "dev.qory.session.started")
@@ -895,7 +895,7 @@ func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
 	if res.ExitCode != 3 || len(started) != 1 || data(started[0])["runtime"] != "sh" {
 		t.Errorf("%+v %v", res, started)
 	}
-	if _, err := os.Stat(filepath.Join(res.Dir, "settings.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(res.SessionDir, "settings.json")); !os.IsNotExist(err) {
 		t.Error("something was prepared for a runtime Forager does not know")
 	}
 }

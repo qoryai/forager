@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,6 +24,13 @@ import (
 // exitObserved is called the moment the runtime's exit is observed, once Cancelled is
 // decided; a test sets it, and it is nil otherwise.
 var exitObserved func()
+
+// SessionsDir is the directory in the run directory that holds a directory per session
+// that started, sessions/<n>/ with n the session's number: the session's output.log, its
+// PreparationScript and the files its runtime writes, such as Claude Code's
+// settings.json. Behind a wall the enclosure binds the session's directory alone,
+// read-only.
+const SessionsDir = "sessions"
 
 // endedBeforeJoin is what a refusal of a session whose run the gateway closed before
 // its runtime started says.
@@ -44,6 +53,11 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // a wall that does not start, writes dev.qory.session.started, then
 // dev.qory.session.exited, failed with -1 and no reason. The run stays open: what
 // follows is the caller's.
+//
+// A session that starts has a directory in the run directory, sessions/<n>/ with n its
+// number ([Result.SessionDir]): its output.log, the bytes of its dev.qory.run.log
+// chunks, its PreparationScript and the files its runtime writes. A join that writes
+// no dev.qory.session.started leaves no directory there.
 //
 // Once the runtime runs, its exit is the result and not an error. The context ending
 // stops the runtime, and so does the run being closed from outside; a runtime that
@@ -176,6 +190,22 @@ func (r *Run) refusedJoin(n int, err error) {
 // dev.qory.session.exited.
 func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Runtime, answer *server.LinkJoinAnswer, n int) (*Result, error) {
 	dir := r.dir
+	// sessionDir is the session's directory, made once the session's checks before the
+	// runtime's preparation pass. A session that does not start leaves none: fail
+	// removes it, with what the preparation wrote, and the record says why.
+	sessionDir := filepath.Join(dir, SessionsDir, strconv.Itoa(n))
+	made := false
+	discard := func() {
+		if !made {
+			return
+		}
+		if err := r.files.EndSession(); err != nil {
+			r.open.Report("closing the session's output.log: " + accesskey.ShownError(err).Error())
+		}
+		if err := os.RemoveAll(sessionDir); err != nil {
+			r.open.Report("removing the directory of a session that did not start: " + accesskey.ShownError(err).Error())
+		}
+	}
 	// started says dev.qory.session.started is written, and start is when.
 	started := false
 	var start time.Time
@@ -186,6 +216,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// its stream already: the session's goes to its record alone, with the state and
 	// the reason the run was closed with.
 	fail := func(err error) (*Result, error) {
+		if !started {
+			discard()
+		}
 		if errors.Is(context.Cause(runCtx), errRunClosed) {
 			e := r.closedBy.get()
 			state, reason := recorded(e)
@@ -212,7 +245,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// that a walled agent of another run still going can change, is a refused join,
 	// before anything starts. The run's entry among the walled runs still going lists
 	// the session's places until the session ends.
-	plan, err := checkMounts(spec, dir)
+	plan, err := checkMounts(spec, dir, sessionDir)
 	if err != nil {
 		return fail(err)
 	}
@@ -258,11 +291,30 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if err != nil {
 		return fail(err)
 	}
+	// The session's directory holds the session's output.log and what the session
+	// writes for its runtime, from here on; every log event of the session goes to its
+	// output.log as well as to the run's, until the session ends.
+	if err := os.MkdirAll(filepath.Join(dir, SessionsDir), 0o755); err != nil {
+		return fail(accesskey.ShownError(err))
+	}
+	if err := os.Mkdir(sessionDir, 0o755); err != nil {
+		return fail(accesskey.ShownError(err))
+	}
+	made = true
+	if err := r.files.StartSession(sessionDir); err != nil {
+		return fail(err)
+	}
+	defer func() {
+		if err := r.files.EndSession(); err != nil {
+			r.open.Report("closing the session's output.log: " + accesskey.ShownError(err).Error())
+		}
+	}()
 	// The runtime prepares the launch before the variables are resolved, because what it
 	// sets is Forager's and wins over a server's variable of the same name. Behind a wall
-	// the run directory goes in read-only, apart from every place the session binds: the
-	// settings are read from it, and the record in it is not the agent's to rewrite or
-	// move. The runtime learns whether the run is walled, and the placeholders the run
+	// the session's directory goes in read-only, apart from every place the session
+	// binds, and nothing else of the run directory: the settings are read from it, the
+	// record is not the agent's to read or rewrite, and another session's settings are
+	// not its to read. The runtime learns whether the run is walled, and the placeholders the run
 	// sets, with or without a wall. A file the runtime reads from this machine is refused
 	// when a walled run could have written it: one in a place of SessionSpec.Written, in
 	// a writable bind of another walled run in the registry or, behind a wall, in a
@@ -270,7 +322,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// when it contains such a place. The places are worked out once, for both.
 	written := sync.OnceValues(func() ([]string, error) { return writtenPlaces(spec, r.id, plan, r.wallOwn) })
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
-	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
+	attach := runtimes.Attach{Launch: prepared, SessionDir: sessionDir, Forwarder: spec.Forwarder, Interactive: interactive,
 		Readable: readable(written), ReadableDir: readableDir(written),
 		Walled: spec.Wall != nil, Placeholders: append([]string(nil), placeholderNames...), ModelVariables: key.modelVariables(),
 		DeniedVariables: deniedVariables(rt, spec.Wall != nil)}
@@ -282,7 +334,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	// The session's preparation runs inside, after the runtime's, and starts the launch
 	// as the runtime prepared it.
-	if prepared, err = withPreparation(dir, insideAll(spec.Preparation, inside), prepared); err != nil {
+	if prepared, err = withPreparation(sessionDir, insideAll(spec.Preparation, inside), prepared); err != nil {
 		return fail(err)
 	}
 	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
@@ -451,11 +503,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		// The places again, just before the enclosure binds them, and the wall's binds,
 		// which exist by now, against the walled runs still going; the run's entry then
 		// lists them all. No walled agent of this user's can change a directory a name
-		// on the way to a place or the run directory is looked up in, the join's checks
+		// on the way to a place or the session's directory is looked up in, the join's checks
 		// saw to that; the user, or a process outside every wall, can. A place that
 		// resolves otherwise than at the join, or whose names are looked up in other
 		// directories, fails the session; what changes after this point is not seen.
-		again, err := checkMounts(spec, dir)
+		again, err := checkMounts(spec, dir, sessionDir)
 		if err != nil {
 			return fail(err)
 		}
@@ -567,7 +619,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		// record.
 		r.lastExit = -1
 	}
-	res := &Result{RunID: r.id, Dir: dir, Session: n, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed}
+	res := &Result{RunID: r.id, Dir: dir, SessionDir: sessionDir, Session: n, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed}
 	switch {
 	case closed:
 		// The gateway wrote the session's dev.qory.session.exited in its stream when it

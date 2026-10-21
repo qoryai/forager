@@ -39,7 +39,7 @@ func (f *fakeWritten) readableDir(p string) (string, error) {
 func walledDirs(t *testing.T, f *fakeWritten, inside func(string) string, args []string) (runtimes.Launch, error) {
 	t.Helper()
 	return claude.Settings([]string{"Stop"}, runtimes.Attach{
-		Launch: runtimes.Launch{Command: "claude", Args: args}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+		Launch: runtimes.Launch{Command: "claude", Args: args}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 		Walled: true, Readable: f.readable, ReadableDir: f.readableDir, Inside: inside,
 	})
 }
@@ -384,7 +384,7 @@ func TestAWalledLaunchsPluginLinkTextSaysWhereItLeads(t *testing.T) {
 		return filepath.EvalSymlinks(path)
 	}
 	_, err = claude.Settings([]string{"Stop"}, runtimes.Attach{
-		Launch: runtimes.Launch{Args: []string{"--plugin-dir", q}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+		Launch: runtimes.Launch{Args: []string{"--plugin-dir", q}}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 		Walled: true, Readable: through, ReadableDir: through,
 	})
 	want = "Replace the link " + filepath.Join(q, "skills", "y") + " with a copy, or point it at a path that does not go " +

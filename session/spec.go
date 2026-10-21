@@ -157,7 +157,7 @@ type SessionSpec struct {
 	// preparation, as the runtime's user, in Dir, with the runtime's environment, through
 	// the run's proxy and with its placeholders, so it reaches what the policy allows
 	// with the credentials the policy selects. The session starts the runtime through a
-	// script it writes into the run directory, PreparationScript, with /bin/sh, so an
+	// script it writes into the session's directory, PreparationScript, with /bin/sh, so an
 	// image for such a run contains /bin/sh. The script runs the preparation with no
 	// input and its output where the runtime's goes, and starts the runtime once the
 	// preparation exits 0. A preparation that exits otherwise ends the session with its
@@ -173,7 +173,8 @@ type SessionSpec struct {
 	// the other mode is a refused join, mount_mode_conflict. One whose path goes through a
 	// link inside a writable one, and that does not resolve into it, is a refused join,
 	// whatever its mode, mount_through_link. Dir is writable, and is bound at its path
-	// when no mount contains it. The session adds the run directory, read-only. A walled
+	// when no mount contains it. The session adds the session's directory in the run
+	// directory, sessions/<n>/, read-only. A walled
 	// session refuses a bind that lies inside, or is reached through, a writable bind of
 	// another walled run of this user's still going, apart from the same root, a writable
 	// one that contains one of that run's binds or the way to one, and one that is,
@@ -316,6 +317,9 @@ type Result struct {
 	// output.log; on one machine the gateway writes the run's stream, events.jsonl,
 	// beside them.
 	Dir string
+	// SessionDir is the session's directory in Dir, sessions/<n>/ with n the session's
+	// number: its output.log, its preparation.sh and the files its runtime writes.
+	SessionDir string
 	// Session is the session's number in the run, from 1, as the gateway's join answer
 	// gave it.
 	Session int

@@ -11,7 +11,7 @@ import (
 	"github.com/qoryai/forager/session/runtimes"
 )
 
-// PreparationScript is the script, in the run directory, that the runtime of a run
+// PreparationScript is the script, in the session's directory, that the runtime of a run
 // with a preparation is started through.
 const PreparationScript = "preparation.sh"
 
@@ -60,9 +60,9 @@ func checkPreparation(spec runSpec) error {
 }
 
 // withPreparation starts the launch through the script of [PreparationScript], which
-// it writes into the run directory with the preparation in it: /bin/sh, the script,
+// it writes into the session's directory with the preparation in it: /bin/sh, the script,
 // then the launch's command and arguments. No preparation leaves the launch as it is.
-func withPreparation(runDir string, preparation []string, launch runtimes.Launch) (runtimes.Launch, error) {
+func withPreparation(sessionDir string, preparation []string, launch runtimes.Launch) (runtimes.Launch, error) {
 	if len(preparation) == 0 {
 		return launch, nil
 	}
@@ -71,7 +71,7 @@ func withPreparation(runDir string, preparation []string, launch runtimes.Launch
 		words[i] = quote(w)
 	}
 	script := strings.Replace(preparationScript, "@PREPARATION@", strings.Join(words, " "), 1)
-	path := filepath.Join(runDir, PreparationScript)
+	path := filepath.Join(sessionDir, PreparationScript)
 	if err := runfile.Replace(path, []byte(script), 0o644); err != nil {
 		return runtimes.Launch{}, accesskey.ShownError(err)
 	}

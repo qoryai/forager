@@ -123,7 +123,7 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 	if w.got.ProxyToken != linktest.ProxySecret {
 		t.Errorf("the wall's relay got %q as the proxy secret", w.got.ProxyToken)
 	}
-	if want := []wall.Mount{{Path: sp.Dir}, {Path: res.Dir, ReadOnly: true}}; !slices.Equal(w.got.Mounts, want) {
+	if want := []wall.Mount{{Path: sp.Dir}, {Path: res.SessionDir, ReadOnly: true}}; !slices.Equal(w.got.Mounts, want) {
 		t.Errorf("mounts %v, want %v", w.got.Mounts, want)
 	}
 	env := strings.Join(w.got.Env, "\n")
@@ -413,7 +413,7 @@ func TestPrepareIsGivenTheStandInsOfAWalledRun(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []string{"MODEL_TOKEN", "FILES_KEY"}
-		if !slices.Equal(rt.got.Placeholders, want) || rt.got.RunDir == "" || rt.got.Walled != walled {
+		if !slices.Equal(rt.got.Placeholders, want) || rt.got.SessionDir == "" || rt.got.Walled != walled {
 			t.Errorf("walled %v: Prepare received %v, want %v", walled, rt.got.Placeholders, want)
 		}
 	}

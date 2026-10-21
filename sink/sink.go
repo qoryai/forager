@@ -43,11 +43,14 @@ const (
 	SessionFile = "session.jsonl"
 )
 
-// File writes the two record files of a run.
+// File writes the two record files of a run, and the output.log of the session that
+// runs, between [File.StartSession] and [File.EndSession].
 type File struct {
 	mu     sync.Mutex
 	events *os.File
 	output *os.File
+	// session is the output.log of the session that runs, or nil.
+	session *os.File
 }
 
 // NewFile creates the run directory, if needed, and opens the record files in it for
@@ -75,7 +78,7 @@ func NewFileAs(dir, events string) (*File, error) {
 }
 
 // Write appends the event as one line to events.jsonl and, for a log event, its bytes
-// to output.log.
+// to output.log, and to the session's output.log while one is open.
 func (f *File) Write(ev *event.Event) error {
 	line, err := ev.JSON()
 	if err != nil {
@@ -96,17 +99,58 @@ func (f *File) Write(ev *event.Event) error {
 				if _, err := f.output.Write(b); err != nil {
 					return accesskey.ShownError(err)
 				}
+				if f.session != nil {
+					if _, err := f.session.Write(b); err != nil {
+						return accesskey.ShownError(err)
+					}
+				}
 			}
 		}
 	}
 	return nil
 }
 
-// Close syncs and closes both files.
+// StartSession creates output.log in dir, a directory that exists, and appends the bytes
+// of every log event written from here on to it as well, until [File.EndSession]. A
+// directory that already holds an output.log is refused, and so is a second session
+// before the first one ends.
+func (f *File) StartSession(dir string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.session != nil {
+		return errors.New("call EndSession before the next StartSession: the output.log of a session is open")
+	}
+	out, err := os.OpenFile(filepath.Join(dir, OutputFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return accesskey.ShownError(err)
+	}
+	f.session = out
+	return nil
+}
+
+// EndSession syncs and closes the session's output.log; with none open it does
+// nothing.
+func (f *File) EndSession() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.endSession()
+}
+
+// endSession is [File.EndSession] with f.mu held.
+func (f *File) endSession() error {
+	if f.session == nil {
+		return nil
+	}
+	err := errors.Join(f.session.Sync(), f.session.Close())
+	f.session = nil
+	return accesskey.ShownError(err)
+}
+
+// Close syncs and closes both files, and the session's output.log while one is open.
 func (f *File) Close(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return accesskey.ShownError(errors.Join(f.events.Sync(), f.events.Close(), f.output.Sync(), f.output.Close()))
+	return accesskey.ShownError(errors.Join(f.endSession(), f.events.Sync(), f.events.Close(), f.output.Sync(), f.output.Close()))
 }
 
 // Writer writes every event as one JSON line, the line events.jsonl holds, to a stream

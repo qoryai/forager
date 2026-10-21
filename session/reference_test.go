@@ -116,11 +116,11 @@ func TestARunInAnImageByReference(t *testing.T) {
 			t.Errorf("the enclosure's environment lacks %s: %v", want, w.got.Env)
 		}
 	}
-	script, err := os.ReadFile(filepath.Join(res.Dir, session.PreparationScript))
+	script, err := os.ReadFile(filepath.Join(res.SessionDir, session.PreparationScript))
 	if err != nil || !strings.Contains(string(script), "'true' '/workspace/prepare.sh'") {
 		t.Errorf("the preparation script: %s, %v", script, err)
 	}
-	copied, err := os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+	copied, err := os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 	if err != nil || !strings.Contains(string(copied), `"sh /workspace/hook.sh"`) || !strings.Contains(string(copied), `"`+dir+`shop"`) {
 		t.Errorf("the settings copied: %s, %v", copied, err)
 	}

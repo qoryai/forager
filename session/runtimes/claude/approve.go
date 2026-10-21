@@ -13,7 +13,7 @@ import (
 // apiKeyVar is the variable Claude Code reads an API key from.
 const apiKeyVar = "ANTHROPIC_API_KEY"
 
-// ApproveScript is the script, in the run directory, that an interactive Claude Code
+// ApproveScript is the script, in the session's directory, that an interactive Claude Code
 // with the API key's stand-in is started through.
 const ApproveScript = "approve-key.sh"
 
@@ -80,7 +80,7 @@ exec "$@"
 `
 
 // approve starts an interactive, walled Claude Code with the API key's stand-in through
-// the script of [ApproveScript], which it writes into the run directory: Claude Code
+// the script of [ApproveScript], which it writes into the session's directory: Claude Code
 // then uses the stand-in without waiting for a person to approve it. A launch that is
 // headless, unwalled, or whose API key is no stand-in, is returned as it is: Claude
 // Code shows no approval prompt for the first; without a wall the script would write
@@ -91,7 +91,7 @@ func approve(a runtimes.Attach, launch runtimes.Launch) (runtimes.Launch, error)
 		return launch, nil
 	}
 	script := strings.Replace(approveScript, "@APPROVED@", approved(), 1)
-	path := filepath.Join(a.RunDir, ApproveScript)
+	path := filepath.Join(a.SessionDir, ApproveScript)
 	if err := runfile.Replace(path, []byte(script), 0o644); err != nil {
 		return runtimes.Launch{}, accesskey.ShownError(err)
 	}

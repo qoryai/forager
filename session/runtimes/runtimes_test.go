@@ -43,7 +43,7 @@ func TestARuntimeWrittenAsDataAlone(t *testing.T) {
 	}
 	// With a forwarder and no hooks source there is still nothing to install.
 	launch := runtimes.Launch{Command: "other", Args: []string{"run"}}
-	got, err := rt.Prepare(runtimes.Attach{Launch: launch, RunDir: t.TempDir(), Forwarder: []string{"q"}})
+	got, err := rt.Prepare(runtimes.Attach{Launch: launch, SessionDir: t.TempDir(), Forwarder: []string{"q"}})
 	if err != nil || got.Command != "other" || len(got.Args) != 1 {
 		t.Errorf("%+v %v", got, err)
 	}
@@ -64,7 +64,7 @@ func TestADescriptorNamesAnInstallerAndNeverBringsOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.Prepare(runtimes.Attach{RunDir: t.TempDir(), Forwarder: []string{"q"}}); err != nil || !called {
+	if _, err := rt.Prepare(runtimes.Attach{SessionDir: t.TempDir(), Forwarder: []string{"q"}}); err != nil || !called {
 		t.Errorf("the installer was not asked: %v", err)
 	}
 	for _, bad := range []string{"stop: {signal: SIGKILL}", "stop: {grace: soon}", "stop: {}", "stop: {signal: SIGINT, then: SIGTERM}"} {

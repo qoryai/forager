@@ -33,7 +33,7 @@ const (
 	subagentPromptFileFlag = "--append-subagent-system-prompt-file"
 )
 
-// copyNames are the names of the copies of the flags' files in the run directory, by
+// copyNames are the names of the copies of the flags' files in the session's directory, by
 // their place among the flag's files, from 1.
 var copyNames = map[string]string{
 	mcpConfigFlag:          "mcp-config-%d.json",
@@ -128,7 +128,7 @@ func takesValue(w string) bool {
 // --mcp-config or --agents that Claude Code takes as JSON passes as it is. Any other
 // value is a path, refused when it starts with "~", is relative, or has a ".." name.
 // A file of --mcp-config or --agents is then checked and read as the settings are, and
-// copied into the run directory, as mcp-config-<n>.json or agents-<n>.json, with its
+// copied into the session's directory, as mcp-config-<n>.json or agents-<n>.json, with its
 // strings written as the enclosure sees them when [runtimes.Attach.Inside] is set; the
 // argument is given the copy's path. A file of --system-prompt-file,
 // --append-system-prompt-file or --append-subagent-system-prompt-file is checked and
@@ -172,7 +172,7 @@ func walledPaths(args []string, a runtimes.Attach) ([]string, error) {
 			return nil, err
 		}
 		n[v.flag]++
-		copies = append(copies, copied{v, filepath.Join(a.RunDir, fmt.Sprintf(name, n[v.flag])), b, perm & 0o644})
+		copies = append(copies, copied{v, filepath.Join(a.SessionDir, fmt.Sprintf(name, n[v.flag])), b, perm & 0o644})
 	}
 	if len(copies) == 0 {
 		return args, nil
