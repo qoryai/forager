@@ -1,6 +1,23 @@
 [
   {
     "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000170",
+    "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+    "type": "dev.qory.session.exited",
+    "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+    "time": "2026-09-16T12:12:00.000Z",
+    "sequence": "0000000039",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/session.exited.schema.json",
+    "data": {
+      "session": 1,
+      "state": "cancelled",
+      "exit_code": -1,
+      "reason": "stopped",
+      "duration_ms": 719000
+    }
+  },
+  {
+    "specversion": "1.0",
     "id": "7e1c0000-0000-7000-8000-000000000140",
     "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
     "type": "dev.qory.run.exited",

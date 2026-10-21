@@ -189,7 +189,7 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // TestLinkFixturesValidate pins that every document under fixtures/link passes the schema
 // of the gateway's link its name starts with: the discovery of the local link and of a
 // separate gateway, each with its proxy address, a run request without a wall, one with a
-// wall, the names it passes and its images, and one with a narrowing as well, a run
+// wall and its images, and one with a narrowing as well, a run
 // answer with a wall, its placeholders, reserved names, credential hosts, image, applied
 // and certificate authority, one with a wall and an image but no certificate
 // authority, one without a wall, one without a wall whose gateway holds a credential,
@@ -301,8 +301,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // with an unknown one, opened by a session, or with a runtime member, a session.started
 // without its command, numbered 0, or whose harness is empty, has a member it does not
 // define or a commit of 39 characters, a session.exited without its session, failed
-// with exit status 0 and no reason, cancelled with stopped, or of a refused join with an
-// exit status other than -1, a run.exited with no_session and succeeded,
+// with exit status 0 and no reason, cancelled with stopped and an exit status, or of a
+// refused join with an exit status other than -1, a run.exited with no_session and succeeded,
 // a run.exited without state, with a state other than the three, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
@@ -314,14 +314,16 @@ const beyondLinkSchema = "-beyond-schema-"
 // list, without a variable or with oauth beside a header, a descriptor that declares a
 // secret read from LD_PRELOAD, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
-// not define, that passes a value with a name or whose image has no reference, a link run
+// not define, that has passes, a member only a join request has, or whose image has no
+// reference, a link run
 // answer without applied, with a proxy secret too short, whose image has no reference
 // or whose credential_hosts entry has a member it does not define, no hosts, no
 // placeholders, a format without an endpoint or an endpoint without a format, a link reload answer with the proxy secret or the certificate
 // authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
 // run.registered or a run.egress, a run.started opened by a gateway or a session, a run.exited with one of Forager's reasons
 // other than timeout, interrupted and no_session, its old names among them, or with timeout and a state other than cancelled
-// or an exit code other than 124, a session.exited cancelled with no reason or succeeded with exit status 1, or a run.refused with a gateway's code,
+// or an exit code other than 124, a session.exited cancelled with no reason, succeeded with exit status 1, with stopped,
+// succeeded with no exit status or cancelled with a refusal's code, or a run.refused with a gateway's code,
 // its old codes among them, run_closed, another code of the
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or
 // workspaces or has no heartbeat interval or proxy, a link join request without passes,
@@ -481,28 +483,61 @@ func sessionNumber(m map[string]any) (int, bool) {
 	return int(v), err == nil
 }
 
-// TestSessionExitedReasonsAreTheSessions pins the reasons of dev.qory.session.exited to
-// timeout, interrupted and the codes a link batch's dev.qory.run.refused may carry, the
-// codes the session decides itself: a refused join has its refusal's code as reason.
+// TestSessionExitedReasonsAreTheSessions pins the reasons of a dev.qory.session.exited in a
+// link batch to timeout, interrupted and the codes a link batch's dev.qory.run.refused may
+// carry, the codes the session decides itself: a refused join has its refusal's code as
+// reason. The event's reason is the open code of dev.qory.run.exited, since the gateway
+// writes a session's dev.qory.session.exited with the reason of the run's end.
 func TestSessionExitedReasonsAreTheSessions(t *testing.T) {
-	doc, err := contracts.Document("events/session.exited.schema.json")
+	doc, err := contracts.Document("link-batch.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	enum, _ := doc.(map[string]any)["properties"].(map[string]any)["reason"].(map[string]any)["enum"].([]any)
 	var got []string
-	for _, c := range enum {
-		code := c.(string)
-		got = append(got, code)
+	for _, rule := range doc.(map[string]any)["$defs"].(map[string]any)["event"].(map[string]any)["allOf"].([]any) {
+		r, _ := rule.(map[string]any)
+		typ, _ := dig(r, "if", "properties", "type", "const").(string)
+		if typ != "dev.qory.session.exited" {
+			continue
+		}
+		enum, _ := dig(r, "then", "properties", "data", "properties", "reason", "enum").([]any)
+		for _, c := range enum {
+			got = append(got, c.(string))
+		}
+	}
+	for _, code := range got {
 		if code != "timeout" && code != "interrupted" && !refusal.Decides(code) {
-			t.Errorf("session.exited allows the reason %s, which the session does not decide", code)
+			t.Errorf("a link batch's session.exited allows the reason %s, which the session does not decide", code)
 		}
 	}
 	for _, code := range []string{"timeout", "interrupted", "placeholder_conflict", "mount_mode_conflict", "engine_unreachable"} {
 		if !slices.Contains(got, code) {
-			t.Errorf("session.exited does not allow the reason %s", code)
+			t.Errorf("a link batch's session.exited does not allow the reason %s", code)
 		}
 	}
+	pattern := func(name string) any {
+		d, err := contracts.Document(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dig(d.(map[string]any), "properties", "reason", "pattern")
+	}
+	if s, r := pattern("events/session.exited.schema.json"), pattern("events/run.exited.schema.json"); s == nil || s != r {
+		t.Errorf("session.exited's reason pattern is %v; want run.exited's, %v", s, r)
+	}
+}
+
+// dig returns the value at the path of member names under m, or nil.
+func dig(m map[string]any, names ...string) any {
+	var v any = m
+	for _, n := range names {
+		o, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = o[n]
+	}
+	return v
 }
 
 // beyondSchema marks the refused fixtures of about whose rule only Forager checks: a

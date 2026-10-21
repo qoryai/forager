@@ -80,6 +80,12 @@ release may change what an existing document does, and says so under Upgrading.
   `forager_version`, `host`, `wall`, `labels` and `about`, and requires only the first
   two. Its `opened_by` is `run`; a `dev.qory.run.started` with `opened_by: "session"`
   fails validation, and a link batch with one is `400` `invalid_request`.
+- Send `passes` in each join request, not in the run request: a run request with
+  `passes` fails validation against `link-run-request.schema.json`, and the gateway
+  answers it `400` `invalid_request`. The gateway checks a join's `passes` against the
+  run's placeholders: a conflict fails that join, `403` `placeholder_conflict`, and the
+  run stays open. A reload is checked against the union of the `passes` of the open
+  joins, those the gateway answered `200` and has no `dev.qory.session.exited` of.
 - Read how a session ended from its `dev.qory.session.exited`, and how the run ended
   from `dev.qory.run.exited`, which the close writes once, with the caller's outcome.
   The run's `exit_code` is the last session's, `124` at the run's time limit, or `-1`
@@ -110,7 +116,14 @@ release may change what an existing document does, and says so under Upgrading.
   `session`, `state`, `exit_code`, `signal`, `reason` and `duration_ms`. The runtime's
   exit decides the state, as it decided the state of `dev.qory.run.exited` before. A
   refused join is `failed` with `exit_code` `-1`, `duration_ms` `0` and the refusal's
-  code as `reason`, and has no `dev.qory.session.started`; the run stays open.
+  code as `reason`, and has no `dev.qory.session.started`; the run stays open. When the
+  gateway ends the run while a join is open, the gateway writes that session's
+  `dev.qory.session.exited` first, with the `state`, the `reason` and the `exit_code`
+  `-1` of its `dev.qory.run.exited`; the resend of a record that ends with
+  `gateway_lost`, and the session in its record of the gateway's `410`, do the same.
+  Such an event's `reason` is an open code, as a `dev.qory.run.exited`'s is; a session's
+  batch on the link contains only `timeout`, `interrupted` and the codes of
+  `refusal.Decides`.
 - The reason `no_session` of `dev.qory.run.exited`, reserved: the run was closed with no
   join, `failed` with `exit_code` `-1`.
 - The join request on the gateway's link, `POST <run.url>/<run_id>/sessions` on both

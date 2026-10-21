@@ -9,11 +9,6 @@
   "about": {
     "title": "Fix the failing build"
   },
-  "passes": [
-    "HOME",
-    "NODE_ENV",
-    "PATH"
-  ],
   "images": {
     "default": "base",
     "definitions": [

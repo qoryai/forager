@@ -10,7 +10,7 @@
   "data": {
     "session": 1,
     "state": "cancelled",
-    "exit_code": -1,
+    "exit_code": 143,
     "reason": "stopped",
     "duration_ms": 1200
   }

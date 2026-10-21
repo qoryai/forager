@@ -2,38 +2,42 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/session.exited.schema.json",
   "title": "dev.qory.session.exited",
-  "description": "A session of the run ended: its runtime exited, the session stopped it, or the join was refused. One per join, the last event of the session's, after its dev.qory.session.started; a refused join has no dev.qory.session.started, and its dev.qory.session.exited is failed with exit_code -1 and the refusal's code as reason. The run stays open after it: only dev.qory.run.exited ends the run. The runtime's exit decides the state: succeeded on exit status 0, with no reason and no signal; failed on any other exit status or a signal, with no reason; cancelled with timeout, the run's time limit, or interrupted, a stop from where the run was started, whatever the exit status or signal. When the gateway ends the run while a session runs, the gateway's dev.qory.run.exited is the run's last event, and that session has no dev.qory.session.exited in the run's stream.",
+  "description": "A session of the run ended: its runtime exited, the session stopped it, the join was refused, or the run ended while the session ran. One per join, the last event of the session's, after its dev.qory.session.started; a refused join has no dev.qory.session.started, and its dev.qory.session.exited is failed with exit_code -1 and the refusal's code as reason. The run stays open after it: only dev.qory.run.exited ends the run. The runtime's exit decides the state: succeeded on exit status 0, with no reason and no signal; failed on any other exit status or a signal, with no reason; cancelled with timeout, the run's time limit, or interrupted, a stop from where the run was started, whatever the exit status or signal. When the gateway ends the run while a join is open, the gateway writes that session's dev.qory.session.exited first, with the state, the reason and the exit_code of its dev.qory.run.exited, then the dev.qory.run.exited; the resend of a record that ends with gateway_lost does the same, and so does the session in its record of the gateway's 410. Such an event has exit_code -1 and no signal, as a refused join has: with no exit status of the runtime, the rules of the runtime's exit do not apply, and the reason is an open code, as dev.qory.run.exited's. So every dev.qory.session.started of a run's stream has its dev.qory.session.exited. A session's batch on the link contains only the session's reasons, link-batch.schema.json.",
   "type": "object",
   "additionalProperties": false,
   "required": ["session", "state", "exit_code", "duration_ms"],
   "allOf": [
     {
-      "if": {"properties": {"state": {"const": "succeeded"}}, "required": ["state"]},
-      "then": {"properties": {"exit_code": {"const": 0}}, "not": {"anyOf": [{"required": ["reason"]}, {"required": ["signal"]}]}}
-    },
-    {
-      "if": {"properties": {"state": {"const": "failed"}}, "required": ["state"], "not": {"required": ["reason"]}},
-      "then": {"anyOf": [{"required": ["signal"]}, {"properties": {"exit_code": {"not": {"const": 0}}}}]}
+      "if": {"anyOf": [{"required": ["signal"]}, {"required": ["exit_code"], "properties": {"exit_code": {"not": {"const": -1}}}}]},
+      "then": {
+        "properties": {"reason": {"enum": ["timeout", "interrupted"]}},
+        "allOf": [
+          {
+            "if": {"properties": {"state": {"const": "succeeded"}}, "required": ["state"]},
+            "then": {"properties": {"exit_code": {"const": 0}}, "not": {"anyOf": [{"required": ["reason"]}, {"required": ["signal"]}]}}
+          },
+          {
+            "if": {"properties": {"state": {"const": "failed"}}, "required": ["state"]},
+            "then": {"not": {"required": ["reason"]}, "anyOf": [{"required": ["signal"]}, {"properties": {"exit_code": {"not": {"const": 0}}}}]}
+          }
+        ]
+      }
     },
     {
       "if": {"properties": {"state": {"const": "cancelled"}}, "required": ["state"]},
-      "then": {"required": ["reason"], "properties": {"reason": {"enum": ["timeout", "interrupted"]}}}
+      "then": {"required": ["reason"]}
     },
     {
       "if": {"properties": {"reason": {"enum": ["timeout", "interrupted"]}}, "required": ["reason"]},
       "then": {"properties": {"state": {"const": "cancelled"}}}
-    },
-    {
-      "if": {"required": ["reason"], "properties": {"reason": {"not": {"enum": ["timeout", "interrupted"]}}}},
-      "then": {"properties": {"state": {"const": "failed"}, "exit_code": {"const": -1}}, "not": {"required": ["signal"]}}
     }
   ],
   "properties": {
     "session": {"description": "The session's number in the run, from 1: the one of its dev.qory.session.started, or for a join the gateway refused, the number the gateway gave the join request.", "type": "integer", "minimum": 1},
     "state": {"description": "How the session ended: succeeded, failed or cancelled, as the runtime's exit and the reason decide it.", "type": "string", "enum": ["succeeded", "failed", "cancelled"]},
-    "exit_code": {"description": "The runtime's exit status, or -1 when a signal killed it, and -1 for a refused join, whose runtime never started.", "type": "integer", "minimum": -1},
+    "exit_code": {"description": "The runtime's exit status, or -1 when a signal killed it; -1 for a refused join, whose runtime never started; and -1 when the run ended while the session ran, as the run's dev.qory.run.exited has it.", "type": "integer", "minimum": -1},
     "signal": {"description": "The signal that killed the runtime, when one did: SIGKILL, SIGTERM.", "type": "string", "minLength": 1},
-    "reason": {"description": "Why the session ended, when it ended other than by the runtime exiting by itself: timeout, the run's time limit was reached and the session stopped the runtime; interrupted, the run was stopped from where it was started, a Ctrl-C or a signal to the program that runs the session, before the session observed the runtime's exit; or, for a refused join, the refusal's code, one the session decides itself, those of refusal.Decides. Absent when the runtime exited by itself.", "type": "string", "enum": ["timeout", "interrupted", "run_configuration_invalid", "tool_unknown", "image_unknown", "image_not_allowed", "image_user_root", "variable_reserved", "placeholder_conflict", "model_key_missing", "mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run", "mount_through_link", "engine_unreachable"]},
-    "duration_ms": {"description": "Milliseconds from the session's dev.qory.session.started to its end; 0 for a refused join, which has none.", "type": "integer", "minimum": 0}
+    "reason": {"description": "Why the session ended, when it ended other than by the runtime exiting by itself: an open code, a lower-case letter, then lower-case letters, digits and _, up to 64 characters, as the reason of dev.qory.run.exited. The session writes timeout, the run's time limit was reached and the session stopped the runtime; interrupted, the run was stopped from where it was started, a Ctrl-C or a signal to the program that runs the session, before the session observed the runtime's exit; and, for a refused join, the refusal's code, one the session decides itself, those of refusal.Decides. When the run ends while the session runs, the reason is the run's: the dev.qory.run.exited reason of the gateway's ending, stopped, session_lost, batch_refused or the starter's, gateway_lost from the resend of a record, and in the session's record the reason of the gateway's 410, run_closed among them; absent when that dev.qory.run.exited has none. Absent when the runtime exited by itself.", "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+    "duration_ms": {"description": "Milliseconds from the session's dev.qory.session.started to its end, the run's end when the run ended while the session ran; 0 for a refused join, which has none.", "type": "integer", "minimum": 0}
   }
 }

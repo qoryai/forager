@@ -36,7 +36,7 @@
       "$ref": "run-configuration.schema.json#/properties/variables"
     },
     "placeholders": {
-      "description": "The variables the agent sees in place of a credential or a tool's secret the gateway holds: the session sets each to a value that is no credential, and the run passes no value for one, placeholder_conflict. Names alone, never a value. Absent means none.",
+      "description": "The variables the agent sees in place of a credential or a tool's secret the gateway holds: the session sets each to a value that is no credential, and a session that passes a value for one fails its join, placeholder_conflict. Names alone, never a value. Absent means none.",
       "type": "array",
       "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
     },

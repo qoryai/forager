@@ -70,7 +70,7 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.run.resized`        | The pseudo-terminal was resized                                            |
 | `dev.qory.run.egress`         | One per connection, or per request on a terminated host                    |
 | `dev.qory.run.heartbeat`      | Every interval while the run is open, 30 seconds by default                |
-| `dev.qory.session.exited`     | A session ended, or its join was refused                                   |
+| `dev.qory.session.exited`     | A session ended, its join was refused, or the run ended while it ran       |
 | `dev.qory.run.exited`         | The run ended: the result, the last event                                  |
 
 Forager heartbeats while the session runs: the session sends one every interval the
@@ -85,6 +85,9 @@ command and the image, and a `dev.qory.session.exited`, with how the session end
 runtime's exit decides `succeeded` or `failed`, and `cancelled` comes with `timeout` or
 `interrupted`. A join that is refused has only a `dev.qory.session.exited`, `failed`
 with exit code -1 and the refusal's code, such as `mount_mode_conflict`, as its reason.
+When the run ends while a session runs, that session's `dev.qory.session.exited` comes
+right before the run's `dev.qory.run.exited`, with the same state and reason and exit
+code -1. So every `dev.qory.session.started` has its `dev.qory.session.exited`.
 
 `dev.qory.session.started` contains `harness` when the caller passes it: one entry per
 harness source the session's compose used, each with `source`, the source as it is
@@ -106,10 +109,13 @@ gave no outcome, or the starter's outcome and reason when it gave one; and sendi
 record again writes `gateway_lost`, `failed`. Forager's codes are reserved, and so are
 the old names `quiet`, `credential_expired`, `credential_check_unreachable` and
 `credential_check_invalid`, which Forager no longer writes: a starter's reason that
-equals one is dropped. When the gateway ends a session's run, the gateway writes
-the run's `dev.qory.run.exited`, and answers the session's next request with a `410`, a
-code, and the state and the reason of that end. The session records its
-`dev.qory.run.exited` in `session.jsonl` alone, with them, and posts nothing more:
+equals one is dropped. When the gateway ends a session's run, the gateway writes the
+open session's `dev.qory.session.exited` and then the run's `dev.qory.run.exited`, and
+answers the session's next request with a `410`, a code, and the state and the reason
+of that end. Sending a record again writes the open session's `dev.qory.session.exited`
+the same way before its `gateway_lost`. The session records its
+`dev.qory.session.exited` and its `dev.qory.run.exited` in `session.jsonl` alone, with
+them and exit code -1, and posts nothing more:
 `stopped`, `run_closed`, `session_lost` or `batch_refused` as the gateway ended the
 run. A refusal of the run request with a
 code other than `wall_required` is recorded the same way: the session records
