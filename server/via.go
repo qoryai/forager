@@ -46,7 +46,7 @@ func (v Via) origin() (*url.URL, error) {
 }
 
 // Check refuses a via Forager cannot send through: a URL that is not an https origin, a
-// CAFile it cannot read or that holds no PEM certificate, and a CertificateSHA256 not
+// CAFile it cannot read or that contains no PEM certificate, and a CertificateSHA256 not
 // in its form. It sends nothing.
 func (v Via) Check() error {
 	_, err := v.Transport()

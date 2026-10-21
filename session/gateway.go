@@ -80,8 +80,8 @@ type RemoteGateway struct {
 	// session checks the chain against the system's roots; with CAFile, against the
 	// authorities of that PEM file in their place; with CertificateSHA256, it also
 	// accepts only a certificate with that public key. A CA file Forager cannot read,
-	// or a pin of another form, stops the run or the resend before any connection, with
-	// an error that starts with the fix.
+	// or a pin of another form, stops the run, and a resend that sends events, before
+	// any connection, with an error that starts with the fix.
 	TLS server.RemoteTLS
 }
 
@@ -121,16 +121,21 @@ func (g *RemoteGateway) link(version string, digests func(server.Digests)) (*ser
 
 // checkTLS refuses a TLS the link cannot use, with an error that starts with the fix:
 // a CA file that cannot be read or has no PEM certificate, and a pin of another form.
-// [server.RemoteTLS.Check] checks each.
+// [server.RemoteTLS.Check] checks each; of its error, the text after the fix is the
+// cause the fix does not state: the read error, or that the file has no PEM
+// certificate.
 func (g *RemoteGateway) checkTLS() error {
 	if f := g.TLS.CAFile; f != "" {
 		if err := (server.RemoteTLS{CAFile: f}).Check(); err != nil {
+			if cause := errors.Unwrap(err); cause != nil {
+				err = cause
+			}
 			return fmt.Errorf("set the gateway's CA file to a PEM file of its certificate authorities that Forager can read: %w", err)
 		}
 	}
 	if p := g.TLS.CertificateSHA256; p != "" {
-		if err := (server.RemoteTLS{CertificateSHA256: p}).Check(); err != nil {
-			return fmt.Errorf("set the gateway's certificate pin to the SHA-256 of its public key: %w", err)
+		if (server.RemoteTLS{CertificateSHA256: p}).Check() != nil {
+			return errors.New("set the gateway's certificate pin to the SHA-256 of its public key: 44 characters of standard base64 ending in =")
 		}
 	}
 	return nil

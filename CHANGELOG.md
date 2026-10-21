@@ -949,12 +949,13 @@ release may change what an existing document does, and says so under Upgrading.
   place of the system's roots, so a gateway at a name such as `node-1.internal` can
   have a certificate of a private authority. With `CertificateSHA256`, the session
   accepts only a certificate with that public key. With the zero value, the session
-  checks the chain against the system's roots, as before. `session.Open` and `session.Resend` refuse a CA file that
-  Forager cannot read or that has no PEM certificate with "set the gateway's CA file to
-  a PEM file of its certificate authorities that Forager can read: " and the reason,
-  and a pin of another form with "set the gateway's certificate pin to the SHA-256 of
-  its public key: " and the reason, before any connection. `server.RemoteTLS.Check`
-  runs the same check.
+  checks the chain against the system's roots, as before. `session.Open`, and
+  `session.Resend` when it sends events, refuse a CA file that Forager cannot read or
+  that has no PEM certificate with "set the gateway's CA file to a PEM file of its
+  certificate authorities that Forager can read: " and the read error or "<path>
+  contains no PEM certificate", and a pin of another form with "set the gateway's
+  certificate pin to the SHA-256 of its public key: 44 characters of standard base64
+  ending in =", before any connection. `server.RemoteTLS.Check` runs the same check.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.

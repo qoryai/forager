@@ -51,6 +51,9 @@ func (r RemoteTLS) Check() error {
 	return err
 }
 
+// errPinForm refuses a pin that is not the SHA-256 of a public key in its form.
+var errPinForm = errors.New("the gateway's certificate pin is not 44 characters of standard base64 ending in =")
+
 // pinShape is a pin's form: 32 bytes in standard base64 with padding.
 var pinShape = regexp.MustCompile(`^[A-Za-z0-9+/]{43}=$`)
 
@@ -66,21 +69,21 @@ func (r RemoteTLS) config(host string) (*tls.Config, error) {
 	if r.CAFile != "" {
 		b, err := os.ReadFile(r.CAFile)
 		if err != nil {
-			return nil, fmt.Errorf("the gateway's certificate authorities: %w", accesskey.ShownError(err))
+			return nil, fmt.Errorf("the gateway's CA file: %w", accesskey.ShownError(err))
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(b) {
-			return nil, fmt.Errorf("the gateway's certificate authorities %s hold no PEM certificate", accesskey.ShownValue(r.CAFile, false))
+			return nil, fmt.Errorf("the gateway's CA file: %w", errors.New(accesskey.ShownValue(r.CAFile, false)+" contains no PEM certificate"))
 		}
 		cfg.RootCAs = pool
 	}
 	if r.CertificateSHA256 != "" {
 		if !pinShape.MatchString(r.CertificateSHA256) {
-			return nil, errors.New("the gateway's certificate pin is not the SHA-256 of a public key in standard base64 with padding, 44 characters ending in =")
+			return nil, errPinForm
 		}
 		pin, err := base64.StdEncoding.Strict().DecodeString(r.CertificateSHA256)
 		if err != nil || len(pin) != sha256.Size {
-			return nil, errors.New("the gateway's certificate pin is not the SHA-256 of a public key in standard base64 with padding, 44 characters ending in =")
+			return nil, errPinForm
 		}
 		// The chain and the host name are verified first, as without a pin; the pin
 		// then holds the certificate to its one key.

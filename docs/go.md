@@ -415,13 +415,15 @@ run, err := session.Open(ctx, session.OpenSpec{
 
   A caller sets both from its configuration, such as a file on the machine, or from
   values the program that starts it passes. A CA file is not a secret.
-  `session.Open` and `session.Resend` check both before any connection, and
-  `session.Open` checks them before the run directory exists:
-  - A CA file that Forager cannot read, or that has no PEM certificate: "set the
-    gateway's CA file to a PEM file of its certificate authorities that Forager can
-    read: " and the reason, with the path.
+  `session.Open` checks both before the run directory exists. `session.Resend` checks
+  both when it has events to send, before any connection:
+  - A CA file that Forager cannot read: "set the gateway's CA file to a PEM file of
+    its certificate authorities that Forager can read: " and the read error, such as
+    "open /etc/qory/gateway-ca.pem: no such file or directory".
+  - A CA file with no PEM certificate: the same fix, then "<path> contains no PEM
+    certificate".
   - A pin of another form: "set the gateway's certificate pin to the SHA-256 of its
-    public key: " and the reason.
+    public key: 44 characters of standard base64 ending in =".
 
   A certificate whose chain does not verify, or whose key is not the pinned one, fails
   the connection, and the run key is never sent. Every connection, the

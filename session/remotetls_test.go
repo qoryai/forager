@@ -94,14 +94,14 @@ func TestARemoteGatewaysTLSOfAnotherFormIsNoRun(t *testing.T) {
 	missing := filepath.Join(dir, "none.pem")
 	secretPath := filepath.Join(dir, "qrk_x", "ca.pem")
 	const caFix = "set the gateway's CA file to a PEM file of its certificate authorities that Forager can read: "
-	const pinFix = "set the gateway's certificate pin to the SHA-256 of its public key: "
+	const pinFix = "set the gateway's certificate pin to the SHA-256 of its public key: 44 characters of standard base64 ending in ="
 	sum := sha256.Sum256([]byte("a key"))
 	cases := map[string]struct {
 		tls       server.RemoteTLS
 		fix, path string
 	}{
 		"a missing CA file":         {server.RemoteTLS{CAFile: missing}, caFix, missing},
-		"a CA file not PEM":         {server.RemoteTLS{CAFile: notPEM}, caFix, notPEM},
+		"a CA file not PEM":         {server.RemoteTLS{CAFile: notPEM}, caFix, notPEM + " contains no PEM certificate"},
 		"a CA file in a qrk_ path":  {server.RemoteTLS{CAFile: secretPath}, caFix, ""},
 		"a hex pin":                 {server.RemoteTLS{CertificateSHA256: strings.Repeat("ab", 32)}, pinFix, ""},
 		"a pin without its padding": {server.RemoteTLS{CertificateSHA256: base64.RawStdEncoding.EncodeToString(sum[:])}, pinFix, ""},
@@ -115,7 +115,8 @@ func TestARemoteGatewaysTLSOfAnotherFormIsNoRun(t *testing.T) {
 	for name, c := range cases {
 		r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID()), TLS: c.tls})
 		_, err := run(context.Background(), r.sp)
-		if err == nil || !strings.HasPrefix(err.Error(), c.fix) || !strings.Contains(err.Error(), c.path) || strings.Contains(err.Error(), "qrk_") {
+		if err == nil || !strings.HasPrefix(err.Error(), c.fix) || !strings.Contains(err.Error(), c.path) || strings.Contains(err.Error(), "qrk_") ||
+			strings.Count(err.Error(), "the gateway's") != 1 || (c.fix == pinFix && err.Error() != pinFix) {
 			t.Errorf("%s: %v, want %q and %q", name, err, c.fix, c.path)
 		}
 		if entries, _ := os.ReadDir(r.sp.RunsDir); len(entries) != 0 || r.started() {
