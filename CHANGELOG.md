@@ -936,6 +936,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- In a run with no wall, `output.log`, every `dev.qory.run.log` chunk and every event
+  mapped from an output or hook record contain `qory-proxy-password` in place of
+  the forwarder's password, and the base64 of `qory:qory-proxy-password` in place of
+  the base64 of `qory:<password>`. Before, a runtime that printed its environment or
+  its proxy URL left the password in `output.log`, `session.jsonl`, the gateway's
+  `events.jsonl` and the server's record.
 - Without a wall, a launch that passed `--settings` more than once started, and Claude
   Code read its last settings file, which the `claude-settings` installer had not
   copied: the run had no Forager hooks, and that file's `env` was not filtered. A launch

@@ -64,6 +64,10 @@ them under its state directory and prints the path:
 - `events.jsonl`: one CloudEvent per line, in order.
 - `output.log`: the session's bytes.
 
+In a run with no wall, `qory-proxy-password` replaces the password of the agent's proxy
+URL in the session's bytes and in the events made from the runtime's output and hook
+records.
+
 Forager writes its events: the start, the policy, each connection, each chunk of output,
 a heartbeat every 30 seconds, and the exit. The agent's hooks and output add the
 runtime's events: prompts, tool calls, subagents, turns, as the runtime reports them

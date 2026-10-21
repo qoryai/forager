@@ -1568,6 +1568,10 @@ compose keeps it out of git:
   is never posted.
 - `output.log`: the raw bytes of the run's output, the host work's and each session's,
   the concatenation of the `dev.qory.run.log` chunks. Both files tail.
+  In a run with no wall, `qory-proxy-password` replaces the forwarder's password, and
+  the base64 of `qory:qory-proxy-password` replaces the base64 of `qory:<password>`, in
+  every `dev.qory.run.log` chunk and in every event the descriptor maps from an output
+  or hook record.
 - `settings.json`: the runtime's settings with Forager's hooks added, when hooks
   are installed.
 - `ca-bundle.pem`: the trusted bundle with the run's certificate, for every run with a
@@ -3419,10 +3423,13 @@ line off before anything reaches the gateway. Without a wall, on one machine as 
 separate gateway, the agent's proxy URL is the forwarder's address on loopback with a
 password, `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session
 makes for the run's forwarder alone, 32 bytes from the system's random source in
-base64url, which lives as long as the run and is never logged or recorded. A connection
-to the forwarder carries one request, a `CONNECT` and its tunnel or one plain HTTP
-request and its reply, so every request is checked: it must carry the password in its
-one `Proxy-Authorization`, Basic, the user name ignored, compared in constant time. The
+base64url, which lives as long as the run. The session writes the password into no
+event. Where the runtime prints it, as is or as the base64 of `qory:<password>`, the
+record contains `qory-proxy-password` in its place, in the same form (§The record
+files). A connection to the forwarder carries one request, a `CONNECT` and its tunnel
+or one plain HTTP request and its reply, so every request is checked: it must carry the
+password in its one `Proxy-Authorization`, Basic, the user name ignored, compared in
+constant time. The
 forwarder takes the header off, passes the request on with `Connection: close`, passes
 on nothing the agent sends after a plain request, and closes the connection at the end
 of its reply; a plain request that asks for an upgrade goes on with
