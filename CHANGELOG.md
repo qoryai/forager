@@ -563,8 +563,10 @@ release may change what an existing document does, and says so under Upgrading.
   gateway reads them again when one has another identity, modification time or size,
   as after a rename. Connections already open keep their TLS session. A read that
   fails keeps the pair in force and reports one line that starts with "replace the
-  gateway's certificate". Before, the gateway read the pair once, at `Start`, and a
-  renewal needed a restart, which closed every connection of the runs in progress.
+  gateway's certificate". The gateway reads each file only when it is a regular file
+  of at most 1 MiB, at `Start` and at each check. Before, the gateway read the pair
+  once, at `Start`, and a renewal needed a restart, which closed every connection of
+  the runs in progress.
 - `gateway.HardenProcess`, for qory to call first in `main`: it makes the calls with
   which `Start` limits core dumps of the process and debugger access to it, before the
   program reads its configuration, a key or its environment. Before, a debugger that

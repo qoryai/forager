@@ -2,9 +2,11 @@ package gateway_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -133,5 +135,87 @@ func TestTheOneAddressReadsARenewedCertificate(t *testing.T) {
 	}
 	if n := failures(r); n != 1 {
 		t.Errorf("after the repair, %d lines report a failure, want 1", n)
+	}
+}
+
+// TestARenewedKeyBeforeItsCertificateIsNoFailure pins the read between the two renames
+// of a renewal: a key renamed in before its certificate keeps the pair in force and is
+// read once more at the next check, so the renewal reports nothing. A key that still
+// does not match at that check is reported once.
+func TestARenewedKeyBeforeItsCertificateIsNoFailure(t *testing.T) {
+	cfg := gateway.Config{}
+	gateway.SetCertCheck(&cfg, certCheckEvery)
+	r := startRemote(t, nil, cfg)
+	certFile, keyFile := r.cfg.TLS.CertFile, r.cfg.TLS.KeyFile
+	a := derOf(t, certFile, keyFile)
+
+	bCert, bKey, bPool := testCertificate(t, t.TempDir())
+	certB, _ := os.ReadFile(bCert)
+	keyB, _ := os.ReadFile(bKey)
+	replaceByRename(t, keyFile, keyB)
+	time.Sleep(2 * certCheckEvery)
+	if got := servedCertificate(t, r); !bytes.Equal(got, a) {
+		t.Fatal("a handshake between the key's rename and the certificate's does not get the pair in force")
+	}
+	if n := failures(r); n != 0 {
+		t.Fatalf("a key renamed in before its certificate is reported in %d lines, want 0", n)
+	}
+	replaceByRename(t, certFile, certB)
+	time.Sleep(2 * certCheckEvery)
+	r.pool = bPool
+	if got := servedCertificate(t, r); !bytes.Equal(got, derOf(t, bCert, bKey)) {
+		t.Fatal("a handshake after the certificate's rename does not get the renewed pair")
+	}
+	if n := failures(r); n != 0 {
+		t.Errorf("the renewal is reported in %d lines, want 0", n)
+	}
+
+	_, cKey, _ := testCertificate(t, t.TempDir())
+	keyC, _ := os.ReadFile(cKey)
+	replaceByRename(t, keyFile, keyC)
+	for range 3 {
+		time.Sleep(2 * certCheckEvery)
+		servedCertificate(t, r)
+	}
+	if n := failures(r); n != 1 {
+		t.Errorf("a key of another certificate is reported in %d lines, want 1", n)
+	}
+	if want := "reading them failed, tls: private key does not match public key;"; !r.reported(want) {
+		t.Errorf("no line contains %q", want)
+	}
+}
+
+// TestTheGatewayReadsAtMost1MiBOfACertificateFile pins the bound of a read: a key file
+// longer than 1 MiB fails Start, and renamed in later, it keeps the pair in force and is
+// reported once.
+func TestTheGatewayReadsAtMost1MiBOfACertificateFile(t *testing.T) {
+	dir := t.TempDir()
+	certFile, _, _ := testCertificate(t, dir)
+	big := filepath.Join(dir, "big.pem")
+	if err := os.WriteFile(big, bytes.Repeat([]byte("a"), 1<<20+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := gateway.Start(context.Background(), gateway.Config{Dir: t.TempDir(), Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: big}, Server: gatewayControl(t).server()})
+	want := "the gateway's certificate " + certFile + " and key " + big + ": " + big + " is longer than 1 MiB, the most the gateway reads of a certificate or key file"
+	if err == nil || err.Error() != want {
+		t.Errorf("Start with a key file of 1 MiB and 1 byte: %v; want %q", err, want)
+	}
+
+	cfg := gateway.Config{}
+	gateway.SetCertCheck(&cfg, certCheckEvery)
+	r := startRemote(t, nil, cfg)
+	a := derOf(t, r.cfg.TLS.CertFile, r.cfg.TLS.KeyFile)
+	replaceByRename(t, r.cfg.TLS.KeyFile, bytes.Repeat([]byte("a"), 1<<20+1))
+	for range 3 {
+		time.Sleep(2 * certCheckEvery)
+		if got := servedCertificate(t, r); !bytes.Equal(got, a) {
+			t.Fatal("a handshake after a key file of 1 MiB and 1 byte does not get the pair in force")
+		}
+	}
+	if n := failures(r); n != 1 {
+		t.Errorf("the long key file is reported in %d lines, want 1", n)
+	}
+	if want := "reading them failed, " + r.cfg.TLS.KeyFile + " is longer than 1 MiB, the most the gateway reads of a certificate or key file;"; !r.reported(want) {
+		t.Errorf("no line contains %q", want)
 	}
 }

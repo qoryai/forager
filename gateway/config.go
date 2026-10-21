@@ -118,8 +118,8 @@ type Config struct {
 	// upstreamRoots, when not nil, are the roots every run's proxy verifies a
 	// terminated host's certificate against, in place of this machine's. Tests set them.
 	upstreamRoots *x509.CertPool
-	// certCheck, when not zero, replaces certCheck, how often at most the one address
-	// checks its certificate and key files for a change. Tests set it.
+	// certCheck, when not zero, replaces the constant [certCheck], how often at most the
+	// one address checks its certificate and key files for a change. Tests set it.
 	certCheck time.Duration
 }
 
