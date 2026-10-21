@@ -16,6 +16,10 @@ jobs:
       matrix:
         part: [core, gateway, wall, session, e2e]
     runs-on: ubuntu-latest
+    env:
+      # The image's Go is older than go.mod's 1.27.3 and sets GOTOOLCHAIN=local; remove
+      # this line once the digest below is of a go1.27.3 image.
+      GOTOOLCHAIN: go1.27.3
     container:
       # Docker Hub's official golang:1.27, copied by digest to qoryai's public package,
       # and pulled with the job's token.
