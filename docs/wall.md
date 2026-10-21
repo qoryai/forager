@@ -739,8 +739,9 @@ uid 0. An image whose user is a name its `/etc/passwd` does not map, or that has
 `/etc/passwd`, is refused the same way, since its user cannot be checked: give the user
 as a uid. The relay always starts from the
 default image, never from the run's, and the authorities the run trusts are read out of
-the run's image. `dev.qory.run.started` reports `image_fetch_ms`, how long finding
-the image took, the pull included when there was one.
+the run's image. The session's `image` step spans the fetch and the check of the
+image's user, and its `dev.qory.run.step_exited` has how long they took as
+`duration_ms` ([the record](events.md)).
 
 In such an image the checkout is mounted at `/workspace` and the working directory is
 under it; the paths Forager puts inside name it there, and values from the server,

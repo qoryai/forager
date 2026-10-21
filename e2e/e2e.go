@@ -799,18 +799,31 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 		if err != nil {
 			t.Fatalf("the run did not start: %v", err)
 		}
-		var started map[string]any
+		// started is the session.started, and fetched the image step's step_exited: the
+		// fetch of the image by reference, whose name is the reference.
+		var started, fetched map[string]any
+		image := -1.0
 		for _, e := range r.events {
-			if e["type"] == "dev.qory.session.started" {
-				started = e["data"].(map[string]any)
+			d, _ := e["data"].(map[string]any)
+			switch e["type"] {
+			case "dev.qory.session.started":
+				started = d
+			case "dev.qory.run.step_started":
+				if d["kind"] == "image" && d["name"] == o.Reference {
+					image, _ = d["step"].(float64)
+				}
+			case "dev.qory.run.step_exited":
+				if d["step"] == image {
+					fetched = d
+				}
 			}
 		}
-		fetched, _ := started["image_fetch_ms"].(float64)
 		written, werr := os.ReadFile(filepath.Join(r.dir, "probe-was-here"))
 		if r.probe.Workdir != "/workspace" || r.probe.HostWorkspace || werr != nil || string(written) != "inside" || r.res.ExitCode != 7 ||
-			started["dir"] != "/workspace" || started["image"] != o.Reference || started["image_name"] != nil || fetched < 0 || started["image_fetch_ms"] == nil {
-			t.Errorf("the probe ran in %q, the workspace's path here seen inside %v, wrote %q (%v), exited %d; session.started %v",
-				r.probe.Workdir, r.probe.HostWorkspace, written, werr, r.res.ExitCode, started)
+			started["dir"] != "/workspace" || started["image"] != o.Reference || started["image_name"] != nil ||
+			fetched["state"] != "succeeded" || fetched["duration_ms"] == nil {
+			t.Errorf("the probe ran in %q, the workspace's path here seen inside %v, wrote %q (%v), exited %d; session.started %v; the image step's end %v",
+				r.probe.Workdir, r.probe.HostWorkspace, written, werr, r.res.ExitCode, started, fetched)
 		}
 		if o.Leftovers != nil {
 			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {

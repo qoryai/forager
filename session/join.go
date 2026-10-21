@@ -40,9 +40,9 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // session's dev.qory.session.exited is written and the gateway accepted it, within 15
 // seconds, so the next join may follow. It sends the gateway the join request with the
 // names of the variables the session passes a value for and its model key, then checks
-// the session's places, prepares the runtime, resolves the variables, prepares the
-// wall, writes dev.qory.session.started and the session's dev.qory.run.policy_applied,
-// and starts the runtime. Sessions of one run join one after another.
+// the session's places, prepares the runtime, resolves the variables, writes
+// dev.qory.session.started and the session's dev.qory.run.policy_applied, prepares the
+// wall, and starts the runtime. Sessions of one run join one after another.
 //
 // An error means the session did not start. An error before the join request, of a
 // spec the session refuses, writes nothing. A join the gateway refuses with a 403, or
@@ -58,6 +58,13 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 //
 // Every dev.qory.run.log, dev.qory.run.resized and dev.qory.runtime.* event of the
 // session has the session's number as session.
+//
+// The join writes its steps, numbered on from the run's last step: the join step, join
+// session <n>, from the join request to right before dev.qory.session.started, and,
+// behind a wall, the image step, for an image the policy names by reference, and the
+// wall step, up to the runtime's start. A refused join ends its join step failed with
+// -1 before its dev.qory.session.exited. Join returns an error and writes nothing while
+// a host step of [Run.StartStep] is open.
 //
 // A session that starts has a directory in the run directory, sessions/<n>/ with n its
 // number ([Result.SessionDir]): its output.log, the bytes of its dev.qory.run.log
@@ -75,6 +82,9 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	defer r.joining.Unlock()
 	if r.closed {
 		return nil, errors.New("the run is closed")
+	}
+	if r.hostStep != nil {
+		return nil, fmt.Errorf("exit step %d before the join: a session does not join during a host step", r.hostStep.n)
 	}
 	// A wall whose removal failed may still run, with the places its entry lists: a
 	// join would rewrite that entry with the join's places alone.
@@ -134,10 +144,14 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	defer cancelRun(nil)
 	stopFollow := context.AfterFunc(r.closing, func() { cancelRun(errRunClosed) })
 	defer stopFollow()
-	answer, number, err := r.joinRequest(runCtx, s)
+	// The join step spans the join request and the session's checks, up to the
+	// session's dev.qory.session.started; the session lies outside it. Its name has the
+	// number the gateway gives the next join it answers.
+	step := r.startStep(event.StepJoin, fmt.Sprintf("join session %d", r.numbered+1))
+	answer, number, err := r.joinRequest(runCtx, s, step)
 	var res *Result
 	if err == nil {
-		res, err = r.session(ctx, runCtx, s, rt, answer, number)
+		res, err = r.session(ctx, runCtx, s, rt, answer, number, step)
 	}
 	// The next join may follow only once the gateway accepted this session's
 	// dev.qory.session.exited, or the run ended.
@@ -150,11 +164,12 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 }
 
 // joinRequest sends the join request and returns the gateway's answer and the
-// session's number. A 403 with a code, numbered by the gateway as the next join, writes
-// the refused join's dev.qory.session.exited. A 410 ends the run. A failure that leaves
-// unknown whether the gateway numbered the join keeps the close from writing
-// no_session.
-func (r *Run) joinRequest(ctx context.Context, s runSpec) (*server.LinkJoinAnswer, int, error) {
+// session's number. A failure ends step, the join step: failed with -1, or cancelled
+// with -1 when the run ended. A 403 with a code, numbered by the gateway as the next
+// join, writes the refused join's dev.qory.session.exited after it. A 410 ends the
+// run. A failure that leaves unknown whether the gateway numbered the join keeps the
+// close from writing no_session.
+func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.LinkJoinAnswer, int, error) {
 	answer, err := r.link.Join(ctx, r.disc.Run.URL, r.id, server.LinkJoinRequest{Passes: passes(s), ModelCredential: s.ModelCredential})
 	if err == nil {
 		r.numbered = answer.Session
@@ -162,6 +177,7 @@ func (r *Run) joinRequest(ctx context.Context, s runSpec) (*server.LinkJoinAnswe
 	}
 	if e, ok := server.Ended(err); ok {
 		r.end(e)
+		step.end(event.StateCancelled, -1)
 		return nil, 0, &Refusal{Code: e.Code, Status: http.StatusGone, From: e.From, Text: endedBeforeJoin}
 	}
 	var ref *Refusal
@@ -170,6 +186,7 @@ func (r *Run) joinRequest(ctx context.Context, s runSpec) (*server.LinkJoinAnswe
 		// and the run's joins arrive one after another: this one is the next number.
 		r.numbered++
 		ref.Detail = "the gateway"
+		step.end(event.StateFailed, -1)
 		r.refusedJoin(r.numbered, ref)
 		return nil, 0, ref
 	}
@@ -177,6 +194,7 @@ func (r *Run) joinRequest(ctx context.Context, s runSpec) (*server.LinkJoinAnswe
 	if !errors.As(err, &status) && !errors.As(err, &ref) {
 		r.maybeJoined = true
 	}
+	step.end(event.StateFailed, -1)
 	return nil, 0, err
 }
 
@@ -193,8 +211,20 @@ func (r *Run) refusedJoin(n int, err error) {
 }
 
 // session runs the session that joined as number n, from its checks to its
+// dev.qory.session.exited. joined is the join step, open: it ends succeeded with -1
+// right before dev.qory.session.started, or failed with -1 before the
+// dev.qory.session.exited of a join the session's checks refuse.
+//
+// Behind a wall the session's start has two steps after dev.qory.session.started. The
+// image step, for an image the policy names by its reference, spans the wall's
+// preparation up to the end of the image's fetch and the check of its user,
+// wall.Request.Fetched. The wall step spans the rest: the wall's networks, the
+// forwarder, the hook socket, the second check of the places and the wall's Wrap, up to
+// the runtime's start. The runtime runs in no step. A failure in either step ends it
+// failed with -1, after the failure's line with the session's number and the step's
+// when the failure has no refusal code, and before the session's
 // dev.qory.session.exited.
-func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Runtime, answer *server.LinkJoinAnswer, n int) (*Result, error) {
+func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Runtime, answer *server.LinkJoinAnswer, n int, joined *Step) (*Result, error) {
 	dir := r.dir
 	// sessionDir is the session's directory, made once the session's checks before the
 	// runtime's preparation pass. It stays exactly when dev.qory.session.started is
@@ -213,9 +243,17 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			r.open.Report("removing the directory of a session that did not start: " + accesskey.ShownError(err).Error())
 		}
 	}
-	// started says dev.qory.session.started is written, and start is when.
+	// started says dev.qory.session.started is written, and start is when; open is the
+	// session's step that is open, the join step first, nil for none.
 	started := false
 	var start time.Time
+	open := joined
+	endStep := func(state string) {
+		if open != nil {
+			open.end(state, -1)
+			open = nil
+		}
+	}
 	// failWith ends a session that does not start, with its dev.qory.session.exited:
 	// the one of a refused join before dev.qory.session.started, and after it failed
 	// with -1, with reason as its reason unless reason is empty.
@@ -236,11 +274,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			if reason == "" {
 				delete(exited, "reason")
 			}
+			endStep(event.StateCancelled)
 			r.own(event.SessionExited, exited)
 			r.lastExit = -1
 			return nil, &Refusal{Code: e.Code, Status: http.StatusGone, From: e.From, Text: endedBeforeJoin}
 		}
 		if !started {
+			endStep(event.StateFailed)
 			r.refusedJoin(n, err)
 			return nil, err
 		}
@@ -249,10 +289,15 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			exited["reason"] = reason
 		} else {
 			// A failure with no refusal code, such as a pull or the wall's start, has its
-			// text in the record as a stderr chunk of the session, before its
-			// dev.qory.session.exited, which has no reason.
-			r.writeLog("stderr", n, failureLine(err))
+			// text in the record as a stderr chunk of the session, and of the step that
+			// failed, before its dev.qory.session.exited, which has no reason.
+			step := 0
+			if open != nil {
+				step = open.n
+			}
+			r.writeLog("stderr", n, step, failureLine(err))
 		}
+		endStep(event.StateFailed)
 		r.write(event.SessionExited, exited)
 		r.lastExit = -1
 		return nil, err
@@ -414,38 +459,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if interactive {
 		cols, rows = terminalSize(spec.Stdin)
 	}
-	sessionStarted := func() {
-		started, start = true, time.Now()
-		r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, interactive, cols, rows, enclosure))
-	}
-	if spec.Wall != nil {
-		req := wall.Request{RunID: r.id, Image: r.img.Ref, Runtime: r.img.Runtime, Docker: r.img.Docker, RelayImage: r.relayImage, Pull: r.byReference}
-		if enclosure, err = spec.Wall.Prepare(runCtx, req); err != nil {
-			// Every failure of the wall follows the session's start. A refusal's code,
-			// such as an image that runs as root, is the reason the session ended;
-			// another failure, such as a pull, has no reason.
-			sessionStarted()
-			var ref *Refusal
-			if errors.As(err, &ref) && refusal.Decides(ref.Code) {
-				return failWith(err, ref.Code)
-			}
-			return fail(err)
-		}
-		defer func() {
-			// The session's context may be what ended it; the wall is removed regardless.
-			if err := enclosure.Close(context.WithoutCancel(ctx)); err != nil {
-				r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
-				// Its containers may outlive the session: the entry stays, and is the
-				// run's while one of them exists.
-				r.listed.keep()
-				r.keptBy = n
-			}
-		}()
-		// Behind a wall the wall's relay opens every connection with the run's proxy
-		// secret, and the forwarder passes on what arrives as it is.
-		bind, secret = enclosure.ProxyAddr(), ""
-	}
-	sessionStarted()
+	// The join ends here, and the session starts: every failure of the wall follows
+	// the session's start.
+	endStep(event.StateSucceeded)
+	started, start = true, time.Now()
+	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, interactive, cols, rows))
 	// policyApplied is this session's members of policy_applied: its variables as
 	// resolved, the variables its credentials' placeholders are in, and the harness's
 	// hosts. Each reload while the session runs records them too.
@@ -461,6 +479,50 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	r.record(event.PolicyApplied, r.policyApplied(r.members))
 	r.emitMu.Unlock()
 	defer r.setApplied(nil)
+	if spec.Wall != nil {
+		// The image step, for an image the wall fetches, ends once the fetch and the
+		// check of the image's user pass, and the wall step starts.
+		walling := false
+		wallStep := func() { open, walling = r.startStep(event.StepWall, "start the wall"), true }
+		req := wall.Request{RunID: r.id, Image: r.img.Ref, Runtime: r.img.Runtime, Docker: r.img.Docker, RelayImage: r.relayImage, Pull: r.byReference}
+		if req.Pull {
+			open = r.startStep(event.StepImage, r.img.Ref)
+			req.Fetched = func() {
+				endStep(event.StateSucceeded)
+				wallStep()
+			}
+		} else {
+			wallStep()
+		}
+		if enclosure, err = spec.Wall.Prepare(runCtx, req); err != nil {
+			// A refusal's code, such as an image that runs as root, is the reason the
+			// session ended; another failure, such as a pull, has no reason.
+			var ref *Refusal
+			if errors.As(err, &ref) && refusal.Decides(ref.Code) {
+				return failWith(err, ref.Code)
+			}
+			return fail(err)
+		}
+		// A wall that fetched the image and did not call Fetched: the image step ends
+		// with the preparation.
+		if !walling {
+			endStep(event.StateSucceeded)
+			wallStep()
+		}
+		defer func() {
+			// The session's context may be what ended it; the wall is removed regardless.
+			if err := enclosure.Close(context.WithoutCancel(ctx)); err != nil {
+				r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
+				// Its containers may outlive the session: the entry stays, and is the
+				// run's while one of them exists.
+				r.listed.keep()
+				r.keptBy = n
+			}
+		}()
+		// Behind a wall the wall's relay opens every connection with the run's proxy
+		// secret, and the forwarder passes on what arrives as it is.
+		bind, secret = enclosure.ProxyAddr(), ""
+	}
 	var fwd *forwarder
 	switch {
 	case r.remote == nil:
@@ -562,6 +624,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if errors.Is(context.Cause(runCtx), errRunClosed) {
 		return fail(errRunClosed)
 	}
+	// The wall step ends as the runtime starts, which runs in no step.
+	endStep(event.StateSucceeded)
 	logs := func(stream string) func([]byte) {
 		return func(b []byte) {
 			r.write(event.RunLog, map[string]any{"stream": stream, "bytes": encode(b), "session": n})
@@ -669,7 +733,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 // accesskey.ShownName's for the runtime, the image, its name and its container
 // runtime; accesskey.ShownValue's for the directory, the command, each argument, the
 // runtime's version, each word of the preparation and each harness source.
-func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, interactive bool, cols, rows int, enclosure wall.Enclosure) map[string]any {
+func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, interactive bool, cols, rows int) map[string]any {
 	started := map[string]any{
 		"session": n, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(prepared.Command, false), "args": shownValues(prepared.Args),
 		"dir": accesskey.ShownValue(spec.Dir, false), "interactive": interactive,
@@ -699,11 +763,6 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 		}
 		if r.img.Docker {
 			started["docker"] = true
-		}
-		if f, ok := enclosure.(wall.Fetcher); ok && enclosure != nil {
-			if took, fetched := f.ImageFetch(); fetched {
-				started["image_fetch_ms"] = took.Milliseconds()
-			}
 		}
 	}
 	if len(spec.Harness) > 0 {

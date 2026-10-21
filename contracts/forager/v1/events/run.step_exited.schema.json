@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/run.step_exited.schema.json",
   "title": "dev.qory.run.step_exited",
-  "description": "A step of the run ended. One per step, after the step's dev.qory.run.step_started and after every dev.qory.run.log of the step.",
+  "description": "A step of the run ended. One per step, after the step's dev.qory.run.step_started and after every dev.qory.run.log of the step, and before dev.qory.run.exited. A run the gateway ends during a step has none for it in the run's stream: the gateway writes the open session's dev.qory.session.exited and the run's dev.qory.run.exited alone, and the session writes the step's, cancelled with -1, in its record alone.",
   "type": "object",
   "additionalProperties": false,
   "required": ["step", "state", "exit_code", "duration_ms"],

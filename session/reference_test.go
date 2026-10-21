@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ const pinned = "registry.example/agents/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
 // targetWall is an open wall that shows a mount at its Target, as the Docker adapter
 // does: the launch it returns starts in the workspace's directory on this machine. It
 // fetched the image, as an adapter does for a run whose image is named by reference,
-// and refuses with what refuse holds.
+// and calls the request's Fetched then, or refuses with what refuse holds.
 type targetWall struct {
 	openWall
 	refuse error
@@ -37,6 +38,9 @@ func (w *targetWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclos
 	w.openWall.Prepare(ctx, req)
 	if w.refuse != nil {
 		return nil, w.refuse
+	}
+	if req.Pull && req.Fetched != nil {
+		req.Fetched()
 	}
 	return w, nil
 }
@@ -50,8 +54,6 @@ func (w *targetWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, erro
 	}
 	return got, err
 }
-
-func (w *targetWall) ImageFetch() (time.Duration, bool) { return 1500 * time.Millisecond, w.req.Pull }
 
 // byReference makes the gateway answer the image by reference, as it resolves one
 // images.allow covers: under the default's runtime, marked as a reference, with the
@@ -97,8 +99,13 @@ func TestARunInAnImageByReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (wall.Request{RunID: res.RunID, Image: pinned, RelayImage: "example.com/agent:1", Pull: true}); w.req != want {
-		t.Errorf("the wall was asked for %+v, want %+v", w.req, want)
+	got := w.req
+	if got.Fetched == nil {
+		t.Error("the wall was asked for a fetch with no Fetched")
+	}
+	got.Fetched = nil
+	if want := (wall.Request{RunID: res.RunID, Image: pinned, RelayImage: "example.com/agent:1", Pull: true}); !reflect.DeepEqual(got, want) {
+		t.Errorf("the wall was asked for %+v, want %+v", got, want)
 	}
 	if req := g.Requests()[0]; !slices.Equal(req.Images.Allow, sp.ImagesAllow) {
 		t.Errorf("the run request's images %+v", req.Images)
@@ -124,10 +131,18 @@ func TestARunInAnImageByReference(t *testing.T) {
 	if err != nil || !strings.Contains(string(copied), `"sh /workspace/hook.sh"`) || !strings.Contains(string(copied), `"`+dir+`shop"`) {
 		t.Errorf("the settings copied: %s, %v", copied, err)
 	}
-	started := data(ofType(events(t, res), "dev.qory.session.started")[0])
+	evs := events(t, res)
+	started := data(ofType(evs, "dev.qory.session.started")[0])
 	if started["dir"] != "/workspace" || started["image"] != pinned || started["image_name"] != nil || started["container_runtime"] != nil ||
-		started["docker"] != nil || started["image_fetch_ms"] != float64(1500) {
+		started["docker"] != nil || started["image_fetch_ms"] != nil {
 		t.Errorf("session.started %v", started)
+	}
+	// The fetch is the image step, after session.started, and the rest of the wall's
+	// start the wall step.
+	want := []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started",
+		"step 2 image " + pinned, "step 2 succeeded -1", "step 3 wall start the wall", "step 3 succeeded -1", "session 1 exited", "run exited"}
+	if got := stepOrder(evs); !slices.Equal(got, want) {
+		t.Errorf("the steps:\n%q\nwant\n%q", got, want)
 	}
 }
 
@@ -280,8 +295,10 @@ func TestTheServersImageByReferenceIsTheOneTheWallPulls(t *testing.T) {
 			t.Fatal(err)
 		}
 		rg.close(t)
-		if want := (wall.Request{RunID: res.RunID, Image: pinned, RelayImage: "example.com/agent:1", Pull: true}); w.req != want {
-			t.Errorf("%s: the wall was asked for %+v, want %+v", doc, w.req, want)
+		got := w.req
+		got.Fetched = nil
+		if want := (wall.Request{RunID: res.RunID, Image: pinned, RelayImage: "example.com/agent:1", Pull: true}); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: the wall was asked for %+v, want %+v", doc, got, want)
 		}
 	}
 }

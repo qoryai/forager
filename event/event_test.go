@@ -24,7 +24,7 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 	e := event.NewEmitter(event.NewRunID(), func() time.Time { return time.Unix(1_800_000_000, 5_000_000) })
 	for _, ev := range []*event.Event{
 		e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}),
-		e.Make(event.StepStarted, map[string]any{"step": 1, "name": "fetch github.com/example-org/app", "kind": "fetch"}),
+		e.Make(event.StepStarted, map[string]any{"step": 1, "name": "fetch github.com/example-org/app", "kind": event.StepFetch}),
 		e.Make(event.StepExited, map[string]any{"step": 1, "state": event.StateSucceeded, "exit_code": 0, "duration_ms": 1840}),
 		e.Make("dev.qory.runtime.ended", map[string]any{"session_id": "s1", "reason": "other"}),
 	} {
@@ -89,6 +89,27 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	state := doc.(map[string]any)["properties"].(map[string]any)["state"].(map[string]any)
 	if got, want := fmt.Sprint(state["enum"]), fmt.Sprint([]string{event.StateSucceeded, event.StateFailed, event.StateCancelled}); got != want {
 		t.Errorf("run.exited's state enum is %s; the constants are %s", got, want)
+	}
+}
+
+// TestStepKindsAndStatesAreTheContracts pins the step kind constants to the kind enum of
+// run.step_started, in order, and the states to the state enum of run.step_exited.
+func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
+	for _, c := range []struct {
+		schema, member string
+		want           []string
+	}{
+		{"events/run.step_started.schema.json", "kind", []string{event.StepFetch, event.StepCompose, event.StepImage, event.StepSetup, event.StepJoin, event.StepWall}},
+		{"events/run.step_exited.schema.json", "state", []string{event.StateSucceeded, event.StateFailed, event.StateCancelled}},
+	} {
+		doc, err := contracts.Document(c.schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		member := doc.(map[string]any)["properties"].(map[string]any)[c.member].(map[string]any)
+		if got, want := fmt.Sprint(member["enum"]), fmt.Sprint(c.want); got != want {
+			t.Errorf("%s %s: the schema's enum is %s; the constants are %s", c.schema, c.member, got, want)
+		}
 	}
 }
 

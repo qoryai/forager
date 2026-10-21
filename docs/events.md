@@ -98,8 +98,9 @@ A session whose wall fails to start has its `dev.qory.session.started`, then its
 `dev.qory.session.exited`, `failed` with exit code -1 and no reason, or the refusal's
 code as its reason when the wall refused with one, such as `image_user_root`, an image
 whose user is root. A failure with no reason, such as an image pull that fails, has the
-error's text as a `dev.qory.run.log` on `stderr` of that session right before its
-`dev.qory.session.exited`.
+error's text as a `dev.qory.run.log` on `stderr` of that session, and of the image or
+the wall step that failed, before that step's `dev.qory.run.step_exited` and the
+session's `dev.qory.session.exited`.
 When the run ends while a session runs, that session's `dev.qory.session.exited` comes
 right before the run's `dev.qory.run.exited`, with the same state and reason and exit
 code -1. So every `dev.qory.session.started` has its `dev.qory.session.exited`.
@@ -108,15 +109,13 @@ Every `dev.qory.run.log`, `dev.qory.run.resized` and `dev.qory.runtime.*` event 
 session contains the session's number in `session`, so a reader of a run with several
 sessions can show each session's terminal and events apart. A line of the run's host
 work, such as a fetch or a compose, is a `dev.qory.run.log` on `stderr` with no
-`session`; the caller writes it with `(*session.Run).HostLog` before the first join or
-between two joins. An event without `session`, of a record that Forager wrote before
+`session`, in a step. An event without `session`, of a record that Forager wrote before
 the member was added, stays valid.
 
-The contract describes the run's host work as a list of steps, as a CI job has. A step
-is one named unit of host work, such as a fetch of a repository or a compose of the
-harness: a `dev.qory.run.step_started`, the step's host lines, and a
-`dev.qory.run.step_exited`.
-A reader such as a control plane's run page can show each step, the step that failed,
+The record has the run's host work as a list of steps, as a CI job has. A step is one
+named unit of host work, such as a fetch of a repository or a compose of the harness: a
+`dev.qory.run.step_started`, the step's lines, and a `dev.qory.run.step_exited`. A
+reader such as a control plane's run page can show each step, the step that failed,
 and the log lines of each step.
 
 - `dev.qory.run.step_started` has `step`, the step's number in the run from 1, `name`,
@@ -127,10 +126,26 @@ and the log lines of each step.
 - Each host line of a step is a `dev.qory.run.log` with the step's number in `step`,
   between the step's two events. A host line outside every step has no `step`.
 
-The steps come after `dev.qory.run.started`, numbered in the order they start. A setup
-command is a `setup` step wherever it runs, inside the wall too. The contract defines
-the two types; Forager's Go packages write neither, and `(*session.Run).HostLog` writes
-no `step`.
+The steps come after `dev.qory.run.started`, numbered in the order they start, one at
+a time:
+
+- The caller writes the `fetch` and `compose` steps of its host work with
+  `(*session.Run).StartStep`, before the first join or between two joins.
+- Each join writes a `join` step, `join session <n>`, around its join request and the
+  session's checks. It ends before `dev.qory.session.started`, or `failed` before the
+  `dev.qory.session.exited` of a refused join.
+- Behind a wall, after `dev.qory.session.started`, the join writes an `image` step,
+  with the image's reference as its name, for an image the policy names by reference,
+  and a `wall` step, `start the wall`, up to the runtime's start. The runtime runs in no
+  step, and a session's lines have `step` only in these two steps.
+
+The close ends a host step still open `cancelled` with -1, before
+`dev.qory.run.exited`. When the gateway ends a run during a step, the run's stream has
+no `dev.qory.run.step_exited` for that step; the session writes one, `cancelled` with
+-1, in `session.jsonl` alone. Forager writes no `setup` step: a session's `preparation`
+runs with its runtime, in no step. A step's `name` has `qory-proxy-password` in place
+of a forwarder's password, and a phrase in place of a name that contains `qak_` or
+`qrk_`.
 
 `dev.qory.session.started` contains `harness` when the caller passes it: one entry per
 harness source the session's compose used, each with `source`, the source as it is

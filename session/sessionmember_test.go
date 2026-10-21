@@ -2,12 +2,12 @@ package session_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -15,6 +15,7 @@ import (
 	"github.com/creack/pty"
 
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
 	refusals "github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/sink"
@@ -81,14 +82,10 @@ func TestEachSessionsEventsHaveItsNumber(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.HostLog([]byte("qory run: fetched example/app\n")); err != nil {
-		t.Fatal(err)
-	}
+	hostStep(t, r, event.StepFetch, "fetch example/app", "qory run: fetched example/app\n")
 	for n := 1; n <= 2; n++ {
 		if n == 2 {
-			if err := r.HostLog([]byte("qory run: composed the harness\n")); err != nil {
-				t.Fatal(err)
-			}
+			hostStep(t, r, event.StepCompose, "compose the harness", "qory run: composed the harness\n")
 		}
 		s := sp.SessionSpec
 		s.Env = append(append([]string(nil), s.Env...), "FAKE_SETTINGS="+filepath.Join(r.Dir(), session.SessionsDir, fmt.Sprint(n), "settings.json"))
@@ -210,85 +207,10 @@ func TestEachSessionsResizeHasItsNumber(t *testing.T) {
 	}
 }
 
-// TestAHostLineIsMasked pins a host line that contains the host proxy's URL and the
-// base64 of its Proxy-Authorization: the run.log chunk is stderr with no session, and
-// neither it, output.log nor session.jsonl contains the password, which
-// qory-proxy-password replaces. A line longer than 4096 bytes is two chunks.
-func TestAHostLineIsMasked(t *testing.T) {
-	sp := spec(t)
-	ctx := context.Background()
-	r, err := session.Open(ctx, opened(sp))
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, err := r.HostProxy()
-	if err != nil {
-		t.Fatal(err)
-	}
-	password, _ := hostParts(t, h)
-	basic := base64.StdEncoding.EncodeToString([]byte("qory:" + password))
-	line := "git fetch through " + h.ProxyURL + " with Proxy-Authorization: Basic " + basic + "\n"
-	long := strings.Repeat("x", 5000) + "\n"
-	if err := r.HostLog([]byte(line + long)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1}); err != nil {
-		t.Fatal(err)
-	}
-	res := &session.Result{Dir: r.Dir()}
-	out := noPassword(t, res, password)
-	noPassword(t, res, basic)
-	want := strings.Replace(line, password, "qory-proxy-password", 1)
-	want = strings.Replace(want, basic, base64.StdEncoding.EncodeToString([]byte("qory:qory-proxy-password")), 1)
-	if out != want+long {
-		t.Errorf("output.log\n%q\nwant\n%q", out, want+long)
-	}
-	logs := ofType(events(t, res), "dev.qory.run.log")
-	if len(logs) != 3 {
-		t.Fatalf("%d run.log chunks, want 3", len(logs))
-	}
-	for _, l := range logs {
-		if d := data(l); d["stream"] != "stderr" || d["session"] != nil {
-			t.Errorf("a host line's chunk %v; want stderr and no session", d)
-		}
-	}
-}
-
-// TestAHostLineIsRefusedDuringAJoinAndAfterTheClose pins when a host line is
-// written: not while a session runs, and not after the close; each error starts with
-// the fix.
-func TestAHostLineIsRefusedDuringAJoinAndAfterTheClose(t *testing.T) {
-	sp := spec(t, "FAKE_EXIT=0")
-	ctx := context.Background()
-	r, err := session.Open(ctx, opened(sp))
-	if err != nil {
-		t.Fatal(err)
-	}
-	during := make(chan error, 1)
-	s := sp.SessionSpec
-	s.OnVariables = func(session.Applied) { during <- r.HostLog([]byte("too late\n")) }
-	if _, err := r.Join(ctx, s); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-during; err == nil || !strings.HasPrefix(err.Error(), "write the host work's lines after Join returns") {
-		t.Errorf("a host line during a join: %v", err)
-	}
-	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.HostLog([]byte("after\n")); err == nil || !strings.HasPrefix(err.Error(), "open a new run") {
-		t.Errorf("a host line after the close: %v", err)
-	}
-	for _, l := range ofType(events(t, &session.Result{Dir: r.Dir()}), "dev.qory.run.log") {
-		if b, _ := base64.StdEncoding.DecodeString(data(l)["bytes"].(string)); strings.Contains(string(b), "too late") || strings.Contains(string(b), "after") {
-			t.Errorf("a refused host line is in the record: %q", b)
-		}
-	}
-}
-
 // TestAFailureWithNoCodeIsInTheSessionsOutput pins a pull and a wall's start that fail
-// with no refusal code: the record and the link have session.started, a stderr run.log
-// of session 1 with the error's text, then session.exited failed with -1 and no reason;
+// with no refusal code: the record and the link have the join step, session.started,
+// the wall step, a stderr run.log of session 1 and of the wall step with the error's
+// text, the wall step failed with -1, then session.exited failed with -1 and no reason;
 // sessions/1/output.log has that text. A wall's refusal with a code, which is the
 // reason of session.exited, writes no such chunk.
 func TestAFailureWithNoCodeIsInTheSessionsOutput(t *testing.T) {
@@ -320,24 +242,14 @@ func TestAFailureWithNoCodeIsInTheSessionsOutput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"dev.qory.session.started", "log stderr 1 " + c.text + "\n", "dev.qory.session.exited"}
-			if c.text == "" {
-				want = []string{"dev.qory.session.started", "dev.qory.session.exited"}
+			want := []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started", "step 2 wall start the wall"}
+			if c.text != "" {
+				want = append(want, "log 1 2 "+c.text)
 			}
+			want = append(want, "step 2 failed -1", "session 1 exited", "run exited")
 			for where, evs := range map[string][]map[string]any{"the record": events(t, &session.Result{Dir: closed.Dir}), "the link": g.Events()} {
 				startedThenExited(t, where, evs, c.reason)
-				var order []string
-				for _, e := range evs {
-					switch e["type"] {
-					case "dev.qory.session.started", "dev.qory.session.exited":
-						order = append(order, fmt.Sprint(e["type"]))
-					case "dev.qory.run.log":
-						d := data(e)
-						b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
-						order = append(order, fmt.Sprintf("log %v %v %s", d["stream"], d["session"], b))
-					}
-				}
-				if fmt.Sprint(order) != fmt.Sprint(want) {
+				if order := stepOrder(evs); !slices.Equal(order, want) {
 					t.Errorf("%s:\n%q\nwant\n%q", where, order, want)
 				}
 			}

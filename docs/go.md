@@ -116,19 +116,30 @@ For each run the session, over the gateway's link, at `Open`:
 
 At each `Join` the session:
 
-1. sends the join request: the names, never the values, of the variables it passes a
-   value for, and the session's model credential when `ModelCredential` is set; the
-   answer has the session's number, 1 for the run's first join;
-2. records `dev.qory.session.started`, with the runtime, the command, `terminal`, the
+1. starts the join step, `join session <n>`, and sends the join request: the names,
+   never the values, of the variables it passes a value for, and the session's model
+   credential when `ModelCredential` is set; the answer has the session's number, 1 for
+   the run's first join;
+2. checks the session's places, prepares the runtime and resolves the variables, then
+   ends the join step `succeeded` with `-1`;
+3. records `dev.qory.session.started`, with the runtime, the command, `terminal`, the
    image and the harness's sources, and `dev.qory.run.policy_applied` with the session's
    variables, the credential variables and the harness's hosts;
-3. starts the runtime, records `dev.qory.session.exited` when it exits, and returns once
-   the gateway accepted that batch, or the run ended.
+4. behind a wall, records the image step, for an image the policy names by reference,
+   around the wall's preparation up to the image's fetch and the check of its user, and
+   the wall step, `start the wall`, around the rest of the wall's start up to the
+   runtime's start;
+5. starts the runtime, in no step, records `dev.qory.session.exited` when it exits, and
+   returns once the gateway accepted that batch, or the run ended.
 
-A join the gateway refuses, `403`, records `dev.qory.session.exited` with the refusal's
-code, `failed`, `-1` and `duration_ms` 0, and returns a `*session.Refusal`. A session
-that fails after `dev.qory.session.started` and before its runtime starts, at the
-image's pull or the wall's start, records `dev.qory.session.exited` `failed` with `-1`.
+A join the gateway refuses, `403`, or that fails the session's checks, ends its join
+step `failed` with `-1`, records `dev.qory.session.exited` with the refusal's code,
+`failed`, `-1` and `duration_ms` 0, and returns a `*session.Refusal`. A session that
+fails after `dev.qory.session.started` and before its runtime starts, at the image's
+pull or the wall's start, writes the error's text as a line of the session and of the
+step, ends the step `failed` with `-1`, and records `dev.qory.session.exited` `failed`
+with `-1`. `Join` returns an error and writes nothing while a host step is open: "exit
+step 1 before the join: a session does not join during a host step".
 
 On the local link every batch names its run in `X-Qory-Run-Id`; the link carries no
 secret, since the session and the gateway check that the socket's peer runs as their
@@ -219,24 +230,52 @@ err = fetch.Run()
 h.Close()                                         // Join closes it too
 ```
 
-`(*session.Run).HostLog(b)` writes the lines of the host work into the record, such as
-what the fetch or the compose prints: each line is a `dev.qory.run.log` with `stream`
-`stderr` and no `session`, cut at 4096 bytes as a session's lines on pipes are, and goes
-to `output.log`. The run's masker replaces each forwarder's password in the lines, the
-host proxy's included, within one call: pass whole lines, because a password split
-across two calls stays as written. Pass an error's text through `accesskey.ShownError`,
-which replaces a text that contains a run key or an access key. Call it before the first `Join` or
-after a `Join` returns: while a `Join` runs it returns "write the host work's lines
-after Join returns: a session of the run is still running", so `sessions/<n>/output.log`
-contains the bytes of session n alone, and after `Close` it returns "open a new run for
-the host work's lines: the run is closed".
+Write the host work as steps, one at a time, so a reader shows each step, the step that
+failed and its lines:
+
+- `(*session.Run).StartStep(kind, name)` writes `dev.qory.run.step_started` with the
+  run's next step number, shared with each join's steps, and returns a `*session.Step`.
+  `kind` is `event.StepFetch` or `event.StepCompose`. The run's masker replaces each
+  forwarder's password in `name`, and a `name` that contains `qak_` or `qrk_` is a
+  phrase in its place.
+- `(*session.Step).Log(b)` writes the step's lines, such as what the fetch or the
+  compose prints: each line is a `dev.qory.run.log` with `stream` `stderr`, the step's
+  number as `step` and no `session`, cut at 4096 bytes as a session's lines on pipes
+  are, and goes to `output.log`. The run's masker replaces each forwarder's password in
+  the lines, the host proxy's included, within one call: pass whole lines, because a
+  password split across two calls stays as written. Pass an error's text through
+  `accesskey.ShownError`, which replaces a text that contains a run key or an access
+  key.
+- `(*session.Step).Exit(state, exitCode)` writes `dev.qory.run.step_exited` with
+  `state`, `succeeded`, `failed` or `cancelled`, `exitCode`, the exit status of the
+  step's process or `-1` when it has none, and `duration_ms`, which Forager measures
+  from `StartStep`.
+- `Close` ends a step still open `cancelled` with `-1` before `dev.qory.run.exited`.
+
+Start a step before the first `Join` or after a `Join` returns. Each error starts with
+the fix, and writes nothing:
+
+| Call | When | Error |
+|---|---|---|
+| `StartStep` | a kind other than fetch and compose | `start a host step of kind fetch or compose, not "setup": Join writes the join, image and wall steps` |
+| `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
+| `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
+| `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |
+| `Exit` | a state outside the three | `exit the step with succeeded, failed or cancelled, not "skipped"` |
+| `Log`, `Exit` | after the step exited | `start a new step for these lines: step 1 exited`, `start a new step: step 1 exited already` |
 
 ```go
+step, err := run.StartStep(event.StepFetch, "fetch github.com/example-org/app")
+if err != nil {
+	return err
+}
+state, code := event.StateSucceeded, 0
 if err := fetch.Run(); err != nil {
-	line := "qory run: the fetch failed: " + accesskey.ShownError(err).Error() + "\n"
-	if err := run.HostLog([]byte(line)); err != nil {
-		return err
-	}
+	step.Log([]byte("qory run: the fetch failed: " + accesskey.ShownError(err).Error() + "\n"))
+	state, code = event.StateFailed, fetch.ProcessState.ExitCode()
+}
+if err := step.Exit(state, code); err != nil {
+	return err
 }
 ```
 

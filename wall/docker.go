@@ -298,6 +298,9 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 		if err := e.pull(ctx); err != nil {
 			return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
 		}
+		if req.Fetched != nil {
+			req.Fetched()
+		}
 	}
 	// What removes a thing is noted before the thing is asked for: a command cut off by
 	// the context may still have been carried out by the engine.

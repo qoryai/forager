@@ -80,6 +80,10 @@ type Run struct {
 	keptBy         int
 	closed         bool
 	sessionApplied map[string]any
+	// steps is the number of the run's last step, host steps and Join's alike, and
+	// hostStep the host step open, nil for none.
+	steps    int
+	hostStep *Step
 }
 
 // Open opens a run at its gateway and returns it once dev.qory.run.started and the
@@ -481,14 +485,14 @@ func (r *Run) setApplied(m map[string]any) {
 }
 
 // Close writes the run's dev.qory.run.exited with the caller's outcome, once, and
-// closes the run: the heartbeats and the reloads stop, the sinks are flushed within 15
-// seconds, and the lock, the registry entry and the link are let go. A failed outcome
-// with no reason of a run no session joined is written as failed with no_session and
-// -1. A run the gateway closed before the close has its dev.qory.run.exited in the
-// session's record alone, with the state and the reason of the gateway's 410 and the
-// last session's exit code. An error means the outcome is refused, and nothing is
-// written: the run stays open, and Close may be called again; or the run is closed
-// already.
+// closes the run: a host step still open ends cancelled with -1 first, the heartbeats
+// and the reloads stop, the sinks are flushed within 15 seconds, and the lock, the
+// registry entry and the link are let go. A failed outcome with no reason of a run no
+// session joined is written as failed with no_session and -1. A run the gateway closed
+// before the close has its dev.qory.run.exited in the session's record alone, with the
+// state and the reason of the gateway's 410 and the last session's exit code. An error
+// means the outcome is refused, and nothing is written: the run stays open, and Close
+// may be called again; or the run is closed already.
 func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 	if !r.joining.TryLock() {
 		return nil, errors.New("a session of the run is still running: close the run after Join returns")
@@ -506,6 +510,10 @@ func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 	}
 	r.closed = true
 	r.hosts.closeAll()
+	// A host step still open ends before run.exited, as one the caller stopped.
+	if r.hostStep != nil {
+		r.hostStep.end(event.StateCancelled, -1)
+	}
 	// Nothing of a reload goes after run.exited, and the heartbeats stop before it.
 	r.reload.stop()
 	r.stopBeat()

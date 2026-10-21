@@ -397,8 +397,9 @@ func TestTheRunEndsWhenItIsClosed(t *testing.T) {
 }
 
 // TestAFailureAfterTheAnswerIsPosted pins a join the session refuses after the
-// gateway's join answer, with a code the session decides: its session.exited, with the
-// code, is in the record and posted on the link, no session started, and the close
+// gateway's join answer, with a code the session decides: its join step ends failed,
+// then its session.exited, with the code, is in the record and posted on the link, no
+// session started, and the close
 // posts the run's run.exited, failed with no reason: the join was numbered, so the
 // run is no no_session.
 func TestAFailureAfterTheAnswerIsPosted(t *testing.T) {
@@ -411,12 +412,15 @@ func TestAFailureAfterTheAnswerIsPosted(t *testing.T) {
 	if !errors.As(err, &r) || r.Code != "variable_reserved" || r.From != "" {
 		t.Fatalf("%v, want variable_reserved of the session's own", err)
 	}
-	want := []string{"dev.qory.run.started", "dev.qory.run.policy_applied", "dev.qory.session.exited", "dev.qory.run.exited"}
+	want := []string{"dev.qory.run.started", "dev.qory.run.policy_applied", "dev.qory.run.step_started", "dev.qory.run.step_exited", "dev.qory.session.exited", "dev.qory.run.exited"}
 	if got := posted(g); !slices.Equal(got, want) {
 		t.Fatalf("posted %v, want %v", got, want)
 	}
 	ev := g.Events()
-	if got := data(ev[2]); got["reason"] != "variable_reserved" || got["state"] != "failed" || got["exit_code"] != float64(-1) || got["duration_ms"] != float64(0) {
+	if got := data(ev[3]); got["state"] != "failed" || got["exit_code"] != float64(-1) {
+		t.Errorf("the join step's step_exited %v", got)
+	}
+	if got := data(ev[4]); got["reason"] != "variable_reserved" || got["state"] != "failed" || got["exit_code"] != float64(-1) || got["duration_ms"] != float64(0) {
 		t.Errorf("session.exited %v", got)
 	}
 	if got := data(ev[3]); got["reason"] != nil || got["state"] != "failed" || got["exit_code"] != float64(-1) {

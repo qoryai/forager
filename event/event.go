@@ -45,6 +45,18 @@ const (
 	StepExited  = "dev.qory.run.step_exited"
 )
 
+// The kinds of a step, the kind of dev.qory.run.step_started: a fetch of a source, a
+// compose of the harness, a fetch or a build of an image, a setup command, the join of
+// a session, and the start of a wall.
+const (
+	StepFetch   = "fetch"
+	StepCompose = "compose"
+	StepImage   = "image"
+	StepSetup   = "setup"
+	StepJoin    = "join"
+	StepWall    = "wall"
+)
+
 // OpenedByRun is the opened_by of dev.qory.run.started that the contract accepts:
 // Forager's open of a run at its gateway, before any session joins it.
 const OpenedByRun = "run"

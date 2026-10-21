@@ -392,7 +392,11 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // host work, outside every session, has none; and the steps are numbered from 1 in the
 // order they start, after run.started, each run.step_exited following the
 // run.step_started of its number, once, and a run.log with a step member lies between
-// that step's run.step_started and run.step_exited.
+// that step's run.step_started and run.step_exited; a join step lies outside every
+// session and no session starts during one, an image or a wall step lies inside a
+// session, and a run.log with both session and step is one of an image or a wall
+// step; and every step ends before run.exited, unless the gateway ended the run, whose
+// run.exited has a reason the close never writes.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
 	runs, err := fs.ReadDir(contracts.FS, "fixtures/run")
@@ -415,7 +419,16 @@ func TestRecordedRunValidates(t *testing.T) {
 		}
 		var log []byte
 		open, last := 0, 0
-		started, steps, stepped := false, 0, map[int]string{}
+		started, steps, stepped, kinds := false, 0, map[int]string{}, map[int]string{}
+		// openJoin reports whether a join step is open.
+		openJoin := func() bool {
+			for n, k := range kinds {
+				if k == "join" && stepped[n] == "started" {
+					return true
+				}
+			}
+			return false
+		}
 		for i, e := range events {
 			if err := s["event.schema.json"].Validate(e); err != nil {
 				t.Errorf("%s: line %d: %v", dir, i+1, err)
@@ -441,6 +454,9 @@ func TestRecordedRunValidates(t *testing.T) {
 			if n, ok := sessionNumber(m); ok {
 				switch m["type"] {
 				case "dev.qory.session.started":
+					if openJoin() {
+						t.Errorf("%s: line %d: session %d starts during a join step", dir, i+1, n)
+					}
 					if open != 0 || n != last+1 {
 						t.Errorf("%s: line %d: session %d starts after session %d, with session %d open", dir, i+1, n, last, open)
 					}
@@ -470,6 +486,17 @@ func TestRecordedRunValidates(t *testing.T) {
 						t.Errorf("%s: line %d: step %d starts after step %d", dir, i+1, n, steps)
 					}
 					steps, stepped[n] = n, "started"
+					kinds[n], _ = m["data"].(map[string]any)["kind"].(string)
+					switch inside := open != 0; kinds[n] {
+					case "join":
+						if inside {
+							t.Errorf("%s: line %d: join step %d starts inside session %d", dir, i+1, n, open)
+						}
+					case "image", "wall":
+						if !inside {
+							t.Errorf("%s: line %d: %s step %d starts outside every session", dir, i+1, kinds[n], n)
+						}
+					}
 				case "dev.qory.run.step_exited":
 					if stepped[n] != "started" {
 						t.Errorf("%s: line %d: step %d exits, and its state is %q, not started", dir, i+1, n, stepped[n])
@@ -479,10 +506,22 @@ func TestRecordedRunValidates(t *testing.T) {
 					if stepped[n] != "started" {
 						t.Errorf("%s: line %d: a run.log of step %d, whose state is %q, not started", dir, i+1, n, stepped[n])
 					}
+					if _, ok := m["data"].(map[string]any)["session"]; ok && kinds[n] != "image" && kinds[n] != "wall" {
+						t.Errorf("%s: line %d: a run.log of a session in %s step %d", dir, i+1, kinds[n], n)
+					}
 				}
 			}
 			if m["type"] == "dev.qory.run.exited" && open != 0 {
 				t.Errorf("%s: line %d: the run exits with session %d open", dir, i+1, open)
+			}
+			if m["type"] == "dev.qory.run.exited" {
+				reason, _ := m["data"].(map[string]any)["reason"].(string)
+				byClose := reason == "" || reason == "timeout" || reason == "interrupted" || reason == "no_session"
+				for n, st := range stepped {
+					if st == "started" && byClose {
+						t.Errorf("%s: line %d: the run exits with step %d open", dir, i+1, n)
+					}
+				}
 			}
 			if m["type"] == "dev.qory.run.log" {
 				chunk, err := base64Decode(m["data"].(map[string]any)["bytes"].(string))
