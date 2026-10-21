@@ -990,12 +990,12 @@ func (r *Run) choose(held *credential.Held) ([]tool.Chosen, error) {
 
 func credentialConflict(name string) error {
 	shown := accesskey.ShownName(name, false)
-	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", shown)
+	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the session passes a value for it inside", shown)
 }
 
 func toolConflict(name string) error {
 	shown := accesskey.ShownName(name, false)
-	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside", shown)
+	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the session passes a value for it inside", shown)
 }
 
 // inForce is the policy a run configuration puts in force. Without a security_policy it

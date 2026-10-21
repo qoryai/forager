@@ -503,6 +503,17 @@ func sessionOf(data map[string]any) int {
 	return int(n)
 }
 
+// otherOpen reports whether a join of joins other than session n is open: answered
+// 200, with or without its dev.qory.session.started, and no dev.qory.session.exited.
+func otherOpen(joins map[int]join, n int) bool {
+	for m, j := range joins {
+		if m != n && j.open() {
+			return true
+		}
+	}
+	return false
+}
+
 // gatewayName is a refusal's name of the form only a gateway's refusal carries.
 var gatewayName = regexp.MustCompile(`^(labels|about\.details)\.[^=]*=`)
 
@@ -524,12 +535,8 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 	given := lr.given
 	// What the gateway holds of each join, as the batch's events change it, in order.
 	joins := make(map[int]join, len(lr.joins))
-	running := 0
 	for _, j := range lr.joins {
 		joins[j.session] = *j
-		if j.started && !j.exited {
-			running = j.session
-		}
 	}
 	lr.mu.Unlock()
 	fresh := map[string]bool{}
@@ -570,7 +577,7 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			}
 			for _, j := range joins {
 				if j.open() {
-					return "a run.exited while a session runs"
+					return "a run.exited while a join is open"
 				}
 			}
 			final = true
@@ -580,12 +587,14 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			switch {
 			case !ok || !j.accepted:
 				return "a session.started of no join the gateway accepted"
-			case j.started || j.exited:
+			case j.started:
 				return "a second session.started of one session"
-			case running != 0:
+			case j.exited:
+				return "a session.started after its session.exited"
+			case otherOpen(joins, n):
 				return "a session.started while another session runs"
 			}
-			j.started, running = true, n
+			j.started = true
 			joins[n] = j
 		case event.SessionExited:
 			n := sessionOf(data)
@@ -598,9 +607,6 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			}
 			j.exited = true
 			joins[n] = j
-			if running == n {
-				running = 0
-			}
 		case event.RunRefused:
 			if startedID != "" {
 				return "a run.refused after run.started"

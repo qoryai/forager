@@ -669,12 +669,14 @@ func (lr *linkRun) end(e ending) {
 			return
 		}
 		if e.state != "" && lr.st.Started() {
-			// A join still open: its session's end comes first, with the run's state and
-			// reason. No batch is numbered from here on, the run having ended.
+			// A join still open with its session.started: its session's end comes first,
+			// with the run's state and reason, as each session.exited follows its
+			// session.started. An open join with no session.started gets no event. No batch
+			// and no join is numbered from here on, the run having ended.
 			lr.batch.Lock()
 			lr.mu.Lock()
 			var open *join
-			if j := lr.openJoin(); j != nil {
+			if j := lr.openJoin(); j != nil && j.started {
 				c := *j
 				open = &c
 			}

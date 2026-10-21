@@ -11,6 +11,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/server"
@@ -102,7 +103,8 @@ func readJoinRequest(body []byte) (*server.LinkJoinRequest, bool) {
 // passes that contain a placeholder of a credential or a tool the gateway holds for
 // the run, which leaves the run open; 410 for a run that ended at the gateway; and 400
 // invalid_request for a body the schema refuses, for a model_credential of no model
-// key of the run, and on the local link for a run id of no run here. On the one
+// key of the run, for a join while another join of the run is open, and on the local
+// link for a run id of no run here. On the one
 // address the run id is the run key's, any other 400 run_key_invalid, and a run the
 // gateway does not hold is a 410 ([Gateway.heldRun]).
 func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, runID string) {
@@ -134,8 +136,13 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		invalid(w)
 		return
 	}
+	// A reload waits for the join, and so does a batch: no batch is checked against the
+	// joins while one is added, so a run.exited the link accepted finds no join it did
+	// not check.
 	lr.joining.Lock()
 	defer lr.joining.Unlock()
+	lr.batch.Lock()
+	defer lr.batch.Unlock()
 	if end, ended := lr.gone(); ended {
 		gone(w, end)
 		return
@@ -148,6 +155,18 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	}
 	conflict := lr.r.Conflict(run.Passing(req.Passes))
 	lr.mu.Lock()
+	if lr.ended {
+		// The run ended since the check above: [linkRun.end] sets ended under lr.mu.
+		end := lr.how
+		lr.mu.Unlock()
+		gone(w, end)
+		return
+	}
+	if lr.openJoin() != nil {
+		lr.mu.Unlock()
+		refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway, joinWhileOpen)
+		return
+	}
 	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes), model: model}
 	lr.joins = append(lr.joins, j)
 	digest := lr.reloadDigest
@@ -167,6 +186,10 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	b, _ := json.Marshal(server.LinkJoinAnswer{Version: 1, Session: j.session, ModelCredential: model})
 	w.Write(b)
 }
+
+// joinWhileOpen is the text of the 400 invalid_request of a join while another join of
+// the run is open, from its 200 until the gateway numbers its dev.qory.session.exited.
+const joinWhileOpen = "a join while another join of the run is open"
 
 // modelKey is the model key a join's session starts with: name, when it is one of the
 // model keys the gateway holds for the run, else the run's start key when name is
