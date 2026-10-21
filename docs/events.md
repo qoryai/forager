@@ -40,8 +40,8 @@ passes. `qory` keeps them under its state directory and prints the path:
   `session.Result.SessionDir`. It contains the session's `output.log`, the bytes of its
   `dev.qory.run.log` chunks, so you can replay one session's terminal from that file
   alone, and the files the session writes for its runtime, such as `preparation.sh` and
-  Claude Code's `settings.json` and `approve-key.sh`. A join that does not start leaves
-  no directory.
+  Claude Code's `settings.json` and `approve-key.sh`. A join that writes no
+  `dev.qory.session.started`, such as one the gateway refuses, leaves no directory.
 
 The files the session writes for the runtime, these and `ca-bundle.pem`, are each
 written to a new file beside it and renamed, so a link at its path is replaced, not

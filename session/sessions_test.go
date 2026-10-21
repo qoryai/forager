@@ -124,12 +124,13 @@ func chunks(t *testing.T, dir string) ([]byte, map[int][]byte) {
 	return all, bySession
 }
 
-// TestASessionThatDoesNotStartHasNoDirectory pins that a join that does not start
-// leaves no directory under sessions/: a join the gateway refuses, a join whose checks
-// refuse a mount, before the runtime's preparation, and a join whose wall refuses the
-// enclosure, after the preparation wrote settings.json. The session that then starts is
-// number 4, in sessions/4/, alone.
-func TestASessionThatDoesNotStartHasNoDirectory(t *testing.T) {
+// TestASessionHasADirectoryOnceItStarts pins that sessions/<n>/ exists exactly for the
+// sessions whose dev.qory.session.started is written. A join the gateway refuses, a
+// join whose checks refuse a mount, before the directory is made, and a join whose
+// runtime's preparation fails, after it is made, leave none. A join whose wall refuses
+// the enclosure is started, and keeps sessions/4/ with its settings.json and its
+// output.log. Session 5 then starts in sessions/5/.
+func TestASessionHasADirectoryOnceItStarts(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0")
 	joins := 0
 	g.OnJoin(func(linktest.Join) linktest.Reply {
@@ -156,6 +157,11 @@ func TestASessionThatDoesNotStartHasNoDirectory(t *testing.T) {
 	if _, err := r.Join(ctx, inRuns); !errors.As(err, &ref) || ref.Code != refusals.MountContainsForagerFiles {
 		t.Fatalf("a mount of the runs directory: %v", err)
 	}
+	absent := sp.SessionSpec
+	absent.Args = []string{"--settings", filepath.Join(t.TempDir(), "absent.json")}
+	if _, err := r.Join(ctx, absent); err == nil || !strings.HasPrefix(err.Error(), "runtime claude: ") {
+		t.Fatalf("a settings file that does not exist: %v", err)
+	}
 	walls.refuse = true
 	if _, err := r.Join(ctx, sp.SessionSpec); !errors.As(err, &ref) || ref.Code != refusals.ImageUserRoot {
 		t.Fatalf("the wall's refusal: %v", err)
@@ -170,8 +176,21 @@ func TestASessionThatDoesNotStartHasNoDirectory(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	if err != nil || res.Session != 4 || !slices.Equal(names, []string{"4"}) {
-		t.Errorf("session %d; sessions/ has %v, %v; want 4 alone", res.Session, names, err)
+	if err != nil || res.Session != 5 || !slices.Equal(names, []string{"4", "5"}) {
+		t.Errorf("session %d; sessions/ has %v, %v; want 4 and 5", res.Session, names, err)
+	}
+	refused := filepath.Join(res.Dir, session.SessionsDir, "4")
+	for _, name := range []string{"settings.json", sink.OutputFile} {
+		if _, err := os.Stat(filepath.Join(refused, name)); err != nil {
+			t.Errorf("the session the wall refused: %v", err)
+		}
+	}
+	var started []any
+	for _, e := range ofType(events(t, res), "dev.qory.session.started") {
+		started = append(started, data(e)["session"])
+	}
+	if !slices.Equal(started, []any{float64(4), float64(5)}) {
+		t.Errorf("session.started for sessions %v, want 4 and 5", started)
 	}
 }
 

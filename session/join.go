@@ -192,9 +192,9 @@ func (r *Run) refusedJoin(n int, err error) {
 func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Runtime, answer *server.LinkJoinAnswer, n int) (*Result, error) {
 	dir := r.dir
 	// sessionDir is the session's directory, made once the session's checks before the
-	// runtime's preparation pass. A session that does not start leaves none: fail
-	// removes it, with what the preparation wrote; the record has the join's
-	// dev.qory.session.exited.
+	// runtime's preparation pass. It stays exactly when dev.qory.session.started is
+	// written: a failure before that removes it, with what the preparation wrote, and
+	// the record has the join's dev.qory.session.exited.
 	sessionDir := filepath.Join(dir, SessionsDir, strconv.Itoa(n))
 	made := false
 	discard := func() {
