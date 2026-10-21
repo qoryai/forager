@@ -32,7 +32,7 @@ type Runtime interface {
 	// was written against none.
 	Version() string
 	// Prepare makes a launch one the session can follow: it installs the forwarder as
-	// the program's hook, writes what that takes into the run directory, and returns
+	// the program's hook, writes what that takes into the session's directory, and returns
 	// the launch to start in place of the one given, command and arguments. A program
 	// that waits for a person to approve a stand-in of [Attach.Placeholders] may be
 	// started through a script Prepare writes there, which records the approval where
@@ -68,9 +68,11 @@ type Attach struct {
 	// Launch is what the caller asked to start. Its Env is empty: a runtime adds
 	// variables, it does not see the run's.
 	Launch Launch
-	// RunDir is the run directory. What Prepare writes goes here; under a wall the
-	// enclosure sees it read-only at the same path.
-	RunDir string
+	// SessionDir is the session's directory, sessions/<n>/ in the run directory, which
+	// no other session of the run writes to. What Prepare writes goes here; under a wall
+	// the enclosure sees it read-only at the same path, and nothing else of the run
+	// directory.
+	SessionDir string
 	// Forwarder is the command to install as the program's hook: it reads a hook's
 	// input and forwards it to the session as a record of [SourceHooks]. Empty means the
 	// run has none, and no hooks are installed.
@@ -98,8 +100,8 @@ type Attach struct {
 	// environment leaves these names out of the copy, regardless of case.
 	DeniedVariables []string
 	// Inside, when not nil, writes a path of this machine's as the enclosure sees it,
-	// in a string that may hold one: a runtime applies it to what it copies into the
-	// run directory of the caller's, so a path it names still leads where it led. The
+	// in a string that may hold one: a runtime applies it to what it copies into
+	// SessionDir from the caller's files, so a path it names still leads where it led. The
 	// session sets it for a run whose workspace is at /workspace inside. Nil leaves
 	// every path as it is.
 	Inside func(string) string

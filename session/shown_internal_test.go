@@ -68,7 +68,7 @@ func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 	ws, runs := mkdir(t, base, "workspace"), mkdir(t, base, "runs")
 	refused := func(t *testing.T, spec runSpec) *Refusal {
 		t.Helper()
-		_, err := checkMounts(spec, filepath.Join(runs, "run"))
+		_, err := checkMounts(spec, filepath.Join(runs, "run"), filepath.Join(runs, "run", SessionsDir, "1"))
 		var r *Refusal
 		if !errors.As(err, &r) {
 			t.Fatalf("want a refusal, got %v", err)
@@ -157,7 +157,7 @@ func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 			_, err := checkMounts(runSpec{SessionSpec: SessionSpec{
 				ForagerFiles: []string{file},
 			},
-			}, "")
+			}, "", "")
 			if err == nil || err.Error() != want {
 				t.Errorf("%s: %v, want %q", file, err, want)
 			}
@@ -221,7 +221,7 @@ func TestAWalledRunsCheckPrintsAPhraseForASecretInAPath(t *testing.T) {
 				SessionSpec: SessionSpec{
 					Dir: mkdir(t, base, "ws"),
 				},
-			}, runDir)
+			}, runDir, filepath.Join(runDir, SessionsDir, "1"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -424,7 +424,7 @@ func TestARefusalThroughALinkListsANamePhraseForASecret(t *testing.T) {
 	ws, runs, outside := mkdir(t, base, "workspace"), mkdir(t, base, "runs"), mkdir(t, base, "outside")
 	refused := func(t *testing.T, spec runSpec) *Refusal {
 		t.Helper()
-		_, err := checkMounts(spec, filepath.Join(runs, "run"))
+		_, err := checkMounts(spec, filepath.Join(runs, "run"), filepath.Join(runs, "run", SessionsDir, "1"))
 		var r *Refusal
 		if !errors.As(err, &r) {
 			t.Fatalf("want a refusal, got %v", err)

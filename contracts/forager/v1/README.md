@@ -122,9 +122,11 @@ Stated so a receiver reads the record for what it is.
 - A credential the run passes into the enclosure's environment is the agent's; one the
   policy selects stays outside (§Credentials). What is passed in is the agent's: a
   checkout that keeps a secret in the repository's configuration passes the secret in with
-  the workspace. Behind a wall the run directory is shown read-only and lies outside
-  every place the run binds writable, so the agent can neither change nor move
-  `events.jsonl`. The server's copy is out of reach as well.
+  the workspace. Behind a wall the enclosure sees only the session's directory in the
+  run directory, `sessions/<n>/`, read-only, and the run directory lies outside every
+  place the run binds writable, so the agent can neither read, change nor move
+  `events.jsonl`, nor read another session's files. The server's copy is out of reach
+  as well.
 - Behind a wall the exit status is the adapter's command's. With Docker that is the
   runtime's status, except that `125` is the engine failing to start the container,
   `126` and `127` the program not being startable in the image, and a runtime killed by
@@ -203,10 +205,11 @@ One run, on a developer machine, with a server configured:
 6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
    Forager's forwarder as a command hook for each event the runtime lists. For Claude
    Code that is a copy of the first settings file the launch passes, written as
-   `settings.json` in the run directory and passed in its place, and, for an
-   interactive session whose API key is a placeholder, a script that pre-approves the
-   placeholder value in Claude Code's configuration before it starts (§The descriptor).
-   What is prepared goes into the run directory; the composed home is not modified.
+   `settings.json` in the session's directory, `sessions/<n>/` in the run directory, and
+   passed in its place, and, for an interactive session whose API key is a placeholder,
+   a script that pre-approves the placeholder value in Claude Code's configuration
+   before it starts (§The descriptor). What is prepared goes into the session's
+   directory (§The record files); the composed home is not modified.
    Claude Code reads only the last `--settings` it is passed. A launch that passes
    `--settings` more than once, counted anywhere in its arguments, does not start,
    walled or not: "Pass one --settings file. This launch passes --settings more than
@@ -224,7 +227,7 @@ One run, on a developer machine, with a server configured:
    start when one fails. A value that starts with `~`, is relative or has a `..` part is
    refused. A value of `--mcp-config` or `--agents` that Claude Code takes as JSON
    passes unchanged; a file is checked as the settings file is and passed as a copy in
-   the run directory, `mcp-config-<n>.json` or `agents-<n>.json`. A `--plugin-dir` or
+   the session's directory, `mcp-config-<n>.json` or `agents-<n>.json`. A `--plugin-dir` or
    `--plugin-dir-no-mcp` directory must not lie in, be reached through or contain such
    a place, and no link under it may lead into one, no file under it may have more than
    one name, and it may have at most 10,000 entries; a `.zip` is checked as a file. An
@@ -301,7 +304,7 @@ Behind a wall, three steps differ and no event does. Before step 5 the gateway s
 tools the policy selects and waits until each listens (§Tools), then has the wall
 prepare the enclosure and listens on the address the wall returns, not on loopback.
 After step 6 it passes the wall the launch, the proxy's address, the socket and the
-run directory, read-only, and starts the command the wall returns, on the same pseudo-terminal or
+session's directory, read-only, and starts the command the wall returns, on the same pseudo-terminal or
 pipes; the proxy and socket variables inside contain the addresses the enclosure reaches
 them on. After step 9 it closes the wall, which removes everything it created, and stops
 the tools.
@@ -1576,13 +1579,24 @@ compose keeps it out of git:
   The record of truth; the server's is a copy, without `dev.qory.run.registered`, which
   is never posted.
 - `output.log`: the raw bytes of the run's output, the host work's and each session's,
-  the concatenation of the `dev.qory.run.log` chunks. Both files tail.
+  the concatenation of the `dev.qory.run.log` chunks in sequence order. Both files tail.
   In a run with no wall, `qory-proxy-password` replaces the forwarder's password, and
   the base64 of `qory:qory-proxy-password` replaces the base64 of `qory:<password>`, in
   every `dev.qory.run.log` chunk and in every event the descriptor maps from an output
   or hook record.
-- `settings.json`: the runtime's settings with Forager's hooks added, when hooks
-  are installed.
+- `sessions/<n>/`: a directory per session that started, `<n>` the session's number
+  from the join answer; a join that writes no `dev.qory.session.started` has none.
+  Behind a wall the enclosure binds the directory of the session that runs, read-only,
+  and nothing else of the run directory. It contains:
+  - `output.log`: the bytes of the session's `dev.qory.run.log` chunks, masked as the
+    run's `output.log` is, so the session's terminal can be replayed from it alone.
+  - `preparation.sh`: the script the runtime starts through, for a session with a
+    preparation (§The wall).
+  - `settings.json`: the runtime's settings with Forager's hooks added, when hooks are
+    installed.
+  - `approve-key.sh` and the copies of the `--mcp-config`, `--agents` and
+    system-prompt files: what Claude Code's preparation writes, when it writes them
+    (§Sequence step 6, §The descriptor).
 - `ca-bundle.pem`: the trusted bundle with the run's certificate, for every run with a
   certificate authority, walled or not; certificates only, never a key (§Credentials,
   Termination).
@@ -1597,8 +1611,8 @@ record, numbered by its sequence (§The gateway's link), and `output.log`. On on
 they share a run directory when the gateway writes its record in the session's runs
 directory. Behind a separate gateway each machine has a separate run directory. The
 gateway's machine holds `events.jsonl`, `delivered.log` and `undelivered/` toward the
-server. The session's machine holds `session.jsonl`, `output.log` and `settings.json`,
-its mark, and its delivery state toward the gateway:
+server. The session's machine holds `session.jsonl`, `output.log` and `sessions/`, its
+mark, and its delivery state toward the gateway:
 
 - `separate-gateway`: an empty file, the mark of a session's record behind a separate
   gateway, which the session writes as it creates `session.jsonl` and no other writer of
@@ -3637,7 +3651,7 @@ after trimming the space around it, under `customApiKeyResponses.approved`. That
 configuration is `.config.json` in `CLAUDE_CONFIG_DIR`, else in `~/.claude`, when the
 file exists, and otherwise `.claude.json` in `CLAUDE_CONFIG_DIR`, else in `~`. When the
 session is interactive, the run has a wall and `ANTHROPIC_API_KEY` is a placeholder of
-the run, `claude-settings` writes `approve-key.sh` into the run directory and starts Claude Code
+the run, `claude-settings` writes `approve-key.sh` into the session's directory and starts Claude Code
 through it with `/bin/sh`, so an image for such a run contains `/bin/sh`. The script
 adds the placeholder value's entry, `utside-the-enclosure`, to that configuration inside
 the enclosure, then starts Claude Code with its arguments. A missing file becomes one
@@ -3833,7 +3847,7 @@ A wall is what makes a connection around the proxy fail. It is optional: with no
 runtime is a process of the machine and enforcement is cooperative (§Limits). With one,
 the runtime runs in an **enclosure** and the session stays outside it with the
 proxy, the policy and the access key secret; the record is written from outside, and the
-enclosure sees the run directory read-only. A wall is built by an adapter, one per
+enclosure sees only the session's directory in the run directory, read-only. A wall is built by an adapter, one per
 container interface; the contract's rules refer to no specific tool and define one list
 for all of them.
 
@@ -3916,7 +3930,8 @@ another walled run's still going, or in a directory inside one. A bind's root is
 up in its parent, so two binds of one root are allowed:
 
 - the enclosure binds the outermost of the places the run lists, the mounts and the
-  workspace, each once, and the run directory, read-only. The workspace is writable and
+  workspace, each once, and the session's directory, `sessions/<n>/` in the run
+  directory, read-only. The workspace is writable and
   is the working directory inside, through the bind that holds it, or bound at the same
   path as on the machine when no mount holds it; a run whose policy names its image by
   reference sees the bind that holds it at `/workspace` (§Images), and a wall binds a
@@ -4064,7 +4079,7 @@ runtime's preparation (§The runtime), as the runtime's user, in its working dir
 with its environment, through the relay and the proxy: it reaches what the policy
 allows, with the run's placeholders where the gateway sets the run's credentials.
 Forager reads nothing into what it does. The session writes `preparation.sh` into the
-run directory, each word of the preparation in single quotes, and starts the runtime
+session's directory, each word of the preparation in single quotes, and starts the runtime
 through it with `/bin/sh`, so an image for such a run contains `/bin/sh`. The script
 runs the preparation with no input and its output where the runtime's goes, and starts
 the runtime, as the runtime prepared it, once the preparation exits 0. A preparation

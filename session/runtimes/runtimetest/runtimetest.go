@@ -49,7 +49,7 @@ func Conforms(t *testing.T, rt runtimes.Runtime) {
 
 	launch := runtimes.Launch{Command: "/usr/bin/program", Args: []string{"--flag", "value"}}
 	dir := t.TempDir()
-	got, err := rt.Prepare(runtimes.Attach{Launch: launch, RunDir: dir})
+	got, err := rt.Prepare(runtimes.Attach{Launch: launch, SessionDir: dir})
 	if err != nil {
 		t.Fatalf("Prepare with no forwarder: %v", err)
 	}
@@ -62,7 +62,7 @@ func Conforms(t *testing.T, rt runtimes.Runtime) {
 
 	dir = t.TempDir()
 	forwarder := []string{"/opt/forager/forward", "an argument's quote"}
-	got, err = rt.Prepare(runtimes.Attach{Launch: launch, RunDir: dir, Forwarder: forwarder})
+	got, err = rt.Prepare(runtimes.Attach{Launch: launch, SessionDir: dir, Forwarder: forwarder})
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

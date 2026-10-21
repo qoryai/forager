@@ -57,7 +57,7 @@ func TestTheWorkspaceIsReachedThroughTheMountThatHoldsIt(t *testing.T) {
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("%+v, %v", res, err)
 	}
-	want := []wall.Mount{{Path: root}, {Path: res.Dir, ReadOnly: true}}
+	want := []wall.Mount{{Path: root}, {Path: res.SessionDir, ReadOnly: true}}
 	if !slices.Equal(w.got.Mounts, want) {
 		t.Errorf("mounts %v, want %v", w.got.Mounts, want)
 	}
@@ -91,7 +91,7 @@ func TestTheWorkspaceIsReachedThroughTheMountThatHoldsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	want = []wall.Mount{
-		{Path: home, ReadOnly: true}, {Path: sp.Dir}, {Path: res.Dir, ReadOnly: true},
+		{Path: home, ReadOnly: true}, {Path: sp.Dir}, {Path: res.SessionDir, ReadOnly: true},
 	}
 	if !slices.Equal(w.got.Mounts, want) || w.got.Dir != sp.Dir {
 		t.Errorf("mounts %v, working directory %q", w.got.Mounts, w.got.Dir)
@@ -118,7 +118,7 @@ func TestNestedMountsOfOneModeAreOneBind(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []wall.Mount{
-		{Path: root}, {Path: ro, ReadOnly: true}, {Path: res.Dir, ReadOnly: true},
+		{Path: root}, {Path: ro, ReadOnly: true}, {Path: res.SessionDir, ReadOnly: true},
 	}
 	if !slices.Equal(w.got.Mounts, want) {
 		t.Errorf("mounts %v, want %v", w.got.Mounts, want)

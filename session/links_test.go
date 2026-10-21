@@ -175,7 +175,7 @@ func TestALinkThatLeadsBackIntoItsPlaceIsReachedThroughIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []wall.Mount{{Path: w}, {Path: res.Dir, ReadOnly: true}}
+	want := []wall.Mount{{Path: w}, {Path: res.SessionDir, ReadOnly: true}}
 	if !slices.Equal(o.got.Mounts, want) || o.got.Dir != v2 {
 		t.Errorf("mounts %v, working directory %q", o.got.Mounts, o.got.Dir)
 	}
@@ -196,7 +196,7 @@ func TestALinkInsideNoPlaceIsFollowedWhereItLeads(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []wall.Mount{{Path: ws}, {Path: home, ReadOnly: true},
-		{Path: res.Dir, ReadOnly: true}}
+		{Path: res.SessionDir, ReadOnly: true}}
 	if !slices.Equal(o.got.Mounts, want) || o.got.Dir != ws {
 		t.Errorf("mounts %v, working directory %q", o.got.Mounts, o.got.Dir)
 	}

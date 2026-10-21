@@ -297,11 +297,12 @@ run, err := session.Open(ctx, session.OpenSpec{
   none of its files are checked against a walled run's mounts, and it reserves no
   variables there.
 - The run directory on the session's machine holds the session's record,
-  `session.jsonl` and `output.log`, its mark, `separate-gateway` (`session.GatewayMark`),
-  an empty file no other writer of a run directory writes, what the gateway accepted of
-  the record, `delivered.log`, and the batches it did not, `undelivered/`; never the run
-  key. The gateway's record, `events.jsonl`, with its delivery state toward the server,
-  is on the gateway's machine ([where the record is](events.md#where-the-record-is)).
+  `session.jsonl` and `output.log`, the sessions' directories, `sessions/`, its mark,
+  `separate-gateway` (`session.GatewayMark`), an empty file no other writer of a run
+  directory writes, what the gateway accepted of the record, `delivered.log`, and the
+  batches it did not, `undelivered/`; never the run key. The gateway's record,
+  `events.jsonl`, with its delivery state toward the server, is on the gateway's machine
+  ([where the record is](events.md#where-the-record-is)).
   `session.BehindGateway(dir string) (bool, error)` reports whether a run directory holds
   a record a session made behind a separate gateway, which `session.Resend` sends:
   whether `dir` holds `separate-gateway` as a regular file, not followed if it is a
@@ -511,6 +512,9 @@ the credential the join request asks the gateway for, for this session.
 
 - `RunID`, `Session`, the session's number, and `Dir`, the run directory with the
   record. See [the record](events.md#where-the-record-is).
+- `SessionDir`, the session's directory in `Dir`, `sessions/<n>/` with `<n>` its
+  number, `session.SessionsDir` and the number: the session's `output.log`, its
+  `preparation.sh` and the files its runtime writes.
 - `ExitCode` and `Signal`, the runtime's, whatever the session's state.
 - `State` and `Reason`, the state and the reason of the session's
   `dev.qory.session.exited`, how the session ended:

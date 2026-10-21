@@ -402,9 +402,11 @@ up in its parent, so two binds of one root are allowed.
   inside the checkout, is `mount_contains_forager_files`: the agent could point the link
   elsewhere.
 - **The run directory.** The runs directory is one of Forager's files, so the run
-  directory lies inside no place the run lists. It is bound read-only to its run's
-  enclosure, and to no other: a bind that is, holds or lies inside another walled run's
-  run directory, whatever its mode, is `mount_shared_with_run`.
+  directory lies inside no place the run lists. Of the run directory, only the
+  directory of the session that runs, `sessions/<n>/`, is bound, read-only, to that
+  session's enclosure: the agent reads no record and no file of another session. A bind
+  that is, holds or lies inside another walled run's run directory, whatever its mode,
+  is `mount_shared_with_run`.
 - **The wall's extra binds.** For `wall.Docker` they are the helper, read-only, the hook
   socket's directory, writable, and, read-only, the private directory that holds the
   run's environment files and, with a CA, the `ca-bundle.pem` the enclosure binds. A
@@ -488,8 +490,8 @@ up in its parent, so two binds of one root are allowed.
   way to p is looked up in it, or a name on the way to it is looked up in p. The paths
   are compared as written and as resolved through links, either side resolved now, so a
   link on neither side hides an overlap; p is resolved as the filesystem resolves it, a
-  `..` after a link from the link's target. The run directory is bound read-only, so a
-  run whose run directory alone overlaps p is not returned. The answer holds when the
+  `..` after a link from the link's target. A session's directory in the run directory
+  is bound read-only, so a run whose run directory alone overlaps p is not returned. The answer holds when the
   read returns: a caller that removes or reuses p on it holds a lock that the runs it
   starts on p wait for, from the check to the action. A read-only bind does not count,
   and the read asks after an entry only when one of its writable binds overlaps p, or
@@ -516,7 +518,8 @@ change a path between the last check and the bind.
 ### No file read from a place an agent can write
 
 Claude Code's runtime reads the settings file passed with `--settings` as the run
-starts, and copies it into the run directory with Forager's hooks added. The session
+starts, and copies it into the session's directory, `sessions/<n>/` in the run
+directory, with Forager's hooks added. The session
 refuses that file when it lies in a place a walled run can write, so no walled run
 chooses what a later run is given:
 
@@ -586,7 +589,7 @@ unwalled launch passes them unchecked.
   file`, `it cannot be read` or `it is no JSON object`. For `--settings` this holds in
   an unwalled launch too.
 - **`--mcp-config` and `--agents` files** are checked and read as the settings file is,
-  and Claude Code is passed a copy in the run directory, `mcp-config-<n>.json` or
+  and Claude Code is passed a copy in the session's directory, `mcp-config-<n>.json` or
   `agents-<n>.json`, numbered from 1 in the order the files appear. For a run whose
   workspace is at `/workspace` inside, a copy that is JSON has every string written as
   the enclosure sees it. A file in such a place is refused: "Move /work/mcp.json to a

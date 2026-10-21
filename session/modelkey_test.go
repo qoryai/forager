@@ -819,7 +819,7 @@ func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, _ = os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+			b, _ = os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 			var doc struct {
 				Env         map[string]any `json:"env"`
 				Permissions map[string]any `json:"permissions"`
@@ -875,7 +875,7 @@ func TestTheSettingsCopyKeepsNoCredentialHelper(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, _ := os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+			b, _ := os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 			var got map[string]any
 			if err := json.Unmarshal(b, &got); err != nil {
 				t.Fatal(err)
@@ -931,7 +931,7 @@ func TestTheSettingsEnvSetsNoDeniedVariable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, _ := os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+			b, _ := os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 			var doc struct {
 				Env map[string]any `json:"env"`
 			}

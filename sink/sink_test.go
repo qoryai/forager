@@ -56,6 +56,54 @@ func TestFileSinkWritesBothRecords(t *testing.T) {
 	}
 }
 
+// TestFileSinkWritesTheSessionsOutput pins a session's output.log: the bytes of the log
+// chunks written between StartSession and EndSession, and no other, while the run's
+// output.log has every chunk; a second session before the first one ends is refused,
+// and so is a directory that holds an output.log.
+func TestFileSinkWritesTheSessionsOutput(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	f, err := sink.NewFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := event.NewEmitter(event.NewRunID(), nil)
+	chunk := func(s string) {
+		f.Write(e.Make(event.RunLog, map[string]any{"stream": "terminal", "bytes": base64.StdEncoding.EncodeToString([]byte(s))}))
+	}
+	one, two := filepath.Join(dir, "one"), filepath.Join(dir, "two")
+	for _, d := range []string{one, two} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chunk("host ")
+	if err := f.StartSession(one); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StartSession(two); err == nil {
+		t.Error("a second session started before the first one ended")
+	}
+	chunk("one ")
+	if err := f.EndSession(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StartSession(one); !errors.Is(err, fs.ErrExist) {
+		t.Errorf("a directory with an output.log: %v", err)
+	}
+	if err := f.StartSession(two); err != nil {
+		t.Fatal(err)
+	}
+	chunk("two")
+	if err := f.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{dir: "host one two", one: "one ", two: "two"} {
+		if out, _ := os.ReadFile(filepath.Join(path, sink.OutputFile)); string(out) != want {
+			t.Errorf("%s: output.log %q, want %q", path, out, want)
+		}
+	}
+}
+
 // TestWriterSinkWritesTheLineTheFileHolds pins that the writer sink and the file sink
 // write the same bytes for the same event, and that closing it leaves the stream open.
 func TestWriterSinkWritesTheLineTheFileHolds(t *testing.T) {

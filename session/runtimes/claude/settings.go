@@ -28,8 +28,8 @@ const maxSettings = 1 << 20
 // Settings installs the forwarder as a command hook for each event in the JSON settings
 // Claude Code reads. It reads the file the arguments name after --settings, or the
 // document they hold there, or starts from an empty one when they name none, adds a
-// hook group per event under "hooks", writes the result as settings.json in the run
-// directory, and names that file instead. The file the launch passed is not modified.
+// hook group per event under "hooks", writes the result as settings.json in the
+// session's directory, and names that file instead. The file the launch passed is not modified.
 // A file is read only when its path has no ".." name, [runtimes.Attach.Readable] passes
 // it, its last part is no link, it is a regular file, it is the file Readable judged
 // and it holds at most 1 MiB. Of its "env" object, the copy keeps no member whose
@@ -62,7 +62,7 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 			return runtimes.Launch{}, err
 		}
 	}
-	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.DeniedVariables)
+	args, err := settingsArgs(events, launch.Args, a.SessionDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.DeniedVariables)
 	if err != nil {
 		return runtimes.Launch{}, err
 	}

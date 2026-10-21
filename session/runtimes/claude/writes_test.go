@@ -18,7 +18,7 @@ import (
 // contains qak_: a phrase, the error each wraps still found by errors.Is.
 func TestSettingsWritesPrintAPhraseForASecretInTheRunDirectory(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "qak_FAKE", "run")
-	_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{RunDir: missing, Forwarder: []string{"q"}})
+	_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{SessionDir: missing, Forwarder: []string{"q"}})
 	if err == nil {
 		t.Fatal("settings were written in a missing directory")
 	}
@@ -32,7 +32,7 @@ func TestSettingsWritesPrintAPhraseForASecretInTheRunDirectory(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, claude.ApproveScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err = claude.Settings([]string{"Stop"}, runtimes.Attach{RunDir: dir, Forwarder: []string{"q"}, Interactive: true, Walled: true, Placeholders: []string{"ANTHROPIC_API_KEY"}})
+	_, err = claude.Settings([]string{"Stop"}, runtimes.Attach{SessionDir: dir, Forwarder: []string{"q"}, Interactive: true, Walled: true, Placeholders: []string{"ANTHROPIC_API_KEY"}})
 	if err == nil {
 		t.Fatal("the approval script was written over a directory")
 	}
@@ -69,7 +69,7 @@ func settingsWithFiles(t *testing.T, run string, perm os.FileMode) (map[string]s
 		Launch: runtimes.Launch{Command: "claude", Args: []string{
 			"--mcp-config", from["mcp-config-1.json"], "--agents", from["agents-1.json"],
 			"--system-prompt-file", from["system-prompt-file-1.md"]}},
-		RunDir: run, Forwarder: []string{"q"}, Walled: true, Interactive: true,
+		SessionDir: run, Forwarder: []string{"q"}, Walled: true, Interactive: true,
 		Placeholders: []string{"ANTHROPIC_API_KEY"}, Readable: f.readable,
 	})
 	content := map[string]string{}

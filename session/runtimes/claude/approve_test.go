@@ -69,7 +69,7 @@ func prepareWalled(t *testing.T, dir string, interactive, walled bool, placehold
 		t.Fatal(err)
 	}
 	got, err := rt.Prepare(runtimes.Attach{
-		Launch: runtimes.Launch{Command: "claude", Args: []string{"--model", "m"}}, RunDir: dir,
+		Launch: runtimes.Launch{Command: "claude", Args: []string{"--model", "m"}}, SessionDir: dir,
 		Forwarder: []string{"/opt/q", "forward"}, Interactive: interactive, Walled: walled, Placeholders: placeholders,
 	})
 	if err != nil {
@@ -254,7 +254,7 @@ func TestTheScriptApprovesTheStandInAndKeepsTheRest(t *testing.T) {
 				t.Fatal(err)
 			}
 			launch, err := rt.Prepare(runtimes.Attach{
-				Launch: runtimes.Launch{Command: "printf", Args: []string{"%s|", "an argument", "it's"}}, RunDir: dir,
+				Launch: runtimes.Launch{Command: "printf", Args: []string{"%s|", "an argument", "it's"}}, SessionDir: dir,
 				Forwarder: []string{"/opt/q", "forward"}, Interactive: true, Walled: true, Placeholders: []string{"ANTHROPIC_API_KEY"},
 			})
 			if err != nil {

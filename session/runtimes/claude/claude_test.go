@@ -48,7 +48,7 @@ func TestSettingsKeepsWhatTheLaunchPassedAndAddsTheForwarder(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			got, err := claude.Settings([]string{"Stop", "SessionEnd"}, runtimes.Attach{
-				Launch: runtimes.Launch{Command: "claude", Args: args}, RunDir: dir, Forwarder: []string{"/opt/q", "it's"},
+				Launch: runtimes.Launch{Command: "claude", Args: args}, SessionDir: dir, Forwarder: []string{"/opt/q", "it's"},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -92,7 +92,7 @@ func TestSettingsKeepsWhatTheLaunchPassedAndAddsTheForwarder(t *testing.T) {
 		})
 	}
 	if _, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-		Launch: runtimes.Launch{Args: []string{"--settings", filepath.Join(t.TempDir(), "absent.json")}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+		Launch: runtimes.Launch{Args: []string{"--settings", filepath.Join(t.TempDir(), "absent.json")}}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 	}); err == nil {
 		t.Error("settings that cannot be read were passed over")
 	}
@@ -161,8 +161,8 @@ func TestSettingsReadsOnlyAPlainFileItIsLetRead(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-				Launch: runtimes.Launch{Command: "claude", Args: []string{"--settings", c.arg}},
-				RunDir: t.TempDir(), Forwarder: []string{"q"}, Readable: c.readable,
+				Launch:     runtimes.Launch{Command: "claude", Args: []string{"--settings", c.arg}},
+				SessionDir: t.TempDir(), Forwarder: []string{"q"}, Readable: c.readable,
 			})
 			switch {
 			case c.want == "" && err != nil:
@@ -198,7 +198,7 @@ func TestSettingsRefusesALaunchThatPassesSettingsMoreThanOnce(t *testing.T) {
 		var asked []string
 		run := t.TempDir()
 		got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-			Launch: runtimes.Launch{Command: "claude", Args: args}, RunDir: run, Forwarder: []string{"q"},
+			Launch: runtimes.Launch{Command: "claude", Args: args}, SessionDir: run, Forwarder: []string{"q"},
 			Walled: walled,
 			Readable: func(p string) (string, error) {
 				asked = append(asked, p)
@@ -285,7 +285,7 @@ func TestSettingsRefusesAWalledLaunchThatPassesProjectConfigRoot(t *testing.T) {
 			var asked []string
 			run := t.TempDir()
 			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-				Launch: runtimes.Launch{Command: "claude", Args: args}, RunDir: run, Forwarder: []string{"q"}, Walled: true,
+				Launch: runtimes.Launch{Command: "claude", Args: args}, SessionDir: run, Forwarder: []string{"q"}, Walled: true,
 				Readable: func(p string) (string, error) {
 					asked = append(asked, p)
 					return filepath.EvalSymlinks(p)
@@ -305,7 +305,7 @@ func TestSettingsRefusesAWalledLaunchThatPassesProjectConfigRoot(t *testing.T) {
 	t.Run("unwalled", func(t *testing.T) {
 		args := []string{"--project-config-root", root, "--project-config-root=" + root}
 		got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-			Launch: runtimes.Launch{Command: "claude", Args: args}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+			Launch: runtimes.Launch{Command: "claude", Args: args}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 		})
 		if err != nil || !slices.Equal(got.Args[:len(args)], args) {
 			t.Errorf("launch %q, %v", got.Args, err)
@@ -326,7 +326,7 @@ func TestSettingsThatAreNoJSONObjectComeWithAFix(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-				Launch: runtimes.Launch{Args: []string{"--settings", f}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+				Launch: runtimes.Launch{Args: []string{"--settings", f}}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 			})
 			prefix := "Make the file " + f + " a JSON object. The check of --settings " + f + " failed: " + reason
 			if err == nil || !strings.HasPrefix(err.Error(), prefix) {
