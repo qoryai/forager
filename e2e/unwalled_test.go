@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -205,7 +207,8 @@ func TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy(t *testing.T) {
 }
 
 // unwalledOrigin is an HTTPS origin on 127.0.0.1, under the suite's authority, which
-// records the x-api-key of every request it gets.
+// records one header of every request it gets: x-api-key, or the one
+// newOriginRecording is given.
 type unwalledOrigin struct {
 	host string
 	mu   sync.Mutex
@@ -213,6 +216,12 @@ type unwalledOrigin struct {
 }
 
 func newUnwalledOrigin(t *testing.T) *unwalledOrigin {
+	t.Helper()
+	return newOriginRecording(t, "X-Api-Key")
+}
+
+// newOriginRecording is an unwalledOrigin that records header.
+func newOriginRecording(t *testing.T, header string) *unwalledOrigin {
 	t.Helper()
 	ca, caKey := authority()
 	leaf, err := sign(ca, caKey, []net.IP{net.IPv4(127, 0, 0, 1)})
@@ -222,7 +231,7 @@ func newUnwalledOrigin(t *testing.T) *unwalledOrigin {
 	o := &unwalledOrigin{}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		o.mu.Lock()
-		o.got = append(o.got, r.Method+" "+r.URL.Path+" "+r.Header.Get("X-Api-Key"))
+		o.got = append(o.got, r.Method+" "+r.URL.Path+" "+r.Header.Get(header))
 		o.mu.Unlock()
 		io.WriteString(w, "origin")
 	}))
@@ -239,4 +248,120 @@ func (o *unwalledOrigin) requests() []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return slices.Clone(o.got)
+}
+
+// hostValue is the fake token of the machine's forge credential of the host proxy's
+// run, which the gateway reads from hostSource.
+const (
+	hostValue  = "fake-forge-token-of-the-host-proxy-test"
+	hostSource = "E2E_TEST_HOST_VALUE"
+)
+
+// TestTheGatewaySetsTheCredentialOnAHostProxyRequest opens a real run without a wall
+// against a real gateway on its local link, without Docker, and sends a request through
+// the run's host proxy, as a fetch on the host does before any session joins. The
+// machine's policy selects the credential forge for the HTTPS origin on 127.0.0.1,
+// basic with the user x-access-token. The request carries no credential: the origin
+// gets the token in Authorization, once, and the token and the host proxy's password
+// are in no variable of HostProxy.Env and no file of the run directory.
+//
+// The proxy verifies the origin against this machine's roots, as in
+// TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy, so the test runs on Linux
+// alone.
+func TestTheGatewaySetsTheCredentialOnAHostProxyRequest(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		Skip(t, "Go reads this machine's roots from SSL_CERT_FILE on Linux alone, and the proxy verifies the origin against them")
+	}
+	if !slices.ContainsFunc(wall.BundleFiles(), func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.Mode().IsRegular() }) {
+		Skip(t, fmt.Sprintf("none of %v is on this machine, and a run with an authority opens only with one", wall.BundleFiles()))
+	}
+	if err := trustRecorders(t); err != nil {
+		t.Fatalf("this machine's roots are not the suite's authority: %v", err)
+	}
+	t.Setenv(hostSource, hostValue)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	o := newOriginRecording(t, "Authorization")
+
+	runs := filepath.Join(t.TempDir(), "runs")
+	g, err := gateway.Start(context.Background(), gateway.Config{Version: "test", Heartbeat: time.Second,
+		RunDir: func(id string) string { return filepath.Join(runs, id) },
+		Credentials: []gateway.Credential{{Name: "forge", Env: hostSource, Hosts: []string{"127.0.0.1"},
+			Scheme: "basic", Username: "x-access-token"}},
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}},
+			Credentials: []gateway.PolicyCredential{{Name: "forge"}}},
+		Report: func(l string) { t.Log("the gateway reported:", l) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		g.Close(ctx)
+	})
+
+	ctx := context.Background()
+	r, err := session.Open(ctx, session.OpenSpec{
+		RunsDir:        runs,
+		RunID:          event.NewRunID(),
+		Gateway:        session.LocalGateway(g.LocalLink()),
+		ForagerVersion: "test",
+		Report:         func(l string) { t.Log("report:", l) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := r.HostProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, err := url.Parse(h.ProxyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := proxyURL.User.Password()
+	if password == "" {
+		t.Fatalf("the host proxy's URL %q has no password", h.ProxyURL)
+	}
+	bundle, err := os.ReadFile(h.CABundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(bundle) {
+		t.Fatalf("no certificate in %s", h.CABundle)
+	}
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+		Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots}}}
+	resp, err := client.Get("https://" + o.host + "/example-org/product.git/info/refs")
+	if err != nil {
+		t.Fatalf("the request through the host proxy: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("the request through the host proxy got %d, want 200", resp.StatusCode)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+hostValue))
+	if want := []string{"GET /example-org/product.git/info/refs " + basic}; !slices.Equal(o.requests(), want) {
+		t.Errorf("the origin got %q; want %q", o.requests(), want)
+	}
+	for _, v := range h.Env {
+		if strings.Contains(v, hostValue) {
+			t.Errorf("HostProxy.Env contains the token: %q", v)
+		}
+	}
+	filepath.WalkDir(r.Dir(), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if b, _ := os.ReadFile(p); bytes.Contains(b, []byte(hostValue)) || bytes.Contains(b, []byte(password)) {
+				t.Errorf("%s contains the token or the host proxy's password", p)
+			}
+		}
+		return nil
+	})
 }

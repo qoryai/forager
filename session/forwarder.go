@@ -129,15 +129,17 @@ func listenForwarding(addr string, way forwarding) (*forwarder, error) {
 // Addr is the address the forwarder listens on, host:port with the port it got.
 func (f *forwarder) Addr() string { return f.ln.Addr().String() }
 
-// Env is the variables that point a program at the forwarder: its address, and the
-// password of the proxy URL when it has one.
-func (f *forwarder) Env() []string {
+// Env is the variables that point a program at the forwarder, each set to [forwarder.URL].
+func (f *forwarder) Env() []string { return link.ProxyEnv(f.URL()) }
+
+// URL is the forwarder's proxy URL: its address, and the password when it has one.
+func (f *forwarder) URL() string {
 	u := url.URL{Scheme: "http", Host: f.Addr()}
 	if f.way.password != "" {
-		// The user name is ignored; the password is the forwarder's own.
+		// The forwarder ignores the user name and checks the password.
 		u.User = url.UserPassword(proxyUser, f.way.password)
 	}
-	return link.ProxyEnv(u.String())
+	return u.String()
 }
 
 // proxyUser is the user name of an unwalled agent's proxy URL, which the forwarder

@@ -332,11 +332,14 @@ harness, then joins a session.
    start and run until the run's final event.
 2. **Host work.** Programs on the machine reach hosts through the run's proxy before
    any session starts, such as a fetch of the run's repositories or a compose of the
-   harness. Each connection is a `dev.qory.run.egress`, between the open's
-   `dev.qory.run.policy_applied` and the first `dev.qory.session.started`. The caller
+   harness, through the host proxy, a forwarder on loopback with a password, for every
+   run, walled or not (§The gateway's link, Host work). Each connection is a
+   `dev.qory.run.egress`, between the open's `dev.qory.run.policy_applied` and the
+   first `dev.qory.session.started`. The caller
    writes the lines of its host work as `dev.qory.run.log` with `stream: stderr`. For
    every run with a certificate authority, walled or not, the open writes
-   `ca-bundle.pem` into the run directory (§Credentials, Termination).
+   `ca-bundle.pem` into the run directory when the machine has a CA bundle
+   (§Credentials, Termination).
 3. **A join.** The session sends the gateway its join request with the session's
    `passes` (§The gateway's link, Joining a session) and receives the session's number,
    from 1. It writes `dev.qory.session.started`, with that number as `session` and what
@@ -723,7 +726,8 @@ the proxy ends the session's TLS itself, answering as the host with a certificat
 authority created for the run. The authority's key is in the gateway's memory and nowhere
 else, and gone with the run; its certificate is what the wall adds to the enclosure's
 trusted bundle (§The wall). For every run with an authority, walled or not, the open
-writes `ca-bundle.pem` into the run directory: the first of
+writes `ca-bundle.pem` into the run directory when the machine has a CA bundle: the
+first of
 `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`,
 `/etc/ssl/ca-bundle.pem` and `/etc/ssl/cert.pem` that is a regular file with a
 certificate in it, then the run's certificate. The file contains certificates and no
@@ -731,9 +735,13 @@ key. Programs of the run's host work, such as a fetch, read it. Without a wall t
 session points the variables the caller gives, `OpenSpec.CAEnv` in Go, or the wall's default
 list (§The wall), at that file. For programs that read those variables the bundle
 replaces the machine's trust, so a root that exists only in another store, such as the
-macOS Keychain, is not trusted. A machine with none of the four files does not start the
-run: `install a CA bundle at /etc/ssl/cert.pem or /etc/ssl/certs/ca-certificates.crt:
-the run's tools trust the gateway for the credentials' hosts only through a bundle, and
+macOS Keychain, is not trusted. On a machine with none of the four files, a run without
+a wall does not start: `install a CA bundle at /etc/ssl/cert.pem or
+/etc/ssl/certs/ca-certificates.crt: the run's tools trust the gateway for the
+credentials' hosts only through a bundle, and this machine has none of the files Forager
+reads`. A walled run starts without the file, and its host proxy does not start:
+`install a CA bundle at /etc/ssl/cert.pem or /etc/ssl/certs/ca-certificates.crt:
+programs that use the host proxy trust the run's certificate only through a bundle, and
 this machine has none of the files Forager reads`. The proxy verifies the real host
 against the machine's roots. Every other host stays a tunnel the proxy does not read,
 and a run with no credential and no path rule has no authority at all, unless it has a
@@ -1580,8 +1588,9 @@ compose keeps it out of git:
   is never posted.
 - `output.log`: the raw bytes of the run's output, the host work's and each session's,
   the concatenation of the `dev.qory.run.log` chunks in sequence order. Both files tail.
-  In a run with no wall, `qory-proxy-password` replaces the forwarder's password, and
-  the base64 of `qory:qory-proxy-password` replaces the base64 of `qory:<password>`, in
+  `qory-proxy-password` replaces the password of each forwarder of the run, the
+  session's in a run with no wall and the host proxy's in every run, and the base64 of
+  `qory:qory-proxy-password` replaces the base64 of `qory:<password>`, in
   every `dev.qory.run.log` chunk and in every event the descriptor maps from an output
   or hook record.
 - `sessions/<n>/`: a directory per session that started, `<n>` the session's number
@@ -1598,8 +1607,8 @@ compose keeps it out of git:
     system-prompt files: what Claude Code's preparation writes, when it writes them
     (§Sequence step 6, §The descriptor).
 - `ca-bundle.pem`: the trusted bundle with the run's certificate, for every run with a
-  certificate authority, walled or not; certificates only, never a key (§Credentials,
-  Termination).
+  certificate authority, walled or not, when the machine has a CA bundle; certificates
+  only, never a key (§Credentials, Termination).
 - `undelivered/`: the batches the server has not accepted, when there are any.
 - `answered`: behind a separate gateway, an empty file the gateway writes before it
   answers a run request; a gateway that starts again keeps a record that holds it, and
@@ -3478,6 +3487,19 @@ live there, closes the connection unanswered. The run's proxy secret, on one mac
 at least 128 bits from the system's random source, made by the gateway for the run; the
 gateway compares it in constant time, never logs it, and refuses it once its run ends,
 and it never leaves the machine.
+
+**Host work.** Programs on the machine reach the run's proxy before a session joins
+through the host proxy, a second forwarder on loopback, for every run, walled or not.
+Its proxy URL is `http://qory:<password>@127.0.0.1:<port>`, with a password the session
+makes for the host proxy alone, as for an unwalled agent's forwarder, and the forwarder
+checks every request the same way. On one machine it opens every connection to the
+gateway's proxy with `QORY-RELAY` and the run's proxy secret; behind a separate gateway
+with `QORY-RELAY` and the run key, over TLS, bound. The run's policy and credentials
+apply to its requests, so the gateway sets a fetch's token, and no token is on the
+machine. The programs trust the run's certificate through `ca-bundle.pem` in the run
+directory (§Credentials, Termination). The host proxy ends when its caller closes it,
+before each join request and at the run's close; from then on its port takes no
+connection. The session writes its password into no event and no file.
 
 ## The runtime
 

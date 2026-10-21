@@ -35,6 +35,10 @@ The module is a library with two entry points: the gateway and the session.
   run's id. The session holds no policy, no credential and no server. It speaks to the
   gateway alone, over the gateway's local link (the contract's
   [§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)).
+- Before a session joins, programs on the host, such as a fetch of the run's
+  repositories or a compose of the harness, reach the run's proxy through
+  `(*session.Run).HostProxy`, a forwarder on loopback with a password, for every run,
+  walled or not: see [the host proxy](#the-host-proxy).
 - It joins a session to the run, `(*session.Run).Join`, with a
   [`session.SessionSpec`](../session/spec.go): the program to start, and how. It gets a
   [`session.Result`](../session/spec.go) back once the runtime has exited and the
@@ -96,10 +100,11 @@ For each run the session, over the gateway's link, at `Open`:
 3. applies the run answer: on the local link the proxy secret goes to the session's
    forwarder, or behind a wall to the wall's relay, and never into the agent's
    environment; with or without a wall, the placeholders go into the agent's
-   environment, and the run's certificate authority into the bundle its programs
-   trust: behind a wall the enclosure's, and without one `ca-bundle.pem` in the run
-   directory, which the variables of `CAEnv` point at; behind a wall the image is the
-   one in the answer; the variables the gateway sets are not the session's to set;
+   environment, and the run's certificate authority into `ca-bundle.pem` in the run
+   directory, which the host work trusts, walled or not, and without a wall the agent
+   too, through the variables of `CAEnv`; behind a wall the enclosure's bundle contains
+   it, and the image is the one in the answer; the variables the gateway sets are not
+   the session's to set;
 4. records `dev.qory.run.started`, `opened_by` `run`, with the gateway's labels on the
    local link, and `dev.qory.run.policy_applied` with the members the gateway decides and
    empty `variables`, and posts every event of the run to the gateway, a heartbeat every
@@ -164,6 +169,55 @@ out the machine's other users, not the agent's user: the same user is trusted, a
 local link. Behind a separate gateway the forwarder reaches the gateway's one address
 over TLS instead, where a bound connection opens the run's proxy with the run key: see
 [the session behind a separate gateway](#the-session-behind-a-separate-gateway).
+
+### The host proxy
+
+`(*session.Run).HostProxy` starts a forwarder on loopback for programs on the host,
+for every run, walled or not, and returns a `session.HostProxy`:
+
+- `ProxyURL` is `http://qory:<password>@127.0.0.1:<port>`. The password is 32 bytes
+  from the system's random source in base64url, made for this forwarder alone. The
+  forwarder checks it on every request as an unwalled session's forwarder does: one
+  request per connection, the password in its one `Proxy-Authorization`, Basic. On one
+  machine the forwarder opens each connection to the gateway's proxy with the run's
+  proxy secret; behind a separate gateway it dials the gateway's one address with the
+  run key. The run's policy and credentials apply, so the gateway sets the token of a
+  fetch, and no token is on the machine.
+- `Env` is `HTTP_PROXY`, `HTTPS_PROXY`, their lower-case forms and `NO_PROXY`, set to
+  `ProxyURL` as for an unwalled session, then each variable of `CAEnv` set to
+  `CABundle` when the run has a certificate authority.
+- `CABundle` is the path of `ca-bundle.pem` in the run directory, the machine's
+  authorities and then the run's certificate, no key; empty for a run with no
+  authority. `Open` writes the file for every run with an authority, walled or not.
+  On a machine with none of the CA bundle files Forager reads, a walled run opens
+  without the file, and `HostProxy` returns "install a CA bundle at /etc/ssl/cert.pem
+  or /etc/ssl/certs/ca-certificates.crt: programs that use the host proxy trust the
+  run's certificate only through a bundle, and this machine has none of the files
+  Forager reads"; a run without a wall does not open.
+- `Close()` ends it: its port takes no connection, and every connection through it
+  closes. `Join` closes every open host proxy before its join request, and `Close` does
+  too, so the password opens nothing while a session runs. `HostProxy` returns an error
+  while a `Join` runs, after `Close`, for a walled run with no bundle, and when the port
+  cannot be opened.
+
+Set `ProxyURL` and `CABundle` in the environment of the program that needs them, such
+as git's, and not in the calling process's environment, which every child inherits, the
+session's runtime included. Forager writes the password into no event, no run file and
+no report line. Where a runtime prints it, the record contains `qory-proxy-password` in
+its place, as for the password of a session's forwarder.
+
+```go
+h, err := run.HostProxy()
+if err != nil {
+	return err
+}
+fetch := exec.Command("git", "fetch", "--depth=1", "origin", "main")
+fetch.Env = append(os.Environ(), "GIT_CONFIG_COUNT=2",
+	"GIT_CONFIG_KEY_0=http.proxy", "GIT_CONFIG_VALUE_0="+h.ProxyURL,
+	"GIT_CONFIG_KEY_1=http.sslCAInfo", "GIT_CONFIG_VALUE_1="+h.CABundle)
+err = fetch.Run()
+h.Close()                                         // Join closes it too
+```
 
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
@@ -440,9 +494,9 @@ the credential the join request asks the gateway for, for this session.
   `session.Forward(ctx, os.Stdin)`. That passes the hook's input to the run, over a
   socket whose address is in the environment.
 - `CAEnv` lists the names of the variables that point at `ca-bundle.pem` in the run
-  directory, the bundle of a run without a wall: the machine's authorities, then the
-  run's certificate. The session writes the bundle when the gateway's answer has an
-  authority. Nil means `wall.DefaultCAEnv`: `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
+  directory: the machine's authorities, then the run's certificate. They are in
+  `HostProxy.Env`, walled or not, and in the environment of a session without a wall.
+  The session writes the bundle when the gateway's answer has an authority. Nil means `wall.DefaultCAEnv`: `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
   `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `AWS_CA_BUNDLE`.
   Forager takes the names from `CAEnv` alone. The caller sets it: `qory` is to set it
   from `wall.ca_env`. Behind a `Wall`, the wall sets the names for the enclosure's

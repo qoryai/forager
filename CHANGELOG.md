@@ -876,6 +876,9 @@ release may change what an existing document does, and says so under Upgrading.
   run directory, `session.Result.SessionDir`, with `<n>` the session's number. Before,
   they were in the run directory. In a runtime's `Prepare`, write to
   `runtimes.Attach.SessionDir`, which replaces `RunDir`.
+- Install a CA bundle at `/etc/ssl/cert.pem` or `/etc/ssl/certs/ca-certificates.crt`
+  to use `HostProxy` in a walled run with a certificate authority; without one,
+  `HostProxy` returns an error that starts with this fix, and the run still opens.
 
 - Pass `--settings` at most once in a run without a wall, as behind one. A launch that
   passes it more than once now does not start, with "runtime claude: Pass one --settings
@@ -897,6 +900,17 @@ release may change what an existing document does, and says so under Upgrading.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
+- `(*session.Run).HostProxy` starts a forwarder on loopback with a password for
+  programs on the host, such as a fetch or a compose before a session joins, for every
+  run, walled or not. `session.HostProxy` has `ProxyURL`,
+  `http://qory:<password>@127.0.0.1:<port>`, `Env`, the proxy variables set to it and
+  the variables of `CAEnv` set to `CABundle`, and `CABundle`, the path of
+  `ca-bundle.pem` in the run directory, empty for a run with no certificate authority.
+  Requests through it reach the run's proxy, under the run's policy and credentials,
+  with the run's proxy secret on one machine and the run key behind a separate gateway.
+  It ends at `HostProxy.Close`, before each join request and at `Close`; from then on
+  its port takes no connection. The password is in no event, run file or report line,
+  and `qory-proxy-password` replaces it in the runtime's output and records.
 - `session.Open` opens a run at the gateway: the run request, without the session's
   passes, `dev.qory.run.started` with `opened_by` `run` and no runtime members,
   `dev.qory.run.policy_applied` with empty `variables`, and heartbeats until

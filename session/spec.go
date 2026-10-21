@@ -35,10 +35,11 @@ type OpenSpec struct {
 	// either way: the runtime sees only their placeholders. The wall is the run's: every
 	// session of the run has it.
 	Wall wall.Wall
-	// CAEnv are the variables that point a program at the run's bundle when the run has
-	// no Wall and the gateway gives it an authority; qory is to set it from wall.ca_env.
-	// Nil means [wall.DefaultCAEnv]. Behind a Wall the wall sets its names for the
-	// bundle instead.
+	// CAEnv are the variables that point a program at the run's bundle when the gateway
+	// gives the run an authority: in [HostProxy.Env], walled or not, and in the
+	// session's environment when the run has no Wall; qory is to set it from
+	// wall.ca_env. Nil means [wall.DefaultCAEnv]. Behind a Wall the wall sets its names
+	// for the bundle inside instead.
 	CAEnv []string
 	// Image is the agent's image under a Wall when the policy selects none: the name
 	// of one of Images, or a reference.

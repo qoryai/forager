@@ -120,8 +120,9 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if err := CheckStopSignal(s.StopSignal); err != nil {
 		return nil, err
 	}
-	// F4 (decision 856 N-4) adds the close of the run's host proxy here, before the
-	// join request and the wall's start.
+	// The run's host proxies end before the join request and the wall's start, so
+	// their passwords open nothing while the session runs.
+	r.hosts.closeAll()
 
 	// runCtx ends when the join's context ends or the run is closed from outside: the
 	// start stops, or the runtime is stopped as at its time limit.
