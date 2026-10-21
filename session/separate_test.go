@@ -272,3 +272,26 @@ func TestAResendTakesTheSessionsRecordAlone(t *testing.T) {
 		t.Error("a refused resend reached the gateway")
 	}
 }
+
+// TestOutputLogHasNoForwarderPasswordBehindASeparateGateway pins a runtime behind a
+// separate gateway that prints its environment: output.log has the proxy URL with
+// qory-proxy-password, and neither it nor session.jsonl contains the password.
+func TestOutputLogHasNoForwarderPasswordBehindASeparateGateway(t *testing.T) {
+	g := startRemote(t)
+	g.SetInterval(30)
+	key := g.RunKey(t, event.NewRunID())
+	r := newSepRun(t, session.RemoteGateway{RunKey: key})
+	r.sp.Env = append(r.sp.Env, session.EnvRunKey+"="+key)
+	r.sp.Args = []string{"-c", `env > "$0"; env; exec "$1"`, r.envFile, os.Args[0]}
+	res, err := session.Run(context.Background(), r.sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != "succeeded" {
+		t.Fatalf("result %+v", res)
+	}
+	out := noPassword(t, res, forwarderPassword(t, r.envFile))
+	if !strings.Contains(out, "HTTP_PROXY="+maskedURL) {
+		t.Errorf("output.log has no masked proxy URL:\n%s", out)
+	}
+}

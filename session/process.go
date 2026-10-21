@@ -19,6 +19,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/session/internal/chunk"
 	"github.com/qoryai/forager/session/runtimes"
 )
@@ -34,6 +35,9 @@ type process struct {
 	stderr  io.Writer
 	// logs returns the chunk consumer for a stream.
 	logs func(stream string) func([]byte)
+	// masker replaces the passwords of the run's forwarders in what goes to logs; nil
+	// for a run with no password, such as a walled run.
+	masker *mask.Masker
 	// stop is the signal that asks the process to leave, and grace how long it gets
 	// after it before SIGKILL.
 	stop  syscall.Signal
@@ -114,14 +118,51 @@ func (p *process) observed() {
 	}
 }
 
+// streamLog is the log of one stream: the masking writer, then the chunk writer, then
+// the stream's chunk consumer from logs.
+type streamLog struct {
+	masked *mask.Writer
+	chunks interface {
+		io.Writer
+		Flush()
+	}
+}
+
+// logWriter builds the log of a stream: on a pseudo-terminal, terminal, cut at
+// chunk.Size bytes or chunk.Gap of quiet; on pipes cut at each line. Every run.log
+// event passes through its masking writer, which replaces the forwarders' passwords.
+func (p *process) logWriter(stream string, terminal bool) *streamLog {
+	emit := p.logs(stream)
+	l := &streamLog{chunks: chunk.New(emit)}
+	if terminal {
+		l.chunks = chunk.NewTerminal(emit, chunk.Gap)
+	}
+	l.masked = mask.NewWriter(l.chunks, p.masker)
+	return l
+}
+
+// Write writes b to the masking writer.
+func (l *streamLog) Write(b []byte) (int, error) { return l.masked.Write(b) }
+
+// cut emits what the chunk writer holds and leaves the bytes the masking writer keeps
+// back, so a password split across a resize stays whole for the masker.
+func (l *streamLog) cut() { l.chunks.Flush() }
+
+// Flush writes the bytes the masking writer keeps back, then emits what the chunk
+// writer holds: the stream is over.
+func (l *streamLog) Flush() {
+	l.masked.Flush()
+	l.chunks.Flush()
+}
+
 // runPipes runs the process on pipes: its input is stdin, its standard output goes to
 // the terminal-less log as stdout, to the output source when there is one, and to
 // stdout; its standard error to the log as stderr and to stderr.
 func (p *process) runPipes(ctx context.Context) (exitStatus, error) {
 	cmd := p.newCmd(ctx)
 	cmd.Stdin = p.stdin
-	out := chunk.New(p.logs("stdout"))
-	errs := chunk.New(p.logs("stderr"))
+	out := p.logWriter("stdout", false)
+	errs := p.logWriter("stderr", false)
 	writers := []io.Writer{out, p.stdout}
 	var lines *lineParser
 	if p.output != nil {
@@ -154,12 +195,13 @@ func (p *process) runPTY(ctx context.Context) (exitStatus, error) {
 		return exitStatus{}, fmt.Errorf("%w: %v", ErrNotStarted, accesskey.ShownError(err))
 	}
 	defer ptmx.Close()
-	log := chunk.NewTerminal(p.logs("terminal"), chunk.Gap)
+	log := p.logWriter("terminal", true)
 	if f, ok := p.stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		apply := func(size *pty.Winsize) {
 			// What was drawn before the resize is logged before it, whatever the gap
-			// still holds; then the runtime learns the size, and the record does.
-			log.Flush()
+			// still holds, apart from the bytes the masker keeps back; then the runtime
+			// learns the size, and the record does.
+			log.cut()
 			pty.Setsize(ptmx, size)
 			if p.resized != nil {
 				p.resized(int(size.Cols), int(size.Rows))

@@ -23,6 +23,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/socket"
@@ -849,6 +850,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			return fail(err)
 		}
 	}
+	// masker replaces the password of every forwarder of the run in the runtime's
+	// output and in its output and hook records before they are events; nil for a run
+	// with no password.
+	masker := mask.Proxy(proxyUser, password)
 	var fwd *forwarder
 	switch {
 	case remote == nil:
@@ -881,7 +886,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	records := func(r runtimes.Record) {
 		if typ, data, ok := rt.Map(r); ok {
-			write(typ, data)
+			write(typ, maskedRecord(masker, data))
 		}
 	}
 	go sock.Serve(records, func(err error) { spec.Report("socket: " + accesskey.ShownError(err).Error()) })
@@ -1048,7 +1053,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		output = nil
 	}
 	resized := func(cols, rows int) { write(event.RunResized, map[string]any{"cols": cols, "rows": rows}) }
-	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output, cols: cols, rows: rows, resized: resized}
+	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, masker: masker, output: output, cols: cols, rows: rows, resized: resized}
 	// The limit ends the runtime and nothing else: the sinks and the wall are closed on
 	// the caller's context, as after any exit. The run being closed from outside ends
 	// it the same way.

@@ -1438,6 +1438,10 @@ compose keeps it out of git:
   is never posted.
 - `output.log`: the raw bytes of the session's output, the concatenation of the
   `dev.qory.run.log` chunks. Both files tail.
+  In a run with no wall, `qory-proxy-password` replaces the forwarder's password, and
+  the base64 of `qory:qory-proxy-password` replaces the base64 of `qory:<password>`, in
+  every `dev.qory.run.log` chunk and in every event the descriptor maps from an output
+  or hook record.
 - `settings.json`: the runtime's settings with Forager's hooks added, when hooks
   are installed.
 - `undelivered/`: the batches the server has not accepted, when there are any.
