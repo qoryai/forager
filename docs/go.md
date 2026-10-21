@@ -223,7 +223,9 @@ h.Close()                                         // Join closes it too
 what the fetch or the compose prints: each line is a `dev.qory.run.log` with `stream`
 `stderr` and no `session`, cut at 4096 bytes as a session's lines on pipes are, and goes
 to `output.log`. The run's masker replaces each forwarder's password in the lines, the
-host proxy's included, as in a session's output. Call it before the first `Join` or
+host proxy's included, within one call: pass whole lines, because a password split
+across two calls stays as written. Pass an error's text through `accesskey.ShownError`,
+which replaces a text that contains a run key or an access key. Call it before the first `Join` or
 after a `Join` returns: while a `Join` runs it returns "write the host work's lines
 after Join returns: a session of the run is still running", so `sessions/<n>/output.log`
 contains the bytes of session n alone, and after `Close` it returns "open a new run for
@@ -231,7 +233,10 @@ the host work's lines: the run is closed".
 
 ```go
 if err := fetch.Run(); err != nil {
-	run.HostLog([]byte("qory run: the fetch failed: " + err.Error() + "\n"))
+	line := "qory run: the fetch failed: " + accesskey.ShownError(err).Error() + "\n"
+	if err := run.HostLog([]byte(line)); err != nil {
+		return err
+	}
 }
 ```
 

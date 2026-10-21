@@ -14,7 +14,8 @@ import (
 // record as dev.qory.run.log with stream stderr and no session member: one chunk per
 // line, and a line longer than 4096 bytes in chunks of 4096, as a session's chunks on
 // pipes. The run's masker replaces the password of each forwarder of the run in b
-// first, and the chunks go to output.log in the run directory. A last line without a
+// first, within this call alone: a password split across two calls stays as written,
+// so pass whole lines. The chunks go to output.log in the run directory. A last line without a
 // line break is a chunk too, and an empty b writes nothing. A run the gateway closed
 // has the chunks in session.jsonl alone.
 //
