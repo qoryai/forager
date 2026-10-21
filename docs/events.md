@@ -34,11 +34,18 @@ passes. `qory` keeps them under its state directory and prints the path:
 - `session.jsonl`: the session's record, one CloudEvent per line, numbered by the
   session's sequence, which is not the stream's: every event the session posts, and the
   few it records alone (below).
-- `output.log`: the session's bytes.
-- The files the session writes for the runtime, such as `preparation.sh`,
-  `ca-bundle.pem`, and Claude Code's `settings.json` and `approve-key.sh`: each is
-  written to a new file beside it and renamed, so a link at its path is replaced, not
-  followed.
+- `output.log`: the bytes of the run's `dev.qory.run.log` chunks, every session's, in
+  sequence order.
+- `sessions/<n>/`: a directory per session that started, `<n>` the session's number,
+  `session.Result.SessionDir`. It contains the session's `output.log`, the bytes of its
+  `dev.qory.run.log` chunks, so you can replay one session's terminal from that file
+  alone, and the files the session writes for its runtime, such as `preparation.sh` and
+  Claude Code's `settings.json` and `approve-key.sh`. A join that does not start leaves
+  no directory.
+
+The files the session writes for the runtime, these and `ca-bundle.pem`, are each
+written to a new file beside it and renamed, so a link at its path is replaced, not
+followed.
 
 The gateway's record and the session's are in the same directory when the caller
 points `gateway.Config.RunDir` at the session's runs directory, `OpenSpec.RunsDir`.
@@ -46,8 +53,8 @@ Otherwise the gateway keeps its record under `gateway.Config.Dir`, in `runs/<id>
 
 Behind a separate gateway the two records are on two machines. The gateway's machine
 holds `events.jsonl`, with its `delivered.log` and `undelivered/` toward the server. The
-session's machine holds `session.jsonl` and `output.log`, and the session's delivery
-state toward the gateway beside them:
+session's machine holds `session.jsonl`, `output.log` and `sessions/`, and the session's
+delivery state toward the gateway beside them:
 
 - `delivered.log`: what the gateway accepted of `session.jsonl`, a line per batch, by
   the session's sequence, and `stopped` when the gateway ended the run.

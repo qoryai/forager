@@ -866,6 +866,11 @@ release may change what an existing document does, and says so under Upgrading.
   running: sessions of one run join one after another", and a `Close` while one runs
   returns "a session of the run is still running: close the run after Join returns".
 - `event.OpenedBySession` is gone: `dev.qory.run.started` has `opened_by` `run`.
+- Read a session's `preparation.sh`, `settings.json`, `approve-key.sh` and the copies
+  of its `--mcp-config`, `--agents` and system-prompt files from `sessions/<n>/` in the
+  run directory, `session.Result.SessionDir`, with `<n>` the session's number. Before,
+  they were in the run directory. In a runtime's `Prepare`, write to
+  `runtimes.Attach.SessionDir`, which replaces `RunDir`.
 
 - Pass `--settings` at most once in a run without a wall, as behind one. A launch that
   passes it more than once now does not start, with "runtime claude: Pass one --settings
@@ -877,13 +882,16 @@ release may change what an existing document does, and says so under Upgrading.
   runtime's `denies` from that `env` in every run, and Claude Code's `denies` list
   `ANTHROPIC_BASE_URL`. Before, a run without a start key kept a value of it there.
 - Give a walled run's `--mcp-config`, `--agents` and system-prompt files the mode its
-  wall's user can read, if that user is not the node's: a copy in the run directory has
-  its file's permission bits within 0644, less the umask, so the copy of a file of mode
-  0600 is 0600, and a wall whose user is another one cannot read it. Before, a copy was
-  0644 less the umask.
+  wall's user can read, if that user is not the node's: a copy in the session's
+  directory has its file's permission bits within 0644, less the umask, so the copy of
+  a file of mode 0600 is 0600, and a wall whose user is another one cannot read it.
+  Before, a copy was 0644 less the umask.
 
 #### Added
 
+- `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
+  the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
+  log events in between to a session's `output.log` as well.
 - `session.Open` opens a run at the gateway: the run request, without the session's
   passes, `dev.qory.run.started` with `opened_by` `run` and no runtime members,
   `dev.qory.run.policy_applied` with empty `variables`, and heartbeats until
@@ -1139,6 +1147,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- Each session that starts has a directory in the run directory, `sessions/<n>/`, with
+  `<n>` its number: its `output.log`, the bytes of its `dev.qory.run.log` chunks, its
+  `preparation.sh` and the files its runtime writes, such as Claude Code's
+  `settings.json`. The run's `output.log` keeps every chunk of the run in sequence
+  order. Behind a wall the enclosure binds only that session's directory, read-only,
+  where it bound the run directory: the agent reads no record and no file of another
+  session. A join that writes no `dev.qory.session.started` leaves no directory there.
+  Before, every session of a run wrote these files at one path in the run directory.
 - `session.Resend` sends no `dev.qory.session.exited` the session wrote in its record
   alone after the gateway ended the run.
 
