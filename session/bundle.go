@@ -12,16 +12,16 @@ import (
 	"github.com/qoryai/forager/wall"
 )
 
-// BundleFile is the file, in the run directory, that an unwalled run's tools trust:
-// the machine's authorities and the run's certificate.
+// BundleFile is the file, in the run directory, that the run's host work trusts, and
+// without a wall the run's tools: the machine's authorities and the run's certificate.
 const BundleFile = "ca-bundle.pem"
 
 // machineBundles are the files writeBundle reads the machine's authorities from, the
 // first that is a regular file with a certificate in it. A test replaces it.
 var machineBundles = wall.BundleFiles
 
-// caEnv are the variables that point an unwalled run's programs at its bundle:
-// OpenSpec.CAEnv, or [wall.DefaultCAEnv] when it is nil.
+// caEnv are the variables that point the host work's programs, and an unwalled run's,
+// at its bundle: OpenSpec.CAEnv, or [wall.DefaultCAEnv] when it is nil.
 func caEnv(spec OpenSpec) []string {
 	if spec.CAEnv != nil {
 		return slices.Clone(spec.CAEnv)

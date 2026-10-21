@@ -44,7 +44,13 @@ type Run struct {
 	byReference bool
 	relayImage  string
 	authority   []byte
+	// bundle is the path of the run's ca-bundle.pem, empty for a run with no
+	// authority, and bundleVars the variables of OpenSpec.CAEnv set to it; caVars are
+	// bundleVars without a wall, for the session's runtime, and nil behind one.
+	bundle      string
+	bundleVars  []string
 	caVars      []string
+	hosts       hostProxies
 	reserved    []string
 	listed      *registration
 	wallOwn     []bindSource
@@ -77,7 +83,7 @@ type Run struct {
 // open's dev.qory.run.policy_applied, with an empty variables, are written. It checks
 // the spec, discovers the gateway's link, takes the run directory's lock, lists a walled
 // run among the walled runs still going, sends the run request, writes the run's
-// bundle for a run with no wall whose answer has an authority, and starts the
+// bundle for a run whose answer has an authority, and starts the
 // heartbeats and the reloads, which last until [Run.Close]. An error means the run did
 // not open: the spec is refused, the gateway's link could not be reached, or the
 // gateway refused the run request. A refusal with a code is a [*Refusal]; a failure
@@ -320,12 +326,16 @@ func (r *Run) start(ctx context.Context) (err error) {
 	if answer.CertificateAuthority != "" {
 		r.authority = []byte(answer.CertificateAuthority)
 	}
-	// Without a wall the run's tools trust the authority through a bundle in the run
-	// directory, the machine's authorities and the run's certificate, which the
-	// variables of caEnv point at, as the wall's do inside.
-	if spec.Wall == nil && r.authority != nil {
-		if r.caVars, err = writeBundle(r.dir, caEnv(spec), r.authority); err != nil {
+	// The run's host work, walled or not, and without a wall the run's tools, trust the
+	// authority through a bundle in the run directory, the machine's authorities and the
+	// run's certificate, which the variables of caEnv point at, as the wall's do inside.
+	if r.authority != nil {
+		if r.bundleVars, err = writeBundle(r.dir, caEnv(spec), r.authority); err != nil {
 			return fail2(err)
+		}
+		r.bundle = filepath.Join(r.dir, BundleFile)
+		if spec.Wall == nil {
+			r.caVars = r.bundleVars
 		}
 	}
 	// On one machine the proxy secret opens every connection to the gateway's proxy,
@@ -483,6 +493,7 @@ func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 		out.Reason, out.ExitCode = event.ReasonNoSession, -1
 	}
 	r.closed = true
+	r.hosts.closeAll()
 	// Nothing of a reload goes after run.exited, and the heartbeats stop before it.
 	r.reload.stop()
 	r.stopBeat()

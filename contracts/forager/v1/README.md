@@ -329,8 +329,10 @@ harness, then joins a session.
    start and run until the run's final event.
 2. **Host work.** Programs on the machine reach hosts through the run's proxy before
    any session starts, such as a fetch of the run's repositories or a compose of the
-   harness. Each connection is a `dev.qory.run.egress`, between the open's
-   `dev.qory.run.policy_applied` and the first `dev.qory.session.started`. The caller
+   harness, through the host proxy, a forwarder on loopback with a password, for every
+   run, walled or not (§The gateway's link, Host work). Each connection is a
+   `dev.qory.run.egress`, between the open's `dev.qory.run.policy_applied` and the
+   first `dev.qory.session.started`. The caller
    writes the lines of its host work as `dev.qory.run.log` with `stream: stderr`. For
    every run with a certificate authority, walled or not, the open writes
    `ca-bundle.pem` into the run directory (§Credentials, Termination).
@@ -1568,8 +1570,9 @@ compose keeps it out of git:
   is never posted.
 - `output.log`: the raw bytes of the run's output, the host work's and each session's,
   the concatenation of the `dev.qory.run.log` chunks. Both files tail.
-  In a run with no wall, `qory-proxy-password` replaces the forwarder's password, and
-  the base64 of `qory:qory-proxy-password` replaces the base64 of `qory:<password>`, in
+  `qory-proxy-password` replaces the password of each forwarder of the run, the
+  session's in a run with no wall and the host proxy's in every run, and the base64 of
+  `qory:qory-proxy-password` replaces the base64 of `qory:<password>`, in
   every `dev.qory.run.log` chunk and in every event the descriptor maps from an output
   or hook record.
 - `settings.json`: the runtime's settings with Forager's hooks added, when hooks
@@ -3453,6 +3456,19 @@ live there, closes the connection unanswered. The run's proxy secret, on one mac
 at least 128 bits from the system's random source, made by the gateway for the run; the
 gateway compares it in constant time, never logs it, and refuses it once its run ends,
 and it never leaves the machine.
+
+**Host work.** Programs on the machine reach the run's proxy before a session joins
+through the host proxy, a second forwarder on loopback, for every run, walled or not.
+Its proxy URL is `http://qory:<password>@127.0.0.1:<port>`, with a password the session
+makes for the host proxy alone, as for an unwalled agent's forwarder, and the forwarder
+checks every request the same way. On one machine it opens every connection to the
+gateway's proxy with `QORY-RELAY` and the run's proxy secret; behind a separate gateway
+with `QORY-RELAY` and the run key, over TLS, bound. The run's policy and credentials
+apply to its requests, so the gateway sets a fetch's token, and no token is on the
+machine. The programs trust the run's certificate through `ca-bundle.pem` in the run
+directory (§Credentials, Termination). The host proxy ends when its caller closes it,
+before each join request and at the run's close; from then on its port takes no
+connection. The session writes its password into no event and no file.
 
 ## The runtime
 

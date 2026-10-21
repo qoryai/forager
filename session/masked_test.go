@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -137,5 +138,39 @@ func TestAnOutputRecordHasNoForwarderPassword(t *testing.T) {
 	}
 	if got, _ := data(r[0])["result"].(string); !strings.HasPrefix(got, "HTTP_PROXY="+maskedURL) {
 		t.Errorf("runtime.result's result %q", got)
+	}
+}
+
+// TestOutputLogHasNoHostProxyPassword pins the host proxy's password in a session that
+// joins after a request through the host proxy, and whose runtime on pipes prints the
+// host proxy's URL with its environment: output.log has that URL with
+// qory-proxy-password, and neither it nor session.jsonl contains the password.
+func TestOutputLogHasNoHostProxyPassword(t *testing.T) {
+	sp := spec(t)
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := r.HostProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := hostParts(t, h)
+	if status, _ := throughHost(t, h.ProxyURL, "http://api.example/host"); status != http.StatusOK {
+		t.Errorf("the request through the host proxy got %d", status)
+	}
+	sp.Env = append(sp.Env, "QORY_TEST_HOST_PROXY="+h.ProxyURL)
+	printedEnv(t, &sp, "env")
+	res, err := r.Join(ctx, sp.SessionSpec)
+	if _, cerr := r.Close(ctx, outcomeOf(res, err)); cerr != nil {
+		t.Fatal(cerr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := noPassword(t, res, password)
+	if !strings.Contains(out, "QORY_TEST_HOST_PROXY="+maskedURL) {
+		t.Errorf("output.log has no masked host proxy URL:\n%s", out)
 	}
 }
