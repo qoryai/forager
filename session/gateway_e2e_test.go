@@ -105,10 +105,11 @@ func record(t *testing.T, res *session.Result) []map[string]any {
 // gateway opens it with the machine's policy, the agent's request reaches the gateway's
 // proxy through the forwarder and is decided there, the gateway numbers the run's
 // stream, the session's events among it, and its record and the session's agree on
-// what happened; nothing is undelivered and no secret is in either.
+// what happened, run.started's machine and setup among it; nothing is undelivered and no secret is in either.
 func TestARunThroughARealGateway(t *testing.T) {
 	sp := spec(t, "FAKE_DENIED_URL=http://denied.invalid/a", "FAKE_EXIT=0")
 	sp.Labels = map[string]string{"repository": "example-namespace/project"}
+	sp.Machine, sp.Setup = "aws-ec2", event.SetupOutside
 	rg := startGateway(t, &sp, gateway.Config{Version: "test", Heartbeat: time.Second,
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}})
 	res, closed, err := runWithSettingsEnvClosed(t, sp)
@@ -130,6 +131,9 @@ func TestARunThroughARealGateway(t *testing.T) {
 	}
 	if l := data(numbered[0])["labels"].(map[string]any); l["repository"] != "example-namespace/project" {
 		t.Errorf("run.started labels %v", l)
+	}
+	if d := data(numbered[0]); d["machine"] != "aws-ec2" || d["setup"] != "outside" {
+		t.Errorf("run.started machine %v, setup %v", d["machine"], d["setup"])
 	}
 	if _, ok := data(numbered[0])["credential"]; ok {
 		t.Errorf("run.started %v has a credential member", data(numbered[0]))

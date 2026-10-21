@@ -105,6 +105,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `machine` and `setup` in `dev.qory.run.started`, both optional, so a reader shows
+  where the run and its setup ran. `machine` is the adapter that made the run's
+  machine, such as `aws-ec2`, or `none`: 1 to 64 of `a-z`, `0-9` and `-`, the first a
+  letter. `setup` is `outside`, for setup commands on the machine outside the wall, or
+  `inside`, for setup commands inside the wall, and is absent for a run with no setup
+  commands. `session.OpenSpec.Machine` and `session.OpenSpec.Setup` set them, and
+  empty leaves them out. `session.Open` refuses any other value before it contacts the
+  gateway, with an error that starts with the fix. `event.MachineNone`,
+  `event.SetupOutside` and `event.SetupInside` are the values in Go.
+  `fixtures/link/link-batch-setup-outside.json` is a batch with both members, and two
+  invalid fixtures have a `machine` in upper case and an unknown `setup`.
 - `dev.qory.run.step_started`, `events/run.step_started.schema.json`, and
   `dev.qory.run.step_exited`, `events/run.step_exited.schema.json`: one step of the
   run's host work, such as a fetch or a compose, with a start, an end, an outcome and

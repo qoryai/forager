@@ -328,8 +328,8 @@ harness, then joins a session.
 
 1. **The open.** Steps 1 to 5 above, for the run: the link, the registration, the policy
    and the proxy. The open writes `dev.qory.run.started`, with `opened_by: "run"`, the
-   Forager version, the host, `wall` for a walled run, and the run's `labels` and
-   `about`, then `dev.qory.run.policy_applied` with an empty `variables`. Heartbeats
+   Forager version, the host, `wall` for a walled run, `machine` and `setup` when the
+   caller passes them, and the run's `labels` and `about`, then `dev.qory.run.policy_applied` with an empty `variables`. Heartbeats
    start and run until the run's final event.
 2. **Host work.** Programs on the machine reach hosts through the run's proxy before
    any session starts, such as a fetch of the run's repositories or a compose of the
@@ -1379,7 +1379,7 @@ The types, one namespace. Forager's:
 | Type | When | Data |
 |---|---|---|
 | `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
-| `dev.qory.run.started` | the run is open: the open wrote it, before the run's host work and before any session; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `host`, behind a wall `wall`; and `labels` when the caller passes any, and `about` when the caller passes one |
+| `dev.qory.run.started` | the run is open: the open wrote it, before the run's host work and before any session; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `host`, behind a wall `wall`; `machine` when the caller passes it, and `setup` when the run has setup commands (§The events, Where the run and its setup ran); and `labels` when the caller passes any, and `about` when the caller passes one |
 | `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `preparation` when the run has a wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used |
 | `dev.qory.run.policy_applied` | right after `dev.qory.run.started`, with an empty `variables`; right after each `dev.qory.session.started` and before the session's wall starts, also for a session whose wall then fails to start, with that session's `variables`, `credential_variables` and `harness_hosts`; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `allow_first`, `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.step_started` | a step of the run's host work started, such as a fetch or a compose; after `dev.qory.run.started`, numbered from 1 in the order the steps start (Steps, below) | `step`, `name`, `kind` |
@@ -1524,6 +1524,20 @@ open of a run at its gateway opened the run, before any session (§Sequence, The
 its sessions). What each session starts, `runtime`, `command`, `args`, `dir`,
 `interactive` and the members the table lists with them, is in its
 `dev.qory.session.started`.
+
+**Where the run and its setup ran.** `dev.qory.run.started` contains `machine` and
+`setup` when the caller passes them. `machine` is the adapter that made the machine the
+run was opened on, such as `aws-ec2`, or `none` when no adapter made it: 1 to 64 of
+`a-z`, `0-9` and `-`, the first a letter. `setup` is where the run's setup commands
+run: `outside`, on the machine outside the wall, or `inside`, inside the wall. A run
+with no setup commands has no `setup`. With `setup` set to `outside`, the setup commands
+run on the machine without a wall. Forager checks both values before the run request
+and refuses any other, and the gateway passes both as the session sent them. Neither
+member selects or changes a policy.
+
+```json
+{"opened_by": "run", "forager_version": "0.7.0", "host": "build-node-4", "wall": "docker", "machine": "aws-ec2", "setup": "outside"}
+```
 
 **The harness of a session.** `dev.qory.session.started` contains `harness` when the
 caller passes it: the harness sources the session's compose used, one object per source,

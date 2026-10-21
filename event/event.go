@@ -61,6 +61,17 @@ const (
 // Forager's open of a run at its gateway, before any session joins it.
 const OpenedByRun = "run"
 
+// MachineNone is the machine of dev.qory.run.started when no adapter made the run's
+// machine.
+const MachineNone = "none"
+
+// The places of a run's setup commands, the setup of dev.qory.run.started: on the
+// machine, outside the wall, or inside the wall.
+const (
+	SetupOutside = "outside"
+	SetupInside  = "inside"
+)
+
 // Forager's own reasons of dev.qory.run.exited, why a run ended other than by the
 // runtime's own exit. A reason is an open code: one of these, or the code the run's
 // starter gave, carried as given. Forager's codes are reserved, and so are the old

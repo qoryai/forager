@@ -23,6 +23,7 @@ import (
 	"github.com/creack/pty"
 
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
@@ -784,6 +785,70 @@ func TestAboutIsInRunStartedAlone(t *testing.T) {
 		t.Errorf("run.started events %v", st)
 	} else if about, ok := data(st[0])["about"]; ok {
 		t.Errorf("an empty About is in run.started as %v", about)
+	}
+}
+
+// TestMachineAndSetupAreInRunStarted pins OpenSpec.Machine and OpenSpec.Setup: each is
+// in run.started as the caller set it, and the event validates against its schema;
+// empty ones leave both members out; a value the schema refuses is no run, with the
+// error word for word, before the gateway sees a connection or a run directory is
+// made, and a value that contains qak_ is shown as the value's phrase.
+func TestMachineAndSetupAreInRunStarted(t *testing.T) {
+	schema, err := contracts.Compile("events/run.started.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ machine, setup string }{
+		{"aws-ec2", event.SetupOutside},
+		{event.MachineNone, event.SetupInside},
+		{"", ""},
+	} {
+		sp := spec(t)
+		sp.Forwarder = nil
+		sp.Machine, sp.Setup = c.machine, c.setup
+		res, err := run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := ofType(events(t, res), "dev.qory.run.started")
+		if len(st) != 1 {
+			t.Fatalf("run.started events %v", st)
+		}
+		d := data(st[0])
+		if err := schema.Validate(d); err != nil {
+			t.Errorf("%+v: run.started does not validate: %v", c, err)
+		}
+		for member, want := range map[string]string{"machine": c.machine, "setup": c.setup} {
+			got, ok := d[member]
+			switch {
+			case want == "" && ok:
+				t.Errorf("an empty %s is in run.started as %v", member, got)
+			case want != "" && got != want:
+				t.Errorf("run.started %s %v, want %s", member, got, want)
+			}
+		}
+	}
+
+	for _, c := range []struct{ machine, setup, want string }{
+		{"AWS-EC2", "", `set OpenSpec.Machine to none or to 1 to 64 of a-z, 0-9 and -, the first a letter: "AWS-EC2"`},
+		{"1-node", "", `set OpenSpec.Machine to none or to 1 to 64 of a-z, 0-9 and -, the first a letter: "1-node"`},
+		{"a" + strings.Repeat("b", 64), "", `set OpenSpec.Machine to none or to 1 to 64 of a-z, 0-9 and -, the first a letter: "a` + strings.Repeat("b", 64) + `"`},
+		{"qak_x", "", "set OpenSpec.Machine to none or to 1 to 64 of a-z, 0-9 and -, the first a letter: (a value that contains an access key secret)"},
+		{"aws-ec2", "elsewhere", `set OpenSpec.Setup to outside or inside, or leave it empty: "elsewhere"`},
+		{"", "Outside", `set OpenSpec.Setup to outside or inside, or leave it empty: "Outside"`},
+	} {
+		sp, g := specGateway(t)
+		sp.Forwarder = nil
+		sp.Machine, sp.Setup = c.machine, c.setup
+		if _, err := run(context.Background(), sp); err == nil || err.Error() != c.want {
+			t.Errorf("machine %q, setup %q: %v, want %s", c.machine, c.setup, err, c.want)
+		}
+		if n := g.Accepted.Load(); n != 0 {
+			t.Errorf("machine %q, setup %q: the gateway saw %d connections of a refused run", c.machine, c.setup, n)
+		}
+		if entries, _ := os.ReadDir(sp.RunsDir); len(entries) > 0 {
+			t.Errorf("machine %q, setup %q: a run directory was made: %v", c.machine, c.setup, entries)
+		}
 	}
 }
 

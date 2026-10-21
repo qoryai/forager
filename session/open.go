@@ -130,6 +130,9 @@ func Open(ctx context.Context, spec OpenSpec) (*Run, error) {
 	if err := CheckLabels(spec.Labels); err != nil {
 		return nil, err
 	}
+	if err := checkMachine(spec); err != nil {
+		return nil, err
+	}
 	// The checks of the machine's image table have no code: the open makes them before
 	// the run request, as before the gateway resolves a selection.
 	if spec.Wall != nil {
@@ -374,6 +377,13 @@ func (r *Run) start(ctx context.Context) (err error) {
 	started := map[string]any{"opened_by": event.OpenedByRun, "forager_version": spec.ForagerVersion, "host": accesskey.ShownName(hostname(), false)}
 	if spec.Wall != nil {
 		started["wall"] = accesskey.ShownName(spec.Wall.Name(), false)
+	}
+	// Open checked both: neither contains qak_ or qrk_, since neither contains _.
+	if spec.Machine != "" {
+		started["machine"] = spec.Machine
+	}
+	if spec.Setup != "" {
+		started["setup"] = spec.Setup
 	}
 	// The labels are the run's as the gateway has them. Behind a separate gateway
 	// neither they nor what the run is about are the session's: the starter's

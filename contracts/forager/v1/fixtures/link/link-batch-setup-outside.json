@@ -1,0 +1,63 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-700000000001",
+    "source": "urn:qory:run:0197f5a6-c172-7384-9f50-ab1c2d3e4f50",
+    "type": "dev.qory.run.started",
+    "subject": "0197f5a6-c172-7384-9f50-ab1c2d3e4f50",
+    "time": "2026-10-22T09:00:00.000Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
+    "data": {
+      "opened_by": "run",
+      "forager_version": "0.7.0",
+      "host": "build-node-4",
+      "wall": "docker",
+      "machine": "aws-ec2",
+      "setup": "outside"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-700000000002",
+    "source": "urn:qory:run:0197f5a6-c172-7384-9f50-ab1c2d3e4f50",
+    "type": "dev.qory.run.policy_applied",
+    "subject": "0197f5a6-c172-7384-9f50-ab1c2d3e4f50",
+    "time": "2026-10-22T09:00:00.005Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.policy_applied.schema.json",
+    "data": {
+      "mode": "observe",
+      "allow": [],
+      "source": "none",
+      "variables": []
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-700000000003",
+    "source": "urn:qory:run:0197f5a6-c172-7384-9f50-ab1c2d3e4f50",
+    "type": "dev.qory.run.step_started",
+    "subject": "0197f5a6-c172-7384-9f50-ab1c2d3e4f50",
+    "time": "2026-10-22T09:00:00.100Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.step_started.schema.json",
+    "data": {
+      "step": 1,
+      "name": "make deps",
+      "kind": "setup"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-700000000004",
+    "source": "urn:qory:run:0197f5a6-c172-7384-9f50-ab1c2d3e4f50",
+    "type": "dev.qory.run.step_exited",
+    "subject": "0197f5a6-c172-7384-9f50-ab1c2d3e4f50",
+    "time": "2026-10-22T09:00:02.100Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.step_exited.schema.json",
+    "data": {
+      "step": 1,
+      "state": "succeeded",
+      "exit_code": 0,
+      "duration_ms": 2000
+    }
+  }
+]

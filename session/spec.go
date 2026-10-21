@@ -88,6 +88,16 @@ type OpenSpec struct {
 	// Behind a RemoteGateway what the run is about is its starter's registration's:
 	// About is neither sent nor reported.
 	About *About
+	// Machine is the adapter that made the machine the run runs on, such as aws-ec2, or
+	// [event.MachineNone] when no adapter made it. run.started reports it as machine. It
+	// is 1 to 64 of a-z, 0-9 and -, and starts with a letter; [Open] refuses anything
+	// else. Empty leaves machine out of run.started.
+	Machine string
+	// Setup is where the run's setup commands run: [event.SetupOutside], on the machine
+	// outside the wall, or [event.SetupInside], inside the wall. run.started reports it as
+	// setup. [Open] refuses any other value. Empty leaves setup out of run.started, for a
+	// run with no setup commands.
+	Setup string
 	// Report receives one line per thing the run reports to its user; nil means
 	// os.Stderr, each line after "qory run: ".
 	Report func(string)
@@ -264,6 +274,22 @@ func checkHarness(sources []HarnessSource) error {
 		}
 	}
 	return nil
+}
+
+// machineShape is the form of run.started's machine.
+var machineShape = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+
+// checkMachine refuses a Machine and a Setup that run.started's schema refuses. An
+// empty one is absent and passes.
+func checkMachine(spec OpenSpec) error {
+	if spec.Machine != "" && !machineShape.MatchString(spec.Machine) {
+		return fmt.Errorf("set OpenSpec.Machine to none or to 1 to 64 of a-z, 0-9 and -, the first a letter: %s", accesskey.ShownValue(spec.Machine, true))
+	}
+	switch spec.Setup {
+	case "", event.SetupOutside, event.SetupInside:
+		return nil
+	}
+	return fmt.Errorf("set OpenSpec.Setup to outside or inside, or leave it empty: %s", accesskey.ShownValue(spec.Setup, true))
 }
 
 // Outcome is how the caller says the run ended, which [Run.Close] writes in

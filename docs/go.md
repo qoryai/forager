@@ -538,7 +538,14 @@ A program that needs custom code implements the interface.
 ## The spec
 
 `session.OpenSpec` has the run's fields: `Gateway`, `Wall`, `CAEnv`, `Image`, `Images`,
-`ImagesAllow`, `RunsDir`, `ForagerVersion`, `RunID`, `Labels`, `About` and `Report`.
+`ImagesAllow`, `RunsDir`, `ForagerVersion`, `RunID`, `Labels`, `About`, `Machine`,
+`Setup` and `Report`. `Machine` is the adapter that made the run's machine, such as
+`aws-ec2`, or `none` when no adapter made it. `Setup` is where the run's setup commands
+run: `outside`, on the machine outside the wall, or `inside`, inside the wall.
+`dev.qory.run.started` contains them as `machine` and `setup`, and an empty one is left
+out. `session.Open` refuses any other value before it contacts the gateway, and the
+error starts with the fix: `set OpenSpec.Setup to outside or inside, or leave it
+empty: "elsewhere"`.
 `session.SessionSpec` has each session's: the runtime and its command, the variables,
 the mounts, the preparation and the rest below. `Harness` lists the harness's sources,
 each a `source` and a full `commit`; `dev.qory.session.started` records them, a source
