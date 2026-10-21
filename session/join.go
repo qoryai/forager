@@ -192,7 +192,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	dir := r.dir
 	// sessionDir is the session's directory, made once the session's checks before the
 	// runtime's preparation pass. A session that does not start leaves none: fail
-	// removes it, with what the preparation wrote, and the record says why.
+	// removes it, with what the preparation wrote; the record has the join's
+	// dev.qory.session.exited.
 	sessionDir := filepath.Join(dir, SessionsDir, strconv.Itoa(n))
 	made := false
 	discard := func() {
@@ -314,8 +315,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the session's directory goes in read-only, apart from every place the session
 	// binds, and nothing else of the run directory: the settings are read from it, the
 	// record is not the agent's to read or rewrite, and another session's settings are
-	// not its to read. The runtime learns whether the run is walled, and the placeholders the run
-	// sets, with or without a wall. A file the runtime reads from this machine is refused
+	// not its to read. The runtime learns whether the run is walled, and the
+	// placeholders the run sets, with or without a wall. A file the runtime reads from this machine is refused
 	// when a walled run could have written it: one in a place of SessionSpec.Written, in
 	// a writable bind of another walled run in the registry or, behind a wall, in a
 	// writable bind of this session's. A directory the runtime passes is refused as well
@@ -503,7 +504,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		// The places again, just before the enclosure binds them, and the wall's binds,
 		// which exist by now, against the walled runs still going; the run's entry then
 		// lists them all. No walled agent of this user's can change a directory a name
-		// on the way to a place or the session's directory is looked up in, the join's checks
+		// on the way to a place or the session's directory is looked up in, the join's
+		// checks
 		// saw to that; the user, or a process outside every wall, can. A place that
 		// resolves otherwise than at the join, or whose names are looked up in other
 		// directories, fails the session; what changes after this point is not seen.
