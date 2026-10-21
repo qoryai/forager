@@ -61,7 +61,7 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	// A wall whose removal failed may still run, with the places its entry lists: a
 	// join would rewrite that entry with the join's places alone.
 	if r.keptBy > 0 {
-		return nil, fmt.Errorf("the wall of session %d may still run: open a new run", r.keptBy)
+		return nil, fmt.Errorf("Open a new run. The wall of session %d could not be removed and may still run, so this run takes no more sessions.", r.keptBy)
 	}
 	spec = sessionDefaults(spec, r.open.Wall != nil)
 	s := runSpec{OpenSpec: r.open, SessionSpec: spec}

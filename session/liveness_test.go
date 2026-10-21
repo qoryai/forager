@@ -295,7 +295,7 @@ func TestAJoinAfterAWallThatStaysIsRefused(t *testing.T) {
 	second := sp.SessionSpec
 	elsewhere := t.TempDir()
 	second.Mounts, second.Dir = []wall.Mount{{Path: elsewhere}}, elsewhere
-	if _, err := r.Join(ctx, second); err == nil || err.Error() != "the wall of session 1 may still run: open a new run" {
+	if _, err := r.Join(ctx, second); err == nil || err.Error() != "Open a new run. The wall of session 1 could not be removed and may still run, so this run takes no more sessions." {
 		t.Errorf("a join after a wall that stays: %v", err)
 	}
 	if b, err := os.ReadFile(file); err != nil || !strings.Contains(string(b), `"`+root+`"`) || strings.Contains(string(b), elsewhere) {

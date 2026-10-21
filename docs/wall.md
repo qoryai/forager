@@ -477,7 +477,8 @@ up in its parent, so two binds of one root are allowed.
   the gateway is contacted, and the check of a session's places at its join. The run
   leaves the registry when it closes, however it ends, unless a session's wall could not
   be removed. Then the run's entry keeps that session's places, and a later join returns
-  "the wall of session 1 may still run: open a new run".
+  "Open a new run. The wall of session 1 could not be removed and may still run, so this
+  run takes no more sessions."
 
   `session.RunsBinding(ctx, d, p)` reads the registry, under its lock, for a caller that
   removes or reuses a place p, an absolute path: it returns each walled run still going,
