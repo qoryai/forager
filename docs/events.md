@@ -72,6 +72,8 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.run.registered`     | Line 1 of the gateway's record, with a server; never posted                |
 | `dev.qory.run.started`        | The run is open, before its host work and before any session               |
 | `dev.qory.run.policy_applied` | After the open; after each session's start; when a new policy takes effect |
+| `dev.qory.run.step_started`   | A step of the run's host work started, such as a fetch or a compose        |
+| `dev.qory.run.step_exited`    | A step ended, with its state and exit code                                 |
 | `dev.qory.session.started`    | A session joined the run: its runtime is about to start                    |
 | `dev.qory.run.log`            | One per chunk of a session's output, or of host work outside a session     |
 | `dev.qory.run.resized`        | The pseudo-terminal was resized                                            |
@@ -109,6 +111,26 @@ work, such as a fetch or a compose, is a `dev.qory.run.log` on `stderr` with no
 `session`; the caller writes it with `(*session.Run).HostLog` before the first join or
 between two joins. An event without `session`, of a record that Forager wrote before
 the member was added, stays valid.
+
+The contract describes the run's host work as a list of steps, as a CI job has. A step
+is one named unit of host work, such as a fetch of a repository or a compose of the
+harness: a `dev.qory.run.step_started`, the step's host lines, and a
+`dev.qory.run.step_exited`.
+A reader such as a control plane's run page can show each step, the step that failed,
+and the log lines of each step.
+
+- `dev.qory.run.step_started` has `step`, the step's number in the run from 1, `name`,
+  a readable name such as `fetch github.com/example-org/app`, and `kind`: `fetch`,
+  `compose`, `image`, `setup`, `join` or `wall`.
+- `dev.qory.run.step_exited` has the same `step`, `state` (`succeeded`, `failed` or
+  `cancelled`), `exit_code`, -1 when no process exit status exists, and `duration_ms`.
+- Each host line of a step is a `dev.qory.run.log` with the step's number in `step`,
+  between the step's two events. A host line outside every step has no `step`.
+
+The steps come after `dev.qory.run.started`, numbered in the order they start. A setup
+command is a `setup` step wherever it runs, inside the wall too. The contract defines
+the two types; Forager's Go packages write neither, and `(*session.Run).HostLog` writes
+no `step`.
 
 `dev.qory.session.started` contains `harness` when the caller passes it: one entry per
 harness source the session's compose used, each with `source`, the source as it is

@@ -39,6 +39,10 @@ const (
 	// the runtime starts, and its end.
 	SessionStarted = "dev.qory.session.started"
 	SessionExited  = "dev.qory.session.exited"
+	// StepStarted and StepExited mark one step of a run's host work, such as a fetch
+	// or a compose: its start, and its end with an outcome.
+	StepStarted = "dev.qory.run.step_started"
+	StepExited  = "dev.qory.run.step_exited"
 )
 
 // OpenedByRun is the opened_by of dev.qory.run.started that the contract accepts:

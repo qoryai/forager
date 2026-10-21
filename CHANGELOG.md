@@ -105,6 +105,27 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `dev.qory.run.step_started`, `events/run.step_started.schema.json`, and
+  `dev.qory.run.step_exited`, `events/run.step_exited.schema.json`: one step of the
+  run's host work, such as a fetch or a compose, with a start, an end, an outcome and
+  its log lines, so a reader shows each step and the step that failed.
+  `dev.qory.run.step_started` has `step`, the step's number from 1, `name` and `kind`:
+  `fetch`, `compose`, `image`, `setup`, `join` or `wall`. `dev.qory.run.step_exited`
+  has `step`, `state` (`succeeded`, `failed` or `cancelled`), `exit_code`, -1 when no
+  process exit status exists, and `duration_ms`. Steps come after
+  `dev.qory.run.started`, and a setup command is a `setup` step wherever it runs,
+  inside the wall too. `event.StepStarted` and `event.StepExited` are the type names.
+  Forager's Go packages write neither type.
+- `step` in `dev.qory.run.log`: the number of the step whose host line the chunk is,
+  between that step's `dev.qory.run.step_started` and `dev.qory.run.step_exited`. The
+  member is optional, and a line outside every step has none.
+  `(*session.Run).HostLog` writes no `step`.
+- `fixtures/run/0195d3e4-af50-7162-9d3e-8f9a0b1c2d3e/`, a recorded run with a `fetch`
+  step and a `compose` step before its session, and
+  `fixtures/link/link-batch-step-failed.json`, a run closed with `no_session` after a
+  `fetch` step that failed. The recorded-run check requires steps numbered from 1
+  after `dev.qory.run.started`, each `dev.qory.run.step_exited` once after its
+  `dev.qory.run.step_started`, and each `dev.qory.run.log` with `step` between the two.
 - `session` in `dev.qory.run.log`, `dev.qory.run.resized` and every
   `dev.qory.runtime.*` event of a session: the session's number, from 1, so a reader
   shows each session's terminal and events apart. The member is optional, and an event

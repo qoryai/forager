@@ -303,7 +303,10 @@ const beyondLinkSchema = "-beyond-schema-"
 // without its command, numbered 0, or whose harness is empty, has a member it does not
 // define or a commit of 39 characters, a session.exited without its session, failed
 // with exit status 0 and no reason, cancelled with stopped and an exit status, cancelled
-// with gateway_lost, or of a refused join with an exit status other than -1, a run.exited with no_session and succeeded,
+// with gateway_lost, or of a refused join with an exit status other than -1, a run.log
+// whose step is 0, a run.step_started with an unknown kind, without its name or numbered
+// 0, a run.step_exited without its state, with a state other than the three, with an
+// exit code below -1 or without its duration, a run.exited with no_session and succeeded,
 // a run.exited without state, with a state other than the three, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
@@ -386,7 +389,10 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // 1 in order, each session.started followed by the session.exited of its number before
 // the next session.started and before run.exited; and a run.log, a run.resized or a
 // runtime event with a session member lies inside that session, so a run.log of the
-// host work, outside every session, has none.
+// host work, outside every session, has none; and the steps are numbered from 1 in the
+// order they start, after run.started, each run.step_exited following the
+// run.step_started of its number, once, and a run.log with a step member lies between
+// that step's run.step_started and run.step_exited.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
 	runs, err := fs.ReadDir(contracts.FS, "fixtures/run")
@@ -409,6 +415,7 @@ func TestRecordedRunValidates(t *testing.T) {
 		}
 		var log []byte
 		open, last := 0, 0
+		started, steps, stepped := false, 0, map[int]string{}
 		for i, e := range events {
 			if err := s["event.schema.json"].Validate(e); err != nil {
 				t.Errorf("%s: line %d: %v", dir, i+1, err)
@@ -450,6 +457,30 @@ func TestRecordedRunValidates(t *testing.T) {
 					t.Errorf("%s: line %d: %s of session %s, with session %d open", dir, i+1, typ, n, open)
 				}
 			}
+			if m["type"] == "dev.qory.run.started" {
+				started = true
+			}
+			if n, ok := stepNumber(m); ok {
+				switch m["type"] {
+				case "dev.qory.run.step_started":
+					if !started {
+						t.Errorf("%s: line %d: step %d starts before run.started", dir, i+1, n)
+					}
+					if n != steps+1 {
+						t.Errorf("%s: line %d: step %d starts after step %d", dir, i+1, n, steps)
+					}
+					steps, stepped[n] = n, "started"
+				case "dev.qory.run.step_exited":
+					if stepped[n] != "started" {
+						t.Errorf("%s: line %d: step %d exits, and its state is %q, not started", dir, i+1, n, stepped[n])
+					}
+					stepped[n] = "exited"
+				case "dev.qory.run.log":
+					if stepped[n] != "started" {
+						t.Errorf("%s: line %d: a run.log of step %d, whose state is %q, not started", dir, i+1, n, stepped[n])
+					}
+				}
+			}
 			if m["type"] == "dev.qory.run.exited" && open != 0 {
 				t.Errorf("%s: line %d: the run exits with session %d open", dir, i+1, open)
 			}
@@ -487,6 +518,20 @@ func sessionNumber(m map[string]any) (int, bool) {
 		return 0, false
 	}
 	n, _ := m["data"].(map[string]any)["session"].(json.Number)
+	v, err := n.Int64()
+	return int(v), err == nil
+}
+
+// stepNumber returns the step of a run.step_started, a run.step_exited or a run.log
+// with a step member.
+func stepNumber(m map[string]any) (int, bool) {
+	if m["type"] != "dev.qory.run.step_started" && m["type"] != "dev.qory.run.step_exited" && m["type"] != "dev.qory.run.log" {
+		return 0, false
+	}
+	n, ok := m["data"].(map[string]any)["step"].(json.Number)
+	if !ok {
+		return 0, false
+	}
 	v, err := n.Int64()
 	return int(v), err == nil
 }

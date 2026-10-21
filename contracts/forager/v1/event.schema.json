@@ -49,6 +49,8 @@
             "dev.qory.run.refused",
             "dev.qory.session.started",
             "dev.qory.session.exited",
+            "dev.qory.run.step_started",
+            "dev.qory.run.step_exited",
             "dev.qory.runtime.started",
             "dev.qory.runtime.prompt_submitted",
             "dev.qory.runtime.tool_started",
@@ -235,6 +237,32 @@
             },
             "data": {
               "$ref": "events/session.exited.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.step_started"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.step_started.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.step_started.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.step_exited"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.step_exited.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.step_exited.schema.json"
             }
           }
         },

@@ -14,7 +14,8 @@ import (
 )
 
 // TestEventsValidateAgainstTheContract pins that what the emitter makes is what the
-// envelope schema accepts, for a run type and for a runtime type.
+// envelope schema accepts, for a run type, for the two step types and for a runtime
+// type.
 func TestEventsValidateAgainstTheContract(t *testing.T) {
 	schema, err := contracts.Compile("event.schema.json")
 	if err != nil {
@@ -23,6 +24,8 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 	e := event.NewEmitter(event.NewRunID(), func() time.Time { return time.Unix(1_800_000_000, 5_000_000) })
 	for _, ev := range []*event.Event{
 		e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}),
+		e.Make(event.StepStarted, map[string]any{"step": 1, "name": "fetch github.com/example-org/app", "kind": "fetch"}),
+		e.Make(event.StepExited, map[string]any{"step": 1, "state": event.StateSucceeded, "exit_code": 0, "duration_ms": 1840}),
 		e.Make("dev.qory.runtime.ended", map[string]any{"session_id": "s1", "reason": "other"}),
 	} {
 		b, err := ev.JSON()
@@ -37,8 +40,8 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 			t.Errorf("%s: %v\n%s", ev.Type, err, b)
 		}
 	}
-	if e.Sequence() != 2 {
-		t.Errorf("sequence %d, want 2", e.Sequence())
+	if e.Sequence() != 4 {
+		t.Errorf("sequence %d, want 4", e.Sequence())
 	}
 }
 

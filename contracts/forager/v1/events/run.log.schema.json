@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/run.log.schema.json",
   "title": "dev.qory.run.log",
-  "description": "One chunk of a session's output, with that session's number as session, or of the run's host work outside a session, such as the lines of a fetch or a compose, with stream stderr and no session. On pipes: one line or 4096 bytes, whichever comes first, cut at a byte, so a multibyte character may straddle two chunks. On a pseudo-terminal: 4096 bytes or a quiet gap of 50 ms after the runtime's last write, whichever comes first, never cut inside a multibyte character, and a line break cuts nothing. The bytes are the writer's, the runtime's or the host work's, uninterpreted; output.log is their concatenation in sequence order.",
+  "description": "One chunk of a session's output, with that session's number as session, or of the run's host work outside a session, such as the lines of a fetch or a compose, with stream stderr and no session. A log line of a step of the host work has the step's number as step. On pipes: one line or 4096 bytes, whichever comes first, cut at a byte, so a multibyte character may straddle two chunks. On a pseudo-terminal: 4096 bytes or a quiet gap of 50 ms after the runtime's last write, whichever comes first, never cut inside a multibyte character, and a line break cuts nothing. The bytes are the writer's, the runtime's or the host work's, uninterpreted; output.log is their concatenation in sequence order.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -26,6 +26,11 @@
     },
     "session": {
       "description": "The number of the session whose output the chunk is, from 1: the session of its dev.qory.session.started. A chunk of the run's host work has none.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "step": {
+      "description": "The number of the step whose log line the chunk is, from 1: the step of its dev.qory.run.step_started. The chunk lies between that event and the step's dev.qory.run.step_exited. A chunk outside every step has none.",
       "type": "integer",
       "minimum": 1
     }
