@@ -3206,8 +3206,10 @@ line off before anything reaches the gateway. Without a wall, on one machine as 
 separate gateway, the agent's proxy URL is the forwarder's address on loopback with a
 password, `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session
 makes for the run's forwarder alone, 32 bytes from the system's random source in
-base64url, which lives as long as the run and is never logged or recorded. A connection
-to the forwarder carries one request, a `CONNECT` and its tunnel or one plain HTTP
+base64url, which lives as long as the run. The session writes the password into no log
+line and no event. Where the runtime prints it, as is or as the base64 of
+`qory:<password>`, the record contains `qory-proxy-password` in its place (§The record
+files). A connection to the forwarder carries one request, a `CONNECT` and its tunnel or one plain HTTP
 request and its reply, so every request is checked: it must carry the password in its
 one `Proxy-Authorization`, Basic, the user name ignored, compared in constant time. The
 forwarder takes the header off, passes the request on with `Connection: close`, passes
