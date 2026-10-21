@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-join-answer.schema.json",
   "title": "Link join answer",
-  "description": "What a gateway returns on its link to a join request it accepts, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key the run key names, over the connection and the request (README §The gateway's link). The session's number in the run and the model key the session starts with. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link to a join request it accepts, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key listed in the run key's gateway_public_key, over the connection and the request (README §The gateway's link). The session's number in the run and the model key the session starts with. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "session"],

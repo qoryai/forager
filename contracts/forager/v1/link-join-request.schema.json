@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-join-request.schema.json",
   "title": "Link join request",
-  "description": "The body of the session's POST to <run.url>/<run_id>/sessions on its gateway's link, application/json, which joins a session to the open run: the names of the variables the session passes a value for and, optionally, the model key the session starts with. Behind a separate gateway the request carries the run's run key, whose run the run_id of the path must be, any other run_key_invalid. A body this schema refuses, a member it does not define among them, is invalid_request; a placeholder of a credential or a tool the gateway holds among passes is placeholder_conflict, a 403, and the run stays open; a join of a run that has ended is a 410.",
+  "description": "The body of the session's POST to <run.url>/<run_id>/sessions on its gateway's link, application/json, which joins a session to the open run: the names of the variables the session passes a value for and, optionally, the model key the session starts with. Behind a separate gateway the request contains the run's run key, whose run the run_id of the path must be, any other run_key_invalid. A body this schema refuses, a member it does not define among them, is invalid_request; a placeholder of a credential or a tool the gateway holds among passes is placeholder_conflict, a 403, and the run stays open; a join of a run that has ended is a 410.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "passes"],
