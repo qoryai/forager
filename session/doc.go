@@ -31,7 +31,9 @@
 //     policy again when an answer's digest says another is in force, and ends the run
 //     when the gateway closes it
 //   - takes the harness's reports over a local socket and maps them, with the
-//     runtime's structured output, to runtime events through the runtime's descriptor
+//     runtime's structured output, to runtime events through the runtime's descriptor;
+//     each runtime event, log chunk and resize of a session has the session's number
+//     as session, and a line of the host work, which [Run.HostLog] writes, has none
 //
 // The package knows nothing of stacks, modules, homes or reports. The caller, the qory
 // command, turns those into the spec.

@@ -8,6 +8,7 @@
   "required": ["session_id", "outcome", "is_error"],
   "properties": {
     "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
+    "session": {"description": "The number of the session whose runtime wrote the record, from 1: the session of its dev.qory.session.started.", "type": "integer", "minimum": 1},
     "outcome": {"description": "success, or the runtime's error kind: error_max_turns, error_during_execution.", "type": "string", "minLength": 1},
     "is_error": {"type": "boolean"},
     "turns": {"type": "integer", "minimum": 0},

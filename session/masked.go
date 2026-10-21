@@ -1,6 +1,10 @@
 package session
 
-import "github.com/qoryai/forager/mask"
+import (
+	"maps"
+
+	"github.com/qoryai/forager/mask"
+)
 
 // maskedRecord is the data of an event mapped from an output or hook record with every
 // string replaced by m, map keys included: a printed environment in a tool's result
@@ -34,4 +38,13 @@ func maskedValue(m *mask.Masker, v any) any {
 		return out
 	}
 	return v
+}
+
+// withSession is a copy of data, the data of an event mapped from a record, with n as
+// session, the number of the session whose runtime wrote the record.
+func withSession(data map[string]any, n int) map[string]any {
+	out := make(map[string]any, len(data)+1)
+	maps.Copy(out, data)
+	out["session"] = n
+	return out
 }

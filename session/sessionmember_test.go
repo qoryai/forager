@@ -1,0 +1,353 @@
+package session_test
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+
+	"github.com/creack/pty"
+
+	"github.com/qoryai/forager/contracts"
+	refusals "github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/sink"
+	"github.com/qoryai/forager/wall"
+)
+
+// sessionKind reports whether typ is one of the event types whose data has the number
+// of the session that wrote them as session.
+func sessionKind(typ string) bool {
+	return typ == "dev.qory.run.log" || typ == "dev.qory.run.resized" || strings.HasPrefix(typ, "dev.qory.runtime.")
+}
+
+// sessionsOf fails the test unless every run.log, run.resized and runtime event of evs
+// between a session.started and its session.exited has that session's number as
+// session, and every run.log outside a session has no session; it returns, per type,
+// the sessions seen, in order, with 0 for none.
+func sessionsOf(t *testing.T, where string, evs []map[string]any) map[string][]int {
+	t.Helper()
+	seen := map[string][]int{}
+	open := 0
+	for _, e := range evs {
+		typ := fmt.Sprint(e["type"])
+		d := data(e)
+		switch {
+		case typ == "dev.qory.session.started":
+			open = int(d["session"].(float64))
+		case typ == "dev.qory.session.exited":
+			open = 0
+		case sessionKind(typ):
+			got := 0
+			if v, ok := d["session"]; ok {
+				got = int(v.(float64))
+			}
+			if got != open {
+				t.Errorf("%s: %s %v has session %d, with session %d open", where, typ, d, got, open)
+			}
+			seen[typ] = append(seen[typ], got)
+		}
+	}
+	return seen
+}
+
+// distinct is s with each run of equal values cut to one value, in order.
+func distinct(s []int) []int {
+	var out []int
+	for _, v := range s {
+		if len(out) == 0 || out[len(out)-1] != v {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// TestEachSessionsEventsHaveItsNumber pins two joins of one run, with host lines before
+// the first and between the two: every run.log and runtime event of a session has the
+// session's number as session, 1 then 2, in the record and on the link, and the host
+// lines have no session. Each session's output.log has the chunks of its session
+// alone, and the run's has the host lines too.
+func TestEachSessionsEventsHaveItsNumber(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.HostLog([]byte("qory run: fetched example/app\n")); err != nil {
+		t.Fatal(err)
+	}
+	for n := 1; n <= 2; n++ {
+		if n == 2 {
+			if err := r.HostLog([]byte("qory run: composed the harness\n")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		s := sp.SessionSpec
+		s.Env = append(append([]string(nil), s.Env...), "FAKE_SETTINGS="+filepath.Join(r.Dir(), session.SessionsDir, fmt.Sprint(n), "settings.json"))
+		res, err := r.Join(ctx, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Session != n {
+			t.Fatalf("join %d is session %d", n, res.Session)
+		}
+	}
+	closed, err := r.Close(ctx, session.Outcome{State: "succeeded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, &session.Result{Dir: closed.Dir})
+	for where, list := range map[string][]map[string]any{"the record": evs, "the link": g.Events()} {
+		seen := sessionsOf(t, where, list)
+		if got := fmt.Sprint(distinct(seen["dev.qory.run.log"])); got != "[0 1 0 2]" {
+			t.Errorf("%s: run.log sessions %v, want [0 1 0 2]", where, got)
+		}
+		for _, typ := range []string{"dev.qory.runtime.ended", "dev.qory.runtime.result"} {
+			if got := fmt.Sprint(seen[typ]); got != "[1 2]" {
+				t.Errorf("%s: %s sessions %v, want [1 2]", where, typ, got)
+			}
+		}
+	}
+	batch, err := contracts.Compile("link-batch.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, b := range g.Batches() {
+		doc, err := contracts.Decode("batch.json", must(json.Marshal(b)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := batch.Validate(doc); err != nil {
+			t.Errorf("batch %d: %v", i, err)
+		}
+	}
+	all, _ := os.ReadFile(filepath.Join(closed.Dir, sink.OutputFile))
+	if !strings.HasPrefix(string(all), "qory run: fetched example/app\n") || !strings.Contains(string(all), "qory run: composed the harness\n") {
+		t.Errorf("the run's output.log has no host lines:\n%s", all)
+	}
+	for n := 1; n <= 2; n++ {
+		out, _ := os.ReadFile(filepath.Join(closed.Dir, session.SessionsDir, fmt.Sprint(n), sink.OutputFile))
+		if strings.Contains(string(out), "qory run:") || !strings.Contains(string(out), "fake runtime: starting") {
+			t.Errorf("session %d's output.log:\n%s", n, out)
+		}
+	}
+}
+
+// TestEachSessionsResizeHasItsNumber pins two interactive joins of one run, each with
+// one resize of the terminal: the first run.resized has session 1 and the second
+// session 2, as every terminal chunk of each session does.
+func TestEachSessionsResizeHasItsNumber(t *testing.T) {
+	master, tty, err := pty.Open()
+	if err != nil {
+		t.Skip("no pseudo-terminal:", err)
+	}
+	defer master.Close()
+	defer tty.Close()
+	var out syncBuffer
+	sp := spec(t)
+	sp.Forwarder = nil
+	sp.Interactive = true
+	sp.Stdin = tty
+	sp.Stdout = &out
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	record := filepath.Join(sp.RunsDir, sp.RunID, "session.jsonl")
+	sp.Command = "sh"
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := 1; n <= 2; n++ {
+		if err := pty.Setsize(master, &pty.Winsize{Cols: 100, Rows: 40}); err != nil {
+			t.Fatal(err)
+		}
+		// The session ends once go exists: the caller's terminal is the input of every
+		// session, so a line typed for one would reach the reader the session before left.
+		gone := filepath.Join(t.TempDir(), "go")
+		s := sp.SessionSpec
+		s.Args = []string{"-c", `stty size; while [ ! -e "$0" ]; do sleep 0.05; done`, gone}
+		done := make(chan error, 1)
+		go func() {
+			_, err := r.Join(ctx, s)
+			done <- err
+		}()
+		waitFor(t, func() bool { return strings.Count(out.String(), "40 100") == n })
+		if err := pty.Setsize(master, &pty.Winsize{Cols: 120, Rows: 50}); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, func() bool {
+			b, _ := os.ReadFile(record)
+			return strings.Count(string(b), `"dev.qory.run.resized"`) == n
+		})
+		if err := os.WriteFile(gone, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	closed, err := r.Close(ctx, session.Outcome{State: "succeeded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := sessionsOf(t, "the record", events(t, &session.Result{Dir: closed.Dir}))
+	if got := fmt.Sprint(seen["dev.qory.run.resized"]); got != "[1 2]" {
+		t.Errorf("run.resized sessions %v, want [1 2]", got)
+	}
+	if got := fmt.Sprint(distinct(seen["dev.qory.run.log"])); got != "[1 2]" {
+		t.Errorf("run.log sessions %v, want [1 2]", got)
+	}
+}
+
+// TestAHostLineIsMasked pins a host line that contains the host proxy's URL and the
+// base64 of its Proxy-Authorization: the run.log chunk is stderr with no session, and
+// neither it, output.log nor session.jsonl contains the password, which
+// qory-proxy-password replaces. A line longer than 4096 bytes is two chunks.
+func TestAHostLineIsMasked(t *testing.T) {
+	sp := spec(t)
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := r.HostProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := hostParts(t, h)
+	basic := base64.StdEncoding.EncodeToString([]byte("qory:" + password))
+	line := "git fetch through " + h.ProxyURL + " with Proxy-Authorization: Basic " + basic + "\n"
+	long := strings.Repeat("x", 5000) + "\n"
+	if err := r.HostLog([]byte(line + long)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1}); err != nil {
+		t.Fatal(err)
+	}
+	res := &session.Result{Dir: r.Dir()}
+	out := noPassword(t, res, password)
+	noPassword(t, res, basic)
+	want := strings.Replace(line, password, "qory-proxy-password", 1)
+	want = strings.Replace(want, basic, base64.StdEncoding.EncodeToString([]byte("qory:qory-proxy-password")), 1)
+	if out != want+long {
+		t.Errorf("output.log\n%q\nwant\n%q", out, want+long)
+	}
+	logs := ofType(events(t, res), "dev.qory.run.log")
+	if len(logs) != 3 {
+		t.Fatalf("%d run.log chunks, want 3", len(logs))
+	}
+	for _, l := range logs {
+		if d := data(l); d["stream"] != "stderr" || d["session"] != nil {
+			t.Errorf("a host line's chunk %v; want stderr and no session", d)
+		}
+	}
+}
+
+// TestAHostLineIsRefusedDuringAJoinAndAfterTheClose pins when a host line is
+// written: not while a session runs, and not after the close; each error starts with
+// the fix.
+func TestAHostLineIsRefusedDuringAJoinAndAfterTheClose(t *testing.T) {
+	sp := spec(t, "FAKE_EXIT=0")
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	during := make(chan error, 1)
+	s := sp.SessionSpec
+	s.OnVariables = func(session.Applied) { during <- r.HostLog([]byte("too late\n")) }
+	if _, err := r.Join(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-during; err == nil || !strings.HasPrefix(err.Error(), "write the host work's lines after Join returns") {
+		t.Errorf("a host line during a join: %v", err)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.HostLog([]byte("after\n")); err == nil || !strings.HasPrefix(err.Error(), "open a new run") {
+		t.Errorf("a host line after the close: %v", err)
+	}
+	for _, l := range ofType(events(t, &session.Result{Dir: r.Dir()}), "dev.qory.run.log") {
+		if b, _ := base64.StdEncoding.DecodeString(data(l)["bytes"].(string)); strings.Contains(string(b), "too late") || strings.Contains(string(b), "after") {
+			t.Errorf("a refused host line is in the record: %q", b)
+		}
+	}
+}
+
+// TestAFailureWithNoCodeIsInTheSessionsOutput pins a pull and a wall's start that fail
+// with no refusal code: the record and the link have session.started, a stderr run.log
+// of session 1 with the error's text, then session.exited failed with -1 and no reason;
+// sessions/1/output.log has that text. A wall's refusal with a code, which is the
+// reason of session.exited, writes no such chunk.
+func TestAFailureWithNoCodeIsInTheSessionsOutput(t *testing.T) {
+	pull := errors.New("wall docker: pull example.com/agent:1: exit status 1")
+	start := errors.New("wall docker: start qory-relay: exit status 125")
+	root := refusals.New(refusals.ImageUserRoot, []string{"example.com/agent:1"}, "the image %s runs as root; a run's image runs as the wall's user", "example.com/agent:1")
+	for _, c := range []struct {
+		name   string
+		wall   wall.Wall
+		text   string
+		reason string
+	}{
+		{"pull", &prepareFailing{err: pull}, pull.Error(), ""},
+		{"start", &wrapFails{err: start}, start.Error(), ""},
+		{"refusal", &prepareFailing{err: root}, "", refusals.ImageUserRoot},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			sp.Wall, sp.Image = c.wall, "example.com/agent:1"
+			ctx := context.Background()
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Join(ctx, sp.SessionSpec); err == nil || !strings.Contains(err.Error(), c.text) {
+				t.Errorf("the join: %v", err)
+			}
+			closed, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"dev.qory.session.started", "log stderr 1 " + c.text + "\n", "dev.qory.session.exited"}
+			if c.text == "" {
+				want = []string{"dev.qory.session.started", "dev.qory.session.exited"}
+			}
+			for where, evs := range map[string][]map[string]any{"the record": events(t, &session.Result{Dir: closed.Dir}), "the link": g.Events()} {
+				startedThenExited(t, where, evs, c.reason)
+				var order []string
+				for _, e := range evs {
+					switch e["type"] {
+					case "dev.qory.session.started", "dev.qory.session.exited":
+						order = append(order, fmt.Sprint(e["type"]))
+					case "dev.qory.run.log":
+						d := data(e)
+						b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+						order = append(order, fmt.Sprintf("log %v %v %s", d["stream"], d["session"], b))
+					}
+				}
+				if fmt.Sprint(order) != fmt.Sprint(want) {
+					t.Errorf("%s:\n%q\nwant\n%q", where, order, want)
+				}
+			}
+			out, _ := os.ReadFile(filepath.Join(closed.Dir, session.SessionsDir, "1", sink.OutputFile))
+			if c.text != "" && string(out) != c.text+"\n" {
+				t.Errorf("sessions/1/output.log %q", out)
+			}
+			if c.text == "" && len(out) != 0 {
+				t.Errorf("sessions/1/output.log %q, want it empty", out)
+			}
+		})
+	}
+}

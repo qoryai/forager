@@ -560,7 +560,7 @@ func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
 		t.Errorf("session.started terminal %v", size)
 	}
 	resized := ofType(evs, "dev.qory.run.resized")
-	if len(resized) != 1 || fmt.Sprint(data(resized[0])) != "map[cols:120 rows:50]" {
+	if len(resized) != 1 || fmt.Sprint(data(resized[0])) != "map[cols:120 rows:50 session:1]" {
 		t.Fatalf("run.resized %v", resized)
 	}
 	// The sequence: what was drawn before the resize is logged before it, what was

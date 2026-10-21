@@ -384,7 +384,9 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // the schema does not require is pinned here: every run.exited Forager writes contains
 // exit_code, beside state, which the schema requires; and the sessions are numbered from
 // 1 in order, each session.started followed by the session.exited of its number before
-// the next session.started and before run.exited.
+// the next session.started and before run.exited; and a run.log, a run.resized or a
+// runtime event with a session member lies inside that session, so a run.log of the
+// host work, outside every session, has none.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
 	runs, err := fs.ReadDir(contracts.FS, "fixtures/run")
@@ -441,6 +443,11 @@ func TestRecordedRunValidates(t *testing.T) {
 						t.Errorf("%s: line %d: session %d exits, with session %d open", dir, i+1, n, open)
 					}
 					open = 0
+				}
+			}
+			if typ, _ := m["type"].(string); typ == "dev.qory.run.log" || typ == "dev.qory.run.resized" || strings.HasPrefix(typ, "dev.qory.runtime.") {
+				if n, ok := m["data"].(map[string]any)["session"].(json.Number); ok && n.String() != strconv.Itoa(open) {
+					t.Errorf("%s: line %d: %s of session %s, with session %d open", dir, i+1, typ, n, open)
 				}
 			}
 			if m["type"] == "dev.qory.run.exited" && open != 0 {

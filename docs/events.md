@@ -73,7 +73,7 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.run.started`        | The run is open, before its host work and before any session               |
 | `dev.qory.run.policy_applied` | After the open; after each session's start; when a new policy takes effect |
 | `dev.qory.session.started`    | A session joined the run: its runtime is about to start                    |
-| `dev.qory.run.log`            | One per chunk of a session's output, or of host work before any session    |
+| `dev.qory.run.log`            | One per chunk of a session's output, or of host work outside a session     |
 | `dev.qory.run.resized`        | The pseudo-terminal was resized                                            |
 | `dev.qory.run.egress`         | One per connection, or per request on a terminated host                    |
 | `dev.qory.run.heartbeat`      | Every interval while the run is open, 30 seconds by default                |
@@ -95,10 +95,20 @@ with exit code -1 and the refusal's code, such as `mount_mode_conflict`, as its 
 A session whose wall fails to start has its `dev.qory.session.started`, then its
 `dev.qory.session.exited`, `failed` with exit code -1 and no reason, or the refusal's
 code as its reason when the wall refused with one, such as `image_user_root`, an image
-whose user is root.
+whose user is root. A failure with no reason, such as an image pull that fails, has the
+error's text as a `dev.qory.run.log` on `stderr` of that session right before its
+`dev.qory.session.exited`.
 When the run ends while a session runs, that session's `dev.qory.session.exited` comes
 right before the run's `dev.qory.run.exited`, with the same state and reason and exit
 code -1. So every `dev.qory.session.started` has its `dev.qory.session.exited`.
+
+Every `dev.qory.run.log`, `dev.qory.run.resized` and `dev.qory.runtime.*` event of a
+session contains the session's number in `session`, so a reader of a run with several
+sessions can show each session's terminal and events apart. A line of the run's host
+work, such as a fetch or a compose, is a `dev.qory.run.log` on `stderr` with no
+`session`; the caller writes it with `(*session.Run).HostLog` before the first join or
+between two joins. An event without `session`, of a record that Forager wrote before
+the member was added, stays valid.
 
 `dev.qory.session.started` contains `harness` when the caller passes it: one entry per
 harness source the session's compose used, each with `source`, the source as it is

@@ -219,6 +219,22 @@ err = fetch.Run()
 h.Close()                                         // Join closes it too
 ```
 
+`(*session.Run).HostLog(b)` writes the lines of the host work into the record, such as
+what the fetch or the compose prints: each line is a `dev.qory.run.log` with `stream`
+`stderr` and no `session`, cut at 4096 bytes as a session's lines on pipes are, and goes
+to `output.log`. The run's masker replaces each forwarder's password in the lines, the
+host proxy's included, as in a session's output. Call it before the first `Join` or
+after a `Join` returns: while a `Join` runs it returns "write the host work's lines
+after Join returns: a session of the run is still running", so `sessions/<n>/output.log`
+contains the bytes of session n alone, and after `Close` it returns "open a new run for
+the host work's lines: the run is closed".
+
+```go
+if err := fetch.Run(); err != nil {
+	run.HostLog([]byte("qory run: the fetch failed: " + err.Error() + "\n"))
+}
+```
+
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
 the refusal's `message`, the text such a run returns, such as

@@ -105,6 +105,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `session` in `dev.qory.run.log`, `dev.qory.run.resized` and every
+  `dev.qory.runtime.*` event of a session: the session's number, from 1, so a reader
+  shows each session's terminal and events apart. The member is optional, and an event
+  without it validates. A line of the run's host work has no `session`.
 - `dev.qory.session.started`, `events/session.started.schema.json`: one per session
   that joins a run, before its runtime starts, with `session`, its number from 1, and
   the runtime members that `dev.qory.run.started` contained before, from `runtime` to
@@ -350,9 +354,9 @@ release may change what an existing document does, and says so under Upgrading.
 - `dev.qory.run.policy_applied` is written at the open with an empty `variables`, at
   each join with that session's `variables`, `credential_variables` and
   `harness_hosts`, and at each reload, as before.
-- `dev.qory.run.log` is one chunk of a session's output, or of the run's host work
-  before the first `dev.qory.session.started`, which the caller writes with
-  `stream: stderr`. The data is unchanged.
+- `dev.qory.run.log` is one chunk of a session's output, with the session's number as
+  `session`, or of the run's host work before the first join or between two joins,
+  which the caller writes with `stream: stderr` and no `session`.
 - The run answer's `model_credential` is the run's start key, the key a session starts
   with when its join request contains none; the join answer's `model_credential` is the
   key each session starts with.
@@ -906,6 +910,10 @@ release may change what an existing document does, and says so under Upgrading.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
+- `(*session.Run).HostLog` writes lines of the run's host work, such as a fetch or a
+  compose, as `dev.qory.run.log` with `stream: stderr` and no `session`, after the run's
+  masker, to the record and `output.log`. It returns an error while a `Join` runs and
+  after `Close`.
 - `(*session.Run).HostProxy` starts a forwarder on loopback with a password for
   programs on the host, such as a fetch or a compose before a session joins, for every
   run, walled or not. `session.HostProxy` has `ProxyURL`,
@@ -1010,6 +1018,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- A join that fails after `dev.qory.session.started` with no refusal code, such as an
+  image pull or a wall's start that fails, writes the error's text as a
+  `dev.qory.run.log` of the session, with `stream: stderr` and its `session`, before
+  its `dev.qory.session.exited`, which has no reason. Before, the record had no text of
+  the error.
 - In a run with no wall, `output.log`, every `dev.qory.run.log` chunk and every event
   mapped from an output or hook record contain `qory-proxy-password` in place of
   the forwarder's password, and the base64 of `qory:qory-proxy-password` in place of

@@ -52,8 +52,12 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // such as an image that runs as root, an image that cannot be fetched or a wall that
 // does not start, writes dev.qory.session.started, then dev.qory.session.exited, failed
 // with -1, with the refusal's code as its reason when the wall refused with a code the
-// session decides, and no reason otherwise. The run stays open: what follows is the
-// caller's.
+// session decides, and no reason otherwise; a failure with no reason has its text as a
+// dev.qory.run.log chunk of the session on stderr before that dev.qory.session.exited.
+// The run stays open: what follows is the caller's.
+//
+// Every dev.qory.run.log, dev.qory.run.resized and dev.qory.runtime.* event of the
+// session has the session's number as session.
 //
 // A session that starts has a directory in the run directory, sessions/<n>/ with n its
 // number ([Result.SessionDir]): its output.log, the bytes of its dev.qory.run.log
@@ -243,6 +247,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		exited := map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": time.Since(start).Milliseconds()}
 		if reason != "" {
 			exited["reason"] = reason
+		} else {
+			// A failure with no refusal code, such as a pull or the wall's start, has its
+			// text in the record as a stderr chunk of the session, before its
+			// dev.qory.session.exited, which has no reason.
+			r.writeLog("stderr", n, failureLine(err))
 		}
 		r.write(event.SessionExited, exited)
 		r.lastExit = -1
@@ -482,9 +491,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if err != nil {
 		return fail(err)
 	}
+	// An event mapped from a record of the session's runtime has the session's number
+	// as session, as each chunk of its output and each resize below has.
 	records := func(rec runtimes.Record) {
 		if typ, data, ok := rt.Map(rec); ok {
-			r.write(typ, maskedRecord(masker, data))
+			r.write(typ, withSession(maskedRecord(masker, data), n))
 		}
 	}
 	go sock.Serve(records, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
@@ -552,13 +563,17 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(errRunClosed)
 	}
 	logs := func(stream string) func([]byte) {
-		return func(b []byte) { r.write(event.RunLog, map[string]any{"stream": stream, "bytes": encode(b)}) }
+		return func(b []byte) {
+			r.write(event.RunLog, map[string]any{"stream": stream, "bytes": encode(b), "session": n})
+		}
 	}
 	output := func(m map[string]any) { records(runtimes.Record{Source: runtimes.SourceOutput, Record: m}) }
 	if !rt.ReadsOutput() {
 		output = nil
 	}
-	resized := func(cols, rows int) { r.write(event.RunResized, map[string]any{"cols": cols, "rows": rows}) }
+	resized := func(cols, rows int) {
+		r.write(event.RunResized, map[string]any{"cols": cols, "rows": rows, "session": n})
+	}
 	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, masker: masker, output: output, cols: cols, rows: rows, resized: resized}
 	// The limit ends the runtime and nothing else: the wall is closed on the caller's
 	// context, as after any exit. The run being closed from outside ends it the same
