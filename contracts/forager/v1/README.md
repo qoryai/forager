@@ -722,7 +722,7 @@ writes `ca-bundle.pem` into the run directory: the first of
 `/etc/ssl/ca-bundle.pem` and `/etc/ssl/cert.pem` that is a regular file with a
 certificate in it, then the run's certificate. The file contains certificates and no
 key. Programs of the run's host work, such as a fetch, read it. Without a wall the
-session points the variables the caller gives, `Spec.CAEnv` in Go, or the wall's default
+session points the variables the caller gives, `OpenSpec.CAEnv` in Go, or the wall's default
 list (§The wall), at that file. For programs that read those variables the bundle
 replaces the machine's trust, so a root that exists only in another store, such as the
 macOS Keychain, is not trusted. A machine with none of the four files does not start the
@@ -1069,12 +1069,12 @@ of the highest source that sets it:
 
 | Source, highest first | What it is | In the launch spec, Go |
 |---|---|---|
-| `fixed` | Forager's names, `QORY_RUN_ID`, `QORY_RUN_SOCKET` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime); the placeholders (§Credentials, §Tools); the start key's endpoint in the runtime's model endpoint variable (§Credentials, The variable of a model key); and the values the harness computes itself | `Spec.HarnessHome`, `Spec.LaunchFixed` |
+| `fixed` | Forager's names, `QORY_RUN_ID`, `QORY_RUN_SOCKET` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime); the placeholders (§Credentials, §Tools); the start key's endpoint in the runtime's model endpoint variable (§Credentials, The variable of a model key); and the values the harness computes itself | `SessionSpec.HarnessHome`, `SessionSpec.LaunchFixed` |
 | `apiary` | the server's: the run configuration's `variables` | |
-| `run` | the run's variables, `qory run --env` | `Spec.Variables.Run` |
-| `machine` | the machine's variables, the `wall.env` of `forager.yaml` | `Spec.Variables.Machine` |
-| `harness` | the harness's written defaults | `Spec.LaunchDefaults` |
-| `shell` | the environment the run inherits | `Spec.Env` |
+| `run` | the run's variables, `qory run --env` | `SessionSpec.Variables.Run` |
+| `machine` | the machine's variables, the `wall.env` of `forager.yaml` | `SessionSpec.Variables.Machine` |
+| `harness` | the harness's written defaults | `SessionSpec.LaunchDefaults` |
+| `shell` | the environment the run inherits | `SessionSpec.Env` |
 
 The server resolves its variables among its levels, a lock included, and sends the
 resolved values alone, a name and a value each; Forager reads no level. So the server's
@@ -1110,7 +1110,7 @@ wins over the one the run inherits: the record lists that one as `shell`, lost a
 **Denied names.** The deny list leaves out a value of the server, the run, the machine
 or the harness's defaults whose name it matches: the built-in list
 `denied-variables.json`, the run's runtime's `denies` (§The descriptor), and the names
-the node's owner adds in the launch spec, `Spec.Variables.Deny` in Go, such as `[NAME,
+the node's owner adds in the launch spec, `SessionSpec.Variables.Deny` in Go, such as `[NAME,
 PREFIX_*]`. The built-in entries apply to the harness's computed values as well, so a
 computed `DOCKER_HOST` or `NODE_EXTRA_CA_CERTS` is left out too; the runtime's `denies`
 and the node's entries leave them in, since the harness computes such values for the
@@ -1159,7 +1159,7 @@ value the run inherits and the one the runtime's preparation sets included, and 
 session sets none of them in the runtime's process environment. One exception applies:
 when the run has an authority, a variable that points at the CA bundle is set to the
 bundle's path, even one of `model.keys`. Without a wall these are the names the caller
-gives in `Spec.CAEnv`, or `wall.DefaultCAEnv` when it is nil; `qory` is to set it from
+gives in `OpenSpec.CAEnv`, or `wall.DefaultCAEnv` when it is nil; `qory` is to set it from
 `wall.ca_env`. Behind a wall they are the names in `CAEnv` of `wall.Docker`, or
 `wall.DefaultCAEnv` when it is nil, each set to `/qory/ca-bundle.pem`. No check compares
 these names with `model.keys`, and a walled run does not unset them. Claude Code also
@@ -1256,7 +1256,7 @@ in the enclosure's environment, the image's included, takes the place of the wal
 docker configuration (§The wall, Nested Docker).
 
 **Unwalled runs.** The launch spec decides whether an unwalled run receives the server's
-variables, `Spec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With
+variables, `SessionSpec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With
 `ignore`, an unwalled run starts without them; each is recorded as `unwalled`, and the
 node's sources apply. With `accept`, they apply as in a walled run, the deny list first.
 The deny list protects the wall and Forager, not the developer, so `accept` opens the
@@ -3480,7 +3480,7 @@ There are three ways to a runtime, and a name resolves to the first that applies
    is read: the run's events, its log and its egress record are all there, the session's
    are not. Any program runs behind a wall this way, with no descriptor.
 3. **An implementation in Go**, for a caller that embeds Forager and whose program
-   needs what a descriptor cannot express. It is set in `session.Spec.Runtime` like any
+   needs what a descriptor cannot express. It is set in `session.SessionSpec.Runtime` like any
    other.
 
 `session/runtimes/runtimetest` is what any of them is tested against: `Conforms`, that a
@@ -3920,7 +3920,7 @@ up in its parent, so two binds of one root are allowed:
   agent that writes the link would choose what is bound. Its names are the place as
   passed, the link, absolute and clean, the last one inside the writable place on the
   way, and the writable place as passed. The same holds of a link inside a place the
-  caller records as written by walled runs (`Spec.Written`), whether or not a run that
+  caller records as written by walled runs (`SessionSpec.Written`), whether or not a run that
   wrote it is still going: the names are the place, the link and the written place;
 - the runs directory is one of Forager's files, so the run directory lies in no
   place the run lists, and a writable place that holds a directory a name on the way

@@ -21,8 +21,8 @@ const BundleFile = "ca-bundle.pem"
 var machineBundles = wall.BundleFiles
 
 // caEnv are the variables that point an unwalled run's programs at its bundle:
-// Spec.CAEnv, or [wall.DefaultCAEnv] when it is nil.
-func caEnv(spec Spec) []string {
+// OpenSpec.CAEnv, or [wall.DefaultCAEnv] when it is nil.
+func caEnv(spec OpenSpec) []string {
 	if spec.CAEnv != nil {
 		return slices.Clone(spec.CAEnv)
 	}

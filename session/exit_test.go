@@ -34,7 +34,7 @@ func startRemote(t *testing.T) *linktest.Fake {
 // remoteSpec is a spec whose runtime exits by itself with the status exit, behind a
 // fake separate gateway by a run key of its for a run of its own, and the gateway; what
 // the session reported is in reports.
-func remoteSpec(t *testing.T, exit int) (session.Spec, *linktest.Fake, func() []string) {
+func remoteSpec(t *testing.T, exit int) (runSpec, *linktest.Fake, func() []string) {
 	t.Helper()
 	sp, _ := specGateway(t)
 	sp.Forwarder = nil
@@ -83,11 +83,11 @@ func undeliveredRun(t *testing.T) (session.ResendSpec, *linktest.Fake) {
 		}
 		return linktest.Reply{Status: 503}
 	})
-	res, err := session.Run(context.Background(), sp)
+	res, closed, err := runClosed(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.State != "failed" || res.Reason != "" || res.ExitCode != 3 || res.Undelivered == 0 {
+	if res.State != "failed" || res.Reason != "" || res.ExitCode != 3 || closed.Undelivered == 0 {
 		t.Fatalf("result %+v", res)
 	}
 	noRunKey(t, res.Dir, sp.Gateway.(session.RemoteGateway).RunKey)
@@ -155,7 +155,7 @@ func TestAResendOfARunAReloadEndedSendsNothing(t *testing.T) {
 				return linktest.Reply{Status: 200}
 			})
 			g.OnReload(func(string) linktest.Reply { return *end })
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -167,7 +167,7 @@ func TestAResendOfARunAReloadEndedSendsNothing(t *testing.T) {
 				t.Fatalf("delivered.log %v, stopped %v, %v", accepted, stopped, err)
 			}
 			for _, e := range events(t, res) {
-				if e["type"] != "dev.qory.run.exited" && !accepted[fmt.Sprint(e["sequence"])] {
+				if e["type"] != "dev.qory.run.exited" && e["type"] != "dev.qory.session.exited" && !accepted[fmt.Sprint(e["sequence"])] {
 					t.Fatalf("the gateway did not take %v", e)
 				}
 			}
@@ -196,14 +196,14 @@ func TestTheCallersEndWhileRunExitedIsPostedKeepsIt(t *testing.T) {
 		}
 		return linktest.Reply{Status: 200}
 	})
-	res, err := session.Run(ctx, sp)
+	res, closed, err := runClosed(ctx, sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ctx.Err() == nil {
 		t.Fatal("no batch with run.exited reached the gateway")
 	}
-	if res.State != "failed" || res.Reason != "" || res.ExitCode != 3 || res.Cancelled || res.Undelivered != 0 {
+	if res.State != "failed" || res.Reason != "" || res.ExitCode != 3 || res.Cancelled || closed.Undelivered != 0 {
 		t.Errorf("result %+v", res)
 	}
 	accepted, _, err := sink.Delivered(res.Dir)
@@ -234,7 +234,7 @@ func TestAResendOfARunRefusedAtOpenSendsNothing(t *testing.T) {
 		return linktest.Reply{Status: 409, Body: linktest.Refusal("run_id_used", "gateway")}
 	})
 	var ref *session.Refusal
-	if res, err := session.Run(context.Background(), sp); !errors.As(err, &ref) || ref.Code != "run_id_used" || res != nil {
+	if res, err := run(context.Background(), sp); !errors.As(err, &ref) || ref.Code != "run_id_used" || res != nil {
 		t.Fatalf("a refused run: %v %+v", err, res)
 	}
 	entries, _ := os.ReadDir(sp.RunsDir)
@@ -352,14 +352,14 @@ func TestBehindGatewayTellsTheRecordsApart(t *testing.T) {
 	check("a directory that does not exist", filepath.Join(dir, "none"), false)
 
 	sp, _, _ := remoteSpec(t, 0)
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	check("a run behind a separate gateway", res.Dir, true)
 	local, _ := specGateway(t)
 	sleeps(&local, 0)
-	if res, err = session.Run(context.Background(), local); err != nil {
+	if res, err = run(context.Background(), local); err != nil {
 		t.Fatal(err)
 	}
 	check("a run on one machine", res.Dir, false)
@@ -383,11 +383,11 @@ func TestAnEndUnderAnotherKeyDoesNotEndTheRun(t *testing.T) {
 				r.Signing = signing
 				return *r
 			})
-			res, err := session.Run(context.Background(), sp)
+			res, closed, err := runClosed(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.RunClosed || res.State != "succeeded" || res.ExitCode != 0 || res.Undelivered == 0 {
+			if res.RunClosed || res.State != "succeeded" || res.ExitCode != 0 || closed.Undelivered == 0 {
 				t.Errorf("result %+v", res)
 			}
 			if _, stopped, err := sink.Delivered(res.Dir); err != nil || stopped {
@@ -421,7 +421,7 @@ func TestTheGatewaysRefusalsOfTheRunKeyAreRecorded(t *testing.T) {
 			g.OnRun(func(server.LinkRunRequest) linktest.Reply {
 				return linktest.Reply{Status: status, Body: map[string]any{"error": code, "from": "gateway", "message": text}}
 			})
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			var r *session.Refusal
 			if !errors.As(err, &r) || r.Code != code || r.Status != status || r.From != "gateway" || err.Error() != text || res != nil {
 				t.Fatalf("%v (%#v), want the gateway's %s, %q", err, r, code, text)
@@ -452,7 +452,7 @@ func TestTheServersWorkspaceNotServedIsRecordedWithItsStatus(t *testing.T) {
 	g.OnRun(func(server.LinkRunRequest) linktest.Reply {
 		return linktest.Reply{Status: 409, Body: map[string]any{"error": "workspace_not_served", "from": "apiary", "message": text}}
 	})
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	var r *session.Refusal
 	if !errors.As(err, &r) || r.Code != "workspace_not_served" || r.Status != 409 || r.From != "apiary" || err.Error() != text || res != nil {
 		t.Fatalf("%v (%#v), want the server's workspace_not_served, %q", err, r, text)

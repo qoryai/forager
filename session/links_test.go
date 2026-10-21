@@ -171,7 +171,7 @@ func TestALinkThatLeadsBackIntoItsPlaceIsReachedThroughIt(t *testing.T) {
 	o := &openWall{}
 	sp := walledSpec(t, o)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: cur}}, cur
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestALinkInsideNoPlaceIsFollowedWhereItLeads(t *testing.T) {
 	o := &openWall{}
 	sp := walledSpec(t, o)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: ws}, {Path: home, ReadOnly: true}}, ws
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +477,7 @@ func TestAWallsHelperIsListedFromTheStart(t *testing.T) {
 		t.Errorf("names %q, detail %q", r.Names, r.Detail)
 	}
 	beside := walledSpec(t, &bindingWall{binds: own})
-	if _, err := session.Run(context.Background(), beside); err != nil {
+	if _, err := run(context.Background(), beside); err != nil {
 		t.Errorf("a run with the same helper and patterns: %v", err)
 	}
 }
@@ -549,9 +549,9 @@ func TestAnotherRunsRunDirectoryIsItsAlone(t *testing.T) {
 	}
 }
 
-// TestARunWaitsForTheRegistrysLock pins the lock: a run held between its check and its
-// entry keeps a second run from checking until it is listed, and the second is then
-// refused. Without the lock the second checks at once, finds no entry and goes on.
+// TestARunWaitsForTheRegistrysLock pins the lock: a run held between its join's check
+// and its entry keeps a second run from checking until it is listed, and the second is
+// then refused. Without the lock the second checks at once, finds no entry and goes on.
 func TestARunWaitsForTheRegistrysLock(t *testing.T) {
 	root := t.TempDir()
 	sub := mkdirs(t, filepath.Join(root, "sub"))
@@ -559,10 +559,15 @@ func TestARunWaitsForTheRegistrysLock(t *testing.T) {
 	paused, resume := make(chan struct{}), make(chan struct{})
 	var resumeOnce sync.Once
 	letGo := func() { resumeOnce.Do(func() { close(resume) }) }
+	// The open lists the run directory, and the join the mounts: the run is held at
+	// its join's check, the second for its id.
+	calls := 0
 	session.SetRegisterPause(func(id string) {
 		if id == firstID {
-			close(paused)
-			<-resume
+			if calls++; calls == 2 {
+				close(paused)
+				<-resume
+			}
 		}
 	})
 	w := newHoldingWall()
@@ -676,12 +681,12 @@ func TestAPlaceThroughALinkInAWrittenPlaceIsNoRun(t *testing.T) {
 	symlink(t, filepath.Join(repo, "real"), inside)
 	sp = walledSpec(t, &openWall{})
 	sp.Written, sp.Dir = []string{repo}, inside
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("a link that resolves into the written place: %+v, %v", res, err)
 	}
 	sp = walledSpec(t, &openWall{})
 	sp.Dir = wt
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("without Spec.Written: %+v, %v", res, err)
 	}
 }

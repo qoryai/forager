@@ -93,7 +93,7 @@ func TestARunInAnImageByReference(t *testing.T) {
 	sp.Variables.Run = []string{"MINE=" + dir}
 	sp.Env = append(sp.Env, "INHERITED="+dir)
 	sp.Preparation = []string{"true", dir + "/prepare.sh"}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,10 +124,10 @@ func TestARunInAnImageByReference(t *testing.T) {
 	if err != nil || !strings.Contains(string(copied), `"sh /workspace/hook.sh"`) || !strings.Contains(string(copied), `"`+dir+`shop"`) {
 		t.Errorf("the settings copied: %s, %v", copied, err)
 	}
-	started := data(ofType(events(t, res), "dev.qory.run.started")[0])
+	started := data(ofType(events(t, res), "dev.qory.session.started")[0])
 	if started["dir"] != "/workspace" || started["image"] != pinned || started["image_name"] != nil || started["container_runtime"] != nil ||
 		started["docker"] != nil || started["image_fetch_ms"] != float64(1500) {
-		t.Errorf("run.started %v", started)
+		t.Errorf("session.started %v", started)
 	}
 }
 
@@ -146,7 +146,7 @@ func TestASettingsFileInTheWorkspaceIsJudgedOnThisMachine(t *testing.T) {
 	want := "runtime claude: Move " + settings + " to a directory no walled run can write, or pass the settings as a " +
 		"JSON object. This launch passes --settings " + settings + ", which lies in " + sp.Dir +
 		", a place a walled run can write, so the run does not start."
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), want) {
+	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("the run: %v, want %q", err, want)
 	}
 }
@@ -159,21 +159,21 @@ func TestARunInAnImageByNameKeepsItsPaths(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0")
 	selecting(g, "")
 	sp.Wall, sp.Image, sp.Images = w, "base", images
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if w.req.Pull || w.got.Dir == "/workspace" || slices.ContainsFunc(w.got.Mounts, func(m wall.Mount) bool { return m.Target != "" }) {
 		t.Errorf("a run by name: %+v, %+v", w.req, w.got)
 	}
-	if started := data(ofType(events(t, res), "dev.qory.run.started")[0]); started["image_fetch_ms"] != nil || started["dir"] != sp.Dir {
-		t.Errorf("run.started %v", started)
+	if started := data(ofType(events(t, res), "dev.qory.session.started")[0]); started["image_fetch_ms"] != nil || started["dir"] != sp.Dir {
+		t.Errorf("session.started %v", started)
 	}
 }
 
 // refusedIn is the dev.qory.run.refused of the session's record of a run that did not
 // start.
-func refusedIn(t *testing.T, sp session.Spec) map[string]any {
+func refusedIn(t *testing.T, sp runSpec) map[string]any {
 	t.Helper()
 	f, err := os.Open(filepath.Join(sp.RunsDir, sp.RunID, "session.jsonl"))
 	if err != nil {
@@ -191,19 +191,20 @@ func refusedIn(t *testing.T, sp session.Spec) map[string]any {
 
 // TestARunWhoseImageByReferenceCannotHoldDoesNotStart pins what stops a run in an image
 // by reference: an allow list that cannot be one, before the gateway hears of the run;
-// the gateway's image_not_allowed; the wall's image_user_root, recorded and posted;
+// the gateway's image_not_allowed; the wall's image_user_root, a refused join recorded
+// and posted;
 // and a place of the run's at /workspace, before the wall is asked.
 func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
-	for name, change := range map[string]func(*session.Spec){
-		"an entry of *":          func(s *session.Spec) { s.ImagesAllow = []string{"*"} },
-		"an empty entry":         func(s *session.Spec) { s.ImagesAllow = []string{""} },
-		"a tag in an entry":      func(s *session.Spec) { s.ImagesAllow = []string{"registry.example/app:1"} },
-		"a list with no default": func(s *session.Spec) { s.Image, s.Images = "", nil },
+	for name, change := range map[string]func(*runSpec){
+		"an entry of *":          func(s *runSpec) { s.ImagesAllow = []string{"*"} },
+		"an empty entry":         func(s *runSpec) { s.ImagesAllow = []string{""} },
+		"a tag in an entry":      func(s *runSpec) { s.ImagesAllow = []string{"registry.example/app:1"} },
+		"a list with no default": func(s *runSpec) { s.Image, s.Images = "", nil },
 	} {
 		sp, g := specGateway(t, "FAKE_EXIT=0")
 		sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = &openWall{}, "base", images, []string{"registry.example/"}
 		change(&sp)
-		if _, err := session.Run(context.Background(), sp); err == nil {
+		if _, err := run(context.Background(), sp); err == nil {
 			t.Errorf("%s: the run started", name)
 		}
 		if len(g.Requests()) > 0 {
@@ -217,7 +218,7 @@ func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	})
 	w := &targetWall{}
 	sp.Wall, sp.Image, sp.ImagesAllow, sp.RunID = w, "example.com/agent:1", []string{"registry.example/other/"}, event.NewRunID()
-	_, err := session.Run(context.Background(), sp)
+	_, err := run(context.Background(), sp)
 	var r *session.Refusal
 	if !errors.As(err, &r) || r.Code != refusals.ImageNotAllowed || w.req.Image != "" {
 		t.Errorf("image_not_allowed: %v; the wall was asked for %+v", err, w.req)
@@ -230,26 +231,21 @@ func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	byReference(g)
 	w = &targetWall{refuse: refusals.New(refusals.ImageUserRoot, []string{pinned}, "the image %s runs as root; a run's image runs as the wall's user", pinned)}
 	sp.Wall, sp.Image, sp.ImagesAllow, sp.RunID = w, "example.com/agent:1", []string{"registry.example/"}, event.NewRunID()
-	if _, err := session.Run(context.Background(), sp); !errors.As(err, &r) || r.Code != refusals.ImageUserRoot {
+	if _, err = run(context.Background(), sp); !errors.As(err, &r) || r.Code != refusals.ImageUserRoot {
 		t.Errorf("image_user_root: %v", err)
 	}
-	if d := refusedIn(t, sp); d["code"] != refusals.ImageUserRoot || !slices.Equal(anyStrings(d["names"]), []string{pinned}) {
-		t.Errorf("the record's run.refused %v", d)
+	if !errors.As(err, &r) || !slices.Equal(r.Names, []string{pinned}) {
+		t.Errorf("image_user_root names %v", err)
 	}
-	posted := false
-	for _, e := range g.Events() {
-		posted = posted || (e["type"] == "dev.qory.run.refused" && data(e)["code"] == refusals.ImageUserRoot)
-	}
-	if !posted {
-		t.Error("the refusal was not posted on the link")
-	}
+	joinRefused(t, sp, refusals.ImageUserRoot)
+	joinRefusedOnLink(t, g, refusals.ImageUserRoot)
 
 	sp, g = specGateway(t, "FAKE_EXIT=0")
 	byReference(g)
 	w = &targetWall{}
 	sp.Wall, sp.Image, sp.ImagesAllow = w, "example.com/agent:1", []string{"registry.example/"}
 	sp.Mounts = []wall.Mount{{Path: "/workspace/tools", ReadOnly: true}}
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "overlaps /workspace") || w.req.Image != "" {
+	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "overlaps /workspace") || w.req.Image != "" {
 		t.Errorf("a mount at /workspace: %v; the wall was asked for %+v", err, w.req)
 	}
 }
@@ -279,7 +275,7 @@ func TestTheServersImageByReferenceIsTheOneTheWallPulls(t *testing.T) {
 		sp := spec(t, "FAKE_EXIT=0")
 		sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = w, "base", images, []string{"registry.example/agents/"}
 		rg := startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
-		res, err := session.Run(context.Background(), sp)
+		res, err := run(context.Background(), sp)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -305,7 +301,7 @@ func TestAPluginLinkToTheWorkspaceInsideIsNoRun(t *testing.T) {
 	want := "runtime claude: Replace the link " + filepath.Join(plugin, "skills", "review") + " with a copy, " +
 		"or move what it leads to out of /workspace. This launch passes --plugin-dir " + plugin +
 		", and that link leads into /workspace, which a walled run can write, so the run does not start."
-	if _, err := session.Run(context.Background(), sp); err == nil || err.Error() != want {
+	if _, err := run(context.Background(), sp); err == nil || err.Error() != want {
 		t.Errorf("the run: %v, want %q", err, want)
 	}
 	if w.req.RunID != "" {

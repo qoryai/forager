@@ -221,31 +221,36 @@ route out leads to the gateway's proxy.
 The Docker adapter uses the `docker` command, and whatever engine it reaches:
 
 ```go
-res, err := session.Run(ctx, session.Spec{
-	Runtime: rt,
-	Command: "claude",                            // a path inside the image
-	Args:    []string{"-p", "Reply pong."},
-	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
-	Dir:     checkout,                            // the workspace and working directory
-	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
+run, err := session.Open(ctx, session.OpenSpec{
 	RunsDir: runs,                                // the run directories, outside every mount
-	ForagerFiles: []string{configDir},            // the caller's files, which no mount may hold
 	Image:   "base",                              // the default: a name of Images, or a reference
 	Images: []session.Image{                      // the machine's; a policy's image selects one by name
 		{Name: "base", Ref: "example.com/agent:1"},   // yours: the runtime and the toolchain
 		{Name: "with-docker", Ref: "example.com/agent:1-docker", Runtime: "sysbox-runc", Docker: true},
 	},
-	Limits:  wall.Limits{Memory: "8g", ShmSize: "2g"},  // what the agent may use: at most 8 GB of memory, 2 GB of /dev/shm; zero is the engine's default
-	Timeout: 5 * time.Hour,                       // the runtime is stopped at it; run.exited says so
 	Labels:  map[string]string{"issue": "77"},    // the caller's names for the run, in run.started and the run's registration
 	Wall: &wall.Docker{
 		Helper:    linuxBuild,                    // a static Linux build of this program
 		RelayArgs: []string{"relay"},             // the mode of it that calls wall.Relay
 		NestArgs:  []string{"nest"},              // the mode of it that calls wall.Nest
 	},
+	Gateway:   session.LocalGateway(g.LocalLink()), // the gateway on this machine, with the policy and the credentials
+})
+if err != nil {
+	return err
+}
+res, err := run.Join(ctx, session.SessionSpec{
+	Runtime: rt,
+	Command: "claude",                            // a path inside the image
+	Args:    []string{"-p", "Reply pong."},
+	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
+	Dir:     checkout,                            // the workspace and working directory
+	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
+	ForagerFiles: []string{configDir},            // the caller's files, which no mount may hold
+	Limits:  wall.Limits{Memory: "8g", ShmSize: "2g"},  // what the agent may use: at most 8 GB of memory, 2 GB of /dev/shm; zero is the engine's default
+	Timeout: 5 * time.Hour,                       // the runtime is stopped at it; session.exited says so
 	Forwarder: []string{wall.HelperPath, "forward"},
 	Exec:      []string{wall.HelperPath, "exec"},  // the mode of it that calls session.Exec
-	Gateway:   session.LocalGateway(g.LocalLink()), // the gateway on this machine, with the policy and the credentials
 })
 ```
 
@@ -294,11 +299,11 @@ Forager's files. Such a run returns a `*session.Refusal` with the code
 `mount_contains_forager_files`, and `Names` holds the mount, then Forager's file. The
 check comes before the gateway is contacted and before anything starts.
 An agent that changes a program Forager starts outside the wall, or reads the access
-key secret, has left the wall. The check covers `Spec.Mounts` and the workspace; the run
+key secret, has left the wall. The check covers `SessionSpec.Mounts` and the workspace; the run
 directory and the hook socket's directory, which the session shows the enclosure itself,
 are the run's, and lie in Forager's files. Forager's files are:
 
-- `Spec.ForagerFiles`, the absolute paths the caller lists as Forager's files. `qory`
+- `SessionSpec.ForagerFiles`, the absolute paths the caller lists as Forager's files. `qory`
   lists the directory of `forager.yaml`, with the access key secret.
 - The gateway's files, which it hands the session with its local link,
   `link.Local.Files`, each with what it is:
@@ -324,7 +329,7 @@ are the run's, and lie in Forager's files. Forager's files are:
 - A wall's files, when it implements `wall.Filer`. For `wall.Docker` they are the
   directory of the `docker` command, the directory of the helper, and the command's
   configuration directory, `DOCKER_CONFIG` or `~/.docker`.
-- `Spec.RunsDir`, where the run directories are made. Its default, `.qory/runs` in the
+- `OpenSpec.RunsDir`, where the run directories are made. Its default, `.qory/runs` in the
   workspace, lies inside the workspace, so a walled run passes one outside it.
 - The session's registry of walled runs, `$XDG_STATE_HOME/qory-forager/walled`, else
   `~/.local/state/qory-forager/walled`.
@@ -353,7 +358,7 @@ another walled run's still going, or in a directory inside one. A bind's root is
 up in its parent, so two binds of one root are allowed.
 
 - **One bind for the workspace.** The enclosure binds the outermost of the places the
-  run lists, `Spec.Mounts` and the workspace, each once. The workspace is the working
+  run lists, `SessionSpec.Mounts` and the workspace, each once. The workspace is the working
   directory inside (`--workdir` for Docker), reached through the mount that holds it.
   `qory` passes the checkout's root as a mount and the current directory as `Dir`:
   one bind, the checkout's root, and the working directory below it. A workspace that no
@@ -384,7 +389,7 @@ up in its parent, so two binds of one root are allowed.
   through it, and nothing is bound through the link. A link on the way to a place that
   lies inside no writable place of the run's is followed by the engine as it binds.
 
-  The same holds of a link inside a place of `Spec.Written`, the places the caller
+  The same holds of a link inside a place of `SessionSpec.Written`, the places the caller
   records as written by walled runs, though no walled run that wrote it is still
   going: `Names` holds the place, the link and the written place as passed. Its
   sentence reads: "List the path that /code/repo/.claude/worktrees/wt resolves to, in
@@ -493,8 +498,8 @@ up in its parent, so two binds of one root are allowed.
   `*wall.Docker`; a nil d, like a run behind another wall, asks as
   `wall.RunContainersExist` does, the method of a Docker with no field set.
 
-A refusal's first name is always a `Spec.Mounts` path or `Dir`, exactly as passed, and
-the run directory is named by `Spec.RunsDir`. Every check runs again just before the
+A refusal's first name is always a `SessionSpec.Mounts` path or `Dir`, exactly as passed, and
+the run directory is named by `OpenSpec.RunsDir`. Every check runs again just before the
 enclosure binds the mounts, with the wall's extra binds, and the run's entry is updated.
 A place that resolves otherwise than at the start, or whose names are looked up in other
 directories, fails the run, with a sentence that says which.
@@ -510,7 +515,7 @@ starts, and copies it into the run directory with Forager's hooks added. The ses
 refuses that file when it lies in a place a walled run can write, so no walled run
 chooses what a later run is given:
 
-- the places the caller lists in `Spec.Written`, the workspaces and the writable mounts
+- the places the caller lists in `SessionSpec.Written`, the workspaces and the writable mounts
   of the walled runs it starts, with or without a wall for this run;
 - the writable binds of the other walled runs of this user's in the registry, by the
   paths they resolved to, with or without a wall for this run. An entry whose session is
@@ -698,7 +703,7 @@ So the wall needs no separate image.
 
 ## Images
 
-The machine defines the images a run may start in, `Spec.Images`, and the session sends
+The machine defines the images a run may start in, `OpenSpec.Images`, and the session sends
 them with a walled run's request. The run's policy selects one by name, with `image`, as
 it selects credentials and tools; the gateway resolves the selection and its answer
 names the image. Without a selection, the run starts in `Image`.
@@ -709,7 +714,7 @@ starts in when its policy selects none.
 
 A policy may also name an image by its reference pinned by digest, `NAME@sha256:` and 64
 lower-case hexadecimal digits, with no tag. The machine runs one only under a prefix of
-`Spec.ImagesAllow`, its `images.allow`: an entry such as `registry.example/agents/` or
+`OpenSpec.ImagesAllow`, its `images.allow`: an entry such as `registry.example/agents/` or
 `registry.example/agents` covers the references that start with it at a whole part;
 without a list no reference runs. Any other reference is refused with
 `image_not_allowed`, and one with a tag or in upper case with

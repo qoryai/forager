@@ -46,7 +46,7 @@ type realGateway struct {
 
 // startGateway starts a gateway with cfg for the spec's run and points the spec at it,
 // until the test ends.
-func startGateway(t *testing.T, sp *session.Spec, cfg gateway.Config) *realGateway {
+func startGateway(t *testing.T, sp *runSpec, cfg gateway.Config) *realGateway {
 	t.Helper()
 	rg := &realGateway{}
 	runs := sp.RunsDir
@@ -111,14 +111,14 @@ func TestARunThroughARealGateway(t *testing.T) {
 	sp.Labels = map[string]string{"repository": "example-namespace/project"}
 	rg := startGateway(t, &sp, gateway.Config{Version: "test", Heartbeat: time.Second,
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}})
-	res, err := runWithSettingsEnv(t, sp)
+	res, closed, err := runWithSettingsEnvClosed(t, sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d := rg.close(t); d != (gateway.Delivery{}) {
 		t.Errorf("delivery %+v", d)
 	}
-	if res.ExitCode != 0 || res.State != "succeeded" || res.RunClosed || res.Undelivered != 0 {
+	if res.ExitCode != 0 || res.State != "succeeded" || res.RunClosed || closed.Undelivered != 0 {
 		t.Errorf("result %+v", res)
 	}
 	own, numbered := events(t, res), record(t, res)
@@ -163,7 +163,7 @@ func TestARealGatewayRefusesARunThatNeedsAWall(t *testing.T) {
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 	startGateway(t, &sp, gateway.Config{Policy: &gateway.Policy{Version: 1,
 		Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}, Paths: map[string][]string{"api.example": {"/v1/*"}}}}})
-	_, err := session.Run(context.Background(), sp)
+	_, err := run(context.Background(), sp)
 	const want = "run it with a wall: the policy selects tools or has path rules, and without a wall a program that ignores the proxy is bound by neither"
 	if err == nil || err.Error() != want {
 		t.Fatalf("%v, want %q", err, want)
@@ -292,7 +292,7 @@ func (c *control) server() *gateway.Server {
 
 // TestARealGatewayReloadsARun pins the reload end to end: the server changes the run's
 // configuration during the run, the gateway's answers carry its new digest, and the
-// session fetches it and records it in a second policy_applied, which the gateway
+// session fetches it and records it in a third policy_applied, which the gateway
 // numbers and the server receives.
 func TestARealGatewayReloadsARun(t *testing.T) {
 	c := newControl(t)
@@ -310,18 +310,19 @@ func TestARealGatewayReloadsARun(t *testing.T) {
 	}
 	done := make(chan *session.Result, 1)
 	go func() {
-		res, err := session.Run(ctx, sp)
+		res, err := run(ctx, sp)
 		if err != nil {
 			t.Error(err)
 		}
 		done <- res
 	}()
-	waitFor(t, func() bool { _, err := os.Stat(own); return err == nil && len(applied()) == 1 })
+	// The open's and the join's policy_applied, then the reload's.
+	waitFor(t, func() bool { _, err := os.Stat(own); return err == nil && len(applied()) == 2 })
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["b.example"]}}`)
-	waitFor(t, func() bool { return len(applied()) == 2 })
+	waitFor(t, func() bool { return len(applied()) == 3 })
 	pa := applied()
-	if fmt.Sprint(data(pa[0])["allow"]) != "[a.example]" || fmt.Sprint(data(pa[1])["allow"]) != "[b.example]" || data(pa[1])["run_configuration"] != c.served() {
-		t.Errorf("policy_applied %v then %v", data(pa[0]), data(pa[1]))
+	if fmt.Sprint(data(pa[1])["allow"]) != "[a.example]" || fmt.Sprint(data(pa[2])["allow"]) != "[b.example]" || data(pa[2])["run_configuration"] != c.served() {
+		t.Errorf("policy_applied %v then %v", data(pa[1]), data(pa[2]))
 	}
 	cancel()
 	res := <-done
@@ -329,7 +330,7 @@ func TestARealGatewayReloadsARun(t *testing.T) {
 	if res == nil {
 		t.FailNow()
 	}
-	if got := ofType(record(t, res), "dev.qory.run.policy_applied"); len(got) != 2 {
+	if got := ofType(record(t, res), "dev.qory.run.policy_applied"); len(got) != 3 {
 		t.Errorf("the gateway numbered %d policy_applied", len(got))
 	}
 }
@@ -365,11 +366,11 @@ func TestARealGatewayKeepsARunAfterTheServersStop(t *testing.T) {
 					c.closed.Store(true)
 				}()
 			}
-			res, err := session.Run(context.Background(), sp)
+			res, closed, err := runClosed(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.RunClosed || res.State != "succeeded" || res.Reason != "" || res.ExitCode != 0 || res.TimedOut || res.Undelivered != 0 {
+			if res.RunClosed || res.State != "succeeded" || res.Reason != "" || res.ExitCode != 0 || res.TimedOut || closed.Undelivered != 0 {
 				t.Errorf("result %+v", res)
 			}
 			if d := rg.close(t); d != (gateway.Delivery{}) {
@@ -405,7 +406,7 @@ func TestARealGatewayKeepsARunAfterTheServersStop(t *testing.T) {
 			sleeps(&sp, 30*time.Second)
 			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 			startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
-			_, err := session.Run(context.Background(), sp)
+			_, err := run(context.Background(), sp)
 			var r *session.Refusal
 			if want := "register " + c.srv.URL + receiver.DefaultRunPath + ": status 410: the server did not accept the run"; err == nil || err.Error() != want || errors.As(err, &r) {
 				t.Errorf("%v, want %q", err, want)
@@ -498,7 +499,7 @@ func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
 				}
 			}()
 			start := time.Now()
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -541,7 +542,7 @@ func TestARealGatewayPassesOnTheServersRefusal(t *testing.T) {
 			sp := spec(t)
 			sleeps(&sp, 0)
 			startGateway(t, &sp, gateway.Config{Server: c.server()})
-			_, err := session.Run(context.Background(), sp)
+			_, err := run(context.Background(), sp)
 			var r *session.Refusal
 			if !errors.As(err, &r) || r.Code != code || r.Status != http.StatusConflict || r.From != accesskey.FromApiary {
 				t.Fatalf("%v, want the server's %s", err, code)
@@ -562,7 +563,7 @@ func TestARunIDWithARecordIsNoRun(t *testing.T) {
 	if _, err := runWithSettingsEnv(t, sp); err != nil {
 		t.Fatal(err)
 	}
-	_, err := session.Run(context.Background(), sp)
+	_, err := run(context.Background(), sp)
 	if want := "open " + filepath.Join(sp.RunsDir, sp.RunID, "events.jsonl") + ": file exists"; err == nil || err.Error() != want {
 		t.Errorf("%v, want %q", err, want)
 	}
@@ -591,7 +592,7 @@ func TestARunThroughAGatewayWithNoLinkSocket(t *testing.T) {
 	if l := rg.g.LocalLink(); l.Socket != "" || !l.IsInMemory() {
 		t.Fatalf("the gateway's link: socket %q, in memory %v", l.Socket, l.IsInMemory())
 	}
-	res, err := runWithSettingsEnv(t, sp)
+	res, closed, err := runWithSettingsEnvClosed(t, sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -601,7 +602,7 @@ func TestARunThroughAGatewayWithNoLinkSocket(t *testing.T) {
 	if d := rg.close(t); d != (gateway.Delivery{}) {
 		t.Errorf("delivery %+v", d)
 	}
-	if res.ExitCode != 0 || res.State != "succeeded" || res.Undelivered != 0 {
+	if res.ExitCode != 0 || res.State != "succeeded" || closed.Undelivered != 0 {
 		t.Errorf("result %+v", res)
 	}
 	numbered := record(t, res)

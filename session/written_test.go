@@ -84,7 +84,7 @@ func TestAFileInAWrittenPlaceIsNotReadable(t *testing.T) {
 // workspace and its writable mounts. The run stops before the wall is prepared. A
 // read-only mount is no such place.
 func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
-	settingsIn := func(t *testing.T, sp *session.Spec, dir string) string {
+	settingsIn := func(t *testing.T, sp *runSpec, dir string) string {
 		t.Helper()
 		f := filepath.Join(dir, "launch-settings.json")
 		if err := os.WriteFile(f, []byte("{}"), 0o644); err != nil {

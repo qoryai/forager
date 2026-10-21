@@ -59,7 +59,7 @@ func fakePreparation() int {
 
 // preparedSpec is spec behind an open wall, with the workspace as its mount, and the
 // runtime a shell line.
-func preparedSpec(t *testing.T, line string, env ...string) session.Spec {
+func preparedSpec(t *testing.T, line string, env ...string) runSpec {
 	t.Helper()
 	sp := spec(t, env...)
 	sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
@@ -85,7 +85,7 @@ func TestThePreparationRunsBeforeTheRuntime(t *testing.T) {
 	sp.Stdin = strings.NewReader("for the runtime\n")
 	sp.Variables.Run = []string{"PREP_VARIABLE=from the run"}
 	sp.Preparation = append([]string{"env", "FAKE_PREPARATION=1", os.Args[0]}, awkward...)
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,10 +119,10 @@ func TestThePreparationRunsBeforeTheRuntime(t *testing.T) {
 		t.Errorf("the gateway's proxy saw %q", got)
 	}
 	evs := events(t, res)
-	started := data(evs[0])
+	started := sessionStarted(t, evs)
 	script := filepath.Join(res.Dir, session.PreparationScript)
 	if started["command"] != "/bin/sh" || started["args"].([]any)[0] != script || started["args"].([]any)[1] != "/bin/sh" {
-		t.Errorf("run.started command %v args %v", started["command"], started["args"])
+		t.Errorf("session.started command %v args %v", started["command"], started["args"])
 	}
 	want := make([]any, len(sp.Preparation))
 	for i, w := range sp.Preparation {
@@ -141,7 +141,7 @@ func TestThePreparationRunsBeforeTheRuntime(t *testing.T) {
 func TestAFailedPreparationEndsTheRun(t *testing.T) {
 	sp := preparedSpec(t, "touch runtime-ran", "FAKE_PREPARATION_EXIT=6")
 	sp.Preparation = []string{"env", "FAKE_PREPARATION=1", os.Args[0]}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestAStopDuringThePreparationEndsTheRun(t *testing.T) {
 			sp.StopSignal = signal
 			sp.StopGrace = 20 * time.Second
 			start := time.Now()
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -193,7 +193,7 @@ func TestAStopDuringThePreparationEndsTheRun(t *testing.T) {
 	sp.Timeout = 200 * time.Millisecond
 	sp.StopGrace = 300 * time.Millisecond
 	start := time.Now()
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestAPreparationNeedsAWallAndAProgram(t *testing.T) {
 				sp.Wall, sp.Image, sp.Mounts = nil, "", nil
 			}
 			sp.Preparation = c.preparation
-			if _, err := session.Run(context.Background(), sp); err == nil || err.Error() != c.want {
+			if _, err := run(context.Background(), sp); err == nil || err.Error() != c.want {
 				t.Errorf("error %v, want %q", err, c.want)
 			}
 			if _, err := os.Stat(filepath.Join(sp.Dir, "runtime-ran")); err == nil {
@@ -229,13 +229,13 @@ func TestAPreparationNeedsAWallAndAProgram(t *testing.T) {
 	}
 	// No preparation is no script.
 	sp := preparedSpec(t, "exit 0")
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := data(events(t, res)[0])
+	started := sessionStarted(t, events(t, res))
 	if _, ok := started["preparation"]; ok || started["command"] != "/bin/sh" || started["args"].([]any)[0] != "-c" {
-		t.Errorf("run.started %v", started)
+		t.Errorf("session.started %v", started)
 	}
 	if _, err := os.Stat(filepath.Join(res.Dir, session.PreparationScript)); err == nil {
 		t.Error("a run without a preparation has its script")

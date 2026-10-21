@@ -15,7 +15,7 @@ Without a wall, Forager gives the run only placeholders, but the agent can read 
 - The run trusts the gateway through `ca-bundle.pem` in the run directory: the
   machine's authorities, then the run's certificate. `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
   `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `AWS_CA_BUNDLE`
-  point at it, or the names the caller gives in `Spec.CAEnv`. `qory` is to give them
+  point at it, or the names the caller gives in `OpenSpec.CAEnv`. `qory` is to give them
   from `wall.ca_env`.
 - Forager reads the machine's authorities from the first of
   `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`,
@@ -169,7 +169,7 @@ either: with the start key in `ANTHROPIC_API_KEY`, a value of `ANTHROPIC_AUTH_TO
 out, and behind a wall the image's value is unset. One exception applies: when the run
 has an authority, a variable that points at the CA bundle is set to the bundle's path,
 even one of these. Without a wall these are the names the caller gives in
-`Spec.CAEnv`; `qory` is to set it from `wall.ca_env`. Behind a wall they are the names
+`OpenSpec.CAEnv`; `qory` is to set it from `wall.ca_env`. Behind a wall they are the names
 in `CAEnv` of `wall.Docker`. A nil list means `wall.DefaultCAEnv`.
 
 Claude Code also applies the `env` object of a settings file. The session copies the

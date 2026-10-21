@@ -41,7 +41,7 @@ passes. `qory` keeps them under its state directory and prints the path:
   followed.
 
 The gateway's record and the session's are in the same directory when the caller
-points `gateway.Config.RunDir` at the session's runs directory, `Spec.RunsDir`.
+points `gateway.Config.RunDir` at the session's runs directory, `OpenSpec.RunsDir`.
 Otherwise the gateway keeps its record under `gateway.Config.Dir`, in `runs/<id>/`.
 
 Behind a separate gateway the two records are on two machines. The gateway's machine

@@ -44,7 +44,7 @@ func (p *declaresToken) Model() (runtimes.ModelPlaces, bool) {
 }
 
 // tokenSpec is specGateway's spec and fake gateway with a declaresToken runtime.
-func tokenSpec(t *testing.T, env ...string) (session.Spec, *linktest.Fake) {
+func tokenSpec(t *testing.T, env ...string) (runSpec, *linktest.Fake) {
 	t.Helper()
 	sp, g := specGateway(t, env...)
 	sp.Runtime = &declaresToken{Runtime: sp.Runtime}
@@ -71,7 +71,7 @@ func answering(g *linktest.Fake, hosts []map[string]any, vars map[string]any) {
 // schema.
 func endpointEntry(t *testing.T, res *session.Result) map[string]any {
 	t.Helper()
-	pa := ofType(events(t, res), "dev.qory.run.policy_applied")
+	pa := joinApplied(events(t, res))
 	if len(pa) != 1 {
 		t.Fatalf("policy_applied events: %v", pa)
 	}
@@ -128,7 +128,7 @@ func TestAWalledRunKeepsACoveredEndpoint(t *testing.T) {
 					sp.LaunchFixed = passed
 				}
 				answering(g, tc.hosts, vars)
-				res, err := session.Run(context.Background(), sp)
+				res, err := run(context.Background(), sp)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -216,7 +216,7 @@ func TestAWalledRunChecksEveryComputedEndpoint(t *testing.T) {
 				sp.Variables.Run = []string{endpointVariable + "=" + tc.run}
 			}
 			answering(g, tokenAndForge, nil)
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -244,7 +244,7 @@ func TestTheEndpointsCredentialIsShownByName(t *testing.T) {
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 	sp.Variables.Run = []string{endpointVariable + "=https://api.anthropic.com"}
 	answering(g, []map[string]any{{"name": "qak_model", "hosts": []string{"api.anthropic.com"}, "placeholders": []string{"MODEL_TOKEN"}}}, nil)
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestAnUnwalledRunAppliesTheEndpointRule(t *testing.T) {
 			out := dumpsEnv(t, &sp)
 			sp.Variables.Run = []string{endpointVariable + "=https://api.anthropic.com"}
 			answering(g, c.hosts, nil)
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}

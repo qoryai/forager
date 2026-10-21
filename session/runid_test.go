@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/internal/linktest"
-	"github.com/qoryai/forager/session"
 )
 
 // TestASessionNamesItsRunOnTheLocalLink pins X-Qory-Run-Id on the local link: every
@@ -24,7 +23,7 @@ func TestASessionNamesItsRunOnTheLocalLink(t *testing.T) {
 		g.SetRunDigest("sha256=" + strings.Repeat("2", 64))
 		return linktest.Reply{Status: 200}
 	})
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -106,10 +106,11 @@ func TestAnEntryWithAContainerIsLive(t *testing.T) {
 	if !slices.Equal(r.Names, []string{sub, leftID, root}) || r.Detail != want {
 		t.Errorf("names %q, detail %q", r.Names, r.Detail)
 	}
-	if len(a.asked) == 0 || !slices.EqualFunc(a.asked, []wall.Engine{leftEngine},
-		func(x, y wall.Engine) bool {
-			return x.Wall == y.Wall && x.Command == y.Command && slices.Equal(x.Env, y.Env)
-		}) || a.ids[0] != leftID {
+	// The open's entry and the join's mounts each check the entry: every ask is of the
+	// entry's engine, for the entry's run.
+	if len(a.asked) == 0 || slices.ContainsFunc(a.asked, func(x wall.Engine) bool {
+		return x.Wall != leftEngine.Wall || x.Command != leftEngine.Command || !slices.Equal(x.Env, leftEngine.Env)
+	}) || slices.ContainsFunc(a.ids, func(id string) bool { return id != leftID }) {
 		t.Errorf("asked %+v for %q", a.asked, a.ids)
 	}
 	if _, err := os.Stat(file); err != nil {
@@ -130,7 +131,7 @@ func TestAnEntryWithoutAContainerIsRemoved(t *testing.T) {
 	a := answer(t, false, nil)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: sub}}, sub
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Fatalf("a run beside an entry whose run is over: %+v, %v", res, err)
 	}
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
@@ -254,7 +255,7 @@ func TestAnEntryStaysWhenTheWallIsNotRemoved(t *testing.T) {
 	w := &closeFailing{enginedWall{engine: leftEngine}}
 	sp := walledSpec(t, w)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(registry(t), w.req.RunID)
@@ -341,7 +342,7 @@ func TestTheIDIsRecordedOnceTheEnclosureIsPrepared(t *testing.T) {
 			w := &closeFailing{enginedWall{engine: leftEngine, id: c.id, idErr: c.err}}
 			sp := walledSpec(t, w)
 			sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
-			if _, err := session.Run(context.Background(), sp); err != nil {
+			if _, err := run(context.Background(), sp); err != nil {
 				t.Fatal(err)
 			}
 			file := filepath.Join(registry(t), w.req.RunID)

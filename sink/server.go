@@ -152,6 +152,13 @@ type Server struct {
 	runClosed bool
 	closed    bool
 	lost      int
+	// queued counts the events put on the queue, and settled those of them whose batch
+	// the worker is done with: accepted, spooled or dropped at a stop. changed is closed
+	// and replaced each time settled grows. flush asks the worker to post what it holds
+	// without waiting for the batch's wait.
+	queued, settled int
+	changed         chan struct{}
+	flush           chan struct{}
 }
 
 // queued is one event in the queue: its line and its sequence, which the record of
@@ -187,7 +194,8 @@ func New(c Config) *Server {
 		wait = BatchWait
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &Server{client: c.To, onDigests: c.OnDigests, onEnded: c.OnEnded, onEnd: c.OnServerEnd, dir: c.Spool, report: report, queue: make(chan queued, QueueSize), ctx: ctx, cancel: cancel, done: make(chan struct{}), sleep: sleep, wait: wait, link: c.Link}
+	w := &Server{client: c.To, onDigests: c.OnDigests, onEnded: c.OnEnded, onEnd: c.OnServerEnd, dir: c.Spool, report: report, queue: make(chan queued, QueueSize), ctx: ctx, cancel: cancel, done: make(chan struct{}), sleep: sleep, wait: wait, link: c.Link,
+		changed: make(chan struct{}), flush: make(chan struct{}, 1)}
 	w.target.Store(&c.Target)
 	if c.Spool != "" {
 		if acks, err := os.OpenFile(filepath.Join(c.Spool, DeliveredFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
@@ -247,6 +255,7 @@ func (w *Server) Write(ev *event.Event) error {
 	q := queued{line, ev.Sequence}
 	select {
 	case w.queue <- q:
+		w.queued++
 	default:
 		w.spool([]queued{q}, event.NewID())
 	}
@@ -318,10 +327,56 @@ func (w *Server) batches() (again bool) {
 	for {
 		batch, ok := w.next()
 		if len(batch) > 0 {
-			w.deliver(batch)
+			w.deliverAll(batch)
 		}
 		if !ok {
 			return false
+		}
+	}
+}
+
+// deliverAll delivers one batch and counts its events as settled, whatever became of
+// it, a panic included.
+func (w *Server) deliverAll(batch []queued) {
+	defer w.settle(len(batch))
+	w.deliver(batch)
+}
+
+// settle counts n events as settled and wakes every [Server.Flush] that waits.
+func (w *Server) settle(n int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.settled += n
+	close(w.changed)
+	w.changed = make(chan struct{})
+}
+
+// Flush posts the events written so far without waiting for the batch's wait, and
+// returns once the worker is done with each of them: accepted, spooled, or dropped
+// because the deliveries stopped. It returns the context's error when the context ends
+// first; the events then stay queued. Events written during a Flush may or may not be
+// waited for.
+func (w *Server) Flush(ctx context.Context) error {
+	w.mu.Lock()
+	target := w.queued
+	w.mu.Unlock()
+	select {
+	case w.flush <- struct{}{}:
+	default:
+	}
+	for {
+		w.mu.Lock()
+		done, changed := w.settled >= target, w.changed
+		w.mu.Unlock()
+		if done {
+			return nil
+		}
+		select {
+		case <-changed:
+		case <-w.done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }
@@ -347,6 +402,24 @@ func (w *Server) next() ([]queued, bool) {
 			}
 		case <-timer:
 			return batch, true
+		case <-w.flush:
+			// A flush takes what is queued at once, without the batch's wait.
+		drain:
+			for len(batch) < BatchEvents && size < BatchBytes {
+				select {
+				case line, ok := <-w.queue:
+					if !ok {
+						return batch, false
+					}
+					batch = append(batch, line)
+					size += len(line.line)
+				default:
+					break drain
+				}
+			}
+			if len(batch) > 0 {
+				return batch, true
+			}
 		}
 	}
 }

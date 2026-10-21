@@ -72,6 +72,7 @@ type Fake struct {
 	onRun     func(server.LinkRunRequest) Reply
 	onReload  func(runID string) Reply
 	onBatch   func([]map[string]any) Reply
+	onJoin    func(Join) Reply
 	// origin is a separate gateway's, https and its one address; empty on the local
 	// link. prefix begins every path of its link, /qory-link; empty on the local link.
 	origin    string
@@ -85,6 +86,20 @@ type Fake struct {
 	bearers   []string
 	preambles []string
 	proxied   []string
+	joins     []Join
+	answered  int
+	// numbered counts the joins of each run answered 200 or 403, by run id; model is the
+	// model_credential of each run's run answer.
+	numbered map[string]int
+	model    map[string]string
+}
+
+// Join is one join request the fake received: the run id of its path, its body, and the
+// number of batches the fake had answered when it arrived.
+type Join struct {
+	RunID    string
+	Request  server.LinkJoinRequest
+	Answered int
 }
 
 // StartFake starts a fake gateway with a heartbeat interval of one second, until the
@@ -153,6 +168,18 @@ func (f *Fake) OnRun(h func(server.LinkRunRequest) Reply) { f.mu.Lock(); f.onRun
 
 // OnReload replaces the answer to a reload, a reload answer of no policy by default.
 func (f *Fake) OnReload(h func(runID string) Reply) { f.mu.Lock(); f.onReload = h; f.mu.Unlock() }
+
+// OnJoin replaces the answer to a join request, which by default is 200 with the run's
+// next session number and the request's model_credential, else the run answer's. A
+// reply of 200 or 403 numbers the join.
+func (f *Fake) OnJoin(h func(Join) Reply) { f.mu.Lock(); f.onJoin = h; f.mu.Unlock() }
+
+// Joins are the join requests received, in order.
+func (f *Fake) Joins() []Join {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.joins)
+}
 
 // OnBatch replaces the answer to a batch, a 200 by default.
 func (f *Fake) OnBatch(h func([]map[string]any) Reply) { f.mu.Lock(); f.onBatch = h; f.mu.Unlock() }
@@ -318,6 +345,39 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		default:
 			reply = Reply{Status: 200, Body: RunAnswer(req)}
 		}
+		if body, ok := reply.Body.(map[string]any); ok && reply.Status == 200 {
+			if f.model == nil {
+				f.model = map[string]string{}
+			}
+			f.model[req.RunID], _ = body["model_credential"].(string)
+		}
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, runPath+"/") && strings.HasSuffix(r.URL.Path, "/sessions"):
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, runPath+"/"), "/sessions")
+		var req server.LinkJoinRequest
+		json.Unmarshal(body, &req)
+		j := Join{RunID: id, Request: req, Answered: f.answered}
+		f.joins = append(f.joins, j)
+		if f.numbered == nil {
+			f.numbered = map[string]int{}
+		}
+		if h := f.onJoin; h != nil {
+			f.mu.Unlock()
+			reply = h(j)
+			f.mu.Lock()
+		} else {
+			model := req.ModelCredential
+			if model == "" {
+				model = f.model[id]
+			}
+			a := map[string]any{"version": 1, "session": f.numbered[id] + 1}
+			if model != "" {
+				a["model_credential"] = model
+			}
+			reply = Reply{Status: 200, Body: a}
+		}
+		if reply.Status == 200 || reply.Status == 403 {
+			f.numbered[id]++
+		}
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, runPath+"/"):
 		id := strings.TrimPrefix(r.URL.Path, runPath+"/")
 		f.reloads = append(f.reloads, id)
@@ -370,6 +430,11 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(reply.Status)
 	w.Write(out)
+	if r.Method == http.MethodPost && r.URL.Path == eventsPath {
+		f.mu.Lock()
+		f.answered++
+		f.mu.Unlock()
+	}
 }
 
 // serveProxy answers every connection to the fake proxy: it records the first line,

@@ -175,14 +175,14 @@ func stray(addr string) string {
 // spec returns a spec running the fake runtime with the given environment, in a fresh
 // checkout directory, with its run directories beside it, speaking to a fake gateway
 // of its own.
-func spec(t *testing.T, env ...string) session.Spec {
+func spec(t *testing.T, env ...string) runSpec {
 	t.Helper()
 	sp, _ := specGateway(t, env...)
 	return sp
 }
 
 // specGateway is spec and the fake gateway it speaks to.
-func specGateway(t *testing.T, env ...string) (session.Spec, *linktest.Fake) {
+func specGateway(t *testing.T, env ...string) (runSpec, *linktest.Fake) {
 	t.Helper()
 	dir := t.TempDir()
 	var out, errs bytes.Buffer
@@ -193,21 +193,24 @@ func specGateway(t *testing.T, env ...string) (session.Spec, *linktest.Fake) {
 	})
 	g := linktest.StartFake(t)
 	g.SetInterval(30)
-	return session.Spec{
-		Runtime:        claudeCode(t),
-		Command:        os.Args[0],
-		Args:           []string{"--settings", writeSettings(t, t.TempDir())},
-		Env:            append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
-		Dir:            dir,
+	return runSpec{OpenSpec: session.OpenSpec{
 		RunsDir:        filepath.Join(t.TempDir(), "runs"),
-		Stdin:          strings.NewReader(""),
-		Stdout:         &out,
-		Stderr:         &errs,
 		Gateway:        session.LocalGateway(g.Local()),
-		Forwarder:      []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
-		Exec:           []string{os.Args[0], "exec"},
 		ForagerVersion: "test",
 		Report:         func(l string) { t.Log("report:", l) },
+	},
+		SessionSpec: session.SessionSpec{
+			Runtime:   claudeCode(t),
+			Command:   os.Args[0],
+			Args:      []string{"--settings", writeSettings(t, t.TempDir())},
+			Env:       append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
+			Dir:       dir,
+			Stdin:     strings.NewReader(""),
+			Stdout:    &out,
+			Stderr:    &errs,
+			Forwarder: []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
+			Exec:      []string{os.Args[0], "exec"},
+		},
 	}, g
 }
 
@@ -279,6 +282,28 @@ func ofType(evs []map[string]any, typ string) []map[string]any {
 
 func data(e map[string]any) map[string]any { return e["data"].(map[string]any) }
 
+// sessionStarted is the data of the first dev.qory.session.started of evs; the test
+// fails without one.
+func sessionStarted(t *testing.T, evs []map[string]any) map[string]any {
+	t.Helper()
+	started := ofType(evs, "dev.qory.session.started")
+	if len(started) == 0 {
+		t.Fatalf("no session.started: %v", types(evs))
+	}
+	return data(started[0])
+}
+
+// joinApplied are the dev.qory.run.policy_applied events after the first
+// dev.qory.session.started: those of the session's join, and of reloads after it.
+func joinApplied(evs []map[string]any) []map[string]any {
+	for i, e := range evs {
+		if e["type"] == "dev.qory.session.started" {
+			return ofType(evs[i+1:], "dev.qory.run.policy_applied")
+		}
+	}
+	return nil
+}
+
 // TestRunRecordsAndExitsWithTheRuntimesStatus is the run end to end on pipes: the
 // members of policy_applied the gateway decides are recorded as its run answer gives
 // them, beside the harness's hosts, both requests go to the gateway's proxy through the
@@ -306,10 +331,19 @@ func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	if len(evs) < 6 || evs[0]["type"] != "dev.qory.run.started" || evs[1]["type"] != "dev.qory.run.policy_applied" || evs[len(evs)-1]["type"] != "dev.qory.run.exited" {
 		t.Fatalf("event order: %v", types(evs))
 	}
-	if started := data(evs[0]); started["opened_by"] != "session" {
-		t.Errorf("run.started opened_by %v; want session", started["opened_by"])
+	if started := data(evs[0]); started["opened_by"] != "run" || started["command"] != nil {
+		t.Errorf("run.started %v; want opened_by run and no runtime members", started)
 	}
-	applied := data(evs[1])
+	// The open's policy_applied has the gateway's members and no variables; the join's
+	// has the session's variables and the harness's hosts beside them.
+	if opened := data(evs[1]); opened["mode"] != "enforce" || fmt.Sprint(opened["variables"]) != "[]" || opened["harness_hosts"] != nil || len(opened) != 6 {
+		t.Errorf("the open's policy_applied %v", opened)
+	}
+	joined := joinApplied(evs)
+	if len(joined) != 1 {
+		t.Fatalf("the join's policy_applied %v", joined)
+	}
+	applied := data(joined[0])
 	if applied["mode"] != "enforce" || applied["source"] != "config" || fmt.Sprint(applied["allow"]) != "[api.example]" || fmt.Sprint(applied["harness_hosts"]) != "[api.example registry.example]" || fmt.Sprint(applied["deny"]) != "[tracker.example]" || applied["digest"] != strings.Repeat("d", 64) || applied["variables"] == nil || len(applied) != 7 {
 		t.Errorf("policy_applied %v", applied)
 	}
@@ -364,11 +398,18 @@ func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 // runWithSettingsEnv runs the spec with FAKE_SETTINGS pointing at the settings file
 // the session writes, which is only known once the run directory exists: the run id is
 // fixed in advance so the path is known.
-func runWithSettingsEnv(t *testing.T, sp session.Spec) (*session.Result, error) {
+func runWithSettingsEnv(t *testing.T, sp runSpec) (*session.Result, error) {
+	t.Helper()
+	res, _, err := runWithSettingsEnvClosed(t, sp)
+	return res, err
+}
+
+// runWithSettingsEnvClosed is runWithSettingsEnv with the close's result too.
+func runWithSettingsEnvClosed(t *testing.T, sp runSpec) (*session.Result, *session.Closed, error) {
 	t.Helper()
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 	sp.Env = append(sp.Env, "FAKE_SETTINGS="+filepath.Join(sp.RunsDir, sp.RunID, "settings.json"))
-	return session.Run(context.Background(), sp)
+	return runClosed(context.Background(), sp)
 }
 
 func types(evs []map[string]any) []string {
@@ -398,7 +439,7 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 	sp.Interactive = true
 	sp.Command = "sh"
 	sp.Args = []string{"-c", "echo hello; exit 4"}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,8 +453,8 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 	if l := ofType(events(t, res), "dev.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
 		t.Errorf("log %v", l)
 	}
-	if size := data(events(t, res)[0])["terminal"]; fmt.Sprint(size) != "map[cols:80 rows:24]" {
-		t.Errorf("run.started terminal %v; want the default when stdin is not a terminal", size)
+	if size := sessionStarted(t, events(t, res))["terminal"]; fmt.Sprint(size) != "map[cols:80 rows:24]" {
+		t.Errorf("session.started terminal %v; want the default when stdin is not a terminal", size)
 	}
 }
 
@@ -427,14 +468,14 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 		sp := spec(t)
 		sp.Interactive = true
 		sp.Args = append(sp.Args, "-p", "Reply pong")
-		res, err := session.Run(context.Background(), sp)
+		res, err := run(context.Background(), sp)
 		if err != nil {
 			t.Fatal(err)
 		}
 		evs := events(t, res)
-		started := data(evs[0])
+		started := sessionStarted(t, evs)
 		if started["interactive"] != false || started["terminal"] != nil {
-			t.Errorf("run.started %v; want not interactive and no terminal size", started)
+			t.Errorf("session.started %v; want not interactive and no terminal size", started)
 		}
 		if l := ofType(evs, "dev.qory.run.log"); len(l) == 0 || data(l[0])["stream"] == "terminal" {
 			t.Errorf("log %v; want the streams of pipes", l)
@@ -450,13 +491,13 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 		sp.Runtime = runtimes.Bare("other-agent")
 		sp.Command = "sh"
 		sp.Args = []string{"-c", "echo hello", "sh", "-p"}
-		res, err := session.Run(context.Background(), sp)
+		res, err := run(context.Background(), sp)
 		if err != nil {
 			t.Fatal(err)
 		}
 		evs := events(t, res)
-		if started := data(evs[0]); started["interactive"] != true || started["terminal"] == nil {
-			t.Errorf("run.started %v; want the caller's terminal kept", started)
+		if started := sessionStarted(t, evs); started["interactive"] != true || started["terminal"] == nil {
+			t.Errorf("session.started %v; want the caller's terminal kept", started)
 		}
 		if l := ofType(evs, "dev.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
 			t.Errorf("log %v", l)
@@ -465,7 +506,7 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 }
 
 // TestInteractiveRunFollowsTheTerminalSize pins the size in the record: the
-// pseudo-terminal starts at the size of the terminal stdin is, reported in run.started,
+// pseudo-terminal starts at the size of the terminal stdin is, reported in session.started,
 // and when that terminal is resized the pseudo-terminal follows and run.resized says so
 // at the sequence where it did, before the output drawn on the new size.
 func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
@@ -490,7 +531,7 @@ func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
 	sp.Args = []string{"-c", "stty size; read line; stty size"}
 	done := make(chan *session.Result, 1)
 	go func() {
-		res, err := session.Run(context.Background(), sp)
+		res, err := run(context.Background(), sp)
 		if err != nil {
 			t.Error(err)
 		}
@@ -512,8 +553,8 @@ func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
 		t.FailNow()
 	}
 	evs := events(t, res)
-	if size := data(evs[0])["terminal"]; fmt.Sprint(size) != "map[cols:100 rows:40]" {
-		t.Errorf("run.started terminal %v", size)
+	if size := sessionStarted(t, evs)["terminal"]; fmt.Sprint(size) != "map[cols:100 rows:40]" {
+		t.Errorf("session.started terminal %v", size)
 	}
 	resized := ofType(evs, "dev.qory.run.resized")
 	if len(resized) != 1 || fmt.Sprint(data(resized[0])) != "map[cols:120 rows:50]" {
@@ -570,7 +611,7 @@ func TestContextEndStopsTheRuntime(t *testing.T) {
 	sp.Args = []string{"-c", "sleep 30"}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	res, err := session.Run(ctx, sp)
+	res, err := run(ctx, sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +626,7 @@ func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
 	sp.Command = "sh"
 	sp.Args = []string{"-c", "sleep 30"}
 	sp.Timeout = 300 * time.Millisecond
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,23 +668,31 @@ func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
 	for i := range session.MaxLabels + 1 {
 		many[fmt.Sprint("k", i)] = "v"
 	}
-	for name, change := range map[string]func(*session.Spec){
-		"a path as the run id":  func(s *session.Spec) { s.RunID = "../../elsewhere" },
-		"an upper-case run id":  func(s *session.Spec) { s.RunID = strings.ToUpper(id) },
-		"an upper-case key":     func(s *session.Spec) { s.Labels = map[string]string{"Repo": "x"} },
-		"an empty key":          func(s *session.Spec) { s.Labels = map[string]string{"": "x"} },
-		"a long value":          func(s *session.Spec) { s.Labels = map[string]string{"k": strings.Repeat("v", 257)} },
-		"too many labels":       func(s *session.Spec) { s.Labels = many },
-		"a negative time limit": func(s *session.Spec) { s.Timeout = -time.Second },
+	for name, change := range map[string]func(*runSpec){
+		"a path as the run id": func(s *runSpec) { s.RunID = "../../elsewhere" },
+		"an upper-case run id": func(s *runSpec) { s.RunID = strings.ToUpper(id) },
+		"an upper-case key":    func(s *runSpec) { s.Labels = map[string]string{"Repo": "x"} },
+		"an empty key":         func(s *runSpec) { s.Labels = map[string]string{"": "x"} },
+		"a long value":         func(s *runSpec) { s.Labels = map[string]string{"k": strings.Repeat("v", 257)} },
+		"too many labels":      func(s *runSpec) { s.Labels = many },
 	} {
 		sp := spec(t)
 		change(&sp)
-		if _, err := session.Run(context.Background(), sp); err == nil {
+		if _, err := run(context.Background(), sp); err == nil {
 			t.Errorf("%s: the run started", name)
 		}
 		if entries, _ := os.ReadDir(sp.RunsDir); len(entries) > 0 {
 			t.Errorf("%s: a run directory was made: %v", name, entries)
 		}
+	}
+	// A negative time limit is the session's: the join refuses it before its request.
+	sp, g := specGateway(t)
+	sp.Timeout = -time.Second
+	if _, err := run(context.Background(), sp); err == nil {
+		t.Error("a negative time limit: the session started")
+	}
+	if len(g.Joins()) > 0 {
+		t.Error("a negative time limit: the gateway got a join request")
 	}
 }
 
@@ -656,7 +705,7 @@ func TestAboutIsInRunStartedAlone(t *testing.T) {
 	sp.Forwarder = nil
 	sp.About = &session.About{Title: "Example",
 		Subjects: []session.Subject{{Type: "example"}}}
-	_, err := session.Run(context.Background(), sp)
+	_, err := run(context.Background(), sp)
 	var ae *session.AboutError
 	if !errors.As(err, &ae) || err.Error() != "about.subjects[0].ref is empty" {
 		t.Errorf("an About without a ref: %v", err)
@@ -681,7 +730,7 @@ func TestAboutIsInRunStartedAlone(t *testing.T) {
 		},
 		Details: json.RawMessage(`{ "example-key" : [ 1, { "b" : { "c" : true } } ] }`),
 	}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -725,7 +774,7 @@ func TestAboutIsInRunStartedAlone(t *testing.T) {
 	sp = spec(t)
 	sp.Forwarder = nil
 	sp.About = &session.About{Details: json.RawMessage(" { } ")}
-	if res, err = session.Run(context.Background(), sp); err != nil {
+	if res, err = run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	if st := ofType(events(t, res), "dev.qory.run.started"); len(st) != 1 {
@@ -743,7 +792,7 @@ func TestStopGraceIsHowLongTheRuntimeHasToLeave(t *testing.T) {
 	sp.Timeout = 200 * time.Millisecond
 	sp.StopGrace = 300 * time.Millisecond
 	start := time.Now()
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +811,7 @@ func TestStopSignalIsTheOneTheRunNames(t *testing.T) {
 	sp.Args = []string{"-c", "trap 'exit 7' INT; trap '' TERM; sleep 30 & wait"}
 	sp.Timeout = 300 * time.Millisecond
 	sp.StopSignal = "SIGINT"
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -772,7 +821,7 @@ func TestStopSignalIsTheOneTheRunNames(t *testing.T) {
 	for _, name := range []string{"SIGKILL", "INT", "sigint", "9"} {
 		sp := spec(t)
 		sp.StopSignal = name
-		if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "stop signal") {
+		if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "stop signal") {
 			t.Errorf("stop signal %q: %v", name, err)
 		}
 	}
@@ -808,7 +857,7 @@ func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T)
 			sp.Command, sp.Args = "sh", []string{"-c", script}
 			sp.Timeout = 300 * time.Millisecond
 			sp.StopSignal = c.named
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -818,15 +867,15 @@ func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T)
 			if got.RunDir != res.Dir || got.Launch.Command != "sh" || len(got.Forwarder) == 0 {
 				t.Errorf("Prepare was given %+v", got)
 			}
-			started := ofType(events(t, res), "dev.qory.run.started")
+			started := ofType(events(t, res), "dev.qory.session.started")
 			if len(started) != 1 || data(started[0])["runtime"] != "other-agent" {
-				t.Errorf("run.started %v", started)
+				t.Errorf("session.started %v", started)
 			}
 		})
 	}
 	sp := spec(t)
 	sp.Runtime = leaves{Runtime: runtimes.Bare("other-agent"), stop: runtimes.Stop{Signal: "SIGKILL"}, prepared: new(runtimes.Attach)}
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "runtime other-agent") {
+	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "runtime other-agent") {
 		t.Errorf("a runtime that names SIGKILL: %v", err)
 	}
 }
@@ -835,11 +884,11 @@ func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
 	sp := spec(t)
 	sp.Runtime = nil
 	sp.Command, sp.Args = "sh", []string{"-c", "exit 3"}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := ofType(events(t, res), "dev.qory.run.started")
+	started := ofType(events(t, res), "dev.qory.session.started")
 	if res.ExitCode != 3 || len(started) != 1 || data(started[0])["runtime"] != "sh" {
 		t.Errorf("%+v %v", res, started)
 	}

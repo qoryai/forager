@@ -850,6 +850,21 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Replace `session.Run` and `session.Spec` with `session.Open`, `(*session.Run).Join`
+  and `(*session.Run).Close`. `session.Run` is the open run. Move the run's fields of
+  `Spec` to `session.OpenSpec`: `Gateway`, `Wall`, `CAEnv`, `Image`, `Images`,
+  `ImagesAllow`, `RunsDir`, `ForagerVersion`, `RunID`, `Labels`, `About` and `Report`.
+  Move the rest to `session.SessionSpec`. Read `Undelivered` from `session.Closed`, which
+  `Close` returns; `session.Result` has it no more. `session.Result.State` and `Reason`
+  are those of the session's `dev.qory.session.exited`; the run's outcome is the
+  `session.Outcome` you pass to `Close`. Before, one call ran the run and its one
+  session.
+- Close every run you open, once each join has returned. Join sessions of one run one
+  after another: a `Join` while another runs returns "a session of the run is still
+  running: sessions of one run join one after another", and a `Close` while one runs
+  returns "a session of the run is still running: close the run after Join returns".
+- `event.OpenedBySession` is gone: `dev.qory.run.started` has `opened_by` `run`.
+
 - Pass `--settings` at most once in a run without a wall, as behind one. A launch that
   passes it more than once now does not start, with "runtime claude: Pass one --settings
   file. This launch passes --settings more than once, and Claude Code reads only the last
@@ -867,6 +882,30 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `session.Open` opens a run at the gateway: the run request, without the session's
+  passes, `dev.qory.run.started` with `opened_by` `run` and no runtime members,
+  `dev.qory.run.policy_applied` with empty `variables`, and heartbeats until
+  `dev.qory.run.exited`. `(*session.Run).System` and `Repositories` are the server's
+  `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` from the run answer.
+- `(*session.Run).Join` runs one session: the join request with the session's passes
+  and `SessionSpec.ModelCredential`, the session's number from the answer,
+  `dev.qory.session.started` with the runtime members, `terminal` and `harness`, the
+  session's `dev.qory.run.policy_applied`, and `dev.qory.session.exited`. It returns once
+  the gateway accepted the batch with `dev.qory.session.exited`, so the next join's
+  request follows it. A join the gateway refuses, or that the session refuses after its
+  request, writes `dev.qory.session.exited` `failed`, `-1`, `duration_ms` 0 and the code.
+- `SessionSpec.Harness`, the harness's sources, each a `source` and a full `commit`;
+  `dev.qory.session.started` has them as `harness`, a source that contains `qak_` or
+  `qrk_` as the value's phrase. A commit that is not 40 or 64 lower-case hexadecimal
+  characters returns "set the commit of the harness source N to a full commit id, 40 or
+  64 hexadecimal characters in lower case".
+- `(*session.Run).Close` writes `dev.qory.run.exited` once with the `session.Outcome`
+  you pass. A run no join started, closed `failed` with no reason, is `failed` with
+  `no_session` and `-1`.
+- One masker per run: output and records of every session have
+  `qory-proxy-password` in place of each forwarder password of the run.
+- `(*sink.Server).Flush`, which posts the events written so far and returns once the
+  gateway accepted them, the deliveries stopped or the context ended.
 - `runtimes.Attach.ModelVariables`, which the session sets in a run with a start key:
   the variables of the runtime's `model.keys` and its model endpoint variable, from its
   descriptor. The `claude-settings` installer drops each of these names, matched
@@ -1097,6 +1136,9 @@ release may change what an existing document does, and says so under Upgrading.
   they were refused with "that file is not a regular file" or "that file is a link".
 
 #### Changed
+
+- `session.Resend` sends no `dev.qory.session.exited` the session wrote in its record
+  alone after the gateway ended the run.
 
 - A walled Claude Code launch checks and copies the files of `--system-prompt-file`,
   `--append-system-prompt-file` and `--append-subagent-system-prompt-file`, as it does

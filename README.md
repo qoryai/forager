@@ -156,9 +156,10 @@ program to run an agent inside the same boundary. It needs Go 1.27.1 or above:
 go get github.com/qoryai/forager
 ```
 
-A gateway, `gateway.Start`, holds the policy, the credentials and the server. One call,
-`session.Run`, runs one session against it: you pass the program to start and the
-gateway's local link. You get back the exit status and the directory of the record:
+A gateway, `gateway.Start`, holds the policy, the credentials and the server.
+`session.Open` opens a run at the gateway's local link. `Run.Join` runs one session in
+the run: you pass the program to start, and you get back the exit status. `Run.Close`
+ends the run with the outcome you give and returns the directory of the record:
 
 ```go
 g, err := gateway.Start(ctx, gateway.Config{
@@ -172,18 +173,32 @@ rt, err := catalog.Lookup("claude", "")         // the runtime, by its name
 if err != nil {
 	return err
 }
-res, err := session.Run(ctx, session.Spec{
+run, err := session.Open(ctx, session.OpenSpec{
+	Gateway: session.LocalGateway(g.LocalLink()), // the session speaks to the gateway alone
+})
+if err != nil {                                   // the run did not open
+	return err
+}
+res, err := run.Join(ctx, session.SessionSpec{
 	Runtime:   rt,
 	Command:   "claude",
 	Args:      []string{"-p", "Reply pong."},
-	Gateway:   session.LocalGateway(g.LocalLink()), // the session speaks to the gateway alone
 	Forwarder: []string{exe, "forward"},          // the hook command; it calls session.Forward
 })
+out := session.Outcome{State: "failed", ExitCode: -1} // the session did not start
+if err == nil {
+	out = session.Outcome{State: res.State, ExitCode: res.ExitCode}
+}
+closed, cerr := run.Close(ctx, out)               // writes dev.qory.run.exited
 g.Close(ctx)                                      // delivers the runs' last events, before the exit
-if err != nil {                                   // the run did not start
+if err != nil {
 	return err
 }
-os.Exit(res.ExitCode)                             // the runtime's status; res.Dir is the record
+if cerr != nil {
+	return cerr
+}
+fmt.Println("recorded in", closed.Dir)
+os.Exit(res.ExitCode)                             // the runtime's status
 ```
 
 `qory` imports Forager, and Forager imports nothing of `qory`. What Forager reads

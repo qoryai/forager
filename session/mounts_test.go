@@ -3,12 +3,13 @@ package session_test
 import (
 	"context"
 	"errors"
-	"github.com/qoryai/forager/gateway"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/qoryai/forager/gateway"
 
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/session"
@@ -169,14 +170,14 @@ func mountRefusal(t *testing.T, err error) *session.Refusal {
 }
 
 // runErr is the error of a run that is not to start.
-func runErr(sp session.Spec) error {
-	_, err := session.Run(context.Background(), sp)
+func runErr(sp runSpec) error {
+	_, err := run(context.Background(), sp)
 	return err
 }
 
 // TestAMountOfTheForagersFilesIsNoRun pins the refusal of a walled run whose mount
 // contains a Forager file's directory: it names the mount, then Forager's path, the
-// gateway is never contacted, the wall builds nothing and no run directory is made.
+// join's session.exited has the code, no session starts and the wall builds nothing.
 func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 	parent, dir := foragerDir(t)
 	w := &openWall{}
@@ -191,14 +192,9 @@ func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 	if !strings.Contains(r.Detail, "the mount "+parent+" contains "+dir) {
 		t.Errorf("detail %q", r.Detail)
 	}
-	if n := g.Accepted.Load(); n != 0 {
-		t.Errorf("the gateway got %d connections", n)
-	}
+	joinRefusedOnLink(t, g, "mount_contains_forager_files")
 	if w.req.RunID != "" || w.wrapped {
 		t.Errorf("the wall was prepared or wrapped: %+v", w.req)
-	}
-	if _, err := os.Stat(sp.RunsDir); !os.IsNotExist(err) {
-		t.Errorf("a run directory was made: %v", err)
 	}
 
 	// A mount inside Forager's directory, and the workspace itself, are refused too.
@@ -342,7 +338,7 @@ func TestForagerFilesAreAbsolutePaths(t *testing.T) {
 	for _, p := range []string{"relative/qory", "/home/user/\x00qory"} {
 		sp := spec(t, "FAKE_EXIT=0")
 		sp.ForagerFiles = []string{p}
-		_, err := session.Run(context.Background(), sp)
+		_, err := run(context.Background(), sp)
 		var r *session.Refusal
 		if err == nil || errors.As(err, &r) {
 			t.Errorf("Forager file %q: %v", p, err)
@@ -436,7 +432,7 @@ func TestAMountOfAnotherRunsPrivateDirectoriesIsNoRun(t *testing.T) {
 // gateways make their links in, in the system's temporary directory, are Forager's
 // files behind a separate gateway too, which hands the session no files of its own: a
 // mount of a local gateway's link directory on this machine, or of a file in one, is
-// refused, and the separate gateway is never contacted.
+// refused at the join, and the runtime never starts.
 func TestARemoteGatewaysRunRefusesAMountOfALinkDirectory(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
@@ -445,20 +441,20 @@ func TestARemoteGatewaysRunRefusesAMountOfALinkDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := startRemote(t)
-	r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())})
-	r.sp.Wall, r.sp.Image = &openWall{}, "example.com/agent:1"
 	pattern := filepath.Join(tmp, "qory-link-*")
 	for _, c := range []struct{ mount, how string }{
 		{linkDir, " is "},
 		{filepath.Join(linkDir, "sock"), " lies inside "},
 	} {
+		r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())})
+		r.sp.Wall, r.sp.Image = &openWall{}, "example.com/agent:1"
 		r.sp.Mounts = []wall.Mount{{Path: c.mount}}
 		got := mountRefusal(t, runErr(r.sp))
 		if want := []string{c.mount, pattern}; !slices.Equal(got.Names, want) || !strings.Contains(got.Detail, c.how) || !strings.HasSuffix(got.Detail, ", where the gateways' links are made") {
 			t.Errorf("names %q, want %q, detail %q", got.Names, want, got.Detail)
 		}
-	}
-	if len(g.Bearers()) != 0 || g.Bound() != 0 || r.started() {
-		t.Error("a refused mount reached the gateway, or the runtime started")
+		if r.started() {
+			t.Error("the runtime of a refused mount started")
+		}
 	}
 }

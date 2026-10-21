@@ -87,3 +87,26 @@ func TestClearOverwritesEveryFind(t *testing.T) {
 		}
 	}
 }
+
+// TestAddProxyMasksEachPasswordAdded pins a run's one masker: an empty one masks
+// nothing, and each password added, with its basic form, is replaced, the first one
+// still after the second is added; an empty password adds nothing.
+func TestAddProxyMasksEachPasswordAdded(t *testing.T) {
+	m := &mask.Masker{}
+	if !m.Empty() || !(*mask.Masker)(nil).Empty() {
+		t.Error("a masker with nothing added is not empty")
+	}
+	m.AddProxy("qory", "")
+	if !m.Empty() {
+		t.Error("an empty password added a find")
+	}
+	second := strings.ToUpper(fakePassword)
+	m.AddProxy("qory", fakePassword)
+	m.AddProxy("qory", second)
+	basic := base64.StdEncoding.EncodeToString([]byte("qory:" + fakePassword))
+	got := m.Replace("http://qory:" + fakePassword + "@x http://qory:" + second + "@y " + basic)
+	want := "http://qory:" + mask.ProxyPassword + "@x http://qory:" + mask.ProxyPassword + "@y " + base64.StdEncoding.EncodeToString([]byte("qory:"+mask.ProxyPassword))
+	if m.Empty() || got != want {
+		t.Errorf("Replace %q, want %q", got, want)
+	}
+}

@@ -22,7 +22,7 @@ import (
 
 // sleeps makes the spec's runtime a program that waits the given time, long enough
 // for what a test does to a live run.
-func sleeps(sp *session.Spec, d time.Duration) {
+func sleeps(sp *runSpec, d time.Duration) {
 	sp.Forwarder = nil
 	sp.Command, sp.Args = "/bin/sh", []string{"-c", fmt.Sprintf("sleep %.3f", d.Seconds())}
 }
@@ -36,12 +36,12 @@ func posted(g *linktest.Fake) []string { return types(g.Events()) }
 func TestARunWithoutAGatewayIsNone(t *testing.T) {
 	sp := spec(t)
 	sp.Gateway = nil
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "no gateway") {
+	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "no gateway") {
 		t.Errorf("a run without a gateway: %v", err)
 	}
 	sp = spec(t)
 	sp.Gateway = session.LocalGateway(link.Local{Socket: filepath.Join(t.TempDir(), "sock")})
-	if _, err := session.Run(context.Background(), sp); err == nil {
+	if _, err := run(context.Background(), sp); err == nil {
 		t.Error("a run whose gateway is gone started")
 	}
 	if entries, _ := os.ReadDir(sp.RunsDir); len(entries) > 0 {
@@ -74,7 +74,7 @@ func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 	sp.LaunchFixed = []string{"FIXED_ONE=" + value}
 	sp.LaunchDefaults = []string{"DEFAULT_ONE=" + value}
 	sp.Variables = session.Variables{Run: []string{"RUN_ONE=" + value}, Machine: []string{"MACHINE_ONE=" + value}}
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	reqs := g.Requests()
@@ -92,7 +92,7 @@ func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 	sp, g = specGateway(t, "INHERITED="+value)
 	sleeps(&sp, 0)
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	if reqs := g.Requests(); len(reqs) != 1 {
@@ -162,7 +162,7 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 			sp.OnVariables = func(session.Applied) { t.Error("OnVariables was called for a refused run") }
 			g.OnRun(func(server.LinkRunRequest) linktest.Reply { return c.reply })
-			_, err := session.Run(context.Background(), sp)
+			_, err := run(context.Background(), sp)
 			if err == nil || !strings.Contains(err.Error(), c.text) {
 				t.Fatalf("%v, want %q", err, c.text)
 			}
@@ -211,7 +211,7 @@ func TestRunStartedHasTheGatewaysLabels(t *testing.T) {
 		a["details"] = map[string]string{"requester": "requester"}
 		return linktest.Reply{Status: 200, Body: a}
 	})
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestHeartbeatsRunEveryIntervalTheDiscoveryAnnounces(t *testing.T) {
 	sp, g := specGateway(t)
 	g.SetInterval(1)
 	sleeps(&sp, 2500*time.Millisecond)
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,25 +265,37 @@ func TestADigestThatChangesIsReloaded(t *testing.T) {
 			"policy": map[string]any{"version": 1, "egress": map[string]any{"mode": "enforce", "allow": []string{"api.example"}}},
 			"digest": strings.Repeat("e", 64), "applied": reloaded}}
 	})
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := g.Reloads(); !slices.Equal(got, []string{res.RunID}) {
 		t.Errorf("reloads %q, want the run's once", got)
 	}
-	pa := ofType(events(t, res), "dev.qory.run.policy_applied")
-	if len(pa) != 2 {
+	// The open's, the join's and the reload's, which may come before the join: then it
+	// has no session's variables and no harness's hosts.
+	evs := events(t, res)
+	pa := ofType(evs, "dev.qory.run.policy_applied")
+	if len(pa) != 3 {
 		t.Fatalf("policy_applied %v", pa)
 	}
-	then := data(pa[1])
-	for k, v := range reloaded {
-		if !equalJSON(map[string]any{k: then[k]}, map[string]any{k: v}) {
-			t.Errorf("the second policy_applied %s = %v, want %v", k, then[k], v)
+	var then map[string]any
+	for _, e := range pa {
+		if data(e)["source"] == "fetched" {
+			then = data(e)
 		}
 	}
-	if then["harness_hosts"] == nil || then["variables"] == nil || len(then) != len(reloaded)+2 {
-		t.Errorf("the second policy_applied %v", then)
+	for k, v := range reloaded {
+		if !equalJSON(map[string]any{k: then[k]}, map[string]any{k: v}) {
+			t.Errorf("the reload's policy_applied %s = %v, want %v", k, then[k], v)
+		}
+	}
+	if afterJoin := slices.ContainsFunc(joinApplied(evs), func(e map[string]any) bool { return data(e)["source"] == "fetched" }); afterJoin {
+		if then["harness_hosts"] == nil || then["variables"] == nil || len(then) != len(reloaded)+2 {
+			t.Errorf("the reload's policy_applied %v", then)
+		}
+	} else if then["harness_hosts"] != nil || fmt.Sprint(then["variables"]) != "[]" || len(then) != len(reloaded)+1 {
+		t.Errorf("the reload's policy_applied before the join %v", then)
 	}
 	digests := g.BatchDigests()
 	if len(digests) < 2 || digests[0] != first || digests[len(digests)-1] != second {
@@ -351,7 +363,7 @@ func TestTheRunEndsWhenItIsClosed(t *testing.T) {
 				g.OnReload(func(string) linktest.Reply { return *c.reload })
 			}
 			start := time.Now()
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -384,25 +396,31 @@ func TestTheRunEndsWhenItIsClosed(t *testing.T) {
 	}
 }
 
-// TestAFailureAfterTheAnswerIsPosted pins a run the session refuses after the
-// gateway's run answer, with a code the session decides: its run.refused is in the
-// record and posted on the link, which ends the run at the gateway, and nothing
-// started.
+// TestAFailureAfterTheAnswerIsPosted pins a join the session refuses after the
+// gateway's join answer, with a code the session decides: its session.exited, with the
+// code, is in the record and posted on the link, no session started, and the close
+// posts the run's run.exited, failed with no reason: the join was numbered, so the
+// run is no no_session.
 func TestAFailureAfterTheAnswerIsPosted(t *testing.T) {
 	sp, g := specGateway(t)
 	sleeps(&sp, 0)
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 	sp.Variables.Run = []string{"QORY_X=a-value"}
-	_, err := session.Run(context.Background(), sp)
+	_, err := run(context.Background(), sp)
 	var r *session.Refusal
 	if !errors.As(err, &r) || r.Code != "variable_reserved" || r.From != "" {
 		t.Fatalf("%v, want variable_reserved of the session's own", err)
 	}
-	if got := posted(g); !slices.Equal(got, []string{"dev.qory.run.refused"}) {
-		t.Errorf("posted %v", got)
+	want := []string{"dev.qory.run.started", "dev.qory.run.policy_applied", "dev.qory.session.exited", "dev.qory.run.exited"}
+	if got := posted(g); !slices.Equal(got, want) {
+		t.Fatalf("posted %v, want %v", got, want)
 	}
-	if ev := g.Events(); len(ev) == 1 && !equalJSON(data(ev[0]), map[string]any{"code": "variable_reserved", "names": []any{"QORY_X"}}) {
-		t.Errorf("posted %v", ev[0])
+	ev := g.Events()
+	if got := data(ev[2]); got["reason"] != "variable_reserved" || got["state"] != "failed" || got["exit_code"] != float64(-1) || got["duration_ms"] != float64(0) {
+		t.Errorf("session.exited %v", got)
+	}
+	if got := data(ev[3]); got["reason"] != nil || got["state"] != "failed" || got["exit_code"] != float64(-1) {
+		t.Errorf("run.exited %v", got)
 	}
 }
 
@@ -418,7 +436,7 @@ func TestTheGatewaysProxyIsOnLoopback(t *testing.T) {
 	for _, addr := range []string{"192.0.2.10:3128", "proxy.example:3128"} {
 		sp, g := specGateway(t)
 		g.SetDiscoveryProxy(addr)
-		_, err := session.Run(context.Background(), sp)
+		_, err := run(context.Background(), sp)
 		if err == nil || !strings.Contains(err.Error(), "no address on loopback") {
 			t.Errorf("%s: %v", addr, err)
 		}
@@ -438,7 +456,7 @@ func TestNoTextNamesTheLinksURL(t *testing.T) {
 		a["run_id"] = "0191f2a4-3c5e-7b8d-9e0f-000000000000"
 		return linktest.Reply{Status: 200, Body: a}
 	})
-	_, err := session.Run(context.Background(), sp)
+	_, err := run(context.Background(), sp)
 	if err == nil || strings.Contains(err.Error(), "localhost") || !strings.Contains(err.Error(), "the run answer at the gateway") {
 		t.Errorf("an answer for another run: %v", err)
 	}
@@ -454,7 +472,7 @@ func TestNoTextNamesTheLinksURL(t *testing.T) {
 		return linktest.Reply{Status: 200}
 	})
 	g.OnReload(func(string) linktest.Reply { return linktest.Reply{Status: 200, Body: []byte("not json")} })
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()

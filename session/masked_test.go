@@ -27,7 +27,7 @@ const maskedURL = "http://qory:qory-proxy-password@127.0.0.1:"
 
 // printedEnv sets the spec to run sh with the script, after it writes its environment
 // to a file, and returns that file.
-func printedEnv(t *testing.T, sp *session.Spec, script string) string {
+func printedEnv(t *testing.T, sp *runSpec, script string) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "env")
 	sp.Forwarder = nil
@@ -75,7 +75,7 @@ func noPassword(t *testing.T, res *session.Result, secret string) string {
 func TestOutputLogHasNoForwarderPasswordOnPipes(t *testing.T) {
 	sp := spec(t)
 	envFile := printedEnv(t, &sp, "env")
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestOutputLogHasNoForwarderPasswordOnATerminal(t *testing.T) {
 	sp := spec(t)
 	sp.Interactive = true
 	envFile := printedEnv(t, &sp, "env")
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestOutputLogHasNoForwarderPasswordOnATerminal(t *testing.T) {
 func TestOutputLogHasNoBasicFormOfTheForwarderPassword(t *testing.T) {
 	sp := spec(t)
 	envFile := printedEnv(t, &sp, `pw=${HTTP_PROXY#http://qory:}; pw=${pw%@*}; printf 'Proxy-Authorization: Basic %s\n' "$(printf 'qory:%s' "$pw" | base64)"`)
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,16 +126,16 @@ func TestOutputLogHasNoBasicFormOfTheForwarderPassword(t *testing.T) {
 func TestAnOutputRecordHasNoForwarderPassword(t *testing.T) {
 	sp := spec(t)
 	envFile := printedEnv(t, &sp, `printf '{"type":"result","subtype":"success","session_id":"fake","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0.01,"result":"HTTP_PROXY=%s"}\n' "$HTTP_PROXY"`)
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	noPassword(t, res, forwarderPassword(t, envFile))
-	r := ofType(events(t, res), "dev.qory.session.result")
+	r := ofType(events(t, res), "dev.qory.runtime.result")
 	if len(r) != 1 {
-		t.Fatalf("session.result %v", r)
+		t.Fatalf("runtime.result %v", r)
 	}
 	if got, _ := data(r[0])["result"].(string); !strings.HasPrefix(got, "HTTP_PROXY="+maskedURL) {
-		t.Errorf("session.result's result %q", got)
+		t.Errorf("runtime.result's result %q", got)
 	}
 }

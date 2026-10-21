@@ -44,30 +44,43 @@ type pair struct{ find, put []byte }
 // user:ProxyPassword. An empty password is left out; with none, Proxy is nil.
 func Proxy(user string, passwords ...string) *Masker {
 	m := &Masker{}
-	stand := []byte(user + ":" + ProxyPassword)
 	for _, p := range passwords {
-		if p == "" {
-			continue
-		}
-		m.addForm([]byte(p), []byte(ProxyPassword), same)
-		pair := []byte(user + ":" + p)
-		// A padded form comes first: at the same place the longest find wins, so a copy
-		// with its padding gets the placeholder's.
-		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
-			find := make([]byte, enc.EncodedLen(len(pair)))
-			enc.Encode(find, pair)
-			put := make([]byte, enc.EncodedLen(len(stand)))
-			enc.Encode(put, stand)
-			m.addForm(find, put, same)
-			clear(find)
-		}
-		clear(pair)
+		m.AddProxy(user, p)
 	}
 	if len(m.pairs) == 0 {
 		return nil
 	}
 	return m
 }
+
+// AddProxy adds the password of a proxy URL with the user name user, in the forms
+// [Proxy] replaces: the password as it is, and the base64 of user:password, each
+// replaced with the same form of ProxyPassword. An empty password adds nothing. A run
+// keeps one Masker and adds each forwarder's password as the forwarder is made, before
+// anything masks with it.
+func (m *Masker) AddProxy(user, password string) {
+	if password == "" {
+		return
+	}
+	stand := []byte(user + ":" + ProxyPassword)
+	m.addForm([]byte(password), []byte(ProxyPassword), same)
+	pair := []byte(user + ":" + password)
+	// A padded form comes first: at the same place the longest find wins, so a copy
+	// with its padding gets the placeholder's.
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
+		find := make([]byte, enc.EncodedLen(len(pair)))
+		enc.Encode(find, pair)
+		put := make([]byte, enc.EncodedLen(len(stand)))
+		enc.Encode(put, stand)
+		m.addForm(find, put, same)
+		clear(find)
+	}
+	clear(pair)
+}
+
+// Empty reports whether the masker has no find: a nil one, or one no value was added
+// to.
+func (m *Masker) Empty() bool { return m == nil || len(m.pairs) == 0 }
 
 // same is b as it is, a copy.
 func same(b []byte) []byte { return bytes.Clone(b) }

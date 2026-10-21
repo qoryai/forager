@@ -30,14 +30,20 @@ The module is a library with two entry points: the gateway and the session.
   served in memory alone, to a session in the gateway's process, as `qory run` starts
   it; without it the socket serves a session in another process too. A separate
   gateway, below, serves no local link either way.
-- It then builds a [`session.Spec`](../session/session.go): the program to start, and
-  how, and the gateway it speaks to, `session.LocalGateway(g.LocalLink())`. The session
-  holds no policy, no credential and no server. It speaks to the gateway alone, over the
-  gateway's local link (the contract's
+- It then opens a run, `session.Open`, with a [`session.OpenSpec`](../session/spec.go):
+  the gateway it speaks to, `session.LocalGateway(g.LocalLink())`, the wall, and the
+  run's id. The session holds no policy, no credential and no server. It speaks to the
+  gateway alone, over the gateway's local link (the contract's
   [§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)).
-- It gets a [`session.Result`](../session/session.go) back once the runtime has exited
-  and the session's events are flushed to the gateway. Closing the gateway flushes the
-  run's stream to the server.
+- It joins a session to the run, `(*session.Run).Join`, with a
+  [`session.SessionSpec`](../session/spec.go): the program to start, and how. It gets a
+  [`session.Result`](../session/spec.go) back once the runtime has exited and the
+  gateway accepted the session's `dev.qory.session.exited`. Sessions of one run join one
+  after another: the gateway answers a join request `400` while another session of the
+  run runs.
+- It ends the run, `(*session.Run).Close`, with a `session.Outcome`, the run's state,
+  reason and exit code as the caller decides them, and gets a `session.Closed` back. Closing the
+  gateway flushes the run's stream to the server.
 
 ```go
 g, err := gateway.Start(ctx, gateway.Config{
@@ -49,18 +55,31 @@ if err != nil {                                   // no gateway, no run
 	return err
 }
 rt, err := catalog.Lookup("claude", "")           // a runtime by its name, see below
-res, err := session.Run(ctx, session.Spec{
+run, err := session.Open(ctx, session.OpenSpec{
+	Gateway: session.LocalGateway(g.LocalLink()), // reached in memory, in this process
+})
+if err != nil {                                   // the run did not open
+	return err
+}
+res, err := run.Join(ctx, session.SessionSpec{
 	Runtime:   rt,
 	Command:   "claude",
 	Args:      []string{"--settings", settings, "-p", "Reply pong."},
-	Gateway:   session.LocalGateway(g.LocalLink()), // reached in memory, in this process
 	Forwarder: []string{exe, "forward"},          // the hook command, see below
 })
+out := session.Outcome{State: "failed", ExitCode: -1} // the session did not start
+if err == nil {
+	out = session.Outcome{State: res.State, ExitCode: res.ExitCode}
+}
+closed, cerr := run.Close(ctx, out)               // closed.Dir is the record
 g.Close(ctx)                                      // delivers the runs' last events, before the exit
-if err != nil {                                   // the run did not start
+if err != nil {
 	return err
 }
-os.Exit(res.ExitCode)                             // the runtime's status; res.Dir is the record
+if cerr != nil {
+	return cerr
+}
+os.Exit(res.ExitCode)                             // the runtime's status
 ```
 
 [`session/example_test.go`](../session/example_test.go) is the example above, compiled
@@ -68,13 +87,12 @@ with the tests.
 
 ## The session and its gateway
 
-For each run the session, over the gateway's link:
+For each run the session, over the gateway's link, at `Open`:
 
 1. asks the gateway's discovery where the run request, the events and the proxy are,
    and the heartbeat interval;
 2. sends the run request: the run id, whether the run is walled, on the local link its
-   labels and what it is about, the names, never the values, of the variables it passes a value for, and,
-   behind a wall, the machine's images;
+   labels and what it is about, and, behind a wall, the machine's images;
 3. applies the run answer: on the local link the proxy secret goes to the session's
    forwarder, or behind a wall to the wall's relay, and never into the agent's
    environment; with or without a wall, the placeholders go into the agent's
@@ -82,14 +100,30 @@ For each run the session, over the gateway's link:
    trust: behind a wall the enclosure's, and without one `ca-bundle.pem` in the run
    directory, which the variables of `CAEnv` point at; behind a wall the image is the
    one in the answer; the variables the gateway sets are not the session's to set;
-4. records `dev.qory.run.started`, with the gateway's labels on the local link, and
-   `dev.qory.run.policy_applied` with the members the gateway decides, and the run's
-   variables and the harness's hosts beside them, and posts every event of the run to
-   the gateway, a heartbeat every interval among them;
+4. records `dev.qory.run.started`, `opened_by` `run`, with the gateway's labels on the
+   local link, and `dev.qory.run.policy_applied` with the members the gateway decides and
+   empty `variables`, and posts every event of the run to the gateway, a heartbeat every
+   interval among them, until `dev.qory.run.exited`;
 5. fetches the run's configuration again whenever the gateway's answers carry a new
    run-configuration digest, and records it in another `dev.qory.run.policy_applied`;
 6. ends the run when the gateway closes it: a `410` on the link, or the gateway's `400`
    to a batch.
+
+At each `Join` the session:
+
+1. sends the join request: the names, never the values, of the variables it passes a
+   value for, and the session's model credential when `ModelCredential` is set; the
+   answer has the session's number, 1 for the run's first join;
+2. records `dev.qory.session.started`, with the runtime, the command, `terminal`, the
+   image and the harness's sources, and `dev.qory.run.policy_applied` with the session's
+   variables, the credential variables and the harness's hosts;
+3. starts the runtime, records `dev.qory.session.exited` when it exits, and returns once
+   the gateway accepted that batch, or the run ended.
+
+A join the gateway refuses, `403`, records `dev.qory.session.exited` with the refusal's
+code, `failed`, `-1` and `duration_ms` 0, and returns a `*session.Refusal`. A session
+that fails after `dev.qory.session.started` and before its runtime starts, at the
+image's pull or the wall's start, records `dev.qory.session.exited` `failed` with `-1`.
 
 On the local link every batch names its run in `X-Qory-Run-Id`; the link carries no
 secret, since the session and the gateway check that the socket's peer runs as their
@@ -111,8 +145,8 @@ On the local link every connection to the proxy opens with the relay's preamble 
 run's proxy secret: without a wall the forwarder writes it, behind one the wall's relay
 does. Without a wall the agent's proxy URL is the forwarder on loopback with a password,
 `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session makes for
-the run's forwarder alone, 32 bytes from the system's random source in base64url, which
-lives as long as the run and is never logged or recorded. A connection to the forwarder
+the session's forwarder alone, 32 bytes from the system's random source in base64url,
+which lives as long as the session and is never logged or recorded. A connection to the forwarder
 carries one request, a `CONNECT` and its tunnel or one plain HTTP request and its reply,
 so every request is checked: it must carry the password in its one
 `Proxy-Authorization`, Basic, the user name ignored. The forwarder takes the header off,
@@ -232,8 +266,8 @@ agent's environment, the one it inherits among them, as it takes out the access 
 variables.
 
 ```go
-res, err := session.Run(ctx, session.Spec{
-	// …the runtime, the command and the rest, as on one machine
+run, err := session.Open(ctx, session.OpenSpec{
+	// …the wall and the rest, as on one machine
 	Gateway: session.RemoteGateway{RunKey: os.Getenv("QORY_RUN_KEY")}, // names the gateway and its keys
 })
 ```
@@ -242,7 +276,7 @@ res, err := session.Run(ctx, session.Spec{
   `gateway_url` is the one address the run key is ever sent to, and its
   `gateway_public_key` the keys the gateway must prove it holds. One it cannot read is
   no run, "QORY_RUN_KEY is not a run key: " and the part that is wrong. The run's id is
-  the run key's; a `Spec.RunID` that is another is refused, "the run id <id> is not the
+  the run key's; a `OpenSpec.RunID` that is another is refused, "the run id <id> is not the
   one QORY_RUN_KEY names, <its id>".
 - The link is TLS 1.3 alone. The session verifies the gateway's certificate chain for
   the host name of `gateway_url` against the system's roots. Every connection, the
@@ -385,6 +419,14 @@ A program that needs custom code implements the interface.
 
 ## The spec
 
+`session.OpenSpec` has the run's fields: `Gateway`, `Wall`, `CAEnv`, `Image`, `Images`,
+`ImagesAllow`, `RunsDir`, `ForagerVersion`, `RunID`, `Labels`, `About` and `Report`.
+`session.SessionSpec` has each session's: the runtime and its command, the variables,
+the mounts, the preparation and the rest below. `Harness` lists the harness's sources,
+each a `source` and a full `commit`; `dev.qory.session.started` records them, a source
+that contains `qak_` or `qrk_` as the value's phrase in its place. `ModelCredential` is
+the credential the join request asks the gateway for, for this session.
+
 - `Declared` is the egress the harness declared. The record reports it as
   `harness_hosts`, a host that contains `qak_` or `qrk_` as the value's phrase in its
   place, and it decides nothing. `nil` means no declaration.
@@ -458,20 +500,20 @@ A program that needs custom code implements the interface.
 - `SocketGrace` is how long the run socket keeps accepting after the runtime exits, so
   a hook on its last event is still read. Zero or less means 200 ms. It is for tests:
   production leaves it zero.
-- A run refused before it starts returns a `*session.Refusal`, with the contract's code
-  and the names it concerns. `errors.As` finds it.
+- A run or a join refused before it starts returns a `*session.Refusal`, with the
+  contract's code and the names it concerns. `errors.As` finds it.
 - The stream that gets every event as well is the gateway's, `gateway.Config.Events`.
   See [the record](events.md#following-a-run).
 
 ## The result
 
-`session.Result` is what the run came to, as the session knows it:
+`session.Result` is what a session came to, as the session knows it:
 
-- `RunID`, and `Dir`, the run directory with the session's record. See
-  [the record](events.md#where-the-record-is).
-- `ExitCode` and `Signal`, the runtime's, whatever the run's state.
+- `RunID`, `Session`, the session's number, and `Dir`, the run directory with the
+  record. See [the record](events.md#where-the-record-is).
+- `ExitCode` and `Signal`, the runtime's, whatever the session's state.
 - `State` and `Reason`, the state and the reason of the session's
-  `dev.qory.run.exited`, how the run ended:
+  `dev.qory.session.exited`, how the session ended:
   - When the runtime exits by itself, its exit decides: `succeeded` on 0, `failed`
     otherwise, with no reason.
   - At `Timeout`, `cancelled` and `timeout`, with `TimedOut`, when the session's stop
@@ -481,7 +523,7 @@ A program that needs custom code implements the interface.
     caller, which ends the context, `cancelled` and `interrupted`, with `Cancelled`.
     `ExitCode` and `Signal` are the runtime's, whatever they are.
   - A runtime that exits 0 at the session's stop, at the context's end or at the
-    limit, has exited 0: `Run` records its `dev.qory.run.exited` and returns its
+    limit, has exited 0: `Join` records its `dev.qory.session.exited` and returns its
     `Result`, with no error.
   - When the gateway closed the run, `RunClosed`, the state and the reason its `410`
     says, such as `cancelled` and `no_longer_needed`; `batch_refused` as the reason after
@@ -496,16 +538,27 @@ A program that needs custom code implements the interface.
   context lasts: `Cancelled` is never true with `TimedOut` or with `RunClosed`. On
   pipes, the exit is observed when the runtime's standard output and standard error
   close: a descendant that holds them open delays it by up to the stop grace, and what
-  it writes after the grace is not kept. When it is true, `dev.qory.run.exited` is
+  it writes after the grace is not kept. When it is true, `dev.qory.session.exited` is
   `cancelled` with `interrupted`.
-- `Undelivered`, how many of the session's events the gateway did not accept; behind a
-  separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` when the gateway closed the run, and `ClosedReason` the code of the
   gateway's `410`, unchanged: `run_closed`, `stopped` when the run's starter ended it,
   `session_lost` when it heard nothing from the session for 3 heartbeat intervals, and
   `batch_refused` when it refused a batch from the run's session. The runtime was stopped as at its time limit. A server's
   `410` closes no run: Qory Apiary records what a run reports and never ends a run it
   did not start.
+
+`(*session.Run).Close` takes a `session.Outcome`, the `State`, `Reason` and `ExitCode`
+of the run's `dev.qory.run.exited`, and writes that event once. A run no session joined,
+closed `failed` with no reason, is `failed` with `no_session` and `-1`. A `timeout` is
+`cancelled` with `124`, and an `interrupted` is `cancelled`. `Close` refuses an outcome
+the contract refuses, and a close while a `Join` runs. `session.Closed` is what the run
+came to:
+
+- `RunID` and `Dir`, the run directory with the record.
+- `State`, `Reason` and `ExitCode`, those of the run's `dev.qory.run.exited`.
+- `Undelivered`, how many of the run's events the gateway did not accept; behind a
+  separate gateway they are under the run directory's `undelivered/`.
+- `RunClosed` and `ClosedReason`, as `session.Result` has them.
 
 What reached the server is the gateway's to say: `(*gateway.Gateway).Close` returns a
 `gateway.Delivery`.
@@ -546,8 +599,9 @@ with `e2e` to check them together.
     of the link, `server.HeaderRunID` the header a local batch names its run in.
   - `internal/`: `jcs`, and `importrules`, the test of the rules below.
 - `session/`: the session.
-  - `session.Run` takes a launch spec, with the gateway and the wall as values, and
-    returns the exit status. It speaks to the gateway over the gateway's link alone:
+  - `session.Open` opens a run, with the gateway and the wall as values; `Run.Join`
+    runs one session in it and returns the exit status, and `Run.Close` ends it. It
+    speaks to the gateway over the gateway's link alone:
     the local link on one machine, or a separate gateway's one address over TLS.
   - `session.Resend` sends a separate gateway what a run's session did not deliver.
   - `session.Forward` is the hook forwarder behind it.
@@ -575,7 +629,7 @@ with `e2e` to check them together.
 - `e2e/`: the conformance suite every wall adapter passes before it ships: a real
   session behind the wall, with the gateway between.
 
-`qory run` calls `session.Run` with the spec it builds from the composed home and the
+`qory run` is to call `session.Open`, `Run.Join` and `Run.Close` with the specs it builds from the composed home and the
 launch template. The hook command it installs calls `session.Forward`.
 
 ## Two invariants

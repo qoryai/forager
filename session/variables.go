@@ -75,7 +75,7 @@ func checkHarnessHome(home string) error {
 // can match no placeholder. The run request carries them, names alone, so the gateway
 // refuses a placeholder the run passes a value for, as the session did. Without a wall
 // what the run inherits is left out: a placeholder wins over an inherited value.
-func passes(spec Spec) []string {
+func passes(spec runSpec) []string {
 	seen := map[string]bool{}
 	inherited := spec.Env
 	if spec.Wall == nil {
@@ -107,7 +107,7 @@ func passes(spec Spec) []string {
 // run's bundle, Forager's own names. When the run has a start key, key, its endpoint
 // variable is one of the run's fixed names: every other value of it is left out, the
 // harness's computed ones included, and the endpoint rule does not apply.
-func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool, bundle []string, key keyed) (variables.Resolved, []string, error) {
+func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool, bundle []string, key keyed) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
 		decl = s.Secrets()
@@ -557,7 +557,7 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 // credential is not refused: its runtime may use the developer's login. The refusal is [refusal.ModelKeyMissing] with the model keys'
 // variables. Without a wall, an inherited value of one of placeholderNames reaches
 // nothing: the placeholder is set over it.
-func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, placeholderNames []string) error {
+func checkModelKey(spec runSpec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, placeholderNames []string) error {
 	if len(credentials) == 0 {
 		return nil
 	}

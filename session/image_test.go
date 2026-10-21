@@ -81,7 +81,7 @@ func TestTheImageIsTheOneTheGatewayAnswers(t *testing.T) {
 			sp, g := specGateway(t, "FAKE_EXIT=0")
 			selecting(g, c.selected)
 			sp.Wall, sp.Image, sp.Images = w, c.def, images
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,10 +94,10 @@ func TestTheImageIsTheOneTheGatewayAnswers(t *testing.T) {
 				t.Errorf("the run request's images %+v", req.Images)
 			}
 			evs := events(t, res)
-			started := data(ofType(evs, "dev.qory.run.started")[0])
+			started := data(ofType(evs, "dev.qory.session.started")[0])
 			if started["image"] != c.want.Image || fmt.Sprint(started["image_name"]) != fmt.Sprint(orNil(c.wantName)) ||
 				fmt.Sprint(started["container_runtime"]) != fmt.Sprint(orNil(c.want.Runtime)) || (started["docker"] == true) != c.want.Docker {
-				t.Errorf("run.started %v", started)
+				t.Errorf("session.started %v", started)
 			}
 			applied := data(ofType(evs, "dev.qory.run.policy_applied")[0])
 			if fmt.Sprint(applied["image"]) != fmt.Sprint(orNil(c.selected)) {
@@ -109,7 +109,7 @@ func TestTheImageIsTheOneTheGatewayAnswers(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0")
 	sp.Forwarder = nil
 	sp.Image, sp.Images = "base", images
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	if req := g.Requests()[0]; req.Wall || req.Images != nil {
@@ -140,17 +140,17 @@ func TestARunWhoseImageCannotHoldDoesNotStart(t *testing.T) {
 		}
 	}
 	for name, c := range map[string]struct {
-		change  func(*session.Spec)
+		change  func(*runSpec)
 		gateway func(*linktest.Fake)
 		want    string
 		asked   bool
 	}{
-		"no wall": {func(s *session.Spec) { s.Wall = nil }, refuse("wall_required", "image=with-docker"),
+		"no wall": {func(s *runSpec) { s.Wall = nil }, refuse("wall_required", "image=with-docker"),
 			`the policy selects the image "with-docker", which needs a wall: without one the runtime is this machine's process`, true},
-		"an image nobody defined":    {func(*session.Spec) {}, refuse("image_unknown", "nobody-defined"), "image_unknown (status 403): nobody-defined", true},
-		"a definition that is none":  {func(s *session.Spec) { s.Images = []session.Image{{Name: "with-docker", Ref: "i", Docker: true}} }, nil, "needs a runtime", false},
-		"a name defined twice":       {func(s *session.Spec) { s.Images = append(s.Images, images[0]) }, nil, "defined twice", false},
-		"a default that is no image": {func(s *session.Spec) { s.Image = "" }, nil, "wall open", true},
+		"an image nobody defined":    {func(*runSpec) {}, refuse("image_unknown", "nobody-defined"), "image_unknown (status 403): nobody-defined", true},
+		"a definition that is none":  {func(s *runSpec) { s.Images = []session.Image{{Name: "with-docker", Ref: "i", Docker: true}} }, nil, "needs a runtime", false},
+		"a name defined twice":       {func(s *runSpec) { s.Images = append(s.Images, images[0]) }, nil, "defined twice", false},
+		"a default that is no image": {func(s *runSpec) { s.Image = "" }, nil, "wall open", true},
 	} {
 		w := &failWall{}
 		sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -159,7 +159,7 @@ func TestARunWhoseImageCannotHoldDoesNotStart(t *testing.T) {
 		}
 		sp.Wall, sp.Image, sp.Images = w, "base", append([]session.Image(nil), images...)
 		c.change(&sp)
-		if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)
 		}
 		if asked := len(g.Requests()) > 0; asked != c.asked {

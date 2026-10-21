@@ -11,11 +11,11 @@ import (
 	"github.com/qoryai/forager/session/runtimes"
 )
 
-// writtenPlaces are the places a walled run could have written, as Spec.Written lists
+// writtenPlaces are the places a walled run could have written, as SessionSpec.Written lists
 // them, the writable binds of the other walled runs in the registry and, behind a wall,
 // the run's writable binds: the places of the plan the enclosure binds writable, the
 // workspace among them, and the wall's writable binds.
-func writtenPlaces(spec Spec, runID string, plan mountPlan, own []bindSource) ([]string, error) {
+func writtenPlaces(spec runSpec, runID string, plan mountPlan, own []bindSource) ([]string, error) {
 	others, err := othersWritable(runID)
 	if err != nil {
 		return nil, err

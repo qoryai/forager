@@ -45,7 +45,7 @@ exec "$@"
 
 // checkPreparation refuses a preparation a run cannot have: one without a Wall, one
 // whose program is empty, and one with a NUL in a word.
-func checkPreparation(spec Spec) error {
+func checkPreparation(spec runSpec) error {
 	switch {
 	case len(spec.Preparation) == 0:
 		return nil

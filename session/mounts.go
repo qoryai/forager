@@ -27,7 +27,7 @@ import (
 // case, and a name with *, ? or [ in it is a pattern of names, as the private
 // directories of the tools' sockets are. The comparison is by whole components: /a/bc
 // does not lie inside /a/b. A path that cannot be resolved, such as one through a
-// directory this user cannot search, is empty here; [Run] refuses a mount of one.
+// directory this user cannot search, is empty here; [Run.Join] refuses a mount of one.
 func Overlap(mount, path string) string {
 	how, _ := overlap(mount, path)
 	return how
@@ -181,7 +181,7 @@ type foragerFile struct {
 // gateway's, and every one Forager knows itself. The gateway's programs are every one
 // the machine defines, not only the ones the run's policy selects, because a server's
 // policy selects after the check, and a reload may select another credential.
-func foragerFiles(spec Spec) []foragerFile {
+func foragerFiles(spec runSpec) []foragerFile {
 	var out []foragerFile
 	for _, p := range spec.ForagerFiles {
 		out = append(out, foragerFile{p, "one of Forager's files"})
@@ -518,7 +518,7 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 
 // checkMounts refuses a caller's Forager file that is not an absolute path and, behind a
 // wall, the places the run lists that it cannot bind as they are, and returns what the
-// enclosure binds. The places are the run's own, Spec.Mounts and the workspace; the run
+// enclosure binds. The places are the run's own, SessionSpec.Mounts and the workspace; the run
 // directory, read-only, and the hook socket's directory are Forager's, which it
 // keeps apart from every caller's place: the runs directory is one of Forager's
 // files, and so is where the sockets are made. A refusal's first name is always one of
@@ -535,7 +535,7 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 //     part of a read-only one writes what the run shows read-only. Its names are the
 //     inner place and the outer one, in that order.
 //   - mount_through_link: a place, of either mode, whose path goes through a link
-//     inside a writable place, or inside a place of Spec.Written, and does not resolve
+//     inside a writable place, or inside a place of SessionSpec.Written, and does not resolve
 //     into it: the agent that writes the link chooses what is bound. Its names are the
 //     place, the link and the writable or written place, in that order.
 //
@@ -543,7 +543,7 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 // reaches it through the outer one, at the same path. So no bound place is reached
 // through a directory another bound place lets the agent write. The workspace is
 // writable, and is the working directory inside, in one of the binds.
-func checkMounts(spec Spec, runDir string) (mountPlan, error) {
+func checkMounts(spec runSpec, runDir string) (mountPlan, error) {
 	for _, p := range spec.ForagerFiles {
 		if strings.ContainsRune(p, 0) {
 			return mountPlan{}, errors.New("a Forager file's path holds a NUL byte")
@@ -623,7 +623,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 			}
 		}
 	}
-	// So is a place whose path goes through a link inside a place of Spec.Written and
+	// So is a place whose path goes through a link inside a place of SessionSpec.Written and
 	// does not resolve into it: an agent of an earlier walled run, ended or still going,
 	// may have written the link, and it would choose what is bound.
 	for _, w := range spec.Written {
@@ -694,16 +694,24 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	if err := dirInBinds(plan.Dir, plan.Mounts); err != nil {
 		return mountPlan{}, err
 	}
-	run, err := source(runDir, "the run directory "+pathShown(runDir), kindRun, false)
+	run, err := runDirSource(spec.OpenSpec, runDir)
 	if err != nil {
 		return mountPlan{}, err
 	}
 	plan.Mounts = append(plan.Mounts, wall.Mount{Path: runDir, ReadOnly: true})
-	// The run directory is named by the runs directory the caller passed, in which the
-	// session makes it.
-	run.Path = spec.RunsDir
 	plan.sources = append(plan.sources, run)
 	return plan, nil
+}
+
+// runDirSource is the run directory as the registry of walled runs lists it: named by
+// the runs directory the caller passed, in which the open makes it.
+func runDirSource(spec OpenSpec, runDir string) (bindSource, error) {
+	run, err := source(runDir, "the run directory "+pathShown(runDir), kindRun, false)
+	if err != nil {
+		return bindSource{}, err
+	}
+	run.Path = spec.RunsDir
+	return run, nil
 }
 
 // throughLink is the refusal of a place whose path goes through a link inside the

@@ -96,7 +96,7 @@ conventions, beyond what `revive` can check:
   does.
 - Say what the code does, including what it refuses, what it overwrites, what it leaves
   behind, and which errors a caller matches with `errors.Is` or `errors.As`.
-- Link identifiers as `[Policy]`, `[session.Run]`. Indent code blocks with a tab, write
+- Link identifiers as `[Policy]`, `[session.Open]`. Indent code blocks with a tab, write
   lists as two spaces and a dash, and wrap at 90 columns.
 
 One vocabulary, no synonyms: **run** is one execution of one session under Forager,

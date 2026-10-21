@@ -169,7 +169,7 @@ and for each name the run takes the value of the highest that sets it:
 - The deny list leaves out a value of the server, the run, the machine or the harness's
   defaults. The list is the contract's
   [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
-  `denies`, and `Spec.Variables.Deny`. It holds the session's names, the proxy's, the
+  `denies`, and `SessionSpec.Variables.Deny`. It holds the session's names, the proxy's, the
   trust store's, Docker's, `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` and
   `HOME`. The built-in list leaves out a value the harness computes as well; the
   runtime's `denies` and `Variables.Deny` leave those in.
@@ -178,7 +178,7 @@ and for each name the run takes the value of the highest that sets it:
   credential is read from, is left out. A node's value of a declared one reaches the
   runtime.
 - A run without a wall takes none of the server's variables, unless
-  `Spec.Variables.Unwalled` is `session.UnwalledAccept`. The run's variables,
+  `SessionSpec.Variables.Unwalled` is `session.UnwalledAccept`. The run's variables,
   `qory run --env`, apply with or without a wall.
 - A value that loses is left out, and the run starts.
 
@@ -255,7 +255,7 @@ that applies is one the endpoint rule kept. A name
 that contains `qak_` or `qrk_` in any case is sent as `(a name that contains an access
 key secret)`, or `(a name that contains a run key)` when it contains `qrk_` and no
 `qak_`. A fixed name, and a name the run inherits, is listed only beside a value of the
-server, the run, the machine or the harness's defaults. `Spec.OnVariables` receives the
+server, the run, the machine or the harness's defaults. `SessionSpec.OnVariables` receives the
 same list, as `session.Applied`, with each name as it is.
 
 ## A control plane

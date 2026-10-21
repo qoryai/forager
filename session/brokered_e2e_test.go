@@ -40,7 +40,7 @@ var brokeredCredential = gateway.Credential{Name: "model", Env: brokeredSource, 
 // brokeredSpec is a spec whose agent writes its environment to the file it returns,
 // that inherits a value of ANTHROPIC_API_KEY, on a machine whose authorities are in a
 // file of the test's.
-func brokeredSpec(t *testing.T) (session.Spec, string) {
+func brokeredSpec(t *testing.T) (runSpec, string) {
 	t.Helper()
 	t.Setenv(brokeredSource, brokeredValue)
 	roots := filepath.Join(t.TempDir(), "cert.pem")
@@ -99,11 +99,11 @@ func TestAnUnwalledRunThroughARealGatewayIsBrokered(t *testing.T) {
 		Credentials: []gateway.Credential{brokeredCredential},
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.anthropic.com"}},
 			Credentials: []gateway.PolicyCredential{{Name: "model"}}}})
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pa := ofType(events(t, res), "dev.qory.run.policy_applied")
+	pa := joinApplied(events(t, res))
 	if len(pa) != 1 || len(data(pa[0])["credentials"].([]any)) != 1 {
 		t.Errorf("policy_applied %v", pa)
 	}
@@ -141,11 +141,11 @@ func TestAnUnwalledRunThroughARealSeparateGatewayIsBrokered(t *testing.T) {
 	t.Cleanup(session.TrustRemote(url, caFile))
 	sp, env := brokeredSpec(t)
 	sp.Gateway = session.RemoteGateway{RunKey: a.runKey(t, sp.RunID, url, a.key)}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pa := ofType(events(t, res), "dev.qory.run.policy_applied")
+	pa := joinApplied(events(t, res))
 	if len(pa) != 1 || len(data(pa[0])["credentials"].([]any)) != 1 {
 		t.Errorf("policy_applied %v", pa)
 	}

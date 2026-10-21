@@ -158,20 +158,23 @@ func TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy(t *testing.T) {
 	}
 	out := filepath.Join(t.TempDir(), "agent.json")
 	var stdout, stderr bytes.Buffer
-	res, err := session.Run(context.Background(), session.Spec{
-		Runtime: rt,
-		Command: os.Args[0],
-		Env: []string{envAgent + "=" + out, envAgentURL + "=https://" + o.host + "/v1/models",
-			"ANTHROPIC_API_KEY=inherited-fake-key", "PATH=" + os.Getenv("PATH")},
-		Dir:            t.TempDir(),
+	res, err := runOne(context.Background(), runSpec{OpenSpec: session.OpenSpec{
 		RunsDir:        runs,
 		RunID:          event.NewRunID(),
-		Stdin:          strings.NewReader(""),
-		Stdout:         &stdout,
-		Stderr:         &stderr,
 		Gateway:        session.LocalGateway(g.LocalLink()),
 		ForagerVersion: "test",
 		Report:         func(l string) { t.Log("report:", l) },
+	},
+		SessionSpec: session.SessionSpec{
+			Runtime: rt,
+			Command: os.Args[0],
+			Env: []string{envAgent + "=" + out, envAgentURL + "=https://" + o.host + "/v1/models",
+				"ANTHROPIC_API_KEY=inherited-fake-key", "PATH=" + os.Getenv("PATH")},
+			Dir:    t.TempDir(),
+			Stdin:  strings.NewReader(""),
+			Stdout: &stdout,
+			Stderr: &stderr,
+		},
 	})
 	if err != nil {
 		t.Fatalf("the run: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())

@@ -442,7 +442,7 @@ func Run(t *testing.T, o Options) {
 	}
 	var preparation any
 	for _, e := range r.events {
-		if e["type"] == "dev.qory.run.started" {
+		if e["type"] == "dev.qory.session.started" {
 			preparation = e["data"].(map[string]any)["preparation"]
 		}
 	}
@@ -450,11 +450,17 @@ func Run(t *testing.T, o Options) {
 		p.PreparedErr == "" && pr.Allowed == 200 && pr.Net != "" && pr.Net == p.Namespaces["net"] && pr.Mnt == p.Namespaces["mnt"] && pr.UID == p.UID &&
 			fmt.Sprint(pr.Args) == fmt.Sprint(preparationWords) && len(egress) > 1 && egress[0] == originHost+" allowed "+originHost &&
 			fmt.Sprint(preparation) == fmt.Sprint(append([]string{o.Probe, modePrepare}, preparationWords...)),
-		fmt.Sprintf("the probe found %+v (%s) in the workspace as it started, beside the probe's namespaces %v and uid %d; the first egress %v; run.started's preparation %v", *pr, p.PreparedErr, p.Namespaces, p.UID, egress, preparation))
+		fmt.Sprintf("the probe found %+v (%s) in the workspace as it started, beside the probe's namespaces %v and uid %d; the first egress %v; session.started's preparation %v", *pr, p.PreparedErr, p.Namespaces, p.UID, egress, preparation))
+	var wallName any
 	for _, e := range r.events {
 		if e["type"] == "dev.qory.run.started" {
+			wallName = e["data"].(map[string]any)["wall"]
+		}
+	}
+	for _, e := range r.events {
+		if e["type"] == "dev.qory.session.started" {
 			d := e["data"].(map[string]any)
-			check("the record names the wall", d["wall"] == o.Wall.Name() && d["image"] == o.Image, d)
+			check("the record names the wall", wallName == o.Wall.Name() && d["image"] == o.Image, d)
 			if o.Runtime != "" || o.Docker {
 				check("the record names the image the policy selected, its runtime and its Docker", d["image_name"] == "suite" && fmt.Sprint(d["container_runtime"]) == fmt.Sprint(orNil(o.Runtime)) && (d["docker"] == true) == o.Docker, d)
 			}
@@ -795,7 +801,7 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 		}
 		var started map[string]any
 		for _, e := range r.events {
-			if e["type"] == "dev.qory.run.started" {
+			if e["type"] == "dev.qory.session.started" {
 				started = e["data"].(map[string]any)
 			}
 		}
@@ -803,7 +809,7 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 		written, werr := os.ReadFile(filepath.Join(r.dir, "probe-was-here"))
 		if r.probe.Workdir != "/workspace" || r.probe.HostWorkspace || werr != nil || string(written) != "inside" || r.res.ExitCode != 7 ||
 			started["dir"] != "/workspace" || started["image"] != o.Reference || started["image_name"] != nil || fetched < 0 || started["image_fetch_ms"] == nil {
-			t.Errorf("the probe ran in %q, the workspace's path here seen inside %v, wrote %q (%v), exited %d; run.started %v",
+			t.Errorf("the probe ran in %q, the workspace's path here seen inside %v, wrote %q (%v), exited %d; session.started %v",
 				r.probe.Workdir, r.probe.HostWorkspace, written, werr, r.res.ExitCode, started)
 		}
 		if o.Leftovers != nil {
@@ -935,28 +941,31 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		Version:     "walltest",
 		Report:      report,
 	}, runs)
-	spec := session.Spec{
-		Runtime:        rt,
-		Command:        o.Probe,
-		Args:           []string{modeProbe, "--settings", settings},
-		Env:            env,
-		Dir:            dir,
+	spec := runSpec{OpenSpec: session.OpenSpec{
 		RunsDir:        runs,
-		Interactive:    interactive,
-		Stdin:          strings.NewReader(""),
-		Stdout:         &out,
-		Stderr:         &errs,
 		Gateway:        g,
-		Forwarder:      o.Forwarder,
-		Exec:           o.Exec,
 		Wall:           o.Wall,
 		Image:          o.Image,
 		Images:         images,
 		ImagesAllow:    v.allow,
 		RunID:          v.runID,
-		Preparation:    append([]string{o.Probe, modePrepare}, preparationWords...),
 		ForagerVersion: "walltest",
 		Report:         report,
+	},
+		SessionSpec: session.SessionSpec{
+			Runtime:     rt,
+			Command:     o.Probe,
+			Args:        []string{modeProbe, "--settings", settings},
+			Env:         env,
+			Dir:         dir,
+			Interactive: interactive,
+			Stdin:       strings.NewReader(""),
+			Stdout:      &out,
+			Stderr:      &errs,
+			Forwarder:   o.Forwarder,
+			Exec:        o.Exec,
+			Preparation: append([]string{o.Probe, modePrepare}, preparationWords...),
+		},
 	}
 	if v.started != nil {
 		going, stop := context.WithCancel(ctx)
@@ -964,7 +973,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		go func() { defer close(done); v.started(going) }()
 		defer func() { stop(); <-done }()
 	}
-	res, err := session.Run(ctx, spec)
+	res, err := runOne(ctx, spec)
 	closeGateway()
 	if err != nil {
 		return result{}, fmt.Errorf("the run did not start: %w\nstdout:\n%s\nstderr:\n%s", err, out.String(), errs.String())

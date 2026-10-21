@@ -61,7 +61,8 @@ func askContainers(
 }
 
 // registerPause, when not nil, is called between a run's check and the writing of its
-// entry, under the registry's lock: a test holds a run there.
+// entry, under the registry's lock, at the open and at each join: a test holds a run
+// there.
 var registerPause func(runID string)
 
 // walledEntry is what a walled run's file in the registry holds.
@@ -227,6 +228,20 @@ func (r *registration) update(binds []bindSource) error {
 	if err := checkShared(r.docker, r.dir, r.runID, binds); err != nil {
 		return err
 	}
+	if registerPause != nil {
+		registerPause(r.runID)
+	}
+	return r.write(binds)
+}
+
+// rewrite puts binds in the run's entry, under the registry's lock, with no check:
+// what the run's entry lists once a session's places are no longer bound.
+func (r *registration) rewrite(binds []bindSource) error {
+	unlock, err := lockRegistry(r.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return r.write(binds)
 }
 

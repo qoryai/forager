@@ -27,7 +27,7 @@ import (
 // environment to envFile and asks for allowedURL through its proxy; what the session
 // reported is in reports.
 type sepRun struct {
-	sp      session.Spec
+	sp      runSpec
 	envFile string
 	stderr  *syncBuffer
 
@@ -47,19 +47,28 @@ func newSepRun(t *testing.T, gw session.Gateway) *sepRun {
 			t.Logf("stdout:\n%s\nstderr:\n%s", stdout.String(), r.stderr.String())
 		}
 	})
-	r.sp = session.Spec{
-		Command: "/bin/sh", Args: []string{"-c", `env > "$0"; exec "$1"`, r.envFile, os.Args[0]},
-		Env: []string{"FAKE_RUNTIME=1", "FAKE_EXIT=0", "FAKE_ALLOWED_URL=" + allowedURL, "PATH=" + os.Getenv("PATH")},
-		Dir: t.TempDir(), RunsDir: filepath.Join(t.TempDir(), "runs"),
-		Stdin: strings.NewReader(""), Stdout: stdout, Stderr: r.stderr,
-		Gateway: gw, ForagerVersion: "test", Exec: []string{os.Args[0], "exec"},
-		Labels: map[string]string{"forge": "example-forge", "repository": "example-namespace/project"},
-		About:  &session.About{Title: "Example title"},
+	r.sp = runSpec{OpenSpec: session.OpenSpec{
+		RunsDir:        filepath.Join(t.TempDir(), "runs"),
+		Gateway:        gw,
+		ForagerVersion: "test",
+		Labels:         map[string]string{"forge": "example-forge", "repository": "example-namespace/project"},
+		About:          &session.About{Title: "Example title"},
 		Report: func(l string) {
 			t.Log("the session reported:", l)
 			r.mu.Lock()
 			r.reports = append(r.reports, l)
 			r.mu.Unlock()
+		},
+	},
+		SessionSpec: session.SessionSpec{
+			Command: "/bin/sh",
+			Args:    []string{"-c", `env > "$0"; exec "$1"`, r.envFile, os.Args[0]},
+			Env:     []string{"FAKE_RUNTIME=1", "FAKE_EXIT=0", "FAKE_ALLOWED_URL=" + allowedURL, "PATH=" + os.Getenv("PATH")},
+			Dir:     t.TempDir(),
+			Stdin:   strings.NewReader(""),
+			Stdout:  stdout,
+			Stderr:  r.stderr,
+			Exec:    []string{os.Args[0], "exec"},
 		},
 	}
 	return r
@@ -86,11 +95,11 @@ func TestASessionRunsBehindASeparateGateway(t *testing.T) {
 	key := g.RunKey(t, runID)
 	r := newSepRun(t, session.RemoteGateway{RunKey: key})
 	r.sp.Env = append(r.sp.Env, session.EnvRunKey+"="+key)
-	res, err := session.Run(context.Background(), r.sp)
+	res, closed, err := runClosed(context.Background(), r.sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(res.Dir) != runID || res.State != "succeeded" || res.Undelivered != 0 {
+	if filepath.Base(res.Dir) != runID || res.State != "succeeded" || closed.Undelivered != 0 {
 		t.Errorf("result %+v, want the run %s", res, runID)
 	}
 	if len(g.Bearers()) < 3 {
@@ -147,7 +156,7 @@ func TestARunKeyTheSessionCannotReadIsNoRun(t *testing.T) {
 			t.Fatalf("%s: the parse %v", name, perr)
 		}
 		r := newSepRun(t, session.RemoteGateway{RunKey: bad})
-		_, err := session.Run(context.Background(), r.sp)
+		_, err := run(context.Background(), r.sp)
 		if want := "QORY_RUN_KEY is not a run key: " + re.Reason; err == nil || err.Error() != want {
 			t.Errorf("%s: %v, want %q", name, err, want)
 		}
@@ -157,7 +166,7 @@ func TestARunKeyTheSessionCannotReadIsNoRun(t *testing.T) {
 	}
 	r := newSepRun(t, session.RemoteGateway{RunKey: key})
 	r.sp.RunID = event.NewRunID()
-	if _, err := session.Run(context.Background(), r.sp); err == nil || !strings.HasPrefix(err.Error(), "the run id "+r.sp.RunID+" is not the one QORY_RUN_KEY names, ") {
+	if _, err := run(context.Background(), r.sp); err == nil || !strings.HasPrefix(err.Error(), "the run id "+r.sp.RunID+" is not the one QORY_RUN_KEY names, ") {
 		t.Errorf("another run id: %v", err)
 	}
 	if len(g.Bearers()) != 0 || g.Bound() != 0 {
@@ -179,7 +188,7 @@ func TestAGatewayThatCannotProveItsKeyStartsNoRun(t *testing.T) {
 		g := startRemote(t)
 		g.SetProof(p)
 		r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())})
-		_, err := session.Run(context.Background(), r.sp)
+		_, err := run(context.Background(), r.sp)
 		if want := "the gateway at " + g.URL() + " could not prove it holds a key the run key names"; err == nil || err.Error() != want {
 			t.Errorf("%s: %v, want %q", name, err, want)
 		}
@@ -197,7 +206,7 @@ func TestAnAnswerUnderAnotherKeyStartsNoRun(t *testing.T) {
 		g := startRemote(t)
 		g.AnswerUnderUnnamedKey(t, unsigned)
 		r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())})
-		_, err := session.Run(context.Background(), r.sp)
+		_, err := run(context.Background(), r.sp)
 		if want := "the gateway at " + g.URL() + " answered under a key the run key does not name"; err == nil || err.Error() != want {
 			t.Errorf("unsigned %v: %v, want %q", unsigned, err, want)
 		}
@@ -283,7 +292,7 @@ func TestOutputLogHasNoForwarderPasswordBehindASeparateGateway(t *testing.T) {
 	r := newSepRun(t, session.RemoteGateway{RunKey: key})
 	r.sp.Env = append(r.sp.Env, session.EnvRunKey+"="+key)
 	r.sp.Args = []string{"-c", `env > "$0"; env; exec "$1"`, r.envFile, os.Args[0]}
-	res, err := session.Run(context.Background(), r.sp)
+	res, err := run(context.Background(), r.sp)
 	if err != nil {
 		t.Fatal(err)
 	}

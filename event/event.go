@@ -41,11 +41,6 @@ const (
 	SessionExited  = "dev.qory.session.exited"
 )
 
-// OpenedBySession is what opened a run, the opened_by of dev.qory.run.started: a
-// session around a runtime. The contract no longer accepts it; the session writes it
-// until it opens the run with Open.
-const OpenedBySession = "session"
-
 // OpenedByRun is the opened_by of dev.qory.run.started that the contract accepts:
 // Forager's open of a run at its gateway, before any session joins it.
 const OpenedByRun = "run"

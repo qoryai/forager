@@ -142,28 +142,31 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 		Version:     "walltest",
 		Report:      func(l string) { t.Log("report:", l) },
 	}, runs)
-	spec := session.Spec{
-		Runtime: rt,
-		Command: "claude",
-		Args:    []string{"-p", "Reply with one word."},
-		Env: []string{
-			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-			"DISABLE_AUTOUPDATER=1",
-			// Empty means unset: Claude Code reads ANTHROPIC_AUTH_TOKEN first and the
-			// other credential's variable beside the stand-in's.
-			"ANTHROPIC_AUTH_TOKEN=",
-			c.unset + "=",
-		},
-		Dir:            dir,
+	spec := runSpec{OpenSpec: session.OpenSpec{
 		RunsDir:        runs,
 		Gateway:        g,
-		Forwarder:      []string{wall.HelperPath, "forward"},
-		Exec:           append([]string{wall.HelperPath}, ExecArgs...),
 		Wall:           &wall.Docker{Command: r.command, Helper: r.helper, RelayArgs: RelayArgs, NestArgs: NestArgs},
 		Image:          r.image,
 		ForagerVersion: "walltest",
 		Report:         func(l string) { t.Log("report:", l) },
+	},
+		SessionSpec: session.SessionSpec{
+			Runtime: rt,
+			Command: "claude",
+			Args:    []string{"-p", "Reply with one word."},
+			Env: []string{
+				"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+				"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+				"DISABLE_AUTOUPDATER=1",
+				// Empty means unset: Claude Code reads ANTHROPIC_AUTH_TOKEN first and the
+				// other credential's variable beside the stand-in's.
+				"ANTHROPIC_AUTH_TOKEN=",
+				c.unset + "=",
+			},
+			Dir:       dir,
+			Forwarder: []string{wall.HelperPath, "forward"},
+			Exec:      append([]string{wall.HelperPath}, ExecArgs...),
+		},
 	}
 	var out, errs syncBuffer
 	spec.Stdout, spec.Stderr = &out, &errs
@@ -191,7 +194,7 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 
 	var res *session.Result
 	if !interactive {
-		if res, err = session.Run(ctx, spec); err != nil {
+		if res, err = runOne(ctx, spec); err != nil {
 			t.Fatalf("the run did not start: %v\nstderr:\n%s", err, errs.String())
 		}
 	} else {
@@ -325,7 +328,7 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 // drive runs an interactive session: it waits for Claude Code's input, fails at once
 // when Claude Code shows its approval prompt for the API key instead, types the prompt,
 // waits for the recorder's answer on the screen, and leaves with /exit.
-func (r claudeRun) drive(t *testing.T, ctx context.Context, cancel context.CancelFunc, spec session.Spec, out *syncBuffer) *session.Result {
+func (r claudeRun) drive(t *testing.T, ctx context.Context, cancel context.CancelFunc, spec runSpec, out *syncBuffer) *session.Result {
 	t.Helper()
 	in, keys := io.Pipe()
 	spec.Stdin = in
@@ -335,7 +338,7 @@ func (r claudeRun) drive(t *testing.T, ctx context.Context, cancel context.Cance
 	}
 	done := make(chan ended, 1)
 	go func() {
-		res, err := session.Run(ctx, spec)
+		res, err := runOne(ctx, spec)
 		keys.Close()
 		done <- ended{res, err}
 	}()
