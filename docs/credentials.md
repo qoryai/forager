@@ -193,7 +193,10 @@ If the runtime reads no key for the format or the `auth`, the run stops with
 A run may have several model keys, from `forager.yaml` and from the control plane. The
 gateway holds every one and sets only the start key, the one the runtime starts with.
 The proxy sets the start key only on a request to its endpoint's host that carries its
-placeholder. With two or more model keys, the run configuration's `model_credential`
+placeholder. Under `enforce`, a request to a host that only model keys other than the running
+session's cover passes with no key set and needs no path rule, since a model provider
+is an integration that a policy cannot deny. The proxy sets no value of such a key, and
+replaces each model key's value in the answers from the key's host. With two or more model keys, the run configuration's `model_credential`
 names the start key; without it, the run stops with `run_configuration_invalid`. With
 one, that one is the start key.
 

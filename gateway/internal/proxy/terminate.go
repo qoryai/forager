@@ -234,6 +234,19 @@ func (t *terminator) credentialFor(host, clean string) (c *Credential, rule stri
 	return nil, ""
 }
 
+// unusedModelKeys reports whether every credential for the host is a model key the
+// proxy does not set, one that is not the running session's: the proxy sets none of
+// them, and replaces each one's value in every answer from the host.
+func (t *terminator) unusedModelKeys(host string) bool {
+	creds := t.credentials(host)
+	for _, c := range creds {
+		if c.Placeholder == "" || t.p.setsModelKey(c.Name) {
+			return false
+		}
+	}
+	return len(creds) > 0
+}
+
 // credentialNames are the names of the credentials that are for the host, in their
 // order; none when none is.
 func (t *terminator) credentialNames(host string) []string {
@@ -303,7 +316,8 @@ func (t *terminator) covers(host string) bool {
 // matched as its rule. On a host with credentials, the credential whose paths match is
 // set ([terminator.credentialFor]); a path no credential's paths match gets none, and
 // passes under enforce only when the run policy's path rules list the host and every
-// side that lists it matches the path. The credential is set only on a path its paths match, whatever the
+// side that lists it matches the path, or when only unused model keys cover the host
+// ([terminator.unusedModelKeys]) and every side that lists it matches the path. The credential is set only on a path its paths match, whatever the
 // mode: observing is no reason to send a credential to a path nobody configured.
 func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule string, allowed bool, c *Credential) {
 	clean, ok := policy.CleanPath(escaped)
@@ -330,8 +344,10 @@ func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule s
 		switch {
 		case c == nil:
 			// Only the run policy's path rules let a request pass with no credential;
-			// each other side that lists the host has matched it above.
-			if _, _, listed := policy.HostPaths(t.paths, host); !listed {
+			// each other side that lists the host has matched it above. A host only
+			// unused model keys cover is a model provider's, an integration's, which a
+			// policy cannot deny: it needs no path rule.
+			if _, _, listed := policy.HostPaths(t.paths, host); !listed && !t.unusedModelKeys(host) {
 				allowed, rule = false, ""
 			}
 		case rule == "":

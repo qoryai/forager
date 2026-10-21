@@ -878,7 +878,12 @@ the key's header, or in `Authorization` with the key's scheme. A model key's
 placeholder is `qory-`, the key's name and `-sets-the-credential-outside-the-enclosure`,
 such as `qory-model-sets-the-credential-outside-the-enclosure`, so two model keys of a
 run have two placeholders. A request to the host without the placeholder gets no key.
-The run answer's `model_credential` is the start key's name (§The gateway's link).
+Under `enforce`, a request to a host that only model keys other than the running
+session's cover passes with no key set and needs no path rule: a model provider is an
+integration, so a policy cannot deny its hosts. The proxy sets no value of such a key,
+and replaces each model key's value with its placeholder in every answer from the key's
+host. The run answer's `model_credential` is the start key's name (§The gateway's
+link).
 
 **The variable of a model key.** The session gives the start key to the runtime. The
 run answer's `credential_hosts` has each model key's `format`, `endpoint` and `auth`

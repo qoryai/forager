@@ -553,7 +553,11 @@ release may change what an existing document does, and says so under Upgrading.
 - The gateway holds every model key of a run and its proxy sets only the start key,
   on a request to the key's endpoint host that carries the key's placeholder in the
   key's header or scheme. Two model keys may claim one host. Under `enforce`, the
-  run's allow list must cover a model key's endpoint host.
+  run's allow list must cover a model key's endpoint host. Under `enforce`, a request
+  to a host that only model keys other than the running session's cover passes with
+  no credential set and needs no path rule: a model provider is an integration, so a
+  policy cannot deny its hosts. The proxy sets no value of such a key, and replaces
+  each model key's value in every answer from the key's host.
 - `gateway.Config.Selects`: behind a separate gateway, when the server's policy selects
   no credential, a run, with or without a wall, gets the gateway's selection, a credential that takes an
   argument taking it from a label of the run whose value matches the pattern named, for
