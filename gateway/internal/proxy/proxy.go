@@ -624,14 +624,14 @@ func (p *Proxy) SetPolicyOpening(mode policy.Mode, first, allow, deny, names []s
 // outdated reports whether a reload from the terminator before and the rules old to
 // the terminator after and the rules r closes t, and returns the host's decision under
 // the policy in force. The reload closes a tunnel to a host that policy denies, a
-// terminated tunnel whose credential is another one now, or none, a tunnel the proxy
+// terminated tunnel whose credentials after are other ones, or none, a tunnel the proxy
 // passes TLS through to a host after terminates, a tunnel to a host whose path rules
 // are other ones now, and a tunnel to a host r no longer opens.
 func (p *Proxy) outdated(t *tunnel, before, after *terminator, old, r *rules) (Decision, bool) {
 	d := p.decide(t.d.Method, t.d.Host, t.d.Port)
 	switch {
 	case !d.Allowed:
-	case t.terminated && before.credentialName(t.d.Host) != after.credentialName(t.d.Host):
+	case t.terminated && !slices.Equal(before.credentialNames(t.d.Host), after.credentialNames(t.d.Host)):
 	case !t.terminated && after.covers(t.d.Host):
 	case !before.samePaths(after, t.d.Host):
 	case old.opens(t.d.Host) && !r.opens(t.d.Host):
@@ -950,7 +950,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	term := p.term.Load()
 	// A plain request to a host that gets a credential is refused before its path is
 	// read, in either mode; one past the rate limit gets its 429 below.
-	if rated == nil && d.Allowed && term.credentialName(d.Host) != "" {
+	if rated == nil && d.Allowed && len(term.credentials(d.Host)) > 0 {
 		clean, ok := policy.CleanPath(r.URL.EscapedPath())
 		if !ok {
 			clean = r.URL.EscapedPath()

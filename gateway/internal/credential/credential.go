@@ -221,9 +221,9 @@ func (h *Held) Close() {
 
 // Resolve reads the credentials a policy selects, asking every adapter once, and
 // refuses what cannot hold: a name the machine does not define, an argument it does not
-// provide for, a host two credentials claim or the run's allow list does not cover
-// under enforce, a claim above the definition's own. report hears of a renewal that
-// failed.
+// provide for, a host two credentials claim, unless both are model keys or both have
+// paths that do not overlap, a host the run's allow list does not cover under enforce,
+// a claim above the definition's own. report hears of a renewal that failed.
 func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
 	return ResolveWith(ctx, defs, selected, nil, "", mode, allow, report)
 }
@@ -368,8 +368,10 @@ func (h *Held) startKey(start string) error {
 }
 
 // check refuses two uses that claim a host together, unless both are model keys, which
-// the proxy tells apart by their placeholders, and, under enforce, a host the run's
-// allow list does not cover, a model key's host being its endpoint's: a credential for a host the run never reaches is a
+// the proxy tells apart by their placeholders, or both have paths and no path of one
+// overlaps a path of the other, so the proxy sets the use whose paths match a request.
+// Under enforce it refuses a host the run's allow list does not cover, a model key's
+// host being its endpoint's: a credential for a host the run never reaches is a
 // mistake to hear of before the run, not during it.
 func (h *Held) check(mode policy.Mode, allow []string) error {
 	for i, u := range h.Uses {
@@ -379,8 +381,16 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 					continue
 				}
 				for _, theirs := range other.Hosts {
-					if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
-						return fmt.Errorf("claim %s in only one of the credentials %s and %s; both claim it, and a host has one", accesskey.ShownValue(host, false), accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false))
+					if !policy.Covers(theirs, host) && !policy.Covers(host, theirs) {
+						continue
+					}
+					first, second, shown := accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false), accesskey.ShownValue(host, false)
+					if len(u.Paths) == 0 || len(other.Paths) == 0 {
+						return fmt.Errorf("claim %s in only one of the credentials %s and %s; both claim it, and a credential without paths is alone on its hosts", shown, first, second)
+					}
+					if a, b, ok := overlap(other.Paths, u.Paths); ok {
+						return fmt.Errorf("give the credentials %s and %s paths that do not overlap on %s, or claim it in only one of them: their paths %s and %s overlap",
+							first, second, shown, accesskey.ShownValue(a, false), accesskey.ShownValue(b, false))
 					}
 				}
 			}
@@ -394,6 +404,20 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 		}
 	}
 	return nil
+}
+
+// overlap returns a path of a and a path of b that one request path can match both of,
+// such as /example-org/* and /example-org/harness.git/*, and whether there are any. A
+// path is a prefix ending in * or an exact path, the policy's path grammar.
+func overlap(a, b []string) (string, string, bool) {
+	for _, x := range a {
+		for _, y := range b {
+			if policy.CoversPath(x, y) || policy.CoversPath(y, x) {
+				return x, y, true
+			}
+		}
+	}
+	return "", "", false
 }
 
 var (

@@ -349,15 +349,15 @@ release may change what an existing document does, and says so under Upgrading.
 - The run answer's `model_credential` is the run's start key, the key a session starts
   with when its join request names none; the join answer's `model_credential` is the
   key each session starts with.
-- In the contract, several host credentials may claim one host when each has `paths`
-  and no path of one overlaps a path of another: the proxy sets the credential whose
-  paths match the request, and a request no credential's paths match gets none. A
-  credential without `paths` stays alone on its hosts. The gateway does not apply this
-  rule yet: two credentials on one host are still no run.
-- In the contract, a request on a host with a credential passes with no credential set
-  when the policy's `egress.paths` for the host match it and no credential's paths do.
-  The gateway does not apply this rule yet: under `enforce` it still denies such a
-  request.
+- Several host credentials may claim one host when each has `paths` and no path of one
+  overlaps a path of another: the proxy sets the credential whose paths match the
+  request, and a request no credential's paths match gets none. A credential without
+  `paths` stays alone on its hosts. Two credentials whose paths overlap are no run:
+  "give the credentials <a> and <b> paths that do not overlap on <host>, or claim it in
+  only one of them: their paths <p> and <q> overlap".
+- A request on a host with a credential passes with no credential set when the
+  policy's `egress.paths` for the host match it and no credential's paths do, under
+  `enforce` too.
 
 - `wall_required` has the names `tools`, `paths` and `image=<name>`, never
   `credentials`. Its message for tools and path rules reads "run it with a wall: the
@@ -587,9 +587,10 @@ release may change what an existing document does, and says so under Upgrading.
   <host>:<port> denied by the gateway: to reach the gateway's machine or a private
   network address, list the host itself, not a *. pattern, in the allow list of the
   node's policy, and allow it in the run's policy; the gateway reaches either only for
-  such a host, and never a link-local or cloud metadata address". Two credentials that
-  claim one host are refused with "claim <host> in only one of the credentials <a> and
-  <b>; both claim it, and a host has one".
+  such a host, and never a link-local or cloud metadata address". A credential without
+  `paths` that claims a host another credential claims is refused with "claim <host> in
+  only one of the credentials <a> and <b>; both claim it, and a credential without
+  paths is alone on its hosts".
 - The proxy sets a credential on a private host only through a `hosts` entry equal to
   the host, never through a `*.` pattern. A private host is an IP literal in
   `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `fc00::/7`, a name of one label,

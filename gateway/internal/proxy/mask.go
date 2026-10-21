@@ -38,9 +38,14 @@ type maskPair struct{ find, put []byte }
 // and v that the header has, with and without its padding, in the standard and the URL
 // alphabet. Each of these is looked for as well percent-encoded and JSON-escaped, where
 // that changes it. v stays the caller's to clear.
-func (c *Credential) masker(v []byte) *masker {
+func (c *Credential) masker(v []byte) *masker { return c.maskInto(nil, v) }
+
+// maskInto adds the forms of [Credential.masker] for the value v to m, or to a new
+// masker when m is nil, and returns it: one masker replaces the values of several
+// credentials of a host. It returns m when v is empty. v stays the caller's to clear.
+func (c *Credential) maskInto(m *masker, v []byte) *masker {
 	if len(v) == 0 {
-		return nil
+		return m
 	}
 	// A model key is masked with the placeholder of its name, every other credential
 	// with the shared one.
@@ -48,7 +53,9 @@ func (c *Credential) masker(v []byte) *masker {
 	if c.Placeholder != "" {
 		placeholder = c.Placeholder
 	}
-	m := &masker{}
+	if m == nil {
+		m = &masker{}
+	}
 	m.add(v, []byte(placeholder))
 	if c.Scheme == "basic" {
 		pair := make([]byte, 0, len(c.Username)+1+len(v))

@@ -184,26 +184,46 @@ func (t *terminator) tool(host string) *Tool {
 	return nil
 }
 
-// credential is the credential that is for the host, by [policy.CredentialFor], if one
-// is.
-func (t *terminator) credential(host string) *Credential {
+// credentials are the credentials that are for the host, by [policy.CredentialFor], in
+// their order; none when t is nil. Several are for one host only when each has paths,
+// or each is a model key ([credential.Held]'s check).
+func (t *terminator) credentials(host string) []*Credential {
+	if t == nil {
+		return nil
+	}
+	var out []*Credential
 	for i := range t.creds {
 		if policy.CredentialFor(t.creds[i].Hosts, host) {
-			return &t.creds[i]
+			out = append(out, &t.creds[i])
 		}
 	}
-	return nil
+	return out
 }
 
-// credentialName names the credential that is for the host, empty when none is.
-func (t *terminator) credentialName(host string) string {
-	if t == nil {
-		return ""
+// credentialFor is the credential of the host the proxy sets on a request for the
+// clean path: the first without paths, which covers every path, or whose paths match
+// the path. rule is the credential's path that matched, empty for one without paths.
+// It is nil when no credential of the host matches.
+func (t *terminator) credentialFor(host, clean string) (c *Credential, rule string) {
+	for _, c := range t.credentials(host) {
+		if c.Paths == nil {
+			return c, ""
+		}
+		if r, ok := policy.MatchPath(c.Paths, clean); ok {
+			return c, r
+		}
 	}
-	if c := t.credential(host); c != nil {
-		return c.Name
+	return nil, ""
+}
+
+// credentialNames are the names of the credentials that are for the host, in their
+// order; none when none is.
+func (t *terminator) credentialNames(host string) []string {
+	var out []string
+	for _, c := range t.credentials(host) {
+		out = append(out, c.Name)
 	}
-	return ""
+	return out
 }
 
 // rules are the path rules for the host of each side that lists it: the policy's, then
@@ -220,11 +240,13 @@ func (t *terminator) rules(host string) [][]string {
 }
 
 // samePaths reports whether the host's path rules under t and under o are equal: the
-// rules of each side that lists the host, and the paths of the credential for it.
+// rules of each side that lists the host, and the paths of each credential for it, in
+// their order.
 func (t *terminator) samePaths(o *terminator, host string) bool {
-	a, b := t.credentialPaths(host), o.credentialPaths(host)
 	return slices.EqualFunc(t.pathRules(host), o.pathRules(host), slices.Equal[[]string]) &&
-		(a == nil) == (b == nil) && slices.Equal(a, b)
+		slices.EqualFunc(t.credentialPaths(host), o.credentialPaths(host), func(a, b []string) bool {
+			return (a == nil) == (b == nil) && slices.Equal(a, b)
+		})
 }
 
 // pathRules are [terminator.rules], none when t is nil.
@@ -235,16 +257,14 @@ func (t *terminator) pathRules(host string) [][]string {
 	return t.rules(host)
 }
 
-// credentialPaths are the paths of the credential for the host; nil when none is, or
-// when it covers every path.
-func (t *terminator) credentialPaths(host string) []string {
-	if t == nil {
-		return nil
+// credentialPaths are the paths of each credential for the host, in their order: nil
+// for one that covers every path.
+func (t *terminator) credentialPaths(host string) [][]string {
+	var out [][]string
+	for _, c := range t.credentials(host) {
+		out = append(out, c.Paths)
 	}
-	if c := t.credential(host); c != nil {
-		return c.Paths
-	}
-	return nil
+	return out
 }
 
 // ruled reports whether either side has path rules for the host.
@@ -255,23 +275,27 @@ func (t *terminator) covers(host string) bool {
 	if t == nil {
 		return false
 	}
-	return t.ruled(host) || t.credential(host) != nil || t.tool(host) != nil
+	return t.ruled(host) || len(t.credentials(host)) > 0 || t.tool(host) != nil
 }
 
-// path decides one request's path under mode. A path that could be read two ways is
-// denied in either mode; a path that misses the rules of a side that lists its host is
-// denied under enforce, with no rule. A path every such side matches has the narrowest
-// entry that matched as its rule. The credential is set only on a path its own rules
-// match, whatever the mode: observing is no reason to hand a credential to a path
-// nobody configured.
-func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule string, allowed, credentialed bool) {
+// path decides one request's path under mode, and returns the credential the proxy
+// sets on it, nil for none. A path that could be read two ways is denied in either
+// mode; a path that misses the rules of a side that lists its host is denied under
+// enforce, with no rule. A path every such side matches has the narrowest entry that
+// matched as its rule. On a host with credentials, the credential whose paths match is
+// set ([terminator.credentialFor]); a path no credential's paths match gets none, and
+// passes under enforce only when a side lists the host and every side that lists it
+// matches the path. The credential is set only on a path its paths match, whatever the
+// mode: observing is no reason to send a credential to a path nobody configured.
+func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule string, allowed bool, c *Credential) {
 	clean, ok := policy.CleanPath(escaped)
 	if !ok {
-		return escaped, AmbiguousPath, false, false
+		return escaped, AmbiguousPath, false, nil
 	}
-	allowed, credentialed = true, true
-	for _, rules := range t.rules(host) {
-		r, ok := policy.MatchPath(rules, clean)
+	allowed = true
+	rules := t.rules(host)
+	for _, side := range rules {
+		r, ok := policy.MatchPath(side, clean)
 		switch {
 		case !ok:
 			allowed = false
@@ -282,18 +306,20 @@ func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule s
 	if !allowed {
 		rule = ""
 	}
-	if c := t.credential(host); c != nil && c.Paths != nil {
-		r, ok := policy.MatchPath(c.Paths, clean)
-		credentialed = ok
-		if rule == "" || !ok {
+	if len(t.credentials(host)) > 0 {
+		var r string
+		c, r = t.credentialFor(host, clean)
+		switch {
+		case c == nil:
+			allowed = allowed && len(rules) > 0
+		case rule == "":
 			rule = r
 		}
-		allowed = allowed && ok
 	}
 	if !allowed && mode == policy.Observe {
 		allowed = true
 	}
-	return clean, rule, allowed, credentialed
+	return clean, rule, allowed, c
 }
 
 // serve ends the session's TLS on client as host and serves the requests inside it.
@@ -306,6 +332,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 	// HTTP/1.1 only on this side: one request at a time is one decision at a time, and
 	// every client that speaks to a proxy speaks it.
 	conn := tls.Server(client, &tls.Config{Certificates: []tls.Certificate{*leaf}, NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12})
+	creds := t.credentials(d.Host)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			// The host asked of upstream is the one the connection was opened to and
@@ -334,8 +361,11 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			if d, ok := settle(resp.Request, resp, nil); ok {
 				t.p.observe(d)
 			}
-			if c := t.credential(d.Host); c != nil && resp.StatusCode == http.StatusUnauthorized && c.Rejected != nil && resp.Request.Context().Value(keyedKey{}) == c.Name {
-				c.Rejected()
+			if name, ok := resp.Request.Context().Value(keyedKey{}).(string); ok && resp.StatusCode == http.StatusUnauthorized {
+				// The credential the proxy set on the request, of those of the host.
+				if i := slices.IndexFunc(creds, func(c *Credential) bool { return c.Name == name }); i >= 0 && creds[i].Rejected != nil {
+					creds[i].Rejected()
+				}
 			}
 			if masked(resp.Request) == nil {
 				return nil
@@ -377,7 +407,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			deny(w, req)
 			return
 		}
-		clean, rule, allowed, credentialed := t.path(d.Host, r.URL.EscapedPath(), now.Mode)
+		clean, rule, allowed, c := t.path(d.Host, r.URL.EscapedPath(), now.Mode)
 		req.Path, req.PathRule, req.Allowed = clean, rule, allowed
 		tl := t.tool(d.Host)
 		if tl != nil {
@@ -387,8 +417,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			t.p.limited(w, req, RateLimit, rated)
 			return
 		}
-		c := t.credential(d.Host)
-		if c != nil && (strings.EqualFold(r.Method, "TRACE") || strings.EqualFold(r.Method, "TRACK")) {
+		if len(creds) > 0 && (strings.EqualFold(r.Method, "TRACE") || strings.EqualFold(r.Method, "TRACK")) {
 			req.Allowed, req.PathRule, req.Outcome = false, EchoMethod, Refused
 			t.p.observe(req)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -398,22 +427,25 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		r.Header.Del(setBy)
-		// Every answer from a host that gets a credential has its value replaced with
-		// the placeholder, on a path that gets none as well: the host may send back a
-		// value it received before.
+		// Every answer from a host that gets a credential has the value of each of the
+		// host's credentials replaced with its placeholder, on a path that gets none as
+		// well: the host may send back a value it received before. Each value is read
+		// once, so the one set is the one replaced.
 		keyed := false
 		var mask *masker
-		if allowed && c != nil && tl == nil {
-			v := c.secret()
-			if credentialed && c.carries(r.Header) {
-				if name, value, ok := c.header(v); ok {
-					r.Header.Set(name, value)
-					r.Header.Set(setBy, c.Name)
-					req.Credential, keyed = c.Name, true
+		if allowed && len(creds) > 0 && tl == nil {
+			for _, h := range creds {
+				v := h.secret()
+				if h == c && c.carries(r.Header) {
+					if name, value, ok := c.header(v); ok {
+						r.Header.Set(name, value)
+						r.Header.Set(setBy, c.Name)
+						req.Credential, keyed = c.Name, true
+					}
 				}
+				mask = h.maskInto(mask, v)
+				clear(v)
 			}
-			mask = c.masker(v)
-			clear(v)
 		}
 		if !allowed {
 			req.Outcome = Refused
@@ -643,7 +675,7 @@ func (t *terminator) plainPath(host, escaped string, mode policy.Mode) (string, 
 	if t == nil {
 		return "", "", true
 	}
-	if !t.ruled(host) && t.credential(host) == nil && t.tool(host) == nil {
+	if !t.covers(host) {
 		return "", "", true
 	}
 	clean, rule, allowed, _ := t.path(host, escaped, mode)

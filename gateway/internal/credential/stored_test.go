@@ -274,9 +274,9 @@ func TestTwoModelKeysMayShareAHost(t *testing.T) {
 		defs []Definition
 		want string
 	}{
-		"the model key first":       {[]Definition{first, host}, "claim api.model.example in only one of the credentials first and plain; both claim it, and a host has one"},
-		"the host credential first": {[]Definition{host, first}, "claim api.model.example in only one of the credentials plain and first; both claim it, and a host has one"},
-		"a host above":              {[]Definition{first, above}, "claim *.model.example in only one of the credentials first and plain; both claim it, and a host has one"},
+		"the model key first":       {[]Definition{first, host}, "claim api.model.example in only one of the credentials first and plain; both claim it, and a credential without paths is alone on its hosts"},
+		"the host credential first": {[]Definition{host, first}, "claim api.model.example in only one of the credentials plain and first; both claim it, and a credential without paths is alone on its hosts"},
+		"a host above":              {[]Definition{first, above}, "claim *.model.example in only one of the credentials first and plain; both claim it, and a credential without paths is alone on its hosts"},
 	} {
 		sel := []policy.Selected{{Name: c.defs[0].Name}, {Name: c.defs[1].Name}}
 		held, err := ResolveWith(context.Background(), c.defs, sel, nil, "first", policy.Observe, nil, func(l string) { t.Log(l) })
@@ -293,7 +293,7 @@ func TestTwoModelKeysMayShareAHost(t *testing.T) {
 	if err == nil {
 		held.Close()
 		t.Error("a model key and a host credential from the server on one host resolved")
-	} else if want := "claim api.model.example in only one of the credentials server-key and server-model; both claim it, and a host has one"; err.Error() != want {
+	} else if want := "claim api.model.example in only one of the credentials server-key and server-model; both claim it, and a credential without paths is alone on its hosts"; err.Error() != want {
 		t.Errorf("a model key and a host credential from the server:\n got %v\nwant %s", err, want)
 	}
 }
