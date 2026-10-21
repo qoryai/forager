@@ -30,40 +30,45 @@ import (
 // batches to the gateway are written. A Run is for one goroutine: its methods are not
 // called at the same time.
 type Run struct {
-	open           OpenSpec
-	local          *localGateway
-	remote         *RemoteGateway
-	id, dir        string
-	link           *server.Link
-	disc           *server.LinkDiscovery
-	answer         *server.LinkRunAnswer
-	members        map[string]any
-	img            Image
-	byReference    bool
-	relayImage     string
-	authority      []byte
-	caVars         []string
-	reserved       []string
-	listed         *registration
-	wallOwn        []bindSource
-	openBinds      []bindSource
-	files          *sink.File
-	posts          *sink.Server
-	reload         *reloader
-	stopBeat       func()
-	unlock         func()
-	startedAt      time.Time
-	closedBy       ended
-	closing        context.Context
-	markClosed     context.CancelCauseFunc
-	emitMu         sync.Mutex
-	emit           *event.Emitter
-	sinks          sink.Multi
-	masker         *mask.Masker
-	joining        sync.Mutex
-	numbered       int
-	maybeJoined    bool
-	lastExit       int
+	open    OpenSpec
+	local   *localGateway
+	remote  *RemoteGateway
+	id, dir string
+	link    *server.Link
+	disc    *server.LinkDiscovery
+	answer  *server.LinkRunAnswer
+	// members are the members of policy_applied the gateway decides, the run answer's
+	// and then each reload's; under emitMu once the reloads start.
+	members     map[string]any
+	img         Image
+	byReference bool
+	relayImage  string
+	authority   []byte
+	caVars      []string
+	reserved    []string
+	listed      *registration
+	wallOwn     []bindSource
+	openBinds   []bindSource
+	files       *sink.File
+	posts       *sink.Server
+	reload      *reloader
+	stopBeat    func()
+	unlock      func()
+	startedAt   time.Time
+	closedBy    ended
+	closing     context.Context
+	markClosed  context.CancelCauseFunc
+	emitMu      sync.Mutex
+	emit        *event.Emitter
+	sinks       sink.Multi
+	masker      *mask.Masker
+	joining     sync.Mutex
+	numbered    int
+	maybeJoined bool
+	lastExit    int
+	// keptBy is the number of the session whose wall's removal failed, 0 for none:
+	// its entry among the walled runs still going stays, and no session joins after it.
+	keptBy         int
 	closed         bool
 	sessionApplied map[string]any
 }
@@ -366,6 +371,8 @@ func (r *Run) start(ctx context.Context) (err error) {
 		r.emitMu.Lock()
 		defer r.emitMu.Unlock()
 		r.posts.SetRunDigest(held)
+		// A join from here on records the reload's members, not the open's.
+		r.members = members
 		r.record(event.PolicyApplied, r.policyApplied(members))
 	}, r.end)
 	return nil

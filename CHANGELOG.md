@@ -857,9 +857,9 @@ release may change what an existing document does, and says so under Upgrading.
   `Spec` to `session.OpenSpec`: `Gateway`, `Wall`, `CAEnv`, `Image`, `Images`,
   `ImagesAllow`, `RunsDir`, `ForagerVersion`, `RunID`, `Labels`, `About` and `Report`.
   Move the rest to `session.SessionSpec`. Read `Undelivered` from `session.Closed`, which
-  `Close` returns; `session.Result` has it no more. `session.Result.State` and `Reason`
-  are those of the session's `dev.qory.session.exited`; the run's outcome is the
-  `session.Outcome` you pass to `Close`. Before, one call ran the run and its one
+  `Close` returns; `session.Result` has no `Undelivered` field. `session.Result.State`
+  and `Reason` are those of the session's `dev.qory.session.exited`; the run's outcome
+  is the `session.Outcome` you pass to `Close`. Before, one call ran the run and its one
   session.
 - Close every run you open, once each join has returned. Join sessions of one run one
   after another: a `Join` while another runs returns "a session of the run is still

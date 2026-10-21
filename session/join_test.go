@@ -14,6 +14,7 @@ import (
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // TestARunWithTwoJoins pins a run of two sessions: the open writes run.started and a
@@ -355,5 +356,84 @@ func TestTheRunGivesTheServersSystemAndRepositories(t *testing.T) {
 	}
 	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestAJoinAfterAReloadRecordsTheReload pins the policy a join records: a reload
+// between the open and the join puts its members in force, and the join's
+// policy_applied has the reload's source and digest, not the open's.
+func TestAJoinAfterAReloadRecordsTheReload(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	g.SetRunDigest("sha256=" + strings.Repeat("1", 64))
+	g.OnBatch(func([]map[string]any) linktest.Reply {
+		g.SetRunDigest("sha256=" + strings.Repeat("2", 64))
+		return linktest.Reply{Status: 200}
+	})
+	g.OnReload(func(string) linktest.Reply {
+		return linktest.Reply{Status: 200, Body: map[string]any{"version": 1,
+			"policy": map[string]any{"version": 1, "egress": map[string]any{"mode": "enforce", "allow": []string{"api.example"}}},
+			"digest": strings.Repeat("e", 64),
+			"applied": map[string]any{"mode": "enforce", "allow": []any{"api.example"}, "deny": []any{}, "source": "fetched", "digest": strings.Repeat("e", 64),
+				"url": "https://apiary.example/v1/runs", "run_configuration": "sha256=" + strings.Repeat("2", 64)}}}
+	})
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		return len(ofType(events(t, &session.Result{Dir: r.Dir()}), "dev.qory.run.policy_applied")) == 2
+	})
+	if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := r.Close(ctx, session.Outcome{State: "succeeded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := joinApplied(events(t, &session.Result{Dir: closed.Dir}))
+	if len(joined) != 1 || data(joined[0])["source"] != "fetched" || data(joined[0])["digest"] != strings.Repeat("e", 64) {
+		t.Errorf("the join's policy_applied %v; want the reload's source and digest", joined)
+	}
+}
+
+// prepareFailing is a wall whose Prepare fails with no code, as a pull that fails.
+type prepareFailing struct{ openWall }
+
+func (w *prepareFailing) Prepare(context.Context, wall.Request) (wall.Enclosure, error) {
+	return nil, errors.New("wall docker: pull example.com/agent:1: exit status 1")
+}
+
+// TestAPrepareFailureFollowsTheSessionsStart pins a wall that fails to prepare with no
+// code: the join returns the error, and the record has session.started, then
+// session.exited failed with -1 and no reason.
+func TestAPrepareFailureFollowsTheSessionsStart(t *testing.T) {
+	sp, _ := specGateway(t)
+	sp.Wall, sp.Image = &prepareFailing{}, "example.com/agent:1"
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Join(ctx, sp.SessionSpec); err == nil || !strings.Contains(err.Error(), "pull example.com/agent:1") {
+		t.Errorf("the join: %v", err)
+	}
+	closed, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, &session.Result{Dir: closed.Dir})
+	var order []string
+	for _, e := range evs {
+		if e["type"] == "dev.qory.session.started" || e["type"] == "dev.qory.session.exited" {
+			order = append(order, fmt.Sprint(e["type"]))
+		}
+	}
+	if !slices.Equal(order, []string{"dev.qory.session.started", "dev.qory.session.exited"}) {
+		t.Fatalf("the record %q", order)
+	}
+	exited := data(ofType(evs, "dev.qory.session.exited")[0])
+	if exited["state"] != "failed" || exited["exit_code"] != float64(-1) || exited["reason"] != nil {
+		t.Errorf("session.exited %v", exited)
 	}
 }

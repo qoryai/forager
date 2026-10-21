@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/wall"
@@ -27,6 +28,10 @@ func TrustRemote(url, caFile string) (untrust func()) {
 	trusted.Store(url, caFile)
 	return func() { trusted.Delete(url) }
 }
+
+// SetCloseWait sets how long the sinks get to flush at the end of a join and at the
+// close.
+func SetCloseWait(d time.Duration) { closeWait = d }
 
 // SetRegisterPause sets what a run calls between its check against the registry of
 // walled runs and the writing of its entry, under the registry's lock; nil for nothing.

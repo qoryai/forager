@@ -10,8 +10,8 @@
 // access key, decides the run, numbers its events and is the node toward the server.
 // Between the two the session:
 //
-//   - checks what it is given, its variables, its mounts and its image table, before
-//     the gateway is contacted
+//   - checks what it is given: its image table before the run request, each
+//     session's variables before the join request, and each session's mounts after it
 //   - discovers the gateway's link and opens the run with a run request: the run's id,
 //     whether it has a wall, its labels, what it is about, and its images; each join
 //     request has the names of the variables the session passes a value for

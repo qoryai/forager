@@ -85,8 +85,10 @@ type AboutError = server.AboutError
 // command may first.
 func CheckAbout(a *About) error { return server.CheckAbout(a) }
 
-// closeWait is how long the sinks get to flush after the runtime exits.
-const closeWait = 15 * time.Second
+// closeWait is how long the sinks get to flush: at the end of a join, before the next
+// join's request, and at the close. Tests set it shorter, so a fake gateway that does
+// not accept a batch costs them less.
+var closeWait = 15 * time.Second
 
 // ended is how a run was closed from outside, set once.
 type ended struct {

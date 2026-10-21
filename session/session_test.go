@@ -71,6 +71,9 @@ func TestMain(m *testing.M) {
 	case os.Getenv("FAKE_RUNTIME") != "":
 		os.Exit(fakeRuntime())
 	}
+	// A fake gateway that does not accept a batch holds a join and a close for 3 s,
+	// not 15 s.
+	session.SetCloseWait(3 * time.Second)
 	// The registry of walled runs is the tests' own, not this user's.
 	state, err := os.MkdirTemp("", "session-state-")
 	if err != nil {

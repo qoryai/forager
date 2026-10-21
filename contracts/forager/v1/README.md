@@ -430,8 +430,8 @@ egress:
 **A node narrows a server's policy.** The server leads; the node only narrows. A node,
 through an agent that writes its configuration for example, is easier to compromise
 than the server, so on a node connected to a server what the node contributes can only
-take away from the run. The node's policy is the policy document of the launch spec,
-`Spec.Policy` in Go. A fetched `security_policy` and the node's policy combine by
+take away from the run. The node's policy is the policy document of the gateway's
+configuration, `gateway.Config.Policy` in Go. A fetched `security_policy` and the node's policy combine by
 narrowing. Without a server's `security_policy` the node's policy is the run's. One
 exception: for a run behind a separate gateway, with or without a wall, with a selection of credentials,
 the node policy's `credentials` member only caps that selection (the `credentials` row).

@@ -273,6 +273,47 @@ func TestAnEntryStaysWhenTheWallIsNotRemoved(t *testing.T) {
 	}
 }
 
+// TestAJoinAfterAWallThatStaysIsRefused pins a run whose first session's wall could
+// not be removed: a second join is refused before it writes anything, and the run's
+// entry still lists the first session's writable bind, so another walled run is
+// refused inside it.
+func TestAJoinAfterAWallThatStaysIsRefused(t *testing.T) {
+	root := t.TempDir()
+	w := &closeFailing{enginedWall{engine: leftEngine}}
+	sp := walledSpec(t, w)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(registry(t), r.ID())
+	t.Cleanup(func() { os.Remove(file) })
+	second := sp.SessionSpec
+	elsewhere := t.TempDir()
+	second.Mounts, second.Dir = []wall.Mount{{Path: elsewhere}}, elsewhere
+	if _, err := r.Join(ctx, second); err == nil || err.Error() != "the wall of session 1 may still run: open a new run" {
+		t.Errorf("a join after a wall that stays: %v", err)
+	}
+	if b, err := os.ReadFile(file); err != nil || !strings.Contains(string(b), `"`+root+`"`) || strings.Contains(string(b), elsewhere) {
+		t.Errorf("the entry %s, %v; want the first session's bind %s", b, err, root)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	answer(t, true, nil)
+	sub := mkdirs(t, filepath.Join(root, "sub"))
+	other := walledSpec(t, &openWall{})
+	other.Mounts, other.Dir = []wall.Mount{{Path: sub}}, sub
+	ref := refusalOf(t, "mount_shared_with_run", runErr(other))
+	if !slices.Equal(ref.Names, []string{sub, r.ID(), root}) {
+		t.Errorf("names %q", ref.Names)
+	}
+}
+
 // TestAnUnpinnedEntryWithoutAnIDIsNoAnswer pins an entry whose engine was recorded with
 // neither a pinned selection nor an id: podman's with nothing set, or with DOCKER_HOST
 // alone, which podman does not read. Whatever engine answers now may be another, so a

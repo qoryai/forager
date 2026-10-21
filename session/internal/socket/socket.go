@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -37,6 +38,8 @@ type Listener struct {
 	path string
 	ln   *net.UnixListener
 	done chan struct{}
+	// served says Serve has started, so Close waits for its end.
+	served atomic.Bool
 	// grace is how long Close keeps accepting.
 	grace time.Duration
 }
@@ -78,6 +81,7 @@ func (l *Listener) Path() string { return l.path }
 // that is not a record is passed to bad with the error and skipped; bad may be nil.
 // Serve returns when the listener is closed.
 func (l *Listener) Serve(handle func(descriptor.Record), bad func(error)) {
+	l.served.Store(true)
 	defer close(l.done)
 	for {
 		conn, err := l.ln.Accept()
@@ -126,7 +130,9 @@ const Grace = 200 * time.Millisecond
 // Close drains the socket, then removes it and its directory: it keeps accepting for
 // the grace Listen was given, waits for Serve to return, and closes. Records read
 // during the drain still reach handle, which is why a caller closes the socket before
-// it writes the run's last event.
+// it writes the run's last event. Close returns after Serve's last call of handle: a
+// connection still read after the drain's wait ends at its read deadline, [Patience]
+// after it was accepted.
 func (l *Listener) Close() error {
 	l.ln.SetDeadline(time.Now().Add(l.grace))
 	wait := l.grace + Patience
@@ -139,6 +145,9 @@ func (l *Listener) Close() error {
 	case <-time.After(wait):
 	}
 	err := l.ln.Close()
+	if l.served.Load() {
+		<-l.done
+	}
 	if rmErr := os.RemoveAll(l.dir); err == nil {
 		err = rmErr
 	}

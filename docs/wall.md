@@ -295,9 +295,10 @@ forwarder passes the connection on to the gateway's proxy on loopback as it is.
 ### Forager's files
 
 A walled run refuses a mount, or the workspace, that is, contains or lies inside one of
-Forager's files. Such a run returns a `*session.Refusal` with the code
+Forager's files. Such a join returns a `*session.Refusal` with the code
 `mount_contains_forager_files`, and `Names` holds the mount, then Forager's file. The
-check comes before the gateway is contacted and before anything starts.
+check comes at the join, after the join request and before anything starts, and the
+join's `dev.qory.session.exited` has the code as its reason.
 An agent that changes a program Forager starts outside the wall, or reads the access
 key secret, has left the wall. The check covers `SessionSpec.Mounts` and the workspace; the run
 directory and the hook socket's directory, which the session shows the enclosure itself,
@@ -472,8 +473,11 @@ up in its parent, so two binds of one root are allowed.
   0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that run
   can change it", or "Forager's directory …" for a directory.
 
-  The check comes before the gateway is contacted, and the run leaves the registry when
-  it ends, however it ends, unless its wall could not be removed.
+  The check of the run directory and of Forager's directories comes at the open, before
+  the gateway is contacted, and the check of a session's places at its join. The run
+  leaves the registry when it closes, however it ends, unless a session's wall could not
+  be removed. Then the run's entry keeps that session's places, and a later join returns
+  "the wall of session 1 may still run: open a new run".
 
   `session.RunsBinding(ctx, d, p)` reads the registry, under its lock, for a caller that
   removes or reuses a place p, an absolute path: it returns each walled run still going,

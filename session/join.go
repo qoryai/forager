@@ -57,6 +57,11 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if r.closed {
 		return nil, errors.New("the run is closed")
 	}
+	// A wall whose removal failed may still run, with the places its entry lists: a
+	// join would rewrite that entry with the join's places alone.
+	if r.keptBy > 0 {
+		return nil, fmt.Errorf("the wall of session %d may still run: open a new run", r.keptBy)
+	}
 	spec = sessionDefaults(spec, r.open.Wall != nil)
 	s := runSpec{OpenSpec: r.open, SessionSpec: spec}
 	if err := checkVariables(spec.Variables); err != nil {
@@ -100,9 +105,8 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if err := CheckStopSignal(s.StopSignal); err != nil {
 		return nil, err
 	}
-	// F4 (decision 856 N-4): the run's host proxy, when it is still open, closes here,
-	// before the join request and the wall's start, so its password opens nothing while
-	// the session runs.
+	// F4 (decision 856 N-4) adds the close of the run's host proxy here, before the
+	// join request and the wall's start.
 
 	// runCtx ends when the join's context ends or the run is closed from outside: the
 	// start stops, or the runtime is stopped as at its time limit.
@@ -363,6 +367,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 				// Its containers may outlive the session: the entry stays, and is the
 				// run's while one of them exists.
 				r.listed.keep()
+				r.keptBy = n
 			}
 		}()
 		// Behind a wall the wall's relay opens every connection with the run's proxy
