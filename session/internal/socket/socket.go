@@ -38,7 +38,7 @@ type Listener struct {
 	path string
 	ln   *net.UnixListener
 	done chan struct{}
-	// served says Serve has started, so Close waits for its end.
+	// served is true once Serve has started, so Close waits for its end.
 	served atomic.Bool
 	// grace is how long Close keeps accepting.
 	grace time.Duration
