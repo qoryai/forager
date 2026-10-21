@@ -335,7 +335,8 @@ harness, then joins a session.
    first `dev.qory.session.started`. The caller
    writes the lines of its host work as `dev.qory.run.log` with `stream: stderr`. For
    every run with a certificate authority, walled or not, the open writes
-   `ca-bundle.pem` into the run directory (§Credentials, Termination).
+   `ca-bundle.pem` into the run directory when the machine has a CA bundle
+   (§Credentials, Termination).
 3. **A join.** The session sends the gateway its join request with the session's
    `passes` (§The gateway's link, Joining a session) and receives the session's number,
    from 1. It writes `dev.qory.session.started`, with that number as `session` and what
@@ -719,7 +720,8 @@ the proxy ends the session's TLS itself, answering as the host with a certificat
 authority created for the run. The authority's key is in the gateway's memory and nowhere
 else, and gone with the run; its certificate is what the wall adds to the enclosure's
 trusted bundle (§The wall). For every run with an authority, walled or not, the open
-writes `ca-bundle.pem` into the run directory: the first of
+writes `ca-bundle.pem` into the run directory when the machine has a CA bundle: the
+first of
 `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`,
 `/etc/ssl/ca-bundle.pem` and `/etc/ssl/cert.pem` that is a regular file with a
 certificate in it, then the run's certificate. The file contains certificates and no
@@ -727,9 +729,13 @@ key. Programs of the run's host work, such as a fetch, read it. Without a wall t
 session points the variables the caller gives, `OpenSpec.CAEnv` in Go, or the wall's default
 list (§The wall), at that file. For programs that read those variables the bundle
 replaces the machine's trust, so a root that exists only in another store, such as the
-macOS Keychain, is not trusted. A machine with none of the four files does not start the
-run: `install a CA bundle at /etc/ssl/cert.pem or /etc/ssl/certs/ca-certificates.crt:
-the run's tools trust the gateway for the credentials' hosts only through a bundle, and
+macOS Keychain, is not trusted. On a machine with none of the four files, a run without
+a wall does not start: `install a CA bundle at /etc/ssl/cert.pem or
+/etc/ssl/certs/ca-certificates.crt: the run's tools trust the gateway for the
+credentials' hosts only through a bundle, and this machine has none of the files Forager
+reads`. A walled run starts without the file, and its host proxy does not start:
+`install a CA bundle at /etc/ssl/cert.pem or /etc/ssl/certs/ca-certificates.crt:
+programs that use the host proxy trust the run's certificate only through a bundle, and
 this machine has none of the files Forager reads`. The proxy verifies the real host
 against the machine's roots. Every other host stays a tunnel the proxy does not read,
 and a run with no credential and no path rule has no authority at all, unless it has a
@@ -1578,8 +1584,8 @@ compose keeps it out of git:
 - `settings.json`: the runtime's settings with Forager's hooks added, when hooks
   are installed.
 - `ca-bundle.pem`: the trusted bundle with the run's certificate, for every run with a
-  certificate authority, walled or not; certificates only, never a key (§Credentials,
-  Termination).
+  certificate authority, walled or not, when the machine has a CA bundle; certificates
+  only, never a key (§Credentials, Termination).
 - `undelivered/`: the batches the server has not accepted, when there are any.
 - `answered`: behind a separate gateway, an empty file the gateway writes before it
   answers a run request; a gateway that starts again keeps a record that holds it, and

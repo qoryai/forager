@@ -189,10 +189,16 @@ for every run, walled or not, and returns a `session.HostProxy`:
 - `CABundle` is the path of `ca-bundle.pem` in the run directory, the machine's
   authorities and then the run's certificate, no key; empty for a run with no
   authority. `Open` writes the file for every run with an authority, walled or not.
+  On a machine with none of the CA bundle files Forager reads, a walled run opens
+  without the file, and `HostProxy` returns "install a CA bundle at /etc/ssl/cert.pem
+  or /etc/ssl/certs/ca-certificates.crt: programs that use the host proxy trust the
+  run's certificate only through a bundle, and this machine has none of the files
+  Forager reads"; a run without a wall does not open.
 - `Close()` ends it: its port takes no connection, and every connection through it
   closes. `Join` closes every open host proxy before its join request, and `Close` does
   too, so the password opens nothing while a session runs. `HostProxy` returns an error
-  while a `Join` runs, after `Close`, and when the port cannot be opened.
+  while a `Join` runs, after `Close`, for a walled run with no bundle, and when the port
+  cannot be opened.
 
 Set `ProxyURL` and `CABundle` in the environment of the program that needs them, such
 as git's, and not in the calling process's environment, which every child inherits, the

@@ -88,8 +88,9 @@ func (h *hostProxies) closeAll() {
 // with the run's proxy secret, and behind a separate gateway it dials the gateway's
 // proxy with the run key, as an unwalled session's forwarder does. The run's masker
 // gets the password before the forwarder starts. An error means no host proxy started:
-// a session of the run is running, the run is closed, or the forwarder's port could
-// not be opened.
+// a session of the run is running, the run is closed, a walled run with an authority
+// has no bundle because the machine has no CA bundle, or the forwarder's port could not
+// be opened.
 func (r *Run) HostProxy() (HostProxy, error) {
 	if !r.joining.TryLock() {
 		return HostProxy{}, errors.New("start the host proxy after Join returns: a session of the run is still running")
@@ -97,6 +98,9 @@ func (r *Run) HostProxy() (HostProxy, error) {
 	defer r.joining.Unlock()
 	if r.closed {
 		return HostProxy{}, errors.New("the run is closed")
+	}
+	if r.bundleErr != nil {
+		return HostProxy{}, r.bundleErr
 	}
 	password, err := newForwarderSecret()
 	if err != nil {

@@ -867,10 +867,8 @@ release may change what an existing document does, and says so under Upgrading.
   returns "a session of the run is still running: close the run after Join returns".
 - `event.OpenedBySession` is gone: `dev.qory.run.started` has `opened_by` `run`.
 - Install a CA bundle at `/etc/ssl/cert.pem` or `/etc/ssl/certs/ca-certificates.crt`
-  on a machine that runs walled runs with a certificate authority: `session.Open` now
-  writes `ca-bundle.pem` into the run directory for every run with one, walled or not,
-  and a machine with none of the four files Forager reads does not open the run. Before,
-  only a run without a wall needed the file.
+  to use `HostProxy` in a walled run with a certificate authority; without one,
+  `HostProxy` returns an error that starts with this fix, and the run still opens.
 
 - Pass `--settings` at most once in a run without a wall, as behind one. A launch that
   passes it more than once now does not start, with "runtime claude: Pass one --settings

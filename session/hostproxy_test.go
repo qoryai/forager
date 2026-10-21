@@ -321,3 +321,28 @@ func TestTheHostProxyEnds(t *testing.T) {
 		}
 	})
 }
+
+// TestAWalledRunOpensWithoutABundle pins a walled run with an authority on a machine
+// with none of the files Forager reads authorities from: the run opens, as before the
+// host proxy, with no ca-bundle.pem in its run directory, and HostProxy returns the
+// text that starts with the file to install.
+func TestAWalledRunOpensWithoutABundle(t *testing.T) {
+	defer session.SetMachineBundles([]string{filepath.Join(t.TempDir(), "none.pem"), t.TempDir()})()
+	sp, g := specGateway(t)
+	credentialAnswer(g)
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatalf("the walled run did not open: %v", err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+	if _, err := os.Lstat(filepath.Join(r.Dir(), session.BundleFile)); err == nil {
+		t.Error("the run directory has ca-bundle.pem")
+	}
+	_, err = r.HostProxy()
+	const want = "install a CA bundle at /etc/ssl/cert.pem or /etc/ssl/certs/ca-certificates.crt: programs that use the host proxy trust the run's certificate only through a bundle, and this machine has none of the files Forager reads"
+	if err == nil || err.Error() != want {
+		t.Errorf("HostProxy: %v, want %q", err, want)
+	}
+}
