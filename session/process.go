@@ -144,12 +144,12 @@ func (p *process) logWriter(stream string, terminal bool) *streamLog {
 // Write writes b to the masking writer.
 func (l *streamLog) Write(b []byte) (int, error) { return l.masked.Write(b) }
 
-// cut emits what the chunk writer holds and leaves the bytes the masking writer keeps
-// back, so a password split across a resize stays whole for the masker.
+// cut emits the chunk writer's buffered bytes and leaves the bytes the masking writer
+// keeps back, so a password split across a resize stays whole for the masker.
 func (l *streamLog) cut() { l.chunks.Flush() }
 
-// Flush writes the bytes the masking writer keeps back, then emits what the chunk
-// writer holds: the stream is over.
+// Flush writes the bytes the masking writer keeps back, then emits the chunk writer's
+// buffered bytes: the stream is over.
 func (l *streamLog) Flush() {
 	l.masked.Flush()
 	l.chunks.Flush()
