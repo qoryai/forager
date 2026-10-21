@@ -2732,7 +2732,7 @@ what a run request and its answer carry.
 |---|---|---|
 | Where | one machine; `qory` starts the session and the gateway | the gateway the run's run key names by its `gateway_url`, on a separate machine |
 | Transport | a Unix socket, `sock`, in a private directory of the gateway's, `qory-link-*` in the system's temporary directory, mode `0700`, the socket mode `0600`; the directory is one of Forager's files (§The wall) | TLS 1.3 alone, on the gateway's one address, the host and port of `gateway_url` |
-| The session knows the gateway | the socket's peer is the session's user, by its uid | the certificate chain, for the host name of `gateway_url`, against the system's roots; and on every connection the binding, the gateway's proof that it holds a key the run key names, and every answer signed under one (below) |
+| The session knows the gateway | the socket's peer is the session's user, by its uid | the certificate chain, for the host name of `gateway_url`, against the system's roots or the authorities of the run's CA file, and the pin of the certificate's public key when one is set (below); and on every connection the binding, the gateway's proof that it holds a key the run key names, and every answer signed under one (below) |
 | The gateway knows the session | the socket's peer is the gateway's user, by its uid; a batch names its run in `X-Qory-Run-Id` | the run key, sent only once the connection is bound: `Authorization: Bearer` on every request, and the relay's preamble of every proxy connection |
 | The run's labels | the session's | the run's registration's; the run request carries none |
 | Paths | `/.well-known/qory-configuration`, `/v1/run-configuration`, the join's `/v1/run-configuration/<run_id>/sessions` and `/v1/events` | under `/qory-link/`: `/qory-link/configuration`, `/qory-link/run-configuration`, the join's `/qory-link/run-configuration/<run_id>/sessions` and `/qory-link/events` |
@@ -2784,7 +2784,14 @@ run either: "the run id <run id> is not the one QORY_RUN_KEY names, <its run id>
 TLS 1.3 alone: the gateway and the session each refuse an earlier version. The gateway
 serves the operator's certificate and key, `gateway.tls.certificate` and
 `gateway.tls.key`. The session verifies the full chain for the host name of
-`gateway_url` against the system's roots.
+`gateway_url` against the system's roots. With a CA file, a PEM file of authorities,
+the session checks the chain against the authorities of that file alone, which replace
+the system's roots. With a pin, the SHA-256 of the certificate's DER
+SubjectPublicKeyInfo in standard base64 with padding, the session accepts only a
+certificate with that public key, and still checks its chain. The program that starts
+the session passes both; in Go they are `session.RemoteGateway.TLS`. A CA file the
+session cannot read, or one with no PEM certificate, and a pin of another form stop the
+run before any connection.
 
 **The binding.** Every connection to the gateway's one address, the link's and the
 proxy's, opens with the binding, before anything else. The session writes `QORY-BIND`

@@ -2,32 +2,10 @@ package session
 
 import (
 	"context"
-	"sync"
 	"time"
 
-	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/wall"
 )
-
-// trusted are the authorities' files of the separate gateways a test trusts, by URL.
-var trusted sync.Map
-
-func init() {
-	remoteTrust = func(u string) server.RemoteTLS {
-		if f, ok := trusted.Load(u); ok {
-			return server.RemoteTLS{CAFile: f.(string)}
-		}
-		return server.RemoteTLS{}
-	}
-}
-
-// TrustRemote trusts the certificate chain of the separate gateway at url to the
-// authorities of caFile, until untrust is called; any other gateway's to the system's
-// roots.
-func TrustRemote(url, caFile string) (untrust func()) {
-	trusted.Store(url, caFile)
-	return func() { trusted.Delete(url) }
-}
 
 // SetCloseWait sets how long the sinks get to flush at the end of a join and at the
 // close.

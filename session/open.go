@@ -101,7 +101,8 @@ func Open(ctx context.Context, spec OpenSpec) (*Run, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Behind a separate gateway the run is the run key's, read before anything else.
+	// Behind a separate gateway the run is the run key's, read before anything else, and
+	// its TLS is checked before the run directory exists.
 	var keyRunID string
 	if remote != nil {
 		key, err := remote.key()
@@ -109,6 +110,9 @@ func Open(ctx context.Context, spec OpenSpec) (*Run, error) {
 			return nil, err
 		}
 		keyRunID = key.RunID
+		if err := remote.checkTLS(); err != nil {
+			return nil, err
+		}
 	}
 	runID := spec.RunID
 	switch {

@@ -22,13 +22,16 @@ import (
 	"github.com/qoryai/forager/sink"
 )
 
-// startRemote starts a fake separate gateway whose certificate the session trusts, until
-// the test ends.
+// startRemote starts a fake separate gateway, until the test ends.
 func startRemote(t *testing.T) *linktest.Fake {
 	t.Helper()
-	g := linktest.StartRemoteFake(t)
-	t.Cleanup(session.TrustRemote(g.URL(), g.CAFile()))
-	return g
+	return linktest.StartRemoteFake(t)
+}
+
+// remoteGateway is the gateway of the run key key at the fake g, whose certificate the
+// session trusts to the fake's authority.
+func remoteGateway(g *linktest.Fake, key string) session.RemoteGateway {
+	return session.RemoteGateway{RunKey: key, TLS: server.RemoteTLS{CAFile: g.CAFile()}}
 }
 
 // remoteSpec is a spec whose runtime exits by itself with the status exit, behind a
@@ -41,7 +44,7 @@ func remoteSpec(t *testing.T, exit int) (runSpec, *linktest.Fake, func() []strin
 	sp.Command, sp.Args = "/bin/sh", []string{"-c", fmt.Sprintf("exit %d", exit)}
 	g := startRemote(t)
 	g.SetInterval(30)
-	sp.Gateway = session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())}
+	sp.Gateway = remoteGateway(g, g.RunKey(t, event.NewRunID()))
 	var mu sync.Mutex
 	var reports []string
 	sp.Report = func(l string) {
@@ -296,7 +299,7 @@ func TestAResendNeedsTheRunKey(t *testing.T) {
 		"its wrong prefix": {"qrx_" + key[4:], "QORY_RUN_KEY is not a run key: "},
 	} {
 		sp := resend
-		sp.Gateway = session.RemoteGateway{RunKey: c.key}
+		sp.Gateway.RunKey = c.key
 		_, err := session.Resend(ctx, sp)
 		if err == nil || !strings.HasPrefix(err.Error(), c.want) || (c.key == "" && err.Error() != c.want) {
 			t.Errorf("%s: %v", name, err)
@@ -416,7 +419,7 @@ func TestTheGatewaysRefusalsOfTheRunKeyAreRecorded(t *testing.T) {
 			sp.Forwarder = nil
 			g := startRemote(t)
 			runID := event.NewRunID()
-			sp.Gateway = session.RemoteGateway{RunKey: g.RunKey(t, runID)}
+			sp.Gateway = remoteGateway(g, g.RunKey(t, runID))
 			text := fmt.Sprintf("attach https://apiary.example/v1/runs/%s: %s (status %d)", runID, code, status)
 			g.OnRun(func(server.LinkRunRequest) linktest.Reply {
 				return linktest.Reply{Status: status, Body: map[string]any{"error": code, "from": "gateway", "message": text}}
@@ -447,7 +450,7 @@ func TestTheServersWorkspaceNotServedIsRecordedWithItsStatus(t *testing.T) {
 	sp.Forwarder = nil
 	g := startRemote(t)
 	runID := event.NewRunID()
-	sp.Gateway = session.RemoteGateway{RunKey: g.RunKey(t, runID)}
+	sp.Gateway = remoteGateway(g, g.RunKey(t, runID))
 	text := fmt.Sprintf("attach https://apiary.example/v1/runs/%s: workspace_not_served (status 409)", runID)
 	g.OnRun(func(server.LinkRunRequest) linktest.Reply {
 		return linktest.Reply{Status: 409, Body: map[string]any{"error": "workspace_not_served", "from": "apiary", "message": text}}

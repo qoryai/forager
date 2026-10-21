@@ -385,7 +385,14 @@ variables.
 ```go
 run, err := session.Open(ctx, session.OpenSpec{
 	// …the wall and the rest, as on one machine
-	Gateway: session.RemoteGateway{RunKey: os.Getenv("QORY_RUN_KEY")}, // names the gateway and its keys
+	Gateway: session.RemoteGateway{
+		RunKey: os.Getenv("QORY_RUN_KEY"), // the gateway's URL and keys
+		// Optional: trust the gateway's certificate to these authorities, and pin its key.
+		TLS: server.RemoteTLS{
+			CAFile:            "/etc/qory/gateway-ca.pem",
+			CertificateSHA256: "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+		},
+	},
 })
 ```
 
@@ -396,7 +403,30 @@ run, err := session.Open(ctx, session.OpenSpec{
   the run key's; a `OpenSpec.RunID` that is another is refused, "the run id <id> is not the
   one QORY_RUN_KEY names, <its id>".
 - The link is TLS 1.3 alone. The session verifies the gateway's certificate chain for
-  the host name of `gateway_url` against the system's roots. Every connection, the
+  the host name of `gateway_url` with the trust in `RemoteGateway.TLS`, on the run's
+  link and on a resend's:
+  - With the zero `server.RemoteTLS`, the session checks the chain against the
+    system's roots.
+  - `CAFile` is a PEM file of the authorities the gateway's certificate chains to. Set,
+    these authorities replace the system's roots for this gateway.
+  - `CertificateSHA256` is the SHA-256 of the certificate's DER SubjectPublicKeyInfo,
+    in standard base64 with padding: 44 characters ending in `=`. Set, the session
+    accepts only a certificate with that public key, and still checks its chain.
+
+  A caller sets both from its configuration, such as a file on the machine, or from
+  values the program that starts it passes. A CA file is not a secret.
+  `session.Open` checks both before the run directory exists. `session.Resend` checks
+  both when it has events to send, before any connection:
+  - A CA file that Forager cannot read: "set the gateway's CA file to a PEM file of
+    its certificate authorities that Forager can read: " and the read error, such as
+    "open /etc/qory/gateway-ca.pem: no such file or directory".
+  - A CA file with no PEM certificate: the same fix, then "<path> contains no PEM
+    certificate".
+  - A pin of another form: "set the gateway's certificate pin to the SHA-256 of its
+    public key: 44 characters of standard base64 ending in =".
+
+  A certificate whose chain does not verify, or whose key is not the pinned one, fails
+  the connection, and the run key is never sent. Every connection, the
   link's and the proxy's, then opens with the binding: `QORY-BIND`, and the gateway's
   `QORY-BOUND`, its proof over the connection's TLS exporter value that it holds a key
   the run key names ([the binding](../contracts/forager/v1/README.md#the-gateways-link)).
@@ -409,7 +439,7 @@ run, err := session.Open(ctx, session.OpenSpec{
   `Unproven` telling the two apart. No proxy of the environment is used, and no redirect
   is followed.
 - A `session.RemoteGateway` prints as the URL its run key names, `(no run key)` or
-  `(not a run key)`, never the run key.
+  `(not a run key)`, never the run key, and never its `TLS`.
 - No access key is involved, and the gateway holds no files on the session's machine, so
   none of its files are checked against a walled run's mounts, and it reserves no
   variables there.

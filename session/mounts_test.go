@@ -446,7 +446,7 @@ func TestARemoteGatewaysRunRefusesAMountOfALinkDirectory(t *testing.T) {
 		{linkDir, " is "},
 		{filepath.Join(linkDir, "sock"), " lies inside "},
 	} {
-		r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())})
+		r := newSepRun(t, remoteGateway(g, g.RunKey(t, event.NewRunID())))
 		r.sp.Wall, r.sp.Image = &openWall{}, "example.com/agent:1"
 		r.sp.Mounts = []wall.Mount{{Path: c.mount}}
 		got := mountRefusal(t, runErr(r.sp))

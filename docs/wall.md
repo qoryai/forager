@@ -273,8 +273,9 @@ refused.
 Behind a `session.RemoteGateway` the gateway's proxy is on another machine, at the
 gateway's one address, the run key's `gateway_url`. The relay still reaches the session's
 forwarder, on the address the enclosure names, as on one machine, and the forwarder
-carries every connection to the gateway over TLS 1.3, its chain checked against the
-system's roots for the host name of the gateway's URL.
+carries every connection to the gateway over TLS 1.3. The forwarder checks the chain
+for the host name of the gateway's URL with the trust in `RemoteGateway.TLS`: the
+system's roots, or the authorities of its CA file, and its pin when one is set.
 
 - The relay opens every connection with `QORY-RELAY` and a hop secret the session makes
   for the run's forwarder alone, 256 bits from the system's random source. It is the

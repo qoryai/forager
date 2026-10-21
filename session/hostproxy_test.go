@@ -127,7 +127,7 @@ func TestTheHostProxyReachesTheRunsProxy(t *testing.T) {
 				g = startRemote(t)
 				g.SetInterval(30)
 				key := g.RunKey(t, event.NewRunID())
-				sp.Gateway = session.RemoteGateway{RunKey: key}
+				sp.Gateway = remoteGateway(g, key)
 				preamble = link.RelayPreamble + " " + key
 			}
 			if c.walled {
