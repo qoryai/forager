@@ -111,16 +111,22 @@ release may change what an existing document does, and says so under Upgrading.
   `preparation`.
 - `harness` in `dev.qory.session.started`: the harness sources the session's compose
   used, one `{source, commit}` per source, `source` as it is configured and `commit`
-  the full commit id, 40 or 64 hexadecimal characters. Optional; never empty.
+  the full commit id, 40 or 64 hexadecimal characters. Optional; never empty. A
+  `source` that contains `qak_` or `qrk_` in any case is a phrase in its place, as
+  `dir` is.
 - `dev.qory.session.exited`, `events/session.exited.schema.json`: one per join, with
   `session`, `state`, `exit_code`, `signal`, `reason` and `duration_ms`. The runtime's
   exit decides the state, as it decided the state of `dev.qory.run.exited` before. A
   refused join is `failed` with `exit_code` `-1`, `duration_ms` `0` and the refusal's
-  code as `reason`, and has no `dev.qory.session.started`; the run stays open. When the
-  gateway ends the run while a join is open, the gateway writes that session's
+  code as `reason`, and has no `dev.qory.session.started`; the run stays open. A
+  failure at the join after `dev.qory.session.started` and before the runtime starts,
+  such as an image fetch or a wall's start that fails, is `failed` with `exit_code`
+  `-1` and no `reason`. When the gateway ends the run while a join is open, the gateway
+  writes that session's
   `dev.qory.session.exited` first, with the `state`, the `reason` and the `exit_code`
   `-1` of its `dev.qory.run.exited`; the resend of a record that ends with
-  `gateway_lost`, and the session in its record of the gateway's `410`, do the same.
+  `gateway_lost`, `failed`, and the session in its record of the gateway's `410`, do
+  the same.
   Such an event's `reason` is an open code, as a `dev.qory.run.exited`'s is; a session's
   batch on the link contains only `timeout`, `interrupted` and the codes of
   `refusal.Decides`.
@@ -135,7 +141,6 @@ release may change what an existing document does, and says so under Upgrading.
 - `ca-bundle.pem` in the run directory for every run with a certificate authority,
   walled or not, for the run's host work: the machine's bundle and the run's
   certificate, never a key.
-
 - `security_policy.egress.allow_first` in `policy.schema.json`: up to 64 hosts, each a
   lower-case host name or an IPv4 address in canonical form, with no `*.` pattern. In
   either mode, a host an entry matches exactly is allowed before `deny` and `allow` are
@@ -347,7 +352,7 @@ release may change what an existing document does, and says so under Upgrading.
   before the first `dev.qory.session.started`, which the caller writes with
   `stream: stderr`. The data is unchanged.
 - The run answer's `model_credential` is the run's start key, the key a session starts
-  with when its join request names none; the join answer's `model_credential` is the
+  with when its join request contains none; the join answer's `model_credential` is the
   key each session starts with.
 - In the contract, several host credentials may claim one host when each has `paths`
   and no path of one overlaps a path of another: the proxy sets the credential whose
@@ -358,7 +363,6 @@ release may change what an existing document does, and says so under Upgrading.
   when the policy's `egress.paths` for the host match it and no credential's paths do.
   The gateway does not apply this rule yet: under `enforce` it still denies such a
   request.
-
 - `wall_required` has the names `tools`, `paths` and `image=<name>`, never
   `credentials`. Its message for tools and path rules reads "run it with a wall: the
   policy selects tools or has path rules, and without a wall a program that ignores

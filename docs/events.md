@@ -73,12 +73,12 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.session.exited`     | A session ended, its join was refused, or the run ended while it ran       |
 | `dev.qory.run.exited`         | The run ended: the result, the last event                                  |
 
-Forager heartbeats while the session runs: the session sends one every interval the
+Forager heartbeats while the run is open: the session sends one every interval the
 gateway's discovery announces, `gateway.Config.Heartbeat`, and the gateway ends a run
 whose session sends nothing for three. The exit code of a run is its last session's,
 124 at the run's time limit, and -1 when no session ran.
 
-`dev.qory.run.started` says what opened the run, in `opened_by`: `run`, Forager's open
+`dev.qory.run.started` shows what opened the run, in `opened_by`: `run`, Forager's open
 of the run at its gateway, before any session. Each session then has a
 `dev.qory.session.started`, with its number from 1 in `session`, the runtime, the
 command and the image, and a `dev.qory.session.exited`, with how the session ended: the
@@ -94,11 +94,11 @@ harness source the session's compose used, each with `source`, the source as it 
 configured, and `commit`, the full commit id compose used, 40 or 64 hexadecimal
 characters.
 
-Every `dev.qory.run.exited` says how the run ended in `state`: `succeeded`, `failed` or
+Every `dev.qory.run.exited` shows how the run ended in `state`: `succeeded`, `failed` or
 `cancelled`, stopped before it said how it went. The close of the run writes the
 outcome its caller gives. A run its starter ends with an outcome has that outcome. When
 the close's outcome has a reason, or the run ends without a close, or its starter gives
-a reason, `dev.qory.run.exited` says why in `reason`: an open code, Forager's or the
+a reason, `dev.qory.run.exited` contains why in `reason`: an open code, Forager's or the
 starter's, carried as given. The close writes `timeout`, `cancelled`, `interrupted`,
 `cancelled`, a run stopped from where it was started (a Ctrl-C), and `no_session`,
 `failed`, a run closed with no session after its host work failed, such as a fetch,

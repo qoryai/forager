@@ -196,7 +196,8 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // with its certificate authority, and one without a policy, a reload answer with and
 // without a policy and one whose applied has ceiling_paths, a batch of a session's events without sequence, a batch of
 // a run.refused with a code the session decides, a batch of a session.exited and a run.exited
-// with timeout, two with interrupted, one of a refused join and one of a run closed with
+// with timeout, two with interrupted, one of a refused join, one of a failure at the join
+// after its session.started and one of a run closed with
 // no session, a join request with and without model_credential, a join answer with and
 // without model_credential, and refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.
@@ -301,8 +302,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // with an unknown one, opened by a session, or with a runtime member, a session.started
 // without its command, numbered 0, or whose harness is empty, has a member it does not
 // define or a commit of 39 characters, a session.exited without its session, failed
-// with exit status 0 and no reason, cancelled with stopped and an exit status, or of a
-// refused join with an exit status other than -1, a run.exited with no_session and succeeded,
+// with exit status 0 and no reason, cancelled with stopped and an exit status, cancelled
+// with gateway_lost, or of a refused join with an exit status other than -1, a run.exited with no_session and succeeded,
 // a run.exited without state, with a state other than the three, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no

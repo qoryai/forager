@@ -74,7 +74,7 @@
       }
     },
     "model_credential": {
-      "description": "The name of the run's start key, the model key a session starts with when its join request names none, an entry of credential_hosts with format: the run configuration's model_credential, or the run's one model key. The join answer's model_credential is the key each session starts with. Absent when the gateway holds no model key for the run.",
+      "description": "The name of the run's start key, the model key a session starts with when its join request contains none, an entry of credential_hosts with format: the run configuration's model_credential, or the run's one model key. The join answer's model_credential is the key each session starts with. Absent when the gateway holds no model key for the run.",
       "$ref": "policy.schema.json#/properties/credentials/items/properties/name"
     },
     "image": {
