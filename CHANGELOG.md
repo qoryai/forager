@@ -821,6 +821,12 @@ release may change what an existing document does, and says so under Upgrading.
   Before, an open tunnel to the host kept reaching the address, and a new tunnel's
   request reused a pooled connection to it with no new dial.
 
+#### Security
+
+- Build Forager with Go 1.27.3 or above: go.mod requires `go 1.27.3`. Go 1.27.3 has
+  security fixes to `crypto/x509`, which the gateway's proxy uses to check the
+  certificates of upstream hosts.
+
 ### Wall
 
 #### Added

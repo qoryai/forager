@@ -150,7 +150,7 @@ More: [docs/server.md](docs/server.md).
 ## Embed it in Go
 
 Forager is a Go module, and `qory` is one program built on it. Build it into your
-program to run an agent inside the same boundary. It needs Go 1.27.1 or above:
+program to run an agent inside the same boundary. It needs Go 1.27.3 or above:
 
 ```sh
 go get github.com/qoryai/forager
