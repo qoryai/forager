@@ -93,8 +93,8 @@ type OpenSpec struct {
 	// is 1 to 64 of a-z, 0-9 and -, and starts with a letter; [Open] refuses anything
 	// else. Empty leaves machine out of run.started.
 	Machine string
-	// Setup is where the run's setup commands run: [event.SetupOutside], on the machine
-	// outside the wall, or [event.SetupInside], inside the wall. run.started reports it as
+	// Setup is where the run's setup commands run: [event.SetupOutside], in a container
+	// apart from the agent's, or [event.SetupInside], in the agent's container. run.started reports it as
 	// setup. [Open] refuses any other value. Empty leaves setup out of run.started, for a
 	// run with no setup commands.
 	Setup string

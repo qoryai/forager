@@ -90,8 +90,8 @@ whose session sends nothing for three. The exit code of a run is its last sessio
 `dev.qory.run.started` contains `machine` and `setup` when the caller sets
 `OpenSpec.Machine` and `OpenSpec.Setup`. `machine` is the adapter that made the run's
 machine, such as `aws-ec2`, or `none` when no adapter made it. `setup` is `outside`
-when the run's setup commands run on the machine outside the wall, and `inside` when
-they run inside the wall. A run with no setup commands has no `setup`.
+when the run's setup commands run in a container apart from the agent's, and `inside`
+when they run in the agent's container before the runtime starts. A run with no setup commands has no `setup`.
 
 `dev.qory.run.started` shows what opened the run, in `opened_by`: `run`, Forager's open
 of the run at its gateway, before any session. Each session then has a

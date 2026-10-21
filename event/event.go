@@ -65,8 +65,8 @@ const OpenedByRun = "run"
 // machine.
 const MachineNone = "none"
 
-// The places of a run's setup commands, the setup of dev.qory.run.started: on the
-// machine, outside the wall, or inside the wall.
+// The places of a run's setup commands, the setup of dev.qory.run.started: in a
+// container apart from the agent's, or in the agent's container.
 const (
 	SetupOutside = "outside"
 	SetupInside  = "inside"
