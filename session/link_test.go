@@ -82,9 +82,8 @@ func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 		t.Fatalf("%d run requests", len(reqs))
 	}
 	req := reqs[0]
-	want := []string{"DEFAULT_ONE", "FIXED_ONE", "MACHINE_ONE", "RUN_ONE"}
-	if req.RunID != sp.RunID || req.Wall || req.Labels["repository"] != "example-namespace/project" || req.About == nil || req.About.Title != "Example title" || !slices.Equal(req.Passes, want) || req.Images != nil || req.Narrowing != nil {
-		t.Errorf("the run request %+v, passes want %q", req, want)
+	if req.RunID != sp.RunID || req.Wall || req.Labels["repository"] != "example-namespace/project" || req.About == nil || req.About.Title != "Example title" || req.Images != nil || req.Narrowing != nil {
+		t.Errorf("the run request %+v", req)
 	}
 	if raw := string(g.RawRequests()[0]); strings.Contains(raw, value) {
 		t.Errorf("the run request carries a value: %s", raw)
@@ -96,7 +95,7 @@ func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 	if _, err := session.Run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
-	if reqs := g.Requests(); len(reqs) != 1 || !slices.Equal(reqs[0].Passes, []string{"FAKE_RUNTIME", "INHERITED", "PATH"}) {
+	if reqs := g.Requests(); len(reqs) != 1 {
 		t.Errorf("a walled run's run requests %+v", reqs)
 	}
 }

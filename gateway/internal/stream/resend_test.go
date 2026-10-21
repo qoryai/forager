@@ -115,6 +115,54 @@ func TestResendWritesGatewayLost(t *testing.T) {
 	}
 }
 
+// TestResendEndsAnOpenSessionFirst pins the completion of a record whose session 2
+// has a dev.qory.session.started and no dev.qory.session.exited: that session's
+// dev.qory.session.exited comes first, failed, -1, gateway_lost, with the duration from
+// its start to the last event, then the run's dev.qory.run.exited; session 1, which
+// exited, gets none.
+func TestResendEndsAnOpenSessionFirst(t *testing.T) {
+	at := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	s := New(Config{Dir: t.TempDir(), Now: func() time.Time { return at }})
+	runID := event.NewRunID()
+	r, err := s.Open(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Registered(map[string]any{"forager_version": "dev", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30})
+	timed := func(typ, at string, data map[string]any) event.Event {
+		ev := sessionEvent(runID, typ, data)
+		ev.Time = at
+		return ev
+	}
+	r.Accept([]event.Event{
+		timed(event.RunStarted, "2026-10-09T10:00:00.000Z", map[string]any{}),
+		timed(event.SessionStarted, "2026-10-09T10:00:01.000Z", map[string]any{"session": 1}),
+		timed(event.SessionExited, "2026-10-09T10:00:02.000Z", map[string]any{"session": 1, "state": "succeeded", "exit_code": 0, "duration_ms": 1000}),
+		timed(event.SessionStarted, "2026-10-09T10:00:03.000Z", map[string]any{"session": 2}),
+		timed(event.RunLog, "2026-10-09T10:00:04.500Z", map[string]any{"stream": "stdout", "bytes": "aGkK"}),
+	})
+	r.Close(context.Background())
+	registrationAccepted(t, r.Dir())
+	res, err := Resend(context.Background(), ResendConfig{Dir: r.Dir()})
+	if err != nil || !res.Closed {
+		t.Fatalf("result %+v, %v", res, err)
+	}
+	rec := readRecord(t, r.Dir())
+	contiguous(t, runID, rec)
+	if len(rec) != 8 {
+		t.Fatalf("the record %v", types(rec))
+	}
+	session, _ := rec[6].Data.(map[string]any)
+	if rec[6].Type != event.SessionExited || session["session"] != float64(2) || session["state"] != "failed" || session["exit_code"] != float64(-1) ||
+		session["reason"] != event.ReasonGatewayLost || session["duration_ms"] != float64(1500) {
+		t.Errorf("the open session ends %s %v", rec[6].Type, session)
+	}
+	run, _ := rec[7].Data.(map[string]any)
+	if rec[7].Type != event.RunExited || run["reason"] != event.ReasonGatewayLost || run["duration_ms"] != float64(4500) {
+		t.Errorf("the record ends %s %v", rec[7].Type, run)
+	}
+}
+
 // TestResendLeavesARunThatNeverStarted pins that a record without run.started gets no
 // run.exited.
 func TestResendLeavesARunThatNeverStarted(t *testing.T) {

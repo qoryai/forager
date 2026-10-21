@@ -660,7 +660,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 		return quit(err)
 	}
-	req := server.LinkRunRequest{RunID: runID, Wall: spec.Wall != nil, Passes: passes(spec)}
+	req := server.LinkRunRequest{RunID: runID, Wall: spec.Wall != nil}
 	if remote == nil {
 		// Behind a separate gateway the labels and what the run is about are the
 		// starter's registration's.

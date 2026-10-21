@@ -1130,6 +1130,21 @@ func TestARunThroughTheGateway(t *testing.T) {
 	if got := e.reload(t); got.status != http.StatusOK || !bytes.Contains(got.body, []byte("api.example")) {
 		t.Errorf("the reload: %d %s", got.status, got.body)
 	}
+	// A join on the one address: the run key's run, session 1; another run's is
+	// run_key_invalid and is numbered not.
+	refused(t, "a join of another run", r.do(t, key, http.MethodPost, "/qory-link/run-configuration/"+event.NewRunID()+"/sessions", []byte(`{"version":1,"passes":[]}`)), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
+	j := r.do(t, key, http.MethodPost, "/qory-link/run-configuration/"+runID+"/sessions", []byte(`{"version":1,"passes":["HOME"]}`))
+	if j.status != http.StatusOK {
+		t.Fatalf("the join: %d %s", j.status, j.body)
+	}
+	validDocument(t, "link-join-answer.schema.json", j.body)
+	var joined server.LinkJoinAnswer
+	if json.Unmarshal(j.body, &joined); joined.Session != 1 {
+		t.Errorf("the join's answer %s", j.body)
+	}
+	if got := e.post(t, sessionStarted(runID, 1), sessionExited(runID, 1)); got.status != http.StatusAccepted {
+		t.Fatalf("the session: %d %s", got.status, got.body)
+	}
 	if got := e.post(t, exited(runID)); got.status != http.StatusAccepted {
 		t.Fatalf("the last batch: %d %s", got.status, got.body)
 	}

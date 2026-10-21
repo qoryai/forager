@@ -116,14 +116,34 @@ type LinkRunRequest struct {
 	// Narrowing is the session's narrowing of the policy, behind a separate gateway
 	// alone: the local link refuses one, and [Link.OpenRun] sends none on it.
 	Narrowing *LinkNarrowing `json:"narrowing,omitempty"`
-	// Passes are the names of the variables the run passes a value for, in what it
-	// inherits, what the harness sets and its variables: names alone, never a value.
-	// The gateway refuses a credential's or a tool's placeholder the run passes, as the
-	// session does.
-	Passes []string `json:"passes,omitempty"`
 	// Images are the images the session resolves a policy's selection against, so the
 	// gateway decides the run's image as the session does.
 	Images *LinkImages `json:"images,omitempty"`
+}
+
+// LinkJoinRequest is the body of the session's POST to <run URL>/<run_id>/sessions on
+// the link, contracts/forager/v1/link-join-request.schema.json, which joins a session
+// to the open run.
+type LinkJoinRequest struct {
+	Version int `json:"version"`
+	// Passes are the names of the variables the session passes a value for, in what it
+	// inherits, what the harness sets and its variables: names alone, never a value.
+	// The gateway answers 403 placeholder_conflict to a join whose Passes contain a
+	// placeholder of a credential or a tool it holds for the run.
+	Passes []string `json:"passes"`
+	// ModelCredential is the name of the model key the session starts with, one the
+	// gateway holds for the run; empty for the run's start key.
+	ModelCredential string `json:"model_credential,omitempty"`
+}
+
+// LinkJoinAnswer is what the gateway answers a join request it accepts,
+// contracts/forager/v1/link-join-answer.schema.json: the session's number in the run,
+// from 1, and the model key the session starts with, empty when the gateway holds no
+// model key for the run. A member Forager does not know is ignored.
+type LinkJoinAnswer struct {
+	Version         int    `json:"version"`
+	Session         int    `json:"session"`
+	ModelCredential string `json:"model_credential,omitempty"`
 }
 
 // LinkNarrowing is a session's narrowing of the policy the gateway holds for its run.
@@ -950,6 +970,35 @@ func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAns
 	}
 	if err := checkRunMembers(a.Variables, a.Placeholders, a.Reserved, a.Image); err != nil {
 		return nil, &DocumentError{"the reload answer", k.at(u), err}
+	}
+	return &a, nil
+}
+
+// Join joins a session to the open run, a POST of req to <runURL>/<runID>/sessions,
+// and returns the join answer: the session's number and the model key it starts with.
+// A 410 is the end of the run, [Ended]; a coded refusal, placeholder_conflict among
+// them, is an [*accesskey.Refusal].
+func (k *Link) Join(ctx context.Context, runURL, runID string, req LinkJoinRequest) (*LinkJoinAnswer, error) {
+	if err := k.onLink("the run URL", runURL); err != nil {
+		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
+	}
+	if !runIDShape.MatchString(runID) {
+		return nil, errors.New("the join request: the run id is not a UUID in the canonical lower-case form")
+	}
+	if req.Version == 0 {
+		req.Version = 1
+	}
+	if req.Passes == nil {
+		req.Passes = []string{}
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("the join request: %w", err)
+	}
+	u := strings.TrimSuffix(runURL, "/") + "/" + runID + "/sessions"
+	var a LinkJoinAnswer
+	if err := k.fetch(ctx, "the join request", http.MethodPost, u, body, func(h http.Header) { h.Set("Content-Type", LinkContentType) }, "link-join-answer.schema.json", &a); err != nil {
+		return nil, err
 	}
 	return &a, nil
 }

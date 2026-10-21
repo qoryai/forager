@@ -3,6 +3,7 @@ package gateway_test
 import (
 	"encoding/json"
 	"io/fs"
+	"maps"
 	"net/http"
 	"testing"
 
@@ -62,36 +63,41 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 	}
 }
 
-// TestTheRunExitedTheRuntimesExitDecides pins a session's dev.qory.run.exited:
-// succeeded with exit_code 0, failed with any other exit
-// status or a signal, both with no reason, and cancelled with timeout or with
-// interrupted, whatever the exit status or the signal, are taken; any other is refused,
+// TestTheRunExitedIsTheClosesOutcome pins a session's dev.qory.run.exited, the
+// close's: any state, with no reason, timeout or interrupted, and no_session only in a
+// run with no join, are taken; a reason the gateway decides, or a starter's, is refused,
 // and the run ends failed, batch_refused, its reason in the report.
-func TestTheRunExitedTheRuntimesExitDecides(t *testing.T) {
+func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
 		data map[string]any
+		join bool
 		why  string // empty when the batch is taken
 	}{
-		{map[string]any{"state": "succeeded", "exit_code": 0}, ""},
-		{map[string]any{"state": "failed", "exit_code": 1}, ""},
-		{map[string]any{"state": "failed", "exit_code": -1, "signal": "SIGKILL"}, ""},
-		{map[string]any{"state": "cancelled", "exit_code": -1, "signal": "SIGTERM", "reason": "timeout"}, ""},
-		{map[string]any{"state": "cancelled", "exit_code": 0, "reason": "interrupted"}, ""},
-		{map[string]any{"state": "cancelled", "exit_code": 130, "reason": "interrupted"}, ""},
-		{map[string]any{"state": "cancelled", "exit_code": -1, "signal": "SIGKILL", "reason": "interrupted"}, ""},
-		{map[string]any{"state": "failed", "exit_code": 130, "reason": "interrupted"}, "one link-batch.schema.json refuses"},
-		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "interrupted"}, "one link-batch.schema.json refuses"},
-		{map[string]any{"state": "failed", "exit_code": 0}, "a run.exited failed whose runtime exited 0"},
-		{map[string]any{"state": "succeeded", "exit_code": 1}, "a run.exited succeeded whose runtime did not exit 0"},
-		{map[string]any{"state": "succeeded", "exit_code": -1, "signal": "SIGTERM"}, "a run.exited succeeded whose runtime did not exit 0"},
-		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "all_checks_passed"}, "a run.exited with a reason the gateway decides"},
-		{map[string]any{"state": "failed", "exit_code": 1, "reason": "checks_failed"}, "a run.exited with a reason the gateway decides"},
-		{map[string]any{"state": "cancelled", "exit_code": 0}, "a run.exited of a state the runtime's exit does not decide"},
+		{map[string]any{"state": "succeeded", "exit_code": 0}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": 0}, false, ""},
+		{map[string]any{"state": "succeeded", "exit_code": 1}, false, ""},
+		{map[string]any{"state": "cancelled", "exit_code": 0}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "signal": "SIGKILL"}, false, ""},
+		{map[string]any{"state": "cancelled", "exit_code": 124, "reason": "timeout"}, false, ""},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "interrupted"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session"}, true, "a run.exited no_session of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 130, "reason": "interrupted"}, false, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "timeout"}, false, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "session_lost"}, false, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "all_checks_passed"}, false, "a run.exited with a reason the gateway decides"},
+		{map[string]any{"state": "failed", "exit_code": 1, "reason": "checks_failed"}, false, "a run.exited with a reason the gateway decides"},
 	} {
 		a := h.open(server.LinkRunRequest{})
 		if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
 			t.Fatalf("%v: the first batch: %+v", c.data, d)
+		}
+		if c.join {
+			n := h.joined(a.RunID)
+			if d := h.post(sessionStarted(a.RunID, n), sessionExited(a.RunID, n)); !d.Accepted() {
+				t.Fatalf("%v: the session: %+v", c.data, d)
+			}
 		}
 		d := h.post(exitedWith(a.RunID, c.data))
 		if c.why == "" {
@@ -106,6 +112,45 @@ func TestTheRunExitedTheRuntimesExitDecides(t *testing.T) {
 		line := "run " + a.RunID + ": the gateway refused a batch from the run's session, " + c.why + "; the run ends: failed"
 		if !h.reported(line) {
 			t.Errorf("%v: not reported: %s", c.data, line)
+		}
+	}
+}
+
+// TestTheSessionExitedTheRuntimesExitDecides pins a session's
+// dev.qory.session.exited: succeeded with exit_code 0, failed with any other exit
+// status or a signal, both with no reason, cancelled with timeout or with interrupted,
+// whatever the exit status or the signal, and a refused join's, failed with -1 and a
+// code the session decides, are taken; any other is refused, and the run ends failed,
+// batch_refused.
+func TestTheSessionExitedTheRuntimesExitDecides(t *testing.T) {
+	h := start(t, gateway.Config{})
+	for _, c := range []struct {
+		data map[string]any
+		ok   bool
+	}{
+		{map[string]any{"state": "succeeded", "exit_code": 0}, true},
+		{map[string]any{"state": "failed", "exit_code": 1}, true},
+		{map[string]any{"state": "failed", "exit_code": -1, "signal": "SIGKILL"}, true},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "signal": "SIGTERM", "reason": "timeout"}, true},
+		{map[string]any{"state": "cancelled", "exit_code": 130, "reason": "interrupted"}, true},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "mount_mode_conflict"}, true},
+		{map[string]any{"state": "failed", "exit_code": 0}, false},
+		{map[string]any{"state": "succeeded", "exit_code": 1}, false},
+		{map[string]any{"state": "cancelled", "exit_code": 0}, false},
+		{map[string]any{"state": "failed", "exit_code": 130, "reason": "interrupted"}, false},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "session_lost"}, false},
+		{map[string]any{"state": "succeeded", "exit_code": -1, "reason": "mount_mode_conflict"}, false},
+	} {
+		a := h.open(server.LinkRunRequest{})
+		n := h.joined(a.RunID)
+		if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), sessionStarted(a.RunID, n)); !d.Accepted() {
+			t.Fatalf("%v: the first batch: %+v", c.data, d)
+		}
+		data := map[string]any{"session": n, "duration_ms": 5}
+		maps.Copy(data, c.data)
+		d := h.post(ev(a.RunID, event.SessionExited, data))
+		if c.ok != d.Accepted() || (!c.ok && (d.Status != http.StatusBadRequest || d.End != "batch_refused")) {
+			t.Errorf("%v: %+v", c.data, d)
 		}
 	}
 }

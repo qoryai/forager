@@ -248,7 +248,7 @@ func TestARunWithNoServer(t *testing.T) {
 		Events: &syncWriter{w: &events},
 	})
 	labels := map[string]string{"repository": "example-namespace/project"}
-	a := h.open(server.LinkRunRequest{Labels: labels, Passes: []string{"HOME"}})
+	a := h.open(server.LinkRunRequest{Labels: labels})
 	var pol map[string]any
 	if err := json.Unmarshal(a.Policy, &pol); err != nil || a.Digest == "" || pol["egress"].(map[string]any)["mode"] != "enforce" {
 		t.Errorf("policy %s, digest %q", a.Policy, a.Digest)
@@ -386,6 +386,7 @@ func TestTheSharedProxyServesARunBySecret(t *testing.T) {
 	timedOut := exited(runID)
 	timedOut["data"].(map[string]any)["reason"] = "timeout"
 	timedOut["data"].(map[string]any)["state"] = "cancelled"
+	timedOut["data"].(map[string]any)["exit_code"] = 124
 	if d := h.post(timedOut); !d.Accepted() {
 		t.Errorf("a run.exited timeout: %+v", d)
 	}
@@ -508,7 +509,7 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 			return true, twice([]map[string]any{e}, `"reason":"timeout"`, `"reason":"session_lost","reason":"timeout"`)
 		},
 		"a run.started with opened_by twice": func(id string, _ *server.LinkRunAnswer) (bool, []byte) {
-			return false, twice([]map[string]any{started(id, labels)}, `"opened_by":"session"`, `"opened_by":"gateway","opened_by":"session"`)
+			return false, twice([]map[string]any{started(id, labels)}, `"opened_by":"run"`, `"opened_by":"gateway","opened_by":"run"`)
 		},
 		"a policy_applied with its mode twice": func(id string, a *server.LinkRunAnswer) (bool, []byte) {
 			p := applied(id, a.Applied)
@@ -516,7 +517,7 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 			return true, twice([]map[string]any{p}, `"mode":"`+mode+`"`, `"mode":"enforce","mode":"`+mode+`"`)
 		},
 		"a run.started not in UTF-8": func(id string, _ *server.LinkRunAnswer) (bool, []byte) {
-			return false, twice([]map[string]any{started(id, labels)}, `"command":"true"`, "\"command\":\"tr\xffue\"")
+			return false, twice([]map[string]any{started(id, labels)}, `"forager_version":"test"`, "\"forager_version\":\"te\xffst\"")
 		},
 	}
 	rawRuns := map[string]string{}
@@ -649,7 +650,7 @@ func TestAWalledRunWithACredential(t *testing.T) {
 		t.Errorf("reserved %v", l.Reserved)
 	}
 	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: ref, Runtime: "sysbox-runc"}}}
-	a := h.open(server.LinkRunRequest{Wall: true, Images: images, Passes: []string{"HOME"}})
+	a := h.open(server.LinkRunRequest{Wall: true, Images: images})
 	if !strings.HasPrefix(a.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || !slices.Equal(a.Placeholders, []string{"API_TOKEN"}) ||
 		!slices.Equal(a.Reserved, []string{"GATEWAY_TEST_SECRET"}) || a.Image == nil || a.Image.Name != "base" || a.Image.Ref != ref || a.Image.Runtime != "sysbox-runc" {
 		t.Errorf("answer %+v", a)
@@ -663,10 +664,10 @@ func TestAWalledRunWithACredential(t *testing.T) {
 		t.Errorf("the session's policy_applied: %+v", d)
 	}
 	var r *accesskey.Refusal
-	if _, err := h.tryOpen(server.LinkRunRequest{Wall: true, Images: images, Passes: []string{"API_TOKEN"}}); !errors.As(err, &r) || r.Code != "placeholder_conflict" || r.Status != http.StatusForbidden || r.From != "gateway" || !slices.Equal(r.Names, []string{"API_TOKEN"}) {
-		t.Errorf("a placeholder the run passes: %v", err)
+	if _, err := h.join(a.RunID, "API_TOKEN"); !errors.As(err, &r) || r.Code != "placeholder_conflict" || r.Status != http.StatusForbidden || r.From != "gateway" || !slices.Equal(r.Names, []string{"API_TOKEN"}) {
+		t.Errorf("a placeholder the session passes: %v", err)
 	}
-	u := h.open(server.LinkRunRequest{Passes: []string{"HOME"}})
+	u := h.open(server.LinkRunRequest{})
 	if !strings.HasPrefix(u.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || !slices.Equal(u.Placeholders, []string{"API_TOKEN"}) ||
 		!slices.Equal(u.Reserved, []string{"GATEWAY_TEST_SECRET"}) || u.Image != nil || u.RelayImage != "" {
 		t.Errorf("no wall: the answer %+v", u)
@@ -679,9 +680,14 @@ func TestAWalledRunWithACredential(t *testing.T) {
 	h.post(exited(u.RunID))
 	// Each message is today's session's error text.
 	want := "API_TOKEN is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside: placeholder_conflict: API_TOKEN"
-	body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: event.NewRunID(), Wall: true, Images: images, Passes: []string{"API_TOKEN"}})
-	if _, got := h.refusalOf("/v1/run-configuration", string(body)); got["message"] != want {
-		t.Errorf("placeholder_conflict's message %q", got["message"])
+	body, _ := json.Marshal(server.LinkJoinRequest{Version: 1, Passes: []string{"API_TOKEN"}})
+	if status, got := h.refusalOf("/v1/run-configuration/"+a.RunID+"/sessions", string(body)); status != http.StatusForbidden || got["message"] != want {
+		t.Errorf("placeholder_conflict's message %d %q", status, got["message"])
+	}
+	// The run stays open: a join that passes no placeholder is numbered after the two
+	// refused.
+	if n := h.joined(a.RunID, "HOME"); n != 3 {
+		t.Errorf("the join after two refused: session %d", n)
 	}
 	h.post(exited(a.RunID))
 	h.close()

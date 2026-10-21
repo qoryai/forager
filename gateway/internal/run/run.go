@@ -75,11 +75,11 @@ type Config struct {
 	// alone; nil means none. It narrows the start's policy and every policy a reload
 	// puts in force.
 	Narrowing *Narrowing
-	// Passes, when not nil, reports whether the run passes a value of its own for the
+	// Passes, when not nil, reports whether a session of the run passes a value for the
 	// variable: a placeholder it passes a value for is then placeholder_conflict, at
-	// the start and at every reload, as the session refuses it. [Passing] makes one of
-	// the names the run passes. Nil passes none, and the placeholders are the caller's
-	// to check, with [Run.Conflict].
+	// the start and at every reload. The gateway gives the names the open joins pass,
+	// none at the start; [Passing] makes one of a list of names. Nil passes none, and
+	// the placeholders are the caller's to check, with [Run.Conflict], as a join's are.
 	Passes func(name string) bool
 	// Report receives one line per thing the run reports to its user: a credential's
 	// renewal that failed, a tool's standard error, and an entry of the gateway's

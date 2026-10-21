@@ -115,6 +115,11 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 			answer(w, 200, runAnswer)
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/run-configuration/"+runID && r.URL.RawQuery == "":
 			answer(w, 200, reloadAnswer)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/run-configuration/"+runID+"/sessions":
+			if b, _ := io.ReadAll(r.Body); r.Header.Get("Content-Type") != server.LinkContentType || string(b) != `{"version":1,"passes":["NODE_ENV","HOME"]}` {
+				note("join request %q %s", r.Header.Get("Content-Type"), b)
+			}
+			answer(w, 200, `{"version":1,"session":1}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/events":
 			if r.Header.Get("Content-Type") != server.ContentType || r.Header.Get(server.HeaderDelivery) != "d1" || r.Header.Get(server.HeaderRunConfiguration) != runDigest {
 				note("batch headers %v", r.Header)
@@ -135,7 +140,7 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 		t.Errorf("discovery %+v", d)
 	}
 	req := server.LinkRunRequest{RunID: runID, Wall: true, Labels: map[string]string{"forge": "example-forge"}, About: &server.About{Title: "Fix the failing build"},
-		Passes: []string{"NODE_ENV", "HOME"}, Images: &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: "registry.example/base@sha256:00", Runtime: "sysbox-runc"}}}}
+		Images: &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: "registry.example/base@sha256:00", Runtime: "sysbox-runc"}}}}
 	a, err := k.OpenRun(ctx, d.Run.URL, req)
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +150,7 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 		t.Errorf("run answer %+v", a)
 	}
 	mu.Lock()
-	if request.Version != 1 || request.RunID != runID || !request.Wall || request.About == nil || len(request.Passes) != 2 || request.Images == nil || request.Images.Default != "base" || len(request.Images.Definitions) != 1 || request.Narrowing != nil {
+	if request.Version != 1 || request.RunID != runID || !request.Wall || request.About == nil || request.Images == nil || request.Images.Default != "base" || len(request.Images.Definitions) != 1 || request.Narrowing != nil {
 		t.Errorf("the gateway read the run request %+v", request)
 	}
 	mu.Unlock()
@@ -156,6 +161,10 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 	if re.Values()["NODE_ENV"] != "prod" || re.Digest != policyHex || len(re.Reserved) != 1 || re.Placeholders == nil {
 		t.Errorf("reload answer %+v", re)
 	}
+	j, err := k.Join(ctx, d.Run.URL, runID, server.LinkJoinRequest{Passes: []string{"NODE_ENV", "HOME"}})
+	if err != nil || j.Session != 1 || j.ModelCredential != "" {
+		t.Errorf("join answer %+v, %v", j, err)
+	}
 	del, err := k.Deliver(ctx, d.Events.URL, "d1", []byte(`[]`), runDigest)
 	if err != nil {
 		t.Fatal(err)
@@ -163,8 +172,8 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 	if !del.Accepted() || del.Signed || !del.Link || del.Digests != (server.Digests{Configuration: confDigest, RunConfiguration: runDigest}) {
 		t.Errorf("delivery %+v", del)
 	}
-	if len(*digests) != 3 {
-		t.Errorf("%d digests handed on, want 3: %v", len(*digests), *digests)
+	if len(*digests) != 4 {
+		t.Errorf("%d digests handed on, want 4: %v", len(*digests), *digests)
 	}
 	for _, dg := range *digests {
 		if dg.Configuration != confDigest || dg.RunConfiguration != runDigest {

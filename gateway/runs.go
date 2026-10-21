@@ -52,6 +52,10 @@ type linkRun struct {
 
 	// batch takes one batch of the session's at a time.
 	batch sync.Mutex
+	// joining takes one join, or one reload's decision and commit, at a time, so a
+	// join's passes are checked against the placeholders of the policy in force and a
+	// reload against the passes of every open join.
+	joining sync.Mutex
 
 	mu sync.Mutex
 	// opened says the run answer is made.
@@ -66,6 +70,9 @@ type linkRun struct {
 	startedID string
 	startedAt time.Time
 	final     bool
+	// joins are the run's joins the gateway answered 200 or 403, by their session
+	// numbers, from 1, in the order they arrived.
+	joins []*join
 	// given are the members of dev.qory.run.policy_applied the gateway decides, for each
 	// policy it put in force for the run, as the answers carry them.
 	given []map[string]any
@@ -414,7 +421,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	}
 	r, err := run.Decide(run.Config{
 		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
-		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: run.Passing(req.Passes), Report: g.report,
+		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: lr.passing, Report: g.report,
 		Narrowing: narrowing, Secrets: secrets,
 	})
 	if err != nil {
@@ -658,16 +665,22 @@ func (lr *linkRun) end(e ending) {
 			return
 		}
 		if e.state != "" && lr.st.Started() {
-			var ran int64
-			if !startedAt.IsZero() {
-				ran = max(time.Since(startedAt).Milliseconds(), 0)
+			// A join still open: its session's end comes first, with the run's state and
+			// reason. No batch is numbered from here on, the run having ended.
+			lr.batch.Lock()
+			lr.mu.Lock()
+			var open *join
+			if j := lr.openJoin(); j != nil {
+				c := *j
+				open = &c
 			}
-			// A session's run: the gateway holds no exit status of its runtime.
-			data := map[string]any{"state": e.state, "duration_ms": ran, "exit_code": -1}
-			if e.reason != "" {
-				data["reason"] = e.reason
+			lr.mu.Unlock()
+			lr.batch.Unlock()
+			if open != nil {
+				lr.st.Emit(event.SessionExited, ended(e, open.session, open.startedAt))
 			}
-			lr.st.Emit(event.RunExited, data)
+			// The gateway holds no exit status of a session's runtime.
+			lr.st.Emit(event.RunExited, ended(e, 0, startedAt))
 		}
 		lr.result, lr.err = lr.st.Close(lr.g.base)
 		lr.cancel()
@@ -676,6 +689,24 @@ func (lr *linkRun) end(e ending) {
 			lr.g.retire(lr)
 		}
 	})
+}
+
+// ended is the data of the gateway's dev.qory.run.exited of the ending e, or with a
+// session of 1 or more that of the session's dev.qory.session.exited: the ending's
+// state and reason, exit_code -1, and the milliseconds since from, 0 when from is zero.
+func ended(e ending, session int, from time.Time) map[string]any {
+	var ran int64
+	if !from.IsZero() {
+		ran = max(time.Since(from).Milliseconds(), 0)
+	}
+	data := map[string]any{"state": e.state, "duration_ms": ran, "exit_code": -1}
+	if session > 0 {
+		data["session"] = session
+	}
+	if e.reason != "" {
+		data["reason"] = e.reason
+	}
+	return data
 }
 
 // runAnswerDoc is the run answer as the gateway writes it,
@@ -928,6 +959,10 @@ func shownPaths(paths map[string][]string) map[string][]string {
 // after the switch, are recorded right after it, today's order, or before the run's
 // final event when it never comes.
 func (lr *linkRun) apply(next *policy.Loaded) error {
+	// The open joins' passes stay as they are while the reload is decided and put in
+	// force: a join waits for it.
+	lr.joining.Lock()
+	defer lr.joining.Unlock()
 	d, err := lr.r.Reload(lr.ctx, next)
 	if err != nil {
 		return err
