@@ -219,3 +219,28 @@ func TestTheGatewayReadsAtMost1MiBOfACertificateFile(t *testing.T) {
 		t.Errorf("no line contains %q", want)
 	}
 }
+
+// TestAKeyThatChangesBeforeEveryCheckIsReported pins the bound of the held failure: a
+// key of another certificate renamed in before each check is held at the first check
+// alone and reported at the second.
+func TestAKeyThatChangesBeforeEveryCheckIsReported(t *testing.T) {
+	cfg := gateway.Config{}
+	gateway.SetCertCheck(&cfg, certCheckEvery)
+	r := startRemote(t, nil, cfg)
+	a := derOf(t, r.cfg.TLS.CertFile, r.cfg.TLS.KeyFile)
+	for check, want := range []int{0, 1} {
+		_, other, _ := testCertificate(t, t.TempDir())
+		key, _ := os.ReadFile(other)
+		replaceByRename(t, r.cfg.TLS.KeyFile, key)
+		time.Sleep(2 * certCheckEvery)
+		if got := servedCertificate(t, r); !bytes.Equal(got, a) {
+			t.Fatalf("check %d: a handshake does not get the pair in force", check+1)
+		}
+		if n := failures(r); n != want {
+			t.Fatalf("check %d: %d lines report a failure, want %d", check+1, n, want)
+		}
+	}
+	if want := "reading them failed, tls: private key does not match public key;"; !r.reported(want) {
+		t.Errorf("no line contains %q", want)
+	}
+}

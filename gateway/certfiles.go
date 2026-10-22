@@ -26,9 +26,10 @@ const maxPEMFile = 1 << 20
 // next handshake compares each file's identity, modification time and size with those of
 // the files the pair was read from; when one differs, or the last read failed, it reads
 // both files again. A read that fails keeps the pair in force and reports one line for
-// each failure that differs from the last one reported. Two files that do not parse as
-// a pair, such as a renewed key beside the certificate before it, are read once more at
-// the next check before the failure is reported.
+// each failure that differs from the last one reported. When two files do not parse as
+// a certificate and its key, such as a renewed key beside the certificate before it, the
+// first such failure after a read that succeeded is held: both files are read once more
+// at the next check, and any later such failure is reported.
 type certFiles struct {
 	certFile, keyFile string
 	every             time.Duration
@@ -44,9 +45,9 @@ type certFiles struct {
 	certInfo, keyInfo os.FileInfo
 	// retry is set while the last read failed: each check reads both files again.
 	retry bool
-	// heldCertInfo and heldKeyInfo are the files whose pair did not parse at the last
-	// check, a failure not reported yet; nil when there is none.
-	heldCertInfo, heldKeyInfo os.FileInfo
+	// held is set once a failure to parse the two files was held, not reported, since
+	// the last read that succeeded.
+	held bool
 	// failed is the text of the last failure reported, with the files it was of; empty
 	// once a read succeeds.
 	failed                        string
@@ -142,23 +143,18 @@ func (h *certFiles) check() {
 	pair, rci, rki, err := readPair(h.certFile, h.keyFile)
 	if err == nil {
 		h.pair.Store(pair)
-		h.certInfo, h.keyInfo, h.retry = rci, rki, false
-		h.heldCertInfo, h.heldKeyInfo = nil, nil
+		h.certInfo, h.keyInfo, h.retry, h.held = rci, rki, false, false
 		h.failed, h.failedCertInfo, h.failedKeyInfo = "", nil, nil
 		return
 	}
 	h.retry = true
 	var pe pairError
-	if errors.As(err, &pe) {
-		held := h.heldCertInfo != nil && sameFile(ci, h.heldCertInfo) && sameFile(ki, h.heldKeyInfo)
-		if !held {
-			// A renewal replaces the two files one after the other: read them once more
-			// at the next check before the failure is reported.
-			h.heldCertInfo, h.heldKeyInfo = ci, ki
-			return
-		}
+	if errors.As(err, &pe) && !h.held {
+		// A renewal replaces the two files one after the other: read them once more at
+		// the next check before the failure is reported, once per run of failures.
+		h.held = true
+		return
 	}
-	h.heldCertInfo, h.heldKeyInfo = nil, nil
 	line := fmt.Sprintf("replace the gateway's certificate %s and key %s with a certificate and its key, in PEM: reading them failed, %v; the gateway keeps serving the pair it read before and reads both files again on the first handshake %g seconds or more later",
 		accesskey.ShownValue(h.certFile, false), accesskey.ShownValue(h.keyFile, false), err, h.every.Seconds())
 	if line == h.failed && sameFile(ci, h.failedCertInfo) && sameFile(ki, h.failedKeyInfo) {

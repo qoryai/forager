@@ -329,12 +329,13 @@ link. Its `gateway.Config` sets it:
   modification time and size with those of the files the pair in force came from, and
   reads both files again when one of them differs. A file replaced by a rename counts as
   changed. Handshakes get the renewed pair from the first check after the renewal, at
-  most 60 s later. Connections already open keep their TLS session. If the key does not
-  match the certificate, as between the two renames of a renewal, the gateway reads both
-  files again at the next check before it reports a failure. If a read fails, for a
-  half-written file, a key of another certificate, a file the gateway cannot open, a
-  file that is not a regular file or a file longer than 1 MiB, the gateway keeps
-  serving the pair in force. It reports one line per failure, not one per check, and
+  most 60 s later. Connections already open keep their TLS session. If the two files do
+  not parse as a certificate and its key, as between the two renames of a renewal, the
+  gateway reads both files again at the next check before it reports a failure. The
+  gateway delays a report this way once after each read that succeeded, and it reports
+  a later failure at its check. If a read fails, for a half-written file, a key of
+  another certificate, a file the gateway cannot open, a file that is not a regular
+  file or a file longer than 1 MiB, the gateway keeps serving the pair in force. It reports one line per failure, not one per check, and
   the line starts with the fix: "replace the gateway's certificate <file> and key
   <file> with a certificate and its key, in PEM". The gateway reads both files again at
   each check until the read succeeds. Each connection's binding uses that connection's
