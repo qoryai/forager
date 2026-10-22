@@ -941,6 +941,10 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 			}
 		}
 		want := []string{"1 image " + o.Reference, "1 succeeded", "2 join join session 1", "2 succeeded", "3 wall start the wall", "3 succeeded"}
+		if o.Hooks {
+			// runIn gives a run with hooks the setup command install, a step after the wall's.
+			want = append(want, "4 setup install", "4 succeeded")
+		}
 		if !slices.Equal(steps, want) || r.res.ExitCode != 7 {
 			t.Errorf("the steps %q, the probe's exit %d; want %q and 7", steps, r.res.ExitCode, want)
 		}
