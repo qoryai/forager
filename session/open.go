@@ -58,6 +58,7 @@ type Run struct {
 	listed      *registration
 	wallOwn     []bindSource
 	openBinds   []bindSource
+	setupBinds  []bindSource
 	files       *sink.File
 	posts       *sink.Server
 	reload      *reloader
@@ -84,17 +85,32 @@ type Run struct {
 	// hostStep the host step open, nil for none.
 	steps    int
 	hostStep *Step
+	// imageStep is the number of the step that fetched the run's image by reference, 0
+	// until one did.
+	imageStep int
+	// enclosure is the run's wall, built as the run opens, nil for a run without one;
+	// wallFwd is the run's forwarder behind it, where the wall's relay sends every
+	// connection, and relayToken what the relay opens each of them with.
+	enclosure  wall.Enclosure
+	wallFwd    *forwarder
+	relayToken string
+	// setupFirst and setupLast are the numbers of the first and the last step of
+	// [Run.Setup], 0 until it wrote one, and setupFailed the number of its step that
+	// failed, 0 for none: no session joins after it.
+	setupFirst, setupLast, setupFailed int
 }
 
 // Open opens a run at its gateway and returns it once dev.qory.run.started and the
 // open's dev.qory.run.policy_applied, with an empty variables, are written. It checks
 // the spec, discovers the gateway's link, takes the run directory's lock, lists a walled
 // run among the walled runs still going, sends the run request, writes the run's
-// bundle for a run whose answer has an authority, when the machine has a CA bundle, and
-// starts the heartbeats and the reloads, which last until [Run.Close]. An error means
-// the run did not open: the spec is refused, the gateway's link could not be reached,
-// or the gateway refused the run request. A refusal with a code is a [*Refusal]; a
-// failure without one at the gateway is its text as the user is told it.
+// bundle for a run whose answer has an authority, when the machine has a CA bundle,
+// prepares a walled run's wall and starts the run's forwarder for it, for the Docker
+// wall its networks and its relay too, and starts the heartbeats and the reloads, which
+// last until [Run.Close]. An error means the run did not open: the spec is refused, the
+// gateway's link could not be reached, the gateway refused the run request, or the wall
+// did not start. A refusal with a code is a [*Refusal]; a failure without one at the
+// gateway is its text as the user is told it.
 func Open(ctx context.Context, spec OpenSpec) (*Run, error) {
 	spec = openDefaults(spec)
 	local, remote, err := gatewayOf(spec.Gateway)
@@ -370,6 +386,15 @@ func (r *Run) start(ctx context.Context) (err error) {
 			return fail2(fmt.Errorf("the gateway's proxy secret: %w", err))
 		}
 	}
+	// Behind a wall, the run's wall is built as the run opens: its networks, the run's
+	// forwarder at the enclosure's ProxyAddr, and the relay towards that forwarder. Each
+	// session then starts the agent's container alone, and the close removes the rest.
+	if spec.Wall != nil {
+		undo = append(undo, func() { r.closeWall(context.WithoutCancel(ctx)) })
+		if err := r.openWall(ctx); err != nil {
+			return fail2(err)
+		}
+	}
 	// A run closed during its open does not open.
 	if r.closing.Err() != nil {
 		return fail2(errRunClosed)
@@ -499,10 +524,12 @@ func (r *Run) setApplied(m map[string]any) {
 }
 
 // Close writes the run's dev.qory.run.exited with the caller's outcome, once, and
-// closes the run: a host step still open ends cancelled with -1 first, the heartbeats
-// and the reloads stop, the sinks are flushed within 15 seconds, and the lock, the
-// registry entry and the link are let go. A failed outcome with no reason of a run no
-// session joined is written as failed with no_session and -1. A run the gateway closed
+// closes the run: a host step still open ends cancelled with -1 first, then the run's
+// wall is removed, the heartbeats and the reloads stop, the sinks are flushed within 15
+// seconds, and the lock, the registry entry and the link are let go. A wall that could
+// not be removed is reported, and its entry among the walled runs still going stays. A
+// failed outcome with no reason of a run no session joined is written as failed with
+// no_session and -1. A run the gateway closed
 // before the close has its dev.qory.run.exited in the session's record alone, with the
 // state and the reason of the gateway's 410 and the last session's exit code. An error
 // means the outcome is refused, and nothing is written: the run stays open, and Close
@@ -528,6 +555,9 @@ func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 	if r.hostStep != nil {
 		r.hostStep.end(event.StateCancelled, -1)
 	}
+	// The run's wall goes before run.exited: its containers, the setup container's
+	// among them, its networks and its private directory, then the run's forwarder.
+	r.closeWall(context.WithoutCancel(ctx))
 	// Nothing of a reload goes after run.exited, and the heartbeats stop before it.
 	r.reload.stop()
 	r.stopBeat()

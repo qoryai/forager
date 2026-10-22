@@ -438,7 +438,7 @@ func TestTheRunsAndTheMachinesVariablesAreChecked(t *testing.T) {
 
 // TestTheServersSystemAndRepositoriesReachTheAgent pins the two QORY_ names the
 // server's variables may set, end to end: behind a wall the server's QORY_RUN_SYSTEM
-// and QORY_RUN_REPOSITORIES are in the agent's environment, and the run's preparation
+// and QORY_RUN_REPOSITORIES are in the agent's environment, and the session's setup command
 // sees them, while the server's QORY_RUN_KEY, a near miss and an access key's variable
 // are not; the run's or the machine's value of either is variable_reserved.
 func TestTheServersSystemAndRepositoriesReachTheAgent(t *testing.T) {
@@ -449,7 +449,8 @@ func TestTheServersSystemAndRepositoriesReachTheAgent(t *testing.T) {
 	out := dumpsEnv(t, &sp)
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 	prepared := filepath.Join(sp.Dir, "prepared-env")
-	sp.Preparation = []string{"/bin/sh", "-c", `env > "$0"`, prepared}
+	sp.SetupRunner = setupRunner
+	sp.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: []string{"/bin/sh", "-c", `env > "$0"`, prepared}}}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)

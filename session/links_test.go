@@ -302,24 +302,6 @@ func TestAModeConflictInTheWorkspaceSaysPlace(t *testing.T) {
 	}
 }
 
-// repointingWall is an open wall that, while it is prepared, points a link elsewhere.
-type repointingWall struct {
-	openWall
-	link, to string
-}
-
-func (w *repointingWall) Prepare(
-	ctx context.Context, req wall.Request,
-) (wall.Enclosure, error) {
-	if err := os.Remove(w.link); err != nil {
-		return nil, err
-	}
-	if err := os.Symlink(w.to, w.link); err != nil {
-		return nil, err
-	}
-	return w.openWall.Prepare(ctx, req)
-}
-
 // TestALinkPointedElsewhereBeforeTheWrapFailsTheRun pins the second check: a workspace
 // that is a link pointed elsewhere between the start and the wrap fails the run, and
 // the enclosure is never wrapped.
@@ -327,7 +309,15 @@ func TestALinkPointedElsewhereBeforeTheWrapFailsTheRun(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
 	ws := filepath.Join(t.TempDir(), "ws")
 	symlink(t, a, ws)
-	w := &repointingWall{link: ws, to: b}
+	afterTheJoinsCheck(t, func() {
+		if err := os.Remove(ws); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink(b, ws); err != nil {
+			t.Error(err)
+		}
+	})
+	w := &openWall{}
 	sp := walledSpec(t, w)
 	sp.Dir = ws
 	err := runErr(sp)
@@ -434,10 +424,16 @@ func TestTheWallsOwnBindsAreAnotherRunsToo(t *testing.T) {
 }
 
 // heldBinder is a wall that binds a helper and directories of its own and holds the run
-// after its first check, before its enclosure is prepared.
+// after its first check, in Prepare, as the run opens.
 type heldBinder struct {
 	*holdingWall
 	binds []wall.Bind
+}
+
+func newHeldBinder(binds []wall.Bind) heldBinder {
+	w := newHoldingWall()
+	w.inPrepare = true
+	return heldBinder{w, binds}
 }
 
 func (w heldBinder) Binds(wall.Launch) ([]wall.Bind, error) { return w.binds, nil }
@@ -456,7 +452,7 @@ func TestAWallsHelperIsListedFromTheStart(t *testing.T) {
 		{Path: helper, ReadOnly: true, Helper: true},
 		{Path: wall.TempDirs(), ReadOnly: true, Pattern: true},
 	}
-	w := heldBinder{newHoldingWall(), own}
+	w := newHeldBinder(own)
 	s := start(walledSpec(t, w))
 	select {
 	case <-w.reached:
@@ -486,7 +482,7 @@ func TestAWallsHelperIsListedFromTheStart(t *testing.T) {
 // writable directory a wall binds of its own for another walled run still going.
 func TestAPlaceInsideAnotherRunsWritableDirectoryIsNoRun(t *testing.T) {
 	dir := t.TempDir()
-	w := heldBinder{newHoldingWall(), []wall.Bind{{Path: dir}}}
+	w := newHeldBinder([]wall.Bind{{Path: dir}})
 	s := start(walledSpec(t, w))
 	select {
 	case <-w.reached:

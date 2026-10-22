@@ -13,8 +13,9 @@ import (
 
 // Step is one step of the run: one named unit of host work, such as a fetch or a
 // compose, with a start, an end, an outcome and its lines. [Run.StartStep] starts a
-// step of the caller's host work; [Run.Join] writes the join, image and wall steps of
-// a session. The steps of a run are numbered from 1 in the order they start.
+// step of the caller's host work; [Run.FetchImage] writes the image step of an image by
+// reference; [Run.Join] writes the join, image and wall steps of a session. The steps
+// of a run are numbered from 1 in the order they start.
 type Step struct {
 	r      *Run
 	n      int

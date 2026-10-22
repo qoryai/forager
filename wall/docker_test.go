@@ -66,6 +66,34 @@ type recorder struct {
 	endless  string
 	streamed int64
 	stopped  bool
+	// onPull, when set, is called at each docker pull, before the pull's answer, and
+	// onCopy at each docker cp.
+	onPull func()
+	onCopy func()
+	// execCode is the exit status of each docker exec, and execOut and execErr what it
+	// writes on its standard output and standard error; setupStopped makes the inspect of
+	// the setup container's state return false.
+	execCode     int
+	execOut      string
+	execErr      string
+	setupStopped bool
+}
+
+func (r *recorder) stream(_ context.Context, argv, env []string, stdout, stderr io.Writer) (int, error) {
+	argv = append([]string{}, argv...)
+	for i, a := range argv {
+		if a == "--env-file" {
+			argv[i+1] = "SETUPENVFILE"
+		}
+	}
+	line := words(argv)
+	r.lines, r.envs = append(r.lines, line), append(r.envs, env)
+	if r.fails(line) {
+		return -1, errors.New("exec: told to fail")
+	}
+	io.WriteString(stdout, r.execOut)
+	io.WriteString(stderr, r.execErr)
+	return r.execCode, nil
 }
 
 func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
@@ -83,6 +111,9 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 	}
 	line := words(argv)
 	r.lines = append(r.lines, line)
+	if r.onPull != nil && strings.HasPrefix(line, "docker pull ") {
+		r.onPull()
+	}
 	switch {
 	case r.fails(line):
 		return []byte("Error response from daemon: told to fail"), errors.New("exit status 1")
@@ -99,8 +130,15 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 		return []byte("10.89.0.0/24 \n"), nil
 	case strings.Contains(line, "network inspect"):
 		return []byte(r.gateway + " \n"), nil
+	case strings.Contains(line, " inspect --format '{{.State.Running}}' ") && strings.HasSuffix(line, "-setup"):
+		if r.setupStopped {
+			return []byte("false\n"), nil
+		}
+		return []byte("true\n"), nil
 	case strings.Contains(line, " inspect --format {{.State"):
 		return []byte("true\n"), nil
+	case strings.Contains(line, " logs ") && strings.HasSuffix(line, "-setup"):
+		return []byte("hold: told to stop\n"), nil
 	case strings.Contains(line, " logs "):
 		return []byte(RelayReady + "\n"), nil
 	}
@@ -117,10 +155,10 @@ func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error)
 		return nil, &exec.ExitError{Stderr: []byte(r.stderr + "\n")}
 	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.down:
 		return nil, errors.New("exit status 1: Cannot connect to the Docker daemon. Is the docker daemon running?")
-	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.held == nil:
+	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.heldNow() == nil:
 		return nil, errors.New("exit status 1: Error response from daemon: No such image: " + argv[len(argv)-1])
 	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' "):
-		b, _ := json.Marshal(r.held)
+		b, _ := json.Marshal(r.heldNow())
 		return append(b, '\n'), nil
 	case strings.Contains(line, " image inspect ") && r.user == "none":
 		return []byte(`{"Env":["PATH=/bin"],"Cmd":["sh"]}` + "\n"), nil
@@ -129,12 +167,27 @@ func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error)
 	case strings.Contains(line, " image inspect ") && r.user != "":
 		return []byte(`{"Env":["PATH=/bin"],"User":` + r.user + "}\n"), nil
 	case strings.Contains(line, " cp --follow-link "):
+		if r.onCopy != nil {
+			r.onCopy()
+		}
 		_, inside, _ := strings.Cut(argv[len(argv)-2], ":")
 		if f, ok := r.files[inside]; ok {
 			return tarred(f), nil
 		}
 	}
 	return nil, errors.New("no such file")
+}
+
+// heldNow are the repository digests the engine lists for the image: held, and each
+// image a docker pull fetched; nil when there are none and held is nil.
+func (r *recorder) heldNow() []string {
+	out := r.held
+	for _, l := range r.lines {
+		if ref, ok := strings.CutPrefix(l, "docker pull "); ok && !r.fails(l) {
+			out = append(slices.Clone(out), ref)
+		}
+	}
+	return out
 }
 
 func (r *recorder) stdout(ctx context.Context, argv, env []string) (io.ReadCloser, error) {
@@ -703,8 +756,9 @@ func TestTheDockerCLIReceivesNoAccessKeyVariable(t *testing.T) {
 
 // TestDockerFilesAreItsProgramsAndConfiguration pins the adapter's own files: the
 // directory of the docker command as PATH finds it and of the file a link to it leads
-// to, the helper's directory, and the command's configuration directory, DOCKER_CONFIG
-// or else ~/.docker.
+// to, the helper's directory, the command's configuration directory, DOCKER_CONFIG
+// or else ~/.docker, and the engine's registry authorities, CertsDir or else
+// /etc/docker/certs.d.
 func TestDockerFilesAreItsProgramsAndConfiguration(t *testing.T) {
 	bin, libexec, helpers, conf, home := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(libexec, "docker"), []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -730,6 +784,14 @@ func TestDockerFilesAreItsProgramsAndConfiguration(t *testing.T) {
 	t.Setenv("DOCKER_CONFIG", "")
 	if files := d.Files(); !slices.Contains(files, filepath.Join(home, ".docker")) || slices.Contains(files, conf) {
 		t.Errorf("without DOCKER_CONFIG, files %q", files)
+	}
+	if files := d.Files(); !slices.Contains(files, "/etc/docker/certs.d") {
+		t.Errorf("without CertsDir, files %q lack /etc/docker/certs.d", files)
+	}
+	certs := t.TempDir()
+	d.CertsDir = certs
+	if files := d.Files(); !slices.Contains(files, certs) || slices.Contains(files, "/etc/docker/certs.d") {
+		t.Errorf("with CertsDir %s, files %q", certs, files)
 	}
 	var _ Filer = d
 }

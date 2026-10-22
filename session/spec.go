@@ -1,12 +1,15 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -49,6 +52,11 @@ type OpenSpec struct {
 	// image the run's sessions start in is fixed at the open. The run request carries
 	// them, so the gateway resolves the policy's selection against them.
 	Images []Image
+	// EngineProxy, when set, is where the machine's container engine sends the pull of
+	// the run's image: [Run.FetchImage] starts a forwarder there for its step alone, so
+	// the pull goes through the run's proxy. Nil means the engine pulls over the
+	// machine's network.
+	EngineProxy *EngineProxy
 	// ImagesAllow are the prefixes of the references pinned by digest a run's policy may
 	// name its image by, for qory images.allow: an entry covers a reference that starts
 	// with it when the entry ends in / or @, or the reference's next character is / or
@@ -101,6 +109,59 @@ type OpenSpec struct {
 	// Report receives one line per thing the run reports to its user; nil means
 	// os.Stderr, each line after "qory run: ".
 	Report func(string)
+}
+
+// EngineProxy is the proxy setting the machine's container engine reads when it
+// starts, such as http-proxy and https-proxy in Docker's daemon.json set to
+// http://qory:<password>@127.0.0.1:3129: the machine's start unit writes it, and
+// writes the same values for qory to read. Forager writes Password into no event, no
+// record and no error line. Its methods show the address alone, for an EngineProxy and
+// a pointer to one alike, where fmt calls Format, log/slog LogValue and encoding/json
+// MarshalJSON. fmt calls no method, and prints both fields, in three cases: %p of a
+// value, %w, since an EngineProxy is not an error, and a value in a struct field that
+// is not exported, which log/slog's text handler prints through fmt as well.
+type EngineProxy struct {
+	// Addr is the setting's address, a loopback host:port, such as 127.0.0.1:3129.
+	Addr string
+	// Password is the setting's password, which the engine sends in the
+	// Proxy-Authorization of each request.
+	Password string
+}
+
+// shownEngineProxy is what the methods of EngineProxy show: the address alone.
+type shownEngineProxy struct {
+	Addr string
+}
+
+// Format prints p as fmt prints a struct of its address alone, under every verb and
+// flag that fmt passes to it, the password left out.
+func (p EngineProxy) Format(f fmt.State, verb rune) {
+	out := fmt.Sprintf(fmt.FormatString(f, verb), shownEngineProxy{Addr: p.Addr})
+	if verb == 'v' && f.Flag('#') {
+		out = strings.Replace(out, "session.shownEngineProxy", "session.EngineProxy", 1)
+	}
+	io.WriteString(f, out)
+}
+
+// String is p as %v prints it: its address alone.
+func (p EngineProxy) String() string { return fmt.Sprintf("%v", p) }
+
+// GoString is p as %#v prints it: its address alone.
+func (p EngineProxy) GoString() string { return fmt.Sprintf("%#v", p) }
+
+// LogValue is p as log/slog logs it: its address alone.
+func (p EngineProxy) LogValue() slog.Value { return slog.GroupValue(slog.String("addr", p.Addr)) }
+
+// MarshalJSON writes p's address alone, as {"Addr":"127.0.0.1:3129"}.
+func (p EngineProxy) MarshalJSON() ([]byte, error) {
+	return json.Marshal(shownEngineProxy{Addr: p.Addr})
+}
+
+// SetupCommand is one setup command: one setup step of the run, whose name is Name and
+// whose lines are the command's output.
+type SetupCommand struct {
+	Name string   // the step's name: "install"
+	Args []string // the program inside, then its arguments
 }
 
 // SessionSpec is what one session of an open run is given: the program to start and
@@ -163,21 +224,31 @@ type SessionSpec struct {
 	Stdin       io.Reader
 	Stdout      io.Writer
 	Stderr      io.Writer
-	// Preparation is the session's preparation, the program and then its arguments,
-	// which the session runs inside the wall before the runtime: after the runtime's
-	// preparation, as the runtime's user, in Dir, with the runtime's environment, through
-	// the run's proxy and with its placeholders, so it reaches what the policy allows
-	// with the credentials the policy selects. The session starts the runtime through a
-	// script it writes into the session's directory, PreparationScript, with /bin/sh, so an
-	// image for such a run contains /bin/sh. The script runs the preparation with no
-	// input and its output where the runtime's goes, and starts the runtime once the
-	// preparation exits 0. A preparation that exits otherwise ends the session with its
-	// exit status, and the runtime never starts. A stop during the preparation asks it to
-	// leave with SIGTERM, whatever the stop signal, and the runtime never starts.
-	// dev.qory.session.started reports the preparation as given, and the script as its
-	// command and args. Empty means none. A preparation needs the run's Wall and a
-	// program that is not empty.
-	Preparation []string
+	// Setup is the session's setup commands, which the session runs inside the wall
+	// before the runtime, one after another, each as one setup step of the run: after the
+	// runtime's preparation, as the runtime's user, in Dir, with the runtime's
+	// environment, through the run's proxy and with its placeholders, so a command
+	// reaches what the policy allows with the credentials the policy selects. The session
+	// starts the runtime through a script it writes into the session's directory,
+	// PreparationScript, with /bin/sh, so an image for such a run contains /bin/sh. The
+	// script runs each command through SetupRunner with no input, and starts the runtime
+	// once every command exits 0. A command that exits otherwise ends the session with
+	// its exit status, and neither a later command nor the runtime starts. A stop during
+	// a command asks it to leave with SIGTERM, whatever the stop signal, and the runtime
+	// never starts. Each step has the command's Name as its name and its output as its
+	// lines, which the runner sends on QORY_RUN_SOCKET as records of the setup source;
+	// the session writes each line, masked, to Stdout or Stderr too, as it writes the
+	// runtime's output.
+	// dev.qory.session.started contains the names as setup_commands, and the script as
+	// its command and args. Empty means none. Setup needs the run's Wall and SetupRunner,
+	// and each command a name and a program.
+	Setup []SetupCommand
+	// SetupRunner is the command, a path inside the enclosure and its arguments, that
+	// runs one setup command and reports it on QORY_RUN_SOCKET: a binary that calls
+	// [RunSetupCommand], such as {wall.HelperPath, "run", "setup-command"}. The script
+	// starts it as SetupRunner, then the command's number from 1, then --, then the
+	// command's Args. Setup needs it; without Setup it is not used.
+	SetupRunner []string
 	// Mounts are what the enclosure shows of this machine, each at its path: the
 	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
 	// one of the same mode is reached through the outer one, which alone is bound; one of
@@ -226,7 +297,7 @@ type SessionSpec struct {
 	// denied ones, so the runtime sees them unset, never as the image's values or empty.
 	// dev.qory.session.started reports the launch without it. The run's Wall needs one.
 	Exec []string
-	// Timeout is how long the runtime may run, the session's preparation included; zero
+	// Timeout is how long the runtime may run, the session's setup commands included; zero
 	// means no limit. At the limit the runtime is stopped the way the context ending
 	// stops it, and dev.qory.session.exited contains the reason. qory passes the time
 	// left of the run's limit.

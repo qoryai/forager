@@ -400,7 +400,7 @@ func TestAJoinAfterAReloadRecordsTheReload(t *testing.T) {
 }
 
 // prepareFailing is a wall whose Prepare fails with err: a refusal with a code, as an
-// image that runs as root, or an error with none, as a pull that fails.
+// image that runs as root, or an error with none, as a network that cannot be made.
 type prepareFailing struct {
 	openWall
 	err error
@@ -410,34 +410,23 @@ func (w *prepareFailing) Prepare(context.Context, wall.Request) (wall.Enclosure,
 	return nil, w.err
 }
 
-// TestAPrepareFailureFollowsTheSessionsStart pins a wall that fails to prepare, with
-// a refusal's code or with none: the join returns the error, and the record and the
-// link have session.started, then session.exited failed with -1, with the refusal's
-// code as its reason, or no reason for a failure with no code.
-func TestAPrepareFailureFollowsTheSessionsStart(t *testing.T) {
-	for _, c := range []struct {
-		err    error
-		reason string
-	}{
-		{refusals.New(refusals.ImageUserRoot, []string{"example.com/agent:1"}, "the image %s runs as root; a run's image runs as the wall's user", "example.com/agent:1"), refusals.ImageUserRoot},
-		{errors.New("wall docker: pull example.com/agent:1: exit status 1"), ""},
+// TestAPrepareFailureIsAFailedOpen pins a wall that fails to prepare, with a refusal's
+// code or with none: the wall is prepared as the run opens, so Open returns the error,
+// the run's directory has no record of a session, and nothing is wrapped.
+func TestAPrepareFailureIsAFailedOpen(t *testing.T) {
+	for _, err := range []error{
+		refusals.New(refusals.ImageUserRoot, []string{"example.com/agent:1"}, "the image %s runs as root; a run's image runs as the wall's user", "example.com/agent:1"),
+		errors.New("wall docker: network create qory-x-inside: exit status 1"),
 	} {
 		sp, g := specGateway(t)
-		sp.Wall, sp.Image = &prepareFailing{err: c.err}, "example.com/agent:1"
-		ctx := context.Background()
-		r, err := session.Open(ctx, opened(sp))
-		if err != nil {
-			t.Fatal(err)
+		w := &prepareFailing{err: err}
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		if _, got := session.Open(context.Background(), opened(sp)); !errors.Is(got, err) {
+			t.Errorf("%v: the open: %v", err, got)
 		}
-		if _, err := r.Join(ctx, sp.SessionSpec); !errors.Is(err, c.err) {
-			t.Errorf("%q: the join: %v", c.reason, err)
+		if w.wrapped || len(ofType(g.Events(), "dev.qory.session.started")) != 0 {
+			t.Errorf("%v: wrapped %v, events %v", err, w.wrapped, g.Events())
 		}
-		closed, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1})
-		if err != nil {
-			t.Fatal(err)
-		}
-		startedThenExited(t, "the record", events(t, &session.Result{Dir: closed.Dir}), c.reason)
-		startedThenExited(t, "the link", g.Events(), c.reason)
 	}
 }
 

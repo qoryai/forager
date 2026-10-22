@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -41,19 +42,26 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // seconds, so the next join may follow. It sends the gateway the join request with the
 // names of the variables the session passes a value for and its model key, then checks
 // the session's places, prepares the runtime, resolves the variables, writes
-// dev.qory.session.started and the session's dev.qory.run.policy_applied, prepares the
-// wall, and starts the runtime. Sessions of one run join one after another.
+// dev.qory.session.started and the session's dev.qory.run.policy_applied, behind a
+// wall wraps the launch in the wall that [Open] built, and starts the runtime. Behind
+// the Docker wall the wrap writes the docker run of the agent's container, which
+// starts with the launch, after the wall step, and the session's end removes it; the
+// rest of the wall stays until [Run.Close]. Sessions of one run join one after
+// another.
 //
 // An error means the session did not start. An error before the join request, of a
-// spec the session refuses, writes nothing. A join the gateway refuses with a 403, or
-// that fails the session's checks, writes dev.qory.session.exited, failed with -1, the
-// refusal's code as its reason when the session decides that code, and duration_ms 0;
-// a refusal with a code is a [*Refusal]. A failure once the wall is being prepared,
-// such as an image that runs as root, an image that cannot be fetched or a wall that
-// does not start, writes dev.qory.session.started, then dev.qory.session.exited, failed
-// with -1, with the refusal's code as its reason when the wall refused with a code the
-// session decides, and no reason otherwise; a failure with no reason has its text as a
-// dev.qory.run.log chunk of the session on stderr before that dev.qory.session.exited.
+// spec the session refuses or of a run whose setup step of [Run.Setup] failed, writes
+// nothing. A join the gateway refuses with a 403, or that fails the session's checks,
+// writes dev.qory.session.exited, failed with -1, the refusal's code as its reason when
+// the session decides that code, and duration_ms 0; a refusal with a code is a
+// [*Refusal]. A failure in the image or the wall step, such as an image that runs as
+// root, an image that cannot be fetched or a launch the wall cannot wrap, writes
+// dev.qory.session.started, then dev.qory.session.exited, failed with -1, with the
+// refusal's code as its reason when the wall refused with a code the session decides,
+// and no reason otherwise; a failure with no reason has its text as a dev.qory.run.log
+// chunk of the session on stderr before that dev.qory.session.exited. A docker run of
+// the agent's container that fails ends the session with docker's exit status as the
+// runtime's.
 // The run stays open: what follows is the caller's.
 //
 // Every dev.qory.run.log, dev.qory.run.resized and dev.qory.runtime.* event of the
@@ -61,10 +69,12 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 //
 // The join writes its steps, numbered on from the run's last step: the join step, join
 // session <n>, from the join request to right before dev.qory.session.started, and,
-// behind a wall, the image step, when the policy's image is a reference, and the
-// wall step, up to the runtime's start. A refused join ends its join step failed with
-// -1 before its dev.qory.session.exited. Join returns an error and writes nothing while
-// a host step of [Run.StartStep] is open.
+// behind a wall, the image step, when the policy's image is a reference that no step
+// fetched yet ([Run.FetchImage]), and the wall step, up to the launch's start, then a
+// setup step for each command of SessionSpec.Setup, from the records of its runner. A
+// refused join ends its join step failed with -1 before its dev.qory.session.exited.
+// Join returns an error and writes nothing while a host step of [Run.StartStep] is
+// open.
 //
 // A session that starts has a directory in the run directory, sessions/<n>/ with n its
 // number ([Result.SessionDir]): its output.log, the bytes of its dev.qory.run.log
@@ -91,6 +101,10 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if r.keptBy > 0 {
 		return nil, fmt.Errorf("Open a new run. The wall of session %d could not be removed and may still run, so this run takes no more sessions.", r.keptBy)
 	}
+	// A run whose setup failed is not set up as its sessions need.
+	if r.setupFailed > 0 {
+		return nil, fmt.Errorf("Open another run: setup step %d of this run failed, so no session can join it.", r.setupFailed)
+	}
 	spec = sessionDefaults(spec, r.open.Wall != nil)
 	s := runSpec{OpenSpec: r.open, SessionSpec: spec}
 	if err := checkVariables(spec.Variables); err != nil {
@@ -102,7 +116,7 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if err := checkHarness(spec.Harness); err != nil {
 		return nil, err
 	}
-	if err := checkPreparation(s); err != nil {
+	if err := checkSetup(s); err != nil {
 		return nil, err
 	}
 	if err := checkExec(s); err != nil {
@@ -216,13 +230,14 @@ func (r *Run) refusedJoin(n int, err error) {
 // dev.qory.session.exited of a join that fails the session's checks.
 //
 // Behind a wall the session's start has two steps after dev.qory.session.started. The
-// image step, when the policy's image is a reference, spans the wall's
-// preparation up to the end of the image's fetch and the check of its user,
-// wall.Request.Fetched. The wall step spans the rest: the wall's networks, the
-// forwarder, the hook socket, the second check of the places and the wall's Wrap, up to
-// the runtime's start. The runtime runs in no step. A failure in either step ends it
-// failed with -1, after the failure's line with the session's number and the step's
-// when the failure has no refusal code, and before the session's
+// image step, when the policy's image is a reference and no step fetched it yet, spans
+// the wall's pull and the check of the image's user, wall.Puller. The wall step spans
+// the rest: the wall's preparation, its networks, the forwarder, the hook socket, the
+// second check of the places and the wall's Wrap, up to the launch's start. Each setup
+// command of SessionSpec.Setup then has a setup step, which the session writes from its
+// runner's records. The runtime runs in no step. A failure in the image or the wall
+// step ends it failed with -1, after the failure's line with the session's number and
+// the step's when the failure has no refusal code, and before the session's
 // dev.qory.session.exited.
 func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Runtime, answer *server.LinkJoinAnswer, n int, joined *Step) (*Result, error) {
 	dir := r.dir
@@ -312,7 +327,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(err)
 	}
 	if r.listed != nil {
-		if err := r.listed.update(append(plan.sources, r.wallOwn...)); err != nil {
+		if err := r.listed.update(slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 		defer func() {
@@ -394,9 +409,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if prepared, err = rt.Prepare(attach); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
-	// The session's preparation runs inside, after the runtime's, and starts the launch
-	// as the runtime prepared it.
-	if prepared, err = withPreparation(sessionDir, insideAll(spec.Preparation, inside), prepared); err != nil {
+	// The session's setup commands run inside, after the runtime's preparation, and then
+	// start the launch as the runtime prepared it.
+	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
 		return fail(err)
 	}
 	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
@@ -444,17 +459,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if masker.Empty() {
 		masker = nil
 	}
-	// The wall comes before the forwarder, because it says where the forwarder must
-	// listen, and goes after everything else, because the forwarder outlives the last
-	// connection. The session starts before the wall: dev.qory.session.started and the
-	// session's policy_applied come first, then the image and wall steps, so a failure
-	// of the wall follows the session's dev.qory.session.started.
+	// Behind a wall the run's wall, its forwarder and its relay started as the run
+	// opened, and the session's launch starts the agent's container alone. The session starts
+	// before the wall step: dev.qory.session.started and the session's policy_applied
+	// come first, then the image and wall steps, so a failure of the wall follows the
+	// session's dev.qory.session.started.
 	var enclosure wall.Enclosure
-	// relayToken is what the wall's relay opens every connection with: the run's proxy
-	// secret on one machine; behind a separate gateway a secret of this session's
-	// forwarder, which the forwarder takes off before it opens the gateway's proxy with
-	// the run key inside TLS.
-	bind, secret, relayToken := link.Loopback, r.answer.ProxySecret, r.answer.ProxySecret
 	var cols, rows int
 	if interactive {
 		cols, rows = terminalSize(spec.Stdin)
@@ -480,82 +490,78 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	r.emitMu.Unlock()
 	defer r.setApplied(nil)
 	if spec.Wall != nil {
-		// The image step, for an image the wall fetches, ends once the fetch and the
-		// check of the image's user pass, and the wall step starts.
-		walling := false
-		wallStep := func() { open, walling = r.startStep(event.StepWall, "start the wall"), true }
-		req := wall.Request{RunID: r.id, Image: r.img.Ref, Runtime: r.img.Runtime, Docker: r.img.Docker, RelayImage: r.relayImage, Pull: r.byReference}
-		if req.Pull {
-			open = r.startStep(event.StepImage, r.img.Ref)
-			req.Fetched = func() {
-				endStep(event.StateSucceeded)
-				wallStep()
-			}
-		} else {
-			wallStep()
-		}
-		if enclosure, err = spec.Wall.Prepare(runCtx, req); err != nil {
-			// A refusal's code, such as an image that runs as root, is the reason the
-			// session ended; another failure, such as a pull, has no reason.
+		// refused is a failure of the image or the wall step: a refusal's code, such as
+		// an image that runs as root, is the reason the session ended; another failure,
+		// such as a pull, has no reason.
+		refused := func(err error) (*Result, error) {
 			var ref *Refusal
 			if errors.As(err, &ref) && refusal.Decides(ref.Code) {
 				return failWith(err, ref.Code)
 			}
 			return fail(err)
 		}
-		// A wall that fetched the image and did not call Fetched: the image step ends
-		// with the preparation.
-		if !walling {
-			endStep(event.StateSucceeded)
-			wallStep()
-		}
-		defer func() {
-			// The session's context may be what ended it; the wall is removed regardless.
-			if err := enclosure.Close(context.WithoutCancel(ctx)); err != nil {
-				r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
-				// Its containers may outlive the session: the entry stays, and is the
-				// run's while one of them exists.
-				r.listed.keep()
-				r.keptBy = n
+		// The image step, for an image by reference no step fetched yet, spans the
+		// wall's pull and the check of the image's user. After a fetch, the wall finds
+		// the image by its digest and the join writes no image step.
+		if puller, ok := spec.Wall.(wall.Puller); ok && r.byReference && r.imageStep == 0 {
+			open = r.startStep(event.StepImage, r.img.Ref)
+			if err := r.pullImage(runCtx, puller); err != nil {
+				return refused(err)
 			}
-		}()
-		// Behind a wall the wall's relay opens every connection with the run's proxy
-		// secret, and the forwarder passes on what arrives as it is.
-		bind, secret = enclosure.ProxyAddr(), ""
+			r.imageStep = open.n
+			endStep(event.StateSucceeded)
+		}
+		open = r.startStep(event.StepWall, "start the wall")
+		enclosure = r.enclosure
+		if u, ok := enclosure.(unwrapper); ok {
+			defer func() {
+				// The session's context may be what ended it; the agent's container is
+				// removed regardless.
+				if err := u.Unwrap(context.WithoutCancel(ctx)); err != nil {
+					r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
+					// The agent's container may outlive the session: the entry stays, and
+					// is the run's while one of the run's containers exists.
+					r.listed.keep()
+					r.keptBy = n
+				}
+			}()
+		}
 	}
-	var fwd *forwarder
-	switch {
-	case r.remote == nil:
-		// On one machine: without a wall the forwarder on loopback takes a connection
-		// only with the password and opens it to the gateway's proxy with the run's
-		// proxy secret; behind a wall it passes on what the wall's relay sends.
-		fwd, err = listenForwarder(bind, r.disc.Proxy.Address, secret, password)
-	case spec.Wall != nil:
-		// Behind a wall and a separate gateway: the relay opens every connection with the
-		// hop secret, and the forwarder, which checks it, opens the connection to the
-		// gateway over TLS, bound, with the run key.
-		if relayToken, err = newForwarderSecret(); err != nil {
+	// Behind a wall the run's forwarder passes on what the wall's relay sends. Without
+	// one, the session's forwarder on loopback takes a connection only with the
+	// password: on one machine it opens the connection to the gateway's proxy with the
+	// run's proxy secret, and behind a separate gateway it sends it to the gateway
+	// inside TLS, bound, opened with the run key.
+	fwd := r.wallFwd
+	if spec.Wall == nil {
+		if r.remote == nil {
+			fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.ProxySecret, password)
+		} else {
+			fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, password: password})
+		}
+		if err != nil {
 			return fail(err)
 		}
-		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, hop: relayToken})
-	default:
-		// Without a wall, behind a separate gateway: the forwarder on loopback takes a
-		// connection only with the password, and sends it to the gateway inside TLS,
-		// bound, opened with the run key.
-		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, password: password})
+		defer fwd.Close()
 	}
-	if err != nil {
-		return fail(err)
-	}
-	defer fwd.Close()
 
 	sock, err := socket.Listen(spec.SocketGrace)
 	if err != nil {
 		return fail(err)
 	}
 	// An event mapped from a record of the session's runtime has the session's number
-	// as session, as each chunk of its output and each resize below has.
+	// as session, as each chunk of its output and each resize below has. A record of the
+	// setup source is one of the session's setup steps, which the runtime does not map.
+	// The terminal gets each setup line the session writes, as it gets the runtime's
+	// output: stdout and stderr share one lock, so the two writers never write at once.
+	var terminalMu sync.Mutex
+	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
+	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr))
 	records := func(rec runtimes.Record) {
+		if rec.Source == runtimes.SourceSetup {
+			setupSteps.handle(rec)
+			return
+		}
 		if typ, data, ok := rt.Map(rec); ok {
 			r.write(typ, withSession(maskedRecord(masker, data), n))
 		}
@@ -603,7 +609,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return fail(err)
 		}
 		r.listed.askID(runCtx, spec.Wall)
-		if err := r.listed.update(append(append(again.sources, binds...), r.wallOwn...)); err != nil {
+		if err := r.listed.update(slices.Concat(again.sources, binds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)
@@ -612,7 +618,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key)),
 			CA:    r.authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
-			ProxyToken: relayToken,
+			ProxyToken: r.relayToken,
 		})
 		if err != nil {
 			return fail(accesskey.ShownError(err))
@@ -624,7 +630,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if errors.Is(context.Cause(runCtx), errRunClosed) {
 		return fail(errRunClosed)
 	}
-	// The wall step ends as the runtime starts, which runs in no step.
+	// The wall step ends as the launch starts: the setup commands, each in its setup
+	// step, then the runtime, which runs in no step.
 	endStep(event.StateSucceeded)
 	logs := func(stream string) func([]byte) {
 		return func(b []byte) {
@@ -638,7 +645,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	resized := func(cols, rows int) {
 		r.write(event.RunResized, map[string]any{"cols": cols, "rows": rows, "session": n})
 	}
-	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, masker: masker, output: output, cols: cols, rows: rows, resized: resized}
+	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: stdout, stderr: stderr, logs: logs, masker: masker, output: output, cols: cols, rows: rows, resized: resized}
 	// The limit ends the runtime and nothing else: the wall is closed on the caller's
 	// context, as after any exit. The run being closed from outside ends it the same
 	// way.
@@ -662,6 +669,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			exitObserved()
 		}
 	}
+	// The setup's records are recorded once the launch starts; a command that exits
+	// otherwise than 0 once the session stops the launch, at the limit, the context's
+	// end or the run's close, was cancelled. The end of limited once the launch exited
+	// is no stop.
+	setupSteps.start(func() bool {
+		return errors.Is(context.Cause(limited), errTimeout) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
+	})
 	var exit exitStatus
 	if interactive {
 		exit, err = proc.runPTY(limited)
@@ -673,6 +687,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	closed := errors.Is(context.Cause(runCtx), errRunClosed)
 	cancelLimit()
 	closeSocket()
+	// A setup step still open when the launch ended has no exit status.
+	setupSteps.finish(closed || timedOut || cancelled)
 	if err != nil && !closed {
 		r.write(event.SessionExited, map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": time.Since(start).Milliseconds()})
 		r.lastExit = -1
@@ -732,7 +748,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 // session's that contains qak_ or qrk_ in any case is sent as a phrase in its place:
 // accesskey.ShownName's for the runtime, the image, its name and its container
 // runtime; accesskey.ShownValue's for the directory, the command, each argument, the
-// runtime's version, each word of the preparation and each harness source.
+// runtime's version, the name of each setup command and each harness source.
 func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, interactive bool, cols, rows int) map[string]any {
 	started := map[string]any{
 		"session": n, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(prepared.Command, false), "args": shownValues(prepared.Args),
@@ -744,8 +760,12 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = accesskey.ShownValue(v, false)
 	}
-	if len(spec.Preparation) > 0 {
-		started["preparation"] = shownValues(spec.Preparation)
+	if setup := spec.SessionSpec.Setup; len(setup) > 0 {
+		names := make([]string, len(setup))
+		for i, c := range setup {
+			names[i] = c.Name
+		}
+		started["setup_commands"] = shownValues(names)
 	}
 	// The pseudo-terminal's size is in the record, so a replay can lay the redraws of
 	// a full-screen program over each other: the size it starts with here, each change

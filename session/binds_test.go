@@ -167,8 +167,8 @@ func TestNestedMountsOfTwoModesAreNoRun(t *testing.T) {
 			if !slices.Equal(r.Names, c.names) || r.Detail != c.detail {
 				t.Errorf("names %q, detail %q", r.Names, r.Detail)
 			}
-			if w.req.RunID != "" {
-				t.Error("the wall was prepared")
+			if w.wrapped {
+				t.Error("the wall was wrapped")
 			}
 		})
 	}
@@ -254,13 +254,16 @@ func registry(t *testing.T) string {
 	return filepath.Join(state, "qory-forager", "walled")
 }
 
-// holdingWall is an open wall whose Prepare waits until it is released, so its run is
-// a walled run still going for as long as the test needs.
+// holdingWall is an open wall whose Wrap waits until it is released, so its run is a
+// walled run still going, with its session's places listed, for as long as the test
+// needs. With inPrepare it waits in Prepare instead, as the run opens, before any join.
+// fail, when set, is Prepare's error.
 type holdingWall struct {
 	openWall
-	reached chan struct{}
-	release chan struct{}
-	fail    error
+	reached   chan struct{}
+	release   chan struct{}
+	fail      error
+	inPrepare bool
 	// id is the run's id, set before reached is signalled.
 	id string
 }
@@ -273,12 +276,23 @@ func (w *holdingWall) Prepare(
 	ctx context.Context, req wall.Request,
 ) (wall.Enclosure, error) {
 	w.id = req.RunID
-	w.reached <- struct{}{}
-	<-w.release
+	if w.inPrepare {
+		w.reached <- struct{}{}
+		<-w.release
+	}
 	if w.fail != nil {
 		return nil, w.fail
 	}
-	return w.openWall.Prepare(ctx, req)
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *holdingWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, error) {
+	if !w.inPrepare {
+		w.reached <- struct{}{}
+		<-w.release
+	}
+	return w.openWall.Wrap(ctx, l)
 }
 
 // started is a run started in the background, and what it came to.

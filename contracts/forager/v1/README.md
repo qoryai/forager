@@ -342,7 +342,9 @@ harness, then joins a session.
    step is a `dev.qory.run.step_started`, the step's lines as `dev.qory.run.log` with
    `stream: stderr`, its number as `step` and no `session`, and a
    `dev.qory.run.step_exited` (§The events, Steps); the run's masker replaces each
-   forwarder's password in them, as in a session's output. For
+   forwarder's password in them, as in a session's output. The fetch of a walled run's
+   image by reference is host work too, a step of kind `image`
+   (`(*session.Run).FetchImage`, §Images). For
    every run with a certificate authority, walled or not, the open writes
    `ca-bundle.pem` into the run directory when the machine has a CA bundle
    (§Credentials, Termination).
@@ -350,7 +352,7 @@ harness, then joins a session.
    `passes` (§The gateway's link, Joining a session) and receives the session's number,
    from 1. It writes `dev.qory.session.started`, with that number as `session` and what
    the session starts: `runtime`, `runtime_version`, `command`, `args`, `dir`,
-   `interactive`, `terminal`, the image's members, `preparation`, and `harness`, the
+   `interactive`, `terminal`, the image's members, `setup_commands`, and `harness`, the
    harness sources the session's compose used, when the caller passes them. It then
    writes `dev.qory.run.policy_applied` with that session's `variables`,
    `credential_variables` and `harness_hosts`, and steps 6 to 9 run. The session's
@@ -1251,7 +1253,7 @@ refusal is posted on the link, as the session's other refusals are.
 
 **The run's system and repositories.** The server's variables may set two `QORY_`
 names, `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`: the system and the repositories a
-run's preparation may use (§The wall), as the server sets them. Forager reads nothing
+session's setup commands may use (§The wall), as the server sets them. Forager reads nothing
 into their values. The built-in `QORY_*` entry leaves the server's values of them in,
 by these names exactly, in upper case: a name that only begins with one, such as
 `QORY_RUN_SYSTEMX`, or one in lower case, is denied as any `QORY_` name. The runtime's
@@ -1380,7 +1382,7 @@ The types, one namespace. Forager's:
 |---|---|---|
 | `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
 | `dev.qory.run.started` | the run is open: the open wrote it, before the run's host work and before any session; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `host`, behind a wall `wall`; `machine` when the caller passes it, and `setup` when the run has setup commands (§The events, Where the run and its setup ran); and `labels` when the caller passes any, and `about` when the caller passes one |
-| `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `preparation` when the run has a wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used |
+| `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `setup_commands` when the session has setup commands inside the wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used |
 | `dev.qory.run.policy_applied` | right after `dev.qory.run.started`, with an empty `variables`; right after each `dev.qory.session.started` and before the session's wall starts, also for a session whose wall then fails to start, with that session's `variables`, `credential_variables` and `harness_hosts`; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `allow_first`, `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.step_started` | a step of the run's host work started, such as a fetch or a compose; after `dev.qory.run.started`, numbered from 1 in the order the steps start (Steps, below) | `step`, `name`, `kind` |
 | `dev.qory.run.step_exited` | a step ended; one per step, after its `dev.qory.run.step_started` and after every `dev.qory.run.log` of the step | `step`, `state`, `exit_code`, `duration_ms` |
@@ -1468,11 +1470,13 @@ one at a time. The host lines of a step are `dev.qory.run.log` events with the s
 number as `step`, between its `dev.qory.run.step_started` and its
 `dev.qory.run.step_exited`. A host line outside every step has no `step`. `step` is
 optional on `dev.qory.run.log`, so a record with no steps validates. `setup` is the
-kind of a setup command wherever it runs, inside the wall too; Forager writes no
-`setup` step, and a session's `preparation` runs with its runtime, in no step.
+kind of a setup command wherever it runs. Forager writes a `setup` step for each
+command of `(*session.Run).Setup` and of `SessionSpec.Setup`.
 
 The caller writes the steps of its host work, `fetch` and `compose`, before the first
-join or between two joins (`(*session.Run).StartStep`). Each join writes its steps:
+join or between two joins (`(*session.Run).StartStep`), the image's, `image`
+(`(*session.Run).FetchImage`, §Images), and the setup's, `wall` and `setup`
+(`(*session.Run).Setup`, §The wall, Setup). Each join writes its steps:
 
 1. **The join step**, `join`, with the name `join session <n>`, the number the gateway
    gives the next join. It spans the join request and the session's checks, and ends right
@@ -1481,22 +1485,36 @@ join or between two joins (`(*session.Run).StartStep`). Each join writes its ste
    `-1`; then the session writes the join's `dev.qory.session.exited`, with the
    refusal's code when the failure has one. A session does not lie inside a join step.
 2. **The image step**, `image`, with the image's reference as its name, behind a wall
-   when the policy's image is a reference. It comes after `dev.qory.session.started`
-   and the session's `dev.qory.run.policy_applied`. The session writes that
+   when the policy's image is a reference and no step fetched it before the join. It
+   comes after `dev.qory.session.started` and the session's
+   `dev.qory.run.policy_applied`. The session writes that
    `dev.qory.run.policy_applied` right after `dev.qory.session.started` and before the
    wall, also for a session whose wall then fails to start. The image step spans the
-   wall's preparation up to the end of the image's fetch and the check of its user
-   (§Images).
+   image's fetch and the check of its user (§Images). A join after an image step that
+   succeeded finds the image by its digest and writes none.
 3. **The wall step**, `wall`, with the name `start the wall`, behind every wall. It spans the
-   rest of the wall's start: the wall's networks, the session's forwarder and hook
-   socket, the second check of the session's places and the launch's wrapping, up to
-   the runtime's start.
+   rest of the session's start: the session's hook socket, the second check of the
+   session's places and the launch's wrapping, which for `docker` writes the `docker run`
+   of the agent's container, up to the launch's start. The agent's container starts with
+   the launch, after the wall step: a `docker run` that fails ends the session with
+   docker's exit status as the runtime's. The wall's networks, the run's forwarder and the
+   relay start as the run opens, and go when it closes (§The wall).
+4. **The setup steps**, `setup`, one for each command of `SessionSpec.Setup`, with the
+   command's name, such as `install`, behind a wall, after the wall step, one after
+   another, before the runtime starts (§The wall, Setup inside the wall). Each spans
+   the command's run; its lines are the command's output, with the session's `session`,
+   and its `exit_code` is the command's exit status. It ends `succeeded` on 0,
+   `cancelled` when the session stopped the launch first, and `failed` otherwise. A
+   step whose exit record never arrives, such as one whose runner is killed at the end
+   of the stop grace, ends with the session: `cancelled` with `-1` when the session
+   stopped the launch, and `failed` with `-1` otherwise. After a step that does not end
+   `succeeded`, no later setup step starts.
 
 The runtime runs in no step. A failure in the image or the wall step ends that step
 `failed` with `-1`. A failure with no refusal code has its text as a `dev.qory.run.log`
 on `stderr` with both the session's `session` and the step's `step`, before the
 step's `dev.qory.run.step_exited`. Then comes the session's `dev.qory.session.exited`.
-So a session's `dev.qory.run.log` has `step` only during its image or wall step.
+So a session's `dev.qory.run.log` has `step` only during its image, wall or setup step.
 
 Every step ends before `dev.qory.run.exited`: the close ends a host step still open
 `cancelled` with `-1`, right before `dev.qory.run.exited`. A run the gateway ends during
@@ -1545,7 +1563,7 @@ each with `source`, the source as it is configured, and `commit`, the full commi
 compose used, 40 or 64 hexadecimal characters, in lower case. A `source` that contains
 `qak_` or `qrk_` in any case is `(a value that contains an access key secret)` in its
 place, or `(a value that contains a run key)` when it contains `qrk_` and no `qak_`, as
-are `dir`, `command`, an argument, `runtime_version` and a word of `preparation`.
+are `dir`, `command`, an argument, `runtime_version` and a name of `setup_commands`.
 Forager changes nothing else in them. The list is never empty; a caller that passes no
 source leaves `harness` out.
 
@@ -1714,8 +1732,8 @@ compose keeps it out of git:
   - `output.log`: the bytes of the session's `dev.qory.run.log` chunks, those with its
     number as `session`, masked as the
     run's `output.log` is, so the session's terminal can be replayed from it alone.
-  - `preparation.sh`: the script the runtime starts through, for a session with a
-    preparation (§The wall).
+  - `preparation.sh`: the script the runtime starts through, for a session with setup
+    commands inside the wall (§The wall).
   - `settings.json`: the runtime's settings with Forager's hooks added, when hooks are
     installed.
   - `approve-key.sh` and the copies of the `--mcp-config`, `--agents` and
@@ -3651,8 +3669,8 @@ The run endpoint).
 the discovery's `proxy.address` on loopback: inside a wall the relay opens every
 connection with `QORY-RELAY`, a space, the run's proxy secret and a newline (§Limits),
 and without a wall the session's forwarder does.
-Behind a separate gateway the session's forwarder opens every connection to the
-gateway's one address over TLS 1.3, with the link's trust, bound as every connection of
+Behind a separate gateway the forwarder, the run's behind a wall and the session's
+without one, opens every connection to the gateway's one address over TLS 1.3, with the link's trust, bound as every connection of
 the link is (The binding, above), and with `QORY-RELAY`, a space, the run key and a
 newline. Behind a wall the forwarder takes the relay's connection, which opens with
 `QORY-RELAY` and a value the session makes for the run's forwarder alone, and takes that
@@ -3892,9 +3910,9 @@ same 20 characters. A headless session, and an OAuth credential in either mode, 
 approval, and Claude Code starts as it is. A run without a wall starts Claude Code as it
 is too: the script would write into the developer's configuration, so Claude Code shows
 its approval prompt for the placeholder value, and the approval the person gives stays
-in that configuration for later runs. A run's preparation (§The wall) is started
-the same way, through a script the session writes into the run directory,
-`preparation.sh`, which then starts the launch as the runtime prepared it, through
+in that configuration for later runs. A session's setup commands inside the wall (§The
+wall) are started the same way, through a script the session writes into the run
+directory, `preparation.sh`, which then starts the launch as the runtime prepared it, through
 `approve-key.sh` when the runtime prepared that.
 
 **`runtimes.json`** lists, for a server to vendor, every descriptor this contract ships,
@@ -3929,8 +3947,21 @@ and closes; the session reads until end of file, one connection at a time in the
 they arrive, so two hook calls in a row keep their order. There is no answer and no
 framing beyond the newline. The forwarder the session installs as a hook is one such
 client; a harness that reports something itself writes the same shape with
-`source: hooks`. Nothing on the socket reaches a receiver except through the
-descriptor's rules. The socket is removed when the run ends.
+`source: hooks`. A record of the `hooks` or the `output` source reaches a receiver only
+through the descriptor's rules. The setup runner is another client: it writes records
+of the `setup` source, which the session writes as the setup steps of a session with
+setup commands inside the wall (§The wall, Setup inside the wall). Its `record` has
+`command`, the command's number from 1, and `event`: `started`; `line`, with `stream`,
+`stdout` or `stderr`, and `bytes`, the line in standard base64, a long line in parts of
+4096 bytes; or `exited`, with `exit_code`, 0 to 255. The session cuts off a connection
+that stays open longer than 5 seconds, so the runner opens a connection for each batch
+of records. The socket is removed when the run ends.
+
+```json
+{"source": "setup", "record": {"command": 1, "event": "started"}}
+{"source": "setup", "record": {"command": 1, "event": "line", "stream": "stdout", "bytes": "YWRkZWQgMjE0IHBhY2thZ2VzCg=="}}
+{"source": "setup", "record": {"command": 1, "event": "exited", "exit_code": 0}}
+```
 
 ## Images
 
@@ -3973,8 +4004,8 @@ as that image first.
 runtime, with no daemon, as the wall's user, which for such an image is a uid and a gid
 in numbers, neither 0, so that no name or group of the image's `/etc/passwd` or
 `/etc/group` chooses who the agent is: a wall user given by name, or as a uid alone, is
-refused before anything is made. Before the run starts, the wall fetches it unless the
-engine holds it by that digest, and refuses one whose user is root. The relay always
+refused before anything is made. Before the wall starts, the image's fetch pulls it
+unless the engine holds it by that digest, and refuses one whose user is root. The relay always
 starts from the machine's default image, never from the run's. The run sees its
 workspace at `/workspace`, not at its path on the machine (below).
 
@@ -4014,24 +4045,26 @@ reference as its name: "the image <ref> is under none of the machine's allowed p
 that selects another is refused, and the policy in force stays.
 
 **The user of an image by reference.** The wall fetches the image with the engine's
-pull, before it makes anything else for the run, unless the engine holds it by that
-digest, and reads the image's user. No user, `root`, and a uid of 0 in any spelling,
+pull in the run's image step, before the first container of the image starts, unless
+the engine holds it by that digest, and reads the image's user. That container then
+finds the image by its digest and pulls nothing. No user, `root`, and a uid of 0 in any spelling,
 with or without a group, are root, and so is a name the image's `/etc/passwd` maps to
 uid 0. A user given by a name the image's `/etc/passwd` does not map, or in an image
 with no `/etc/passwd`, cannot be checked and is refused the same way: such an image
 gives its user as a uid. Root is
 `image_user_root`, with the reference as its name: "the image <ref> runs as root; a
 run's image runs as the wall's user". The image's user decides nothing else: the agent
-runs as the wall's numeric uid:gid. A fetch that fails is no run, and leaves no
-container or network of the run's; an image the engine pulled stays in its store.
+runs as the wall's numeric uid:gid. A fetch that fails starts no container of the
+image, and the run's close removes the run's containers and networks; an image the
+engine pulled stays in its store.
 
 **The workspace at `/workspace`.** A run whose policy names its image by reference sees
 the bind that holds its workspace, the outermost, at `/workspace`, and the working
 directory under it where it lies in that bind. Another bind whose path inside is
 `/workspace`, holds it or lies under it is refused before the wall is asked. Forager
 names the workspace at `/workspace`, by whole path components, in what it puts inside:
-the working directory, the runtime's command, arguments and variables, the preparation's
-words, `QORY_HARNESS_HOME`, the harness's fixed and default values, and the settings the
+the working directory, the runtime's command, arguments and variables, the setup
+commands' words, `QORY_HARNESS_HOME`, the harness's fixed and default values, and the settings the
 runtime copies; `dir` of `dev.qory.session.started` is the working directory inside. A
 value of the server's, of `--env` or of the machine passes as it is. The working folder
 must be a full repository: a git worktree's `.git` file names the main checkout by its
@@ -4044,11 +4077,32 @@ sees its workspace at the same path as on the machine.
 **The record.** `dev.qory.session.started` contains `image`, the reference, and when the
 image is one the machine defines `image_name`, `container_runtime` when the definition
 sets one, and `docker: true` when the enclosure has nested Docker. For an image by
-reference, the session's image step spans the image's fetch, skipped when the engine
+reference, the run's image step spans the image's fetch, skipped when the engine
 holds it by that digest, and the check of its user; its `duration_ms` includes how long
 the wall took to find the image (§The events, Steps).
 `dev.qory.run.policy_applied` contains `image` when the policy or the run configuration
 selects or names one.
+
+**An image pulled through the gateway.** `(*session.Run).FetchImage` fetches the image
+by reference as a host step of kind `image`, named after the reference, before the first
+join or between joins. The machine's container engine pulls the image; Forager has no
+registry client. With `OpenSpec.EngineProxy`, the address and the password of the proxy
+setting the engine reads when it starts, the pull goes through the run's proxy, under the
+run's policy: for the step alone, a forwarder listens at that address, passes on only a
+request with the password, and reaches the gateway's proxy as the host proxy does
+(§The gateway's link, Host work). Each connection of the pull is a
+`dev.qory.run.egress`, and the engine checks the manifest and each layer against the
+pinned digest. For a run with a certificate authority, the Docker wall writes the run's
+certificate as `qory-run-<id>.crt` in `<CertsDir>/<host>/`, `/etc/docker/certs.d` by
+default, for the reference's registry host and for each host of `credential_hosts`, and
+removes the files when the step ends, also when the pull fails or its context ends.
+The agent's container, the setup container, and the container the wall reads the image's
+files from, are created with `--pull=never`, so the engine pulls the image in the image
+step alone. Docker Engine reads that directory at each pull. On its classic image store it reads
+none for `docker.io`, so an image there comes only through a blind relay, with no
+credential; on its containerd image store this is unverified. Without
+`EngineProxy` the engine pulls over the machine's network. The password is in no event,
+no record and no error line.
 
 **What an image provides.** The wall builds no image and changes none. An image runs:
 
@@ -4092,7 +4146,7 @@ for all of them.
 
 **Names unset inside.** When a walled run has names to unset, its launch starts through
 Forager's helper, the caller's binary, at the front of everything the launch starts, the
-run's preparation and Claude Code's approval of its key included, and after the wall's
+session's setup commands and Claude Code's approval of its key included, and after the wall's
 programs: `exec --unset NAME … -- program args…`, which removes the names from its
 environment and executes the program, found in `PATH`. A program found only through `.`
 or an empty entry of `PATH` is not run, and ends the run with 127. The names are those a
@@ -4137,8 +4191,10 @@ Forager's files are:
 - the private directories in the system's temporary directory where every gateway on the
   machine makes its link's socket, `qory-link-*` (§The gateway's link);
 - the wall's files: for `docker`, the directory of the `docker` command and of the
-  helper, and the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
-  whose context and credential helpers start programs;
+  helper, the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
+  whose context and credential helpers start programs, and `CertsDir`,
+  `/etc/docker/certs.d` by default, where a certificate an agent wrote would be one the
+  engine trusts for a registry;
 - the runs directory, where the session makes the run directories;
 - the session's registry of walled runs (below).
 
@@ -4296,23 +4352,79 @@ host's. It forwards no packet between its two networks: IP forwarding is off in 
 namespace, so what it passes on is the connections it copies and nothing routed
 through it.
 
-**A run's preparation.** A walled run may have a preparation: a program and its
-arguments, which the session runs inside the enclosure before the runtime, after the
-runtime's preparation (§The runtime), as the runtime's user, in its working directory,
-with its environment, through the relay and the proxy: it reaches what the policy
-allows, with the run's placeholders where the gateway sets the run's credentials.
-Forager reads nothing into what it does. The session writes `preparation.sh` into the
-session's directory, each word of the preparation in single quotes, and starts the runtime
-through it with `/bin/sh`, so an image for such a run contains `/bin/sh`. The script
-runs the preparation with no input and its output where the runtime's goes, and starts
-the runtime, as the runtime prepared it, once the preparation exits 0. A preparation
-that exits otherwise is the session's exit status, and the runtime never starts;
-`dev.qory.session.exited` records it as it records a runtime's exit. The run's time
-limit counts the preparation. A stop during the preparation, by any of the run's stop
-signals, asks it to leave with `SIGTERM`, and the runtime never starts; a preparation
-that does not leave within the stop grace is killed as a runtime is.
-`dev.qory.session.started` contains it as `preparation`, as given, with the script as
-`command` and `args`. A run without a wall has no preparation.
+**Setup.** `(*session.Run).Setup` runs a walled run's setup commands in the setup
+container, a separate container of the run's image on the enclosure's internal network,
+where its name is `qory-setup`. It runs once per run, before the first join and outside
+every host step, and only behind `docker`: behind another wall it returns an error. Its
+steps follow the run's last step (§The events, Steps): the image step when the policy's
+image is a reference no step fetched yet; the wall step, `start the setup container`;
+and a `setup` step for each command, with the command's name, its standard output and
+standard error as the step's lines, with no `session`, and its exit status as the
+step's `exit_code`. The setup container runs as the agent's container does without
+nested Docker: as the wall's user, with no capability and none to gain, under `--init`,
+with no health check of the image's and no IPv6 address but loopback's, and with the
+limit flags the agent's container gets, for `SetupSpec.Limits`. It gets the working
+folder, writable, at `/workspace` for an image by reference (§Images), with a
+join's checks of its places, and the helper at `/qory/qory` and, with an authority, the
+bundle at `/qory/ca-bundle.pem`, both read-only: no home, run directory, hook socket or
+container runtime's socket. It reaches only the relay, at `qory-proxy:3128`. Its
+environment is the relay's proxy variables, the bundle's variables, the run's
+placeholders, then the caller's variables without the reserved names, the access key's
+variables and `QORY_RUN_KEY`; a value that contains the password of one of the run's
+forwarders or of the engine proxy, as it is, in a proxy URL or as the base64 of
+`qory:<password>`, is refused. The helper keeps the container
+running (`Docker.HoldArgs`), and each command runs in it through `docker exec`, as the
+wall's user, in the working folder, with no input. The container runs until the run
+closes, so a service a setup command starts is reachable from the agent's container by
+the name `qory-setup`, such as `qory-setup:5432`; such a service writes its output to a
+file, so its command returns. A command that exits otherwise than 0 ends its step
+`failed` with its exit status, and `Setup` returns a `*session.SetupError`. Any other
+failure in a step of the setup, such as a setup container that does not start or that
+stopped, ends the step `failed` with `-1`, or `cancelled` when the caller's context
+ended, after the failure's text as a `dev.qory.run.log` line on `stderr` with the
+step's `step` and no `session`, and is the error `Setup` returns. After a step
+of the setup that does not end `succeeded`, no later step of it starts and no session
+joins the run. The setup container has no Docker daemon. Its services run through every
+session on the same relay, so a request recorded during a session may be a service's;
+the setup container and the agent's run code from the working folder as the wall's user.
+
+**Setup inside the wall.** With `wall.setup: inside`, a walled session may have setup
+commands, `SessionSpec.Setup`: each a name, such as `install` or `start services`, and
+a program and its arguments. The session runs them inside the enclosure before the
+runtime, one after another, after the runtime's preparation (§The runtime), as the
+runtime's user, in its working directory, with its environment, through the relay and
+the proxy: a command reaches what the policy allows, with the run's placeholders where
+the gateway sets the run's credentials. Forager reads nothing into what a command does.
+The session writes `preparation.sh` into the session's directory and starts the runtime
+through it with `/bin/sh`, so an image for such a run contains `/bin/sh`. For each
+command the script starts the setup runner, `SessionSpec.SetupRunner`, with the
+command's number from 1, `--` and the command's words, each word in single quotes, with
+no input. The runner, `session.RunSetupCommand` in the caller's binary, runs the
+command and sends records of the `setup` source to `QORY_RUN_SOCKET` (§The local
+socket): that it started, each line of its output, and its exit status. The session
+writes the command's `setup` step from them (§The events, Steps): it takes a record in
+order alone, and reports one out of order, or one after the setup ended, and records
+nothing of it. The session writes each line of a step, masked as the step's line is,
+to the user's terminal too, where the runtime's output goes: on pipes to standard
+output or standard error as its stream is, and on a pseudo-terminal to standard
+output, each line break as `\r\n`. A runner that cannot reach the socket exits `125` and runs nothing; the
+socket does not cross into an engine in a virtual machine, such as a Mac's, so there a
+session with setup commands inside ends with `125`. The script starts the runtime, as
+the runtime prepared it, once every command exits 0. A command that exits otherwise is
+the session's exit status, and neither a later command nor the runtime starts;
+`dev.qory.session.exited` records it as it records a runtime's exit. A process a command
+leaves running, such as a service it starts, keeps running; its output reaches the
+step for one second after the command exits, and has no reader after that, so a
+service started this way writes its output to a file. The run's time limit counts the setup. A
+stop during a command, by any of the run's stop signals, asks it to leave with
+`SIGTERM`, and the runtime never starts; a command that does not leave within the stop
+grace is killed as a runtime is. `dev.qory.session.started` contains the commands'
+names as `setup_commands`, with the script as `command` and `args`. A run without a
+wall has no setup commands inside.
+
+The setup's records come from inside the enclosure, as the runtime's hook records do:
+code in the working folder can write records of the `setup` source to the socket, and
+so forge a setup step's lines or its exit status, as it can forge the runtime's events.
 
 **Nested Docker.** *Experimental.* Under the nested runtime the enclosure has a root,
 and whether that root reaches the mounts the run lists as the machine's root is

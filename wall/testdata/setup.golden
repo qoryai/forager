@@ -1,0 +1,34 @@
+docker network create --internal --ipv6=false --opt com.docker.network.bridge.inhibit_ipv4=true --label dev.qory.run=0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-in
+docker network create --label dev.qory.run=0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-out
+docker network inspect --format '{{range .IPAM.Config}}{{.Gateway}} {{end}}' qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-out
+docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-in
+docker create --name qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-relay --label dev.qory.run=0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f --network qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-out --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --init --sysctl net.ipv4.ip_forward=0 --sysctl net.ipv6.conf.all.forwarding=0 --env-file RELAYENVFILE --read-only --no-healthcheck --mount type=bind,src=/opt/qory/qory-linux,dst=/qory/qory,readonly --entrypoint /qory/qory example.com/agent:1 run relay 3128=172.30.0.1:50123
+docker network connect --alias qory-proxy qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-in qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-relay
+docker start qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-relay
+docker logs qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-relay
+docker cp --follow-link qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-relay:/etc/ssl/certs/ca-certificates.crt -
+docker cp --follow-link qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-relay:/etc/pki/tls/certs/ca-bundle.crt -
+docker cp --follow-link qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-relay:/etc/ssl/ca-bundle.pem -
+docker cp --follow-link qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-relay:/etc/ssl/cert.pem -
+docker run --detach --name qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-setup --label dev.qory.run=0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f --network qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-in --network-alias qory-setup --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --init --no-healthcheck --sysctl net.ipv6.conf.default.disable_ipv6=1 --env-file RELAYENVFILE --workdir /work --mount type=bind,src=/opt/qory/qory-linux,dst=/qory/qory,readonly --mount type=bind,src=/work,dst=/work --mount type=bind,src=PRIVATEDIR/ca-bundle.pem,dst=/qory/ca-bundle.pem,readonly --entrypoint /qory/qory example.com/agent:1 run hold
+docker exec --user 1000:1000 --workdir /work --env-file SETUPENVFILE qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-setup make deps
+docker rm --force --volumes qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-agent
+docker rm --force --volumes qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-setup
+docker rm --force --volumes qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-relay
+docker network rm qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-out
+docker network rm qory-0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f-in
+
+setup environment:
+HTTP_PROXY=http://qory-proxy:3128
+http_proxy=http://qory-proxy:3128
+HTTPS_PROXY=http://qory-proxy:3128
+https_proxy=http://qory-proxy:3128
+NO_PROXY=localhost,127.0.0.1,::1
+no_proxy=localhost,127.0.0.1,::1
+SSL_CERT_FILE=/qory/ca-bundle.pem
+GIT_SSL_CAINFO=/qory/ca-bundle.pem
+NODE_EXTRA_CA_CERTS=/qory/ca-bundle.pem
+REQUESTS_CA_BUNDLE=/qory/ca-bundle.pem
+CURL_CA_BUNDLE=/qory/ca-bundle.pem
+AWS_CA_BUNDLE=/qory/ca-bundle.pem
+APP_ENV=test

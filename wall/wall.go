@@ -3,9 +3,10 @@
 //
 // The session and the gateway stay outside, with the proxy, the policy decision and the
 // record; a [Wall] owns only what makes a connection around the proxy fail rather
-// than succeed unseen. An adapter wraps the launch and nothing else: the session reads
-// from the [Enclosure] where the gateway must listen, starts the wrapped command on the
-// pseudo-terminal or the pipes it already owns, and closes the enclosure at exit.
+// than succeed unseen. An adapter wraps the launch and nothing else: the session
+// prepares the [Enclosure] as the run opens and reads from it where the gateway must
+// listen, starts each session's wrapped command on the pseudo-terminal or the pipes it
+// already has, and closes the enclosure as the run closes.
 //
 // What every wall guarantees is one list, contracts/forager/v1/README.md §The wall, the
 // same for every adapter, and the conformance suite in package e2e checks it from
@@ -15,7 +16,6 @@ package wall
 
 import (
 	"context"
-	"time"
 )
 
 // Wall is one way of building an enclosure: one implementation per container
@@ -107,34 +107,33 @@ type Request struct {
 	// RelayImage is the image the relay starts from, the machine's default; empty is
 	// Image.
 	RelayImage string
-	// Pull says the run's policy named Image by its reference pinned by digest: the wall
-	// fetches it before it makes anything else, unless the engine holds it by that
-	// digest, and refuses one whose user is root, image_user_root. Such an image never
-	// gets nested Docker.
+	// Pull is set when Image is the run's image by reference, pinned by digest: a
+	// [Puller] fetches it before the enclosure starts the first container of it, which
+	// finds it by that digest and pulls nothing. Such an image never gets nested Docker.
 	Pull bool
-	// Fetched, when set, is called at most once, on the goroutine that calls Prepare and
-	// before Prepare returns, when the fetch of an image with Pull and the check of its
-	// user have passed, before the wall makes anything else: the session records the
-	// fetch as the run's image step and the rest as its wall step. A wall that fetches
-	// nothing never calls it.
-	Fetched func()
 }
 
-// Fetcher is an enclosure that fetched the run's image itself, unless the engine held it
-// by that digest, for a [Request] with Pull, and reports how long finding it took.
-type Fetcher interface {
-	// ImageFetch is how long finding the image took, the fetch included when there was
-	// one, and whether the request had Pull.
-	ImageFetch() (time.Duration, bool)
+// Puller is a wall that fetches a run's image by reference, for a [Request] with Pull,
+// before the enclosure starts the first container of it: the engine pulls it unless it
+// holds it by that digest, and an image whose user is root is refused, image_user_root.
+// The session runs Pull as the run's image step.
+type Puller interface {
+	// Pull fetches req.Image; a request without Pull fetches nothing. With ca, the run's
+	// certificate as PEM, the engine trusts ca for the registry host of req.Image and for
+	// each of hosts during the pull alone: Pull removes the files that make the engine
+	// trust it before it returns, also when the pull fails or ctx ends.
+	Pull(ctx context.Context, req Request, ca []byte, hosts []string) error
 }
 
-// Enclosure is one run's wall, built.
+// Enclosure is one run's wall, built. The session prepares it as the run opens and
+// closes it as the run closes.
 type Enclosure interface {
 	// ProxyAddr is where the gateway must listen, host:port, for the
 	// enclosure to reach it; port 0 leaves the port to the system.
 	ProxyAddr() string
 	// Wrap returns the launch that starts l inside the enclosure, on the terminal or
-	// the pipes of whoever starts it. It is called once, after the proxy listens.
+	// the pipes of whoever starts it. It is called once for each session, after the
+	// proxy listens.
 	Wrap(ctx context.Context, l Launch) (Launch, error)
 	// Close removes everything the wall created, within the context's deadline. It is
 	// safe to call after a failed Wrap and more than once.

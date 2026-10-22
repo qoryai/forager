@@ -76,7 +76,7 @@ release may change what an existing document does, and says so under Upgrading.
 - Take a session's runtime members from `dev.qory.session.started`, not
   `dev.qory.run.started`: `runtime`, `runtime_version`, `command`, `args`, `dir`,
   `interactive`, `terminal`, `image`, `image_name`, `container_runtime`, `docker` and
-  `preparation`. `dev.qory.run.started` keeps `opened_by`,
+  `setup_commands`, which replaces `preparation`. `dev.qory.run.started` keeps `opened_by`,
   `forager_version`, `host`, `wall`, `labels` and `about`, and requires only the first
   two. Its `opened_by` is `run`; a `dev.qory.run.started` with `opened_by: "session"`
   fails validation, and a link batch with one is `400` `invalid_request`.
@@ -158,7 +158,7 @@ release may change what an existing document does, and says so under Upgrading.
   process exit status exists, and `duration_ms`. Steps come after
   `dev.qory.run.started`, one at a time, and each ends before `dev.qory.run.exited`.
   A run the gateway ends during a step has no `dev.qory.run.step_exited` for it in the
-  run's stream. `setup` is the kind of a setup command; Forager writes no `setup` step.
+  run's stream. `setup` is the kind of a setup command.
   A step's `name` has `qory-proxy-password` in place of a forwarder's password, and a
   phrase in place of a name that contains `qak_` or `qrk_`. `event.StepStarted`,
   `event.StepExited` and the six kinds, `event.StepFetch` to `event.StepWall`, are the
@@ -193,7 +193,7 @@ release may change what an existing document does, and says so under Upgrading.
 - `dev.qory.session.started`, `events/session.started.schema.json`: one per session
   that joins a run, before its runtime starts, with `session`, its number from 1, and
   the runtime members that `dev.qory.run.started` contained before, from `runtime` to
-  `preparation`.
+  `docker`, and `setup_commands` in place of `preparation`.
 - `harness` in `dev.qory.session.started`: the harness sources the session's compose
   used, one `{source, commit}` per source, `source` as it is configured and `commit`
   the full commit id, 40 or 64 hexadecimal characters. Optional; never empty. A
@@ -338,7 +338,7 @@ release may change what an existing document does, and says so under Upgrading.
 - `dev.qory.run.started` has `preparation`, the run's preparation as the caller gave it,
   when the run has one.
 - The server's variables may set `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, the
-  system and the repositories a run's preparation may use: the built-in `QORY_*` deny
+  system and the repositories a session's setup commands may use: the built-in `QORY_*` deny
   entry leaves the server's values of these two names in, by these names exactly. Set
   by any other source, they stay reserved as any `QORY_` name.
 - `dev.qory.run.policy_applied` has `ceiling_paths`: the path rules of each ceiling a
@@ -424,6 +424,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- `dev.qory.run.step_started` of kind `setup`: Forager writes one per setup command, in
+  a separate container or inside the wall. Before, Forager wrote no `setup` step.
+- `dev.qory.session.started` contains `setup_commands`, the names of the session's
+  setup commands, in place of `preparation`.
 - `dev.qory.run.started` is written at the open of a run, before its host work and
   before any session, with `opened_by: "run"`. It requires only `opened_by` and
   `forager_version`, and keeps `host`, `wall`, `labels` and `about`.
@@ -921,13 +925,23 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Wall
 
+#### Upgrading
+
+- A wall outside Forager: the session calls `Prepare` in `session.Open`, once per run,
+  and `Wrap` once per session on the one enclosure `Prepare` returned, with `Unwrap`,
+  when the enclosure has it, at the session's end.
+
 #### Added
 
-- `wall.Request.Pull`: `wall.Docker` pulls the image before it makes any network, unless
-  the engine holds it by that digest, under a timeout, and refuses with `image_user_root`
-  an image whose user is root, a uid of 0 or a name its `/etc/passwd` maps to uid 0, or a
-  name it cannot map. A pull that fails leaves no container or network. `wall.Fetcher`
-  reports how long finding the image took, the pull included when there was one.
+- `wall.Request.Pull` and `wall.Puller`: `(*wall.Docker).Pull` pulls a run's image by
+  reference, unless the engine holds it by that digest, under a timeout, and refuses
+  with `image_user_root` an image whose user is root, a uid of 0 or a name its
+  `/etc/passwd` maps to uid 0, or a name it cannot map. With the run's certificate, it
+  writes the certificate in `wall.Docker.CertsDir`, `/etc/docker/certs.d` by default,
+  for the pull alone. The first container of an image with `Pull` finds it by its
+  digest, and none starts when the engine does not hold it. The agent's container, the
+  setup container and the container the wall reads the image's files from are created
+  with `--pull=never`, so the engine pulls such an image in the image step alone.
 - `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
@@ -935,6 +949,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- The internal network, the relay and the run's forwarder start when the run opens and
+  end when it closes; each session starts and removes only the agent's container.
 - The relay now starts from the machine's default image, never from the run's, when the
   machine has a default image.
 
@@ -955,6 +971,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Replace `SessionSpec.Preparation` with `SessionSpec.Setup` and
+  `SessionSpec.SetupRunner`: each command is a `setup` step.
 - Replace `session.Run` and `session.Spec` with `session.Open`, `(*session.Run).Join`
   and `(*session.Run).Close`. `session.Run` is the open run. Move the run's fields of
   `Spec` to `session.OpenSpec`: `Gateway`, `Wall`, `CAEnv`, `Image`, `Images`,
@@ -1008,6 +1026,19 @@ release may change what an existing document does, and says so under Upgrading.
   contains no PEM certificate", and a pin of another form with "set the gateway's
   certificate pin to the SHA-256 of its public key: 44 characters of standard base64
   ending in =", before any connection. `server.RemoteTLS.Check` runs the same check.
+- `(*session.Run).FetchImage`: the engine pulls the run's image by reference as an
+  `image` step, through the gateway's proxy when `OpenSpec.EngineProxy` is set, so a
+  machine whose only route is the gateway runs it. Where fmt calls `Format`,
+  `log/slog` `LogValue` and `encoding/json` `MarshalJSON`, an `EngineProxy` shows its
+  address alone. fmt prints the password with the address under `%p` of a value, under
+  `%w`, and for a value in a struct field that is not exported. A walled run refuses a
+  mount of `wall.Docker.CertsDir`, where the engine reads the certificates it trusts
+  for a registry.
+- `(*session.Run).Setup`: runs setup commands in a separate container of the run's
+  image, on the wall's internal network, one `setup` step each; the container runs until
+  the run closes. `SetupSpec.ForagerFiles` and `SetupSpec.Written` are checked against
+  the working folder as a join's, and with `SetupSpec.Limits` the setup container gets
+  the limit flags the agent's container gets.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
@@ -1020,9 +1051,6 @@ release may change what an existing document does, and says so under Upgrading.
   the fix, and writes nothing, while a `Join` runs, after `Close`, while another host
   step is open, for a state outside the three and after the step exited; `Join`
   returns one while a host step is open.
-- `wall.Request.Fetched`: Prepare calls it once the fetch of an image by reference and
-  the check of its user pass, so the session ends the image step there and starts the
-  wall step.
 - `(*session.Run).HostProxy` starts a forwarder on loopback with a password for
   programs on the host, such as a fetch or a compose before a session joins, for every
   run, walled or not. `session.HostProxy` has `ProxyURL`,

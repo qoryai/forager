@@ -302,8 +302,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // interval is over 300 seconds or without its workspace, an event with an unpadded sequence, a run.started without opened_by,
 // with an unknown one, opened by a session, with a runtime member, with a machine in
 // upper case or with a setup other than outside and inside, a session.started
-// without its command, numbered 0, or whose harness is empty, has a member it does not
-// define or a commit of 39 characters, a session.exited without its session, failed
+// without its command, numbered 0, with preparation, whose setup_commands is empty, or
+// whose harness is empty, has a member it does not define or a commit of 39 characters, a session.exited without its session, failed
 // with exit status 0 and no reason, cancelled with stopped and an exit status, cancelled
 // with gateway_lost, or of a refused join with an exit status other than -1, a run.log
 // whose step is 0, a run.step_started with an unknown kind, without its name or numbered
@@ -396,8 +396,8 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // run.step_started of its number, once, and a run.log with a step member lies between
 // that step's run.step_started and run.step_exited; a join step lies outside every
 // session and no session starts during one, an image or a wall step lies inside a
-// session, and a run.log with both session and step is one of an image or a wall
-// step; and every step ends before run.exited, unless the gateway ended the run, whose
+// session, and a run.log with both session and step is one of an image, a wall or a
+// setup step; and every step ends before run.exited, unless the gateway ended the run, whose
 // run.exited has a reason the close never writes.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
@@ -508,7 +508,7 @@ func TestRecordedRunValidates(t *testing.T) {
 					if stepped[n] != "started" {
 						t.Errorf("%s: line %d: a run.log of step %d, whose state is %q, not started", dir, i+1, n, stepped[n])
 					}
-					if _, ok := m["data"].(map[string]any)["session"]; ok && kinds[n] != "image" && kinds[n] != "wall" {
+					if _, ok := m["data"].(map[string]any)["session"]; ok && kinds[n] != "image" && kinds[n] != "wall" && kinds[n] != "setup" {
 						t.Errorf("%s: line %d: a run.log of a session in %s step %d", dir, i+1, kinds[n], n)
 					}
 				}

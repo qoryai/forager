@@ -38,7 +38,8 @@ func TestEachSessionHasItsDirectory(t *testing.T) {
 	var mounts [][]wall.Mount
 	for _, word := range []string{"one", "two"} {
 		s := sp.SessionSpec
-		s.Preparation = []string{"/bin/sh", "-c", "echo preparing session " + word}
+		s.SetupRunner = setupRunner
+		s.Setup = []session.SetupCommand{{Name: "install", Args: []string{"/bin/sh", "-c", "echo preparing session " + word}}}
 		res, err := r.Join(ctx, s)
 		if err != nil {
 			t.Fatal(err)
@@ -127,9 +128,9 @@ func chunks(t *testing.T, dir string) ([]byte, map[int][]byte) {
 // TestASessionHasADirectoryOnceItStarts pins that sessions/<n>/ exists exactly for the
 // sessions whose dev.qory.session.started is written. A join the gateway refuses, a
 // join whose checks refuse a mount, before the directory is made, and a join whose
-// runtime's preparation fails, after it is made, leave none. A join whose wall refuses
-// the enclosure is started, and keeps sessions/4/ with its settings.json and its
-// output.log. Session 5 then starts in sessions/5/.
+// runtime's preparation fails, after it is made, leave none. A join whose wall fails to
+// wrap the launch is started, and keeps sessions/4/ with its settings.json
+// and its output.log. Session 5 then starts in sessions/5/.
 func TestASessionHasADirectoryOnceItStarts(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0")
 	joins := 0
@@ -163,8 +164,8 @@ func TestASessionHasADirectoryOnceItStarts(t *testing.T) {
 		t.Fatalf("a settings file that does not exist: %v", err)
 	}
 	walls.refuse = true
-	if _, err := r.Join(ctx, sp.SessionSpec); !errors.As(err, &ref) || ref.Code != refusals.ImageUserRoot {
-		t.Fatalf("the wall's refusal: %v", err)
+	if _, err := r.Join(ctx, sp.SessionSpec); err == nil || !strings.HasPrefix(err.Error(), "wall open: ") {
+		t.Fatalf("the wall's failure: %v", err)
 	}
 	walls.refuse = false
 	res, err := r.Join(ctx, sp.SessionSpec)
@@ -182,7 +183,7 @@ func TestASessionHasADirectoryOnceItStarts(t *testing.T) {
 	refused := filepath.Join(res.Dir, session.SessionsDir, "4")
 	for _, name := range []string{"settings.json", sink.OutputFile} {
 		if _, err := os.Stat(filepath.Join(refused, name)); err != nil {
-			t.Errorf("the session the wall refused: %v", err)
+			t.Errorf("the session whose wall failed: %v", err)
 		}
 	}
 	var started []any
@@ -194,17 +195,22 @@ func TestASessionHasADirectoryOnceItStarts(t *testing.T) {
 	}
 }
 
-// switchWall is an open wall that, while refuse is set, refuses every enclosure as a
-// wall refuses an image that runs as root: after the runtime's preparation wrote the
-// session's settings.
+// switchWall is an open wall whose Wrap fails while refuse is set, as a wall that
+// cannot wrap the launch: after the runtime's preparation wrote the session's
+// settings.
 type switchWall struct {
 	openWall
 	refuse bool
 }
 
 func (w *switchWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *switchWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, error) {
 	if w.refuse {
-		return nil, &session.Refusal{Code: refusals.ImageUserRoot, Detail: "the image runs as root"}
+		return wall.Launch{}, errors.New("wall open: the launch cannot be wrapped")
 	}
-	return w.openWall.Prepare(ctx, req)
+	return w.openWall.Wrap(ctx, l)
 }

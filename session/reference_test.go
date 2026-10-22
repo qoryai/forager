@@ -27,22 +27,21 @@ const pinned = "registry.example/agents/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
 
 // targetWall is an open wall that shows a mount at its Target, as the Docker adapter
 // does: the launch it returns starts in the workspace's directory on this machine. It
-// fetched the image, as an adapter does for a run whose image is named by reference,
-// and calls the request's Fetched then, or, when refuse is set, returns refuse from
-// Prepare.
+// is a wall.Puller, which notes each pull, and, when refuse is set, returns refuse from
+// Pull.
 type targetWall struct {
 	openWall
 	refuse error
+	pulls  []wall.Request
+}
+
+func (w *targetWall) Pull(_ context.Context, req wall.Request, _ []byte, _ []string) error {
+	w.pulls = append(w.pulls, req)
+	return w.refuse
 }
 
 func (w *targetWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
 	w.openWall.Prepare(ctx, req)
-	if w.refuse != nil {
-		return nil, w.refuse
-	}
-	if req.Pull && req.Fetched != nil {
-		req.Fetched()
-	}
 	return w, nil
 }
 
@@ -73,7 +72,7 @@ func byReference(g *linktest.Fake) {
 // the wall is asked to fetch it, with the default's image for the relay; the bind that
 // holds the workspace is shown at /workspace and the working directory is under it;
 // what Forager puts inside names the workspace there, the harness's values, its home,
-// the preparation's words and the settings it copies, and what the run, the machine
+// the setup commands' words and the settings it copies, and what the run, the machine
 // and the inherited environment set is left as it is; and the record says the
 // working directory inside, how long the fetch took, and no name for the image.
 func TestARunInAnImageByReference(t *testing.T) {
@@ -95,18 +94,15 @@ func TestARunInAnImageByReference(t *testing.T) {
 	sp.LaunchDefaults = []string{"CACHE_PATH=" + dir + "/cache:" + dir + "x"}
 	sp.Variables.Run = []string{"MINE=" + dir}
 	sp.Env = append(sp.Env, "INHERITED="+dir)
-	sp.Preparation = []string{"true", dir + "/prepare.sh"}
+	sp.SetupRunner = setupRunner
+	sp.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: []string{"true", dir + "/prepare.sh"}}}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := w.req
-	if got.Fetched == nil {
-		t.Error("the wall was asked for a fetch with no Fetched")
-	}
-	got.Fetched = nil
-	if want := (wall.Request{RunID: res.RunID, Image: pinned, RelayImage: "example.com/agent:1", Pull: true}); !reflect.DeepEqual(got, want) {
-		t.Errorf("the wall was asked for %+v, want %+v", got, want)
+	want := wall.Request{RunID: res.RunID, Image: pinned, RelayImage: "example.com/agent:1", Pull: true}
+	if !reflect.DeepEqual(w.req, want) || len(w.pulls) != 1 || !reflect.DeepEqual(w.pulls[0], want) {
+		t.Errorf("the wall was asked for %+v and pulled %+v, want %+v", w.req, w.pulls, want)
 	}
 	if req := g.Requests()[0]; !slices.Equal(req.Images.Allow, sp.ImagesAllow) {
 		t.Errorf("the run request's images %+v", req.Images)
@@ -125,8 +121,8 @@ func TestARunInAnImageByReference(t *testing.T) {
 		}
 	}
 	script, err := os.ReadFile(filepath.Join(res.SessionDir, session.PreparationScript))
-	if err != nil || !strings.Contains(string(script), "'true' '/workspace/prepare.sh'") {
-		t.Errorf("the preparation script: %s, %v", script, err)
+	if err != nil || !strings.Contains(string(script), "1 -- 'true' '/workspace/prepare.sh'") {
+		t.Errorf("the setup's script: %s, %v", script, err)
 	}
 	copied, err := os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 	if err != nil || !strings.Contains(string(copied), `"sh /workspace/hook.sh"`) || !strings.Contains(string(copied), `"`+dir+`shop"`) {
@@ -138,12 +134,13 @@ func TestARunInAnImageByReference(t *testing.T) {
 		started["docker"] != nil || started["image_fetch_ms"] != nil {
 		t.Errorf("session.started %v", started)
 	}
-	// The fetch is the image step, after session.started, and the rest of the wall's
-	// start the wall step.
-	want := []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started",
-		"step 2 image " + pinned, "step 2 succeeded -1", "step 3 wall start the wall", "step 3 succeeded -1", "session 1 exited", "run exited"}
-	if got := stepOrder(evs); !slices.Equal(got, want) {
-		t.Errorf("the steps:\n%q\nwant\n%q", got, want)
+	// The fetch is the image step, after session.started, the rest of the wall's start
+	// the wall step, and the setup command a setup step.
+	steps := []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started",
+		"step 2 image " + pinned, "step 2 succeeded -1", "step 3 wall start the wall", "step 3 succeeded -1",
+		"step 4 setup install", "step 4 succeeded 0", "session 1 exited", "run exited"}
+	if got := stepOrder(evs); !slices.Equal(got, steps) {
+		t.Errorf("the steps:\n%q\nwant\n%q", got, steps)
 	}
 }
 
@@ -209,7 +206,7 @@ func refusedIn(t *testing.T, sp runSpec) map[string]any {
 // by reference: an allow list that cannot be one, before the gateway hears of the run;
 // the gateway's image_not_allowed; the wall's image_user_root, after the session's
 // start, the code as the reason of its session.exited, recorded and posted;
-// and a place of the run's at /workspace, before the wall is asked.
+// and a place of the run's at /workspace, before the wall pulls or wraps.
 func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	for name, change := range map[string]func(*runSpec){
 		"an entry of *":          func(s *runSpec) { s.ImagesAllow = []string{"*"} },
@@ -261,8 +258,8 @@ func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	w = &targetWall{}
 	sp.Wall, sp.Image, sp.ImagesAllow = w, "example.com/agent:1", []string{"registry.example/"}
 	sp.Mounts = []wall.Mount{{Path: "/workspace/tools", ReadOnly: true}}
-	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "overlaps /workspace") || w.req.Image != "" {
-		t.Errorf("a mount at /workspace: %v; the wall was asked for %+v", err, w.req)
+	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "overlaps /workspace") || len(w.pulls) != 0 || w.wrapped {
+		t.Errorf("a mount at /workspace: %v; the wall pulled %+v, wrapped %v", err, w.pulls, w.wrapped)
 	}
 }
 
@@ -296,17 +293,15 @@ func TestTheServersImageByReferenceIsTheOneTheWallPulls(t *testing.T) {
 			t.Fatal(err)
 		}
 		rg.close(t)
-		got := w.req
-		got.Fetched = nil
-		if want := (wall.Request{RunID: res.RunID, Image: pinned, RelayImage: "example.com/agent:1", Pull: true}); !reflect.DeepEqual(got, want) {
-			t.Errorf("%s: the wall was asked for %+v, want %+v", doc, got, want)
+		if want := (wall.Request{RunID: res.RunID, Image: pinned, RelayImage: "example.com/agent:1", Pull: true}); !reflect.DeepEqual(w.req, want) || len(w.pulls) != 1 {
+			t.Errorf("%s: the wall was asked for %+v and pulled %+v, want %+v", doc, w.req, w.pulls, want)
 		}
 	}
 }
 
 // TestAPluginLinkToTheWorkspaceInsideIsNoRun pins that a run whose workspace is at
 // /workspace inside refuses a plugin directory with a link that leads to /workspace,
-// which no place of this machine's is, before the wall is asked.
+// which no place of this machine's is, before the wall pulls or wraps.
 func TestAPluginLinkToTheWorkspaceInsideIsNoRun(t *testing.T) {
 	w := &targetWall{}
 	sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -322,7 +317,7 @@ func TestAPluginLinkToTheWorkspaceInsideIsNoRun(t *testing.T) {
 	if _, err := run(context.Background(), sp); err == nil || err.Error() != want {
 		t.Errorf("the run: %v, want %q", err, want)
 	}
-	if w.req.RunID != "" {
-		t.Errorf("the wall was asked: %+v", w.req)
+	if len(w.pulls) != 0 || w.wrapped {
+		t.Errorf("the wall pulled %+v, wrapped %v", w.pulls, w.wrapped)
 	}
 }

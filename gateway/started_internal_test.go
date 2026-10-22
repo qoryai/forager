@@ -22,7 +22,7 @@ func TestARunStartedWithRawValuesGoesOnPhrased(t *testing.T) {
 		`"labels":{"repository":"acme/qak_FAKE"},"about":{"title":"qrk_t","subjects":[{"type":"issue","ref":"qak_r"},{"type":"issue","ref":"7"}]}}`
 	session := `{"session":1,"interactive":false,` +
 		`"runtime":"qak_rt","command":"/bin/qak_cmd","args":["a","--x=qrk_FAKE"],"dir":"/work/QAK_d",` +
-		`"runtime_version":"1 qrk_v","preparation":["true","qak_p"],"image":"registry.example/qrk_i@sha256:` + strings.Repeat("0", 64) + `"}`
+		`"runtime_version":"1 qrk_v","setup_commands":["install","qak_p"],"image":"registry.example/qrk_i@sha256:` + strings.Repeat("0", 64) + `"}`
 	evs := []event.Event{{Type: event.RunStarted, Data: json.RawMessage(run)}, {Type: event.SessionStarted, Data: json.RawMessage(session)}}
 	shownStarted(evs)
 	decoded := make([]map[string]any, len(evs))
@@ -49,6 +49,9 @@ func TestARunStartedWithRawValuesGoesOnPhrased(t *testing.T) {
 	}
 	if args, _ := sessionData["args"].([]any); len(args) != 2 || args[0] != "a" || args[1] != rv {
 		t.Errorf("args: %v", sessionData["args"])
+	}
+	if names, _ := sessionData["setup_commands"].([]any); len(names) != 2 || names[0] != "install" || names[1] != av {
+		t.Errorf("setup_commands: %v", sessionData["setup_commands"])
 	}
 	for name, data := range map[string]map[string]any{"events/run.started.schema.json": runData, "events/session.started.schema.json": sessionData} {
 		schema, err := contracts.Compile(name)
