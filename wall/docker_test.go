@@ -66,6 +66,8 @@ type recorder struct {
 	endless  string
 	streamed int64
 	stopped  bool
+	// onPull, when set, is called at each docker pull, before the pull's answer.
+	onPull func()
 }
 
 func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
@@ -83,6 +85,9 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 	}
 	line := words(argv)
 	r.lines = append(r.lines, line)
+	if r.onPull != nil && strings.HasPrefix(line, "docker pull ") {
+		r.onPull()
+	}
 	switch {
 	case r.fails(line):
 		return []byte("Error response from daemon: told to fail"), errors.New("exit status 1")
@@ -117,10 +122,10 @@ func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error)
 		return nil, &exec.ExitError{Stderr: []byte(r.stderr + "\n")}
 	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.down:
 		return nil, errors.New("exit status 1: Cannot connect to the Docker daemon. Is the docker daemon running?")
-	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.held == nil:
+	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.heldNow() == nil:
 		return nil, errors.New("exit status 1: Error response from daemon: No such image: " + argv[len(argv)-1])
 	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' "):
-		b, _ := json.Marshal(r.held)
+		b, _ := json.Marshal(r.heldNow())
 		return append(b, '\n'), nil
 	case strings.Contains(line, " image inspect ") && r.user == "none":
 		return []byte(`{"Env":["PATH=/bin"],"Cmd":["sh"]}` + "\n"), nil
@@ -135,6 +140,18 @@ func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error)
 		}
 	}
 	return nil, errors.New("no such file")
+}
+
+// heldNow are the repository digests the engine lists for the image: held, and each
+// image a docker pull fetched; nil when there are none and held is nil.
+func (r *recorder) heldNow() []string {
+	out := r.held
+	for _, l := range r.lines {
+		if ref, ok := strings.CutPrefix(l, "docker pull "); ok && !r.fails(l) {
+			out = append(slices.Clone(out), ref)
+		}
+	}
+	return out
 }
 
 func (r *recorder) stdout(ctx context.Context, argv, env []string) (io.ReadCloser, error) {

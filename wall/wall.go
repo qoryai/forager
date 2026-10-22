@@ -15,7 +15,6 @@ package wall
 
 import (
 	"context"
-	"time"
 )
 
 // Wall is one way of building an enclosure: one implementation per container
@@ -107,25 +106,22 @@ type Request struct {
 	// RelayImage is the image the relay starts from, the machine's default; empty is
 	// Image.
 	RelayImage string
-	// Pull says the run's policy named Image by its reference pinned by digest: the wall
-	// fetches it before it makes anything else, unless the engine holds it by that
-	// digest, and refuses one whose user is root, image_user_root. Such an image never
-	// gets nested Docker.
+	// Pull is set when the run's policy named Image by its reference pinned by digest: a
+	// [Puller] fetched it before Prepare, and Prepare finds it by that digest and pulls
+	// nothing. Such an image never gets nested Docker.
 	Pull bool
-	// Fetched, when set, is called at most once, on the goroutine that calls Prepare and
-	// before Prepare returns, when the fetch of an image with Pull and the check of its
-	// user have passed, before the wall makes anything else: the session records the
-	// fetch as the run's image step and the rest as its wall step. A wall that fetches
-	// nothing never calls it.
-	Fetched func()
 }
 
-// Fetcher is an enclosure that fetched the run's image itself, unless the engine held it
-// by that digest, for a [Request] with Pull, and reports how long finding it took.
-type Fetcher interface {
-	// ImageFetch is how long finding the image took, the fetch included when there was
-	// one, and whether the request had Pull.
-	ImageFetch() (time.Duration, bool)
+// Puller is a wall that fetches the image a run names by its reference, for a [Request]
+// with Pull, before [Wall.Prepare]: the engine pulls it unless it holds it by that
+// digest, and an image whose user is root is refused, image_user_root. The session runs
+// Pull as the run's image step.
+type Puller interface {
+	// Pull fetches req.Image; a request without Pull fetches nothing. With ca, the run's
+	// certificate as PEM, the engine trusts ca for the registry host of req.Image and for
+	// each of hosts during the pull alone: Pull removes the files that make the engine
+	// trust it before it returns, also when the pull fails or ctx ends.
+	Pull(ctx context.Context, req Request, ca []byte, hosts []string) error
 }
 
 // Enclosure is one run's wall, built.

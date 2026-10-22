@@ -7,19 +7,27 @@ import (
 	"github.com/qoryai/forager/session"
 )
 
-// runSpec is one run with one session: the open's spec and the session's.
+// runSpec is one run with one session: the open's spec and the session's, and whether
+// the run fetches its image before the join, (*session.Run).FetchImage.
 type runSpec struct {
 	session.OpenSpec
 	session.SessionSpec
+	fetch bool
 }
 
-// runOne opens a run, joins one session and closes the run with the session's outcome,
-// as qory does for a run of one session, and returns the session's result: the join's
-// error, or the open's.
+// runOne opens a run, fetches its image when sp.fetch is set, joins one session and closes
+// the run with the session's outcome, as qory does for a run of one session, and
+// returns the session's result: the join's error, the fetch's, or the open's.
 func runOne(ctx context.Context, sp runSpec) (*session.Result, error) {
 	r, err := session.Open(ctx, sp.OpenSpec)
 	if err != nil {
 		return nil, err
+	}
+	if sp.fetch {
+		if err := r.FetchImage(ctx); err != nil {
+			r.Close(ctx, session.Outcome{State: event.StateFailed, ExitCode: -1})
+			return nil, err
+		}
 	}
 	res, err := r.Join(ctx, sp.SessionSpec)
 	out := session.Outcome{State: event.StateFailed, ExitCode: -1}

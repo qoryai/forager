@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -89,6 +90,10 @@ type Docker struct {
 	// User is the uid:gid both containers run as; empty means this process's own, so
 	// the workspace's files keep their owner. Root is refused.
 	User string
+	// CertsDir is the directory the engine reads a registry's authorities from, a
+	// directory per registry host, such as /etc/docker/certs.d/registry.example; empty
+	// means /etc/docker/certs.d. [Docker.Pull] writes the run's certificate there.
+	CertsDir string
 
 	sys system
 
@@ -227,61 +232,12 @@ func (d *Docker) Name() string {
 // Prepare creates the run's two networks and decides where the proxy must listen: on
 // the ordinary network's gateway when this machine holds that address, as on a Linux
 // host, and on loopback otherwise, where the engine is in a virtual machine and reaches
-// this machine's loopback by a name.
+// this machine's loopback by a name. For a request with Pull it first finds the image
+// by its digest, which [Docker.Pull] fetched.
 func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
-	sys := d.sys
-	if sys == nil {
-		sys = hostSystem{}
-	}
-	if !runIDShape.MatchString(req.RunID) {
-		return nil, fmt.Errorf("wall docker: the run id %s cannot name a container", accesskey.ShownName(req.RunID, true))
-	}
-	if !imageShape.MatchString(req.Image) {
-		return nil, fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(req.Image, true))
-	}
-	if req.RelayImage != "" && !imageShape.MatchString(req.RelayImage) {
-		return nil, fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(req.RelayImage, true))
-	}
-	if req.Pull && req.Docker {
-		return nil, errors.New("wall docker: an image a run names by its reference never gets nested Docker")
-	}
-	if req.Runtime != "" && !runtimeShape.MatchString(req.Runtime) {
-		return nil, fmt.Errorf("wall docker: %s is not a container runtime's name", accesskey.ShownName(req.Runtime, true))
-	}
-	if req.Docker && req.Runtime == "" {
-		return nil, errors.New("wall docker: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc; a privileged container is never an enclosure")
-	}
-	if req.Docker && len(d.NestArgs) == 0 {
-		return nil, errors.New("wall docker: nested Docker needs the helper's arguments that start it")
-	}
-	if d.Helper == "" || len(d.RelayArgs) == 0 {
-		return nil, errors.New("wall docker: the helper binary and its relay arguments are required")
-	}
-	if err := sys.checkHelper(d.Helper); err != nil {
-		return nil, fmt.Errorf("wall docker: helper %s: %w", accesskey.ShownValue(d.Helper, false), accesskey.ShownError(err))
-	}
-	user := d.User
-	if user == "" {
-		uid, gid := sys.ids()
-		user = fmt.Sprintf("%d:%d", uid, gid)
-	}
-	if !userShape.MatchString(user) {
-		return nil, fmt.Errorf("wall docker: the user %s is not uid[:gid] or a name", accesskey.ShownName(user, true))
-	}
-	uid, _, _ := strings.Cut(user, ":")
-	if n, err := strconv.Atoi(uid); uid == "root" || (err == nil && n == 0) {
-		return nil, errors.New("wall docker: the agent does not run as root; name a user")
-	}
-	// The engine reads a user's name, and a uid's group and groups, out of the image's
-	// /etc/passwd and /etc/group, which an image a run names by its reference writes:
-	// such an image runs only under a uid and a gid, neither 0, that it cannot remap.
-	if req.Pull && !numericUser(user) {
-		return nil, fmt.Errorf("wall docker: an image a run names by its reference needs the wall's user as uid:gid in numbers, neither of them 0, not %s, which the image's /etc/passwd or /etc/group would resolve", accesskey.ShownName(user, true))
-	}
-	// The relay of a run in an image by reference starts from the machine's image, never
-	// from the run's, which may be anything.
-	if req.Pull && req.RelayImage == "" {
-		return nil, errors.New("wall docker: an image a run names by its reference needs the machine's image for the relay, RelayImage")
+	sys, user, err := d.checked(req)
+	if err != nil {
+		return nil, err
 	}
 	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID,
 		env: d.selected()}
@@ -290,18 +246,85 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 			return nil, err
 		}
 	}
-	// An image a run names by its reference is fetched, unless the engine holds it by
-	// that digest, and its user read, before any network is made: one that cannot be
-	// fetched, or whose user is root, leaves no container or network; what the engine
-	// pulled stays in its store.
+	// An image a run names by its reference was fetched by Pull, and its user checked:
+	// one the engine does not hold by that digest leaves no container or network, and
+	// nothing pulls it here.
 	if req.Pull {
-		if err := e.pull(ctx); err != nil {
+		held, err := e.held(ctx)
+		if err == nil && !held {
+			err = fmt.Errorf("wall docker: fetch %s with Pull before Prepare: the engine does not hold it by its digest", accesskey.ShownName(req.Image, false))
+		}
+		if err != nil {
 			return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
 		}
-		if req.Fetched != nil {
-			req.Fetched()
-		}
 	}
+	return e.prepare(ctx)
+}
+
+// checked checks the request and the adapter before any command runs, for
+// [Docker.Prepare] and [Docker.Pull] alike, and returns the system and the wall's user.
+func (d *Docker) checked(req Request) (system, string, error) {
+	sys := d.sys
+	if sys == nil {
+		sys = hostSystem{}
+	}
+	if !runIDShape.MatchString(req.RunID) {
+		return nil, "", fmt.Errorf("wall docker: the run id %s cannot name a container", accesskey.ShownName(req.RunID, true))
+	}
+	if !imageShape.MatchString(req.Image) {
+		return nil, "", fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(req.Image, true))
+	}
+	if req.RelayImage != "" && !imageShape.MatchString(req.RelayImage) {
+		return nil, "", fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(req.RelayImage, true))
+	}
+	if req.Pull && req.Docker {
+		return nil, "", errors.New("wall docker: an image a run names by its reference never gets nested Docker")
+	}
+	if req.Runtime != "" && !runtimeShape.MatchString(req.Runtime) {
+		return nil, "", fmt.Errorf("wall docker: %s is not a container runtime's name", accesskey.ShownName(req.Runtime, true))
+	}
+	if req.Docker && req.Runtime == "" {
+		return nil, "", errors.New("wall docker: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc; a privileged container is never an enclosure")
+	}
+	if req.Docker && len(d.NestArgs) == 0 {
+		return nil, "", errors.New("wall docker: nested Docker needs the helper's arguments that start it")
+	}
+	if d.Helper == "" || len(d.RelayArgs) == 0 {
+		return nil, "", errors.New("wall docker: the helper binary and its relay arguments are required")
+	}
+	if err := sys.checkHelper(d.Helper); err != nil {
+		return nil, "", fmt.Errorf("wall docker: helper %s: %w", accesskey.ShownValue(d.Helper, false), accesskey.ShownError(err))
+	}
+	user := d.User
+	if user == "" {
+		uid, gid := sys.ids()
+		user = fmt.Sprintf("%d:%d", uid, gid)
+	}
+	if !userShape.MatchString(user) {
+		return nil, "", fmt.Errorf("wall docker: the user %s is not uid[:gid] or a name", accesskey.ShownName(user, true))
+	}
+	uid, _, _ := strings.Cut(user, ":")
+	if n, err := strconv.Atoi(uid); uid == "root" || (err == nil && n == 0) {
+		return nil, "", errors.New("wall docker: the agent does not run as root; name a user")
+	}
+	// The engine reads a user's name, and a uid's group and groups, out of the image's
+	// /etc/passwd and /etc/group, which an image a run names by its reference writes:
+	// such an image runs only under a uid and a gid, neither 0, that it cannot remap.
+	if req.Pull && !numericUser(user) {
+		return nil, "", fmt.Errorf("wall docker: an image a run names by its reference needs the wall's user as uid:gid in numbers, neither of them 0, not %s, which the image's /etc/passwd or /etc/group would resolve", accesskey.ShownName(user, true))
+	}
+	// The relay of a run in an image by reference starts from the machine's image, never
+	// from the run's, which may be anything.
+	if req.Pull && req.RelayImage == "" {
+		return nil, "", errors.New("wall docker: an image a run names by its reference needs the machine's image for the relay, RelayImage")
+	}
+	return sys, user, nil
+}
+
+// prepare makes the run's networks, once the request is checked and an image by
+// reference found.
+func (e *dockerEnclosure) prepare(ctx context.Context) (Enclosure, error) {
+	req, sys := e.req, e.sys
 	// What removes a thing is noted before the thing is asked for: a command cut off by
 	// the context may still have been carried out by the engine.
 	//
@@ -409,10 +432,6 @@ type dockerEnclosure struct {
 	// env is the engine's selection every command of the run's runs with, nil for
 	// Forager's own environment.
 	env []string
-	// fetched is how long finding an image by reference took, the check of the engine's
-	// store and any pull, and pulled whether the run's image is one by reference.
-	fetched time.Duration
-	pulled  bool
 	// created says the never-started container of the run's image exists, which the
 	// image's files are read out of.
 	created bool
@@ -459,13 +478,9 @@ const relayWait = 5 * time.Minute
 // check of the engine's store and any pull.
 const pullWait = 10 * time.Minute
 
-// ImageFetch is how long finding the image a run names by its reference took, the check
-// of the engine's store and any pull, and whether the run's image is one by reference.
-func (e *dockerEnclosure) ImageFetch() (time.Duration, bool) { return e.fetched, e.pulled }
-
 // pull fetches the image a run names by its reference with docker pull, unless the
-// engine holds it by that digest, [dockerEnclosure.held], timed, the check included,
-// under [pullWait]. An image held with no Config, as a containerd store holds an index
+// engine holds it by that digest, [dockerEnclosure.held], the check included, under
+// [pullWait]. An image held with no Config, as a containerd store holds an index
 // with the content of none of its platforms, is pulled then all the same, and its Config
 // read again. pull refuses an image whose user is root, image_user_root: no user, root, a uid
 // of 0 in any spelling, with or without a group, or a name the image's /etc/passwd maps
@@ -477,7 +492,6 @@ func (e *dockerEnclosure) ImageFetch() (time.Duration, bool) { return e.fetched,
 func (e *dockerEnclosure) pull(ctx context.Context) error {
 	fetch, cancel := context.WithTimeout(ctx, pullWait)
 	defer cancel()
-	start := time.Now()
 	held, err := e.held(fetch)
 	if err != nil {
 		return err
@@ -487,17 +501,14 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 			return err
 		}
 	}
-	e.fetched, e.pulled = time.Since(start), true
 	config, err := e.imageConfig(ctx)
 	if err != nil {
 		return err
 	}
 	if config == nil && held {
-		again := time.Now()
 		if _, err := e.docker(fetch, "pull", e.req.Image); err != nil {
 			return err
 		}
-		e.fetched += time.Since(again)
 		if config, err = e.imageConfig(ctx); err != nil {
 			return err
 		}
@@ -535,6 +546,95 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 		return root()
 	}
 	return nil
+}
+
+// Pull is [Puller.Pull] for an image a run names by its reference: it checks the
+// request as Prepare does, then, with ca, writes ca as qory-run-<id>.crt, id the run's,
+// in the directory of CertsDir for the registry host of req.Image and for each of
+// hosts, runs the pull, docker pull unless the engine holds the image by that digest,
+// and the check of its user, under [pullWait], and removes the certificates and the
+// container it read the image's /etc/passwd from. A host that cannot be a directory
+// name, such as a *. pattern, gets no certificate. The engine reads a host's directory
+// at each pull, so the run's certificate is trusted for the pull alone.
+func (d *Docker) Pull(ctx context.Context, req Request, ca []byte, hosts []string) (err error) {
+	sys, user, err := d.checked(req)
+	if err != nil || !req.Pull {
+		return err
+	}
+	if len(ca) > 0 {
+		remove, trustErr := d.trust(req.RunID, ca, append([]string{registryHost(req.Image)}, hosts...))
+		if trustErr != nil {
+			return trustErr
+		}
+		defer func() { err = errors.Join(err, remove()) }()
+	}
+	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID, env: d.selected()}
+	err = e.pull(ctx)
+	return errors.Join(err, e.Close(context.WithoutCancel(ctx)))
+}
+
+// defaultCertsDir is where Docker Engine reads a registry's authorities from.
+const defaultCertsDir = "/etc/docker/certs.d"
+
+// certsHost is the shape of a registry host that a directory of CertsDir is named
+// after: a host name or an IPv4 address in lower case, with an optional port.
+var certsHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$`)
+
+// trust writes ca as qory-run-<runID>.crt in the directory of CertsDir for each host
+// of certsHost's shape, once per host, making the directory when it is missing, and
+// returns what removes the files and every directory it made. A failure to write
+// removes what was written before it.
+func (d *Docker) trust(runID string, ca []byte, hosts []string) (func() error, error) {
+	dir := d.CertsDir
+	if dir == "" {
+		dir = defaultCertsDir
+	}
+	var files, made []string
+	remove := func() error {
+		var errs []error
+		for _, f := range files {
+			host := filepath.Base(filepath.Dir(f))
+			if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, fmt.Errorf("Remove %s by hand: the run's certificate stays trusted for %s until it is removed (%s).", accesskey.ShownValue(f, false), accesskey.ShownValue(host, false), accesskey.ShownError(err)))
+			}
+		}
+		for _, m := range made {
+			os.Remove(m)
+		}
+		return errors.Join(errs...)
+	}
+	seen := map[string]bool{}
+	for _, host := range hosts {
+		if seen[host] || !certsHost.MatchString(host) {
+			continue
+		}
+		seen[host] = true
+		hostDir := filepath.Join(dir, host)
+		if _, err := os.Lstat(hostDir); errors.Is(err, fs.ErrNotExist) {
+			if err := os.Mkdir(hostDir, 0o755); err != nil {
+				return nil, errors.Join(unwritten(dir, host, err), remove())
+			}
+			made = append(made, hostDir)
+		}
+		f := filepath.Join(hostDir, "qory-run-"+runID+".crt")
+		if err := os.WriteFile(f, ca, 0o644); err != nil {
+			return nil, errors.Join(unwritten(dir, host, err), remove())
+		}
+		files = append(files, f)
+	}
+	return remove, nil
+}
+
+// unwritten is the error of a certificate for host that could not be written in dir.
+func unwritten(dir, host string, err error) error {
+	return fmt.Errorf("Make %s writable for this user, as the machine's start unit does: the run's certificate for %s could not be written (%s).", accesskey.ShownValue(dir, false), accesskey.ShownValue(host, false), accesskey.ShownError(err))
+}
+
+// registryHost is the registry host of an image reference as the engine reads it,
+// docker.io for a name whose first part has no dot or colon and is not localhost.
+func registryHost(ref string) string {
+	domain, _, _ := strings.Cut(fullReference(ref), "/")
+	return domain
 }
 
 // held reports whether the engine holds the image a run names by its reference by that

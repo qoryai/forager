@@ -36,6 +36,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -744,7 +745,7 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 			reason = "an image by reference starts with no Docker inside, which the run of the suite without one checks"
 		}
 		for _, name := range []string{"an image whose user is root is refused", "the relay's image is the machine's", "the workspace is at /workspace",
-			"a name the image sets and the runtime denies is unset"} {
+			"a name the image sets and the runtime denies is unset", "the image fetched before the join is the run's first step"} {
 			t.Run(name, func(t *testing.T) { t.Skip(reason) })
 		}
 		return
@@ -839,15 +840,43 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 			t.Errorf("the probe sees %s, which the image's ENV sets, %s; want it unset", imageDeniedVar, r.probe.ImageDenied)
 		}
 	})
+	t.Run("the image fetched before the join is the run's first step", func(t *testing.T) {
+		runID := event.NewRunID()
+		r, err := runIn(t, o, variant{image: o.Reference, allow: []string{o.Allow}, runID: runID, fetch: true}, false, h, outside)
+		if err != nil {
+			t.Fatalf("the run did not start: %v", err)
+		}
+		var steps []string
+		for _, e := range r.events {
+			d, _ := e["data"].(map[string]any)
+			switch e["type"] {
+			case "dev.qory.run.step_started":
+				steps = append(steps, fmt.Sprintf("%v %v %v", d["step"], d["kind"], d["name"]))
+			case "dev.qory.run.step_exited":
+				steps = append(steps, fmt.Sprintf("%v %v", d["step"], d["state"]))
+			}
+		}
+		want := []string{"1 image " + o.Reference, "1 succeeded", "2 join join session 1", "2 succeeded", "3 wall start the wall", "3 succeeded"}
+		if !slices.Equal(steps, want) || r.res.ExitCode != 7 {
+			t.Errorf("the steps %q, the probe's exit %d; want %q and 7", steps, r.res.ExitCode, want)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the run left %v (%v)", left, err)
+			}
+		}
+	})
 }
 
 // variant is what a run of the suite changes: the image its policy selects or names,
-// the machine's images.allow, the run's id, and what to do while the run goes.
+// the machine's images.allow, the run's id, what to do while the run goes, and whether
+// the run fetches its image before the join.
 type variant struct {
 	image   string
 	allow   []string
 	runID   string
 	started func(ctx context.Context)
+	fetch   bool
 }
 
 // run runs the probe as the runtime of a session behind the wall and reads what it
@@ -979,6 +1008,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			Exec:        o.Exec,
 			Preparation: append([]string{o.Probe, modePrepare}, preparationWords...),
 		},
+		fetch: v.fetch,
 	}
 	if v.started != nil {
 		going, stop := context.WithCancel(ctx)

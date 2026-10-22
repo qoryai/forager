@@ -739,9 +739,10 @@ uid 0. An image whose user is a name its `/etc/passwd` does not map, or that has
 `/etc/passwd`, is refused the same way, since its user cannot be checked: give the user
 as a uid. The relay always starts from the
 default image, never from the run's, and the authorities the run trusts are read out of
-the run's image. The session's `image` step spans the fetch and the check of the
-image's user, and its `dev.qory.run.step_exited` has how long they took as
-`duration_ms` ([the record](events.md)).
+the run's image. The run's `image` step spans the fetch and the check of the image's
+user, and its `dev.qory.run.step_exited` has how long they took as `duration_ms`
+([the record](events.md)). `(*session.Run).FetchImage` runs that step before the first
+join; without it, the first join runs it after its `dev.qory.session.started`.
 
 In such an image the checkout is mounted at `/workspace` and the working directory is
 under it; the paths Forager puts inside name it there, and values from the server,
@@ -756,6 +757,55 @@ Forager enforces outside the enclosure: the wall, the egress policy, the credent
 proxy sets, the tools the gateway starts and the `dev.qory.run.*` records. The runtime's
 settings, its hooks and its prompts, and the `dev.qory.runtime.*` records, which the
 runtime reports from inside, are not that boundary: the image can change or forge them.
+
+## An image pulled through the gateway
+
+On a machine whose only route out is the gateway, the container engine pulls the run's
+image through the run's proxy, under the run's policy. Forager has no registry client:
+the engine pulls, and Forager gives the pull a forwarder to the gateway for the image
+step alone.
+
+1. Before the engine starts, write its proxy setting. For Docker, set `proxies` in
+   `/etc/docker/daemon.json`, mode 0600: `http-proxy` and `https-proxy` to
+   `http://qory:<password>@127.0.0.1:3129`, and `no-proxy` to `localhost,127.0.0.1`.
+   The daemon reads `proxies` only when it starts
+   ([Docker's daemon proxy page](https://docs.docker.com/engine/daemon/proxy/)).
+2. Give the user that runs Forager write access to `/etc/docker/certs.d`, or set
+   `wall.Docker.CertsDir` to the directory the engine reads registry authorities from.
+3. Pass the same address and password as `OpenSpec.EngineProxy`, and call
+   `(*session.Run).FetchImage` after the open and before the first join:
+
+```go
+run, err := session.Open(ctx, session.OpenSpec{
+	Wall:        &wall.Docker{Helper: linuxBuild, RelayArgs: []string{"relay"}},
+	EngineProxy: &session.EngineProxy{Addr: "127.0.0.1:3129", Password: password}, // the daemon's proxy setting
+	// the rest as in From Go
+})
+if err != nil {
+	return err
+}
+if err := run.FetchImage(ctx); err != nil { // the image step: the engine pulls through the gateway
+	return err
+}
+```
+
+`FetchImage` writes the `image` step, named after the reference. During the step alone,
+a forwarder listens at `127.0.0.1:3129` and passes on only a request with the password.
+For a run with a certificate authority, the Docker wall writes the run's certificate as
+`qory-run-<id>.crt` in the directory of the image's registry host and of each host of
+the run's credentials, and removes the files when the step ends, also when the pull
+fails. Each later join finds the image by its digest and writes no `image` step. Without
+`EngineProxy`, the engine pulls over the machine's network.
+
+What to know:
+
+- The machine has no `docker login`. The registry's host needs path rules in the run's
+  policy, and its token endpoint a credential with `basic` auth.
+- On its classic image store, Docker Engine reads no `certs.d` directory for
+  `docker.io`, so an image there comes only through a blind relay, with no credential.
+  On its containerd image store this is unverified.
+- The `docker` group, which the user that runs Forager is in, has root's reach on the
+  machine ([Docker's attack surface page](https://docs.docker.com/engine/security/#docker-daemon-attack-surface)).
 
 ## Nested Docker
 

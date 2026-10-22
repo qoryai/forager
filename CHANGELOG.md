@@ -894,6 +894,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- `wall.Puller` replaces `wall.Request.Fetched` and `wall.Fetcher`: the pull of an image
+  by reference runs as a separate step after the open.
 - The relay now starts from the machine's default image, never from the run's, when the
   machine has a default image.
 
@@ -954,6 +956,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `(*session.Run).FetchImage`: the engine pulls the run's image by reference as an
+  `image` step, through the gateway's proxy when `OpenSpec.EngineProxy` is set, so a
+  machine whose only route is the gateway runs it.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.

@@ -49,6 +49,11 @@ type OpenSpec struct {
 	// image the run's sessions start in is fixed at the open. The run request carries
 	// them, so the gateway resolves the policy's selection against them.
 	Images []Image
+	// EngineProxy, when set, is where the machine's container engine sends the pull of
+	// the run's image: [Run.FetchImage] starts a forwarder there for its step alone, so
+	// the pull goes through the run's proxy. Nil means the engine pulls over the
+	// machine's network.
+	EngineProxy *EngineProxy
 	// ImagesAllow are the prefixes of the references pinned by digest a run's policy may
 	// name its image by, for qory images.allow: an entry covers a reference that starts
 	// with it when the entry ends in / or @, or the reference's next character is / or
@@ -101,6 +106,19 @@ type OpenSpec struct {
 	// Report receives one line per thing the run reports to its user; nil means
 	// os.Stderr, each line after "qory run: ".
 	Report func(string)
+}
+
+// EngineProxy is the proxy setting the machine's container engine reads when it
+// starts, such as http-proxy and https-proxy in Docker's daemon.json set to
+// http://qory:<password>@127.0.0.1:3129: the machine's start unit writes it, and
+// writes the same values for qory to read. Forager writes Password into no event, no
+// record and no error line.
+type EngineProxy struct {
+	// Addr is the setting's address, a loopback host:port, such as 127.0.0.1:3129.
+	Addr string
+	// Password is the setting's password, which the engine sends in the
+	// Proxy-Authorization of each request.
+	Password string
 }
 
 // SessionSpec is what one session of an open run is given: the program to start and

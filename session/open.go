@@ -84,6 +84,9 @@ type Run struct {
 	// hostStep the host step open, nil for none.
 	steps    int
 	hostStep *Step
+	// imageStep is the number of the step that fetched the run's image by reference, 0
+	// until one did.
+	imageStep int
 }
 
 // Open opens a run at its gateway and returns it once dev.qory.run.started and the
