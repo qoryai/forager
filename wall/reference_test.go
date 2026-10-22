@@ -606,6 +606,43 @@ func TestDockerRefusesASymbolicLinkInCertsDir(t *testing.T) {
 	}
 }
 
+// TestDockerRefusesALinkMadeAfterItsChecks pins a symbolic link out of CertsDir made
+// between Trust's checks and its write, at the host's directory or at the file: the
+// write fails, nothing is written where the link leads, and the pull runs no command.
+func TestDockerRefusesALinkMadeAfterItsChecks(t *testing.T) {
+	ca := []byte("-----BEGIN CERTIFICATE-----\nRUN\n-----END CERTIFICATE-----\n")
+	for _, at := range []string{"a host's directory", "the certificate's file"} {
+		t.Run(at, func(t *testing.T) {
+			dir, elsewhere := t.TempDir(), t.TempDir()
+			trustPause = func(f string) {
+				link, target := f, filepath.Join(elsewhere, "qory.crt")
+				if at == "a host's directory" {
+					link, target = filepath.Dir(f), elsewhere
+					if err := os.Rename(link, link+".moved"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+			}
+			defer func() { trustPause = nil }()
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`}
+			d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, CertsDir: dir, sys: rec}
+			err := d.Pull(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true}, ca, nil)
+			if want := "Make " + dir + " writable for this user"; err == nil || !strings.HasPrefix(err.Error(), want) {
+				t.Errorf("Pull: %v, want an error that starts with %s", err, want)
+			}
+			if got := certsOf(t, elsewhere); len(got) != 0 {
+				t.Errorf("where the link leads: %q", got)
+			}
+			if len(rec.lines) != 0 {
+				t.Errorf("commands after the refusal:\n%s", strings.Join(rec.lines, "\n"))
+			}
+		})
+	}
+}
+
 // TestDockerCleansUpAPullThatPanics pins a pull that panics while it reads the image's
 // /etc/passwd, as a caller that recovers meets it: the run's certificate is removed,
 // and so is the container the wall read the file from.

@@ -3694,7 +3694,7 @@ only while a host step is open, and none for a walled run, whose image step list
 that address (§Images). For a run with a certificate authority, the session writes the
 run's certificate as `qory-run-<id>.crt` in `/etc/docker/certs.d/<host>/` for each host
 its caller lists, and removes the files when the engine proxy ends: when its caller
-closes it, before each join request and at the run's close. The session writes the
+closes it, before each join request and at the run's close. A symbolic link at the host's directory or at the file is refused. The session writes the
 setting's password into no event and no file.
 
 ## The runtime

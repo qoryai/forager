@@ -606,55 +606,112 @@ var certsHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a
 // every directory it made. Empty dir means /etc/docker/certs.d, where Docker Engine
 // reads a registry's authorities from. A host name or an IPv4 address in lower case,
 // with an optional port, gets a certificate; any other host, such as a *. pattern,
-// gets none. A symbolic link at dir/<host> or at the file is refused, so the
-// certificate goes to no place outside dir. A failure to write removes what was
-// written before it.
+// gets none. A symbolic link at dir/<host> or at the file is refused. The writes and
+// the removals go through an [os.Root] of dir, whose calls fail on a link out of dir,
+// also one made after that check, so the certificate goes to no place outside dir. A
+// failure to write removes what was written before it.
 func Trust(dir, runID string, ca []byte, hosts []string) (func() error, error) {
 	if dir == "" {
 		dir = defaultCertsDir
 	}
+	// files and made are names in dir, as the os.Root of dir takes them.
 	var files, made []string
 	remove := func() error {
+		if len(files) == 0 && len(made) == 0 {
+			return nil
+		}
 		var errs []error
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			for _, f := range files {
+				errs = append(errs, unremoved(dir, f, err))
+			}
+			return errors.Join(errs...)
+		}
+		defer root.Close()
 		for _, f := range files {
-			host := filepath.Base(filepath.Dir(f))
-			if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				errs = append(errs, fmt.Errorf("Remove %s by hand: the run's certificate stays trusted for %s until it is removed (%s).", accesskey.ShownValue(f, false), accesskey.ShownValue(host, false), accesskey.ShownError(err)))
+			if err := root.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, unremoved(dir, f, err))
 			}
 		}
 		for _, m := range made {
-			os.Remove(m)
+			root.Remove(m)
 		}
 		return errors.Join(errs...)
 	}
+	var root *os.Root
+	defer func() {
+		if root != nil {
+			root.Close()
+		}
+	}()
 	seen := map[string]bool{}
 	for _, host := range hosts {
 		if seen[host] || !certsHost.MatchString(host) {
 			continue
 		}
 		seen[host] = true
-		hostDir := filepath.Join(dir, host)
-		info, err := os.Lstat(hostDir)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			if err := os.Mkdir(hostDir, 0o755); err != nil {
+		if root == nil {
+			r, err := os.OpenRoot(dir)
+			if err != nil {
 				return nil, errors.Join(unwritten(dir, host, err), remove())
 			}
-			made = append(made, hostDir)
+			root = r
+		}
+		info, err := root.Lstat(host)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			if err := root.Mkdir(host, 0o755); err != nil {
+				return nil, errors.Join(unwritten(dir, host, inDir(dir, err)), remove())
+			}
+			made = append(made, host)
 		case err == nil && info.Mode()&fs.ModeSymlink != 0:
-			return nil, errors.Join(linked("Replace the symbolic link "+accesskey.ShownValue(hostDir, false)+" with a directory", host), remove())
+			return nil, errors.Join(linked("Replace the symbolic link "+accesskey.ShownValue(filepath.Join(dir, host), false)+" with a directory", host), remove())
 		}
-		f := filepath.Join(hostDir, "qory-run-"+runID+".crt")
-		if info, err := os.Lstat(f); err == nil && info.Mode()&fs.ModeSymlink != 0 {
-			return nil, errors.Join(linked("Remove the symbolic link "+accesskey.ShownValue(f, false), host), remove())
+		f := filepath.Join(host, "qory-run-"+runID+".crt")
+		if info, err := root.Lstat(f); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+			return nil, errors.Join(linked("Remove the symbolic link "+accesskey.ShownValue(filepath.Join(dir, f), false), host), remove())
 		}
-		if err := os.WriteFile(f, ca, 0o644); err != nil {
-			return nil, errors.Join(unwritten(dir, host, err), remove())
+		if trustPause != nil {
+			trustPause(filepath.Join(dir, f))
+		}
+		// A write through a link out of dir fails in the os.Root, also through one made
+		// after the checks.
+		if err := root.WriteFile(f, ca, 0o644); err != nil {
+			return nil, errors.Join(unwritten(dir, host, inDir(dir, err)), remove())
 		}
 		files = append(files, f)
 	}
 	return remove, nil
 }
+
+// inDir is err of an os.Root of dir as the os functions give it: the path in dir
+// joined to dir, so the error shows the whole path, and mkdirat, openat and removeat
+// as mkdir, open and remove.
+func inDir(dir string, err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		if !filepath.IsAbs(pe.Path) {
+			pe.Path = filepath.Join(dir, pe.Path)
+		}
+		if op, ok := strings.CutSuffix(pe.Op, "at"); ok && (op == "mkdir" || op == "open" || op == "remove") {
+			pe.Op = op
+		}
+	}
+	return err
+}
+
+// unremoved is the error of the run's certificate f, a name in dir, that could not be
+// removed.
+func unremoved(dir, f string, err error) error {
+	full := filepath.Join(dir, f)
+	host := filepath.Base(filepath.Dir(full))
+	return fmt.Errorf("Remove %s by hand: the run's certificate stays trusted for %s until it is removed (%s).", accesskey.ShownValue(full, false), accesskey.ShownValue(host, false), accesskey.ShownError(inDir(dir, err)))
+}
+
+// trustPause is what Trust calls with the certificate's path after its checks and
+// before the write; nil for nothing. Tests set it.
+var trustPause func(path string)
 
 // linked is the error of a symbolic link where the run's certificate for host would be
 // written, a directory of dir or the file in it, with fix first.
