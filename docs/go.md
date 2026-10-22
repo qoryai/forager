@@ -547,9 +547,9 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   out of these cases. No error that the run methods return contains the run key or a
   byte of the documents.
 - An error of a verified answer starts with the fix, "use another run code: ",
-  because the code is used and a retry by the same key gets the same members: "use
-  another run code: the enrolment answer's run key is not valid: its signature does
-  not verify", say.
+  because the code is used and a retry by the same key within the 15 minutes, while
+  the run's dispatch lives, gets the same members: "use another run code: the
+  enrolment answer's run key is not valid: its signature does not verify", say.
   A `401` is an `*accesskey.Refusal` with the code `unauthorized`: the code is used, has
   expired or was cancelled, or another key redeemed it first.
 - `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and `PostRunVia`, `PostRun`

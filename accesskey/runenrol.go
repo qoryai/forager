@@ -93,7 +93,8 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 var runKeyShape = regexp.MustCompile(`^qrk_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`)
 
 // fixRunCode starts every error of a run answer that the server signed: the code is
-// used, and a retry by the same key gets the same members.
+// used, and a retry by the same key within the 15 minutes, while the run's dispatch
+// lives, gets the same members.
 const fixRunCode = "use another run code: "
 
 // VerifyRunAnswer reads the server's answer to a request with a run code, as

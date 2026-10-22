@@ -122,9 +122,10 @@ release may change what an existing document does, and says so under Upgrading.
   the gateway's relay, at `POST /.well-known/qory-enrolment`. The signed `201` is
   `$defs/run_answer` of `enrolment.schema.json`: `version`, `run_id`, `run_key` and
   `apiary_public_key`. The code is valid for 15 minutes and is used once; a retry by
-  the same public key gets the same members, the same run key included, and another
-  key gets `401`. The run key's `issued` is the time of the first redemption, and its
-  `attach_by` 600 seconds after it. `accesskey.EnrolmentRequest.PostRunVia`, `PostRun`
+  the same public key within the 15 minutes, while the run's dispatch lives, gets the
+  same members, the same run key included, and another key gets `401`. The run key's
+  `issued` is the time of the first redemption, and its `attach_by` 600 seconds after
+  it. `accesskey.EnrolmentRequest.PostRunVia`, `PostRun`
   and `VerifyRunAnswer` return an `accesskey.RunAnswer`, after they verify the answer
   under the server key the code selects and the run key as the gateway does, for the
   answer's `run_id`. fmt writes a `RunAnswer` as `run <run id>`, and slog and
@@ -143,7 +144,8 @@ release may change what an existing document does, and says so under Upgrading.
   and returns it as `accesskey.RunAnswer.Documents`, a `json.RawMessage` byte for byte
   as the answer contains it. An answer without `documents`, or with `documents` that is
   not an object, is an error that starts with the fix. The signature covers
-  `documents`, and a retry by the same key gets the same `documents`. Where fmt calls
+  `documents`, and a retry by the same key within the 15 minutes, while the run's
+  dispatch lives, gets the same `documents`. Where fmt calls
   `Format`, slog `LogValue` and encoding/json `MarshalJSON`, a `RunAnswer` shows
   `run_id` alone. fmt prints the run key and the documents with the other fields under
   `%p` of a value, under `%w`, and for a `RunAnswer` in a struct field that is not
