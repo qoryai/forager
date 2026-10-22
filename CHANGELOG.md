@@ -179,13 +179,16 @@ release may change what an existing document does, and says so under Upgrading.
   image of an environment, which the run's caller writes with `(*session.Run).Built`,
   at most once per run. Each member is required: `image`, the image by its
   digest, `NAME@sha256:` and 64 lower-case hexadecimal digits, with no tag; `size`,
-  its bytes, 1 or more; `commit`, the full commit id the image was built from, 40 or
-  64 lower-case hexadecimal characters; and `environment_ref`, the caller's reference
-  to the environment, 1 character or more, which Forager writes as given.
-  `event.RunBuilt` is the name in Go. `fixtures/link/link-batch-built.json` is a batch
-  with a `build` step and the event, and six invalid fixtures have an image with a
-  tag, a size of 0, a commit in upper case or of 39 characters, and an empty or a
-  missing `environment_ref`.
+  its size in bytes, 1 or more; `commit`, the full commit id the image was built from,
+  40 or 64 lower-case hexadecimal characters; and `environment_ref`, the caller's
+  reference to the environment, 1 character or more. The run's masker replaces each
+  forwarder's password in `environment_ref`, and a reference that contains `qak_` or
+  `qrk_` is a phrase in its place, as in a step's `name`. `event.RunBuilt` is the name
+  in Go. `fixtures/link/link-batch-built.json` is a batch with a `build` step and the
+  event, `fixtures/batch/built-sha256-commit.json` is the event with a commit of 64
+  characters, and seven invalid fixtures have an image with a tag, a size of 0, a
+  commit in upper case or of 39 characters, an empty or a missing `environment_ref`,
+  and a member the schema does not define.
 - `session` in `dev.qory.run.log`, `dev.qory.run.resized` and every
   `dev.qory.runtime.*` event of a session: the session's number, from 1, so a reader
   shows each session's terminal and events apart. The member is optional, and an event
@@ -1054,8 +1057,8 @@ release may change what an existing document does, and says so under Upgrading.
 - `(*session.Run).Built(session.Built)` writes the run's `dev.qory.run.built`, with
   `Image`, `Size`, `Commit` and `EnvironmentRef` as its members, once per run. It
   returns an error that starts with the fix, and writes nothing, for a member that is
-  not of its form, while a `Join` runs, while a host step is open, after `Close` and on
-  a second call.
+  not of its form, an `Image` that contains `qak_` or `qrk_`, while another call of the
+  run runs, while a host step is open, after `Close` and on a second call.
 - `(*session.Run).HostProxy` starts a forwarder on loopback with a password for
   programs on the host, such as a fetch or a compose before a session joins, for every
   run, walled or not. `session.HostProxy` has `ProxyURL`,

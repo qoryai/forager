@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/sink"
 )
 
 // The tests of this file pin dev.qory.run.built, the result of a build of an image
@@ -65,7 +67,7 @@ func TestBuiltPassesThroughARealGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	buildStep(t, r)
-	if err := r.Built(aBuild()); err == nil || !strings.HasPrefix(err.Error(), "write the build's result once per run") {
+	if err := r.Built(aBuild()); err == nil || err.Error() != "write the build's result once per run: Built wrote this run's dev.qory.run.built already" {
 		t.Errorf("a second Built: %v", err)
 	}
 	if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
@@ -167,8 +169,8 @@ func TestBuiltRefusesAndWritesNothing(t *testing.T) {
 		return b
 	}
 	refused("an image with a tag", r.Built(with(func(b *session.Built) { b.Image = "registry.example/example-org/env:latest" })),
-		"set the built image to NAME@sha256: and 64 lower-case hexadecimal digits")
-	refused("a size of 0", r.Built(with(func(b *session.Built) { b.Size = 0 })), "set the built image's size to its bytes, 1 or more, not 0")
+		"set the built image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag")
+	refused("a size of 0", r.Built(with(func(b *session.Built) { b.Size = 0 })), "set the built image's size to its size in bytes, 1 or more, not 0")
 	refused("a commit in upper case", r.Built(with(func(b *session.Built) { b.Commit = strings.ToUpper(b.Commit) })),
 		"set the commit of the build to a full commit id")
 	refused("a commit of 39 characters", r.Built(with(func(b *session.Built) { b.Commit = b.Commit[:39] })),
@@ -179,7 +181,7 @@ func TestBuiltRefusesAndWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	refused("a Built during the build step", r.Built(aBuild()), "exit step 1 before the build's result")
+	refused("a Built during the build step", r.Built(aBuild()), "exit step 1 before you write the build's result")
 	if err := s.Exit(event.StateSucceeded, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +191,7 @@ func TestBuiltRefusesAndWritesNothing(t *testing.T) {
 	if _, err := r.Join(ctx, j); err != nil {
 		t.Fatal(err)
 	}
-	refused("a Built during a join", <-during, "write the build's result after Join returns")
+	refused("a Built during a join", <-during, "write the build's result after the run's other call returns: another call of the run is running")
 	if err := r.Built(aBuild()); err != nil {
 		t.Fatal(err)
 	}
@@ -202,5 +204,66 @@ func TestBuiltRefusesAndWritesNothing(t *testing.T) {
 	want := []string{event.StepStarted, event.StepExited, event.StepStarted, event.StepExited, event.SessionStarted, event.SessionExited, event.RunBuilt, event.RunExited}
 	if got := ofTypes(evs, []string{event.StepStarted, event.StepExited, event.SessionStarted, event.SessionExited, event.RunBuilt, event.RunExited}); !slices.Equal(got, want) {
 		t.Errorf("the record:\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestBuiltKeepsAKeyOutOfItsEvent pins the two members that could contain a key's
+// prefix: an image that contains qak_ or qrk_ in any case is refused with an error that
+// starts with the fix and shows no value, and writes nothing; an environment_ref that
+// contains qak_ is the access key secret's phrase in the record and on the link, one
+// with qrk_ alone the run key's, and one with the host proxy's password has
+// qory-proxy-password in its place; no file of the run directory the test reads
+// contains the fake keys or the password.
+func TestBuiltKeepsAKeyOutOfItsEvent(t *testing.T) {
+	for _, c := range []struct{ ref, want string }{
+		{"env-qak_FAKE0123456789", "(a value that contains an access key secret)"},
+		{"env-QRK_FAKE0123456789", "(a value that contains a run key)"},
+		{"env-<password>-01", "env-qory-proxy-password-01"},
+	} {
+		sp, g := specGateway(t)
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := r.HostProxy()
+		if err != nil {
+			t.Fatal(err)
+		}
+		password, _ := hostParts(t, h)
+		ref := strings.ReplaceAll(c.ref, "<password>", password)
+		for _, image := range []string{
+			"registry.example/qak_fake0123456789/env@sha256:" + strings.Repeat("3f", 32),
+			"registry.example/example-org/qrk_fake0123456789@sha256:" + strings.Repeat("3f", 32),
+			"registry.example/QAK_FAKE/env@sha256:" + strings.Repeat("3f", 32),
+		} {
+			b := aBuild()
+			b.Image = image
+			err := r.Built(b)
+			if err == nil || !strings.HasPrefix(err.Error(), "set the built image to a reference without qak_ or qrk_: ") ||
+				strings.Contains(strings.ToLower(err.Error()), "fake") {
+				t.Errorf("an image with a key's prefix: %v", err)
+			}
+		}
+		b := aBuild()
+		b.EnvironmentRef = ref
+		if err := r.Built(b); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1}); err != nil {
+			t.Fatal(err)
+		}
+		for where, evs := range map[string][]map[string]any{"the record": events(t, &session.Result{Dir: r.Dir()}), "the link": g.Events()} {
+			got := ofType(evs, event.RunBuilt)
+			if len(got) != 1 || data(got[0])["environment_ref"] != c.want || data(got[0])["image"] != aBuild().Image {
+				t.Errorf("%s: run.built %v, want environment_ref %q", where, got, c.want)
+			}
+		}
+		for _, name := range []string{sink.SessionFile, sink.OutputFile} {
+			f, _ := os.ReadFile(filepath.Join(r.Dir(), name))
+			if strings.Contains(strings.ToLower(string(f)), "fake0123456789") || strings.Contains(string(f), password) {
+				t.Errorf("%s contains a fake key or the host proxy's password", name)
+			}
+		}
 	}
 }

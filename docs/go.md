@@ -288,26 +288,30 @@ write its result with `(*session.Run).Built(b)`. `Built` writes `dev.qory.run.bu
 with the members of `session.Built`:
 
 - `Image` as `image`: the image by its digest, `NAME@sha256:` and 64 lower-case
-  hexadecimal digits, with no tag.
+  hexadecimal digits, with no tag and with no `qak_` or `qrk_` in any case.
 - `Size` as `size`: the image's size in bytes, 1 or more.
 - `Commit` as `commit`: the full commit id the image was built from, 40 or 64
   hexadecimal characters in lower case.
 - `EnvironmentRef` as `environment_ref`: your reference to the environment the image
-  is for, not empty. Forager writes it as given, so pass no credential in it.
+  is for, not empty. The run's masker replaces each forwarder's password in it, and a
+  reference that contains `qak_` or `qrk_` is a phrase in its place, as in a step's
+  `name`. Pass no other credential in it: `Built` writes any other secret as you pass
+  it.
 
-Call `Built` once per run, with no host step open, before the first `Join`, after a
-`Join` returns, or after the last. Each error starts with the fix, and writes nothing:
+Call `Built` once per run, with no host step open, before the first `Join` or after a
+`Join` returns. Each error starts with the fix, and writes nothing:
 
 | When | Error |
 |---|---|
-| an image with a tag, in upper case or without a digest | `set the built image to NAME@sha256: and 64 lower-case hexadecimal digits, in lower case, with no tag` |
-| a size of 0 | `set the built image's size to its bytes, 1 or more, not 0` |
+| an image that contains `qak_` or `qrk_` | `set the built image to a reference without qak_ or qrk_: an image with either prefix may contain an access key secret or a run key` |
+| an image with a tag, in upper case or without a digest | `set the built image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
+| a size of 0 | `set the built image's size to its size in bytes, 1 or more, not 0` |
 | a commit that is not a full commit id | `set the commit of the build to a full commit id, 40 or 64 hexadecimal characters in lower case` |
 | an empty `EnvironmentRef` | `set the build's environment reference: dev.qory.run.built requires a non-empty environment_ref` |
-| while a `Join` runs | `write the build's result after Join returns: a session of the run is still running` |
-| while step 1 is open | `exit step 1 before the build's result: Built writes nothing while a host step is open` |
+| while a `Join`, a `Setup` or another call of the run runs | `write the build's result after the run's other call returns: another call of the run is running` |
+| while step 1 is open | `exit step 1 before you write the build's result: Built writes nothing while a host step is open` |
 | after `Close` | `open a new run for the build's result: the run is closed` |
-| a second call | `write the build's result once per run: the run has its dev.qory.run.built already` |
+| a second call | `write the build's result once per run: Built wrote this run's dev.qory.run.built already` |
 
 ```go
 step, err := run.StartStep(event.StepBuild, "build the environment image")
