@@ -128,9 +128,10 @@ release may change what an existing document does, and says so under Upgrading.
 - `machine` and `setup` in `dev.qory.run.started`, both optional, so a reader shows
   where the run and its setup ran. `machine` is the adapter that made the run's
   machine, such as `aws-ec2`, or `none`: 1 to 64 of `a-z`, `0-9` and `-`, the first a
-  letter. `setup` is `outside`, for setup commands in a container apart from the
-  agent's, or `inside`, for setup commands in the agent's container before the runtime
-  starts, and is absent for a run with no setup commands. `session.OpenSpec.Machine` and `session.OpenSpec.Setup` set them, and
+  letter. `setup` is where the run's setup commands run, or would run if it had any:
+  `outside`, in a container apart from the agent's, or `inside`, in the agent's
+  container before the runtime starts. A run that has nowhere to run setup commands
+  has no `setup`. `session.OpenSpec.Machine` and `session.OpenSpec.Setup` set them, and
   empty leaves them out. `session.Open` refuses any other value before it contacts the
   gateway, with an error that starts with the fix. `event.MachineNone`,
   `event.SetupOutside` and `event.SetupInside` are the values in Go.
@@ -1149,7 +1150,11 @@ release may change what an existing document does, and says so under Upgrading.
   image, on the wall's internal network, one `setup` step each; the container runs until
   the run closes. `SetupSpec.ForagerFiles` and `SetupSpec.Written` are checked against
   the working folder as a join's, and with `SetupSpec.Limits` the setup container gets
-  the limit flags the agent's container gets.
+  the limit flags the agent's container gets. Before any step, `Setup` refuses a
+  `SetupSpec.Env` value for one of the run's placeholders with `placeholder_conflict`,
+  a `QORY_` name other than `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` or a reserved
+  name with `variable_reserved`, and a name of `denied-variables.json`, such as
+  `LD_PRELOAD`.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
@@ -1268,6 +1273,18 @@ release may change what an existing document does, and says so under Upgrading.
   `wall.RunContainersExist` is that method of a Docker with no field set, which a nil d
   asks through. A run's check against the registry asks through its wall when it is a
   `*wall.Docker`.
+- `(*session.Run).AgentEnv(spec)`, the environment a session of `spec` gets from the
+  server's variables, `Variables.Run`, `Variables.Machine`, `LaunchDefaults` and
+  `Env`, `NAME=value`, sorted by name, so a caller can give the setup container the
+  agent's environment: pass it as `SetupSpec.Env`. It resolves the variables as `Join`
+  does, with the deny lists and the placeholders, without the runtime's preparation,
+  and writes nothing and sends no request. It leaves out the names Forager, the proxy,
+  the wall and `LaunchFixed` set, the placeholders, and a name of
+  `denied-variables.json` that `Env` has, such as `PATH`. A spec that `Join` refuses
+  before its join request or as it resolves the variables, such as one with
+  `variable_reserved` or `placeholder_conflict`, gets the same refusal. The result has
+  `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup`
+  accepts both.
 
 #### Fixed
 

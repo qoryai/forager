@@ -1574,8 +1574,9 @@ its sessions). What each session starts, `runtime`, `command`, `args`, `dir`,
 `setup` when the caller passes them. `machine` is the adapter that made the machine the
 run was opened on, such as `aws-ec2`, or `none` when no adapter made it: 1 to 64 of
 `a-z`, `0-9` and `-`, the first a letter. `setup` is where the run's setup commands
-run: `outside`, in a container apart from the agent's, or `inside`, in the agent's
-container before the runtime starts. A run with no setup commands has no `setup`.
+run, or would run if it had any: `outside`, in a container apart from the agent's, or
+`inside`, in the agent's container before the runtime starts. A run that has nowhere to
+run setup commands has no `setup`.
 Forager checks both values before the run request
 and refuses any other, and the gateway passes both as the session sent them. Neither
 member selects or changes a policy.
@@ -4464,10 +4465,12 @@ join's checks of its places, and the helper at `/qory/qory` and, with an authori
 bundle at `/qory/ca-bundle.pem`, both read-only: no home, run directory, hook socket or
 container runtime's socket. It reaches only the relay, at `qory-proxy:3128`. Its
 environment is the relay's proxy variables, the bundle's variables, the run's
-placeholders, then the caller's variables without the reserved names, the access key's
-variables and `QORY_RUN_KEY`; a value that contains the password of one of the run's
-forwarders or of the engine proxy, as it is, in a proxy URL or as the base64 of
-`qory:<password>`, is refused. The helper keeps the container
+placeholders, then the caller's variables. Before any step, `Setup` refuses a caller's
+variable for one of the run's placeholders with `placeholder_conflict`; a `QORY_` name
+other than `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, or a reserved name, with
+`variable_reserved`; and a name of `denied-variables.json`, such as `LD_PRELOAD`. A
+value that contains the password of one of the run's forwarders or of the engine proxy,
+as it is, in a proxy URL or as the base64 of `qory:<password>`, is refused. The helper keeps the container
 running (`Docker.HoldArgs`), and each command runs in it through `docker exec`, as the
 wall's user, in the working folder, with no input. The container runs until the run
 closes, so a service a setup command starts is reachable from the agent's container by

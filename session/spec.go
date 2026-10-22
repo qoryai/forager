@@ -103,10 +103,11 @@ type OpenSpec struct {
 	// is 1 to 64 of a-z, 0-9 and -, and starts with a letter; [Open] refuses anything
 	// else. Empty leaves machine out of run.started.
 	Machine string
-	// Setup is where the run's setup commands run: [event.SetupOutside], in a container
-	// apart from the agent's, or [event.SetupInside], in the agent's container. run.started reports it as
-	// setup. [Open] refuses any other value. Empty leaves setup out of run.started, for a
-	// run with no setup commands.
+	// Setup is where the run's setup commands run, or would run if it had any:
+	// [event.SetupOutside], in a container apart from the agent's, or
+	// [event.SetupInside], in the agent's container. run.started reports it as setup.
+	// [Open] refuses any other value. Empty leaves setup out of run.started, for a run
+	// that has nowhere to run setup commands.
 	Setup string
 	// Report receives one line per thing the run reports to its user; nil means
 	// os.Stderr, each line after "qory run: ".

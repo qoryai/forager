@@ -856,6 +856,13 @@ var failed *session.SetupError // a command exited otherwise than 0: no session 
   relay. It gets the working folder, writable, and the helper and the run's bundle,
   read-only: no home, run directory, hook socket or engine socket. It gets no host
   proxy's URL or password.
+- Fill `Env` from `run.AgentEnv(sessionSpec)`, the session's full spec, so the setup
+  container gets the agent's variables. The result has `QORY_RUN_SYSTEM` and
+  `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup` accepts both. `Setup`
+  refuses, before any step, a value for one of the run's placeholders
+  (`placeholder_conflict`), any other `QORY_` name, `QORY_RUN_ID` and
+  `QORY_RUN_SOCKET` among them, or a name the machine's credentials are read from
+  (`variable_reserved`), and a name of `denied-variables.json`, such as `LD_PRELOAD`.
 - It runs until the run closes. The agent reaches a service that setup starts by the
   name `qory-setup`, such as `qory-setup:5432`. Send a service's output to a file, so
   its command returns.

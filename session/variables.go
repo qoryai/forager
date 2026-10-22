@@ -142,16 +142,7 @@ func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, creden
 	readFrom := reserved
 	// Forager's own names, the proxy's, the wall's and the preparation's: with the
 	// placeholders and the harness's computed values, the run's fixed names.
-	own := []string{EnvRunID, EnvSocket}
-	if spec.HarnessHome != "" {
-		own = append(own, EnvHarnessHome)
-	}
-	own = append(own, names(link.ProxyEnv(""))...)
-	own = append(own, names(prepared.Env)...)
-	own = append(own, bundle...)
-	if name := key.endpointName(); name != "" {
-		own = append(own, name)
-	}
+	own := foragerNames(spec, prepared, bundle, key)
 	// What Forager, the preparation and the wall set in this run, which the helper's
 	// exec never unsets: a name the wall sets only for a run with an authority counts
 	// when the run has one, and nested Docker's when the run has it.
@@ -213,6 +204,25 @@ func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, creden
 		}
 	}
 	return vars, unset, nil
+}
+
+// foragerNames are the names Forager and the runtime's preparation set for a session
+// of spec, which win over every source of a variable: QORY_RUN_ID, QORY_RUN_SOCKET,
+// QORY_HARNESS_HOME when spec has a harness home, the proxy's variables, the names of
+// prepared.Env, bundle and the start key's endpoint variable. The wall's names are not
+// among them.
+func foragerNames(spec runSpec, prepared runtimes.Launch, bundle []string, key keyed) []string {
+	own := []string{EnvRunID, EnvSocket}
+	if spec.HarnessHome != "" {
+		own = append(own, EnvHarnessHome)
+	}
+	own = append(own, names(link.ProxyEnv(""))...)
+	own = append(own, names(prepared.Env)...)
+	own = append(own, bundle...)
+	if name := key.endpointName(); name != "" {
+		own = append(own, name)
+	}
+	return own
 }
 
 // names are the names of NAME=value entries.
