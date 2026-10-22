@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 
@@ -173,6 +174,40 @@ func TestTheRequestAndAnswerKnownAnswers(t *testing.T) {
 		if err := json.Unmarshal(read(t, f), &doc); err != nil || doc.RunKey != v.RunKey.RunKey {
 			t.Errorf("%s does not carry the run key of the vector", f)
 		}
+	}
+}
+
+// TestTheRelayedEnrolmentKnownAnswer pins run_enrolment.relay of through-gateway.json:
+// the redemption's request file as the gateway's relay signs it, six lines under the
+// fixture gateway key's id and the gateway's instance id, a POST to the enrolment
+// endpoint whose last line is the file's bytes, white space and trailing line feed
+// included; the signature verifies under the fixture gateway key, and over no other
+// body, the file without its white space at the ends among them.
+func TestTheRelayedEnrolmentKnownAnswer(t *testing.T) {
+	e := vectors(t).RunEnrolment
+	r := e.Relay
+	body := read(t, r.Body)
+	if r.Body != e.Request || !bytes.HasSuffix(body, []byte("}\n")) || !bytes.Contains(body, []byte("\n  \"")) {
+		t.Fatalf("%s is not the redemption's request file, indented and with a trailing line feed", r.Body)
+	}
+	want := []string{accesskey.RequestDomain, knownanswers.GatewayAccessKeyID, knownanswers.InstanceID, "POST", accesskey.EnrolmentPath, string(body)}
+	if r.AccessKeyID != knownanswers.GatewayAccessKeyID || !slices.Equal(r.Lines, want) {
+		t.Fatalf("the lines %q are not the gateway's request string over the file", r.Lines)
+	}
+	req := accesskey.Request{AccessKeyID: r.AccessKeyID, InstanceID: knownanswers.InstanceID, Method: "POST", Target: accesskey.EnrolmentPath, Body: body}
+	m, err := req.Message()
+	if err != nil || string(m) != strings.Join(r.Lines, "\n") || len(m) != r.Length {
+		t.Errorf("the message of %d bytes is not its lines: %v", len(m), err)
+	}
+	g := knownanswers.GatewayKey()
+	if s, err := g.SignRequest(req); err != nil || s != r.Signature {
+		t.Errorf("the fixture gateway key signs %s, %v; want %s", s, err, r.Signature)
+	}
+	if !g.PublicKey().VerifyRequest(req, r.Signature) {
+		t.Error("the signature does not verify under the fixture gateway key")
+	}
+	if req.Body = bytes.TrimSpace(body); g.PublicKey().VerifyRequest(req, r.Signature) {
+		t.Error("the signature verifies over the body without its white space at the ends")
 	}
 }
 

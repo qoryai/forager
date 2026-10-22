@@ -1,5 +1,5 @@
 {
-  "note": "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, a run code's redemption and its answer, an attach and its answer, an outcome and its answer, a binding of a connection to the gateway, and an answer of the gateway on its link. go generate ./runkey writes them from the fixture keys of keys.json.",
+  "note": "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, a run code's redemption and its answer, that redemption as the gateway's relay signs it, an attach and its answer, an outcome and its answer, a binding of a connection to the gateway, and an answer of the gateway on its link. go generate ./runkey writes them from the fixture keys of keys.json.",
   "run_key": {
     "note": "The run key of run-key-payload.json, signed under the fixture signing key of the server: the signed message is the domain line, a line feed, then the payload bytes; the run key is qrk_, the payload in base64url without padding, a dot, and the signature in base64url without padding.",
     "payload": "fixtures/known-answers/run-key-payload.json",
@@ -129,7 +129,22 @@
       ""
     ],
     "length": 186,
-    "signature": "cpJhng0Q2ERFEmeIkbGwyB48SMJWsmfjqnJMrdHIwgqR8oGB8BtZuY-g1J8UmYwbCQr7ZSdKFb-aPsDm_uSZBA"
+    "signature": "cpJhng0Q2ERFEmeIkbGwyB48SMJWsmfjqnJMrdHIwgqR8oGB8BtZuY-g1J8UmYwbCQr7ZSdKFb-aPsDm_uSZBA",
+    "relay": {
+      "note": "The request of enrolment-run-request.json as the gateway's relay passes it to the server: a POST to /.well-known/qory-enrolment, signed under the fixture gateway key secret as the gateway's access key with the gateway's instance id; the last line is the raw body, the file's bytes, its white space and its trailing line feed included. The relay deletes every X-Qory-Access-Key-Id, X-Qory-Instance-Id, X-Qory-Instance-Name, X-Qory-Signature-Ed25519 and X-Qory-Timestamp the machine sent, and sends access_key_id as X-Qory-Access-Key-Id, line 3 as X-Qory-Instance-Id and signature as X-Qory-Signature-Ed25519.",
+      "access_key_id": "ak_f1xt0re00000000g",
+      "body": "fixtures/known-answers/enrolment-run-request.json",
+      "lines": [
+        "qory-request-ed25519-v1",
+        "ak_f1xt0re00000000g",
+        "i_gYKDhIWGh4iJiouMjY6PkA",
+        "POST",
+        "/.well-known/qory-enrolment",
+        "{\n  \"version\": 1,\n  \"code\": \"qecr_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg\",\n  \"name\": \"run-01\",\n  \"public_key\": \"ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ\",\n  \"timestamp\": 1791720000,\n  \"proof\": \"Vk6wlEpWPUu3qfmdJ2XAa5_3BxOedkHtfyz_IWtNpjTsNCzQ9iAXxV5ydPGqTqWCSb3boiJg3JPZ9m849gzAAQ\"\n}\n"
+      ],
+      "length": 400,
+      "signature": "H_vfsxtDeQXaHSGmzcKoIFK4szaiTHLdWl31BtFLlaQgvB8nyCYi32UIPIK_Ux_bk0NjLsky6W5HsYc_mbKyAQ"
+    }
   },
   "binding": {
     "note": "The binding of a connection to the gateway, for the fixed exporter value ekm, the 32 bytes counting up from 129, in place of the one a connection derives with the label: the gateway signs the three lines under the fixture gateway key, and answers QORY-BIND with bound_line, QORY-BOUND, a space, the fingerprint, a space, the signature in base64url without padding, and a newline.",

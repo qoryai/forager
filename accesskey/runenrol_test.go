@@ -169,18 +169,25 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write(body)
 }
 
-// TestPostRunRedeemsARunCode posts a run code to a fake server that signs a run answer
-// under a test key: the client returns the run's id, its run key and its documents, its
-// pin the test key, and the same request sent again gets the same run key.
-func TestPostRunRedeemsARunCode(t *testing.T) {
+// postRunVia redeems r's run code with PostRunVia through a TLS server that serves f
+// in place of the gateway's relay.
+func postRunVia(r *accesskey.EnrolmentRequest, f http.Handler) (*accesskey.RunAnswer, error) {
+	srv := httptest.NewTLSServer(f)
+	defer srv.Close()
+	return r.PostRunVia(context.Background(), srv.Client(), "https://qory.example", srv.URL, "qory/test")
+}
+
+// TestPostRunViaRedeemsARunCode posts a run code to a fake gateway that answers a run
+// answer signed under a test key: the client returns the run's id, its run key and its
+// documents, its pin the test key, and the same request sent again gets the same run
+// key.
+func TestPostRunViaRedeemsARunCode(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
 	f := &fakeServer{status: http.StatusCreated, signer: signer, body: func(accesskey.EnrolmentRequest) []byte { return runAnswerBody(testRunID, rk, signer) }}
-	srv := httptest.NewServer(f)
-	defer srv.Close()
 	r := runRequest(t, signer)
 	for range 2 {
-		ans, err := r.PostRun(context.Background(), nil, srv.URL, "qory/test")
+		ans, err := postRunVia(r, f)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -202,8 +209,6 @@ func TestARetryWithAnotherProofGetsTheSameMembers(t *testing.T) {
 	signer, key := newKey(t), newKey(t)
 	rk := testRunKey(t, signer, testRunID)
 	f := &fakeServer{status: http.StatusCreated, signer: signer, body: func(accesskey.EnrolmentRequest) []byte { return runAnswerBody(testRunID, rk, signer) }}
-	srv := httptest.NewServer(f)
-	defer srv.Close()
 	runCode := "qecr_F1XT0RE0000000000000000000." + signer.Fingerprint()
 	now := time.Now()
 	first, err := accesskey.NewEnrolmentRequest(key, runCode, "run-01", now)
@@ -217,11 +222,11 @@ func TestARetryWithAnotherProofGetsTheSameMembers(t *testing.T) {
 	if first.PublicKey != retry.PublicKey || first.Proof == retry.Proof {
 		t.Fatal("the retry is not the same key with another proof")
 	}
-	a, err := first.PostRun(context.Background(), nil, srv.URL, "qory/test")
+	a, err := postRunVia(first, f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := retry.PostRun(context.Background(), nil, srv.URL, "qory/test")
+	b, err := postRunVia(retry, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,9 +303,7 @@ func TestRunAnswerFailures(t *testing.T) {
 		{"a signed 429", 429, []byte(`{"error":"rate_limited",` + keys + `}`), signer, accesskey.CodeRateLimited},
 	} {
 		f := &fakeServer{status: c.status, signer: c.sign, body: func(accesskey.EnrolmentRequest) []byte { return c.body }}
-		srv := httptest.NewServer(f)
-		ans, err := r.PostRun(context.Background(), nil, srv.URL, "qory/test")
-		srv.Close()
+		ans, err := postRunVia(r, f)
 		if ans != nil || code(err) != c.want {
 			t.Errorf("%s: %v, %v; want %s", c.name, ans, err, c.want)
 		}
@@ -351,7 +354,7 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 	defer srv.Close()
 	ctx := context.Background()
 	run := runRequest(t, signer)
-	const toRun = "redeem a run code with PostRunVia, PostRun or VerifyRunAnswer: the request's code is a run code, qecr_, and PostVia, Post and VerifyAnswer enrol an access key"
+	const toRun = "redeem a run code with PostRunVia or VerifyRunAnswer: the request's code is a run code, qecr_, and PostVia, Post and VerifyAnswer enrol an access key"
 	for name, call := range map[string]func() error{
 		"VerifyAnswer": func() error { _, err := run.VerifyAnswer(created(run, signer, nil)); return err },
 		"Post":         func() error { _, err := run.Post(ctx, nil, srv.URL, "qory/test"); return err },
@@ -369,10 +372,9 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("enrol an access key with PostVia, Post or VerifyAnswer: the request's code enrols an access key of node_kind %q, and PostRunVia, PostRun and VerifyRunAnswer redeem a run code", kind)
+		want := fmt.Sprintf("enrol an access key with PostVia, Post or VerifyAnswer: the request's code enrols an access key of node_kind %q, and PostRunVia and VerifyRunAnswer redeem a run code", kind)
 		for name, call := range map[string]func() error{
 			"VerifyRunAnswer": func() error { _, err := r.VerifyRunAnswer(created(r, signer, nil)); return err },
-			"PostRun":         func() error { _, err := r.PostRun(ctx, nil, srv.URL, "qory/test"); return err },
 			"PostRunVia": func() error {
 				_, err := r.PostRunVia(ctx, srv.Client(), srv.URL, "https://gateway.example", "qory/test")
 				return err
@@ -587,11 +589,10 @@ func padded(t *testing.T, rk string, signer *accesskey.Key, n int) []byte {
 	return b
 }
 
-// TestARunAnswerUpTo1MiB pins the limits of the answer's body: PostRun reads a signed
-// run answer of 200 KiB, more than an access key's answer may be, and one of exactly
-// MaxRunAnswer, 1 MiB; one byte more is answer_unsigned, from PostRun, from PostRunVia
-// and from VerifyRunAnswer. PostRunVia reads one of exactly MaxRunAnswer through a
-// gateway. Post reads an access key's answer as before: a signed answer of 64 KiB
+// TestARunAnswerUpTo1MiB pins the limits of the answer's body: PostRunVia reads a
+// signed run answer of 200 KiB, more than an access key's answer may be, and one of
+// exactly MaxRunAnswer, 1 MiB; one byte more is answer_unsigned, from PostRunVia and
+// from VerifyRunAnswer. Post reads an access key's answer as before: a signed answer of 64 KiB
 // passes, one of MaxAnswer+1 bytes passes too, since the client reads MaxAnswer and
 // one byte more and VerifyAnswer checks no length, and one of 200 KiB is
 // answer_unsigned.
@@ -602,34 +603,15 @@ func TestARunAnswerUpTo1MiB(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
 	r := runRequest(t, signer)
+	if _, err := r.VerifyRunAnswer(created(r, signer, padded(t, rk, signer, accesskey.MaxRunAnswer+1))); code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("VerifyRunAnswer of %d bytes: %v; want answer_unsigned", accesskey.MaxRunAnswer+1, err)
+	}
+	// The TLS server stands in for the gateway's relay at viaURL.
 	for _, c := range []struct {
 		n    int
 		want string
 	}{
 		{200 << 10, ""},
-		{accesskey.MaxRunAnswer, ""},
-		{accesskey.MaxRunAnswer + 1, accesskey.CodeAnswerUnsigned},
-	} {
-		body := padded(t, rk, signer, c.n)
-		f := &fakeServer{status: http.StatusCreated, signer: signer, body: func(accesskey.EnrolmentRequest) []byte { return body }}
-		srv := httptest.NewServer(f)
-		ans, err := r.PostRun(context.Background(), nil, srv.URL, "qory/test")
-		srv.Close()
-		if c.want == "" && (err != nil || ans.RunKey != rk || len(ans.Documents) < c.n/2) {
-			t.Errorf("a run answer of %d bytes: %v, %v", c.n, ans, err)
-		}
-		if c.want != "" && (ans != nil || code(err) != c.want) {
-			t.Errorf("a run answer of %d bytes: %v, %v; want %s", c.n, ans, err, c.want)
-		}
-	}
-	if _, err := r.VerifyRunAnswer(created(r, signer, padded(t, rk, signer, accesskey.MaxRunAnswer+1))); code(err) != accesskey.CodeAnswerUnsigned {
-		t.Errorf("VerifyRunAnswer of %d bytes: %v; want answer_unsigned", accesskey.MaxRunAnswer+1, err)
-	}
-	// Through a gateway: the TLS server stands in for the gateway's relay at viaURL.
-	for _, c := range []struct {
-		n    int
-		want string
-	}{
 		{accesskey.MaxRunAnswer, ""},
 		{accesskey.MaxRunAnswer + 1, accesskey.CodeAnswerUnsigned},
 	} {
