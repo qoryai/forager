@@ -2142,35 +2142,33 @@ an access key's code, and counts a larger answer as unsigned, `answer_unsigned`.
 
 A retry by the same public key within the 15 minutes gets the same members, the same
 `run_id`, `run_key`, `apiary_public_key`, `step` and documents, signed over the retry's
-proof. A
-redemption by another public key after the first is `401`, as is a code that is used,
-has expired or was cancelled; the signed `409` and `429` are those of an access key's
-code. The run key's `issued` is the time of the code's first redemption, not the time
-the code was made, and its `attach_by` is 600 seconds after `issued`. The machine
+proof. A redemption by another public key after the first is `401`, as is a code that is
+used, has expired or was cancelled; the signed `409` and `429` are those of an access
+key's code. The run key's `issued` is the time of the code's first redemption, not the
+time the code was made, and its `attach_by` is 600 seconds after `issued`. The machine
 checks the answer in this order: it verifies the signature under the listed key whose
 fingerprint is the code's first; it reads the body against `run_answer`; it keeps the
 listed keys whose fingerprints are in the code; it verifies `run_key` as the gateway
-does, under the kept key whose fingerprint is the run key's `signer`; and it checks
-that the run key's `run_id` is `run_id`. A verified `201` of the other kind, an access
-key's answer to a run code or a run's answer to an access key's code, uses the code,
-and the machine installs nothing of it. The machine keeps the run key in memory and
-passes it to the session as `RemoteGateway.RunKey`, and writes it to no file and no
-environment variable. In Go, `EnrolmentRequest.PostRunVia` of package `accesskey`
-sends the request through the gateway, `PostRun` sends it to the server, and
-`VerifyRunAnswer` reads the answer. Each returns an `accesskey.RunAnswer`, with `Step`
-and each document as the answer's JSON, a `json.RawMessage` that `VerifyRunAnswer`
-checks against the schema and decodes no further, `nil` for a member the answer leaves out. fmt writes a
-`RunAnswer` as `run <run id>`, and slog and encoding/json write its `run_id` alone,
-except: fmt, and slog's text handler, which prints a struct through fmt, can print the
-run key of a `RunAnswer` in a struct field that is not exported, and its documents as
-their bytes in decimal, since fmt calls no method there.
-`PostVia`, `Post` and `VerifyAnswer` refuse a run code before they send or read
-anything, and the three run methods refuse an access key's code the same way. The
-known answers are `run_enrolment` in `fixtures/known-answers/through-gateway.json`,
-with `enrolment-run-request.json` and `enrolment-run-answer.json`, a run of the step
-explore with every document; `fixtures/enrolment/run-answer-prebuild.json` is a run of
-the step prebuild, and each `fixtures/invalid/enrolment-run-answer-*.json` breaks one
-rule.
+does, under the kept key whose fingerprint is the run key's `signer`; and it checks that
+the run key's `run_id` is `run_id`. A verified `201` of the other kind, an access key's
+answer to a run code or a run's answer to an access key's code, uses the code, and the
+machine installs nothing of it. The machine keeps the run key in memory and passes it to
+the session as `RemoteGateway.RunKey`, and writes it to no file and no environment
+variable. In Go, `EnrolmentRequest.PostRunVia` of package `accesskey` sends the request
+through the gateway, `PostRun` sends it to the server, and `VerifyRunAnswer` reads the
+answer. Each returns an `accesskey.RunAnswer`, with `Step` and each document as the
+answer's JSON, a `json.RawMessage` that `VerifyRunAnswer` checks against the schema and
+decodes no further, `nil` for a member the answer leaves out. fmt writes a `RunAnswer`
+as `run <run id>`, and slog and encoding/json write its `run_id` alone, except: fmt, and
+slog's text handler, which prints a struct through fmt, can print the run key of a
+`RunAnswer` in a struct field that is not exported, and its documents as their bytes in
+decimal, since fmt calls no method there. `PostVia`, `Post` and `VerifyAnswer` refuse a
+run code before they send or read anything, and the three run methods refuse an access
+key's code the same way. The known answers are `run_enrolment` in
+`fixtures/known-answers/through-gateway.json`, with `enrolment-run-request.json` and
+`enrolment-run-answer.json`, a run of the step explore with every document;
+`fixtures/enrolment/run-answer-prebuild.json` is a run of the step prebuild, and each
+`fixtures/invalid/enrolment-run-answer-*.json` breaks one rule.
 
 **The configuration document.** `configuration.schema.json`. A signed
 `GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery, per

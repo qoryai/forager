@@ -530,9 +530,9 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   further; a member the answer leaves out is `nil`. `Domain` and `Inputs` are in every
   verified answer, and the schema sets which of the others the step requires.
 - An answer that breaks a rule of the schema is an error that starts with the fix and
-  states the place and the rule, and no value: "use another run code: the enrolment
-  answer does not match $defs/run_answer of enrolment.schema.json at / (required:
-  work_item)", say.
+  states the place and the rule, and no value. For an answer of the step `explore`
+  without `work_item`, the error is "use another run code: the enrolment answer does
+  not match $defs/run_answer of enrolment.schema.json at / (required: work_item)".
 - `PostRunVia` and `PostRun` read at most `accesskey.MaxRunAnswer`, 1 MiB, of the
   answer's body, and `VerifyRunAnswer` counts a longer body as `answer_unsigned`. The
   methods of an access key's code read at most `accesskey.MaxAnswer`, 64 KiB.

@@ -116,10 +116,10 @@ release may change what an existing document does, and says so under Upgrading.
   `event.SetupOutside` and `event.SetupInside` are the values in Go.
   `fixtures/link/link-batch-setup-outside.json` is a batch with both members, and two
   invalid fixtures have a `machine` in upper case and an unknown `setup`.
-- A run code, `qecr_`: the code a provisioner puts in a machine's start data in place
-  of the run key, since a cloud such as AWS EC2 keeps start data readable for the
-  machine's life. qory redeems it once at boot with a key pair made in memory, through
-  the gateway's relay, at `POST /.well-known/qory-enrolment`. The signed `201` is
+- A run code, `qecr_`: the code a provisioner puts in a machine's start data in place of
+  the run key, since a cloud such as AWS EC2 keeps start data readable for the machine's
+  life. qory redeems it once at boot with a key pair made in memory, through the
+  gateway's relay, at `POST /.well-known/qory-enrolment`. The signed `201` is
   `$defs/run_answer` of `enrolment.schema.json`: `version`, `run_id`, `run_key`,
   `apiary_public_key`, `step`, and the run's documents `domain`, `inputs`, `access`,
   `target`, `work_item`, `run_settings`, `stack` and `workflow`, so the machine gets
@@ -130,23 +130,24 @@ release may change what an existing document does, and says so under Upgrading.
   most 1 MiB of an answer to a run code, `accesskey.MaxRunAnswer`, and 64 KiB of an
   answer to an access key's code, `accesskey.MaxAnswer`. The code is valid for 15
   minutes and is used once; a retry by the same public key gets the same members, the
-  same run key included, and another key gets `401`. The run key's `issued` is the
-  time of the first redemption, and its `attach_by` 600 seconds after it.
+  same run key included, and another key gets `401`. The run key's `issued` is the time
+  of the first redemption, and its `attach_by` 600 seconds after it.
   `accesskey.EnrolmentRequest.PostRunVia`, `PostRun` and `VerifyRunAnswer` return an
   `accesskey.RunAnswer`, after they verify the answer under the server key the code
   selects, read it against `$defs/run_answer`, and verify the run key as the gateway
-  does, for the answer's `run_id`. `RunAnswer.Step` is the step, and `Domain`,
-  `Access`, `Target`, `WorkItem`, `RunSettings`, `Inputs`, `Stack` and `Workflow` are
-  each document as a `json.RawMessage`, `nil` when the answer leaves it out. fmt writes a `RunAnswer` as `run <run id>`, and slog and
-  encoding/json write its `run_id` alone, except: fmt, and slog's text handler, which
-  prints a struct through fmt, can print the run key of a `RunAnswer` in a struct
-  field that is not exported, and its documents as their bytes in decimal.
-  `accesskey.CodePrefixRun` is `qecr_`, and `accesskey.CodeKind` returns `run` for it.
-  `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and the run methods refuse an
-  access key's code, before they send anything. The known answers are `run_enrolment`
-  in `fixtures/known-answers/through-gateway.json`, a run of the step explore with every
-  document; `fixtures/enrolment/run-answer-prebuild.json` is a run of the step
-  prebuild, and each `fixtures/invalid/enrolment-run-answer-*.json` breaks one rule.
+  does, for the answer's `run_id`. `RunAnswer.Step` is the step, and `Domain`, `Access`,
+  `Target`, `WorkItem`, `RunSettings`, `Inputs`, `Stack` and `Workflow` are each
+  document as a `json.RawMessage`, `nil` when the answer leaves it out. fmt writes a
+  `RunAnswer` as `run <run id>`, and slog and encoding/json write its `run_id` alone,
+  except: fmt, and slog's text handler, which prints a struct through fmt, can print the
+  run key of a `RunAnswer` in a struct field that is not exported, and its documents as
+  their bytes in decimal. `accesskey.CodePrefixRun` is `qecr_`, and `accesskey.CodeKind`
+  returns `run` for it. `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and the
+  run methods refuse an access key's code, before they send anything. The known answers
+  are `run_enrolment` in `fixtures/known-answers/through-gateway.json`, a run of the
+  step explore with every document; `fixtures/enrolment/run-answer-prebuild.json` is a
+  run of the step prebuild, and each `fixtures/invalid/enrolment-run-answer-*.json`
+  breaks one rule.
 - `dev.qory.run.step_started`, `events/run.step_started.schema.json`, and
   `dev.qory.run.step_exited`, `events/run.step_exited.schema.json`: one step of the
   run's host work, such as a fetch or a compose, with a start, an end, an outcome and

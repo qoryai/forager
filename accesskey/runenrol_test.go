@@ -600,9 +600,12 @@ func padded(t *testing.T, rk string, signer *accesskey.Key, n int) []byte {
 
 // TestARunAnswerUpTo1MiB pins the limits of the answer's body: PostRun reads a signed
 // run answer of 200 KiB, more than an access key's answer may be, and one of exactly
-// MaxRunAnswer, 1 MiB; one byte more is answer_unsigned, from PostRun and from
-// VerifyRunAnswer. Post reads at most MaxAnswer, 64 KiB, of an access key's answer, as
-// before: a signed answer of 64 KiB passes, and one of 200 KiB is answer_unsigned.
+// MaxRunAnswer, 1 MiB; one byte more is answer_unsigned, from PostRun, from PostRunVia
+// and from VerifyRunAnswer. PostRunVia reads one of exactly MaxRunAnswer through a
+// gateway. Post reads an access key's answer as before: a signed answer of 64 KiB
+// passes, one of MaxAnswer+1 bytes passes too, since the client reads MaxAnswer and
+// one byte more and VerifyAnswer checks no length, and one of 200 KiB is
+// answer_unsigned.
 func TestARunAnswerUpTo1MiB(t *testing.T) {
 	if accesskey.MaxRunAnswer != 1<<20 || accesskey.MaxAnswer != 64<<10 {
 		t.Fatalf("MaxRunAnswer %d, MaxAnswer %d; want 1 MiB and 64 KiB", accesskey.MaxRunAnswer, accesskey.MaxAnswer)
@@ -633,6 +636,29 @@ func TestARunAnswerUpTo1MiB(t *testing.T) {
 	if _, err := r.VerifyRunAnswer(created(r, signer, padded(t, rk, signer, accesskey.MaxRunAnswer+1))); code(err) != accesskey.CodeAnswerUnsigned {
 		t.Errorf("VerifyRunAnswer of %d bytes: %v; want answer_unsigned", accesskey.MaxRunAnswer+1, err)
 	}
+	// Through a gateway: the TLS server stands in for the gateway's relay at viaURL.
+	for _, c := range []struct {
+		n    int
+		want string
+	}{
+		{accesskey.MaxRunAnswer, ""},
+		{accesskey.MaxRunAnswer + 1, accesskey.CodeAnswerUnsigned},
+	} {
+		body := padded(t, rk, signer, c.n)
+		f := &fakeServer{status: http.StatusCreated, signer: signer, body: func(accesskey.EnrolmentRequest) []byte { return body }}
+		srv := httptest.NewTLSServer(f)
+		ans, err := r.PostRunVia(context.Background(), srv.Client(), "https://qory.example", srv.URL, "qory/test")
+		srv.Close()
+		if c.want == "" && (err != nil || ans.RunKey != rk || len(ans.Inputs) < c.n/2) {
+			t.Errorf("a run answer of %d bytes through a gateway: %v, %v", c.n, ans, err)
+		}
+		if c.want != "" && (ans != nil || code(err) != c.want) {
+			t.Errorf("a run answer of %d bytes through a gateway: %v, %v; want %s", c.n, ans, err, c.want)
+		}
+		if f.requests != 1 {
+			t.Errorf("a run answer of %d bytes through a gateway: %d requests; want 1", c.n, f.requests)
+		}
+	}
 	// An access key's answer, padded with spaces inside its object.
 	key, err := accesskey.NewEnrolmentRequest(newKey(t), "qecn_F1XT0RE0000000000000000000."+signer.Fingerprint(), "build-01", time.Now())
 	if err != nil {
@@ -645,6 +671,7 @@ func TestARunAnswerUpTo1MiB(t *testing.T) {
 		want string
 	}{
 		{accesskey.MaxAnswer, ""},
+		{accesskey.MaxAnswer + 1, ""},
 		{200 << 10, accesskey.CodeAnswerUnsigned},
 	} {
 		body := []byte(answer + strings.Repeat(" ", c.n-len(answer)-1) + "}")
