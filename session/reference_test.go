@@ -204,8 +204,8 @@ func refusedIn(t *testing.T, sp runSpec) map[string]any {
 
 // TestARunWhoseImageByReferenceCannotHoldDoesNotStart pins what stops a run in an image
 // by reference: an allow list that cannot be one, before the gateway hears of the run;
-// the gateway's image_not_allowed; the wall's image_user_root, after the session's
-// start, the code as the reason of its session.exited, recorded and posted;
+// the gateway's image_not_allowed; the wall's image_user_root and image_missing, after
+// the session's start, the code as the reason of its session.exited, recorded and posted;
 // and a place of the run's at /workspace, before the wall pulls or wraps.
 func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	for name, change := range map[string]func(*runSpec){
@@ -255,11 +255,92 @@ func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 
 	sp, g = specGateway(t, "FAKE_EXIT=0")
 	byReference(g)
+	w = &targetWall{refuse: refusals.New(refusals.ImageMissing, []string{pinned}, "the image %s is not in its registry", pinned)}
+	sp.Wall, sp.Image, sp.ImagesAllow, sp.RunID = w, "example.com/agent:1", []string{"registry.example/"}, event.NewRunID()
+	if _, err = run(context.Background(), sp); !errors.As(err, &r) || r.Code != refusals.ImageMissing || !slices.Equal(r.Names, []string{pinned}) {
+		t.Errorf("image_missing: %v", err)
+	}
+	startedThenExited(t, "the record", events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)}), refusals.ImageMissing)
+	startedThenExited(t, "the link", g.Events(), refusals.ImageMissing)
+
+	sp, g = specGateway(t, "FAKE_EXIT=0")
+	byReference(g)
 	w = &targetWall{}
 	sp.Wall, sp.Image, sp.ImagesAllow = w, "example.com/agent:1", []string{"registry.example/"}
 	sp.Mounts = []wall.Mount{{Path: "/workspace/tools", ReadOnly: true}}
 	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "overlaps /workspace") || len(w.pulls) != 0 || w.wrapped {
 		t.Errorf("a mount at /workspace: %v; the wall pulled %+v, wrapped %v", err, w.pulls, w.wrapped)
+	}
+}
+
+// TestAGatewayTakesASessionEndedByAMissingImage pins the wall's image_missing through a
+// real gateway: the gateway takes the session's batch, and its record has the session's
+// session.exited, failed with -1 and the reason image_missing.
+func TestAGatewayTakesASessionEndedByAMissingImage(t *testing.T) {
+	c := newControl(t)
+	c.serveDocument(`{"version":1,"image":"` + pinned + `"}`)
+	w := &targetWall{refuse: refusals.New(refusals.ImageMissing, []string{pinned}, "the image %s is not in its registry", pinned)}
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow, sp.RunID = w, "base", images, []string{"registry.example/agents/"}, event.NewRunID()
+	rg := startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
+	_, err := run(context.Background(), sp)
+	var r *session.Refusal
+	if !errors.As(err, &r) || r.Code != refusals.ImageMissing {
+		t.Fatalf("the run: %v, want image_missing", err)
+	}
+	rg.close(t)
+	rg.mu.Lock()
+	reports := rg.reports
+	rg.mu.Unlock()
+	if len(reports) > 0 {
+		t.Errorf("the gateway reported %q", reports)
+	}
+	startedThenExited(t, "the gateway's record", record(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)}), refusals.ImageMissing)
+}
+
+// TestAGatewayTakesARunClosedForAMissingImage pins the close after FetchImage's
+// image_missing through a real gateway: the close's outcome, failed with -1 and the
+// reason image_missing, is taken with no join, nothing is undelivered, and the
+// gateway's record ends with that dev.qory.run.exited.
+func TestAGatewayTakesARunClosedForAMissingImage(t *testing.T) {
+	c := newControl(t)
+	c.serveDocument(`{"version":1,"image":"` + pinned + `"}`)
+	w := &targetWall{refuse: refusals.New(refusals.ImageMissing, []string{pinned}, "the image %s is not in its registry", pinned)}
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow, sp.RunID = w, "base", images, []string{"registry.example/agents/"}, event.NewRunID()
+	rg := startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
+	ctx := context.Background()
+	fetched, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r *session.Refusal
+	if err := fetched.FetchImage(ctx); !errors.As(err, &r) || r.Code != refusals.ImageMissing {
+		t.Fatalf("the fetch: %v, want image_missing", err)
+	}
+	closed, err := fetched.Close(ctx, session.Outcome{State: event.StateFailed, Reason: refusals.ImageMissing, ExitCode: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.State != event.StateFailed || closed.Reason != refusals.ImageMissing || closed.ExitCode != -1 || closed.RunClosed || closed.Undelivered != 0 {
+		t.Errorf("closed %+v", closed)
+	}
+	if d := rg.close(t); d != (gateway.Delivery{}) {
+		t.Errorf("delivery %+v", d)
+	}
+	rg.mu.Lock()
+	reports := rg.reports
+	rg.mu.Unlock()
+	if len(reports) > 0 {
+		t.Errorf("the gateway reported %q", reports)
+	}
+	rec := record(t, &session.Result{Dir: closed.Dir})
+	if len(ofType(rec, "dev.qory.session.started")) != 0 {
+		t.Errorf("the gateway's record has a session: %v", types(rec))
+	}
+	last := rec[len(rec)-1]
+	if d := data(last); last["type"] != event.RunExited || d["state"] != event.StateFailed || d["reason"] != refusals.ImageMissing || d["exit_code"] != float64(-1) {
+		t.Errorf("the gateway's record ends %v", last)
 	}
 }
 

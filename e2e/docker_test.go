@@ -3,20 +3,25 @@ package e2e_test
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/e2e"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -191,6 +196,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		t.Run("no IPv6 inside but loopback's", func(t *testing.T) { insideHasNoIPv6(t, command, helper, image) })
 		t.Run("an image held by its digest starts with its registry gone", func(t *testing.T) { heldStartsWithoutRegistry(t, command, helper, image) })
 		t.Run("Pull fetches an image by reference and its first container finds it", func(t *testing.T) { pullThenPrepare(t, command, helper, image) })
+		t.Run("Pull refuses an image its registry does not have", func(t *testing.T) { pullMissing(t, command, helper, image) })
 	}
 }
 
@@ -348,6 +354,81 @@ func pullThenPrepare(t *testing.T, command, helper, base string) {
 	defer cancel()
 	if got := strings.TrimSpace(r.start(ctx, t)()); got != "started" {
 		t.Errorf("the run in %s after its pull: %q", ref, got)
+	}
+}
+
+// pullMissing pushes one image, whose user is 1000:1000, to a registry of the test's
+// that allows deletes, removes it from the engine, and deletes its manifest from the
+// registry. Pull refuses with image_missing a digest the repository does not have, a
+// repository the registry does not have and the deleted digest, each with the
+// reference as its name; a registry address with no listener is the pull's error, with
+// no code.
+func pullMissing(t *testing.T, command, helper, base string) {
+	name := fmt.Sprintf("qory-walltest-missing-registry-%d", os.Getpid())
+	if out, err := exec.Command(command, "run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5000",
+		"--env", "REGISTRY_STORAGE_DELETE_ENABLED=true", "--mount", "type=tmpfs,dst=/var/lib/registry", registry).CombinedOutput(); err != nil {
+		t.Fatalf("the registry: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "rm", "--force", name).Run() })
+	out, err := exec.Command(command, "port", name, "5000/tcp").Output()
+	if err != nil {
+		t.Fatalf("the registry's port: %v", err)
+	}
+	_, port, ok := strings.Cut(strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0]), "127.0.0.1:")
+	if !ok {
+		t.Fatalf("the registry's port: %q", out)
+	}
+	host := "localhost:" + port
+	tagged := fmt.Sprintf("%s/walltest-missing/app:%d", host, os.Getpid())
+	build := exec.Command(command, "build", "--quiet", "--tag", tagged, "-")
+	build.Stdin = strings.NewReader("FROM " + base + "\nUSER 1000:1000\n")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("the image: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "image", "rm", tagged).Run() })
+	var pushed []byte
+	for range 50 {
+		if pushed, err = exec.Command(command, "push", tagged).CombinedOutput(); err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	m := pushedDigest.FindSubmatch(pushed)
+	if err != nil || m == nil {
+		t.Fatalf("the push of %s: %v: %s", tagged, err, pushed)
+	}
+	deleted := host + "/walltest-missing/app@" + string(m[1])
+	exec.Command(command, "image", "rm", tagged, deleted).Run()
+	del, err := http.NewRequest(http.MethodDelete, "http://"+host+"/v2/walltest-missing/app/manifests/"+string(m[1]), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(del)
+	if err != nil {
+		t.Fatalf("the delete of %s: %v", deleted, err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("the delete of %s: %s", deleted, resp.Status)
+	}
+
+	zero := "@sha256:" + strings.Repeat("0", 64)
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs}
+	pull := func(ref string) error {
+		req := wall.Request{RunID: fmt.Sprintf("walltest-missing-%d-%d", os.Getpid(), time.Now().UnixNano()), Image: ref, RelayImage: base, Pull: true}
+		return w.Pull(context.Background(), req, nil, nil)
+	}
+	for _, ref := range []string{host + "/walltest-missing/app" + zero, host + "/walltest-missing/none" + zero, deleted} {
+		err := pull(ref)
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.ImageMissing || !slices.Equal(r.Names, []string{ref}) {
+			t.Errorf("the pull of %s: %v, want image_missing", ref, err)
+		}
+	}
+	unreachable := "localhost:1/walltest-missing/app" + zero
+	var r *accesskey.Refusal
+	if err := pull(unreachable); err == nil || errors.As(err, &r) {
+		t.Errorf("the pull of %s, a registry address with no listener: %v, want the pull's error", unreachable, err)
 	}
 }
 

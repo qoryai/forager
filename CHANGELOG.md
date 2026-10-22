@@ -989,6 +989,22 @@ release may change what an existing document does, and says so under Upgrading.
   digest, and none starts when the engine does not hold it. The agent's container, the
   setup container and the container the wall reads the image's files from are created
   with `--pull=never`, so the engine pulls such an image in the image step alone.
+- `image_missing`, a refusal code of `refusal.Decides`: `(*wall.Docker).Pull` refuses
+  an image whose registry has no manifest of its digest or no repository of its name,
+  with the reference as its name. When the join's image step pulls the image, the
+  session's `dev.qory.session.exited` is failed, with `exit_code` `-1` and `reason`
+  `image_missing`; `(*session.Run).FetchImage` returns the refusal. When the engine
+  pulls from the image's registry alone, a denied pull, an unreachable registry and a
+  timeout stay failures with no reason. On the containerd image store of Docker Engine
+  29 (containerd 2.x), a 404 from a mirror is `image_missing` when the upstream cannot
+  be reached or its authorization fails; a 403 or another error status from the
+  upstream is a failure with no code. The classic image store, and containerd 1.7 in
+  Docker 26 and 27, return the upstream's error.
+- `image_missing` as the reason of a session's `dev.qory.run.exited`: after
+  `(*session.Run).FetchImage` returns that refusal, close a run with no join with
+  `failed`, `image_missing` and `-1`, and the gateway accepts the batch. `Close`
+  refuses the outcome, and the gateway the batch, with another state or exit code, or
+  after a join.
 - `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one

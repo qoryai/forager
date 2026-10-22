@@ -847,8 +847,11 @@ the credential the join request asks the gateway for, for this session.
 `(*session.Run).Close` takes a `session.Outcome`, the `State`, `Reason` and `ExitCode`
 of the run's `dev.qory.run.exited`, and writes that event once. A run no session joined,
 closed `failed` with no reason, is `failed` with `no_session` and `-1`. A `timeout` is
-`cancelled` with `124`, and an `interrupted` is `cancelled`. `Close` refuses an outcome
-the contract refuses, and a close while a `Join` runs. `session.Closed` is what the run
+`cancelled` with `124`, and an `interrupted` is `cancelled`. After `FetchImage` returns
+the refusal `image_missing`, close a run no session joined with `failed`,
+`image_missing` and `-1`; `Close` refuses `image_missing` with another state or exit
+code, or after a join. `Close` refuses an outcome the contract refuses, and a close
+while a `Join` runs. `session.Closed` is what the run
 came to:
 
 - `RunID` and `Dir`, the run directory with the record.

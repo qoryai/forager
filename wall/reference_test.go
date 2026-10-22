@@ -185,6 +185,66 @@ func TestDockerLeavesNothingWhenTheFetchFails(t *testing.T) {
 	}
 }
 
+// TestDockerRefusesAnImageItsRegistryDoesNotHave pins what docker pull prints when it
+// fails: an image whose registry has no manifest of the digest, or no repository of the
+// name, is image_missing, with the reference as its name; a denied pull, an unreachable
+// registry, a timeout, a missing layer and a missing platform are the pull's error.
+// Docker Engine 29.8.2's lines, containerd image store, are recorded against registry:2
+// and Zot on a test machine: a digest or a tag the repository does not have, a
+// repository the registry does not have and a deleted digest print the same line, the
+// reference twice and then "not found"; a "not found" line whose second reference
+// differs from the first is the pull's error. Docker Engine 26.1.5's, classic image
+// store, are as its
+// distribution/errors.go writes them; the denied lines of the containerd store are as
+// moby's daemon/containerd/image_pull.go and registry_errors.go write them.
+func TestDockerRefusesAnImageItsRegistryDoesNotHave(t *testing.T) {
+	const name = "registry.example/agents/app"
+	resolve := func(tail string) string {
+		return `Error response from daemon: failed to resolve reference "` + byReference + `": ` + tail + "\n"
+	}
+	head := `Head "https://registry.example/v2/agents/app/manifests/sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": `
+	for _, c := range []struct {
+		name, out string
+		missing   bool
+	}{
+		{"29, a digest, repository or deleted digest the registry lacks", resolve(byReference + ": not found"), true},
+		{"29, not found with another reference", resolve(name + "@sha256:" + strings.Repeat("f", 64) + ": not found"), false},
+		{"29, no login", resolve("pull access denied, repository does not exist or may require authorization: authorization failed: no basic auth credentials"), false},
+		{"29, a token's 401", "Error response from daemon: pull access denied for " + name + ", repository does not exist or may require 'docker login'\n", false},
+		{"29, DENIED", "Error response from daemon: error from registry: requested access to the resource is denied\n", false},
+		{"29, unreachable", resolve("failed to do request: " + head + "dial tcp 192.0.2.10:443: connect: connection refused"), false},
+		{"29, a timeout", resolve("failed to do request: " + head + "dial tcp 192.0.2.10:443: i/o timeout"), false},
+		{"29, a missing layer", "Error response from daemon: failed to copy: httpReadSeeker: failed open: content at https://registry.example/v2/agents/app/blobs/sha256:89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567 not found: not found\n", false},
+		{"29, no manifest for the platform", "Error response from daemon: no matching manifest for linux/arm64/v8 in the manifest list entries: no match for platform in manifest: not found\n", false},
+		{"26, MANIFEST_UNKNOWN", "Error response from daemon: manifest for " + byReference + " not found: manifest unknown: manifest unknown\n", true},
+		{"26, NAME_UNKNOWN", "Error response from daemon: repository " + name + " not found: name unknown: repository name not known to registry\n", true},
+		{"26, DENIED", "Error response from daemon: pull access denied for " + name + ", repository does not exist or may require 'docker login': denied: requested access to the resource is denied\n", false},
+		{"26, UNAUTHORIZED", "Error response from daemon: unauthorized: authentication required\n", false},
+		{"26, unreachable", `Error response from daemon: Get "https://registry.example/v2/": dial tcp 192.0.2.10:443: connect: connection refused` + "\n", false},
+		{"26, a timeout", `Error response from daemon: Get "https://registry.example/v2/": net/http: request canceled while waiting for connection (Client.Timeout exceeded while awaiting headers)` + "\n", false},
+	} {
+		for _, held := range []bool{false, true} {
+			// A held image with no Config is pulled all the same.
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, fail: "docker pull", failOut: c.out}
+			if held {
+				rec.user, rec.held = "null", []string{byReference}
+			}
+			d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+			err := d.Pull(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true}, nil, nil)
+			var r *accesskey.Refusal
+			switch {
+			case at(rec.lines, "docker pull "+byReference) < 0:
+				t.Errorf("%s, held %v: no pull:\n%s", c.name, held, strings.Join(rec.lines, "\n"))
+			case c.missing && (!errors.As(err, &r) || r.Code != refusal.ImageMissing || !slices.Equal(r.Names, []string{byReference}) ||
+				r.Detail != "the image "+byReference+" is not in its registry"):
+				t.Errorf("%s, held %v: %v, want image_missing", c.name, held, err)
+			case !c.missing && (err == nil || errors.As(err, &r) || !strings.Contains(err.Error(), "docker pull")):
+				t.Errorf("%s, held %v: %v, want the pull's error", c.name, held, err)
+			}
+		}
+	}
+}
+
 // TestDockerPullsNoImageItHoldsByTheDigest pins that the engine is asked first whether it
 // holds the image by the reference: one it lists among the image's repository digests,
 // in either the short form or in full, is not pulled, and its user is still checked; the

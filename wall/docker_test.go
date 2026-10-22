@@ -38,6 +38,9 @@ type recorder struct {
 	uid      int
 	lines    []string
 	fail     string
+	// failOut, when set, is what a command that fail selects prints, in place of
+	// "Error response from daemon: told to fail".
+	failOut string
 	// version is what docker version prints; empty prints 28.0.0. noIPv6 has the
 	// engine give a network created with --ipv6 no IPv6 subnet; ipv6 notes that the
 	// inside network was created with --ipv6.
@@ -115,6 +118,8 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 		r.onPull()
 	}
 	switch {
+	case r.fails(line) && r.failOut != "":
+		return []byte(r.failOut), errors.New("exit status 1")
 	case r.fails(line):
 		return []byte("Error response from daemon: told to fail"), errors.New("exit status 1")
 	case strings.Contains(line, " version --format "):

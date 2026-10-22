@@ -212,6 +212,74 @@ func TestARunNoSessionJoinedIsNoSession(t *testing.T) {
 	}
 }
 
+// imageMissingOutcome is Close's text for an outcome with the reason image_missing
+// that the gateway does not accept.
+const imageMissingOutcome = "an outcome with the reason image_missing is failed with the exit code -1, of a run no session joined"
+
+// TestImageMissingClosesOnlyARunNoSessionJoined pins the close's image_missing: failed
+// with -1 after a join is refused before anything is written, and the run closes with
+// another outcome after.
+func TestImageMissingClosesOnlyARunNoSessionJoined(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: "failed", Reason: "image_missing", ExitCode: -1}); err == nil || err.Error() != imageMissingOutcome {
+		t.Errorf("image_missing after a join: %v, want %s", err, imageMissingOutcome)
+	}
+	if got := ofType(g.Events(), "dev.qory.run.exited"); len(got) != 0 {
+		t.Errorf("a refused outcome wrote %v", got)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAJoinTheGatewayMayHaveNumberedIsAJoin pins the close after a join request whose
+// answer leaves unknown whether the gateway numbered the join, a 200 with a body that
+// is no join answer: a failed outcome with no reason stays failed with no reason, not
+// no_session, and image_missing is refused, as after a join.
+func TestAJoinTheGatewayMayHaveNumberedIsAJoin(t *testing.T) {
+	for _, out := range []session.Outcome{{State: "failed", ExitCode: -1}, {State: "failed", Reason: "image_missing", ExitCode: -1}} {
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		g.OnJoin(func(linktest.Join) linktest.Reply {
+			return linktest.Reply{Status: 200, Body: map[string]any{"version": 1}}
+		})
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Join(ctx, sp.SessionSpec); err == nil {
+			t.Fatal("a join answer with no session joined")
+		}
+		closed, err := r.Close(ctx, out)
+		if out.Reason == "image_missing" {
+			if err == nil || err.Error() != imageMissingOutcome {
+				t.Errorf("image_missing after a join the gateway may have numbered: %v, want %s", err, imageMissingOutcome)
+			}
+			if _, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1}); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if closed.State != "failed" || closed.Reason != "" || closed.ExitCode != -1 {
+			t.Errorf("closed %+v, want failed with -1 and no reason", closed)
+		}
+		if exited := ofType(g.Events(), "dev.qory.run.exited"); len(exited) != 1 || data(exited[0])["reason"] != nil {
+			t.Errorf("the link got %v", exited)
+		}
+	}
+}
+
 // TestCloseChecksTheOutcome pins the outcomes Close refuses, each with its text, before
 // it writes anything, and that a run closes once.
 func TestCloseChecksTheOutcome(t *testing.T) {
@@ -230,6 +298,8 @@ func TestCloseChecksTheOutcome(t *testing.T) {
 		{session.Outcome{State: "cancelled", Reason: "timeout", ExitCode: 1}, "an outcome with the reason timeout is cancelled with the exit code 124"},
 		{session.Outcome{State: "failed", Reason: "interrupted"}, "an outcome with the reason interrupted is cancelled"},
 		{session.Outcome{State: "failed", Reason: "session_lost", ExitCode: -1}, `the outcome's reason "session_lost" is not a code of the caller's: a lower-case letter, then up to 63 lower-case letters, digits and _, and none of Forager's reserved codes`},
+		{session.Outcome{State: "failed", Reason: "image_missing", ExitCode: 0}, imageMissingOutcome},
+		{session.Outcome{State: "succeeded", Reason: "image_missing", ExitCode: -1}, imageMissingOutcome},
 	} {
 		if _, err := r.Close(ctx, c.out); err == nil || err.Error() != c.want {
 			t.Errorf("%+v: %v, want %s", c.out, err, c.want)
