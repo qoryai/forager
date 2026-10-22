@@ -54,6 +54,7 @@ var Real Clock = realClock{}
 
 type realClock struct{}
 
+// AfterFunc is time.AfterFunc, and the stop is its timer's Stop.
 func (realClock) AfterFunc(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
 
 // Mapper maps the records of one session. Handle and Close may be called from several

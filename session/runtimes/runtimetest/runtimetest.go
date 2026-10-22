@@ -43,7 +43,7 @@ func Conforms(t *testing.T, rt runtimes.Runtime) {
 		t.Errorf("the stop grace %s is negative", stop.Grace)
 	}
 	if events := rt.Map(runtimes.Record{Source: runtimes.SourceHooks, Record: map[string]any{}}); len(events) > 0 {
-		t.Errorf("an empty record became %s; a record that says nothing is no event", events[0].Type)
+		t.Errorf("an empty record became %s; a record that contains nothing is no event", events[0].Type)
 	}
 	if rt.Headless(nil) {
 		t.Error("no arguments at all are headless; a runtime started with none has whatever interface it has")
@@ -144,6 +144,7 @@ func Replays(t *testing.T, rt runtimes.Runtime, fsys fs.FS, dir string) {
 // stopped is a clock in which no time passes: its timers never fire.
 type stopped struct{}
 
+// AfterFunc starts no timer; the stop it returns reports true.
 func (stopped) AfterFunc(time.Duration, func()) func() bool { return func() bool { return true } }
 
 func lines(t *testing.T, fsys fs.FS, name string, into func([]byte)) {

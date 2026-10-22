@@ -146,8 +146,8 @@ func fakeRuntime() int {
 				Event string `json:"hook_event_name"`
 			}
 			json.Unmarshal([]byte(input), &in)
-			// Every group's every hook runs, as the runtime runs them: the launch's
-			// own and the session's forwarder.
+			// Every group's every hook runs, as the runtime runs them: the hooks the
+			// launch passed and the session's forwarder.
 			for _, group := range s.Hooks[in.Event] {
 				for _, h := range group.Hooks {
 					cmd := shell(h.Command)

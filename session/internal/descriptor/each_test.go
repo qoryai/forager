@@ -73,7 +73,7 @@ func TestEachProducesAnEventPerElementThatMatches(t *testing.T) {
 }
 
 // TestEachThatMatchesNoElementLeavesTheRecordToTheNextRule pins that a rule with each
-// holds only when an element matches: a line with no text block, a line whose path is
+// matches only when an element matches: a line with no text block, a line whose path is
 // no array and a line without the path go on to the next rule.
 func TestEachThatMatchesNoElementLeavesTheRecordToTheNextRule(t *testing.T) {
 	d := parse(t, eachDoc)
@@ -90,10 +90,10 @@ func TestEachThatMatchesNoElementLeavesTheRecordToTheNextRule(t *testing.T) {
 	}
 }
 
-// TestLinkReadsTheParentMember pins Link: a record of the member's source that matches
-// gives the subagent's id and the call's id; a record of another source, one that does
-// not match, a call id that is null, empty or no string, and a descriptor without the
-// member give nothing.
+// TestLinkReadsTheParentMember pins Link: for a record of the member's source that
+// matches, Link returns the subagent's id and the call's id; for a record of another
+// source, one that does not match, a call id that is null, empty or no string, and a
+// descriptor without the member, it returns false.
 func TestLinkReadsTheParentMember(t *testing.T) {
 	d := parse(t, eachDoc)
 	agent, call, ok := d.Link(output(t, `{"type":"user","agent_id":"a1","parent_tool_use_id":"toolu_1"}`))

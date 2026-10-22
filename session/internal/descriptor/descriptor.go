@@ -390,11 +390,11 @@ func (s *Secrets) check() error {
 	return nil
 }
 
-// Map applies the rules to one record: the first rule of the record's source whose
-// match holds produces the events. A rule without each produces one event. A rule with
-// each produces one event per element of its array whose match holds, in the array's
-// order, and its match holds when one element's does; a rule whose path is no array
-// produces nothing. A record no rule matches produces nothing.
+// Map applies the rules to one record: the first rule of the record's source that
+// matches produces the events. A rule without each produces one event. A rule with each
+// produces one event per element of its array that matches, in the array's order, and
+// matches when one element does; a rule whose path is no array produces nothing. A
+// record no rule matches produces nothing.
 func (d *Descriptor) Map(r Record) []Event {
 	for i := range d.Rules {
 		rule := &d.Rules[i]
@@ -455,8 +455,8 @@ func copied(data map[string]string, record map[string]any, element *any) map[str
 	return out
 }
 
-// matches reports whether every entry of match holds against the record, or against
-// the element for a path that starts with each. when element is not nil.
+// matches reports whether the record matches every entry of match, or the element for a
+// path that starts with each. when element is not nil.
 func matches(match map[string]any, record map[string]any, element *any) bool {
 	for path, want := range match {
 		got, ok := read(record, element, path)
