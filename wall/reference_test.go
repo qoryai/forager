@@ -585,7 +585,7 @@ func TestDockerRefusesASymbolicLinkInCertsDir(t *testing.T) {
 			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`}
 			d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, CertsDir: dir, sys: rec}
 			err := d.Pull(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true}, ca, nil)
-			want := fmt.Sprintf(c.want, link) + ": the run's certificate for registry.example is never written through a symbolic link."
+			want := fmt.Sprintf(c.want, link) + ": the run's certificate for registry.example is not written through the symbolic link."
 			if err == nil || err.Error() != want {
 				t.Errorf("Pull: %v, want %s", err, want)
 			}

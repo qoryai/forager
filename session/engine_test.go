@@ -360,7 +360,7 @@ func TestAnEngineProxyRefusesASymbolicLinkInTheCertificatesDirectory(t *testing.
 		t.Fatal(err)
 	}
 	_, err := r.EngineProxy([]string{"registry.example"})
-	want := "Replace the symbolic link " + link + " with a directory: the run's certificate for registry.example is never written through a symbolic link."
+	want := "Replace the symbolic link " + link + " with a directory: the run's certificate for registry.example is not written through the symbolic link."
 	if err == nil || err.Error() != want {
 		t.Errorf("EngineProxy: %v, want %s", err, want)
 	}

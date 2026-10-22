@@ -607,9 +607,11 @@ var certsHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a
 // reads a registry's authorities from. A host name or an IPv4 address in lower case,
 // with an optional port, gets a certificate; any other host, such as a *. pattern,
 // gets none. A symbolic link at dir/<host> or at the file is refused. The writes and
-// the removals go through an [os.Root] of dir, whose calls fail on a link out of dir,
-// also one made after that check, so the certificate goes to no place outside dir. A
-// failure to write removes what was written before it.
+// the removals go through an [os.Root] of dir, whose calls fail on a symbolic link out
+// of dir, also one made after that check, and follow one that stays inside dir. A hard
+// link at the file name is written through, and the file it links to is overwritten,
+// also one outside dir, so dir must be writable only by the run's user. A failure to
+// write removes what was written before it.
 func Trust(dir, runID string, ca []byte, hosts []string) (func() error, error) {
 	if dir == "" {
 		dir = defaultCertsDir
@@ -675,7 +677,7 @@ func Trust(dir, runID string, ca []byte, hosts []string) (func() error, error) {
 		if trustPause != nil {
 			trustPause(filepath.Join(dir, f))
 		}
-		// A write through a link out of dir fails in the os.Root, also through one made
+		// A write through a symbolic link out of dir fails in the os.Root, also one made
 		// after the checks.
 		if err := root.WriteFile(f, ca, 0o644); err != nil {
 			return nil, errors.Join(unwritten(dir, host, inDir(dir, err)), remove())
@@ -716,7 +718,7 @@ var trustPause func(path string)
 // linked is the error of a symbolic link where the run's certificate for host would be
 // written, a directory of dir or the file in it, with fix first.
 func linked(fix, host string) error {
-	return fmt.Errorf("%s: the run's certificate for %s is never written through a symbolic link.", fix, accesskey.ShownValue(host, false))
+	return fmt.Errorf("%s: the run's certificate for %s is not written through the symbolic link.", fix, accesskey.ShownValue(host, false))
 }
 
 // unwritten is the error of a certificate for host that could not be written in dir.
