@@ -620,7 +620,8 @@ func (lr *linkRun) observe(d proxy.Decision) { lr.st.Emit(event.RunEgress, run.E
 // key, at the run's limits with counters apart from the run's proxy. When guarded is
 // true it is guarded as the run's proxy is: this machine's addresses and the private
 // network addresses are reached only for a host that the node's policy's allow list
-// and StackHosts both list by name. The run's policy is not read. Each decision is a
+// and StackHosts both list by name, not by a *. pattern, and a link-local or cloud
+// metadata address for none. The run's policy is not read. Each decision is a
 // line of the gateway's report ([stackLine]). On the local link it is registered under
 // a fresh secret, the run answer's stack_proxy_secret, which no other proxy has; on
 // the one address the run key opens it, after [link.StackPreamble].
@@ -634,11 +635,15 @@ func (lr *linkRun) openStack(guarded bool) error {
 	px.SetLimits(proxy.Limits{Connections: lr.g.cfg.RunLimits.Connections, RequestsPerSecond: lr.g.cfg.RunLimits.RequestsPerSecond, Burst: lr.g.cfg.RunLimits.Burst, Stack: true})
 	px.Unlisted(stackRefused)
 	if guarded {
-		// The names are the node's policy's allow entries, as for the run's proxy; the
-		// proxy opens one only for a host StackHosts lists too.
+		// The names are the node's policy's allow entries that StackHosts lists exactly,
+		// so a *. entry of StackHosts opens nothing: both lists name the host itself.
 		var names []string
 		if node := lr.g.cfg.Policy; node != nil {
-			names = slices.Clone(node.Egress.Allow)
+			for _, entry := range node.Egress.Allow {
+				if _, ok := policy.Exact(lr.g.cfg.StackHosts, entry); ok {
+					names = append(names, entry)
+				}
+			}
 		}
 		px.Guard(names)
 		px.GuardRefused(stackGuarded)
@@ -709,9 +714,14 @@ func stackRefused(host string, port int) string {
 }
 
 // stackGuarded is the body of the 403 a run's guarded stack proxy answers for a host
-// the guard refuses: this machine's address or a private network address, by number or
-// at dial time, a link-local address or a cloud metadata address.
-func stackGuarded(host string, port int) string {
+// the guard refuses, by number or at dial time: never for a link-local or cloud
+// metadata address, which no entry opens, and otherwise this machine's address or a
+// private network address.
+func stackGuarded(host string, port int, never bool) string {
+	if never {
+		return fmt.Sprintf("qory: fetch the harness definition from another host: the gateway never reaches a link-local or cloud metadata address, and %s is one or resolves to one.\n"+
+			"qory: egress to %s:%d denied by the gateway: no entry of gateway.stack_hosts or of the node's policy opens a link-local or cloud metadata address\n", host, host, port)
+	}
 	return fmt.Sprintf("qory: to fetch the harness definition from the gateway's machine or a private network address, list %s by name, not a *. pattern, in the allow list of the node's policy and in gateway.stack_hosts in forager.yaml.\n"+
 		"qory: egress to %s:%d denied by the gateway: the stack proxy reaches such an address only for a host listed by name in both, and never a link-local or cloud metadata address\n", host, host, port)
 }

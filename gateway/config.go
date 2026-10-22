@@ -19,9 +19,10 @@ type Config struct {
 	// Policy is the node's policy, the one the command passes; nil means none. Without
 	// a server's policy it is each run's, and none is mode observe. Beside a server's
 	// policy it narrows that one: the node only takes away. Its allow list's entries
-	// that name a host itself, and that the run's policy allows, are the only ones that
-	// open this machine's addresses and the private network addresses to a guarded
-	// proxy.
+	// that name a host itself are the only ones that open this machine's addresses and
+	// the private network addresses to a guarded proxy: to the run's proxy those that
+	// the run's policy allows, and to the run's stack proxy those that StackHosts lists
+	// exactly.
 	Policy *Policy
 	// Credentials and Tools are the ones this machine defines; a run's policy selects
 	// among them by name. The gateway sets a credential's value for a run with or
@@ -73,8 +74,9 @@ type Config struct {
 	// run's policy is not checked. Behind a wall or a separate gateway it is guarded as
 	// the run's proxy is: it reaches this machine's addresses and the private network
 	// addresses only for a host that the allow list of Policy and StackHosts both list by
-	// name. Each decision is a line of Report, never a dev.qory.run.egress, and a refusal
-	// at RunLimits is reported at most once a second per limit. Empty means every host is
+	// name, not by a *. pattern, and a link-local or cloud metadata address for none.
+	// Each decision is a line of Report, never a dev.qory.run.egress, and a refusal at
+	// RunLimits is reported at most once a second per limit. Empty means every host is
 	// refused.
 	StackHosts []string
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the

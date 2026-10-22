@@ -119,6 +119,9 @@ type Decision struct {
 	// zero when nothing answered.
 	RequestID string
 	Status    int
+	// Never is true when the guard refused a link-local or cloud metadata address, by
+	// its number or at dial time: no name opens one.
+	Never bool
 }
 
 // rules is what the proxy decides by: the policy's mode, allow_first list, allow list
@@ -190,7 +193,7 @@ type Proxy struct {
 	unlisted atomic.Pointer[func(host string, port int) string]
 	// guardBody, when set, is the body of the 403 of a host the guard refuses
 	// ([Proxy.GuardRefused]).
-	guardBody atomic.Pointer[func(host string, port int) string]
+	guardBody atomic.Pointer[func(host string, port int, never bool) string]
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
@@ -222,8 +225,12 @@ const HostForm = "wall:host-form"
 const PlainRequest = "wall:plain-request"
 
 // guardError is the guard's refusal at dial time, of a name that resolved to an
-// address the guard does not dial.
-type guardError struct{ msg string }
+// address the guard does not dial. never is true for a link-local or cloud metadata
+// address, which no name opens.
+type guardError struct {
+	msg   string
+	never bool
+}
 
 func (e *guardError) Error() string { return e.msg }
 
@@ -295,11 +302,11 @@ func (p *Proxy) guard(ctx context.Context, address string) error {
 	}
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
-		return &guardError{address + " does not read as an address; the gateway refuses it"}
+		return &guardError{msg: address + " does not read as an address; the gateway refuses it"}
 	}
 	ip := unzoned(host)
 	if ip == nil {
-		return &guardError{host + " does not read as an address; the gateway refuses it"}
+		return &guardError{msg: host + " does not read as an address; the gateway refuses it"}
 	}
 	if err := judge(ctx, host, ip); err != nil {
 		return err
@@ -331,11 +338,11 @@ func (p *Proxy) guard(ctx context.Context, address string) error {
 func judge(ctx context.Context, host string, ip net.IP) error {
 	switch {
 	case linkLocal(ip):
-		return &guardError{host + " is a link-local address; the gateway refuses it"}
+		return &guardError{msg: host + " is a link-local address; the gateway refuses it", never: true}
 	case metadata(ip):
-		return &guardError{"Use another host: the gateway refuses the cloud metadata address " + host}
+		return &guardError{msg: "Use another host: the gateway refuses the cloud metadata address " + host, never: true}
 	case own(ip) && ctx.Value(namedKey{}) == nil:
-		return &guardError{host + " is this machine's address and no allow entry lists the host by name; the gateway refuses it"}
+		return &guardError{msg: host + " is this machine's address and no allow entry lists the host by name; the gateway refuses it"}
 	case private(ip) && ctx.Value(namedKey{}) == nil:
 		return privateAddr(host)
 	}
@@ -344,7 +351,7 @@ func judge(ctx context.Context, host string, ip net.IP) error {
 
 // privateAddr is the guard's refusal of a private network address, written as host.
 func privateAddr(host string) error {
-	return &guardError{"List the host by name in the allow list of the node's policy: " + host + " is a private network address, and the gateway dials one only for a host listed there by name"}
+	return &guardError{msg: "List the host by name in the allow list of the node's policy: " + host + " is a private network address, and the gateway dials one only for a host listed there by name"}
 }
 
 // carriers are the IPv6 ranges whose addresses the guard also judges by an IPv4 address
@@ -524,9 +531,9 @@ func (p *Proxy) Unlisted(body func(host string, port int) string) { p.unlisted.S
 
 // GuardRefused sets the body of the 403 that refuses a host by the guard's rule
 // ([GuardRule]), when the connection is decided and when its dial is: body's text for
-// the host and the port, in place of the guard's line. Every other refusal keeps its
-// body.
-func (p *Proxy) GuardRefused(body func(host string, port int) string) {
+// the host, the port and [Decision.Never], in place of the guard's line. Every other
+// refusal keeps its body.
+func (p *Proxy) GuardRefused(body func(host string, port int, never bool) string) {
 	p.guardBody.Store(&body)
 }
 
@@ -898,8 +905,8 @@ func (p *Proxy) decide(method, host string, port int) Decision {
 	if p.guarded.Load() {
 		ip := net.ParseIP(host)
 		local := strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || own(ip) || private(ip)
-		if linkLocal(ip) || metadata(ip) || (local && !p.named(host, ok)) {
-			d.Rule, d.Outcome = GuardRule, Refused
+		if never := linkLocal(ip) || metadata(ip); never || (local && !p.named(host, ok)) {
+			d.Rule, d.Outcome, d.Never = GuardRule, Refused, never
 			return d
 		}
 	}
@@ -922,7 +929,7 @@ func failed(d Decision, err error) Decision {
 	var op *net.OpError
 	switch {
 	case errors.As(err, &ge):
-		d.Allowed, d.Rule, d.Outcome = false, GuardRule, Refused
+		d.Allowed, d.Rule, d.Outcome, d.Never = false, GuardRule, Refused, ge.never
 	case errors.As(err, &op) && op.Op == "dial":
 		d.Outcome = DialFailed
 	default:
@@ -1350,20 +1357,20 @@ func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 // for a host no allow entry matches under enforce, and the body [Proxy.GuardRefused]
 // set for a host the guard refuses.
 func (p *Proxy) deny(w http.ResponseWriter, d Decision) {
-	body := p.unlisted.Load()
-	if d.Rule != "" || d.Allowed || d.Mode != policy.Enforce {
-		body = nil
+	text := ""
+	if body := p.unlisted.Load(); body != nil && d.Rule == "" && !d.Allowed && d.Mode == policy.Enforce {
+		text = (*body)(d.Host, d.Port)
 	}
-	if d.Rule == GuardRule {
-		body = p.guardBody.Load()
+	if body := p.guardBody.Load(); body != nil && d.Rule == GuardRule {
+		text = (*body)(d.Host, d.Port, d.Never)
 	}
-	if body != nil {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusForbidden)
-		io.WriteString(w, (*body)(d.Host, d.Port))
+	if text == "" {
+		deny(w, d)
 		return
 	}
-	deny(w, d)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	io.WriteString(w, text)
 }
 
 // deny answers a refused connection: 403 with one line naming the host and the mode,

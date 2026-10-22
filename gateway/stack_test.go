@@ -33,8 +33,15 @@ func stackRefusedBody(host string, port int) string {
 		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the host is not in gateway.stack_hosts\n", host, port)
 }
 
-// stackGuardedBody is the body of the 403 a run's guarded stack proxy answers for a
-// host the guard refuses.
+// stackNeverBody is the body of the 403 a run's guarded stack proxy answers for a
+// link-local or cloud metadata address.
+func stackNeverBody(host string, port int) string {
+	return "qory: fetch the harness definition from another host: the gateway never reaches a link-local or cloud metadata address, and " + host + " is one or resolves to one.\n" +
+		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: no entry of gateway.stack_hosts or of the node's policy opens a link-local or cloud metadata address\n", host, port)
+}
+
+// stackGuardedBody is the body of the 403 a run's guarded stack proxy answers for this
+// machine's address or a private network address.
 func stackGuardedBody(host string, port int) string {
 	return "qory: to fetch the harness definition from the gateway's machine or a private network address, list " + host + " by name, not a *. pattern, in the allow list of the node's policy and in gateway.stack_hosts in forager.yaml.\n" +
 		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the stack proxy reaches such an address only for a host listed by name in both, and never a link-local or cloud metadata address\n", host, port)
@@ -214,8 +221,10 @@ func TestTheStackProxyOnOneMachine(t *testing.T) {
 
 // TestTheStackProxyIsGuardedBehindAWall pins the guard of a walled run's stack proxy:
 // this machine's address by number and by name, and the cloud metadata address, are
-// refused with the stack proxy's guard body even when StackHosts lists them, nothing is
-// dialled for them, and each refusal is a line of the gateway's report.
+// refused even when StackHosts lists them, the metadata address with the body that
+// sends the fetch to another host and the others with the body that lists the host in
+// both lists; nothing is dialled for them, and each refusal is a line of the gateway's
+// report.
 func TestTheStackProxyIsGuardedBehindAWall(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("the guarded stack proxy reached this machine: %s", r.URL)
@@ -227,9 +236,13 @@ func TestTheStackProxyIsGuardedBehindAWall(t *testing.T) {
 	for _, target := range []string{"127.0.0.1:" + port, "169.254.169.254:80", "localhost:" + port} {
 		host, p, _ := net.SplitHostPort(target)
 		n, _ := strconv.Atoi(p)
+		want := stackGuardedBody(host, n)
+		if host == "169.254.169.254" {
+			want = stackNeverBody(host, n)
+		}
 		status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), target)
-		if status != http.StatusForbidden || body != stackGuardedBody(host, n) {
-			t.Errorf("%s: %d %q", target, status, body)
+		if status != http.StatusForbidden || body != want {
+			t.Errorf("%s: %d %q, want %q", target, status, body, want)
 		}
 	}
 	h.close()
@@ -280,6 +293,34 @@ func TestTheStackProxyOpensANameOfTheNodesPolicy(t *testing.T) {
 	}
 	if status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), "other.localhost:"+port); status != http.StatusForbidden || body != stackGuardedBody("other.localhost", n) {
 		t.Errorf("a CONNECT to a name the node's policy does not list: %d %q", status, body)
+	}
+}
+
+// TestTheStackProxyOpensNoNameForAPattern pins that a *. entry of StackHosts opens no
+// name of the node's policy: a host the node's policy lists by name, under a *. entry
+// of StackHosts alone, that resolves to this machine's address is refused at dial time
+// with the guard's body.
+func TestTheStackProxyOpensNoNameForAPattern(t *testing.T) {
+	if _, err := net.DefaultResolver.LookupHost(context.Background(), "stack.localhost."); err != nil {
+		t.Skipf("stack.localhost. does not resolve here: %v", err)
+	}
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the guarded stack proxy reached this machine: %s", r.URL)
+	}))
+	defer origin.Close()
+	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	n, _ := strconv.Atoi(port)
+	h := start(t, gateway.Config{StackHosts: []string{"*.localhost"},
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"stack.localhost"}}}})
+	a := h.open(server.LinkRunRequest{Wall: true})
+	resp, err := relay(h.g.Addr(), a.StackProxySecret).Get("http://stack.localhost:" + port + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || string(b) != stackGuardedBody("stack.localhost", n) {
+		t.Errorf("a name under a *. entry of StackHosts: %d %q", resp.StatusCode, b)
 	}
 }
 

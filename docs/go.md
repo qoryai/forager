@@ -261,13 +261,21 @@ returns a `session.HostProxy`:
 - Behind a wall or a separate gateway the stack proxy is guarded as the run's proxy
   is. It reaches the gateway's machine or a private network address only for a host
   that the allow list of `gateway.Config.Policy` and `StackHosts` both list by name,
-  and never a link-local or cloud metadata address. A host the guard refuses gets a
-  `403` with this body, by its address and when its name resolves to such an address
-  at dial time:
+  not by a `*.` pattern, and never a link-local or cloud metadata address. The guard
+  refuses a host by its address and when its name resolves to such an address at dial
+  time. The gateway's machine or a private network address gets a `403` with this
+  body:
 
   ```
   qory: to fetch the harness definition from the gateway's machine or a private network address, list git.internal by name, not a *. pattern, in the allow list of the node's policy and in gateway.stack_hosts in forager.yaml.
   qory: egress to git.internal:443 denied by the gateway: the stack proxy reaches such an address only for a host listed by name in both, and never a link-local or cloud metadata address
+  ```
+
+  A link-local or cloud metadata address gets a `403` with this body:
+
+  ```
+  qory: fetch the harness definition from another host: the gateway never reaches a link-local or cloud metadata address, and 169.254.169.254 is one or resolves to one.
+  qory: egress to 169.254.169.254:80 denied by the gateway: no entry of gateway.stack_hosts or of the node's policy opens a link-local or cloud metadata address
   ```
 - `CABundle` is empty, and `Env` sets no CA variable.
 - `Close()` ends it as it ends a host proxy. The run's first `Join` closes it before

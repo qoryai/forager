@@ -3705,7 +3705,8 @@ request to the hosts of `gateway.stack_hosts` alone, on any port, no certificate
 authority and no credential. The run's policy does not apply. Behind a wall or a
 separate gateway the stack proxy is guarded as the run's proxy is: it reaches the
 gateway's machine or a private network address only for a host that the node's policy
-and `gateway.stack_hosts` both list by name. Each decision is one line of the gateway's
+and `gateway.stack_hosts` both list by name, not by a `*.` pattern, and never a
+link-local or cloud metadata address. Each decision is one line of the gateway's
 log, a refusal at the run's limits at most once a second per limit, and no
 `dev.qory.run.egress` is written. The gateway closes the stack proxy at the run's first
 join request, so no session reaches it. qory also writes the fetch in the run machine's

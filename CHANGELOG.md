@@ -598,11 +598,14 @@ release may change what an existing document does, and says so under Upgrading.
   request, for qory's fetch of the harness definition. The stack proxy passes a
   CONNECT or a plain HTTP request to one of them, on any port, in enforce mode, with no
   certificate authority and no credential, and the run's policy is not checked. Behind
-  a wall or a separate gateway it is guarded as the run's proxy is, with the node's
-  policy's names. It counts at the run's limits, apart from the run's proxy. Each
-  decision is a line of `Config.Report`, never a `dev.qory.run.egress`, and a refusal
-  at the run's limits is reported at most once a second per limit. Start accepts a
-  lower-case host name, an IPv4 address or a `*.` suffix, and refuses any other entry.
+  a wall or a separate gateway it is guarded as the run's proxy is: it reaches this
+  machine's addresses and the private network addresses only for a host that the
+  node's policy and `gateway.stack_hosts` both list by name, not by a `*.` pattern,
+  and never a link-local or cloud metadata address. It counts at the run's limits,
+  apart from the run's proxy. Each decision is a line of `Config.Report`, never a
+  `dev.qory.run.egress`, and a refusal at the run's limits is reported at most once a
+  second per limit. Start accepts a lower-case host name, an IPv4 address or a `*.`
+  suffix, and refuses any other entry.
 - `QORY-STACK`, `link.StackPreamble`, on a separate gateway's one address. From the
   run's first join request on, it is refused.
 - A separate gateway reads a renewed certificate and key from `gateway.TLS`'s files
