@@ -888,8 +888,9 @@ release may change what an existing document does, and says so under Upgrading.
   `/etc/passwd` maps to uid 0, or a name it cannot map. With the run's certificate, it
   writes the certificate in `wall.Docker.CertsDir`, `/etc/docker/certs.d` by default,
   for the pull alone. `Prepare` with `Pull` finds the image by its digest, and makes no
-  container or network when the engine does not hold it. The run's containers start
-  with `--pull=never`, so the engine pulls such an image in the image step alone.
+  container or network when the engine does not hold it. The agent's container and
+  the container the wall reads the image's files from are created with
+  `--pull=never`, so the engine pulls such an image in the image step alone.
 - `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one

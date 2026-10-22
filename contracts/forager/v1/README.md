@@ -3983,8 +3983,8 @@ pinned digest. For a run with a certificate authority, the Docker wall writes th
 certificate as `qory-run-<id>.crt` in `<CertsDir>/<host>/`, `/etc/docker/certs.d` by
 default, for the reference's registry host and for each host of `credential_hosts`, and
 removes the files when the step ends, also when the pull fails or its context ends.
-The agent's container, and the container the wall reads the image's files from, start
-with `--pull=never`, so the engine pulls the image in the image step alone.
+The agent's container, and the container the wall reads the image's files from, are
+created with `--pull=never`, so the engine pulls the image in the image step alone.
 Docker Engine reads that directory at each pull. On its classic image store it reads
 none for `docker.io`, so an image there comes only through a blind relay, with no
 credential; on its containerd image store this is unverified. Without

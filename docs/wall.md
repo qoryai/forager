@@ -797,8 +797,8 @@ For a run with a certificate authority, the Docker wall writes the run's certifi
 `qory-run-<id>.crt` in the directory of the image's registry host and of each host of
 the run's credentials, and removes the files when the step ends, also when the pull
 fails. Each later join finds the image by its digest and writes no `image` step. The
-agent's container, and the container the wall reads the image's files from, start with
-`--pull=never`, so the engine pulls the image in the `image` step alone. Without
+agent's container, and the container the wall reads the image's files from, are
+created with `--pull=never`, so the engine pulls the image in the `image` step alone. Without
 `EngineProxy`, the engine pulls over the machine's network.
 
 What to know:

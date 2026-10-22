@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
@@ -23,9 +24,9 @@ import (
 // as the host proxy does, and, for a run with a certificate authority, the engine
 // trusts the run's certificate for the image's registry host and for each host of the
 // run's credentials. Without EngineProxy the engine pulls over the machine's network.
-// A join after the fetch finds the image by its digest and writes no image step; the
-// first join of a run with no fetch fetches the image in its image step, after its
-// dev.qory.session.started.
+// A join after a fetch that succeeded finds the image by its digest and writes no
+// image step; the first join of a run with no such fetch fetches the image in its image
+// step, after its dev.qory.session.started.
 //
 // A run whose image the machine defines, or whose wall is no wall.Puller, has nothing to
 // fetch: FetchImage writes no step and returns nil.
@@ -108,7 +109,7 @@ func (r *Run) pullImage(ctx context.Context, puller wall.Puller) (err error) {
 		fwd, err = listenForwarding(p.Addr, forwarding{dial: r.link.DialProxy, password: p.Password})
 	}
 	if err != nil {
-		return fmt.Errorf("Run one image step at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at %s (%s).", accesskey.ShownValue(p.Addr, false), accesskey.ShownError(err))
+		return unlistened(p.Addr, err)
 	}
 	defer func() {
 		err = errors.Join(err, fwd.Close())
@@ -122,6 +123,17 @@ func (r *Run) pullImage(ctx context.Context, puller wall.Puller) (err error) {
 		hosts = append(hosts, c.Hosts...)
 	}
 	return puller.Pull(ctx, r.wallRequest(), r.authority, hosts)
+}
+
+// unlistened is the error of a forwarder that cannot listen at the engine proxy's
+// address addr: an address in use, such as by a second run's image step, has the fix
+// of one image step at a time, and any other failure, such as a port this user may not
+// listen at, a fix about the address.
+func unlistened(addr string, err error) error {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return fmt.Errorf("Run one image step at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at %s (%s).", accesskey.ShownValue(addr, false), accesskey.ShownError(err))
+	}
+	return fmt.Errorf("Set the engine proxy's address to one this user can listen at: the forwarder cannot listen at %s (%s).", accesskey.ShownValue(addr, false), accesskey.ShownError(err))
 }
 
 // checkEngineProxy refuses an engine proxy whose address is not a loopback host:port

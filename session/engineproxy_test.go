@@ -200,7 +200,7 @@ func TestAnUnexportedEngineProxyPrintsItsFields(t *testing.T) {
 		"the slog text handler": b.String(),
 	} {
 		if !strings.Contains(out, enginePassword) {
-			t.Errorf("%s of an unexported EngineProxy field printed %s, without the password the doc says it prints", what, out)
+			t.Errorf("%s of an unexported EngineProxy field printed %s, without the password the doc lists", what, out)
 		}
 	}
 	// encoding/json writes no field that is not exported.
