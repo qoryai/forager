@@ -666,16 +666,19 @@ Since a match may start in them, the session keeps back up to the last 199 chara
 of each stream, and up to its last 3 lines, until more output follows them or the
 stream ends. It keeps back at most 64 KiB: of more, it writes the bytes before the
 last 64 KiB with the lines of the harness among them replaced. After 64 blank lines,
-it writes the lines of the harness before them replaced too. These are never matched:
-text wrapped to the terminal's width, a line with a terminal's escape codes in it,
-text in another Unicode normalisation form, base64, JSON inside a JSON string, text
-split across JSON strings, and the deltas of a stream of messages. These are not
-masked: the `command` and `args` of `dev.qory.session.started`; the failure line of a
-join that fails before the home is read; the setup steps of a run whose setup runs
-`outside`; the lines of the host's steps, which `Step.Log` writes with no session
-number; the copy of the runtime's output to `Stdout` and `Stderr`; and the error that
-`Join` returns. False, the default, masks no harness text. See
-[`mask.Harness`](../mask/harness.go) for the matching.
+it writes the lines of the harness before them replaced too. Inside one JSON string,
+up to 2 lines of the harness that come after more than 64 KiB of escaped blank lines
+are written as they are; a run of 3 or more lines after those blank lines is replaced.
+These are never matched: text wrapped to the terminal's width, a line with a
+terminal's escape codes in it, text in another Unicode normalisation form, base64,
+JSON inside a JSON string, text split across JSON strings, and the deltas of a stream
+of messages. These are not masked: the `command` and `args` of
+`dev.qory.session.started`; the failure line of a join that fails before the home is
+read; the setup steps of a run whose setup runs `outside`; the lines of the host's
+steps, which `Step.Log` writes with no session number; the copy of the runtime's
+output to `Stdout` and `Stderr`; and the error that `Join` returns. False, the
+default, masks no harness text. See [`mask.Harness`](../mask/harness.go) for the
+matching.
 
 `session.SessionSpec` has each session's: the runtime and its command, the variables,
 the mounts, the setup commands and the rest below. `Harness` lists the harness's sources,

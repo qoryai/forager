@@ -1007,22 +1007,26 @@ func (h *Harness) Writer(w io.Writer) *HarnessWriter {
 // follow those lines of the files, it writes them replaced, each with the replacement
 // of a file that has the line. It remembers the last HarnessLines-1 lines of the
 // files that it wrote with blank lines alone after them, so a later line that makes a
-// run of lines with them is replaced too. It keeps back at most the last 64 KiB: when
-// there are more, it writes the bytes before the last 64 KiB with the lines of the
-// files among them replaced, with the replacement of the match that continues past
-// that point when there is one, and otherwise each with the replacement of a file
-// that has the line; a last line that repeats the pattern of a line of the files at
-// least as long is replaced too. Once a replacement is written for a match that
-// reaches the end of what was written, it keeps the end of the match as well, up to
-// 64 KiB, so the rest of the match that follows in later writes is part of that
-// replacement. After a write the writer keeps back at most 192 KiB, 12 bytes and the
-// write: up to 64 KiB of that match, up to 64 KiB of whitespace after it, up to 64
-// KiB more, and up to 12 bytes of a line number before them. Each write scans what
-// the writer keeps back and the write, so the cost of a stream is linear in its
-// length, and writes of one byte cost the most: on an Apple M5 Max on 2026-10-22, 0.1
-// s per MiB with files of short lines, and after 100 KiB of one line, with a file of
-// a line of 1 MiB, 190 s per MiB of other text and 90 s per MiB of the file's text.
-// It is safe for concurrent writes.
+// run of lines with them is replaced too. Inside one JSON string, up to
+// HarnessLines-1 lines of the files that come after more than 64 KiB of escaped blank
+// lines are written as they are; a run of HarnessLines or more lines after those
+// blank lines is replaced. It keeps back at most the last 64 KiB: when there are
+// more, it writes the bytes before the last 64 KiB with the lines of the files among
+// them replaced, with the replacement of the match that continues past that point
+// when there is one, and otherwise each with the replacement of a file that has the
+// line; a last line that repeats the pattern of a line of the files at least as long
+// is replaced too. Once a replacement is written for a match that reaches the end of
+// what was written, it keeps the end of the match as well, up to 64 KiB, so the rest
+// of the match that follows in later writes is part of that replacement. After a
+// write the writer keeps back at most 192 KiB, 12 bytes and the write: up to 64 KiB
+// of that match, up to 64 KiB of whitespace after it, up to 64 KiB more, and up to 12
+// bytes of a line number before them. Each write scans what the writer keeps back and
+// the write, so the cost of a stream is linear in its length, and writes of one byte
+// cost the most: on an Apple M5 Max on 2026-10-22 and 2026-10-23, 0.1 s per MiB with
+// one file of 3 short lines, 20 bytes; 1.1 s per MiB with 64 files of short lines, 2
+// MiB in all; and after 100 KiB of one line, with one file of 3 lines, one of them 1
+// MiB long, 190 s per MiB of other text and 90 s per MiB of the file's text. It is
+// safe for concurrent writes.
 type HarnessWriter struct {
 	w  io.Writer
 	h  *Harness
