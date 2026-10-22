@@ -595,7 +595,8 @@ the credential the join request asks the gateway for, for this session.
   `Args`, the program and then its arguments. The session runs them inside the wall
   before the runtime, one after another, through the run's proxy, and starts the
   runtime once every one exits 0. Each command is a `setup` step with its name, its
-  output as the step's lines and its exit status. A command that exits otherwise is
+  output as the step's lines and its exit status. The session also writes each line,
+  masked, to `Stdout` or `Stderr`, as it writes the runtime's output. A command that exits otherwise is
   the run's exit status, and neither a later command nor the runtime starts. Setup
   needs a `Wall` and `SetupRunner`, and `Timeout` counts it. See
   [the contract](../contracts/forager/v1/README.md#the-wall).

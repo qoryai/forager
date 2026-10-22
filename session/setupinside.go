@@ -93,6 +93,8 @@ type setupSteps struct {
 	r        *Run
 	session  int
 	commands []SetupCommand
+	// terminal writes a setup line, masked, to the user's terminal.
+	terminal func(stream string, b []byte)
 	// base is the number of the last step before the setup's, the wall step's.
 	base int
 
@@ -111,9 +113,39 @@ type setupSteps struct {
 }
 
 // newSetupSteps returns the setup steps of session n, whose setup is commands, once the
-// session's last step before them has started.
-func (r *Run) newSetupSteps(n int, commands []SetupCommand) *setupSteps {
-	return &setupSteps{r: r, session: n, commands: commands, base: r.steps, next: 1, ended: len(commands) == 0}
+// session's last step before them has started; terminal gets each line of the steps.
+func (r *Run) newSetupSteps(n int, commands []SetupCommand, terminal func(stream string, b []byte)) *setupSteps {
+	return &setupSteps{r: r, session: n, commands: commands, terminal: terminal, base: r.steps, next: 1, ended: len(commands) == 0}
+}
+
+// setupTerminal writes a setup line to the user's terminal as the runtime's output
+// reaches it: on pipes to stdout or stderr as its stream is; on a pseudo-terminal to
+// stdout, each line break as the pseudo-terminal writes it, \r\n, since the
+// terminal is in raw mode while the launch runs.
+func setupTerminal(interactive bool, stdout, stderr io.Writer) func(stream string, b []byte) {
+	return func(stream string, b []byte) {
+		switch {
+		case interactive:
+			stdout.Write(bytes.ReplaceAll(b, []byte("\n"), []byte("\r\n")))
+		case stream == "stderr":
+			stderr.Write(b)
+		default:
+			stdout.Write(b)
+		}
+	}
+}
+
+// terminalWriter is w, a stream to the user's terminal, with each write under mu.
+type terminalWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+// Write writes p to w under the lock.
+func (l *terminalWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 // start is called once the session's last step before the setup ended, as its launch
@@ -147,7 +179,11 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 		s.open = s.r.startStep(event.StepSetup, s.commands[got.command-1].Name)
 		return
 	case got.event == setupLine && running:
-		s.r.writeLog(got.stream, s.session, s.open.n, got.bytes)
+		// The record has the line once, through the sink, and the terminal has it once,
+		// masked the same way.
+		masked := []byte(s.r.masker.Replace(string(got.bytes)))
+		s.r.writeLog(got.stream, s.session, s.open.n, masked)
+		s.terminal(got.stream, masked)
 		return
 	case got.event == setupExited && running:
 		state := event.StateSucceeded
@@ -194,7 +230,7 @@ const setupLineSize = 4096
 // RunSetupCommand runs one setup command of SessionSpec.Setup inside the wall and
 // reports it on the socket of QORY_RUN_SOCKET, as records of the setup source: that it
 // started, each line of its output, and its exit status. The session writes the
-// command's setup step from them. The caller's binary runs it inside the enclosure in
+// command's setup step from them, and each line to the user's terminal. The caller's binary runs it inside the enclosure in
 // a hidden mode, SessionSpec.SetupRunner, as it runs [Exec]; the script of
 // [PreparationScript] starts it once for each command.
 //

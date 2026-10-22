@@ -182,7 +182,9 @@ type SessionSpec struct {
 	// its exit status, and neither a later command nor the runtime starts. A stop during
 	// a command asks it to leave with SIGTERM, whatever the stop signal, and the runtime
 	// never starts. Each step has the command's Name as its name and its output as its
-	// lines, which the runner sends on QORY_RUN_SOCKET as records of the setup source.
+	// lines, which the runner sends on QORY_RUN_SOCKET as records of the setup source;
+	// the session writes each line, masked, to Stdout or Stderr too, as it writes the
+	// runtime's output.
 	// dev.qory.session.started contains the names as setup_commands, and the script as
 	// its command and args. Empty means none. Setup needs the run's Wall and SetupRunner,
 	// and each command a name and a program.

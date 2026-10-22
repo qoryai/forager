@@ -559,7 +559,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// An event mapped from a record of the session's runtime has the session's number
 	// as session, as each chunk of its output and each resize below has. A record of the
 	// setup source is one of the session's setup steps, which the runtime does not map.
-	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup)
+	// The terminal gets each setup line the session writes, as it gets the runtime's
+	// output: stdout and stderr share one lock, so the two writers never write at once.
+	var terminalMu sync.Mutex
+	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
+	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr))
 	records := func(rec runtimes.Record) {
 		if rec.Source == runtimes.SourceSetup {
 			setupSteps.handle(rec)
@@ -648,7 +652,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	resized := func(cols, rows int) {
 		r.write(event.RunResized, map[string]any{"cols": cols, "rows": rows, "session": n})
 	}
-	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, masker: masker, output: output, cols: cols, rows: rows, resized: resized}
+	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: stdout, stderr: stderr, logs: logs, masker: masker, output: output, cols: cols, rows: rows, resized: resized}
 	// The limit ends the runtime and nothing else: the wall is closed on the caller's
 	// context, as after any exit. The run being closed from outside ends it the same
 	// way.

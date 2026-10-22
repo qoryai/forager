@@ -235,39 +235,66 @@ func TestSetupCommandsRunBeforeTheRuntime(t *testing.T) {
 	}
 }
 
-// TestASetupCommandsLinesAreMasked pins that the run's masker replaces a forwarder's
-// password in a setup command's lines, as in the runtime's output.
-func TestASetupCommandsLinesAreMasked(t *testing.T) {
-	sp := preparedSpec(t, "exit 0")
-	ctx := context.Background()
-	r, err := session.Open(ctx, opened(sp))
-	if err != nil {
-		t.Fatal(err)
-	}
-	hp, err := r.HostProxy()
-	if err != nil {
-		t.Fatal(err)
-	}
-	u, err := url.Parse(hp.ProxyURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	password, _ := u.User.Password()
-	sp.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: []string{"echo", "the password is " + password}}}
-	res, err := r.Join(ctx, sp.SessionSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
-		t.Fatal(err)
-	}
-	all := steps(t, events(t, res))
-	if len(all) != 3 || all[2].logs["stdout"] != "the password is "+mask.ProxyPassword+"\n" {
-		t.Errorf("the setup step's lines %+v", all[len(all)-1])
-	}
-	record, _ := os.ReadFile(filepath.Join(res.Dir, "session.jsonl"))
-	if strings.Contains(string(record), password) {
-		t.Error("the record contains the host proxy's password")
+// TestASetupCommandsLinesReachTheTerminalOnceMasked pins that the run's masker replaces
+// a forwarder's password in a setup command's lines, as in the runtime's output, and
+// that each line reaches the user's terminal once, masked, and the session's and the
+// run's output.log once: on pipes on the line's stream, and on a pseudo-terminal on
+// stdout, each line break as \r\n.
+func TestASetupCommandsLinesReachTheTerminalOnceMasked(t *testing.T) {
+	for _, interactive := range []bool{false, true} {
+		t.Run(fmt.Sprint("interactive ", interactive), func(t *testing.T) {
+			sp := preparedSpec(t, "exit 0")
+			var stdout, stderr syncBuffer
+			sp.Stdout, sp.Stderr, sp.Interactive = &stdout, &stderr, interactive
+			ctx := context.Background()
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			hp, err := r.HostProxy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			u, err := url.Parse(hp.ProxyURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			password, _ := u.User.Password()
+			sp.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: []string{"/bin/sh", "-c", `echo "the password is $0"; printf 'a warning\n' >&2`, password}}}
+			res, err := r.Join(ctx, sp.SessionSpec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+				t.Fatal(err)
+			}
+			line, warning := "the password is "+mask.ProxyPassword+"\n", "a warning\n"
+			all := steps(t, events(t, res))
+			if len(all) != 3 || all[2].logs["stdout"] != line || all[2].logs["stderr"] != warning {
+				t.Errorf("the setup step's lines %+v", all[len(all)-1])
+			}
+			if interactive {
+				if out := stdout.String(); strings.Count(out, "the password is "+mask.ProxyPassword+"\r\n") != 1 || strings.Count(out, "a warning\r\n") != 1 || stderr.String() != "" {
+					t.Errorf("the terminal got %q on stdout and %q on stderr", out, stderr.String())
+				}
+			} else if stdout.String() != line || stderr.String() != warning {
+				t.Errorf("the terminal got %q on stdout and %q on stderr", stdout.String(), stderr.String())
+			}
+			for _, f := range []string{filepath.Join(res.SessionDir, "output.log"), filepath.Join(res.Dir, "output.log")} {
+				b, err := os.ReadFile(f)
+				if err != nil || strings.Count(string(b), line) != 1 || strings.Count(string(b), warning) != 1 {
+					t.Errorf("%s contains %q, %v; want each setup line once", f, b, err)
+				}
+			}
+			for _, f := range []string{"session.jsonl", "output.log"} {
+				if b, _ := os.ReadFile(filepath.Join(res.Dir, f)); strings.Contains(string(b), password) {
+					t.Errorf("%s contains the host proxy's password", f)
+				}
+			}
+			if strings.Contains(stdout.String()+stderr.String(), password) {
+				t.Error("the terminal got the host proxy's password")
+			}
+		})
 	}
 }
 
