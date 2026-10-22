@@ -284,7 +284,7 @@ func ReportedAbout(a *About) *About {
 }
 
 // ShownAbout is a checked About as Forager sends it to Qory Apiary, in run.started and
-// in a registration: a copy in which a value that contains qak_ or qrk_ in any case
+// in a registration: a copy in which a value that contains qak_, qrk_ or qecr_ in any case
 // does not appear. Kind, Title and each subject's Title are accesskey.ShownName's
 // phrase in place of such a value. A subject whose Type or Ref contains one is left
 // out, since neither form holds a phrase and a subject needs both, and so is a URL
@@ -323,7 +323,7 @@ func ShownAbout(a *About) *About {
 }
 
 // aboutContainsSecret reports whether a member of a, a decoded string or member name
-// of its Details among them, contains qak_ or qrk_ in any case.
+// of its Details among them, contains qak_, qrk_ or qecr_ in any case.
 func aboutContainsSecret(a *About) bool {
 	if accesskey.ContainsSecret(a.Kind) || accesskey.ContainsSecret(a.Title) {
 		return true
@@ -339,7 +339,7 @@ func aboutContainsSecret(a *About) bool {
 }
 
 // jsonSecrets are the strings and member names of the JSON d, as they decode, that
-// contain qak_ or qrk_ in any case, joined by spaces, so an escape such as \u0061
+// contain qak_, qrk_ or qecr_ in any case, joined by spaces, so an escape such as \u0061
 // hides neither; empty when there are none. Bytes that do not decode as JSON are
 // checked as they are written.
 func jsonSecrets(d []byte) string {

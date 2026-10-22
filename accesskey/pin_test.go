@@ -182,13 +182,15 @@ func TestSecretInPinDocumentDecoded(t *testing.T) {
 // TestSecretInPinEntry pins the check of one entry: its alg always, its public key
 // unless it is one valid key.
 func TestSecretInPinEntry(t *testing.T) {
-	qak, qrk := keyWith(t, "qak_", true), keyWith(t, "QRK_", true)
+	qak, qrk, qecr := keyWith(t, "qak_", true), keyWith(t, "QRK_", true), keyWith(t, "qecr_", true)
 	for _, c := range []struct {
 		name, alg, key string
 		want           error
 	}{
 		{"a key with qak_", "ed25519", qak, nil},
 		{"a key with QRK_", "ed25519", qrk, nil},
+		{"a key with qecr_", "ed25519", qecr, nil},
+		{"a run code in alg", "QECR_F1XT0RE0000000000000000000.x", qak, accesskey.ErrRunCodeInDocument},
 		{"a secret in alg", fakeSecret, qak, accesskey.ErrSecretInDocument},
 		{"a run key in alg", fakeRunKey, qak, accesskey.ErrRunKeyInDocument},
 		{"a key a character short", "ed25519", qak[:42], accesskey.ErrSecretInDocument},
@@ -203,14 +205,16 @@ func TestSecretInPinEntry(t *testing.T) {
 }
 
 // TestAKeyThatStartsWithASecretPrefixIsChecked pins that a valid key that starts with
-// qak_ or qrk_, in any case, is not left out, since a secret cut to 43 characters can
-// read as a key, and that a valid key with qak_ further in still is.
+// qak_, qrk_ or qecr_, in any case, is not left out, since a secret cut to 43
+// characters can read as a key, and that a valid key with qak_ further in still is.
 func TestAKeyThatStartsWithASecretPrefixIsChecked(t *testing.T) {
 	for prefix, want := range map[string]error{
-		"qak_": accesskey.ErrSecretInDocument,
-		"QAK_": accesskey.ErrSecretInDocument,
-		"qrk_": accesskey.ErrRunKeyInDocument,
-		"QrK_": accesskey.ErrRunKeyInDocument,
+		"qak_":  accesskey.ErrSecretInDocument,
+		"QAK_":  accesskey.ErrSecretInDocument,
+		"qrk_":  accesskey.ErrRunKeyInDocument,
+		"QrK_":  accesskey.ErrRunKeyInDocument,
+		"qecr_": accesskey.ErrRunCodeInDocument,
+		"QECR_": accesskey.ErrRunCodeInDocument,
 	} {
 		k := keyAt(t, 0, prefix, true)
 		if _, err := accesskey.ParsePin([]byte("[" + entry("ed25519", k) + "]")); err != want {

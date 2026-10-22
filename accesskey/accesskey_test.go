@@ -1413,10 +1413,80 @@ func TestWithoutVariablesTakesOutForagersOwn(t *testing.T) {
 	}
 }
 
+// TestContainsSecretCatchesEachKind pins the check for each kind of secret, an access
+// key secret, qak_, a run key, qrk_, and a run code, qecr_, in lower and upper case:
+// ContainsSecret and DocumentContainsSecret report each, SecretInDocument returns the
+// kind's error, and ErrRunCodeInDocument starts with the fix, quotes nothing and is an
+// ErrSecretInDocument. A value with more than one kind gets the first kind's error in
+// the order qak_, qrk_, qecr_, and a near miss is no secret.
+func TestContainsSecretCatchesEachKind(t *testing.T) {
+	for _, c := range []struct {
+		value string
+		want  error
+	}{
+		{"x qak_y", accesskey.ErrSecretInDocument}, {"x QAK_Y", accesskey.ErrSecretInDocument},
+		{"x qrk_y", accesskey.ErrRunKeyInDocument}, {"x QRK_Y", accesskey.ErrRunKeyInDocument},
+		{"x qecr_y", accesskey.ErrRunCodeInDocument}, {"x QECR_Y", accesskey.ErrRunCodeInDocument},
+		{"x qEcR_y", accesskey.ErrRunCodeInDocument},
+		{"qecr_x qrk_y", accesskey.ErrRunKeyInDocument}, {"QECR_x QAK_y", accesskey.ErrSecretInDocument},
+		{"qecn_x", nil}, {"qec_r", nil}, {"qecr-x", nil}, {"qecrx", nil}, {"run code", nil},
+	} {
+		secret := c.want != nil
+		if got := accesskey.ContainsSecret(c.value); got != secret {
+			t.Errorf("ContainsSecret(%q) = %t, want %t", c.value, got, secret)
+		}
+		for _, doc := range []any{c.value, []any{"a", c.value}, map[string]any{"a": c.value}, map[string]any{c.value: 1}, map[any]any{c.value: 1}} {
+			if got := accesskey.DocumentContainsSecret(doc); got != secret {
+				t.Errorf("DocumentContainsSecret(%#v) = %t, want %t", doc, got, secret)
+			}
+			if got := accesskey.SecretInDocument(doc); got != c.want {
+				t.Errorf("SecretInDocument(%#v) = %v, want %v", doc, got, c.want)
+			}
+		}
+	}
+	err := accesskey.ErrRunCodeInDocument
+	if want := "remove the run code from the document: a run code belongs in a machine's start data only"; err.Error() != want {
+		t.Errorf("ErrRunCodeInDocument = %q, want %q", err, want)
+	}
+	if !errors.Is(err, accesskey.ErrSecretInDocument) || errors.Is(err, accesskey.ErrRunKeyInDocument) || errors.Is(accesskey.ErrRunKeyInDocument, err) {
+		t.Error("ErrRunCodeInDocument is not an ErrSecretInDocument alone")
+	}
+	if len(err.Error()) > 100 || strings.Contains(strings.ToLower(err.Error()), "qecr_") {
+		t.Errorf("ErrRunCodeInDocument is over 100 characters or contains the prefix: %q", err)
+	}
+}
+
+// TestARunCodeIsRefusedAndPhrased pins a run code, qecr_ in any case, where a secret
+// does not belong: a pin, a name, an instance id and a server URL that contain one are
+// refused, and no error quotes the code; a name's and a value's phrase is the run
+// code's, and IsNamePhrase reports it.
+func TestARunCodeIsRefusedAndPhrased(t *testing.T) {
+	code := "qecr_F1XT0RE0000000000000000000." + keys(t).SigningKey.Fingerprint
+	if _, err := accesskey.ParsePin([]byte(`[{"alg":"` + code + `","public_key":"` + keys(t).SigningKey.PublicKey + `"}]`)); err != accesskey.ErrRunCodeInDocument {
+		t.Errorf("a pin with a run code: %v; want ErrRunCodeInDocument", err)
+	}
+	r, _ := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qecn_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	_, post := r.Post(context.Background(), nil, "https://qory.example/?c="+code, "test")
+	for i, err := range []error{post, accesskey.CheckName("x" + code[:12]), accesskey.CheckName(strings.ToUpper(code[:12])), accesskey.CheckInstanceID(code[:20])} {
+		if err == nil || strings.Contains(strings.ToLower(err.Error()), "qecr_") || strings.Contains(err.Error(), "F1XT0RE") {
+			t.Errorf("%d: %v", i, err)
+		}
+	}
+	if post == nil || post.Error() != "the server URL contains a run code" {
+		t.Errorf("a server URL with a run code: %v", post)
+	}
+	if got := accesskey.ShownName("QECR_x", true); got != "(a name that contains a run code)" || !accesskey.IsNamePhrase(got) {
+		t.Errorf("ShownName = %s, IsNamePhrase %t", got, accesskey.IsNamePhrase(got))
+	}
+	if got := accesskey.ShownValue("x: qecr_y", true); got != "(a value that contains a run code)" {
+		t.Errorf("ShownValue = %s", got)
+	}
+}
+
 // TestShownName pins the phrase a name that contains qak_ or qrk_ in any case is shown
 // as, the access key secret's when it contains both, and a clean name quoted or bare.
 func TestShownName(t *testing.T) {
-	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	const ak, rk, rc = "(a name that contains an access key secret)", "(a name that contains a run key)", "(a name that contains a run code)"
 	for _, c := range []struct {
 		name  string
 		quote bool
@@ -1425,6 +1495,8 @@ func TestShownName(t *testing.T) {
 		{"qak_x", true, ak}, {"QAK_x", false, ak}, {"x.QaK_y", true, ak},
 		{"qrk_x", false, rk}, {"QRK_x", true, rk}, {"x.qRk_y", false, rk},
 		{"qrk_x.qak_y", true, ak}, {"QRK_x.QAK_y", false, ak},
+		{"qecr_x", false, rc}, {"QECR_x", true, rc}, {"x.qEcR_y", false, rc},
+		{"qecr_x.qrk_y", true, rk}, {"QECR_x.QAK_y", false, ak},
 		{"model", true, `"model"`}, {"model", false, "model"}, {"qak-x", false, "qak-x"},
 	} {
 		if got := accesskey.ShownName(c.name, c.quote); got != c.want {
@@ -1436,7 +1508,7 @@ func TestShownName(t *testing.T) {
 // TestShownValue pins the phrase a value that contains qak_ or qrk_ in any case is shown
 // as, the access key secret's when it contains both, and a clean value quoted or bare.
 func TestShownValue(t *testing.T) {
-	const ak, rk = "(a value that contains an access key secret)", "(a value that contains a run key)"
+	const ak, rk, rc = "(a value that contains an access key secret)", "(a value that contains a run key)", "(a value that contains a run code)"
 	for _, c := range []struct {
 		value string
 		quote bool
@@ -1445,6 +1517,8 @@ func TestShownValue(t *testing.T) {
 		{"qak_x", true, ak}, {"QAK_x", false, ak}, {"x: QaK_y", true, ak},
 		{"qrk_x", false, rk}, {"QRK_x", true, rk}, {"x: qRk_y", false, rk},
 		{"qrk_x qak_y", true, ak}, {"QRK_x QAK_y", false, ak},
+		{"qecr_x", false, rc}, {"QECR_x", true, rc}, {"x: qEcR_y", false, rc},
+		{"qecr_x qrk_y", true, rk}, {"QECR_x QAK_y", false, ak},
 		{"exit status 3", true, `"exit status 3"`}, {"exit status 3", false, "exit status 3"}, {"qak-x", false, "qak-x"},
 	} {
 		if got := accesskey.ShownValue(c.value, c.quote); got != c.want {
@@ -1479,9 +1553,11 @@ func TestShownError(t *testing.T) {
 		t.Errorf("ShownError(%v) = %v, want the error itself", clean, got)
 	}
 	for text, want := range map[string]string{
-		"open /x/qak_y: no such file": "(a value that contains an access key secret)",
-		"QRK_x":                       "(a value that contains a run key)",
-		"qrk_x QaK_y":                 "(a value that contains an access key secret)",
+		"open /x/qak_y: no such file":  "(a value that contains an access key secret)",
+		"QRK_x":                        "(a value that contains a run key)",
+		"qrk_x QaK_y":                  "(a value that contains an access key secret)",
+		"open /x/qecr_y: no such file": "(a value that contains a run code)",
+		"QECR_x":                       "(a value that contains a run code)",
 	} {
 		err := fmt.Errorf("wrapped: %w", errors.New(text))
 		got := accesskey.ShownError(err)
@@ -1518,8 +1594,10 @@ func TestAnEnrolmentsDialErrorPrintsAPhraseForASecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	for proxy, phrase := range map[string]string{
-		"http://qak_fake.example:1": "(a value that contains an access key secret)",
-		"http://QRK_FAKE.example:1": "(a value that contains a run key)",
+		"http://qak_fake.example:1":  "(a value that contains an access key secret)",
+		"http://QRK_FAKE.example:1":  "(a value that contains a run key)",
+		"http://qecr_fake.example:1": "(a value that contains a run code)",
+		"http://QECR_FAKE.example:1": "(a value that contains a run code)",
 	} {
 		p, _ := url.Parse(proxy)
 		hc := &http.Client{Transport: &http.Transport{

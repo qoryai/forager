@@ -544,6 +544,9 @@ func checkOrigin(s string) error {
 	if containsRunKey(s) {
 		return errors.New("the server URL contains a run key")
 	}
+	if containsRunCode(s) {
+		return errors.New("the server URL contains a run code")
+	}
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("the server URL %s is not an origin, scheme and host only", shown(s))

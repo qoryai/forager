@@ -13,7 +13,7 @@ import (
 // dev.qory.run.built.
 type Built struct {
 	// Image is the image by its digest: NAME@sha256: and 64 lower-case hexadecimal
-	// digits, with no tag, as a policy's image reference is, and with no qak_ or qrk_ in
+	// digits, with no tag, as a policy's image reference is, and with no qak_, qrk_ or qecr_ in
 	// any case.
 	Image string
 	// Size is the image's size in bytes, 1 or more.
@@ -23,7 +23,7 @@ type Built struct {
 	Commit string
 	// EnvironmentRef is the reference to the environment the image is for, not empty.
 	// The run's masker replaces each forwarder's password in it, and a reference that
-	// contains qak_ or qrk_ in any case is a phrase in its place, as in a step's name.
+	// contains qak_, qrk_ or qecr_ in any case is a phrase in its place, as in a step's name.
 	EnvironmentRef string
 }
 
@@ -33,7 +33,7 @@ type Built struct {
 // event.StepBuild, and call Built after the step exits.
 //
 // An error means nothing is written: a member of b is not of its shape, Image contains
-// qak_ or qrk_, another call of the run is running, a host step is open, the run is
+// qak_, qrk_ or qecr_, another call of the run is running, a host step is open, the run is
 // closed, or Built wrote the run's dev.qory.run.built already.
 //
 // EnvironmentRef must contain no credential. The masker replaces only the forwarders'
@@ -63,13 +63,13 @@ func (r *Run) Built(b Built) error {
 
 // checkBuilt refuses a build's result the schema of dev.qory.run.built would: an image
 // not pinned by digest, a size below 1, a commit that is not a full commit id, or an
-// empty environment reference, and an image that contains qak_ or qrk_ in any case,
+// empty environment reference, and an image that contains qak_, qrk_ or qecr_ in any case,
 // which no event contains. The image's errors show no value, since a reference may
 // contain a registry's credentials.
 func checkBuilt(b Built) error {
 	switch {
 	case accesskey.ContainsSecret(b.Image):
-		return errors.New("set the built image to a reference without qak_ or qrk_: an image with either prefix may contain an access key secret or a run key")
+		return errors.New("set the built image to a reference without qak_, qrk_ or qecr_: each starts a secret")
 	case !policy.ImageReference(b.Image):
 		return errors.New("set the built image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag")
 	case b.Size < 1:

@@ -411,14 +411,14 @@ func (r *Run) start(ctx context.Context) (err error) {
 		return fail2(errRunClosed)
 	}
 	r.startedAt = time.Now()
-	// A value of the run's that contains qak_ or qrk_ in any case is sent as a phrase in
+	// A value of the run's that contains qak_, qrk_ or qecr_ in any case is sent as a phrase in
 	// its place: accesskey.ShownName's for the host and the wall, and server.ShownLabels'
 	// and server.ShownAbout's for the labels and about.
 	started := map[string]any{"opened_by": event.OpenedByRun, "forager_version": spec.ForagerVersion, "host": accesskey.ShownName(hostname(), false)}
 	if spec.Wall != nil {
 		started["wall"] = accesskey.ShownName(spec.Wall.Name(), false)
 	}
-	// Open checked both: neither contains qak_ or qrk_, since neither contains _.
+	// Open checked both: neither contains qak_, qrk_ or qecr_, since neither contains _.
 	if spec.Machine != "" {
 		started["machine"] = spec.Machine
 	}

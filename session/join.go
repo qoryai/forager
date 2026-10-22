@@ -756,7 +756,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 }
 
 // sessionStarted is the data of the session's dev.qory.session.started. A value of the
-// session's that contains qak_ or qrk_ in any case is sent as a phrase in its place:
+// session's that contains qak_, qrk_ or qecr_ in any case is sent as a phrase in its place:
 // accesskey.ShownName's for the runtime, the image, its name and its container
 // runtime; accesskey.ShownValue's for the directory, the command, each argument, the
 // runtime's version, the name of each setup command and each harness source.

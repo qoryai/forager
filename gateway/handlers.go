@@ -698,7 +698,7 @@ func (lr *linkRun) joined(ev event.Event) {
 
 // shownStarted phrases each dev.qory.run.started and dev.qory.session.started in evs, a batch [linkRun.check]
 // accepted, as a session phrases one, so a session that sends a value as it is passes
-// no value that contains qak_ or qrk_ in any case through the gateway: the members of
+// no value that contains qak_, qrk_ or qecr_ in any case through the gateway: the members of
 // startedNames as [accesskey.ShownName] shows them, those of startedValues and each
 // entry of startedLists as [accesskey.ShownValue] does, the labels as
 // [server.ShownLabels] gives them and about as [server.ShownAbout] does. Data with no

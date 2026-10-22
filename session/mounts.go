@@ -526,7 +526,7 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 // directory is one of Forager's files, and so is where the sockets are made. A
 // refusal's first name is always one of
 // the places exactly as the caller passed it, or [accesskey.ShownName]'s phrase in its
-// place when it contains qak_ or qrk_ in any case. Detail prints such a path as
+// place when it contains qak_, qrk_ or qecr_ in any case. Detail prints such a path as
 // [accesskey.ShownValue]'s phrase, and the names list each phrase once:
 //
 //   - mount_contains_forager_files: a place that is, contains or lies inside one of
@@ -833,11 +833,11 @@ func paths(ms []wall.Mount) []string {
 }
 
 // pathShown is a path as a message prints it, bare: [accesskey.ShownValue]'s phrase in
-// its place when it contains qak_ or qrk_ in any case.
+// its place when it contains qak_, qrk_ or qecr_ in any case.
 func pathShown(p string) string { return accesskey.ShownValue(p, false) }
 
 // pathsShown are paths as a refusal's Names lists them: as [accesskey.ShownNames] lists
-// them, a name's phrase in place of a path that contains qak_ or qrk_ in any case, as
+// them, a name's phrase in place of a path that contains qak_, qrk_ or qecr_ in any case, as
 // run.refused's names are, each phrase once.
 func pathsShown(ps ...string) []string { return accesskey.ShownNames(ps) }
 

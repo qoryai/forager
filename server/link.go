@@ -272,7 +272,7 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	if s.StackProxySecret != "" {
 		s.StackProxySecret = redactedSecret
 	}
-	// A name or a value that contains qak_ or qrk_ in any case prints its phrase.
+	// A name or a value that contains qak_, qrk_ or qecr_ in any case prints its phrase.
 	s.Labels = ShownLabels(a.Labels)
 	if a.Variables != nil {
 		s.Variables = make(map[string]Variable, len(a.Variables))

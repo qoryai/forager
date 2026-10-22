@@ -851,8 +851,8 @@ name twice and an `auth.header` that frames the request or that the proxy sets:
 that an entry of the built-in deny list, `denied-variables.json`, covers, case ignored,
 such as `GIT_SSL_CAINFO`, `HTTPS_PROXY` or one of Forager's `QORY_` names, and an
 endpoint from which `policy.EndpointHost` reads no host, such as one with port 0. Each
-is `run_configuration_invalid`, and a name that contains an access key secret or a run
-key is shown as a phrase, in the text and in the refusal's `names`.
+is `run_configuration_invalid`, and a name that contains an access key secret, a run
+key or a run code is shown as a phrase, in the text and in the refusal's `names`.
 
 `model_credential` is the name of the start key, the model key the runtime starts
 with: an API credential of `credentials`, or a model key that the machine defines and
@@ -1333,8 +1333,10 @@ for a credential, never a value: one `{credential, name}` per credential and var
 in the order of the run answer's `credential_hosts` and of each credential's
 `placeholders`. The start key's one entry is the variable the session gives it
 (§Credentials, The variable of a model key); the other model keys have none. A credential's name or a variable that contains
-`qak_` or `qrk_` in any case is `(a name that contains an access key secret)` in its
-place, or `(a name that contains a run key)` when it contains `qrk_` and no `qak_`, so
+`qak_`, `qrk_` or `qecr_` in any case is `(a name that contains an access key secret)`
+in its place, `(a name that contains a run key)` when it contains `qrk_` and no `qak_`,
+or `(a name that contains a run code)` when it contains `qecr_` and neither of the
+others, so
 the record carries neither. `credential_variables` is absent when there is no entry and
 at the open, and every further `dev.qory.run.policy_applied` during the session repeats
 it.
@@ -1386,7 +1388,7 @@ The types, one namespace. Forager's:
 | `dev.qory.run.policy_applied` | right after `dev.qory.run.started`, with an empty `variables`; right after each `dev.qory.session.started` and before the session's wall starts, also for a session whose wall then fails to start, with that session's `variables`, `credential_variables` and `harness_hosts`; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `allow_first`, `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.step_started` | a step of the run's host work started, such as a fetch or a compose; after `dev.qory.run.started`, numbered from 1 in the order the steps start (Steps, below) | `step`, `name`, `kind` |
 | `dev.qory.run.step_exited` | a step ended; one per step, after its `dev.qory.run.step_started` and after every `dev.qory.run.log` of the step | `step`, `state`, `exit_code`, `duration_ms` |
-| `dev.qory.run.built` | the run's caller wrote the result of a build of an image of an environment (`(*session.Run).Built`); at most one per run, after `dev.qory.run.started` and before `dev.qory.run.exited`, outside every session and every step. Forager checks the form of each member, and `Built` returns an error for an image that contains `qak_` or `qrk_` in any case | `image`, the image by its digest, `NAME@sha256:` and 64 lower-case hexadecimal digits; `size`, its size in bytes, 1 or more; `commit`, the full commit id the image was built from, 40 or 64 lower-case hexadecimal characters; `environment_ref`, the caller's reference to the environment the image is for, 1 character or more, with `qory-proxy-password` in place of a forwarder's password, and a phrase in place of a reference that contains `qak_` or `qrk_`, as in a step's `name` |
+| `dev.qory.run.built` | the run's caller wrote the result of a build of an image of an environment (`(*session.Run).Built`); at most one per run, after `dev.qory.run.started` and before `dev.qory.run.exited`, outside every session and every step. Forager checks the form of each member, and `Built` returns an error for an image that contains `qak_`, `qrk_` or `qecr_` in any case | `image`, the image by its digest, `NAME@sha256:` and 64 lower-case hexadecimal digits; `size`, its size in bytes, 1 or more; `commit`, the full commit id the image was built from, 40 or 64 lower-case hexadecimal characters; `environment_ref`, the caller's reference to the environment the image is for, 1 character or more, with `qory-proxy-password` in place of a forwarder's password, and a phrase in place of a reference that contains `qak_`, `qrk_` or `qecr_`, as in a step's `name` |
 | `dev.qory.run.log` | one per chunk of a session's output, with the session's number as `session`, or of the run's host work outside every session, which the caller writes with `stream: stderr` and no `session`, and with the step's number as `step` inside a step: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes`, `session`, `step` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows`, `session` |
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
@@ -1552,12 +1554,13 @@ stream has no `dev.qory.run.step_exited` for that step. The session writes that
 step's `dev.qory.run.step_exited` in `session.jsonl` alone, with the step's outcome.
 
 The run's masker replaces each forwarder's password in a step's `name`, and a `name`
-that contains `qak_` or `qrk_` in any case is `(a value that contains an access key
-secret)` in its place, or `(a value that contains a run key)` when it contains `qrk_`
-and no `qak_`, as `dir` of `dev.qory.session.started` is. The caller's `name` must
+that contains `qak_`, `qrk_` or `qecr_` in any case is `(a value that contains an access
+key secret)` in its place, `(a value that contains a run key)` when it contains `qrk_`
+and no `qak_`, or `(a value that contains a run code)` when it contains `qecr_` and
+neither of the others, as `dir` of `dev.qory.session.started` is. The caller's `name` must
 contain no URL userinfo, token or other credential: the masker replaces only the
-forwarders' passwords, and the phrase replaces only a `name` that contains `qak_` or
-`qrk_`, so any other secret in a `name` is written as given.
+forwarders' passwords, and the phrase replaces only a `name` that contains `qak_`,
+`qrk_` or `qecr_`, so any other secret in a `name` is written as given.
 
 ```json
 {"step": 1, "name": "fetch github.com/example-org/app", "kind": "fetch"}
@@ -1588,8 +1591,10 @@ member selects or changes a policy.
 caller passes it: the harness sources the session's compose used, one object per source,
 each with `source`, the source as it is configured, and `commit`, the full commit id
 compose used, 40 or 64 hexadecimal characters, in lower case. A `source` that contains
-`qak_` or `qrk_` in any case is `(a value that contains an access key secret)` in its
-place, or `(a value that contains a run key)` when it contains `qrk_` and no `qak_`, as
+`qak_`, `qrk_` or `qecr_` in any case is `(a value that contains an access key secret)`
+in its place, `(a value that contains a run key)` when it contains `qrk_` and no `qak_`,
+or `(a value that contains a run code)` when it contains `qecr_` and neither of the
+others, as
 are `dir`, `command`, an argument, `runtime_version` and a name of `setup_commands`.
 Forager changes nothing else in them. The list is never empty; a caller that passes no
 source leaves `harness` out.
