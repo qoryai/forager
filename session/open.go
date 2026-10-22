@@ -54,6 +54,7 @@ type Run struct {
 	// [Run.HostProxy] returns; nil otherwise.
 	bundleErr   error
 	hosts       hostProxies
+	engine      engineProxies
 	reserved    []string
 	listed      *registration
 	wallOwn     []bindSource
@@ -551,6 +552,7 @@ func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 	}
 	r.closed = true
 	r.hosts.closeAll()
+	r.closeEngine()
 	// A host step still open ends before run.exited, as one the caller stopped.
 	if r.hostStep != nil {
 		r.hostStep.end(event.StateCancelled, -1)

@@ -78,6 +78,14 @@ func SetMachineBundles(paths []string) (restore func()) {
 	return func() { machineBundles = old }
 }
 
+// SetEngineCertsDir sets where Run.EngineProxy writes the run's certificate, until
+// restore is called.
+func SetEngineCertsDir(dir string) (restore func()) {
+	old := engineCertsDir
+	engineCertsDir = dir
+	return func() { engineCertsDir = old }
+}
+
 // ReadableDir is what a runtime is given to ask of a directory before it passes it to
 // the program, for the places a walled run could have written.
 func ReadableDir(places []string) func(string) (string, error) {

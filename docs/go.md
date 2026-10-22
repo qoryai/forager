@@ -303,6 +303,50 @@ below to Forager's maintainers", with the stack, and the next batch is sent. Nei
 report nor any log contains the panic's value, which may contain a request's header or
 a credential.
 
+### The engine proxy
+
+`(*session.Run).EngineProxy(hosts)` sends the requests of the machine's container
+engine through the run's proxy during host work in a run with no wall, such as the
+pulls and the push of a build on a machine whose only route out is the gateway. Set
+`OpenSpec.EngineProxy` to the engine's proxy setting: the address and the password in
+the `http-proxy` and `https-proxy` of Docker's `daemon.json`.
+
+- A forwarder listens at `OpenSpec.EngineProxy.Addr`, passes on only a request with
+  its password, and reaches the gateway's proxy as the host proxy does, so the run's
+  policy and credentials apply to the engine's requests.
+- For a run with a certificate authority, `EngineProxy` writes the run's certificate
+  as `qory-run-<id>.crt` in `/etc/docker/certs.d/<host>/` for each host in `hosts`, so
+  the engine trusts the run's certificate for those registries. A host that cannot be
+  a directory name, such as `*.registry.example`, gets none.
+- The returned `close` ends it: the port takes no connection, and the certificates
+  and the directories made for them are removed. The next `Join` and `Close` end it
+  too, and pass the error of a certificate they cannot remove to `OpenSpec.Report`.
+
+Open it while a host step is open; it stays open after the step exits. Each error
+starts with the fix, and opens nothing:
+
+| When | Error |
+|---|---|
+| a walled run | `Open the engine proxy in a run with no wall: a walled run's image step listens at the engine proxy's address.` |
+| no `OpenSpec.EngineProxy` | `Set OpenSpec.EngineProxy to the engine's proxy setting: the run has no engine proxy.` |
+| no host step is open | `Start a host step before you open the engine proxy: the engine proxy opens only during a host step.` |
+| the run's engine proxy is open | `Close the engine proxy before you open it again: the engine has one proxy setting, and the run's engine proxy is open.` |
+| the address is in use | `Run one image step at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at 127.0.0.1:3129 (…).` |
+| a certificate cannot be written | `Make /etc/docker/certs.d writable for this user, as the machine's start unit does: the run's certificate for registry.example could not be written (…).` |
+| while a `Join` runs | `Open the engine proxy after Join returns: a session of the run is still running.` |
+| after `Close` | `Open a new run for the engine proxy: the run is closed.` |
+
+```go
+closeProxy, err := run.EngineProxy([]string{"registry.example"})
+if err != nil {
+	return err
+}
+err = exec.Command("docker", "push", "registry.example/app:1").Run()
+if cerr := closeProxy(); err == nil {             // Join and Close end it too
+	err = cerr
+}
+```
+
 ## A separate gateway
 
 A gateway serves the sessions of other machines on one address, in place of its local
