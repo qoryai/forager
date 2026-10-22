@@ -1766,9 +1766,10 @@ documents; a run where it is false has no replacement.
 These are never matched: text wrapped to the terminal's width, a line with a
 terminal's escape codes in it, text in another Unicode normalisation form, base64, JSON
 inside a JSON string, text split across JSON strings, and the deltas of a stream of
-messages. These are not masked: the `args` of `dev.qory.session.started`, the setup
-steps of a run whose setup runs `outside`, and the copy of the runtime's output that
-the session writes to the caller's `Stdout` and `Stderr`.
+messages. These are not masked: the `command` and `args` of
+`dev.qory.session.started`, the setup steps of a run whose setup runs `outside`, the
+copy of the runtime's output that the session writes to the caller's `Stdout` and
+`Stderr`, and the error the caller gets when a join fails.
 
 The gateway writes `events.jsonl`, with its `delivered.log` and `undelivered/` (§The
 server, After Forager stops unexpectedly); the session writes `session.jsonl`, its

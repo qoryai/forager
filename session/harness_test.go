@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,5 +225,37 @@ func TestAHiddenHarnessIsMaskedInASetupStep(t *testing.T) {
 	}
 	if terminal.String() != want {
 		t.Errorf("the terminal %q, want %q", terminal.String(), want)
+	}
+}
+
+// TestAHiddenHarnessIsMaskedInAFailureOfTheStart pins a wall whose wrap of the launch
+// fails with an error that quotes a path whose names contain three lines of the
+// implement skill: the session's stderr line of the failure has the replacement in
+// their place.
+func TestAHiddenHarnessIsMaskedInAFailureOfTheStart(t *testing.T) {
+	lines := strings.Split(implementSkill, "\n")
+	path := "/opt/notes\n" + strings.Join(lines[2:5], "\n") + "\nenv"
+	sp := walledSpec(t, &wrapFails{err: &fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}})
+	sp.HarnessHome, sp.HarnessHidden = harnessHome(t), true
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Join(ctx, sp.SessionSpec); err == nil {
+		t.Fatal("the session started")
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateFailed, ExitCode: -1}); err != nil {
+		t.Fatal(err)
+	}
+	var stderr string
+	for _, l := range ofType(events(t, &session.Result{Dir: r.Dir()}), event.RunLog) {
+		if d := data(l); d["stream"] == "stderr" && d["session"] != nil {
+			b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+			stderr += string(b)
+		}
+	}
+	if want := "open /opt/notes\n" + implementPut + "\nenv: file does not exist\n"; !strings.HasSuffix(stderr, want) {
+		t.Errorf("the session's stderr %q, want it to end %q", stderr, want)
 	}
 }

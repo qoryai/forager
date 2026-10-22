@@ -124,9 +124,9 @@ type OpenSpec struct {
 	// its directories or one of its files cannot be read, when the home has more than
 	// HarnessMaxFiles files, when a file has more than HarnessMaxFileSize bytes, or when
 	// the files have more than HarnessMaxSize bytes in all; the error starts with the fix
-	// and contains the file's path relative to the home. The session.started args, the
-	// lines of the run's setup outside a session and the copy of the runtime's output to
-	// Stdout and Stderr are not masked. False, the default, masks no harness text, and a
+	// and contains the file's path relative to the home. The session.started command and
+	// args, the lines of the run's setup outside a session, the copy of the runtime's
+	// output to Stdout and Stderr and the error of Join are not masked. False, the default, masks no harness text, and a
 	// session with no HarnessHome masks none either.
 	HarnessHidden bool
 }

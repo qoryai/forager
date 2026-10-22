@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -75,10 +76,13 @@ type Harness struct {
 	// triples lists, for the hash of each HarnessLines consecutive lines of a file that
 	// are not blank, the files that contain them; nil when no file has that many lines.
 	triples map[uint64][]int32
-	// lines is the set of the hashes of the files' lines that are not blank, and
-	// longest the length of the longest one.
-	lines   map[uint64]struct{}
+	// lines maps the hash of each line of the files that is not blank to the first
+	// file that has it, and longest is the length of the longest one.
+	lines   map[uint64]int32
 	longest int
+	// periodic lists the lines of the files longer than keepMost/2 bytes that repeat a
+	// pattern of up to period bytes, which no piece of the index contains.
+	periodic []periodicLine
 	// pieces lists, for the rolling hash of each indexed piece, its places; nil when
 	// no file has HarnessChars bytes. filter has a bit set for each of those hashes.
 	pieces map[uint64][]place
@@ -94,6 +98,14 @@ type harnessFile struct {
 	put, json []byte
 }
 
+// periodicLine is a line of file that repeats pattern, of length bytes with its
+// whitespace left out.
+type periodicLine struct {
+	file    int32
+	pattern string
+	length  int
+}
+
 // place is a piece's file and its offset in the file.
 type place struct{ file, at int32 }
 
@@ -103,7 +115,7 @@ func ForHarness(files []HarnessFile) *Harness {
 	if len(files) == 0 {
 		return nil
 	}
-	h := &Harness{seed: maphash.MakeSeed(), base: rand.Uint64() | 1, lines: map[uint64]struct{}{}, triples: map[uint64][]int32{}, pieces: map[uint64][]place{}}
+	h := &Harness{seed: maphash.MakeSeed(), base: rand.Uint64() | 1, lines: map[uint64]int32{}, triples: map[uint64][]int32{}, pieces: map[uint64][]place{}}
 	h.top = 1
 	for range gram - 1 {
 		h.top *= h.base
@@ -155,8 +167,15 @@ func (h *Harness) indexLines(f int32, text []byte) {
 			continue
 		}
 		k := maphash.Bytes(h.seed, t)
-		h.lines[k] = struct{}{}
+		if _, in := h.lines[k]; !in {
+			h.lines[k] = f
+		}
 		h.longest = max(h.longest, len(t))
+		if len(t) > keepMost/2 {
+			if p := periodOf(t); p > 0 {
+				h.periodic = append(h.periodic, periodicLine{file: f, pattern: string(t[:p]), length: len(t)})
+			}
+		}
 		hashes = append(hashes, k)
 	}
 	for j := 0; j+HarnessLines <= len(hashes); j++ {
@@ -649,6 +668,86 @@ func (h *Harness) keep(v *view) int {
 	return min(from, lines)
 }
 
+// keepMost is the most raw bytes after the start that keep gives that the writer keeps
+// back: more, and capped moves that start on.
+const keepMost = 64 << 10
+
+// capped is k, the start of the bytes of v that keep gives, moved on to the last
+// keepMost of the raw bytes, which number raw, when there are more; and spans, of
+// which those from n on are spans of v, with spans added that mask the lines of the
+// files that the move writes. When a span of v contains the new start, a span of its
+// file masks the bytes from k to it; otherwise a span masks each line between k and
+// the new start that is a line of the files, with the file that has it, and the last
+// line of v when it repeats the pattern of a line of the files at least as long.
+func (h *Harness) capped(v *view, k, raw int, spans []span, n int) (int, []span) {
+	if raw-v.rawStart(k, raw) <= keepMost {
+		return k, spans
+	}
+	t := v.text
+	cut := len(t) - keepMost
+	if v.from != nil {
+		cut = sort.Search(len(t), func(i int) bool { return int(v.from[i]) >= raw-keepMost })
+	}
+	for i := 0; i < utf8.UTFMax-1 && cut > k && cut < len(t) && !utf8.RuneStart(t[cut]); i++ {
+		cut--
+	}
+	if cut <= k {
+		return k, spans
+	}
+	in := -1
+	for j := n; j < len(spans); j++ {
+		if s := spans[j]; s.start < cut && cut < s.end && (in < 0 || s.start < spans[in].start) {
+			in = j
+		}
+	}
+	if in >= 0 {
+		if s := spans[in]; s.start > k {
+			spans = append(spans, span{start: k, end: s.start, file: s.file, json: v.json})
+		}
+		return cut, spans
+	}
+	for s := k; s < cut; {
+		e := s
+		for e < len(t) && !lineBreak(t[e]) {
+			e++
+		}
+		if l, ok := h.lineOf(t[s:e], s); ok {
+			f, found := h.lines[l.key]
+			if !found && l.numbered {
+				f, found = h.lines[l.alt]
+			}
+			if !found && e == len(t) {
+				f, found = h.periodicFile(t[l.start:l.end])
+			}
+			if found {
+				spans = append(spans, span{start: l.start, end: l.end, file: f, json: v.json})
+			}
+		}
+		s = e + 1
+	}
+	return cut, spans
+}
+
+// periodicFile is the file of a line of the files that repeats the pattern line
+// repeats, with its line number left out, and is at least as long; false for none.
+func (h *Harness) periodicFile(line []byte) (int32, bool) {
+	if len(h.periodic) == 0 {
+		return 0, false
+	}
+	content, _ := numberedLine(line)
+	content = bytes.TrimSpace(content)
+	p := periodOf(content)
+	if p == 0 {
+		return 0, false
+	}
+	for _, l := range h.periodic {
+		if len(l.pattern) == p && l.pattern == string(content[:p]) && l.length >= len(content) {
+			return l.file, true
+		}
+	}
+	return 0, false
+}
+
 // find is the spans of b, merged and in order, and, unless final, where the bytes of b
 // start that a match may still begin in once more bytes follow; len(b) when final.
 func (h *Harness) find(b []byte, final bool) ([]span, int) {
@@ -663,11 +762,13 @@ func (h *Harness) find(b []byte, final bool) ([]span, int) {
 		n := len(spans)
 		spans = h.lineSpans(v, spans)
 		spans = h.charSpans(v, spans)
+		if !final {
+			var k int
+			k, spans = h.capped(v, h.keep(v), len(b), spans, n)
+			from = min(from, v.rawStart(k, len(b)))
+		}
 		for j := n; j < len(spans); j++ {
 			spans[j].start, spans[j].end = v.rawStart(spans[j].start, len(b)), v.rawEnd(spans[j].end)
-		}
-		if !final {
-			from = min(from, v.rawStart(h.keep(v), len(b)))
 		}
 	}
 	return trimmed(b, merged(b, spans)), from
@@ -829,12 +930,18 @@ func (h *Harness) Writer(w io.Writer) *HarnessWriter {
 // stream that a match may still begin in, and writes it with a later write or on
 // Flush: the last HarnessChars-1 characters; the last line, unless it is longer than
 // the longest line of the files; and up to HarnessLines-1 lines before it that are
-// lines of the files. Once a replacement is written for a match that reaches the end
-// of what was written, it keeps the end of the match as well, up to 64 KiB, so the
-// rest of the match that follows in later writes is part of that replacement. Each
-// write scans again what the writer keeps back, at most 3 times the longest line of
-// the files and 64 KiB more, so a stream costs at most its length times that amount.
-// It is safe for concurrent writes.
+// lines of the files. It keeps back at most the last 64 KiB of these: when there are
+// more, it writes the bytes before the last 64 KiB with the lines of the files among
+// them replaced, with the replacement of the match that continues past that point
+// when there is one, and otherwise each with the replacement of a file that has the
+// line; a last line that repeats the pattern of a line of the files at least as long
+// is replaced too. Once a replacement is written for a match that reaches the end of
+// what was written, it keeps the end of the match as well, up to 64 KiB, so the rest
+// of the match that follows in later writes is part of that replacement. After a
+// write the writer keeps back at most 192 KiB and the write: up to 64 KiB of that
+// match, up to 64 KiB of whitespace after it, and up to 64 KiB more. Each write scans
+// what the writer keeps back and the write, so the cost of a stream is linear in its
+// length. It is safe for concurrent writes.
 type HarnessWriter struct {
 	w  io.Writer
 	h  *Harness
