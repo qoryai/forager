@@ -509,8 +509,8 @@ type pathRule struct {
 // by a slash, a separator of words, ] or }, or is followed by ., ? or ! that ends s or
 // comes before white space, as at the end of a sentence. A separator of words is white
 // space, a quote, a comma, a colon, as in a list of paths, an equals sign, as in
-// --flag=path, or one of the shell's characters that end a word. ${A}/work and
-// $(pwd)/work stay as they are for /work.
+// --flag=path, or one of the shell's characters that end a word. ${A}/work stays as
+// it is for /work.
 var argPaths = pathRule{
 	start: func(s string, i int) bool {
 		return i == 0 || strings.IndexByte(wordSeparators, s[i-1]) >= 0 || strings.HasSuffix(s[:i], "file://")
