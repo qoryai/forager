@@ -1697,14 +1697,20 @@ var spoofed = http.Header{
 	"x-qory-instance-name":   {"spoofed-name"},
 }
 
-// gatewaySigned is "signed by the gateway" for an enrolment whose X-Qory-Access-Key-Id
-// and X-Qory-Instance-Id are the tests' gateway's, each once, with no X-Qory-Instance-Name
+// gatewaySigned is "signed by the gateway" for an enrolment whose X-Qory-Access-Key-Id,
+// an access key id of the form ak_, and X-Qory-Instance-Id are the tests' gateway's,
+// each once, with no X-Qory-Instance-Name
 // and no X-Qory-Timestamp, and whose one X-Qory-Signature-Ed25519 verifies under the
 // gateway's access key as a POST to the target as it came over body; else what differs.
 func gatewaySigned(req *http.Request, body []byte) string {
 	id, instance, sig := req.Header.Values(server.HeaderAccessKeyID), req.Header.Values(server.HeaderInstanceID), req.Header.Values(server.HeaderSignature)
 	if !slices.Equal(id, []string{testKey}) || !slices.Equal(instance, []string{testInstance}) || len(sig) != 1 {
 		return fmt.Sprintf("the fields %q, %q, %q", id, instance, sig)
+	}
+	// The gateway's access key id, ak_, the one its other requests to the server go
+	// under, never its node's id, ng_.
+	if accesskey.CheckID(id[0]) != nil || !strings.HasPrefix(id[0], "ak_") {
+		return fmt.Sprintf("the access key id %q is not an access key's id, ak_", id[0])
 	}
 	if n, ts := req.Header.Values(server.HeaderInstanceName), req.Header.Values(server.HeaderTimestamp); len(n) != 0 || len(ts) != 0 {
 		return fmt.Sprintf("the name %q and the timestamp %q", n, ts)
