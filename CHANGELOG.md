@@ -453,10 +453,6 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
-- Redeem a run code with `accesskey.EnrolmentRequest.PostRunVia`, through a gateway's
-  relay. `PostRun`, which sent the code to the server without a gateway, is removed:
-  the server answers `401` to a run code that does not come through the relay of the
-  gateway the code is bound to.
 - `dev.qory.run.step_started` of kind `setup`: Forager writes one per setup command, in
   a separate container or inside the wall. Before, Forager wrote no `setup` step.
 - `dev.qory.session.started` contains `setup_commands`, the names of the session's

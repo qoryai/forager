@@ -583,8 +583,8 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   answer without `documents` is the error "use another run code: the enrolment answer
   has no documents", and one whose `documents` is not an object, `null` included, is
   "use another run code: the enrolment answer's documents is not a JSON object".
-- `PostRunVia` and `PostRun` read at most `accesskey.MaxRunAnswer`, 1 MiB, of the
-  answer's body, and `VerifyRunAnswer` counts a longer body as `answer_unsigned`.
+- `PostRunVia` reads at most `accesskey.MaxRunAnswer`, 1 MiB, of the answer's body,
+  and `VerifyRunAnswer` counts a longer body as `answer_unsigned`.
 - `accesskey.RunAnswer` shows its run id and not its run key or its documents where
   fmt calls `Format`, `log/slog` `LogValue` and `encoding/json` `MarshalJSON`, for a
   value and a pointer alike. It formats as `run <run id>`, a `slog` handler that calls
@@ -601,10 +601,12 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   the run's dispatch lives, gets the same members: "use another run code: the
   enrolment answer's run key is not valid: its signature does not verify", say.
   A `401` is an `*accesskey.Refusal` with the code `unauthorized`: the code is used, has
-  expired or was cancelled, or another key redeemed it first.
-- `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and `PostRunVia`, `PostRun`
-  and `VerifyRunAnswer` refuse an access key's code, before they send or read anything:
-  "redeem a run code with PostRunVia, PostRun or VerifyRunAnswer: …". A verified answer
+  expired or was cancelled, another key redeemed it first, or the request did not come
+  through the relay of the gateway the code is bound to, signed under that gateway's
+  access key.
+- `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and `PostRunVia` and
+  `VerifyRunAnswer` refuse an access key's code, before they send or read anything:
+  "redeem a run code with PostRunVia or VerifyRunAnswer: …". A verified answer
   of the other kind is an `*accesskey.KindError`.
 
 ### Sending the session's record again

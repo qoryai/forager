@@ -27,7 +27,8 @@
 // code, [CodePrefixRun], enrols no key: [EnrolmentRequest.PostRunVia] redeems it
 // through a gateway for a run's run key, verified as package runkey verifies one, and
 // the run's documents, and returns a [RunAnswer], which shows its run id and not its
-// run key or documents wherever fmt, log/slog and encoding/json call its methods. Pass fmt a RunAnswer, a pointer to one, or its RunID alone. Never pass a
+// run key or documents wherever fmt, log/slog and encoding/json call its methods.
+// Pass fmt a RunAnswer, a pointer to one, or its RunID alone. Never pass a
 // value that contains a RunAnswer, and never pass a RunAnswer or a pointer to one under
 // %w; under %p, pass only a pointer. In any other case fmt may call no method of
 // RunAnswer and print every field, the run key and the documents included. slog's

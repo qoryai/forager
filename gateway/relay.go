@@ -73,7 +73,7 @@ var sourceFields = []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"}
 var signedFields = []string{accesskey.HeaderAccessKeyID, accesskey.HeaderInstanceID, accesskey.HeaderInstanceName, accesskey.HeaderSignature, accesskey.HeaderTimestamp}
 
 // errNotSigned starts the line the gateway reports when signing an enrolment fails.
-const errNotSigned = "report this to the Forager maintainers: the relay sent no enrolment to the server, because signing it under the gateway's access key failed"
+const errNotSigned = "report this to the Forager maintainers: signing the enrolment failed"
 
 // relayWait is how long the relay waits for the server's answer.
 const relayWait = 10 * time.Second
@@ -388,7 +388,7 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// The bound above applies first: the relay signs at most relayEnrolment bytes,
 		// the slice that out sends.
 		if err := rl.signEnrolment(out.Header, out.URL.RequestURI(), body); err != nil {
-			rl.g.report(errNotSigned + ": " + accesskey.ShownError(err).Error())
+			rl.g.report(errNotSigned + "; the relay sent nothing to the server: " + accesskey.ShownError(err).Error())
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -423,9 +423,9 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // any case of the field's name, and sets X-Qory-Access-Key-Id and X-Qory-Instance-Id to
 // the gateway's and X-Qory-Signature-Ed25519 to the request's signature under the
 // gateway's access key: a POST to target, the origin-form target the relay sends, over
-// body, the bytes it sends. A POST signs no timestamp, so h has no X-Qory-Timestamp.
-// The server ignores the signature of every code but a run code, qecr_, whose
-// redemption it accepts only through the relay of the gateway the code is bound to.
+// body, the bytes it sends. The relay signs no timestamp line for a POST, so h has no
+// X-Qory-Timestamp. Core does not check the signature of a code other than qecr_, and
+// redeems a qecr_ code only through the relay of the gateway the code is bound to.
 func (rl *relay) signEnrolment(h http.Header, target string, body []byte) error {
 	for k := range h {
 		for _, f := range signedFields {
