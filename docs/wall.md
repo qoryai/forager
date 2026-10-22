@@ -328,8 +328,10 @@ are the run's, and lie in Forager's files. Forager's files are:
   session in the same process as the gateway reaches it in memory, never by that path
   (see [the gateway's link](../contracts/forager/v1/README.md#the-gateways-link)).
 - A wall's files, when it implements `wall.Filer`. For `wall.Docker` they are the
-  directory of the `docker` command, the directory of the helper, and the command's
-  configuration directory, `DOCKER_CONFIG` or `~/.docker`.
+  directory of the `docker` command, the directory of the helper, the command's
+  configuration directory, `DOCKER_CONFIG` or `~/.docker`, and `CertsDir`,
+  `/etc/docker/certs.d` by default, where a certificate an agent wrote would be one the
+  engine trusts for a registry.
 - `OpenSpec.RunsDir`, where the run directories are made. Its default, `.qory/runs` in the
   workspace, lies inside the workspace, so a walled run passes one outside it.
 - The session's registry of walled runs, `$XDG_STATE_HOME/qory-forager/walled`, else

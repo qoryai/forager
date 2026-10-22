@@ -1,12 +1,15 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -112,13 +115,44 @@ type OpenSpec struct {
 // starts, such as http-proxy and https-proxy in Docker's daemon.json set to
 // http://qory:<password>@127.0.0.1:3129: the machine's start unit writes it, and
 // writes the same values for qory to read. Forager writes Password into no event, no
-// record and no error line.
+// record and no error line, and fmt, log/slog and encoding/json show the address
+// alone, of an EngineProxy and of a pointer to one alike.
 type EngineProxy struct {
 	// Addr is the setting's address, a loopback host:port, such as 127.0.0.1:3129.
 	Addr string
 	// Password is the setting's password, which the engine sends in the
 	// Proxy-Authorization of each request.
 	Password string
+}
+
+// shownEngineProxy is what fmt, log/slog and encoding/json show of an EngineProxy:
+// the address alone.
+type shownEngineProxy struct {
+	Addr string
+}
+
+// Format prints p as fmt prints a struct of its address alone, under every verb and
+// flag, the password left out.
+func (p EngineProxy) Format(f fmt.State, verb rune) {
+	out := fmt.Sprintf(fmt.FormatString(f, verb), shownEngineProxy{Addr: p.Addr})
+	if verb == 'v' && f.Flag('#') {
+		out = strings.Replace(out, "session.shownEngineProxy", "session.EngineProxy", 1)
+	}
+	io.WriteString(f, out)
+}
+
+// String is p as %v prints it: its address alone.
+func (p EngineProxy) String() string { return fmt.Sprintf("%v", p) }
+
+// GoString is p as %#v prints it: its address alone.
+func (p EngineProxy) GoString() string { return fmt.Sprintf("%#v", p) }
+
+// LogValue is p as log/slog logs it: its address alone.
+func (p EngineProxy) LogValue() slog.Value { return slog.GroupValue(slog.String("addr", p.Addr)) }
+
+// MarshalJSON writes p's address alone, as {"Addr":"127.0.0.1:3129"}.
+func (p EngineProxy) MarshalJSON() ([]byte, error) {
+	return json.Marshal(shownEngineProxy{Addr: p.Addr})
 }
 
 // SessionSpec is what one session of an open run is given: the program to start and

@@ -4076,8 +4076,10 @@ Forager's files are:
 - the private directories in the system's temporary directory where every gateway on the
   machine makes its link's socket, `qory-link-*` (§The gateway's link);
 - the wall's files: for `docker`, the directory of the `docker` command and of the
-  helper, and the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
-  whose context and credential helpers start programs;
+  helper, the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
+  whose context and credential helpers start programs, and `CertsDir`,
+  `/etc/docker/certs.d` by default, where a certificate an agent wrote would be one the
+  engine trusts for a registry;
 - the runs directory, where the session makes the run directories;
 - the session's registry of walled runs (below).
 

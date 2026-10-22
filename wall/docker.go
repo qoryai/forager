@@ -168,11 +168,19 @@ func (d *Docker) SetsWithAuthority() []string {
 
 // Files lists the adapter's own files on this machine: the directory of the docker
 // command, found in PATH as the adapter runs it, the directory of the helper, each with
-// the directory of the file a symbolic link leads to, and the command's configuration
+// the directory of the file a symbolic link leads to, the command's configuration
 // directory, DOCKER_CONFIG as the command reads it, else ~/.docker, whose context and
-// credential helpers name programs the command starts.
+// credential helpers name programs the command starts, and CertsDir, where a
+// certificate an agent wrote would be one the engine trusts for a registry.
 func (d *Docker) Files() []string {
 	out := program.Dirs(d.command())
+	certs := d.CertsDir
+	if certs == "" {
+		certs = defaultCertsDir
+	}
+	if abs, err := filepath.Abs(certs); err == nil {
+		out = append(out, abs)
+	}
 	// The helper is a path, never looked up in PATH.
 	if helper, err := filepath.Abs(d.Helper); d.Helper != "" && err == nil {
 		out = append(out, program.Dirs(helper)...)

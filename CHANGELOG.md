@@ -958,7 +958,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `(*session.Run).FetchImage`: the engine pulls the run's image by reference as an
   `image` step, through the gateway's proxy when `OpenSpec.EngineProxy` is set, so a
-  machine whose only route is the gateway runs it.
+  machine whose only route is the gateway runs it. fmt, `log/slog` and
+  `encoding/json` show an `EngineProxy`'s address alone, never its password. A walled
+  run refuses a mount of `wall.Docker.CertsDir`, where the engine reads the
+  certificates it trusts for a registry.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.

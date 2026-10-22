@@ -359,6 +359,26 @@ func TestAMountOfTheWallsFilesIsNoRun(t *testing.T) {
 	}
 }
 
+// TestAMountOfTheEnginesRegistryAuthoritiesIsNoRun pins that the directory the engine
+// reads registry authorities from, the Docker wall's CertsDir, is one of the wall's
+// files: a mount of it, or of a directory that holds it, is refused, so code in the
+// wall cannot write a certificate the engine trusts for a registry.
+func TestAMountOfTheEnginesRegistryAuthoritiesIsNoRun(t *testing.T) {
+	certs := filepath.Join(t.TempDir(), "docker", "certs.d")
+	if err := os.MkdirAll(certs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, mounted := range []string{certs, filepath.Dir(certs)} {
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image = &wall.Docker{Helper: filepath.Join(t.TempDir(), "qory"), RelayArgs: []string{"relay"}, CertsDir: certs}, "example.com/agent:1"
+		sp.Mounts = []wall.Mount{{Path: mounted}}
+		r := mountRefusal(t, runErr(sp))
+		if !slices.Contains(r.Names, certs) || !strings.Contains(r.Detail, "the docker wall's files") {
+			t.Errorf("a mount of %s: names %q, detail %q", mounted, r.Names, r.Detail)
+		}
+	}
+}
+
 // swappingWall is an open wall that, while it is prepared, puts a link where a mount
 // was checked: what the enclosure would show changes between the start and the wrap.
 type swappingWall struct {

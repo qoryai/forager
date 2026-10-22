@@ -720,8 +720,9 @@ func TestTheDockerCLIReceivesNoAccessKeyVariable(t *testing.T) {
 
 // TestDockerFilesAreItsProgramsAndConfiguration pins the adapter's own files: the
 // directory of the docker command as PATH finds it and of the file a link to it leads
-// to, the helper's directory, and the command's configuration directory, DOCKER_CONFIG
-// or else ~/.docker.
+// to, the helper's directory, the command's configuration directory, DOCKER_CONFIG
+// or else ~/.docker, and the engine's registry authorities, CertsDir or else
+// /etc/docker/certs.d.
 func TestDockerFilesAreItsProgramsAndConfiguration(t *testing.T) {
 	bin, libexec, helpers, conf, home := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(libexec, "docker"), []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -747,6 +748,14 @@ func TestDockerFilesAreItsProgramsAndConfiguration(t *testing.T) {
 	t.Setenv("DOCKER_CONFIG", "")
 	if files := d.Files(); !slices.Contains(files, filepath.Join(home, ".docker")) || slices.Contains(files, conf) {
 		t.Errorf("without DOCKER_CONFIG, files %q", files)
+	}
+	if files := d.Files(); !slices.Contains(files, "/etc/docker/certs.d") {
+		t.Errorf("without CertsDir, files %q lack /etc/docker/certs.d", files)
+	}
+	certs := t.TempDir()
+	d.CertsDir = certs
+	if files := d.Files(); !slices.Contains(files, certs) || slices.Contains(files, "/etc/docker/certs.d") {
+		t.Errorf("with CertsDir %s, files %q", certs, files)
 	}
 	var _ Filer = d
 }
