@@ -83,6 +83,10 @@ const (
 // HoldArgs are the arguments that make the helper keep the setup container running.
 var HoldArgs = []string{modeHold}
 
+// stackHost is the one host of the suite's gateway.stack_hosts: a name that resolves
+// nowhere, which the run's policy does not allow.
+const stackHost = "stack.invalid"
+
 // What the service a setup command starts in the setup container answers, and where.
 const (
 	setupServiceLine = "the setup's service"
@@ -957,7 +961,8 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 func setupOutside(t *testing.T, o Options, h hosts, outside string) {
 	names := []string{"a setup command's output is its setup step's lines",
 		"a setup command that fails fails the setup and the join",
-		"a service the setup starts is reached as qory-setup"}
+		"a service the setup starts is reached as qory-setup",
+		"a setup command reaches the run's proxy and never the stack proxy"}
 	if !o.Setup {
 		for _, name := range names {
 			t.Run(name, func(t *testing.T) { t.Skip("the adapter starts no setup container") })
@@ -1042,13 +1047,78 @@ func setupOutside(t *testing.T, o Options, h hosts, outside string) {
 		}
 		leftNothing(t, runID)
 	})
+	t.Run(names[3], func(t *testing.T) {
+		// The stack proxy is open while the setup runs: the host's fetch through it is
+		// allowed and its dial fails, a 502. The setup container's request for the same
+		// host goes through the run's proxy, whose policy denies it.
+		runID := event.NewRunID()
+		var setupErr, stackErr error
+		stackStatus := 0
+		fetch := session.SetupCommand{Name: "fetch the stack host", Args: []string{"sh", "-c", "wget -q -O /dev/null http://" + stackHost + "/ 2>&1; echo exit $?"}}
+		r, err := runIn(t, o, variant{runID: runID, setup: []session.SetupCommand{fetch},
+			onSetup: func(err error) { setupErr = err },
+			opened:  func(run *session.Run) { stackStatus, stackErr = stackFetch(run) }}, false, h, outside)
+		if err != nil || setupErr != nil {
+			t.Fatalf("the setup: %v; the run: %v", setupErr, err)
+		}
+		if stackErr != nil || stackStatus != http.StatusBadGateway {
+			t.Errorf("the host's fetch through the stack proxy: %d, %v; want the 502 of a dial that failed", stackStatus, stackErr)
+		}
+		var lines strings.Builder
+		var egress []string
+		for _, e := range r.events {
+			d, _ := e["data"].(map[string]any)
+			switch {
+			case e["type"] == "dev.qory.run.log" && d["session"] == nil:
+				b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+				lines.Write(b)
+			case e["type"] == "dev.qory.run.egress" && d["host"] == stackHost:
+				egress = append(egress, fmt.Sprint(d["decision"], " ", d["rule"]))
+			}
+		}
+		if !strings.Contains(lines.String(), "403") || !slices.Equal(egress, []string{"denied "}) {
+			t.Errorf("the setup command's lines %q and its dev.qory.run.egress %q; want the run's policy's 403, recorded denied", lines.String(), egress)
+		}
+		var stack []string
+		for _, l := range strings.Split(r.reports, "\n") {
+			if strings.Contains(l, "stack fetch") {
+				stack = append(stack, l)
+			}
+		}
+		want := []string{"run " + runID + ": stack fetch to " + stackHost + ":80 allowed by gateway.stack_hosts entry " + stackHost + "; the dial failed"}
+		if !slices.Equal(stack, want) {
+			t.Errorf("the gateway's stack fetch lines %q, want the host's alone, %q", stack, want)
+		}
+		leftNothing(t, runID)
+	})
+}
+
+// stackFetch fetches the stack host through a stack proxy of the run, as qory fetches
+// the harness definition before the first join, and returns the status.
+func stackFetch(r *session.Run) (int, error) {
+	h, err := r.StackProxy()
+	if err != nil {
+		return 0, err
+	}
+	defer h.Close()
+	u, err := url.Parse(h.ProxyURL)
+	if err != nil {
+		return 0, err
+	}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(u), DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + stackHost + "/")
+	if err != nil {
+		return 0, err
+	}
+	resp.Body.Close()
+	return resp.StatusCode, nil
 }
 
 // variant is what a run of the suite changes: the image its policy selects or names,
 // the machine's images.allow, the run's id, what to do while the run goes, whether
 // the run fetches its image before the join, the run's setup commands outside, before
-// the join, with what to do with Setup's error, and variables the probe gets besides
-// the suite's.
+// the join, with what to do with Setup's error, variables the probe gets besides
+// the suite's, and what to do with the run once it opens.
 type variant struct {
 	image   string
 	allow   []string
@@ -1058,6 +1128,8 @@ type variant struct {
 	setup   []session.SetupCommand
 	onSetup func(error)
 	env     []string
+	// opened, when set, is called with the run once it opens.
+	opened func(*session.Run)
 }
 
 // run runs the probe as the runtime of a session behind the wall and reads what it
@@ -1162,6 +1234,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			Image:       selected},
 		Tools:       []gateway.Tool{{Name: "suite-tool", Command: []string{exe, modeTool}, Serves: []string{toolHost}}},
 		Credentials: creds,
+		StackHosts:  []string{stackHost},
 		Version:     "walltest",
 		Report:      report,
 	}, runs)
@@ -1190,7 +1263,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			Exec:        o.Exec,
 			SetupRunner: []string{o.Probe, modeSetupCommand},
 		},
-		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup,
+		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup, opened: v.opened,
 	}
 	// The setup runner reports on the run socket, so a run has its setup command where
 	// the socket crosses into the enclosure.
