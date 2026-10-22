@@ -230,6 +230,14 @@ release may change what an existing document does, and says so under Upgrading.
   characters, and seven invalid fixtures have an image with a tag, a size of 0, a
   commit in upper case or of 39 characters, an empty or a missing `environment_ref`,
   and a member the schema does not define.
+- `environment_image` and `base` in `dev.qory.run.built`, optional: the environment
+  image the build pushed or started from, and the base image the build pulled, each
+  by its digest, of the form of `image`. `session.Built.EnvironmentImage` and
+  `session.Built.Base` set them; `Built` writes each one only when it is set, and
+  returns an error for one with a tag, in upper case, or with `qak_` or `qrk_` in any
+  case. `fixtures/batch/built-environment-image-base.json` is the event with both,
+  `fixtures/link/link-batch-built.json` has both, and three invalid fixtures have an
+  environment image with a tag, a base with a tag and an empty environment image.
 - `session` in `dev.qory.run.log`, `dev.qory.run.resized` and every
   `dev.qory.runtime.*` event of a session: the session's number, from 1, so a reader
   shows each session's terminal and events apart. The member is optional, and an event

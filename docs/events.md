@@ -74,7 +74,7 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.run.policy_applied` | After the open; after each session's start; when a new policy takes effect |
 | `dev.qory.run.step_started`   | A step of the run's host work started, such as a fetch or a compose        |
 | `dev.qory.run.step_exited`    | A step ended, with its state and exit code                                 |
-| `dev.qory.run.built`          | After a build of an image: its digest, size, commit and environment        |
+| `dev.qory.run.built`          | After a build: image, size, commit, environment, environment image, base   |
 | `dev.qory.session.started`    | A session joined the run: its runtime is about to start                    |
 | `dev.qory.run.log`            | One per chunk of a session's output, or of host work outside a session     |
 | `dev.qory.run.resized`        | The pseudo-terminal was resized                                            |
