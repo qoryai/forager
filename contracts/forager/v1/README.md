@@ -3737,6 +3737,18 @@ directory (§Credentials, Termination). The host proxy ends when its caller clos
 before each join request and at the run's close; from then on its port takes no
 connection. The session writes its password into no event and no file.
 
+**The engine's host work.** In a run with no wall, the machine's container engine
+reaches the run's proxy during host work, such as a build's pulls and push, through the
+engine proxy: a forwarder at the address of the proxy setting the engine reads when it
+starts, which passes on only a request with that setting's password and reaches the
+gateway's proxy as the host proxy does. The session opens one engine proxy at a time,
+only while a host step is open, and none for a walled run, whose image step listens at
+that address (§Images). For a run with a certificate authority, the session writes the
+run's certificate as `qory-run-<id>.crt` in `/etc/docker/certs.d/<host>/` for each host
+its caller lists, and removes the files when the engine proxy ends: when its caller
+closes it, before each join request and at the run's close. A symbolic link at the host's directory or at the file is refused. The session writes the
+setting's password into no event and no file.
+
 ## The runtime
 
 The session starts a program, records it and stops it, and contains nothing specific to

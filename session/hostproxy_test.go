@@ -229,12 +229,12 @@ func TestTheHostProxysBundle(t *testing.T) {
 	}
 }
 
-// refused fails the test when the address takes a connection.
+// refused fails the test when addr takes a connection.
 func refused(t *testing.T, addr, when string) {
 	t.Helper()
 	if c, err := net.Dial("tcp", addr); err == nil {
 		c.Close()
-		t.Errorf("the host proxy takes a connection %s", when)
+		t.Errorf("%s takes a connection %s", addr, when)
 	}
 }
 

@@ -53,10 +53,11 @@ type OpenSpec struct {
 	// image the run's sessions start in is fixed at the open. The run request carries
 	// them, so the gateway resolves the policy's selection against them.
 	Images []Image
-	// EngineProxy, when set, is where the machine's container engine sends the pull of
-	// the run's image: [Run.FetchImage] starts a forwarder there for its step alone, so
-	// the pull goes through the run's proxy. Nil means the engine pulls over the
-	// machine's network.
+	// EngineProxy, when set, is where the machine's container engine sends its
+	// requests: in a walled run, [Run.FetchImage] starts a forwarder there for its step
+	// alone, so the pull of the run's image goes through the run's proxy; in a run with
+	// no wall, [Run.EngineProxy] starts one for host work, such as a build's pulls and
+	// push. Nil means the engine pulls over the machine's network.
 	EngineProxy *EngineProxy
 	// ImagesAllow are the prefixes of the references pinned by digest a run's policy may
 	// name its image by, for qory images.allow: an entry covers a reference that starts

@@ -3,6 +3,7 @@ package wall
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -614,6 +615,91 @@ func TestDockerRemovesTheCertificatesBeforeAFailedWrite(t *testing.T) {
 	}
 	if len(rec.lines) != 0 {
 		t.Errorf("commands after the failed write:\n%s", strings.Join(rec.lines, "\n"))
+	}
+}
+
+// TestDockerRefusesASymbolicLinkInCertsDir pins a symbolic link where the run's
+// certificate would be written, at the registry host's directory or at the file in it:
+// Pull returns the error whose fix is the link, writes nothing where the link leads,
+// leaves the link as it was, and runs no command.
+func TestDockerRefusesASymbolicLinkInCertsDir(t *testing.T) {
+	ca := []byte("-----BEGIN CERTIFICATE-----\nRUN\n-----END CERTIFICATE-----\n")
+	for _, c := range []struct{ name, link, want string }{
+		{"a host's directory", "registry.example", "Replace the symbolic link %s with a directory"},
+		{"the certificate's file", "registry.example/qory-run-" + runID + ".crt", "Remove the symbolic link %s"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir, elsewhere := t.TempDir(), t.TempDir()
+			link := filepath.Join(dir, c.link)
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(elsewhere, "target"), link); err != nil {
+				t.Fatal(err)
+			}
+			if c.name == "a host's directory" {
+				if err := os.Mkdir(filepath.Join(elsewhere, "target"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`}
+			d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, CertsDir: dir, sys: rec}
+			err := d.Pull(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true}, ca, nil)
+			want := fmt.Sprintf(c.want, link) + ": the run's certificate for registry.example is not written through the symbolic link."
+			if err == nil || err.Error() != want {
+				t.Errorf("Pull: %v, want %s", err, want)
+			}
+			after := map[string]string{}
+			if c.name == "a host's directory" {
+				after["target"] = ""
+			}
+			if got := certsOf(t, elsewhere); !maps.Equal(got, after) {
+				t.Errorf("where the link leads: %q, want %q", got, after)
+			}
+			if _, err := os.Readlink(link); err != nil {
+				t.Errorf("the link: %v", err)
+			}
+			if len(rec.lines) != 0 {
+				t.Errorf("commands after the refusal:\n%s", strings.Join(rec.lines, "\n"))
+			}
+		})
+	}
+}
+
+// TestDockerRefusesALinkMadeAfterItsChecks pins a symbolic link out of CertsDir made
+// between Trust's checks and its write, at the host's directory or at the file: the
+// write fails, nothing is written where the link leads, and the pull runs no command.
+func TestDockerRefusesALinkMadeAfterItsChecks(t *testing.T) {
+	ca := []byte("-----BEGIN CERTIFICATE-----\nRUN\n-----END CERTIFICATE-----\n")
+	for _, at := range []string{"a host's directory", "the certificate's file"} {
+		t.Run(at, func(t *testing.T) {
+			dir, elsewhere := t.TempDir(), t.TempDir()
+			trustPause = func(f string) {
+				link, target := f, filepath.Join(elsewhere, "qory.crt")
+				if at == "a host's directory" {
+					link, target = filepath.Dir(f), elsewhere
+					if err := os.Rename(link, link+".moved"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+			}
+			defer func() { trustPause = nil }()
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`}
+			d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, CertsDir: dir, sys: rec}
+			err := d.Pull(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true}, ca, nil)
+			if want := "Make " + dir + " writable for this user"; err == nil || !strings.HasPrefix(err.Error(), want) {
+				t.Errorf("Pull: %v, want an error that starts with %s", err, want)
+			}
+			if got := certsOf(t, elsewhere); len(got) != 0 {
+				t.Errorf("where the link leads: %q", got)
+			}
+			if len(rec.lines) != 0 {
+				t.Errorf("commands after the refusal:\n%s", strings.Join(rec.lines, "\n"))
+			}
+		})
 	}
 }
 
