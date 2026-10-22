@@ -106,14 +106,18 @@ release may change what an existing document does, and says so under Upgrading.
 #### Added
 
 - `parent_agent_id` in `dev.qory.runtime.subagent_started`: the subagent that started
-  this one, when the runtime reports it. Claude Code reports it in a session on pipes
-  with `--output-format stream-json --verbose`. A descriptor sets where in the member
-  `parent`.
+  this one, when the runtime reports it. Claude Code 2.1.292 and later reports it in a
+  session on pipes with `--output-format stream-json --verbose`. A descriptor sets where
+  in the member `parent`.
 - `dev.qory.runtime.message`: one text or thinking block of a subagent, with `agent_id`,
-  `role`, `text` and `kind`, from a session on pipes. Claude Code prints them with `--output-format
-  stream-json --verbose --forward-subagent-text`.
-- A descriptor rule may have `each`, a path to an array: each element then produces one
-  event, of the first rule with that `each` whose match the element meets.
+  `role`, `text` and `kind`, from a session on pipes. Claude Code 2.1.292 and later
+  prints them with `--output-format stream-json --verbose --forward-subagent-text`.
+- A descriptor rule may have `each`, a path to an array: each element that a rule with
+  that `each` matches then produces one event, of the first such rule it matches, and an
+  element that no such rule matches produces none.
+- `runtimes.Event`, the type and data of one event, and `runtimes.Parents`, the optional
+  interface of a runtime that reports which tool call started a subagent: the session
+  reads it to set `parent_agent_id`.
 - `machine` and `setup` in `dev.qory.run.started`, both optional, so a reader shows
   where the run and its setup ran. `machine` is the adapter that made the run's
   machine, such as `aws-ec2`, or `none`: 1 to 64 of `a-z`, `0-9` and `-`, the first a

@@ -12,8 +12,8 @@ import (
 // The cases of TestSubagentStreamLinesFromTheReference are written by hand from the
 // Agent SDK TypeScript reference (SDKAssistantMessage, SDKUserMessage: agent_id and
 // parent_tool_use_id) and the headless page's section on subagent messages, in the
-// shape of the hooks fixtures beside the descriptor. None of them is a recording of
-// Claude Code: the recorded fixtures come from an image of 2.1.292 or later.
+// shape of the hooks fixtures beside the descriptor. No recorded fixture of these lines
+// exists.
 const (
 	sid  = `"session_id":"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90"`
 	hook = `{"source":"hooks","record":{` + sid + `,"cwd":"/home/dev/app","permission_mode":"default",`

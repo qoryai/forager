@@ -11,10 +11,11 @@
 //
 // [Descriptor.Map] is the whole of the mapping engine: the first rule of the record's
 // source whose match holds produces one event, type and data, by copying values out of
-// the record, or with each one event per element of an array in the record, each
-// element by the first rule with that each that it matches. It matches and copies; it never computes, and there is nothing to configure
-// that would make it. [Descriptor.Link] reads the descriptor's parent member: which
-// tool call started a subagent, for the session to set the subagent's parent.
+// the record. A rule with each produces one event per element of an array in the record
+// that a rule with that each matches, each by the first such rule it matches. It matches
+// and copies; it never computes, and there is nothing to configure that would make it.
+// [Descriptor.Link] reads the descriptor's parent member: which tool call started a
+// subagent, for the session to set the subagent's parent.
 //
 // A descriptor's [Secrets] defines the secrets the runtime reads and the variables it
 // keeps for itself, and its [Model] the API formats the runtime sends, where a composer

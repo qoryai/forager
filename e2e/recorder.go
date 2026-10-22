@@ -376,8 +376,8 @@ func (r *request) offers(name string) bool {
 	return false
 }
 
-// block is the content block a script answers the request with, and the stop reason:
-// a tool_use block for a tool or Agent call, a text block otherwise.
+// block returns the content block that the script sets for the request, and the stop
+// reason: a tool_use block for a tool or Agent call, a text block otherwise.
 func (s Script) block(r *request) (map[string]any, string) {
 	text := map[string]any{"type": "text", "text": recorderAnswer}
 	first := r.firstText()
@@ -414,8 +414,9 @@ func (s Script) block(r *request) (map[string]any, string) {
 	return text, "end_turn"
 }
 
-// answer answers a request as the Messages API does, streamed when the request's body
-// sets stream, with the script's block for it and the request's model as the model.
+// answer writes the response to a request in the format of the Messages API, streamed
+// when the request's body sets stream, with the script's block for it and the request's
+// model as the model.
 func answer(w http.ResponseWriter, body []byte, script Script) {
 	var req request
 	json.Unmarshal(body, &req)

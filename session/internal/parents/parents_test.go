@@ -212,10 +212,13 @@ func TestALinkBeforeTheStartSetsTheParent(t *testing.T) {
 	s.want("tool_started", "subagent_started a1", "tool_started a1", "subagent_started a2:a1")
 }
 
-// TestAStartWaitsAtMostFiveSeconds pins the bound: a start whose link does not arrive
+// TestAStartIsHeldAtMostFiveSeconds pins the bound: a start whose link does not arrive
 // is written without a parent once 5 seconds have passed, with the events kept behind
 // it, and a link after that changes nothing.
-func TestAStartWaitsAtMostFiveSeconds(t *testing.T) {
+func TestAStartIsHeldAtMostFiveSeconds(t *testing.T) {
+	if parents.Hold != 5*time.Second {
+		t.Fatalf("Hold = %v, want 5s", parents.Hold)
+	}
 	s := newSession(t)
 	s.init()
 	s.call("", "toolu_1")
@@ -305,8 +308,8 @@ func TestCloseWritesWhatIsKeptBack(t *testing.T) {
 	s.want("tool_started", "subagent_started a1", "turn_finished a1", "subagent_started a2")
 }
 
-// TestOutputEventsAreNotKeptBack pins that only hook events wait: the result line is
-// written while a start waits.
+// TestOutputEventsAreNotKeptBack pins that only hook events are kept back: the result
+// line is written while a start is held.
 func TestOutputEventsAreNotKeptBack(t *testing.T) {
 	s := newSession(t)
 	s.init()
@@ -316,7 +319,7 @@ func TestOutputEventsAreNotKeptBack(t *testing.T) {
 }
 
 // TestHandleReturnsAtOnceWhileItKeepsEventsBack pins that the socket is not held up: on
-// the real clock, a record handled while a start waits returns within 10 ms, and the
+// the real clock, a record handled while a start is held returns within 10 ms, and the
 // timer writes the start once its time runs out.
 func TestHandleReturnsAtOnceWhileItKeepsEventsBack(t *testing.T) {
 	d, err := descriptor.Parse("amp.yaml", []byte(doc))
@@ -386,5 +389,65 @@ func TestARuntimeWithoutLinksKeepsNothingBack(t *testing.T) {
 	}
 	if want := []string{"dev.qory.runtime.subagent_started", "dev.qory.runtime.turn_finished"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("written %q, want %q", got, want)
+	}
+}
+
+// TestASubagentIsNotItsParent pins a link whose call the subagent itself made: its
+// start is written without a parent.
+func TestASubagentIsNotItsParent(t *testing.T) {
+	s := newSession(t)
+	s.init()
+	s.call("a1", "toolu_1")
+	s.message("a1", "toolu_1")
+	s.start("a1")
+	s.want("tool_started a1", "subagent_started a1")
+}
+
+// TestTheFirstLinkCounts pins a subagent whose messages have two calls: the first one's
+// agent is the parent.
+func TestTheFirstLinkCounts(t *testing.T) {
+	s := newSession(t)
+	s.init()
+	s.call("p", "toolu_1")
+	s.call("q", "toolu_2")
+	s.message("a1", "toolu_1")
+	s.message("a1", "toolu_2")
+	s.start("a1")
+	s.want("tool_started p", "tool_started q", "subagent_started a1:p")
+}
+
+// outputDoc is a descriptor whose output, not its hooks, reports a subagent's start.
+const outputDoc = `version: 1
+runtime: amp
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+parent:
+  source: output
+  match: {type: user, agent_id: {present: true}}
+  agent_id: agent_id
+  tool_use_id: parent_tool_use_id
+rules:
+  - source: output
+    match: {type: subagent}
+    type: dev.qory.runtime.subagent_started
+    data: {session_id: session_id, agent_id: agent_id}
+`
+
+// TestAStartFromTheOutputIsNotHeld pins that only a start from the hooks is held: a
+// start from the output is written at once, and no timer is set for it.
+func TestAStartFromTheOutputIsNotHeld(t *testing.T) {
+	d, err := descriptor.Parse("amp.yaml", []byte(outputDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &clock{}
+	var written []descriptor.Event
+	m := parents.New(d, func(e descriptor.Event) { written = append(written, e) }, c)
+	m.Handle(descriptor.Record{Source: descriptor.SourceOutput, Record: map[string]any{"type": "subagent", "session_id": "s1", "agent_id": "a1"}})
+	if len(written) != 1 || written[0].Data["agent_id"] != "a1" {
+		t.Errorf("written = %+v, want the start", written)
+	}
+	if n := len(c.timers); n != 0 {
+		t.Errorf("%d timers set, want none", n)
 	}
 }

@@ -204,3 +204,39 @@ func TestTheFirstRuleThatMatchesTheRecordDecides(t *testing.T) {
 		t.Errorf("Map = %+v; want the thinking rule", got)
 	}
 }
+
+// pickDoc has two rules with each for the text blocks of the output, and a rule of the
+// hooks with the same each for thinking blocks.
+const pickDoc = `version: 1
+runtime: amp
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+rules:
+  - source: output
+    match: {each.type: text}
+    each: message.content
+    type: dev.qory.runtime.message
+    data: {text: each.text, kind: each.type}
+  - source: output
+    match: {each.type: text}
+    each: message.content
+    type: dev.qory.runtime.notification
+    data: {message: each.text}
+  - source: hooks
+    match: {each.type: thinking}
+    each: message.content
+    type: dev.qory.runtime.notification
+    data: {message: each.thinking}
+`
+
+// TestAnElementTakesTheFirstRuleOfItsSource pins the choice per element: a text block
+// that two rules match produces one event, of the first of them, and a thinking block
+// that only a rule of another source matches produces nothing.
+func TestAnElementTakesTheFirstRuleOfItsSource(t *testing.T) {
+	d := parse(t, pickDoc)
+	got := d.Map(output(t, `{"message":{"content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"one"}]}}`))
+	want := []descriptor.Event{{Type: "dev.qory.runtime.message", Data: map[string]any{"text": "one", "kind": "text"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Map =\n %+v\nwant\n %+v", got, want)
+	}
+}

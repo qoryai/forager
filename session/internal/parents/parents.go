@@ -19,8 +19,8 @@ import (
 	"github.com/qoryai/forager/session/internal/descriptor"
 )
 
-// Hold is how long the mapper keeps a subagent's start back while it waits for the
-// subagent's link.
+// Hold is how long the mapper keeps a subagent's start back when the subagent's link
+// has not arrived.
 const Hold = 5 * time.Second
 
 // The event types and fields the mapper reads and writes.
@@ -79,13 +79,13 @@ type Mapper struct {
 	queue []*kept
 }
 
-// kept is one event the mapper keeps back. waiting is true while it is a subagent's
-// start whose link has not arrived and whose time has not run out.
+// kept is one event the mapper keeps back. held is true for a subagent's start whose
+// link has not arrived and whose time has not run out.
 type kept struct {
-	event   descriptor.Event
-	agent   string
-	waiting bool
-	stop    func() bool
+	event descriptor.Event
+	agent string
+	held  bool
+	stop  func() bool
 }
 
 // New is a mapper that maps records with rt and writes each event with write. When rt
@@ -99,8 +99,8 @@ func New(rt Runtime, write func(descriptor.Event), clock Clock) *Mapper {
 }
 
 // Handle maps one record. It writes the record's events, or keeps a hook record's
-// events back behind a subagent's start that waits for its link, and returns without
-// waiting.
+// events back behind a held subagent's start, and returns before a timer or a later
+// record writes them.
 func (m *Mapper) Handle(rec descriptor.Record) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -127,7 +127,7 @@ func (m *Mapper) Handle(rec descriptor.Record) {
 				if call, ok := m.links[k.agent]; ok {
 					m.parent(k, call)
 				} else if m.output && !m.closed && rec.Source == descriptor.SourceHooks {
-					k.waiting = true
+					k.held = true
 					k.stop = m.clock.AfterFunc(Hold, func() { m.expire(k) })
 				}
 			}
@@ -141,32 +141,32 @@ func (m *Mapper) Handle(rec descriptor.Record) {
 	}
 }
 
-// Close writes every event still kept back, without a parent for a start that still
-// waits, and stops the timers. Events of records handled after Close are written as
+// Close writes every event still kept back, without a parent for a start still held,
+// and stops the timers. Events of records handled after Close are written as
 // they are mapped.
 func (m *Mapper) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closed = true
 	for _, k := range m.queue {
-		if k.waiting {
-			k.waiting = false
+		if k.held {
+			k.held = false
 			k.stop()
 		}
 	}
 	m.flush()
 }
 
-// linked records the link of a subagent and sets the parent of its start when the
-// start waits for it. A subagent's first link is the one that counts.
+// linked records the link of a subagent and sets the parent of its start when that
+// start is held. A subagent's first link is the one that counts.
 func (m *Mapper) linked(agent, call string) {
 	if _, ok := m.links[agent]; ok {
 		return
 	}
 	m.links[agent] = call
 	for _, k := range m.queue {
-		if k.waiting && k.agent == agent {
-			k.waiting = false
+		if k.held && k.agent == agent {
+			k.held = false
 			k.stop()
 			m.parent(k, call)
 		}
@@ -184,21 +184,21 @@ func (m *Mapper) parent(k *kept, call string) {
 	}
 }
 
-// expire ends the wait of a start whose time ran out: it is written without a parent.
+// expire ends the hold of a start whose time ran out: it is written without a parent.
 func (m *Mapper) expire(k *kept) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !k.waiting {
+	if !k.held {
 		return
 	}
-	k.waiting = false
+	k.held = false
 	m.flush()
 }
 
-// flush writes the kept events from the first up to the first start that still waits.
+// flush writes the kept events from the first up to the first held start.
 func (m *Mapper) flush() {
 	i := 0
-	for ; i < len(m.queue) && !m.queue[i].waiting; i++ {
+	for ; i < len(m.queue) && !m.queue[i].held; i++ {
 		m.write(m.queue[i].event)
 		m.queue[i] = nil
 	}

@@ -1407,7 +1407,7 @@ The runtime's, produced by a descriptor from what the runtime reports:
 | `dev.qory.runtime.turn_failed` | a turn ended on an API error | `session_id`, `error`, `details`, `message` |
 | `dev.qory.runtime.subagent_started` | a subagent was spawned | `session_id`, `agent_id`, `agent_type`, `parent_agent_id` |
 | `dev.qory.runtime.subagent_finished` | a subagent finished | the same, `message`, `background_tasks` |
-| `dev.qory.runtime.message` | a subagent wrote a message, read from the runtime's standard output | `session_id`, `agent_id`, `role`, `text` |
+| `dev.qory.runtime.message` | a subagent wrote a message, read from the runtime's standard output | `session_id`, `agent_id`, `role`, `text`, `kind` |
 | `dev.qory.runtime.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
 | `dev.qory.runtime.ended` | the runtime closed its session | `session_id`, `reason` |
 | `dev.qory.runtime.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
@@ -1445,10 +1445,12 @@ are required and what each contains. Values are copied from the runtime unchange
 enumerations in `source`, `reason`, `kind`, `outcome` are the runtime's words.
 
 **A subagent's parent.** `dev.qory.runtime.subagent_started` contains `parent_agent_id`
-when another subagent started this one and the runtime reported it. Claude Code reports
-it only in its JSON output, so only a session on pipes with `--output-format stream-json
---verbose` has it. Each message of a subagent there has the subagent's `agent_id` and
-`parent_tool_use_id`, the id of the tool call that started the subagent. The session's
+when another subagent started this one and the runtime reported it. Claude Code 2.1.292
+and later reports it only in its JSON output, so only a session on pipes with
+`--output-format stream-json --verbose` has it. Each message of a subagent there has the
+subagent's `agent_id` and `parent_tool_use_id`, the id of the tool call that started the
+subagent. Claude Code 2.1.273 prints `parent_tool_use_id` there and no `agent_id`, so its
+subagents have no `parent_agent_id`. The session's
 `dev.qory.runtime.tool_started` with that `tool_use_id` has the agent that made the
 call. Once the session has read a JSON object line from the runtime's standard output,
 and until it reads such a message, it keeps the subagent's `subagent_started` and the
@@ -1460,7 +1462,7 @@ not report the parent.
 
 **A subagent's messages.** `dev.qory.runtime.message` is one text block or thinking
 block of a subagent, as the runtime printed it on its standard output, with `kind`
-`text` or `thinking`. Claude Code prints them with
+`text` or `thinking`. Claude Code 2.1.292 and later prints them with
 `--output-format stream-json --verbose --forward-subagent-text`. An interactive session
 has none, and the main conversation's messages are not events. The session masks a
 message as it masks every runtime event. The same line is also in the session's
