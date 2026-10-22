@@ -665,10 +665,11 @@ home, in each of these cases:
 Since a match may start in them, the session keeps back up to the last 199 characters
 of each stream, and up to its last 3 lines, until more output follows them or the
 stream ends. It keeps back at most 64 KiB: of more, it writes the bytes before the
-last 64 KiB with the lines of the harness among them replaced. These are never
-matched: text wrapped to the terminal's width, a line with a terminal's escape codes
-in it, text in another Unicode normalisation form, base64, JSON inside a JSON string,
-text split across JSON strings, and the deltas of a stream of messages. These are not
+last 64 KiB with the lines of the harness among them replaced. After 64 blank lines,
+it writes the lines of the harness before them replaced too. These are never matched:
+text wrapped to the terminal's width, a line with a terminal's escape codes in it,
+text in another Unicode normalisation form, base64, JSON inside a JSON string, text
+split across JSON strings, and the deltas of a stream of messages. These are not
 masked: the `command` and `args` of `dev.qory.session.started`; the failure line of a
 join that fails before the home is read; the setup steps of a run whose setup runs
 `outside`; the lines of the host's steps, which `Step.Log` writes with no session

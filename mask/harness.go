@@ -450,12 +450,18 @@ func (h *Harness) lineOf(line []byte, offset int) (textLine, bool) {
 }
 
 // lineSpans appends the spans of HarnessLines or more consecutive lines of v that are
-// lines of one file, those of one file next to each other merged.
-func (h *Harness) lineSpans(v *view, spans []span) []span {
+// lines of one file, those of one file next to each other merged. prior is the lines
+// of the files before v with blank lines alone after them, which count as lines at the
+// start of v: a run that starts in them starts at 0.
+func (h *Harness) lineSpans(v *view, spans []span, prior []textLine) []span {
 	if h.triples == nil {
 		return spans
 	}
 	var lines []textLine
+	for _, l := range prior {
+		l.start, l.end = 0, 0
+		lines = append(lines, l)
+	}
 	t := v.text
 	for s := 0; s < len(t); {
 		e := s
@@ -620,8 +626,10 @@ func whole(t []byte, start, end int) (span, bool) {
 // keep is where the bytes of v start that a match may still begin in once more bytes
 // follow: the last HarnessChars-1 characters, and the last line, unless it is longer
 // than every line of the files, with up to HarnessLines-1 lines before it that are
-// lines of the files.
-func (h *Harness) keep(v *view) int {
+// lines of the files and up to 64 blank lines among them. It appends to spans a span
+// for each line of the files that the limit of blank lines leaves out of that, up to
+// HarnessLines-1 lines in all, as a later line may still make a run of them.
+func (h *Harness) keep(v *view, spans []span) (int, []span) {
 	t := v.text
 	from := len(t)
 	if h.pieces != nil {
@@ -635,7 +643,7 @@ func (h *Harness) keep(v *view) int {
 		from = i
 	}
 	if h.triples == nil {
-		return from
+		return from, spans
 	}
 	s := len(t)
 	for s > 0 && !lineBreak(t[s-1]) {
@@ -643,10 +651,11 @@ func (h *Harness) keep(v *view) int {
 	}
 	last := t[s:]
 	if content, _ := numberedLine(last); len(bytes.TrimSpace(content)) > h.longest {
-		return from
+		return from, spans
 	}
 	lines := s
-	for found, blanks := 0, 0; found < HarnessLines-1 && s > 0 && blanks < 64; {
+	found, blanks := 0, 0
+	for found < HarnessLines-1 && s > 0 && blanks < 64 {
 		e := s - 1
 		s = e
 		for s > 0 && !lineBreak(t[s-1]) {
@@ -665,7 +674,36 @@ func (h *Harness) keep(v *view) int {
 		lines = s
 		found++
 	}
-	return min(from, lines)
+	for blanks == 64 && found < HarnessLines-1 && s > 0 {
+		e := s - 1
+		s = e
+		for s > 0 && !lineBreak(t[s-1]) {
+			s--
+		}
+		if e-s > h.longest+64 {
+			break
+		}
+		l, ok := h.lineOf(t[s:e], s)
+		if !ok {
+			continue
+		}
+		f, in := h.fileOf(l)
+		if !in {
+			break
+		}
+		spans = append(spans, span{start: l.start, end: l.end, file: f, json: v.json})
+		found++
+	}
+	return min(from, lines), spans
+}
+
+// fileOf is the first file that has l, and whether one has it.
+func (h *Harness) fileOf(l textLine) (int32, bool) {
+	f, in := h.lines[l.key]
+	if !in && l.numbered {
+		f, in = h.lines[l.alt]
+	}
+	return f, in
 }
 
 // keepMost is the most raw bytes after the start that keep gives that the writer keeps
@@ -712,10 +750,7 @@ func (h *Harness) capped(v *view, k, raw int, spans []span, n int) (int, []span)
 			e++
 		}
 		if l, ok := h.lineOf(t[s:e], s); ok {
-			f, found := h.lines[l.key]
-			if !found && l.numbered {
-				f, found = h.lines[l.alt]
-			}
+			f, found := h.fileOf(l)
 			if !found && e == len(t) {
 				f, found = h.periodicFile(t[l.start:l.end])
 			}
@@ -750,7 +785,8 @@ func (h *Harness) periodicFile(line []byte) (int32, bool) {
 
 // find is the spans of b, merged and in order, and, unless final, where the bytes of b
 // start that a match may still begin in once more bytes follow; len(b) when final.
-func (h *Harness) find(b []byte, final bool) ([]span, int) {
+// prior is the lines of the files before b, as lineSpans counts them in b as it is.
+func (h *Harness) find(b []byte, final bool, prior []textLine) ([]span, int) {
 	views := []view{plainView(b)}
 	if bytes.IndexByte(b, '\\') >= 0 {
 		views = append(views, jsonView(b))
@@ -760,11 +796,16 @@ func (h *Harness) find(b []byte, final bool) ([]span, int) {
 	for i := range views {
 		v := &views[i]
 		n := len(spans)
-		spans = h.lineSpans(v, spans)
+		if v.json {
+			spans = h.lineSpans(v, spans, nil)
+		} else {
+			spans = h.lineSpans(v, spans, prior)
+		}
 		spans = h.charSpans(v, spans)
 		if !final {
 			var k int
-			k, spans = h.capped(v, h.keep(v), len(b), spans, n)
+			k, spans = h.keep(v, spans)
+			k, spans = h.capped(v, k, len(b), spans, n)
 			from = min(from, v.rawStart(k, len(b)))
 		}
 		for j := n; j < len(spans); j++ {
@@ -864,14 +905,45 @@ func merged(b []byte, spans []span) []span {
 }
 
 // blank reports whether b is whitespace alone, a JSON escape of a line break, a tab
-// or a carriage return included.
+// or a carriage return included, or lines that are blank after a line number, as a
+// file read with line numbers shows its blank lines, the last of them maybe only the
+// start of its number.
 func blank(b []byte) bool {
-	for len(b) > 0 {
-		n := space(b)
+	for c := b; ; {
+		if len(c) == 0 {
+			return true
+		}
+		n := space(c)
 		if n == 0 {
+			break
+		}
+		c = c[n:]
+	}
+	for rest := b; len(rest) > 0; {
+		line := rest
+		i := bytes.IndexByte(rest, '\n')
+		if i >= 0 {
+			line, rest = rest[:i], rest[i+1:]
+		} else {
+			rest = nil
+		}
+		if content, _ := numberedLine(line); len(bytes.TrimSpace(content)) == 0 {
+			continue
+		}
+		if t := bytes.TrimLeft(line, " \t\r\v\f"); i < 0 && len(t) <= 10 && digits(t) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// digits reports whether b is ASCII digits alone.
+func digits(b []byte) bool {
+	for _, c := range b {
+		if c < '0' || c > '9' {
 			return false
 		}
-		b = b[n:]
 	}
 	return true
 }
@@ -891,7 +963,7 @@ func (h *Harness) Replace(s string) string {
 		return s
 	}
 	b := []byte(s)
-	spans, _ := h.find(b, true)
+	spans, _ := h.find(b, true, nil)
 	if len(spans) == 0 {
 		return s
 	}
@@ -930,20 +1002,26 @@ func (h *Harness) Writer(w io.Writer) *HarnessWriter {
 // stream that a match may still begin in, and writes it with a later write or on
 // Flush: the last HarnessChars-1 characters; the last line, unless it is longer than
 // the longest line of the files; and up to HarnessLines-1 lines before it that are
-// lines of the files. It keeps back at most the last 64 KiB of these: when there are
-// more, it writes the bytes before the last 64 KiB with the lines of the files among
-// them replaced, with the replacement of the match that continues past that point
-// when there is one, and otherwise each with the replacement of a file that has the
-// line; a last line that repeats the pattern of a line of the files at least as long
-// is replaced too. Once a replacement is written for a match that reaches the end of
-// what was written, it keeps the end of the match as well, up to 64 KiB, so the rest
-// of the match that follows in later writes is part of that replacement. After a
-// write the writer keeps back at most 192 KiB and the write: up to 64 KiB of that
-// match, up to 64 KiB of whitespace after it, and up to 64 KiB more. Each write scans
-// what the writer keeps back and the write, so the cost of a stream is linear in its
-// length, and writes of one byte cost the most: on an Apple M5 Max on 2026-10-22, 0.8
+// lines of the files, with up to 64 blank lines among them. A blank line after a line
+// number, as a file read with line numbers shows it, is blank. When more blank lines
+// follow those lines of the files, it writes them replaced, each with the replacement
+// of a file that has the line. It remembers the last HarnessLines-1 lines of the
+// files that it wrote with blank lines alone after them, so a later line that makes a
+// run of lines with them is replaced too. It keeps back at most the last 64 KiB: when
+// there are more, it writes the bytes before the last 64 KiB with the lines of the
+// files among them replaced, with the replacement of the match that continues past
+// that point when there is one, and otherwise each with the replacement of a file
+// that has the line; a last line that repeats the pattern of a line of the files at
+// least as long is replaced too. Once a replacement is written for a match that
+// reaches the end of what was written, it keeps the end of the match as well, up to
+// 64 KiB, so the rest of the match that follows in later writes is part of that
+// replacement. After a write the writer keeps back at most 192 KiB, 12 bytes and the
+// write: up to 64 KiB of that match, up to 64 KiB of whitespace after it, up to 64
+// KiB more, and up to 12 bytes of a line number before them. Each write scans what
+// the writer keeps back and the write, so the cost of a stream is linear in its
+// length, and writes of one byte cost the most: on an Apple M5 Max on 2026-10-22, 0.1
 // s per MiB with files of short lines, and after 100 KiB of one line, with a file of
-// a line of 1 MiB, 210 s per MiB of other text and 100 s per MiB of the file's text.
+// a line of 1 MiB, 190 s per MiB of other text and 90 s per MiB of the file's text.
 // It is safe for concurrent writes.
 type HarnessWriter struct {
 	w  io.Writer
@@ -956,6 +1034,154 @@ type HarnessWriter struct {
 	// open is the file of the match the writer wrote last when that match ended at
 	// seen; -1 for none.
 	open int32
+	// prior is what the writer remembers of the lines before buf.
+	prior lineMemory
+}
+
+// lineMemory is what a HarnessWriter remembers of the lines of the stream before its
+// buffer: up to HarnessLines-1 lines of the files with blank lines alone after them,
+// the last in lines[n-1], and the state of the start of the buffer's first line,
+// which lies before the buffer.
+type lineMemory struct {
+	lines  [HarnessLines - 1]textLine
+	n      int
+	head   lineHead
+	digits int
+}
+
+// lineHead is the state of the start of a line: whitespace alone or nothing; then
+// digits; then one or two bytes of the arrow after them; then the tab or the arrow
+// after them and whitespace, a line number as a file read with line numbers shows it;
+// or other text.
+type lineHead byte
+
+const (
+	headBlank lineHead = iota
+	headDigits
+	headArrow1
+	headArrow2
+	headNumbered
+	headText
+)
+
+// next is the state after c.
+func (s lineHead) next(c byte, digits *int) lineHead {
+	space := c == ' ' || c == '\t' || c == '\r' || c == '\v' || c == '\f'
+	switch {
+	case s == headBlank && space, s == headNumbered && space:
+		return s
+	case (s == headBlank || s == headDigits) && '0' <= c && c <= '9':
+		if s == headBlank {
+			*digits = 0
+		}
+		if *digits++; *digits > 10 {
+			return headText
+		}
+		return headDigits
+	case s == headDigits && c == '\t':
+		return headNumbered
+	case s == headDigits && c == 0xe2:
+		return headArrow1
+	case s == headArrow1 && c == 0x86:
+		return headArrow2
+	case s == headArrow2 && c == 0x92:
+		return headNumbered
+	}
+	return headText
+}
+
+// remembered is the lines of m as lineSpans takes them.
+func (m *lineMemory) remembered() []textLine { return m.lines[:m.n] }
+
+// carry is m after the writer drops the bytes of b before keep, and keep, moved back
+// to the start of a line number that the bytes before it end in, with the part of an
+// arrow after it, so the buffer starts with the whole number.
+func (h *Harness) carry(m lineMemory, b []byte, keep int) (lineMemory, int) {
+	if h.triples == nil {
+		return m, keep
+	}
+	ls := bytes.LastIndexAny(b[:keep], "\n\x00") + 1
+	head := m.head
+	if ls > 0 {
+		head = headBlank
+	}
+	start := -1
+	for i := ls; i < keep && head != headText; i++ {
+		was := head
+		if head = head.next(b[i], &m.digits); was == headBlank && head == headDigits {
+			start = i
+		}
+	}
+	if ls > 0 {
+		// The last lines of the files before ls, newest first, up to a line that ends a
+		// run of lines; the lines remembered before b count only when none does.
+		var found [HarnessLines - 1]textLine
+		n, ended := 0, false
+		for e := ls - 1; e >= 0 && n < len(found); {
+			s := bytes.LastIndexAny(b[:e], "\n\x00") + 1
+			l, kind := h.lineKind(b[s:e])
+			switch {
+			case s == 0 && m.head == headText, kind == lineEnds:
+				ended = true
+			case kind == lineOfFiles:
+				found[n] = l
+				n++
+			}
+			if ended {
+				break
+			}
+			e = s - 1
+		}
+		if ended {
+			m.n = 0
+		}
+		for i := n - 1; i >= 0; i-- {
+			m = m.push(found[i])
+		}
+	}
+	m.head = head
+	switch {
+	case head == headText:
+		m.n = 0
+	case (head == headDigits || head == headArrow1 || head == headArrow2) && start >= 0:
+		keep, m.head = start, headBlank
+	}
+	return m, keep
+}
+
+// The kinds of line of lineKind.
+const (
+	lineBlank = iota
+	lineOfFiles
+	lineEnds
+)
+
+// lineKind is line, a whole line of the stream, and whether it is blank, a line of the
+// files, or a line that ends a run of lines: other text, or a line longer than every
+// line of the files.
+func (h *Harness) lineKind(line []byte) (textLine, int) {
+	if len(line) > h.longest+64 {
+		return textLine{}, lineEnds
+	}
+	l, ok := h.lineOf(line, 0)
+	if !ok {
+		return l, lineBlank
+	}
+	if _, in := h.fileOf(l); !in {
+		return l, lineEnds
+	}
+	return l, lineOfFiles
+}
+
+// push is m with l as its last line.
+func (m lineMemory) push(l textLine) lineMemory {
+	if m.n == len(m.lines) {
+		copy(m.lines[:], m.lines[1:])
+		m.n--
+	}
+	m.lines[m.n] = l
+	m.n++
+	return m
 }
 
 // Write writes b with each piece of text that counts as a file's replaced, keeping
@@ -995,7 +1221,7 @@ const (
 // them when final, and keeps the rest.
 func (hw *HarnessWriter) scan(final bool) error {
 	b := hw.buf
-	spans, from := hw.h.find(b, final)
+	spans, from := hw.h.find(b, final, hw.prior.remembered())
 	from = max(from, hw.seen)
 	var out []byte
 	at, open := hw.seen, hw.open
@@ -1031,10 +1257,13 @@ func (hw *HarnessWriter) scan(final bool) error {
 	if open >= 0 && !final {
 		keep = hw.contextStart(at)
 	}
+	if !final {
+		hw.prior, keep = hw.h.carry(hw.prior, b, keep)
+	}
 	hw.buf = append(hw.buf[:0], b[keep:]...)
 	hw.seen, hw.open = at-keep, open
 	if final {
-		hw.buf, hw.seen, hw.open = nil, 0, -1
+		hw.buf, hw.seen, hw.open, hw.prior = nil, 0, -1, lineMemory{}
 	}
 	return nil
 }
