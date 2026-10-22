@@ -308,6 +308,9 @@ func Described(name string, document []byte, installers map[string]Installer) (R
 	if h := d.Headless; h != nil {
 		r.headless = h.Args
 	}
+	if d.Parent != nil {
+		return parented{r}, nil
+	}
 	return r, nil
 }
 
@@ -366,9 +369,12 @@ func (r *described) Prepare(a Attach) (Launch, error) {
 // Map applies the descriptor's rules.
 func (r *described) Map(rec Record) []Event { return r.d.Map(rec) }
 
-// Link applies the descriptor's parent member; false for every record when the
-// descriptor has none.
-func (r *described) Link(rec Record) (string, string, bool) { return r.d.Link(rec) }
+// parented is the runtime of a descriptor with a parent member, the one kind of
+// described runtime that is [Parents].
+type parented struct{ *described }
+
+// Link applies the descriptor's parent member.
+func (r parented) Link(rec Record) (string, string, bool) { return r.d.Link(rec) }
 
 // Secrets is the descriptor's secrets section, a copy; empty when it has none.
 func (r *described) Secrets() Declarations {

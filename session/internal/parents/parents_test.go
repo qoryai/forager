@@ -362,3 +362,29 @@ func TestHandleReturnsAtOnceWhileItKeepsEventsBack(t *testing.T) {
 		}
 	}
 }
+
+// mapOnly is a runtime that maps records and reports no link.
+type mapOnly struct{ d *descriptor.Descriptor }
+
+func (r mapOnly) Map(rec descriptor.Record) []descriptor.Event { return r.d.Map(rec) }
+
+// TestARuntimeWithoutLinksKeepsNothingBack pins that a runtime that is no Linker has
+// each event written as it comes, after a line of output too.
+func TestARuntimeWithoutLinksKeepsNothingBack(t *testing.T) {
+	d, err := descriptor.Parse("amp.yaml", []byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	m := parents.New(mapOnly{d}, func(e descriptor.Event) { got = append(got, e.Type) }, &clock{})
+	for _, r := range []descriptor.Record{
+		{Source: "output", Record: map[string]any{"type": "system"}},
+		{Source: "hooks", Record: map[string]any{"hook_event_name": "SubagentStart", "session_id": "s1", "agent_id": "a1", "agent_type": "x"}},
+		{Source: "hooks", Record: map[string]any{"hook_event_name": "Stop", "session_id": "s1", "agent_id": "a1"}},
+	} {
+		m.Handle(r)
+	}
+	if want := []string{"dev.qory.runtime.subagent_started", "dev.qory.runtime.turn_finished"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("written %q, want %q", got, want)
+	}
+}
