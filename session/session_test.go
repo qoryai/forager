@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -135,17 +136,34 @@ func fakeRuntime() int {
 			fmt.Fprintln(os.Stderr, "no SessionEnd hook installed:", err)
 			return 90
 		}
-		// Every group's every hook runs, as the runtime runs them: the launch's own and
-		// the session's forwarder.
-		for _, group := range s.Hooks["SessionEnd"] {
-			for _, h := range group.Hooks {
-				cmd := shell(h.Command)
-				cmd.Stdin = strings.NewReader(`{"session_id":"fake","hook_event_name":"SessionEnd","reason":"other","cwd":"/"}`)
-				cmd.Stderr = os.Stderr
-				if err := cmd.Run(); err != nil {
-					fmt.Fprintln(os.Stderr, "hook:", err)
-					return 91
+		// FAKE_HOOKS is hook inputs to call before SessionEnd, one JSON object a
+		// line, each for the hooks of its hook_event_name; FAKE_LINES is lines to
+		// print after them.
+		inputs := slices.DeleteFunc(strings.Split(os.Getenv("FAKE_HOOKS"), "\n"), func(l string) bool { return l == "" })
+		inputs = append(inputs, `{"session_id":"fake","hook_event_name":"SessionEnd","reason":"other","cwd":"/"}`)
+		for _, input := range inputs {
+			var in struct {
+				Event string `json:"hook_event_name"`
+			}
+			json.Unmarshal([]byte(input), &in)
+			// Every group's every hook runs, as the runtime runs them: the launch's
+			// own and the session's forwarder.
+			for _, group := range s.Hooks[in.Event] {
+				for _, h := range group.Hooks {
+					cmd := shell(h.Command)
+					cmd.Stdin = strings.NewReader(input)
+					cmd.Stderr = os.Stderr
+					if err := cmd.Run(); err != nil {
+						fmt.Fprintln(os.Stderr, "hook:", err)
+						return 91
+					}
 				}
+			}
+			if in.Event != "SessionEnd" {
+				continue
+			}
+			if lines := os.Getenv("FAKE_LINES"); lines != "" {
+				fmt.Println(lines)
 			}
 		}
 	}
@@ -440,6 +458,54 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("timed out")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestASubagentsParentIsSetAndAWaitingStartComesBeforeTheExit pins the session's
+// mapper end to end on pipes: after the runtime's first JSON line, a subagent's start
+// waits for the line that links it to its call; a nested subagent's start gets its
+// parent; each subagent's text block is a runtime.message; a start whose link never
+// comes is written, without a parent, in its order before the session's exit.
+func TestASubagentsParentIsSetAndAWaitingStartComesBeforeTheExit(t *testing.T) {
+	hooks := strings.Join([]string{
+		`{"session_id":"fake","hook_event_name":"PreToolUse","tool_name":"Agent","tool_use_id":"toolu_A","tool_input":{}}`,
+		`{"session_id":"fake","hook_event_name":"SubagentStart","agent_id":"a1","agent_type":"Explore"}`,
+		`{"session_id":"fake","hook_event_name":"PreToolUse","tool_name":"Agent","tool_use_id":"toolu_B","tool_input":{},"agent_id":"a1"}`,
+		`{"session_id":"fake","hook_event_name":"SubagentStart","agent_id":"a2","agent_type":"Explore"}`,
+		`{"session_id":"fake","hook_event_name":"PreToolUse","tool_name":"Agent","tool_use_id":"toolu_C","tool_input":{},"agent_id":"a2"}`,
+		`{"session_id":"fake","hook_event_name":"SubagentStart","agent_id":"a3","agent_type":"Explore"}`,
+	}, "\n")
+	lines := strings.Join([]string{
+		`{"type":"user","session_id":"fake","agent_id":"a1","parent_tool_use_id":"toolu_A","message":{"role":"user","content":[{"type":"text","text":"look"}]}}`,
+		`{"type":"assistant","session_id":"fake","agent_id":"a2","parent_tool_use_id":"toolu_B","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm","signature":"s"},{"type":"text","text":"found it"}]}}`,
+	}, "\n")
+	res, err := runWithSettingsEnv(t, spec(t, "FAKE_HOOKS="+hooks, "FAKE_LINES="+lines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, res)
+	var got []string
+	for _, e := range evs {
+		typ := e["type"].(string)
+		d := data(e)
+		switch typ {
+		case "dev.qory.runtime.subagent_started":
+			got = append(got, fmt.Sprintf("start %v:%v", d["agent_id"], d["parent_agent_id"]))
+		case "dev.qory.runtime.message":
+			got = append(got, fmt.Sprintf("message %v %v %v", d["agent_id"], d["role"], d["text"]))
+		case "dev.qory.runtime.ended", "dev.qory.session.exited":
+			got = append(got, typ)
+		}
+	}
+	want := []string{"start a1:<nil>", "message a1 user look", "start a2:a1", "message a2 assistant found it", "start a3:<nil>", "dev.qory.runtime.ended", "dev.qory.session.exited"}
+	// The two message lines are read beside the hooks: a1's line may be read before a2's
+	// start, and a3's start waits until the exit in either case.
+	if !slices.Contains(got, "start a2:a1") || !slices.Contains(got, "message a2 assistant found it") || !slices.Contains(got, "message a1 user look") || len(got) != len(want) {
+		t.Fatalf("events %q, want %q in some order of the lines", got, want)
+	}
+	order := func(a, b string) bool { return slices.Index(got, a) < slices.Index(got, b) }
+	if !order("start a1:<nil>", "start a2:a1") || !order("start a2:a1", "start a3:<nil>") || !order("start a3:<nil>", "dev.qory.runtime.ended") || got[len(got)-1] != "dev.qory.session.exited" {
+		t.Errorf("events %q: the starts and the hook events after them are not in their order before the exit", got)
 	}
 }
 

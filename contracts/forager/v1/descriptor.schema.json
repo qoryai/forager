@@ -241,6 +241,18 @@
         }
       }
     },
+    "parent": {
+      "description": "Where the runtime reports which tool call started a subagent, for parent_agent_id on dev.qory.runtime.subagent_started. A record from `source` that matches the rule contains a subagent's id and the id of the tool call that started it. The agent that made that call, in the session's dev.qory.runtime.tool_started, is the subagent's parent. Absent, the session sets no parent.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "match", "agent_id", "tool_use_id"],
+      "properties": {
+        "source": {"description": "output or hooks.", "type": "string", "enum": ["output", "hooks"]},
+        "match": {"description": "As in rules.", "$ref": "#/$defs/match"},
+        "agent_id": {"description": "The path of the subagent's id in the record.", "$ref": "#/$defs/path"},
+        "tool_use_id": {"description": "The path of the id of the tool call that started the subagent.", "$ref": "#/$defs/path"}
+      }
+    },
     "rules": {
       "description": "Evaluated in order against every record of the rule's source; the first rule whose match succeeds produces its events, and a record no rule matches produces nothing.",
       "type": "array",

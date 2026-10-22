@@ -13,7 +13,8 @@
 // source whose match holds produces one event, type and data, by copying values out of
 // the record, or with each one event per element of an array in the record that
 // matches. It matches and copies; it never computes, and there is nothing to configure
-// that would make it.
+// that would make it. [Descriptor.Link] reads the descriptor's parent member: which
+// tool call started a subagent, for the session to set the subagent's parent.
 //
 // A descriptor's [Secrets] defines the secrets the runtime reads and the variables it
 // keeps for itself, and its [Model] the API formats the runtime sends, where a composer
@@ -47,7 +48,19 @@ type Descriptor struct {
 	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
 	Secrets        *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
 	Model          *Model    `yaml:"model" json:"model,omitempty"`
+	Parent         *Parent   `yaml:"parent" json:"parent,omitempty"`
 	Rules          []Rule    `yaml:"rules" json:"rules"`
+}
+
+// Parent is where the runtime reports which tool call started a subagent: a record of
+// Source that matches Match contains the subagent's id at the path AgentID and the id
+// of the tool call that started it at the path ToolUseID. Nil when the descriptor has
+// no parent member.
+type Parent struct {
+	Source    string         `yaml:"source" json:"source"`
+	Match     map[string]any `yaml:"match" json:"match"`
+	AgentID   string         `yaml:"agent_id" json:"agent_id"`
+	ToolUseID string         `yaml:"tool_use_id" json:"tool_use_id"`
 }
 
 // Model is the API formats the runtime sends its requests in, and where a composer
@@ -408,6 +421,24 @@ func (d *Descriptor) Map(r Record) []Event {
 		}
 	}
 	return nil
+}
+
+// Link applies the parent member to one record: when the record is of the member's
+// source and matches, it returns the subagent's id and the id of the tool call that
+// started it, both strings that are not empty, and true.
+func (d *Descriptor) Link(r Record) (agentID, toolUseID string, ok bool) {
+	p := d.Parent
+	if p == nil || p.Source != r.Source || !matches(p.Match, r.Record, nil) {
+		return "", "", false
+	}
+	a, _ := lookup(r.Record, p.AgentID)
+	c, _ := lookup(r.Record, p.ToolUseID)
+	agentID, _ = a.(string)
+	toolUseID, _ = c.(string)
+	if agentID == "" || toolUseID == "" {
+		return "", "", false
+	}
+	return agentID, toolUseID, true
 }
 
 // eachPrefix is how a path of a rule with each starts when it reads the element.

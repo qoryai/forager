@@ -105,6 +105,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `parent_agent_id` in `dev.qory.runtime.subagent_started`: the subagent that started
+  this one, when the runtime reports it. Claude Code reports it in a session on pipes
+  with `--output-format stream-json --verbose`. A descriptor sets where in a new member,
+  `parent`.
 - `dev.qory.runtime.message`: one text block of a subagent, with `agent_id`, `role` and
   `text`, from a session on pipes. Claude Code prints them with `--output-format
   stream-json --verbose --forward-subagent-text`.

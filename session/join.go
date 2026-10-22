@@ -17,6 +17,7 @@ import (
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
+	"github.com/qoryai/forager/session/internal/parents"
 	"github.com/qoryai/forager/session/internal/socket"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/wall"
@@ -557,18 +558,23 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	var terminalMu sync.Mutex
 	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
 	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr))
+	// The mapper is reached from the socket's goroutine and the output's: it sets
+	// parent_agent_id on a subagent's start, which it may keep back for a while, and
+	// writes every event of the session's runtime in order.
+	mapper := parents.New(rt, func(e runtimes.Event) {
+		r.write(e.Type, withSession(maskedRecord(masker, e.Data), n))
+	}, parents.Real)
 	records := func(rec runtimes.Record) {
 		if rec.Source == runtimes.SourceSetup {
 			setupSteps.handle(rec)
 			return
 		}
-		for _, e := range rt.Map(rec) {
-			r.write(e.Type, withSession(maskedRecord(masker, e.Data), n))
-		}
+		mapper.Handle(rec)
 	}
 	go sock.Serve(records, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
 	closeSocket := sync.OnceFunc(func() { sock.Close() })
 	defer closeSocket()
+	defer mapper.Close()
 
 	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
@@ -687,6 +693,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	closed := errors.Is(context.Cause(runCtx), errRunClosed)
 	cancelLimit()
 	closeSocket()
+	// The events the mapper still keeps back come before the session's exit.
+	mapper.Close()
 	// A setup step still open when the launch ended has no exit status.
 	setupSteps.finish(closed || timedOut || cancelled)
 	if err != nil && !closed {

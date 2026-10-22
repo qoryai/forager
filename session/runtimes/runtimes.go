@@ -223,6 +223,15 @@ type Record = descriptor.Record
 // event's, and its data.
 type Event = descriptor.Event
 
+// Parents is implemented by a runtime that reports which tool call started a subagent.
+// It is optional and checked by type assertion, so [Runtime] keeps its methods: the
+// session sets no parent_agent_id for a runtime without it.
+type Parents interface {
+	// Link returns, for a record that reports which tool call started a subagent, the
+	// subagent's id, the id of that tool call and true; for any other record, false.
+	Link(Record) (agentID, toolUseID string, ok bool)
+}
+
 // The sources of a record. A runtime maps records of SourceOutput and SourceHooks;
 // the session reads the records of SourceSetup, a setup command's, and passes none of
 // them to a runtime.
@@ -356,6 +365,10 @@ func (r *described) Prepare(a Attach) (Launch, error) {
 
 // Map applies the descriptor's rules.
 func (r *described) Map(rec Record) []Event { return r.d.Map(rec) }
+
+// Link applies the descriptor's parent member; false for every record when the
+// descriptor has none.
+func (r *described) Link(rec Record) (string, string, bool) { return r.d.Link(rec) }
 
 // Secrets is the descriptor's secrets section, a copy; empty when it has none.
 func (r *described) Secrets() Declarations {

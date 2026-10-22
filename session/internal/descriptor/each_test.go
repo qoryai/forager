@@ -9,12 +9,17 @@ import (
 	"github.com/qoryai/forager/session/internal/descriptor"
 )
 
-// eachDoc is a descriptor with a rule with each for the text blocks of a message and a
-// rule after it for any message.
+// eachDoc is a descriptor with a rule with each for the text blocks of a message, a
+// rule after it for any message, and a parent member.
 const eachDoc = `version: 1
 runtime: amp
 runtime_version: "1"
 sources: {output: {format: jsonl}}
+parent:
+  source: output
+  match: {agent_id: {present: true}}
+  agent_id: agent_id
+  tool_use_id: parent_tool_use_id
 rules:
   - source: output
     match: {type: assistant, agent_id: {present: true}, each.type: text}
@@ -85,10 +90,53 @@ func TestEachThatMatchesNoElementLeavesTheRecordToTheNextRule(t *testing.T) {
 	}
 }
 
-// TestEachIsChecked pins the schema: each is a path.
-func TestEachIsChecked(t *testing.T) {
-	doc := strings.Replace(eachDoc, "each: message.content", "each: message.content[0]", 1)
-	if _, err := descriptor.Parse("amp.yaml", []byte(doc)); err == nil {
-		t.Error("each that is no path: accepted")
+// TestLinkReadsTheParentMember pins Link: a record of the member's source that matches
+// gives the subagent's id and the call's id; a record of another source, one that does
+// not match, a call id that is null, empty or no string, and a descriptor without the
+// member give nothing.
+func TestLinkReadsTheParentMember(t *testing.T) {
+	d := parse(t, eachDoc)
+	agent, call, ok := d.Link(output(t, `{"type":"user","agent_id":"a1","parent_tool_use_id":"toolu_1"}`))
+	if !ok || agent != "a1" || call != "toolu_1" {
+		t.Errorf("Link = %q %q %v", agent, call, ok)
+	}
+	for _, js := range []string{
+		`{"type":"user","parent_tool_use_id":"toolu_1"}`,
+		`{"type":"user","agent_id":"a1","parent_tool_use_id":null}`,
+		`{"type":"user","agent_id":"a1","parent_tool_use_id":""}`,
+		`{"type":"user","agent_id":"a1","parent_tool_use_id":7}`,
+		`{"type":"user","agent_id":"a1"}`,
+	} {
+		if _, _, ok := d.Link(output(t, js)); ok {
+			t.Errorf("%s linked", js)
+		}
+	}
+	hooks := descriptor.Record{Source: descriptor.SourceHooks, Record: map[string]any{"agent_id": "a1", "parent_tool_use_id": "toolu_1"}}
+	if _, _, ok := d.Link(hooks); ok {
+		t.Error("a record of another source linked")
+	}
+	none := parse(t, strings.Replace(eachDoc, "parent:\n  source: output\n  match: {agent_id: {present: true}}\n  agent_id: agent_id\n  tool_use_id: parent_tool_use_id\n", "", 1))
+	if none.Parent != nil {
+		t.Fatal("the member was not removed")
+	}
+	if _, _, ok := none.Link(output(t, `{"agent_id":"a1","parent_tool_use_id":"toolu_1"}`)); ok {
+		t.Error("a descriptor without parent linked")
+	}
+}
+
+// TestParentAndEachAreChecked pins the schema: parent has its four members and no
+// other, a path is dotted names, and each is a path.
+func TestParentAndEachAreChecked(t *testing.T) {
+	for name, doc := range map[string]string{
+		"parent without tool_use_id": strings.Replace(eachDoc, "  tool_use_id: parent_tool_use_id\n", "", 1),
+		"parent without match":       strings.Replace(eachDoc, "  match: {agent_id: {present: true}}\n", "", 1),
+		"parent with another member": strings.Replace(eachDoc, "  agent_id: agent_id\n", "  agent_id: agent_id\n  depth: 2\n", 1),
+		"parent of another source":   strings.Replace(eachDoc, "parent:\n  source: output", "parent:\n  source: setup", 1),
+		"a parent path with a space": strings.Replace(eachDoc, "  agent_id: agent_id\n", "  agent_id: agent id\n", 1),
+		"each that is no path":       strings.Replace(eachDoc, "each: message.content", "each: message.content[0]", 1),
+	} {
+		if _, err := descriptor.Parse("amp.yaml", []byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }

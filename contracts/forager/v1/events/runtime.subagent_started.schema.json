@@ -10,6 +10,7 @@
     "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
     "session": {"description": "The number of the session whose runtime wrote the record, from 1: the session of its dev.qory.session.started.", "type": "integer", "minimum": 1},
     "agent_id": {"type": "string", "minLength": 1},
-    "agent_type": {"type": "string", "minLength": 1}
+    "agent_type": {"type": "string", "minLength": 1},
+    "parent_agent_id": {"description": "The subagent that started this subagent. Absent when the main agent started it, or when the runtime did not report which agent started it.", "type": "string", "minLength": 1}
   }
 }

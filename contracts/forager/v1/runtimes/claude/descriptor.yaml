@@ -3,16 +3,17 @@
 #
 # The hooks report the session in both modes, interactive and not, so they are the
 # canonical source. The standard output, JSON lines when the session runs on pipes, adds
-# what no hook reports: the result line, with the outcome, the turns and the cost; and,
-# with --output-format stream-json --verbose --forward-subagent-text, each subagent's
-# text blocks. Its init line is not mapped, because SessionStart already produced
-# runtime.started.
+# what no hook reports: the result line, with the outcome, the turns and the cost; with
+# --output-format stream-json --verbose, the tool call that started each subagent, in
+# parent_tool_use_id of the subagent's messages; and with --forward-subagent-text too,
+# each subagent's text blocks. Its init line is not mapped, because SessionStart already
+# produced runtime.started.
 #
-# The two message rules are written against the Agent SDK TypeScript reference
-# (SDKAssistantMessage, SDKUserMessage) and the headless page, for the versions whose
-# stream messages of a subagent contain agent_id: Agent SDK 0.3.292, which bundles
-# Claude Code 2.1.292, and later. An older Claude Code prints no agent_id there, so they
-# do not apply to it. No fixture beside this file is a recording of them.
+# The parent member and the two message rules are written against the Agent SDK
+# TypeScript reference (SDKAssistantMessage, SDKUserMessage) and the headless page, for
+# the versions whose stream messages of a subagent contain agent_id: Agent SDK 0.3.292,
+# which bundles Claude Code 2.1.292, and later. An older Claude Code prints no agent_id
+# there, so they do not apply to it. No fixture beside this file is a recording of them.
 #
 # Work in the background has no separate hook. Its start is a tool call like any other,
 # with run_in_background in the input and whatever the tool returned in the response, and
@@ -93,6 +94,13 @@ model:
               ANTHROPIC_DEFAULT_FABLE_MODEL, ANTHROPIC_SMALL_FAST_MODEL,
               CLAUDE_CODE_SUBAGENT_MODEL, CLAUDE_CODE_SUBAGENT_MODEL_FORCE,
               CLAUDE_CODE_AUTO_MODE_MODEL, CLAUDE_CODE_EFFORT_LEVEL, CLAUDE_CODE_EXTRA_BODY]
+# A subagent's message has its agent_id and, in parent_tool_use_id, the id of the Agent
+# or Skill tool call that started the subagent.
+parent:
+  source: output
+  match: {agent_id: {present: true}}
+  agent_id: agent_id
+  tool_use_id: parent_tool_use_id
 rules:
   - source: hooks
     match: {hook_event_name: SessionStart}
