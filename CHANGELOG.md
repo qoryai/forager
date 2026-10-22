@@ -1192,6 +1192,12 @@ release may change what an existing document does, and says so under Upgrading.
   `wall.RunContainersExist` is that method of a Docker with no field set, which a nil d
   asks through. A run's check against the registry asks through its wall when it is a
   `*wall.Docker`.
+- `(*session.Run).ServerEnv(spec)`, the server's variables that a session of `spec`
+  gets, `NAME=value`, sorted by name, so a caller can give the setup container the
+  agent's environment. Call it before `Setup` with the session's full spec, and append
+  the result after the machine's and the run's variables. It resolves the variables as
+  `Join` does, without the runtime's preparation, and writes nothing and sends no
+  request. The values are plain values, not secrets.
 
 #### Fixed
 

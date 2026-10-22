@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -20,6 +21,8 @@ import (
 	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
+	"github.com/qoryai/forager/session/internal/variables"
+	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/sink"
 	"github.com/qoryai/forager/wall"
 )
@@ -458,6 +461,72 @@ func (r *Run) System() string { return r.answer.Values()[envRunSystem] }
 // Repositories is the server's value of QORY_RUN_REPOSITORIES in the run answer's
 // variables, the repositories the run may fetch; empty when the server sets none.
 func (r *Run) Repositories() string { return r.answer.Values()[envRunRepositories] }
+
+// ServerEnv is the server's variables that a session of spec would get, as [Run.Join]
+// resolves them for spec: NAME=value, sorted by name, in a new slice on every call,
+// empty when the session would get none. It leaves out Forager's names, the proxy's,
+// the wall's, the placeholders, spec.LaunchFixed, the access key's variables and each
+// name the spec's rules leave out: a name of the deny list, a name the runtime
+// declares, reserves or denies, and every name for a run without a wall that does not
+// accept the server's variables. The values are plain values, not secrets: the agent
+// gets each as it is, and the run's records contain none of them. ServerEnv runs no
+// runtime preparation, writes nothing and sends no request, so the result differs from
+// the agent's environment in one way: a name the runtime preparation sets overrides
+// the server's value in the agent. A caller that gives another container the agent's
+// environment appends the result after its machine and run variables, so the server's
+// values win, as in Join. The error is the one Join returns for spec before its join
+// request, or that the run is closed or another call of the run is running.
+func (r *Run) ServerEnv(spec SessionSpec) ([]string, error) {
+	if !r.joining.TryLock() {
+		return nil, errors.New("call ServerEnv after the run's other call returns: another call of the run is running")
+	}
+	defer r.joining.Unlock()
+	if r.closed {
+		return nil, errors.New("open a new run for the server's variables: the run is closed")
+	}
+	s, rt, err := r.checkSession(spec)
+	if err != nil {
+		return nil, err
+	}
+	// As in Join: without a wall the variables the machine's credentials are read from
+	// are left out of what the session inherits, and the session starts with its model
+	// key, which the join answer gives as the request's or the run's start key.
+	if s.Wall == nil {
+		s.Env = withoutNames(s.Env, r.reserved)
+	}
+	model := s.ModelCredential
+	if model == "" {
+		model = r.answer.ModelCredential
+	}
+	credentialHosts, placeholderNames, key, err := chosen(rt, r.answer.CredentialHosts, r.answer.Placeholders, model)
+	if err != nil {
+		return nil, err
+	}
+	prepared := runtimes.Launch{Command: s.Command, Args: s.Args}
+	vars, _, err := resolve(s, rt, r.answer.Values(), credentialHosts, prepared, placeholderNames, r.reserved, r.img.Docker, r.authority != nil, names(r.caVars), key)
+	if err != nil {
+		return nil, err
+	}
+	return serverValues(vars), nil
+}
+
+// serverValues are the values of vars.Env whose source is the server, in vars.Env's
+// order, without the access key's variables, in a new slice.
+func serverValues(vars variables.Resolved) []string {
+	server := map[string]bool{}
+	for _, e := range vars.Applied {
+		if e.From == variables.FromApiary {
+			server[e.Name] = true
+		}
+	}
+	out := []string{}
+	for _, kv := range vars.Env {
+		if name, _, _ := strings.Cut(kv, "="); server[name] {
+			out = append(out, kv)
+		}
+	}
+	return accesskey.WithoutVariables(out)
+}
 
 // The server's variables a [Run] gives its caller.
 const (

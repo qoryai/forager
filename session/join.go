@@ -105,47 +105,8 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if r.setupFailed > 0 {
 		return nil, fmt.Errorf("Open another run: setup step %d of this run failed, so no session can join it.", r.setupFailed)
 	}
-	spec = sessionDefaults(spec, r.open.Wall != nil)
-	s := runSpec{OpenSpec: r.open, SessionSpec: spec}
-	if err := checkVariables(spec.Variables); err != nil {
-		return nil, err
-	}
-	if err := checkHarnessHome(spec.HarnessHome); err != nil {
-		return nil, err
-	}
-	if err := checkHarness(spec.Harness); err != nil {
-		return nil, err
-	}
-	if err := checkSetup(s); err != nil {
-		return nil, err
-	}
-	if err := checkExec(s); err != nil {
-		return nil, err
-	}
-	rt := spec.Runtime
-	if rt == nil {
-		rt = runtimes.Bare(filepath.Base(spec.Command))
-	}
-	leave := rt.Stop()
-	if err := CheckStopSignal(leave.Signal); err != nil {
-		return nil, fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), err)
-	}
-	if s.StopSignal == "" {
-		s.StopSignal = leave.Signal
-	}
-	if s.StopGrace == 0 && leave.Grace > 0 {
-		s.StopGrace = leave.Grace
-	}
-	if s.StopSignal == "" {
-		s.StopSignal = DefaultStopSignal
-	}
-	if s.StopGrace == 0 {
-		s.StopGrace = DefaultStopGrace
-	}
-	if s.Timeout < 0 || s.StopGrace < 0 {
-		return nil, errors.New("the timeout or the stop grace is negative")
-	}
-	if err := CheckStopSignal(s.StopSignal); err != nil {
+	s, rt, err := r.checkSession(spec)
+	if err != nil {
 		return nil, err
 	}
 	// The run's host proxies end before the join request and the wall's start, so
@@ -175,6 +136,57 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 		r.open.Report(fmt.Sprintf("the gateway did not accept the session's last events within %s; the next join may be refused", closeWait))
 	}
 	return res, err
+}
+
+// checkSession is the spec of a session of the run with its defaults filled, and its
+// runtime, after the checks a join runs before the join request: the variables, the
+// harness's home and sources, the setup, the helper's exec and the stop signal and
+// grace. It writes nothing and sends nothing.
+func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) {
+	spec = sessionDefaults(spec, r.open.Wall != nil)
+	s := runSpec{OpenSpec: r.open, SessionSpec: spec}
+	if err := checkVariables(spec.Variables); err != nil {
+		return runSpec{}, nil, err
+	}
+	if err := checkHarnessHome(spec.HarnessHome); err != nil {
+		return runSpec{}, nil, err
+	}
+	if err := checkHarness(spec.Harness); err != nil {
+		return runSpec{}, nil, err
+	}
+	if err := checkSetup(s); err != nil {
+		return runSpec{}, nil, err
+	}
+	if err := checkExec(s); err != nil {
+		return runSpec{}, nil, err
+	}
+	rt := spec.Runtime
+	if rt == nil {
+		rt = runtimes.Bare(filepath.Base(spec.Command))
+	}
+	leave := rt.Stop()
+	if err := CheckStopSignal(leave.Signal); err != nil {
+		return runSpec{}, nil, fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), err)
+	}
+	if s.StopSignal == "" {
+		s.StopSignal = leave.Signal
+	}
+	if s.StopGrace == 0 && leave.Grace > 0 {
+		s.StopGrace = leave.Grace
+	}
+	if s.StopSignal == "" {
+		s.StopSignal = DefaultStopSignal
+	}
+	if s.StopGrace == 0 {
+		s.StopGrace = DefaultStopGrace
+	}
+	if s.Timeout < 0 || s.StopGrace < 0 {
+		return runSpec{}, nil, errors.New("the timeout or the stop grace is negative")
+	}
+	if err := CheckStopSignal(s.StopSignal); err != nil {
+		return runSpec{}, nil, err
+	}
+	return s, rt, nil
 }
 
 // joinRequest sends the join request and returns the gateway's answer and the

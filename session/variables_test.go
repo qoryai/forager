@@ -903,3 +903,160 @@ func TestAWrapThatFailsPrintsAPhraseForASecretInAPath(t *testing.T) {
 		}
 	}
 }
+
+// serverEnvVariables is serverVariables with the server's QORY_RUN_SYSTEM, which the
+// agent gets, and three names it never gets from the server: an access key's
+// variable, one of Forager's names and a proxy name.
+const serverEnvVariables = `{"variables":{"NODE_ENV":{"value":"test"},"APP_REGION":{"value":"eu-west-1"},` +
+	`"ANTHROPIC_BASE_URL":{"value":"https://elsewhere.example"},"PATH":{"value":"/nowhere"},"LOG_LEVEL":{"value":"server"},` +
+	`"CODEX_HOME":{"value":"/server/home"},"ANTHROPIC_AUTH_TOKEN":{"value":"server-credential"},` +
+	`"QORY_RUN_SYSTEM":{"value":"tickets"},"QORY_ACCESS_KEY_SECRET":{"value":"x"},"QORY_RUN_ID":{"value":"x"},"HTTPS_PROXY":{"value":"http://x.example"}}}`
+
+// TestServerEnvIsWhatTheAgentGetsFromTheServer pins Run.ServerEnv against a real
+// join of the same spec: behind a wall, and without one with accept or ignore, the
+// result is the server's values in the agent's environment, the names the record lists
+// from the server, sorted. A name of the deny list, a name the runtime declares, a
+// name of LaunchFixed, Forager's, the proxy's and an access key's variable are not in
+// it, and each call returns a new slice.
+func TestServerEnvIsWhatTheAgentGetsFromTheServer(t *testing.T) {
+	served := []string{"LOG_LEVEL=server", "NODE_ENV=test", "QORY_RUN_SYSTEM=tickets"}
+	for _, tc := range []struct {
+		name     string
+		walled   bool
+		unwalled string
+		want     []string
+	}{
+		{"walled", true, "", served},
+		{"unwalled and accept", false, session.UnwalledAccept, served},
+		{"unwalled and ignore", false, session.UnwalledIgnore, []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			sp, g := specGateway(t)
+			answerVariables(g, serverEnvVariables)
+			out := dumpsEnv(t, &sp)
+			sp.LaunchFixed = []string{"CODEX_HOME=/computed/home"}
+			sp.Variables = session.Variables{Run: []string{"LOG_LEVEL=run"}, Machine: []string{"NODE_ENV=machine"}, Deny: []string{"APP_*"}, Unwalled: tc.unwalled}
+			if tc.walled {
+				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			}
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := r.ServerEnv(sp.SessionSpec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("ServerEnv %q, want %q", got, tc.want)
+			}
+			if !slices.IsSorted(got) {
+				t.Errorf("ServerEnv %q is not sorted", got)
+			}
+			if len(got) > 0 {
+				got[0] = "CHANGED=by-the-caller"
+				again, err := r.ServerEnv(sp.SessionSpec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !slices.Equal(again, tc.want) {
+					t.Errorf("after a change to the first result, ServerEnv %q, want %q", again, tc.want)
+				}
+				got = again
+			}
+			if _, err := os.Stat(filepath.Join(r.Dir(), session.SessionsDir)); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("ServerEnv left the sessions' directory: %v", err)
+			}
+			if n := len(g.Joins()); n != 0 {
+				t.Errorf("ServerEnv sent %d join requests, want none", n)
+			}
+			res, err := r.Join(ctx, sp.SessionSpec)
+			if _, cerr := r.Close(ctx, outcomeOf(res, err)); cerr != nil {
+				t.Fatal(cerr)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.ExitCode != 0 {
+				t.Fatalf("exit %d", res.ExitCode)
+			}
+			env := envOf(t, out)
+			agent := []string{}
+			for _, line := range variablesApplied(t, res) {
+				name, rest, _ := strings.Cut(line, "<-")
+				if from, _, _ := strings.Cut(rest, " "); from != "apiary" {
+					continue
+				}
+				if value, ok := env[name]; ok {
+					agent = append(agent, name+"="+value)
+				}
+			}
+			if !slices.Equal(got, agent) {
+				t.Errorf("ServerEnv %q, the server's values in the agent's environment %q", got, agent)
+			}
+			for _, kv := range got {
+				name, _, _ := strings.Cut(kv, "=")
+				if slices.Contains([]string{"APP_REGION", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CODEX_HOME", "PATH", "QORY_ACCESS_KEY_SECRET", "QORY_RUN_ID", "HTTPS_PROXY"}, name) {
+					t.Errorf("ServerEnv has %s, a name the agent does not get from the server", name)
+				}
+			}
+		})
+	}
+}
+
+// TestServerEnvRefusesWhatAJoinRefuses pins the errors of Run.ServerEnv: a spec a join
+// refuses before its join request, a refusal of what the run passes in with its code,
+// and a closed run. None of them sends a join request.
+func TestServerEnvRefusesWhatAJoinRefuses(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		set  func(*runSpec)
+		want string
+	}{
+		{"a variable with no value", func(sp *runSpec) { sp.Variables.Run = []string{"ONLY_A_NAME"} }, "ONLY_A_NAME has no value"},
+		{"an unwalled mode of neither", func(sp *runSpec) { sp.Variables.Unwalled = "sometimes" }, "neither accept nor ignore"},
+		{"a deny entry of no shape", func(sp *runSpec) { sp.Variables.Deny = []string{"A-B"} }, "variables.deny"},
+		{"a walled run with no Exec", func(sp *runSpec) {
+			sp.Wall, sp.Image, sp.Exec = &openWall{}, "example.com/agent:1", nil
+		}, "Exec"},
+		{"a walled run that passes a QORY_ name", func(sp *runSpec) {
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			sp.Variables.Machine = []string{"QORY_RUN_SYSTEM=x"}
+		}, "variable_reserved"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			answerVariables(g, serverEnvVariables)
+			tc.set(&sp)
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+					t.Fatal(err)
+				}
+			}()
+			got, err := r.ServerEnv(sp.SessionSpec)
+			if err == nil || !strings.Contains(refusal(err), tc.want) {
+				t.Errorf("ServerEnv %q, %v; want an error with %q", got, err, tc.want)
+			}
+			if n := len(g.Joins()); n != 0 {
+				t.Errorf("%d join requests, want none", n)
+			}
+		})
+	}
+	sp, _ := specGateway(t)
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.ServerEnv(sp.SessionSpec); err == nil || !strings.HasPrefix(err.Error(), "open a new run") {
+		t.Errorf("after the close: %q, %v; want the fix first", got, err)
+	}
+}
