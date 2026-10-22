@@ -472,12 +472,12 @@ func (r *Run) Repositories() string { return r.answer.Values()[envRunRepositorie
 // the value in the agent: AgentEnv runs no runtime preparation, writes nothing and
 // sends no request. It also leaves out a value of SessionSpec.Env whose name the
 // built-in deny list, denied-variables.json, matches, such as PATH, which Join passes
-// to the agent and [Run.Setup] refuses. The values are plain values, not secrets. A caller that runs the
-// setup passes the result as [SetupSpec.Env], with QORY_RUN_SYSTEM and
-// QORY_RUN_REPOSITORIES when it wants them. The error is the one Join returns for spec
-// before its join request or as it resolves the variables, the same
-// [refusal.VariableReserved] or [refusal.PlaceholderConflict] among them, or that the
-// run is closed or another call of the run is running.
+// to the agent and [Run.Setup] refuses. The values are plain values, not secrets. A
+// caller that runs the setup passes the result as [SetupSpec.Env], with
+// QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES when it wants them. The error is the one
+// Join returns for spec before its join request or as it resolves the variables, the
+// same [refusal.VariableReserved] or [refusal.PlaceholderConflict] among them, or that
+// the run is closed or another call of the run is running.
 func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 	if !r.joining.TryLock() {
 		return nil, errors.New("call AgentEnv after the run's other call returns: another call of the run is running")
