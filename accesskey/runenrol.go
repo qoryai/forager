@@ -24,12 +24,10 @@ import (
 // writes run_id alone, and encoding/json writes run_id alone, also inside an exported
 // field, a slice or a map, as slog's JSON handler writes them.
 //
-// fmt prints every field, the run key and the documents included, whenever it calls no
-// method of RunAnswer. That happens under %p and %w of an argument that is a RunAnswer
-// or contains one by value, such as an array of them or a struct with one in any field,
-// and under %w of a pointer to a RunAnswer too. It also happens for a RunAnswer, or a
-// pointer to one, in a struct field that is not exported, which slog's text handler
-// also prints through fmt. Log a RunAnswer through its methods, or log its RunID.
+// Pass fmt a RunAnswer, a pointer to one, or its RunID alone. Never pass a value that
+// contains a RunAnswer, and never pass a RunAnswer or a pointer to one under %w; under
+// %p, pass only a pointer. In any other case fmt may call no method of RunAnswer and
+// print every field, the run key and the documents included.
 type RunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -65,8 +63,8 @@ func (a RunAnswer) String() string { return "run " + a.RunID }
 // GoString returns what String returns.
 func (a RunAnswer) GoString() string { return a.String() }
 
-// Format writes what String returns, under every verb fmt calls it with. In the cases
-// the doc of [RunAnswer] lists, fmt calls no method and prints every field.
+// Format writes what String returns, under every verb fmt calls it with. Pass fmt a
+// RunAnswer as the doc of [RunAnswer] instructs, so that fmt calls Format.
 func (a RunAnswer) Format(f fmt.State, _ rune) { io.WriteString(f, a.String()) }
 
 // LogValue returns a group with run_id alone, so a slog handler that calls LogValue

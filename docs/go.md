@@ -538,13 +538,10 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   value and a pointer alike. It formats as `run <run id>`, a `slog` handler that calls
   `LogValue` writes `run_id` alone, and `encoding/json` writes `{"run_id": …}` alone,
   also inside an exported field, a slice or a map.
-- fmt prints every field, the run key and the documents included, whenever it calls
-  no method of `RunAnswer`. That happens under `%p` and `%w` of an argument that is a
-  `RunAnswer` or contains one by value, such as an array of them or a struct with one
-  in any field, and under `%w` of a pointer to a `RunAnswer` too. It also happens for a
-  `RunAnswer`, or a pointer to one, in a struct field that is not exported, which
-  slog's text handler also prints through fmt. Log a `RunAnswer` through its methods,
-  or log its `RunID`. No error that the run methods return contains the run key or a
+- Pass fmt a `RunAnswer`, a pointer to one, or its `RunID` alone. Never pass a value
+  that contains a `RunAnswer`, and never pass a `RunAnswer` or a pointer to one under
+  `%w`; under `%p`, pass only a pointer. In any other case fmt may call no method of
+  `RunAnswer` and print every field, the run key and the documents included. No error that the run methods return contains the run key or a
   byte of the documents.
 - An error of a verified answer starts with the fix, "use another run code: ",
   because the code is used and a retry by the same key gets the same members: "use

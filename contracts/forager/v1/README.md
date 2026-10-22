@@ -2159,13 +2159,11 @@ through the gateway, `PostRun` sends it to the server, and `VerifyRunAnswer` rea
 answer. Each returns an `accesskey.RunAnswer`, whose `Documents` is the answer's
 `documents` as a `json.RawMessage`. Where fmt calls `Format`, slog `LogValue` and
 encoding/json `MarshalJSON`, fmt writes a `RunAnswer` as `run <run id>`, and slog and
-encoding/json write its `run_id` alone. fmt prints every field, the run key and the
-documents included, whenever it calls no method of `RunAnswer`. That happens under `%p`
-and `%w` of an argument that is a `RunAnswer` or contains one by value, such as an array
-of them or a struct with one in any field, and under `%w` of a pointer to a `RunAnswer`
-too. It also happens for a `RunAnswer`, or a pointer to one, in a struct field that is
-not exported, which slog's text handler also prints through fmt. Log a `RunAnswer`
-through its methods, or log its `RunID`. `PostVia`, `Post` and `VerifyAnswer` refuse a
+encoding/json write its `run_id` alone. Pass fmt a `RunAnswer`, a pointer to one, or
+its `RunID` alone. Never pass a value that contains a `RunAnswer`, and never pass a
+`RunAnswer` or a pointer to one under `%w`; under `%p`, pass only a pointer. In any
+other case fmt may call no method of `RunAnswer` and print every field, the run key and
+the documents included. `PostVia`, `Post` and `VerifyAnswer` refuse a
 run code before they send or read anything, and the three run methods refuse an access
 key's code the same way. The known answers are `run_enrolment` in
 `fixtures/known-answers/through-gateway.json`, with `enrolment-run-request.json` and

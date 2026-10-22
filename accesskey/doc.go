@@ -28,8 +28,10 @@
 // [EnrolmentRequest.PostRun] redeem it for a run's run key, verified as package runkey
 // verifies one, and the run's documents, and return a [RunAnswer], which shows its run
 // id and not its run key or documents wherever fmt, log/slog and encoding/json call
-// its methods. fmt calls none, and prints every field, in the cases the doc of
-// [RunAnswer] lists, such as %w and a struct field that is not exported.
+// its methods. Pass fmt a RunAnswer, a pointer to one, or its RunID alone. Never pass a
+// value that contains a RunAnswer, and never pass a RunAnswer or a pointer to one under
+// %w; under %p, pass only a pointer. In any other case fmt may call no method of
+// RunAnswer and print every field, the run key and the documents included.
 //
 // An instance is one running copy of qory with the access key. [NewInstanceID] makes
 // its id, and [InstanceFile] and [ReadInstanceFile] are the two lines qory keeps it in,
