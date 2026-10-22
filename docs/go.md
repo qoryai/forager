@@ -541,8 +541,9 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
 - Pass fmt a `RunAnswer`, a pointer to one, or its `RunID` alone. Never pass a value
   that contains a `RunAnswer`, and never pass a `RunAnswer` or a pointer to one under
   `%w`; under `%p`, pass only a pointer. In any other case fmt may call no method of
-  `RunAnswer` and print every field, the run key and the documents included. No error that the run methods return contains the run key or a
-  byte of the documents.
+  `RunAnswer` and print every field, the run key and the documents included. slog's
+  text handler prints such a value through fmt too. No error that the run methods
+  return contains the run key or a byte of the documents.
 - An error of a verified answer starts with the fix, "use another run code: ",
   because the code is used and a retry by the same key gets the same members: "use
   another run code: the enrolment answer's run key is not valid: its signature does

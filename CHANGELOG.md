@@ -149,7 +149,7 @@ release may change what an existing document does, and says so under Upgrading.
   Never pass a value that contains a `RunAnswer`, and never pass a `RunAnswer` or a
   pointer to one under `%w`; under `%p`, pass only a pointer. In any other case fmt may
   call no method of `RunAnswer` and print every field, the run key and the documents
-  included.
+  included. slog's text handler prints such a value through fmt too.
 - A run code's answer of up to 1 MiB, `accesskey.MaxRunAnswer`, the most the gateway's
   relay passes back: `PostRunVia` and `PostRun` read at most 1 MiB of its body, and
   `VerifyRunAnswer` counts a longer body as `answer_unsigned`.

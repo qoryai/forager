@@ -2163,11 +2163,11 @@ encoding/json write its `run_id` alone. Pass fmt a `RunAnswer`, a pointer to one
 its `RunID` alone. Never pass a value that contains a `RunAnswer`, and never pass a
 `RunAnswer` or a pointer to one under `%w`; under `%p`, pass only a pointer. In any
 other case fmt may call no method of `RunAnswer` and print every field, the run key and
-the documents included. `PostVia`, `Post` and `VerifyAnswer` refuse a
-run code before they send or read anything, and the three run methods refuse an access
-key's code the same way. The known answers are `run_enrolment` in
-`fixtures/known-answers/through-gateway.json`, with `enrolment-run-request.json` and
-`enrolment-run-answer.json`.
+the documents included. slog's text handler prints such a value through fmt too.
+`PostVia`, `Post` and `VerifyAnswer` refuse a run code before they send or read
+anything, and the three run methods refuse an access key's code the same way. The known
+answers are `run_enrolment` in `fixtures/known-answers/through-gateway.json`, with
+`enrolment-run-request.json` and `enrolment-run-answer.json`.
 
 **The configuration document.** `configuration.schema.json`. A signed
 `GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery, per

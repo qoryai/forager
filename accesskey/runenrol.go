@@ -27,7 +27,8 @@ import (
 // Pass fmt a RunAnswer, a pointer to one, or its RunID alone. Never pass a value that
 // contains a RunAnswer, and never pass a RunAnswer or a pointer to one under %w; under
 // %p, pass only a pointer. In any other case fmt may call no method of RunAnswer and
-// print every field, the run key and the documents included.
+// print every field, the run key and the documents included. slog's text handler
+// prints such a value through fmt too.
 type RunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -64,7 +65,8 @@ func (a RunAnswer) String() string { return "run " + a.RunID }
 func (a RunAnswer) GoString() string { return a.String() }
 
 // Format writes what String returns, under every verb fmt calls it with. Pass fmt a
-// RunAnswer as the doc of [RunAnswer] instructs, so that fmt calls Format.
+// RunAnswer as the doc of [RunAnswer] describes, so that fmt calls Format, or prints
+// the address under %p.
 func (a RunAnswer) Format(f fmt.State, _ rune) { io.WriteString(f, a.String()) }
 
 // LogValue returns a group with run_id alone, so a slog handler that calls LogValue

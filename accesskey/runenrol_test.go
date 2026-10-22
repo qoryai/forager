@@ -392,12 +392,12 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 // prints its run id and never its run key or a byte of its documents: under %v, %+v,
 // %#v, %s, %q, %x and %d, through slog's text and JSON handlers, through
 // encoding/json, and in an exported field of a struct, in a slice and in a map under
-// the JSON handler. It also pins samples of the arguments RunAnswer's doc says never
-// to pass fmt, where fmt calls no method of RunAnswer and prints the run key: a
-// RunAnswer, and a pointer to one, in a struct field that is not exported, under fmt
-// and slog's text handler; %p of a value, an array, an embedding struct and a struct
-// with a RunAnswer field; %s of a slice of pointers to such a struct; and %w of a
-// value, a pointer, a slice and a pointer to such a struct.
+// the JSON handler. It also pins samples of the arguments that the doc of RunAnswer
+// forbids passing to fmt, where fmt calls no method of RunAnswer and prints the run
+// key: a RunAnswer, and a pointer to one, in a struct field that is not exported,
+// under fmt and slog's text handler; %p of a value, an array, an embedding struct and
+// a struct with a RunAnswer field; %s of a slice of pointers to such a struct; and %w
+// of a value, a pointer, a slice and a pointer to such a struct.
 func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
@@ -465,11 +465,11 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 			t.Errorf("%%+v of %T: %s", c.v, got)
 		}
 	}
-	// Samples of the arguments RunAnswer's doc says never to pass fmt, where fmt calls
-	// no method of RunAnswer and prints every field. Each case checks for the run key,
-	// as text or in hex under %x. The JSON handler writes {} for a field that is not
-	// exported. pVerb and wVerb are variables, so that vet's printf check accepts the
-	// arguments.
+	// Samples of the arguments that the doc of RunAnswer forbids passing to fmt, where
+	// fmt calls no method of RunAnswer and prints every field. Each case checks for the
+	// run key, as text or in hex under %x. The JSON handler writes {} for a field that
+	// is not exported. sVerb, pVerb and wVerb are variables, so that vet's printf check
+	// accepts the arguments.
 	hasKey := func(s string) bool {
 		return strings.Contains(s, secret) || strings.Contains(s, fmt.Sprintf("%x", secret))
 	}

@@ -31,7 +31,8 @@
 // its methods. Pass fmt a RunAnswer, a pointer to one, or its RunID alone. Never pass a
 // value that contains a RunAnswer, and never pass a RunAnswer or a pointer to one under
 // %w; under %p, pass only a pointer. In any other case fmt may call no method of
-// RunAnswer and print every field, the run key and the documents included.
+// RunAnswer and print every field, the run key and the documents included. slog's
+// text handler prints such a value through fmt too.
 //
 // An instance is one running copy of qory with the access key. [NewInstanceID] makes
 // its id, and [InstanceFile] and [ReadInstanceFile] are the two lines qory keeps it in,
