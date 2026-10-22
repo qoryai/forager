@@ -392,8 +392,11 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 // prints its run id and never its run key or a byte of its documents: under every fmt
 // verb, through slog's text and JSON handlers, through encoding/json, and in an
 // exported field of a struct, in a slice and in a map under the JSON handler. It also
-// pins the one open case: in a struct field that is not exported, fmt and slog's text
-// handler print the run key, and the documents as their bytes in decimal.
+// pins the three open cases, where fmt prints the run key and the documents: a
+// RunAnswer in a struct field that is not exported, under fmt and slog's text handler,
+// with the documents as text under %s, quoted under %q, in hex under %x and as bytes in
+// decimal under %v and %+v; %p of a value, also in an array or an embedding struct;
+// and %w of a value and of a pointer.
 func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
@@ -469,6 +472,34 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	type hidden struct{ a any }
 	if got := fmt.Sprintf("%+v", hidden{*ans}); !strings.Contains(got, secret) || !strings.Contains(got, inputBytes) {
 		t.Errorf("%%+v of a RunAnswer in a field that is not exported: %s; RunAnswer's doc describes the run key and the documents' bytes there", got)
+	}
+	// In such a field each verb prints the documents in its form: %s as text, %q quoted,
+	// %x in hex and %v as bytes in decimal, with the run key under each.
+	inputHex := fmt.Sprintf("%x", testInput)
+	for verb, want := range map[string]string{"%s": testInput, "%q": `\"` + testInput + `\"`, "%x": inputHex, "%v": inputBytes} {
+		if got := fmt.Sprintf(verb, hidden{*ans}); !strings.Contains(got, want) || (!strings.Contains(got, secret) && !strings.Contains(got, fmt.Sprintf("%x", secret))) {
+			t.Errorf("%s of a RunAnswer in a field that is not exported: %s; RunAnswer's doc describes the run key and the documents as %s there", verb, got, want)
+		}
+	}
+	// The other two open cases: fmt calls no method of an argument under %p of a value
+	// that is not a pointer, also inside an array or an embedding struct, or under %w,
+	// since a RunAnswer is not an error, and prints every field. pVerb and wVerb are
+	// variables, so that vet's printf check accepts the arguments.
+	type embedding struct{ accesskey.RunAnswer }
+	pVerb, wVerb := "%p", "%w"
+	for _, c := range []struct{ name, got string }{
+		{"%p of a value", fmt.Sprintf(pVerb, *ans)},
+		{"%p of an array", fmt.Sprintf(pVerb, [1]accesskey.RunAnswer{*ans})},
+		{"%p of an embedding struct", fmt.Sprintf(pVerb, embedding{*ans})},
+		{"fmt.Errorf with %w of a value", fmt.Errorf(wVerb, *ans).Error()},
+		{"fmt.Errorf with %w of a pointer", fmt.Errorf(wVerb, ans).Error()},
+	} {
+		if !strings.Contains(c.got, secret) || !strings.Contains(c.got, inputBytes) {
+			t.Errorf("%s: %s; RunAnswer's doc describes the run key and the documents' bytes there", c.name, c.got)
+		}
+	}
+	if got := fmt.Sprintf(pVerb, ans); leaks(got) {
+		t.Errorf("%%p of a pointer: %s", got)
 	}
 	b.Reset()
 	slog.New(slog.NewTextHandler(&b, nil)).Info("redeemed", "hidden", hidden{*ans})

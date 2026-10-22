@@ -2130,14 +2130,14 @@ the server's keys and `documents`, the run's documents, and every member is requ
  "documents": {…}}
 ```
 
-`documents` is a JSON object. `run-documents.schema.json` of `qoryai/integrations`,
-`https://qory.dev/contracts/provisioner/v1/run-documents.schema.json`, defines its
-members. Forager checks that `documents` is an object, reads none of its members, and
-passes it to the caller byte for byte as the answer contains it.
+`documents` is a JSON object, whose schema is `documents.schema.json` of
+`qoryai/integrations`, `https://qory.dev/contracts/run/v1/documents.schema.json`. Forager checks
+that `documents` is an object, reads none of its members, and passes it to the caller
+byte for byte as the answer contains it.
 
 The answer is at most 1 MiB: Forager reads at most 1 MiB of the body of an answer to a
-run code, the most the gateway's relay passes back, and at most 64 KiB of an answer to
-an access key's code, and counts a longer body as unsigned, `answer_unsigned`.
+run code, the most the gateway's relay passes back, and counts a longer body as
+unsigned, `answer_unsigned`.
 
 A retry by the same public key within the 15 minutes gets the same members, the same
 `run_id`, `run_key`, `apiary_public_key` and `documents`, signed over the retry's proof.
@@ -2156,13 +2156,16 @@ the session as `RemoteGateway.RunKey`, and writes it to no file and no environme
 variable. In Go, `EnrolmentRequest.PostRunVia` of package `accesskey` sends the request
 through the gateway, `PostRun` sends it to the server, and `VerifyRunAnswer` reads the
 answer. Each returns an `accesskey.RunAnswer`, whose `Documents` is the answer's
-`documents` as a `json.RawMessage`. fmt writes a `RunAnswer` as `run <run id>`, and slog
-and encoding/json write its `run_id` alone, except: fmt, and slog's text handler, which
-prints a struct through fmt, can print the run key of a `RunAnswer` in a struct field
-that is not exported, and its documents as their bytes in decimal, since fmt calls no
-method there. `PostVia`, `Post` and `VerifyAnswer` refuse a run code before they send or
-read anything, and the three run methods refuse an access key's code the same way. The
-known answers are `run_enrolment` in `fixtures/known-answers/through-gateway.json`, with
+`documents` as a `json.RawMessage`. Where fmt calls `Format`, slog `LogValue` and
+encoding/json `MarshalJSON`, fmt writes a `RunAnswer` as `run <run id>`, and slog and
+encoding/json write its `run_id` alone. fmt calls no method, and prints every field, the
+run key and the documents included, in three cases: `%p` of a value, also inside an
+array or an embedding struct; `%w`, since a `RunAnswer` is not an error; and a
+`RunAnswer` in a struct field that is not exported, which slog's text handler prints
+through fmt as well. In such a field the documents come out as text under `%s`, quoted
+under `%q`, in hex under `%x`, and as bytes in decimal under `%v` and `%+v`. `PostVia`,
+`Post` and `VerifyAnswer` refuse a run code before they send or read anything, and the
+three run methods refuse an access key's code the same way. The known answers are `run_enrolment` in `fixtures/known-answers/through-gateway.json`, with
 `enrolment-run-request.json` and `enrolment-run-answer.json`.
 
 **The configuration document.** `configuration.schema.json`. A signed

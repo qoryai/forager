@@ -122,7 +122,7 @@
     },
     "run_answer": {
       "title": "Run code answer",
-      "description": "The 201 to a run code, qecr_: the run's id, its run key, the server's public keys and the run's documents. Every member is required. The redemption makes no access key. A run code is valid for 15 minutes and is used once: a redemption by another public key after the first is 401, and a retry by the same public key within the 15 minutes gets the same members, the same run_id, run_key, apiary_public_key and documents, signed over the retry's proof. The run key's issued is the time of the code's first redemption, not the time the code was made, and its attach_by is 600 seconds after issued. The answer is at most 1 MiB: Forager reads at most 1 MiB of the body of an answer to a run code, and at most 64 KiB of an answer to an access key's code, and counts a longer body as unsigned, answer_unsigned. The answer is signed as the 201 to an access key's code is, and the signature covers the whole body, documents included. The machine verifies it under the listed key whose fingerprint is the code's first, then verifies run_key as the gateway does, under the listed key whose fingerprint is in the code and is the run key's signer, and checks that the run key's run_id is run_id.",
+      "description": "The 201 to a run code, qecr_: the run's id, its run key, the server's public keys and the run's documents. Every member is required. The redemption makes no access key. A run code is valid for 15 minutes and is used once: a redemption by another public key after the first is 401, and a retry by the same public key within the 15 minutes gets the same members, the same run_id, run_key, apiary_public_key and documents, signed over the retry's proof. The run key's issued is the time of the code's first redemption, not the time the code was made, and its attach_by is 600 seconds after issued. The answer is at most 1 MiB: Forager reads at most 1 MiB of the body of an answer to a run code, and counts a longer body as unsigned, answer_unsigned. The answer is signed as the 201 to an access key's code is, and the signature covers the whole body, documents included. The machine verifies it under the listed key whose fingerprint is the code's first, then verifies run_key as the gateway does, under the listed key whose fingerprint is in the code and is the run key's signer, and checks that the run key's run_id is run_id.",
       "type": "object",
       "additionalProperties": false,
       "required": ["version", "run_id", "run_key", "apiary_public_key", "documents"],
@@ -144,7 +144,7 @@
         },
         "apiary_public_key": {"$ref": "#/$defs/server_keys"},
         "documents": {
-          "description": "The run's documents: a JSON object, whose members run-documents.schema.json of qoryai/integrations defines, https://qory.dev/contracts/provisioner/v1/run-documents.schema.json. Forager checks that documents is an object, reads none of its members, and passes it to the caller byte for byte as the answer contains it. A documents member that is not an object, null included, is refused.",
+          "description": "The run's documents: a JSON object, whose schema is documents.schema.json of qoryai/integrations, https://qory.dev/contracts/run/v1/documents.schema.json. Forager checks that documents is an object, reads none of its members, and passes it to the caller byte for byte as the answer contains it. A documents member that is not an object, null included, is refused.",
           "type": "object"
         }
       }

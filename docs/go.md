@@ -526,23 +526,26 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   without a gateway, and `VerifyRunAnswer` reads an answer that the caller sent.
 - `RunAnswer.Documents` is the answer's `documents` member, a `json.RawMessage` byte
   for byte as the answer contains it. `VerifyRunAnswer` checks that it is a JSON object
-  and reads none of its members; `run-documents.schema.json` of `qoryai/integrations`
-  defines them. An answer without `documents` is the error "use another run code: the
-  enrolment answer has no documents", and one whose `documents` is not an object,
-  `null` included, is "use another run code: the enrolment answer's documents is not a
-  JSON object".
+  and reads none of its members. Its schema is `documents.schema.json` of
+  `qoryai/integrations`, `https://qory.dev/contracts/run/v1/documents.schema.json`. An
+  answer without `documents` is the error "use another run code: the enrolment answer
+  has no documents", and one whose `documents` is not an object, `null` included, is
+  "use another run code: the enrolment answer's documents is not a JSON object".
 - `PostRunVia` and `PostRun` read at most `accesskey.MaxRunAnswer`, 1 MiB, of the
-  answer's body, and `VerifyRunAnswer` counts a longer body as `answer_unsigned`. The
-  methods of an access key's code read at most `accesskey.MaxAnswer`, 64 KiB.
-- `accesskey.RunAnswer` shows its run id and not its run key or its documents, except
-  in a struct field that is not exported. It formats as `run <run id>` whatever the
-  verb, a `slog` handler that calls `LogValue` writes `run_id` alone, and
-  `encoding/json` writes `{"run_id": …}` alone, also inside an exported field, a slice
-  or a map. The exception: fmt calls no method of a value reached through a struct
-  field that is not exported, so fmt, and slog's text handler, which prints a struct
-  through fmt, can print the run key there, and the documents as their bytes in
-  decimal, as `%+v` of `struct{ a accesskey.RunAnswer }` does. Keep a `RunAnswer` out of
-  such a field. No error contains the run key or a byte of the documents.
+  answer's body, and `VerifyRunAnswer` counts a longer body as `answer_unsigned`.
+- `accesskey.RunAnswer` shows its run id and not its run key or its documents where
+  fmt calls `Format`, `log/slog` `LogValue` and `encoding/json` `MarshalJSON`, for a
+  value and a pointer alike. It formats as `run <run id>`, a `slog` handler that calls
+  `LogValue` writes `run_id` alone, and `encoding/json` writes `{"run_id": …}` alone,
+  also inside an exported field, a slice or a map.
+- fmt calls no method of a `RunAnswer`, and prints every field, the run key and the
+  documents included, in three cases: `%p` of a value, also inside an array or an
+  embedding struct; `%w`, since a `RunAnswer` is not an error; and a `RunAnswer` in a
+  struct field that is not exported, which slog's text handler prints through fmt as
+  well. In such a field the documents come out as text under `%s`, quoted under `%q`,
+  in hex under `%x`, and as bytes in decimal under `%v` and `%+v`. Keep a `RunAnswer`
+  out of these cases. No error that the run methods return contains the run key or a
+  byte of the documents.
 - An error of a verified answer starts with the fix, "use another run code: ",
   because the code is used and a retry by the same key gets the same members: "use
   another run code: the enrolment answer's run key is not valid: its signature does
