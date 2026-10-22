@@ -11,8 +11,8 @@
 //
 // [Descriptor.Map] is the whole of the mapping engine: the first rule of the record's
 // source whose match holds produces one event, type and data, by copying values out of
-// the record, or with each one event per element of an array in the record that
-// matches. It matches and copies; it never computes, and there is nothing to configure
+// the record, or with each one event per element of an array in the record, each
+// element by the first rule with that each that it matches. It matches and copies; it never computes, and there is nothing to configure
 // that would make it. [Descriptor.Link] reads the descriptor's parent member: which
 // tool call started a subagent, for the session to set the subagent's parent.
 //
@@ -212,7 +212,7 @@ type Hooks struct {
 type Rule struct {
 	Source string `yaml:"source" json:"source"`
 	// Each is a dotted path to an array in the record, or empty. With it, the rule
-	// applies to each element of the array, and a path of Match or Data that starts
+	// applies to the elements of the array, and a path of Match or Data that starts
 	// with "each." reads the element.
 	Each string `yaml:"each" json:"each,omitempty"`
 	// Match holds paths into the record and the values they must equal, or
@@ -391,10 +391,13 @@ func (s *Secrets) check() error {
 }
 
 // Map applies the rules to one record: the first rule of the record's source that
-// matches produces the events. A rule without each produces one event. A rule with each
-// produces one event per element of its array that matches, in the array's order, and
-// matches when one element does; a rule whose path is no array produces nothing. A
-// record no rule matches produces nothing.
+// matches produces the events, and a record no rule matches produces nothing. A rule
+// without each matches when the record matches every entry of its match, and produces
+// one event. A rule with each matches when one element of its array matches it; then each
+// element, in the array's order, produces the event of the first rule from this one on
+// with the same source and each that the element matches, so one record's elements
+// may produce events of different rules, and an element no such rule matches produces
+// none. A rule whose path is no array matches no record.
 func (d *Descriptor) Map(r Record) []Event {
 	for i := range d.Rules {
 		rule := &d.Rules[i]
@@ -407,18 +410,23 @@ func (d *Descriptor) Map(r Record) []Event {
 			}
 			continue
 		}
-		elements, _ := lookup(r.Record, rule.Each)
-		list, _ := elements.([]any)
+		list, _ := lookup(r.Record, rule.Each)
+		elements, _ := list.([]any)
+		if !slices.ContainsFunc(elements, func(e any) bool { return matches(rule.Match, r.Record, &e) }) {
+			continue
+		}
 		var events []Event
-		for i := range list {
-			element := &list[i]
-			if matches(rule.Match, r.Record, element) {
-				events = append(events, Event{Type: rule.Type, Data: copied(rule.Data, r.Record, element)})
+		for k := range elements {
+			element := &elements[k]
+			for j := i; j < len(d.Rules); j++ {
+				other := &d.Rules[j]
+				if other.Source == r.Source && other.Each == rule.Each && matches(other.Match, r.Record, element) {
+					events = append(events, Event{Type: other.Type, Data: copied(other.Data, r.Record, element)})
+					break
+				}
 			}
 		}
-		if len(events) > 0 {
-			return events
-		}
+		return events
 	}
 	return nil
 }

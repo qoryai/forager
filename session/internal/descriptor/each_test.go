@@ -140,3 +140,67 @@ func TestParentAndEachAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// blocksDoc has a rule with each for text blocks, a rule without each for any message
+// of the main agent, and a rule with each for thinking blocks.
+const blocksDoc = `version: 1
+runtime: amp
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+rules:
+  - source: output
+    match: {type: assistant, agent_id: {present: true}, each.type: text}
+    each: message.content
+    type: dev.qory.runtime.message
+    data: {agent_id: agent_id, text: each.text, kind: each.type}
+  - source: output
+    match: {type: assistant, main: true}
+    type: dev.qory.runtime.notification
+    data: {kind: type}
+  - source: output
+    match: {type: assistant, agent_id: {present: true}, each.type: thinking}
+    each: message.content
+    type: dev.qory.runtime.message
+    data: {agent_id: agent_id, text: each.thinking, kind: each.type}
+`
+
+// TestEachChoosesARulePerElement pins the choice of a rule per element: a thinking
+// block, then a text block, a redacted thinking block and a second thinking block
+// produce one event each for the thinking and text blocks, in the array's order, each
+// of the first rule with the same each that the element matches; a redacted thinking
+// block matches no rule and produces nothing.
+func TestEachChoosesARulePerElement(t *testing.T) {
+	d := parse(t, blocksDoc)
+	got := d.Map(output(t, `{"type":"assistant","agent_id":"a1","message":{"role":"assistant","content":[
+		{"type":"thinking","thinking":"first I look","signature":"sig"},
+		{"type":"text","text":"one"},
+		{"type":"redacted_thinking","data":"opaque"},
+		{"type":"thinking","thinking":"then I answer","signature":"sig"}]}}`))
+	want := []descriptor.Event{
+		{Type: "dev.qory.runtime.message", Data: map[string]any{"agent_id": "a1", "text": "first I look", "kind": "thinking"}},
+		{Type: "dev.qory.runtime.message", Data: map[string]any{"agent_id": "a1", "text": "one", "kind": "text"}},
+		{Type: "dev.qory.runtime.message", Data: map[string]any{"agent_id": "a1", "text": "then I answer", "kind": "thinking"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Map =\n %+v\nwant\n %+v", got, want)
+	}
+	if got := d.Map(output(t, `{"type":"assistant","agent_id":"a1","message":{"content":[{"type":"redacted_thinking","data":"opaque"}]}}`)); got != nil {
+		t.Errorf("a redacted thinking block produced %+v", got)
+	}
+}
+
+// TestTheFirstRuleThatMatchesTheRecordDecides pins that the rules still apply per
+// record in order: a line whose only block is a thinking block, which the first rule
+// with each does not match, goes to the rule without each before the thinking rule
+// when that one matches, and to the thinking rule when it does not.
+func TestTheFirstRuleThatMatchesTheRecordDecides(t *testing.T) {
+	d := parse(t, blocksDoc)
+	got := d.Map(output(t, `{"type":"assistant","agent_id":"a1","main":true,"message":{"content":[{"type":"thinking","thinking":"hm"}]}}`))
+	if len(got) != 1 || got[0].Type != "dev.qory.runtime.notification" {
+		t.Errorf("Map = %+v; want the rule without each", got)
+	}
+	got = d.Map(output(t, `{"type":"assistant","agent_id":"a1","message":{"content":[{"type":"thinking","thinking":"hm"}]}}`))
+	if len(got) != 1 || got[0].Data["kind"] != "thinking" || got[0].Data["text"] != "hm" {
+		t.Errorf("Map = %+v; want the thinking rule", got)
+	}
+}

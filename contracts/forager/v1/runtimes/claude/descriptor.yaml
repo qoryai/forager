@@ -6,10 +6,10 @@
 # what no hook reports: the result line, with the outcome, the turns and the cost; with
 # --output-format stream-json --verbose, the tool call that started each subagent, in
 # parent_tool_use_id of the subagent's messages; and with --forward-subagent-text too,
-# each subagent's text blocks. Its init line is not mapped, because SessionStart already
-# produced runtime.started.
+# each subagent's text and thinking blocks. Its init line is not mapped, because
+# SessionStart already produced runtime.started.
 #
-# The parent member and the two message rules are written against the Agent SDK
+# The parent member and the three message rules are written against the Agent SDK
 # TypeScript reference (SDKAssistantMessage, SDKUserMessage) and the headless page, for
 # the versions whose stream messages of a subagent contain agent_id: Agent SDK 0.3.292,
 # which bundles Claude Code 2.1.292, and later. An older Claude Code prints no agent_id
@@ -218,9 +218,11 @@ rules:
       duration_ms: duration_ms
       cost_usd: total_cost_usd
       result: result
-  # A subagent's text blocks: each text block of an assistant message, and of a user
-  # message such as the first one, which contains the prompt that drives the subagent.
-  # A message of the main conversation has no agent_id.
+  # A subagent's text and thinking blocks: each text block of an assistant message, and
+  # of a user message such as the first one, which contains the prompt that drives the
+  # subagent, and each thinking block of an assistant message, in the order of the
+  # message's blocks. A message of the main conversation has no agent_id, and a
+  # redacted_thinking block matches no rule.
   - source: output
     match: {type: assistant, agent_id: {present: true}, each.type: text}
     each: message.content
@@ -240,4 +242,14 @@ rules:
       agent_id: agent_id
       role: message.role
       text: each.text
+      kind: each.type
+  - source: output
+    match: {type: assistant, agent_id: {present: true}, each.type: thinking}
+    each: message.content
+    type: dev.qory.runtime.message
+    data:
+      session_id: session_id
+      agent_id: agent_id
+      role: message.role
+      text: each.thinking
       kind: each.type

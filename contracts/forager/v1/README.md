@@ -1458,8 +1458,9 @@ comes. When no such message arrives within 5 seconds, `parent_agent_id` is absen
 Absent `parent_agent_id` means the main agent started the subagent, or the runtime did
 not report the parent.
 
-**A subagent's messages.** `dev.qory.runtime.message` is one text block of a subagent,
-as the runtime printed it on its standard output. Claude Code prints them with
+**A subagent's messages.** `dev.qory.runtime.message` is one text block or thinking
+block of a subagent, as the runtime printed it on its standard output, with `kind`
+`text` or `thinking`. Claude Code prints them with
 `--output-format stream-json --verbose --forward-subagent-text`. An interactive session
 has none, and the main conversation's messages are not events. The session masks a
 message as it masks every runtime event. The same line is also in the session's
@@ -3767,12 +3768,17 @@ so an installed hook observes and never changes what the runtime does.
 the record to values: equality with a string, number or boolean, or `{present: true}`.
 Every entry must match. `data` is a map of the event's fields to dotted paths whose
 values are copied unchanged; a path that does not exist leaves the field out, which is
-how optional fields work. Rules run in order and the first that matches produces one
-event; a record no rule matches produces nothing. No patterns, no expressions, no
-defaults, no concatenation. A mapping that needs more than equality and presence is a
-Forager change. A rule with `each`, a path to an array, applies to each element in order
-and produces one event per element that matches; a path that starts with `each.` reads
-the element: `each: message.content`, `each.type: text`, `text: each.text`.
+how optional fields work. Rules run in order and the first that matches produces the
+events; a record no rule matches produces nothing. A rule without `each` produces one
+event. No patterns, no expressions, no defaults, no concatenation. A mapping that needs
+more than equality and presence is a Forager change. A rule with `each`, a path to an
+array, matches a record when one element matches it; a path that starts with `each.`
+reads the element: `each: message.content`, `each.type: text`, `text: each.text`. When
+it is the first rule that matches, each element, in order, produces one event: that of
+the first rule from this one on with the same `source` and `each` that the element
+matches. One line's elements may so produce events of different rules, such as a
+thinking block's and then a text block's; an element no such rule matches produces
+nothing.
 
 **Parent**, optional: where the runtime reports which tool call started a subagent.
 `source`, `match` as in a rule, and two paths, `agent_id` and `tool_use_id`. A record

@@ -464,7 +464,7 @@ func waitFor(t *testing.T, cond func() bool) {
 // TestASubagentsParentIsSetAndAWaitingStartComesBeforeTheExit pins the session's
 // mapper end to end on pipes: after the runtime's first JSON line, a subagent's start
 // waits for the line that links it to its call; a nested subagent's start gets its
-// parent; each subagent's text block is a runtime.message; a start whose link never
+// parent; each subagent's thinking and text block is a runtime.message, in order; a start whose link never
 // comes is written, without a parent, in its order before the session's exit.
 func TestASubagentsParentIsSetAndAWaitingStartComesBeforeTheExit(t *testing.T) {
 	hooks := strings.Join([]string{
@@ -497,14 +497,14 @@ func TestASubagentsParentIsSetAndAWaitingStartComesBeforeTheExit(t *testing.T) {
 			got = append(got, typ)
 		}
 	}
-	want := []string{"start a1:<nil>", "message a1 user look", "start a2:a1", "message a2 assistant found it", "start a3:<nil>", "dev.qory.runtime.ended", "dev.qory.session.exited"}
+	want := []string{"start a1:<nil>", "message a1 user look", "start a2:a1", "message a2 assistant hm", "message a2 assistant found it", "start a3:<nil>", "dev.qory.runtime.ended", "dev.qory.session.exited"}
 	// The two message lines are read beside the hooks: a1's line may be read before a2's
 	// start, and a3's start waits until the exit in either case.
-	if !slices.Contains(got, "start a2:a1") || !slices.Contains(got, "message a2 assistant found it") || !slices.Contains(got, "message a1 user look") || len(got) != len(want) {
+	if !slices.Contains(got, "start a2:a1") || !slices.Contains(got, "message a2 assistant hm") || !slices.Contains(got, "message a2 assistant found it") || !slices.Contains(got, "message a1 user look") || len(got) != len(want) {
 		t.Fatalf("events %q, want %q in some order of the lines", got, want)
 	}
 	order := func(a, b string) bool { return slices.Index(got, a) < slices.Index(got, b) }
-	if !order("start a1:<nil>", "start a2:a1") || !order("start a2:a1", "start a3:<nil>") || !order("start a3:<nil>", "dev.qory.runtime.ended") || got[len(got)-1] != "dev.qory.session.exited" {
+	if !order("message a2 assistant hm", "message a2 assistant found it") || !order("start a1:<nil>", "start a2:a1") || !order("start a2:a1", "start a3:<nil>") || !order("start a3:<nil>", "dev.qory.runtime.ended") || got[len(got)-1] != "dev.qory.session.exited" {
 		t.Errorf("events %q: the starts and the hook events after them are not in their order before the exit", got)
 	}
 }

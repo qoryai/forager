@@ -43,21 +43,24 @@ const nestedEvents = `{"type":"dev.qory.runtime.tool_started","data":{` + sid + 
 `
 
 // messageRecords is a subagent's assistant line with a thinking block before a text
-// block and a tool call, a main conversation's line, and a subagent's tool result.
+// block, a redacted thinking block and a tool call, a subagent's tool result, and a
+// main conversation's line.
 var messageRecords = strings.Join([]string{
 	out + `"type":"system","subtype":"init","claude_code_version":"2.1.292"}}`,
-	out + `"type":"assistant","agent_id":"a1","parent_tool_use_id":"toolu_A","message":{"id":"msg_1","role":"assistant","content":[{"type":"thinking","thinking":"go.mod first","signature":"c2ln"},{"type":"text","text":"I read go.mod."},{"type":"tool_use","id":"toolu_C","name":"Read","input":{"file_path":"/home/dev/app/go.mod"}}]}}}`,
+	out + `"type":"assistant","agent_id":"a1","parent_tool_use_id":"toolu_A","message":{"id":"msg_1","role":"assistant","content":[{"type":"thinking","thinking":"go.mod first","signature":"c2ln"},{"type":"text","text":"I read go.mod."},{"type":"redacted_thinking","data":"b3BhcXVl"},{"type":"tool_use","id":"toolu_C","name":"Read","input":{"file_path":"/home/dev/app/go.mod"}}]}}}`,
 	out + `"type":"user","agent_id":"a1","parent_tool_use_id":"toolu_A","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_C","content":"module example.com/app"}]}}}`,
 	out + `"type":"assistant","parent_tool_use_id":null,"message":{"id":"msg_2","role":"assistant","content":[{"type":"text","text":"Done."}]}}}`,
 }, "\n")
 
-const messageEvents = `{"type":"dev.qory.runtime.message","data":{` + sid + `,"agent_id":"a1","role":"assistant","text":"I read go.mod.","kind":"text"}}
+const messageEvents = `{"type":"dev.qory.runtime.message","data":{` + sid + `,"agent_id":"a1","role":"assistant","text":"go.mod first","kind":"thinking"}}
+{"type":"dev.qory.runtime.message","data":{` + sid + `,"agent_id":"a1","role":"assistant","text":"I read go.mod.","kind":"text"}}
 `
 
 // TestSubagentStreamLinesFromTheReference pins the parent member and the message rules
 // on lines of the reference's shape: a nested subagent's start has its parent in both
-// orders of start and link, a text block after a thinking block is mapped, and neither
-// a tool result nor the main conversation's text is a message.
+// orders of start and link, a thinking block then a text block are two messages in that
+// order, and neither a redacted thinking block, a tool result nor the main
+// conversation's text is a message.
 func TestSubagentStreamLinesFromTheReference(t *testing.T) {
 	rt, err := claude.New()
 	if err != nil {
