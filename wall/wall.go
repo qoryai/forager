@@ -3,9 +3,10 @@
 //
 // The session and the gateway stay outside, with the proxy, the policy decision and the
 // record; a [Wall] owns only what makes a connection around the proxy fail rather
-// than succeed unseen. An adapter wraps the launch and nothing else: the session reads
-// from the [Enclosure] where the gateway must listen, starts the wrapped command on the
-// pseudo-terminal or the pipes it already owns, and closes the enclosure at exit.
+// than succeed unseen. An adapter wraps the launch and nothing else: the session
+// prepares the [Enclosure] as the run opens and reads from it where the gateway must
+// listen, starts each session's wrapped command on the pseudo-terminal or the pipes it
+// already has, and closes the enclosure as the run closes.
 //
 // What every wall guarantees is one list, contracts/forager/v1/README.md §The wall, the
 // same for every adapter, and the conformance suite in package e2e checks it from
@@ -107,15 +108,15 @@ type Request struct {
 	// Image.
 	RelayImage string
 	// Pull is set when Image is the run's image by reference, pinned by digest: a
-	// [Puller] fetched it before Prepare, and Prepare finds it by that digest and pulls
-	// nothing. Such an image never gets nested Docker.
+	// [Puller] fetches it before the enclosure starts the first container of it, which
+	// finds it by that digest and pulls nothing. Such an image never gets nested Docker.
 	Pull bool
 }
 
 // Puller is a wall that fetches a run's image by reference, for a [Request] with Pull,
-// before [Wall.Prepare]: the engine pulls it unless it holds it by that digest, and an
-// image whose user is root is refused, image_user_root. The session runs Pull as the
-// run's image step.
+// before the enclosure starts the first container of it: the engine pulls it unless it
+// holds it by that digest, and an image whose user is root is refused, image_user_root.
+// The session runs Pull as the run's image step.
 type Puller interface {
 	// Pull fetches req.Image; a request without Pull fetches nothing. With ca, the run's
 	// certificate as PEM, the engine trusts ca for the registry host of req.Image and for
@@ -124,13 +125,15 @@ type Puller interface {
 	Pull(ctx context.Context, req Request, ca []byte, hosts []string) error
 }
 
-// Enclosure is one run's wall, built.
+// Enclosure is one run's wall, built. The session prepares it as the run opens and
+// closes it as the run closes.
 type Enclosure interface {
 	// ProxyAddr is where the gateway must listen, host:port, for the
 	// enclosure to reach it; port 0 leaves the port to the system.
 	ProxyAddr() string
 	// Wrap returns the launch that starts l inside the enclosure, on the terminal or
-	// the pipes of whoever starts it. It is called once, after the proxy listens.
+	// the pipes of whoever starts it. It is called once for each session, after the
+	// proxy listens.
 	Wrap(ctx context.Context, l Launch) (Launch, error)
 	// Close removes everything the wall created, within the context's deadline. It is
 	// safe to call after a failed Wrap and more than once.

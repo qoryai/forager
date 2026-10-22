@@ -70,6 +70,30 @@ type recorder struct {
 	// onCopy at each docker cp.
 	onPull func()
 	onCopy func()
+	// execCode is the exit status of each docker exec, and execOut and execErr what it
+	// writes on its standard output and standard error; setupStopped makes the inspect of
+	// the setup container's state return false.
+	execCode     int
+	execOut      string
+	execErr      string
+	setupStopped bool
+}
+
+func (r *recorder) stream(_ context.Context, argv, env []string, stdout, stderr io.Writer) (int, error) {
+	argv = append([]string{}, argv...)
+	for i, a := range argv {
+		if a == "--env-file" {
+			argv[i+1] = "SETUPENVFILE"
+		}
+	}
+	line := words(argv)
+	r.lines, r.envs = append(r.lines, line), append(r.envs, env)
+	if r.fails(line) {
+		return -1, errors.New("exec: told to fail")
+	}
+	io.WriteString(stdout, r.execOut)
+	io.WriteString(stderr, r.execErr)
+	return r.execCode, nil
 }
 
 func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
@@ -106,8 +130,15 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 		return []byte("10.89.0.0/24 \n"), nil
 	case strings.Contains(line, "network inspect"):
 		return []byte(r.gateway + " \n"), nil
+	case strings.Contains(line, " inspect --format '{{.State.Running}}' ") && strings.HasSuffix(line, "-setup"):
+		if r.setupStopped {
+			return []byte("false\n"), nil
+		}
+		return []byte("true\n"), nil
 	case strings.Contains(line, " inspect --format {{.State"):
 		return []byte("true\n"), nil
+	case strings.Contains(line, " logs ") && strings.HasSuffix(line, "-setup"):
+		return []byte("hold: told to stop\n"), nil
 	case strings.Contains(line, " logs "):
 		return []byte(RelayReady + "\n"), nil
 	}

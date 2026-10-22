@@ -25,10 +25,11 @@ func at(lines []string, prefix string) int {
 
 // TestDockerFetchesAnImageByReferenceFirst pins the fetch of an image a run names by its
 // reference: Pull checks the engine's store, runs docker pull of an image the engine
-// does not hold, then checks its user; Prepare finds the image by its digest, pulls
-// nothing, and then makes the first network; the relay from the request's RelayImage,
-// the machine's default; a container of the image, never started and on no network,
-// created before the agent's, and removed with the rest.
+// does not hold, then checks its user; Prepare makes the first network and pulls
+// nothing; the relay starts from the request's RelayImage, the machine's default; the
+// first use finds the image by its digest after the relay starts and creates a container
+// of the image, never started and on no network, before the agent's, removed with the
+// rest.
 func TestDockerFetchesAnImageByReferenceFirst(t *testing.T) {
 	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`}
 	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
@@ -48,9 +49,14 @@ func TestDockerFetchesAnImageByReferenceFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	check := "docker image inspect --format '{{json .RepoDigests}}' " + byReference
-	held, pull, inspect, found, network := at(rec.lines, check), at(rec.lines, "docker pull "+byReference), at(rec.lines, "docker image inspect --format '{{json .Config}}' "+byReference), at(rec.lines[3:], check), at(rec.lines, "docker network create")
-	if held != 0 || pull != 1 || inspect != 2 || found != 0 || network != 4 || strings.Count(strings.Join(rec.lines, "\n"), "docker pull ") != 1 {
-		t.Errorf("the check at %d, the pull at %d, the user's inspect at %d, Prepare's check at %d after them, the first network at %d:\n%s", held, pull, inspect, found, network, strings.Join(rec.lines, "\n"))
+	held, pull, inspect, network := at(rec.lines, check), at(rec.lines, "docker pull "+byReference), at(rec.lines, "docker image inspect --format '{{json .Config}}' "+byReference), at(rec.lines, "docker network create")
+	listens := at(rec.lines, "docker logs qory-"+runID+"-relay")
+	found := -1
+	if listens > 0 {
+		found = at(rec.lines[listens:], check)
+	}
+	if held != 0 || pull != 1 || inspect != 2 || network != 3 || found != 1 || strings.Count(strings.Join(rec.lines, "\n"), "docker pull ") != 1 {
+		t.Errorf("the check at %d, the pull at %d, the user's inspect at %d, the first network at %d, the first use's check %d after the relay listens:\n%s", held, pull, inspect, network, found, strings.Join(rec.lines, "\n"))
 	}
 	relay := at(rec.lines, "docker create --name qory-"+runID+"-relay ")
 	if relay < 0 || !strings.Contains(rec.lines[relay], " --entrypoint /qory/qory example.com/agent:1 relay ") {
@@ -146,8 +152,9 @@ func TestDockerRefusesAnImageWhoseUserIsRoot(t *testing.T) {
 }
 
 // TestDockerLeavesNothingWhenTheFetchFails pins that an image by reference that cannot
-// be fetched is an error of Pull, that the wall made nothing for it, and that Prepare
-// then refuses the image, which the engine does not hold, before it makes anything.
+// be fetched is an error of Pull, that the wall made nothing for it, and that Wrap then
+// refuses the image, which the engine does not hold, before it creates any container of
+// it.
 func TestDockerLeavesNothingWhenTheFetchFails(t *testing.T) {
 	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, fail: "docker pull"}
 	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
@@ -158,12 +165,17 @@ func TestDockerLeavesNothingWhenTheFetchFails(t *testing.T) {
 	if len(rec.lines) != 2 || at(rec.lines, "docker image inspect --format '{{json .RepoDigests}}' "+byReference) != 0 {
 		t.Errorf("commands beside the check and the pull:\n%s", strings.Join(rec.lines, "\n"))
 	}
-	want := "wall docker: fetch " + byReference + " with Pull before Prepare: the engine does not hold it by its digest"
-	if _, err := d.Prepare(context.Background(), req); err == nil || err.Error() != want {
-		t.Errorf("Prepare of an image the engine does not hold: %v, want %s", err, want)
+	want := "wall docker: fetch " + byReference + " with Pull before its first container starts: the engine does not hold it by its digest"
+	e, err := d.Prepare(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(rec.lines) != 3 || at(rec.lines, "docker pull") != 1 {
-		t.Errorf("Prepare ran more than the check:\n%s", strings.Join(rec.lines, "\n"))
+	if _, err := e.Wrap(context.Background(), launch()); err == nil || err.Error() != want {
+		t.Errorf("Wrap of an image the engine does not hold: %v, want %s", err, want)
+	}
+	e.Close(context.Background())
+	if at(rec.lines, "docker create --name qory-"+runID+"-image") >= 0 || strings.Count(strings.Join(rec.lines, "\n"), "docker pull") != 1 {
+		t.Errorf("Wrap created a container of the image or pulled it:\n%s", strings.Join(rec.lines, "\n"))
 	}
 	if _, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, Pull: true, Docker: true, Runtime: "sysbox-runc"}); err == nil {
 		t.Error("an image by reference was given nested Docker")

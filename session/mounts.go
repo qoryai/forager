@@ -520,7 +520,8 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 // checkMounts refuses a caller's Forager file that is not an absolute path and, behind a
 // wall, the places the run lists that it cannot bind as they are, and returns what the
 // enclosure binds. The places are the run's own, SessionSpec.Mounts and the workspace; the
-// session's directory in the run directory, sessionDir, read-only, and the hook socket's
+// session's directory in the run directory, sessionDir, read-only, unless sessionDir is
+// empty, as for the setup container, which has none, and the hook socket's
 // directory are Forager's, which it keeps apart from every caller's place: the runs
 // directory is one of Forager's files, and so is where the sockets are made. A
 // refusal's first name is always one of
@@ -702,7 +703,9 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 	if err != nil {
 		return mountPlan{}, err
 	}
-	plan.Mounts = append(plan.Mounts, wall.Mount{Path: sessionDir, ReadOnly: true})
+	if sessionDir != "" {
+		plan.Mounts = append(plan.Mounts, wall.Mount{Path: sessionDir, ReadOnly: true})
+	}
 	plan.sources = append(plan.sources, run)
 	return plan, nil
 }

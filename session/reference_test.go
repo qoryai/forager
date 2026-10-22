@@ -28,7 +28,7 @@ const pinned = "registry.example/agents/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
 // targetWall is an open wall that shows a mount at its Target, as the Docker adapter
 // does: the launch it returns starts in the workspace's directory on this machine. It
 // is a wall.Puller, which notes each pull, and, when refuse is set, returns refuse from
-// Pull and Prepare.
+// Pull.
 type targetWall struct {
 	openWall
 	refuse error
@@ -42,9 +42,6 @@ func (w *targetWall) Pull(_ context.Context, req wall.Request, _ []byte, _ []str
 
 func (w *targetWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
 	w.openWall.Prepare(ctx, req)
-	if w.refuse != nil {
-		return nil, w.refuse
-	}
 	return w, nil
 }
 
@@ -209,7 +206,7 @@ func refusedIn(t *testing.T, sp runSpec) map[string]any {
 // by reference: an allow list that cannot be one, before the gateway hears of the run;
 // the gateway's image_not_allowed; the wall's image_user_root, after the session's
 // start, the code as the reason of its session.exited, recorded and posted;
-// and a place of the run's at /workspace, before the wall is asked.
+// and a place of the run's at /workspace, before the wall pulls or wraps.
 func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	for name, change := range map[string]func(*runSpec){
 		"an entry of *":          func(s *runSpec) { s.ImagesAllow = []string{"*"} },
@@ -261,8 +258,8 @@ func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	w = &targetWall{}
 	sp.Wall, sp.Image, sp.ImagesAllow = w, "example.com/agent:1", []string{"registry.example/"}
 	sp.Mounts = []wall.Mount{{Path: "/workspace/tools", ReadOnly: true}}
-	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "overlaps /workspace") || w.req.Image != "" {
-		t.Errorf("a mount at /workspace: %v; the wall was asked for %+v", err, w.req)
+	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "overlaps /workspace") || len(w.pulls) != 0 || w.wrapped {
+		t.Errorf("a mount at /workspace: %v; the wall pulled %+v, wrapped %v", err, w.pulls, w.wrapped)
 	}
 }
 
@@ -304,7 +301,7 @@ func TestTheServersImageByReferenceIsTheOneTheWallPulls(t *testing.T) {
 
 // TestAPluginLinkToTheWorkspaceInsideIsNoRun pins that a run whose workspace is at
 // /workspace inside refuses a plugin directory with a link that leads to /workspace,
-// which no place of this machine's is, before the wall is asked.
+// which no place of this machine's is, before the wall pulls or wraps.
 func TestAPluginLinkToTheWorkspaceInsideIsNoRun(t *testing.T) {
 	w := &targetWall{}
 	sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -320,7 +317,7 @@ func TestAPluginLinkToTheWorkspaceInsideIsNoRun(t *testing.T) {
 	if _, err := run(context.Background(), sp); err == nil || err.Error() != want {
 		t.Errorf("the run: %v, want %q", err, want)
 	}
-	if w.req.RunID != "" {
-		t.Errorf("the wall was asked: %+v", w.req)
+	if len(w.pulls) != 0 || w.wrapped {
+		t.Errorf("the wall pulled %+v, wrapped %v", w.pulls, w.wrapped)
 	}
 }

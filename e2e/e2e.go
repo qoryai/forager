@@ -74,6 +74,19 @@ const (
 	modeNeighbours = "neighbours"
 	// modeSealed is the probe of a run whose credential Qory Apiary seals.
 	modeSealed = "sealed"
+	// modeHold keeps the setup container running, and modeService is the service a setup
+	// command starts in it, which answers setupServiceLine on setupServicePort.
+	modeHold    = "hold"
+	modeService = "service"
+)
+
+// HoldArgs are the arguments that make the helper keep the setup container running.
+var HoldArgs = []string{modeHold}
+
+// What the service a setup command starts in the setup container answers, and where.
+const (
+	setupServiceLine = "the setup's service"
+	setupServicePort = "8080"
 )
 
 // ExecArgs are the arguments that make the helper run [session.Exec].
@@ -153,9 +166,10 @@ const (
 const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 
 // Main makes the test binary the helper when it was started as one: the relay, the hook
-// forwarder, the setup runner, the run's setup command, the probe, the start of a Docker of the agent's
-// own, the probe in a container the agent started, the search for neighbours in one, a
-// recorder, or the probe of a sealed credential. It returns at once otherwise.
+// forwarder, the setup runner, the run's setup command, the probe, the start of a Docker
+// daemon inside the agent's container, the probe in a container the agent started, the search for
+// neighbours in one, a recorder, the probe of a sealed credential, the hold of the setup
+// container or the service a setup command starts in it. It returns at once otherwise.
 func Main() {
 	if len(os.Args) < 2 {
 		return
@@ -195,6 +209,20 @@ func Main() {
 		os.Exit(serveRecorder())
 	case modeSealed:
 		os.Exit(sealedProbe())
+	case modeHold:
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := wall.Hold(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	case modeService:
+		err := http.ListenAndServe(":"+setupServicePort, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			io.WriteString(w, setupServiceLine)
+		}))
+		fmt.Fprintln(os.Stderr, "service:", err)
+		os.Exit(1)
 	}
 }
 
@@ -268,6 +296,10 @@ type Options struct {
 	// from, as the engine reports it while the run goes; the case of the relay's image
 	// asks it. Nil skips that case.
 	RelayImage func(runID string) (string, error)
+	// Setup is true when the adapter starts a setup container for (*session.Run).Setup:
+	// the cases of setup outside run in it. Without Setup they are skipped, and the skip
+	// line states why.
+	Setup bool
 	// Recorders are three recorders: the first acts as the host of a runtime's API key,
 	// the second as the host of its OAuth credential, the third as a host the policy
 	// allows with no credential. Without them the checks of a runtime's key are skipped,
@@ -520,6 +552,7 @@ func Run(t *testing.T, o Options) {
 	}
 
 	byReference(t, o, origin, outside)
+	setupOutside(t, o, origin, outside)
 
 	t.Run("the terminal crosses and a named host on this machine is reached", func(t *testing.T) {
 		origin.named = true
@@ -815,7 +848,7 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 	v := variant{image: o.Reference, allow: []string{o.Allow}, runID: runID}
 	if o.RelayImage != nil {
 		v.started = func(ctx context.Context) {
-			// The relay exists from the wrap of the launch to the wall's close: the first
+			// The relay exists from the run's open to the wall's close: the first
 			// answer while the run goes is its image.
 			for {
 				if image, err := o.RelayImage(runID); err == nil && image != "" {
@@ -915,15 +948,116 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 	})
 }
 
+// setupOutside checks setup outside, (*session.Run).Setup before the join: a setup
+// command's standard output and standard error are its setup step's lines, after the
+// wall step that starts the setup container and before the join; a command that exits
+// otherwise than 0 fails the setup, no later command runs and the join is refused; and
+// a service a setup command starts is reached from the agent's container by the name
+// qory-setup. Each run leaves nothing once it closes.
+func setupOutside(t *testing.T, o Options, h hosts, outside string) {
+	names := []string{"a setup command's output is its setup step's lines",
+		"a setup command that fails fails the setup and the join",
+		"a service the setup starts is reached as qory-setup"}
+	if !o.Setup {
+		for _, name := range names {
+			t.Run(name, func(t *testing.T) { t.Skip("the adapter starts no setup container") })
+		}
+		return
+	}
+	leftNothing := func(t *testing.T, runID string) {
+		t.Helper()
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the run left %v (%v)", left, err)
+			}
+		}
+	}
+	t.Run(names[0], func(t *testing.T) {
+		runID := event.NewRunID()
+		var setupErr error
+		say := session.SetupCommand{Name: "say", Args: []string{"sh", "-c", "echo to stdout; echo to stderr >&2"}}
+		r, err := runIn(t, o, variant{runID: runID, setup: []session.SetupCommand{say},
+			onSetup: func(err error) { setupErr = err }}, false, h, outside)
+		if err != nil || setupErr != nil {
+			t.Fatalf("the setup: %v; the run: %v", setupErr, err)
+		}
+		var steps, lines []string
+		setupStep := 0.0
+		for _, e := range r.events {
+			d, _ := e["data"].(map[string]any)
+			switch e["type"] {
+			case "dev.qory.run.step_started":
+				steps = append(steps, fmt.Sprintf("%v %v %v", d["step"], d["kind"], d["name"]))
+				if d["kind"] == "setup" && setupStep == 0 {
+					setupStep = d["step"].(float64)
+				}
+			case "dev.qory.run.step_exited":
+				steps = append(steps, fmt.Sprintf("%v %v %v", d["step"], d["state"], d["exit_code"]))
+			case "dev.qory.run.log":
+				if d["step"] == setupStep && d["session"] == nil {
+					b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+					lines = append(lines, fmt.Sprintf("%v %s", d["stream"], strings.TrimSuffix(string(b), "\n")))
+				}
+			}
+		}
+		// The two streams reach the step in either order.
+		slices.Sort(lines)
+		want := []string{"1 wall start the setup container", "1 succeeded -1", "2 setup say", "2 succeeded 0",
+			"3 join join session 1", "3 succeeded -1", "4 wall start the wall"}
+		if len(steps) < len(want) || !slices.Equal(steps[:len(want)], want) ||
+			!slices.Equal(lines, []string{"stderr to stderr", "stdout to stdout"}) || r.res.ExitCode != 7 {
+			t.Errorf("the steps %q, the setup step's lines %q, the probe's exit %d; want the steps to start with %q", steps, lines, r.res.ExitCode, want)
+		}
+		leftNothing(t, runID)
+	})
+	t.Run(names[1], func(t *testing.T) {
+		runID := event.NewRunID()
+		var setupErr error
+		commands := []session.SetupCommand{{Name: "fail", Args: []string{"sh", "-c", "exit 3"}},
+			{Name: "never", Args: []string{"sh", "-c", "echo never"}}}
+		_, err := runIn(t, o, variant{runID: runID, setup: commands,
+			onSetup: func(err error) { setupErr = err }}, false, h, outside)
+		var failed *session.SetupError
+		if !errors.As(setupErr, &failed) || failed.ExitCode != 3 || setupErr.Error() != "Fix fail: setup step 2 exited with 3." {
+			t.Errorf("the setup: %v, want a *SetupError of step 2 with 3", setupErr)
+		}
+		if want := "Open another run: setup step 2 of this run failed, so no session can join it."; err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("the join: %v, want %q", err, want)
+		}
+		leftNothing(t, runID)
+	})
+	t.Run(names[2], func(t *testing.T) {
+		runID := event.NewRunID()
+		var setupErr error
+		start := session.SetupCommand{Name: "start the service",
+			Args: []string{"sh", "-c", o.Probe + " " + modeService + " >/tmp/service.log 2>&1 &"}}
+		r, err := runIn(t, o, variant{runID: runID, setup: []session.SetupCommand{start},
+			onSetup: func(err error) { setupErr = err },
+			env:     []string{"PROBE_SETUP_SERVICE=http://" + net.JoinHostPort("qory-setup", setupServicePort) + "/"}}, false, h, outside)
+		if err != nil || setupErr != nil {
+			t.Fatalf("the setup: %v; the run: %v", setupErr, err)
+		}
+		if r.probe.SetupService != setupServiceLine {
+			t.Errorf("the agent's request to qory-setup: %q, want %q", r.probe.SetupService, setupServiceLine)
+		}
+		leftNothing(t, runID)
+	})
+}
+
 // variant is what a run of the suite changes: the image its policy selects or names,
-// the machine's images.allow, the run's id, what to do while the run goes, and whether
-// the run fetches its image before the join.
+// the machine's images.allow, the run's id, what to do while the run goes, whether
+// the run fetches its image before the join, the run's setup commands outside, before
+// the join, with what to do with Setup's error, and variables the probe gets besides
+// the suite's.
 type variant struct {
 	image   string
 	allow   []string
 	runID   string
 	started func(ctx context.Context)
 	fetch   bool
+	setup   []session.SetupCommand
+	onSetup func(error)
+	env     []string
 }
 
 // run runs the probe as the runtime of a session behind the wall and reads what it
@@ -985,6 +1119,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	if o.Docker {
 		env = append(env, "PROBE_DOCKER=1")
 	}
+	env = append(env, v.env...)
 	policyCreds := []gateway.PolicyCredential{{Name: "suite"}}
 	creds := []gateway.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}}
 	if len(h.recorders) != 3 {
@@ -1055,7 +1190,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			Exec:        o.Exec,
 			SetupRunner: []string{o.Probe, modeSetupCommand},
 		},
-		fetch: v.fetch,
+		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup,
 	}
 	// The setup runner reports on the run socket, so a run has its setup command where
 	// the socket crosses into the enclosure.

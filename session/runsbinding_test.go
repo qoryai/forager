@@ -513,6 +513,8 @@ func TestRunsBindingAsksThroughTheDocker(t *testing.T) {
 
 // TestTheRegistryAsksThroughTheRunsDocker pins the Docker a run's check against the
 // registry asks through: the run's wall when it is a Docker, and none for another wall.
+// The check is the open's: the run's helper lies inside a writable bind of a walled run
+// whose entry's lock is free, so its engine is asked, and the run does not start.
 func TestTheRegistryAsksThroughTheRunsDocker(t *testing.T) {
 	bin := t.TempDir()
 	command := filepath.Join(bin, "docker")
@@ -530,16 +532,15 @@ func TestTheRegistryAsksThroughTheRunsDocker(t *testing.T) {
 		want *wall.Docker
 	}{
 		{"a Docker", d, d},
-		{"another wall", &openWall{}, nil},
+		{"another wall", &bindingWall{binds: []wall.Bind{{Path: helper, ReadOnly: true, Helper: true}}}, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			root := t.TempDir()
-			sub := mkdirs(t, filepath.Join(root, "sub"))
-			leave(t, root, &leftEngine)
+			leave(t, bin, &leftEngine)
 			asked := askedThrough(t)
-			sp := walledSpec(t, c.w)
-			sp.Mounts, sp.Dir = []wall.Mount{{Path: sub}}, sub
-			refusalOf(t, "mount_shared_with_run", runErr(sp))
+			err := runErr(walledSpec(t, c.w))
+			if err == nil || !strings.Contains(err.Error(), "Forager's helper "+helper+" lies inside the writable bind "+bin) {
+				t.Errorf("the run: %v", err)
+			}
 			if len(*asked) == 0 || slices.ContainsFunc(*asked,
 				func(by *wall.Docker) bool { return by != c.want }) {
 				t.Errorf("asked through %p, want %p", *asked, c.want)

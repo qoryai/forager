@@ -99,6 +99,9 @@ type report struct {
 	// runtime denies and the suite's image by reference sets in its ENV: unset, empty
 	// or set.
 	ImageDenied string `json:"image_denied"`
+	// SetupService is what the service at PROBE_SETUP_SERVICE answered, asked with no
+	// proxy, or why it did not answer; empty when the variable is not set.
+	SetupService string `json:"setup_service"`
 }
 
 // preparedFile is where in the workspace the run's setup command leaves its report.
@@ -251,6 +254,9 @@ func probe(args []string) int {
 		r.HostFile = true
 	}
 	r.Workdir, _ = os.Getwd()
+	if u := os.Getenv("PROBE_SETUP_SERVICE"); u != "" {
+		r.SetupService = direct(u)
+	}
 	switch v, ok := os.LookupEnv(imageDeniedVar); {
 	case !ok:
 		r.ImageDenied = "unset"
@@ -384,6 +390,24 @@ func dial(addr string) string {
 	}
 	c.Close()
 	return ""
+}
+
+// direct is the body of GET u with no proxy, or why there is none: the request is tried
+// for 10 seconds, since a service a setup command started may still be starting.
+func direct(u string) string {
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 2 * time.Second}
+	why := ""
+	for range 20 {
+		resp, err := client.Get(u)
+		if err == nil {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return string(b)
+		}
+		why = err.Error()
+		time.Sleep(500 * time.Millisecond)
+	}
+	return why
 }
 
 // get fetches u through the proxy the environment names, explicitly, because some of

@@ -145,7 +145,7 @@ release may change what an existing document does, and says so under Upgrading.
   process exit status exists, and `duration_ms`. Steps come after
   `dev.qory.run.started`, one at a time, and each ends before `dev.qory.run.exited`.
   A run the gateway ends during a step has no `dev.qory.run.step_exited` for it in the
-  run's stream. `setup` is the kind of a setup command; Forager writes no `setup` step.
+  run's stream. `setup` is the kind of a setup command.
   A step's `name` has `qory-proxy-password` in place of a forwarder's password, and a
   phrase in place of a name that contains `qak_` or `qrk_`. `event.StepStarted`,
   `event.StepExited` and the six kinds, `event.StepFetch` to `event.StepWall`, are the
@@ -411,6 +411,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- `dev.qory.run.step_started` of kind `setup`: Forager writes one per setup command, in
+  a separate container or inside the wall. Before, Forager wrote no `setup` step.
 - `dev.qory.session.started` contains `setup_commands`, the names of the session's
   setup commands, in place of `preparation`.
 - `dev.qory.run.started` is written at the open of a run, before its host work and
@@ -910,6 +912,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Wall
 
+#### Upgrading
+
+- A wall outside Forager: the session calls `Prepare` in `session.Open`, once per run,
+  and `Wrap` once per session on the one enclosure `Prepare` returned, with `Unwrap`,
+  when the enclosure has it, at the session's end.
+
 #### Added
 
 - `wall.Request.Pull` and `wall.Puller`: `(*wall.Docker).Pull` pulls a run's image by
@@ -917,10 +925,10 @@ release may change what an existing document does, and says so under Upgrading.
   with `image_user_root` an image whose user is root, a uid of 0 or a name its
   `/etc/passwd` maps to uid 0, or a name it cannot map. With the run's certificate, it
   writes the certificate in `wall.Docker.CertsDir`, `/etc/docker/certs.d` by default,
-  for the pull alone. `Prepare` with `Pull` finds the image by its digest, and makes no
-  container or network when the engine does not hold it. The agent's container and
-  the container the wall reads the image's files from are created with
-  `--pull=never`, so the engine pulls such an image in the image step alone.
+  for the pull alone. The first container of an image with `Pull` finds it by its
+  digest, and none starts when the engine does not hold it. The agent's container, the
+  setup container and the container the wall reads the image's files from are created
+  with `--pull=never`, so the engine pulls such an image in the image step alone.
 - `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
@@ -928,6 +936,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- The internal network, the relay and the run's forwarder start when the run opens and
+  end when it closes; each session starts and removes only the agent's container.
 - The relay now starts from the machine's default image, never from the run's, when the
   machine has a default image.
 
@@ -1011,6 +1021,11 @@ release may change what an existing document does, and says so under Upgrading.
   `%w`, and for a value in a struct field that is not exported. A walled run refuses a
   mount of `wall.Docker.CertsDir`, where the engine reads the certificates it trusts
   for a registry.
+- `(*session.Run).Setup`: runs setup commands in a separate container of the run's
+  image, on the wall's internal network, one `setup` step each; the container runs until
+  the run closes. `SetupSpec.ForagerFiles` and `SetupSpec.Written` are checked against
+  the working folder as a join's, and with `SetupSpec.Limits` the setup container gets
+  the limit flags the agent's container gets.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
