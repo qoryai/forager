@@ -115,9 +115,9 @@ func New(code string, names []string, format string, a ...any) *accesskey.Refusa
 }
 
 // Shown are names as a refusal lists them: each that contains an access key secret, a
-// run key or a run code, [accesskey.ContainsSecret], is its phrase, [accesskey.ShownName] unquoted,
-// since a refusal's names reach its text and the answer that carries it. [New] lists a
-// phrase two names give once. Nil when names is empty.
+// run key or a run code, [accesskey.ContainsSecret], is its phrase, [accesskey.ShownName]
+// unquoted, since a refusal's names reach its text and the answer that carries it.
+// [New] lists a phrase two names give once. Nil when names is empty.
 func Shown(names ...string) []string {
 	var out []string
 	for _, n := range names {

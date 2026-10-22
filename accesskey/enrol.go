@@ -543,13 +543,13 @@ func (r *EnrolmentRequest) send(ctx context.Context, hc *http.Client, serverURL,
 // address, as the server document's url is.
 func checkOrigin(s string) error {
 	if containsAccessKeySecret(s) {
-		return errors.New("the server URL contains an access key secret")
+		return errors.New("remove the access key secret from the server URL: the URL is a scheme, a host and an optional port")
 	}
 	if containsRunKey(s) {
-		return errors.New("remove the run key from the server URL: a run key belongs in QORY_RUN_KEY only")
+		return errors.New("remove the run key from the server URL: the URL is a scheme, a host and an optional port")
 	}
 	if containsRunCode(s) {
-		return errors.New("remove the run code from the server URL: a run code belongs in a machine's start data only")
+		return errors.New("remove the run code from the server URL: the URL is a scheme, a host and an optional port")
 	}
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {

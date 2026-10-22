@@ -167,8 +167,8 @@ func Read(name string, b []byte) (*Config, error) {
 // access key secret anywhere, in its bytes or, escaped, in a decoded string or member
 // name, is [accesskey.ErrSecretInDocument] before a schema reads it, one that contains
 // a run key [accesskey.ErrRunKeyInDocument], and one that contains a run code
-// [accesskey.ErrRunCodeInDocument], so no schema error quotes the secret. A key the pin lists is left out of that check as
-// [accesskey.SecretInPinDocument] leaves it out.
+// [accesskey.ErrRunCodeInDocument], so no schema error quotes the secret. A key the
+// pin lists is left out of that check as [accesskey.SecretInPinDocument] leaves it out.
 func Parse(name string, b []byte) (*Config, error) {
 	if err := accesskey.SecretInPinDocument(string(b), "apiary_public_key"); err != nil {
 		return nil, err
@@ -605,10 +605,10 @@ var errRunURLSecret = errors.New("run.url contains the start of an access key se
 // Discover fetches the configuration document from the server's well-known path and
 // returns it with the server's digest of it. An error, transport, status or a document
 // the schema refuses, means no run; it names the URL. A document without the run
-// endpoint, or whose run.url contains qak_, qrk_ or qecr_ in any case, is refused as one the
-// schema refuses. A 401 is unauthorized, a signed
-// refusal is the code its body contains, rate_limited say, and an answer that does not
-// verify is answer_unsigned, each an [*accesskey.Refusal].
+// endpoint, or whose run.url contains qak_, qrk_ or qecr_ in any case, is refused as
+// one the schema refuses. A 401 is unauthorized, a signed refusal is the code its
+// body contains, rate_limited say, and an answer that does not verify is
+// answer_unsigned, each an [*accesskey.Refusal].
 func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
 	if err := c.Check(); err != nil {
 		return nil, "", err
@@ -783,8 +783,8 @@ func CheckLabels(labels map[string]string) error {
 func shownLabelKey(k string) bool { return accesskey.IsNamePhrase(k) }
 
 // ShownLabels are a run's labels as Forager sends them to Qory Apiary, in run.started
-// and in a registration: each key and each value that contains qak_, qrk_ or qecr_ in any case
-// is accesskey.ShownName's phrase in its place. Of two labels whose keys become the
+// and in a registration: each key and each value that contains qak_, qrk_ or qecr_ in
+// any case is accesskey.ShownName's phrase in its place. Of two labels whose keys become the
 // same phrase, the one whose key sorts first is kept. Nil is nil.
 func ShownLabels(labels map[string]string) map[string]string {
 	if labels == nil {

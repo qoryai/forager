@@ -74,8 +74,8 @@ func TestNeedsWallSaysWhatARunAlwaysSaid(t *testing.T) {
 }
 
 // TestShownListsAPhraseForASecret pins Shown: a name that contains qak_, qrk_ or qecr_
-// in any case is its phrase, a clean name is as it is, and New lists a phrase two names give
-// once.
+// in any case is its phrase, a clean name is as it is, and New lists a phrase two
+// names give once.
 func TestShownListsAPhraseForASecret(t *testing.T) {
 	got := New(RunConfigurationInvalid, Shown("x-qak_one", "model", "QAK_two", "qrk_three", "QECR_four", "qecr_five"), "refused").Names
 	want := []string{"(a name that contains a run code)", "(a name that contains a run key)", "(a name that contains an access key secret)", "model"}

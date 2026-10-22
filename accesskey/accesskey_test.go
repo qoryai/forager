@@ -1472,7 +1472,7 @@ func TestARunCodeIsRefusedAndPhrased(t *testing.T) {
 			t.Errorf("%d: %v", i, err)
 		}
 	}
-	if post == nil || post.Error() != "remove the run code from the server URL: a run code belongs in a machine's start data only" {
+	if post == nil || post.Error() != "remove the run code from the server URL: the URL is a scheme, a host and an optional port" {
 		t.Errorf("a server URL with a run code: %v", post)
 	}
 	if got := accesskey.ShownName("QECR_x", true); got != "(a name that contains a run code)" || !accesskey.IsNamePhrase(got) {
@@ -1483,28 +1483,35 @@ func TestARunCodeIsRefusedAndPhrased(t *testing.T) {
 	}
 }
 
-// TestFixedRunCodeErrorsPassShownError pins the fixed texts that speak of a run code:
-// the error of a code of no known shape, an access key's enrolment method given a run
-// code, and a server URL that contains a run key or a run code. None contains qecr_ or
-// qrk_, so ShownError returns each error itself and its text reaches the reader.
-func TestFixedRunCodeErrorsPassShownError(t *testing.T) {
+// TestFixedSecretErrorsPassShownError pins the fixed texts that speak of a secret: the
+// error of a code of no known shape, an access key's enrolment method given a run code,
+// and a server URL that contains an access key secret, a run key or a run code. None
+// contains qak_, qrk_ or qecr_, so ShownError returns each error itself and its text
+// reaches the reader.
+func TestFixedSecretErrorsPassShownError(t *testing.T) {
 	_, shape := accesskey.NormaliseCode("qecx_F1XT0RE0000000000000000000.x")
 	run, err := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qecr_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "run-01", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, forKey := run.Post(context.Background(), nil, "https://qory.example", "test")
-	_, runKeyURL := run.PostRunVia(context.Background(), http.DefaultClient, "https://qory.example/qrk_x", "https://gateway.example", "test")
-	_, runCodeURL := run.PostRunVia(context.Background(), http.DefaultClient, "https://qory.example/qecr_x", "https://gateway.example", "test")
+	viaURL := func(serverURL string) error {
+		_, err := run.PostRunVia(context.Background(), http.DefaultClient, serverURL, "https://gateway.example", "test")
+		return err
+	}
 	for want, err := range map[string]error{
 		"an enrolment code is qecn_, qecp_, qecg_, qeci_ or a run code's prefix, 26 characters, then a dot and a fingerprint":                            shape,
 		"redeem a run code with PostRunVia or VerifyRunAnswer: the request's code is a run code, and PostVia, Post and VerifyAnswer enrol an access key": forKey,
-		"remove the run key from the server URL: a run key belongs in QORY_RUN_KEY only":                                                                 runKeyURL,
-		"remove the run code from the server URL: a run code belongs in a machine's start data only":                                                     runCodeURL,
+		"remove the access key secret from the server URL: the URL is a scheme, a host and an optional port":                                             viaURL("https://qory.example/QAK_x"),
+		"remove the run key from the server URL: the URL is a scheme, a host and an optional port":                                                       viaURL("https://qory.example/qrk_x"),
+		"remove the run code from the server URL: the URL is a scheme, a host and an optional port":                                                      viaURL("https://qory.example/qecr_x"),
 	} {
 		if err == nil || err.Error() != want {
 			t.Errorf("got %v, want %s", err, want)
 			continue
+		}
+		if strings.Contains(want, "server URL") && len(want) > 100 {
+			t.Errorf("%q is over 100 characters", want)
 		}
 		if got := accesskey.ShownError(err); got != err {
 			t.Errorf("ShownError(%q) = %q, want the error itself", err, got)
