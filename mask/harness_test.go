@@ -75,6 +75,9 @@ func TestThreeLinesAreMaskedAndTwoAreNot(t *testing.T) {
 // long is a file of one paragraph of 400 characters on one line.
 var long = strings.Repeat("Each step of the plan names its input and its output. ", 8)[:400]
 
+// accentedLong is a line of 406 characters with accents, which ends in a space.
+var accentedLong = strings.Repeat("Étape: écrire le résultat de chaque test, puis le relire. ", 7)
+
 // TestTwoHundredCharactersAreMaskedAndNot199 pins the rule of characters: 200
 // consecutive characters of a file, inside one line, are replaced, and 199 are not.
 // Characters are counted, not bytes.
@@ -143,14 +146,17 @@ func TestTextInJSONIsMasked(t *testing.T) {
 		}
 	}
 	// A string of an event's data, decoded: the text as it is.
-	if got := h.Replace("cat says:\n" + review); got != "cat says:\n"+reviewPut+"\n" {
+	if got := h.Replace("cat printed:\n" + review); got != "cat printed:\n"+reviewPut+"\n" {
 		t.Errorf("a decoded string: %q", got)
 	}
-	// An escape of a character outside ASCII.
-	escaped := strings.ReplaceAll(strings.ReplaceAll(long, "e", `e`), "\n", `\n`)
-	h2 := mask.ForHarness([]mask.HarnessFile{{Path: "notes/plan.md", Text: []byte(long)}})
+	// Each e as the escape \u0065, and each é as \u00e9.
+	escaped := strings.ReplaceAll(strings.ReplaceAll(accentedLong, "e", `\u0065`), "é", `\u00e9`)
+	h2 := mask.ForHarness([]mask.HarnessFile{{Path: "notes/plan.md", Text: []byte(accentedLong)}})
+	if !strings.Contains(escaped, `\u0065`) || !strings.Contains(escaped, `\u00e9`) {
+		t.Fatalf("the escaped text has no escape: %.80q", escaped)
+	}
 	if got := h2.Replace(`{"text":"` + escaped + `"}`); got != `{"text":"[harness text: notes/plan.md] "}` {
-		t.Errorf("an escape of \\u0065: %q", got)
+		t.Errorf("the text with escapes of e and é: %q", got)
 	}
 }
 
@@ -171,6 +177,36 @@ func TestTwoFilesAreMaskedEachWithItsPath(t *testing.T) {
 	mixed := strings.Join(lines[0:3], "\n") + "\nnot the harness\n" + strings.Join(lines[7:10], "\n") + "\n"
 	if got, want := h.Replace(mixed), implementPut+"\nnot the harness\n"+implementPut+"\n"; got != want {
 		t.Errorf("two pieces apart by a line: %q, want %q", got, want)
+	}
+}
+
+// TestThePathInAReplacementIsCleaned pins a path with quotes, a terminal's code and a
+// bidirectional mark: the replacement contains the path without the escape character
+// and the mark, and with the quotes escaped, in a string and inside a JSON string, with
+// its escapes decoded or not.
+func TestThePathInAReplacementIsCleaned(t *testing.T) {
+	h := mask.ForHarness([]mask.HarnessFile{{Path: "notes/\"plan\"\x1b[2J\u202e.md", Text: []byte(long)}})
+	if got, want := h.Replace(long), `[harness text: notes/\"plan\"[2J.md] `; got != want {
+		t.Errorf("the replacement %q, want %q", got, want)
+	}
+	in, _ := json.Marshal(map[string]string{"text": long})
+	if got, want := h.Replace(string(in)), `{"text":"[harness text: notes/\"plan\"[2J.md] "}`; got != want {
+		t.Errorf("the replacement in JSON %q, want %q", got, want)
+	}
+	in, _ = json.Marshal(map[string]string{"text": long + "\n"})
+	var out map[string]string
+	if err := json.Unmarshal([]byte(h.Replace(string(in))), &out); err != nil || out["text"] != `[harness text: notes/\"plan\"[2J.md] `+"\n" {
+		t.Errorf("the replacement in JSON with escapes decoded %q, %v", out["text"], err)
+	}
+}
+
+// TestWhitespaceAtTheEndsOfAMatchStays pins a file whose text starts with spaces and a
+// tab: the whitespace before the first other character of a match stays in front of
+// the replacement, and the whitespace after its last.
+func TestWhitespaceAtTheEndsOfAMatchStays(t *testing.T) {
+	h := mask.ForHarness([]mask.HarnessFile{{Path: "notes/plan.md", Text: []byte("  \t" + long + "\n")}})
+	if got, want := h.Replace("plan:  \t"+long+"\nend\n"), "plan:  \t[harness text: notes/plan.md] \nend\n"; got != want {
+		t.Errorf("%q, want %q", got, want)
 	}
 }
 

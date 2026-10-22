@@ -644,16 +644,30 @@ Set `HarnessHidden` from `harness_hidden` in the run's documents. When it is tru
 session reads the files in its `HarnessHome` as it starts and masks their text in what
 it reports, after the forwarders' passwords: every `dev.qory.run.log` chunk of the
 session and every event its runtime's output and hooks map to. `[harness text: <path>]`
-replaces text that matches 3 consecutive lines or 200 characters of a file, `<path>` the
-file's path relative to the home, such as `skills/implement/SKILL.md`; text inside a
-JSON string matches too. The session reads regular files alone, follows no link and
-skips binary files. It reads at most `session.HarnessMaxFiles` files of at most
-`session.HarnessMaxFileSize` bytes each, `session.HarnessMaxSize` bytes in all, and
-reports each file it does not read through `Report`; that file's text is not masked. A
-home that cannot be read fails the join, "give the session a harness home it can read".
-Since a match may start in them, the session writes each stream's last 199 characters,
-and up to its last 3 lines, once more output follows them or the stream ends. False, the default, masks no harness
-text. See [`mask.Harness`](../mask/harness.go) for the matching.
+replaces text that matches 3 consecutive lines or 200 characters of a file, `<path>`
+the file's path relative to the home, such as `skills/implement/SKILL.md`; text inside
+a JSON string matches too. The session reads regular files alone and follows no link.
+A file that contains a zero byte is not masked, and the session reports it through
+`Report`: `the text of the harness file bin/tool is not masked: it contains a zero
+byte`. The join fails, and its error starts with the fix and contains the file's path
+relative to the home, in each of these cases:
+
+- The home, a directory in it or a file in it cannot be read.
+- The home has more than `session.HarnessMaxFiles` files.
+- A file has more than `session.HarnessMaxFileSize` bytes: `make each harness file at
+  most 1048576 bytes: skills/implement/ref.md has 2097152`.
+- The files have more than `session.HarnessMaxSize` bytes in all.
+
+Since a match may start in them, the session keeps back up to the last 199 characters
+of each stream, and up to its last 3 lines, until more output follows them or the
+stream ends. These are never matched: text wrapped to the terminal's width, a line with
+a terminal's escape codes in it, text in another Unicode normalisation form, base64,
+JSON inside a JSON string, text split across JSON strings, and the deltas of a stream
+of messages. These are not masked: the `args` of `dev.qory.session.started`, the setup
+steps of a run whose setup runs `outside`, and the copy of the runtime's output to
+`Stdout` and `Stderr`. False, the default, masks no harness text. See
+[`mask.Harness`](../mask/harness.go) for the matching.
+
 `session.SessionSpec` has each session's: the runtime and its command, the variables,
 the mounts, the setup commands and the rest below. `Harness` lists the harness's sources,
 each a `source` and a full `commit`; `dev.qory.session.started` records them, a source

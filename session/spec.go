@@ -118,12 +118,16 @@ type OpenSpec struct {
 	// from an output or hook record, after the run's masker. Text that matches at least
 	// mask.HarnessLines consecutive lines or mask.HarnessChars characters of a file is
 	// replaced with [harness text: <path>], <path> the file's path relative to the home,
-	// such as skills/implement/SKILL.md; see [mask.Harness]. A home that cannot be read
-	// fails the join. The session reads regular files alone, follows no link, skips a
-	// file that contains a zero byte, and reads at most HarnessMaxFiles files, each of at
-	// most HarnessMaxFileSize bytes, HarnessMaxSize bytes in all: a file it does not read
-	// is a Report line, and its text is not masked. False, the default, masks no harness
-	// text, and a session with no HarnessHome masks none either.
+	// such as skills/implement/SKILL.md; see [mask.Harness]. The session reads regular
+	// files alone and follows no link. A file that contains a zero byte is skipped, its
+	// text is not masked, and it is a Report line. The join fails when the home, one of
+	// its directories or one of its files cannot be read, when the home has more than
+	// HarnessMaxFiles files, when a file has more than HarnessMaxFileSize bytes, or when
+	// the files have more than HarnessMaxSize bytes in all; the error starts with the fix
+	// and contains the file's path relative to the home. The session.started args, the
+	// lines of the run's setup outside a session and the copy of the runtime's output to
+	// Stdout and Stderr are not masked. False, the default, masks no harness text, and a
+	// session with no HarnessHome masks none either.
 	HarnessHidden bool
 }
 

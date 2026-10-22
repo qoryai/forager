@@ -1006,7 +1006,10 @@ release may change what an existing document does, and says so under Upgrading.
   `HarnessHome` with `[harness text: <path>]` in every `dev.qory.run.log` chunk and
   every event mapped from the runtime's output and hooks. Text counts as a file's at 3
   consecutive lines or 200 characters, also inside a JSON string. `mask.Harness` does
-  the matching, in a string and in a stream. False, the default, changes nothing.
+  the matching, in a string and in a stream. A file with a zero byte is not masked and
+  is a `Report` line; a home that cannot be read, or that is over
+  `session.HarnessMaxFiles`, `session.HarnessMaxFileSize` or `session.HarnessMaxSize`,
+  fails the join. False, the default, changes nothing.
 - `session.RemoteGateway.TLS`, a `server.RemoteTLS`: how the session trusts the
   certificate of the run key's gateway, on the run's link and on a resend's. With
   `CAFile`, the session checks the chain against the authorities of that PEM file in

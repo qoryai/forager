@@ -1751,13 +1751,24 @@ compose keeps it out of git:
 replaces the text of each file in a session's harness home, after the forwarders'
 passwords are replaced, in every `dev.qory.run.log` chunk of the session, its setup
 steps' included, and in every event the descriptor maps from an output or hook record.
-`<path>` is the file's path relative to the home, such as `skills/implement/SKILL.md`.
-Text is a file's once it matches at least 3 consecutive lines of the file, with the
-whitespace at the start and the end of each line and the blank lines left out, or at
-least 200 consecutive characters of it; text inside a JSON string matches with its
-escapes decoded. The session reads the home's files as it starts, and a change to them
-after that changes nothing. qory sets `OpenSpec.HarnessHidden` from `harness_hidden`
-in the run's documents; a run where it is false has no replacement.
+`<path>` is the file's path relative to the home, such as `skills/implement/SKILL.md`,
+without control characters and bidirectional marks, and with `"` and `\` escaped as in
+a JSON string. Text is a file's once it matches at least 3 consecutive lines of the
+file, with the whitespace at the start and the end of each line and the blank lines
+left out, or at least 200 consecutive characters of it; text inside a JSON string
+matches with its escapes decoded. The session reads the home's regular files as it
+starts, follows no link, and a change to the files after that changes nothing. A file
+that contains a zero byte is not masked, and the session reports it. A home, a
+directory or a file that cannot be read, or a home over the limits of files and size,
+fails the join. qory sets `OpenSpec.HarnessHidden` from `harness_hidden` in the run's
+documents; a run where it is false has no replacement.
+
+These are never matched: text wrapped to the terminal's width, a line with a
+terminal's escape codes in it, text in another Unicode normalisation form, base64, JSON
+inside a JSON string, text split across JSON strings, and the deltas of a stream of
+messages. These are not masked: the `args` of `dev.qory.session.started`, the setup
+steps of a run whose setup runs `outside`, and the copy of the runtime's output that
+the session writes to the caller's `Stdout` and `Stderr`.
 
 The gateway writes `events.jsonl`, with its `delivered.log` and `undelivered/` (§The
 server, After Forager stops unexpectedly); the session writes `session.jsonl`, its

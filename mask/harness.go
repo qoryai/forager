@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 	"unicode"
 	"unicode/utf8"
@@ -54,16 +55,20 @@ type HarnessFile struct {
 // Harness masks the text of the files of a harness home: [Harness.Replace] in a
 // string, and the writer of [Harness.Writer] in a stream. Each piece of text that
 // counts as a file's, by the rule of HarnessLines and HarnessChars, is replaced with
-// [harness text: <path>], <path> the file's Path, and pieces of one file next to each
-// other, or apart by whitespace alone, are replaced with one such text. Text is
+// [harness text: <path>], and pieces of one file next to each other, or apart by
+// whitespace alone, are replaced with one such text. <path> is the file's Path without
+// its control characters, such as the escape character of a terminal's codes, and
+// without bidirectional marks, and with " and \ escaped as in a JSON string, so a
+// replacement never ends a JSON string. Text is
 // matched as it is, and also with its JSON escapes decoded, such as \n, \" and \u00e9,
 // so the text inside a JSON string in a stream is found too; a line that starts with a
 // line number and a tab or an arrow, as a file read with line numbers shows it,
 // matches without the number. Carriage returns before line breaks are left out of the
 // match. A run of a pattern of up to four bytes, such as a line of = or of spaces,
 // counts toward a match of characters next to other text of the file, and is no match
-// by itself; whitespace at either end of a match stays. The cost is linear in the
-// text. A nil Harness replaces nothing. A Harness is safe for concurrent use.
+// by itself; whitespace at either end of a match stays. The cost of Replace is
+// linear in the text. A nil Harness replaces nothing. A Harness is safe for concurrent
+// use.
 type Harness struct {
 	files []harnessFile
 	seed  maphash.Seed
@@ -104,7 +109,7 @@ func ForHarness(files []HarnessFile) *Harness {
 		h.top *= h.base
 	}
 	for i, f := range files {
-		put := []byte("[harness text: " + f.Path + "]")
+		put := []byte("[harness text: " + string(jsonEscaped([]byte(cleanPath(f.Path)), false, false)) + "]")
 		text := f.Text
 		if bytes.Contains(text, []byte("\r\n")) {
 			text = bytes.ReplaceAll(text, []byte("\r\n"), []byte("\n"))
@@ -126,6 +131,18 @@ func ForHarness(files []HarnessFile) *Harness {
 		}
 	}
 	return h
+}
+
+// cleanPath is p as a replacement contains it: valid UTF-8 without control characters
+// and bidirectional marks, so a terminal that shows a replacement moves no cursor,
+// changes no colour and reverses no text for the path.
+func cleanPath(p string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(p, ""))
 }
 
 // indexLines adds the lines of file f, its text, to the set of lines and the index of
@@ -809,12 +826,15 @@ func (h *Harness) Writer(w io.Writer) *HarnessWriter {
 }
 
 // HarnessWriter is the writer of [Harness.Writer]. It keeps back the end of the
-// stream that a match may still begin in, the last HarnessChars-1 characters and up
-// to the last HarnessLines lines, and writes it with a later write or on Flush. Once a
-// replacement is written for a match that reaches the end of what was written, it
-// keeps the end of the match as well, up to 64 KiB, so the rest of the match that
-// follows in later writes is part of that replacement. It is safe for concurrent
-// writes.
+// stream that a match may still begin in, and writes it with a later write or on
+// Flush: the last HarnessChars-1 characters; the last line, unless it is longer than
+// the longest line of the files; and up to HarnessLines-1 lines before it that are
+// lines of the files. Once a replacement is written for a match that reaches the end
+// of what was written, it keeps the end of the match as well, up to 64 KiB, so the
+// rest of the match that follows in later writes is part of that replacement. Each
+// write scans again what the writer keeps back, at most 3 times the longest line of
+// the files and 64 KiB more, so a stream costs at most its length times that amount.
+// It is safe for concurrent writes.
 type HarnessWriter struct {
 	w  io.Writer
 	h  *Harness

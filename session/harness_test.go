@@ -15,8 +15,10 @@ import (
 	"github.com/qoryai/forager/sink"
 )
 
-// implementSkill and reviewSkill are the texts of the example harness's two files, at
-// skills/implement/SKILL.md and skills/review/SKILL.md in its home.
+// implementSkill, reviewSkill and implementPlan are the texts of the example
+// harness's three files, at skills/implement/SKILL.md, skills/review/SKILL.md and
+// skills/implement/plan.md in its home. implementPlan is one line of 280 characters,
+// which the session keeps back at the end of a stream.
 const (
 	implementSkill = `# Implement
 
@@ -31,19 +33,21 @@ const (
 - Run each test the change adds, and the suite.
 - List each defect with its file and line.
 `
-	implementPut = "[harness text: skills/implement/SKILL.md]"
-	reviewPut    = "[harness text: skills/review/SKILL.md]"
+	implementPlan = "Plan: read the work item, list each thing to build, write a test for each item on the list, change the code until every test passes, run the checks the workspace defines, write what changed in the change log, and ask a second reader for a review of the change before it is merged.\n"
+	implementPut  = "[harness text: skills/implement/SKILL.md]"
+	reviewPut     = "[harness text: skills/review/SKILL.md]"
+	planPut       = "[harness text: skills/implement/plan.md]"
 )
 
 // harnessLines are lines of the example harness that no event and no output.log of a
 // run whose harness is hidden contains.
-var harnessLines = []string{"Change the code until every test passes.", "Run each test the change adds, and the suite."}
+var harnessLines = []string{"Change the code until every test passes.", "Run each test the change adds, and the suite.", "ask a second reader for a review"}
 
 // harnessHome writes the example harness into a temporary directory and returns it.
 func harnessHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	for p, text := range map[string]string{"skills/implement/SKILL.md": implementSkill, "skills/review/SKILL.md": reviewSkill} {
+	for p, text := range map[string]string{"skills/implement/SKILL.md": implementSkill, "skills/review/SKILL.md": reviewSkill, "skills/implement/plan.md": implementPlan} {
 		f := filepath.Join(home, p)
 		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
 			t.Fatal(err)
@@ -57,8 +61,8 @@ func harnessHome(t *testing.T) string {
 
 // harnessScript is the runtime's script of the tests of this file: it prints the
 // implement skill as cat does, a result record whose result is the review skill, the
-// review skill in two writes apart by a pause, then writes changed text into the
-// implement skill and prints it.
+// review skill in two writes apart by a pause, writes changed text into the implement
+// skill and prints it, and prints the plan last.
 const harnessScript = `cat "$QORY_HARNESS_HOME/skills/implement/SKILL.md"
 printf '{"type":"result","subtype":"success","session_id":"fake","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0.01,"result":"%s"}\n' "$(awk '{printf "%s\\n", $0}' "$QORY_HARNESS_HOME/skills/review/SKILL.md")"
 head -c 70 "$QORY_HARNESS_HOME/skills/review/SKILL.md"
@@ -66,6 +70,7 @@ sleep 0.3
 tail -c +71 "$QORY_HARNESS_HOME/skills/review/SKILL.md"
 printf 'Changed line one of the skill.\nChanged line two of the skill.\nChanged line three of the skill.\n' > "$QORY_HARNESS_HOME/skills/implement/SKILL.md"
 cat "$QORY_HARNESS_HOME/skills/implement/SKILL.md"
+cat "$QORY_HARNESS_HOME/skills/implement/plan.md"
 `
 
 // harnessRun runs the script of the tests of this file with the example harness's
@@ -98,7 +103,8 @@ func harnessRun(t *testing.T, hidden bool) (*session.Result, string, []string) {
 // as cat prints it, inside the JSON of a result record on stdout, and in the result
 // event, and the review skill printed in two writes on either side of a pause is one
 // replacement. Text written into the home after the session started is no harness
-// text and is shown.
+// text and is shown. The plan, at the end of the stream, is masked when the stream
+// ends.
 func TestAHiddenHarnessIsMaskedInWhatTheRunReports(t *testing.T) {
 	res, out, chunks := harnessRun(t, true)
 	session, _ := os.ReadFile(filepath.Join(res.Dir, sink.SessionFile))
@@ -113,9 +119,13 @@ func TestAHiddenHarnessIsMaskedInWhatTheRunReports(t *testing.T) {
 	want := implementPut + "\n" +
 		`{"type":"result","subtype":"success","session_id":"fake","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0.01,"result":"` + reviewPut + `\n"}` + "\n" +
 		reviewPut + "\n" +
-		"Changed line one of the skill.\nChanged line two of the skill.\nChanged line three of the skill.\n"
+		"Changed line one of the skill.\nChanged line two of the skill.\nChanged line three of the skill.\n" +
+		planPut + "\n"
 	if out != want {
 		t.Errorf("output.log:\n%s\nwant:\n%s", out, want)
+	}
+	if got := strings.Join(chunks, ""); got != want {
+		t.Errorf("the run.log chunks:\n%s\nwant:\n%s", got, want)
 	}
 	r := ofType(events(t, res), "dev.qory.runtime.result")
 	if len(r) != 1 {
@@ -135,7 +145,8 @@ func TestAHarnessNotHiddenIsShown(t *testing.T) {
 	want := implementSkill +
 		`{"type":"result","subtype":"success","session_id":"fake","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0.01,"result":` + string(result) + `}` + "\n" +
 		reviewSkill +
-		"Changed line one of the skill.\nChanged line two of the skill.\nChanged line three of the skill.\n"
+		"Changed line one of the skill.\nChanged line two of the skill.\nChanged line three of the skill.\n" +
+		implementPlan
 	if out != want {
 		t.Errorf("output.log:\n%s\nwant:\n%s", out, want)
 	}
@@ -190,14 +201,15 @@ func TestAHiddenHarnessWhoseHomeCannotBeReadFailsTheJoin(t *testing.T) {
 	}
 }
 
-// TestAHiddenHarnessIsMaskedInASetupStep pins a setup command that prints a skill: the
-// setup step's lines have the replacement in its place, and the terminal has the same.
+// TestAHiddenHarnessIsMaskedInASetupStep pins a setup command that prints a skill, and
+// the plan last: the setup step's lines have the replacements in their places, and the
+// terminal has the same.
 func TestAHiddenHarnessIsMaskedInASetupStep(t *testing.T) {
 	sp := preparedSpec(t, "true")
 	sp.HarnessHome, sp.HarnessHidden = harnessHome(t), true
 	var terminal bytes.Buffer
 	sp.Stdout = &terminal
-	sp.SessionSpec.Setup = []session.SetupCommand{{Name: "show", Args: []string{"/bin/sh", "-c", `echo before; cat "$QORY_HARNESS_HOME/skills/implement/SKILL.md"; echo after`}}}
+	sp.SessionSpec.Setup = []session.SetupCommand{{Name: "show", Args: []string{"/bin/sh", "-c", `echo before; cat "$QORY_HARNESS_HOME/skills/implement/SKILL.md"; echo after; cat "$QORY_HARNESS_HOME/skills/implement/plan.md"`}}}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +218,7 @@ func TestAHiddenHarnessIsMaskedInASetupStep(t *testing.T) {
 	if len(all) != 3 || all[2].started["kind"] != event.StepSetup {
 		t.Fatalf("the steps %v", all)
 	}
-	want := "before\n" + implementPut + "\nafter\n"
+	want := "before\n" + implementPut + "\nafter\n" + planPut + "\n"
 	if got := all[2].logs["stdout"]; got != want {
 		t.Errorf("the setup step's lines %q, want %q", got, want)
 	}

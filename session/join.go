@@ -270,6 +270,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			open = nil
 		}
 	}
+	// hidden masks the text of a hidden harness in what the session reports, once the
+	// session has read the harness's files; nil until then, and for a harness not hidden.
+	var hidden *mask.Harness
 	// failWith ends a session that does not start, with its dev.qory.session.exited:
 	// the one of a refused join before dev.qory.session.started, and after it failed
 	// with -1, with reason as its reason unless reason is empty.
@@ -311,7 +314,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			if open != nil {
 				step = open.n
 			}
-			r.writeLog("stderr", n, step, failureLine(err))
+			r.writeLog("stderr", n, step, []byte(hidden.Replace(string(failureLine(err)))))
 		}
 		endStep(event.StateFailed)
 		r.write(event.SessionExited, exited)
@@ -371,7 +374,6 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	// A run whose harness is hidden masks the text of the harness's files, as they are
 	// at this point, in what the session reports.
-	var hidden *mask.Harness
 	if r.open.HarnessHidden && spec.HarnessHome != "" {
 		if hidden, err = readHarness(spec.HarnessHome, r.open.Report); err != nil {
 			return fail(err)
