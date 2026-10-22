@@ -920,3 +920,55 @@ func TestPostViaEnrolsThroughTheGateway(t *testing.T) {
 		t.Errorf("a nil client: %v; want it refused before anything is sent", err)
 	}
 }
+
+// TestPostRunViaRedeemsARunCodeThroughTheGateway pins accesskey's PostRunVia with via's
+// transport: a run code's redemption goes to via.url's origin at
+// /.well-known/qory-enrolment, and its answer verifies under the server's key as
+// without the gateway, the run key under the same key, so the client returns the run's
+// id and run key; a nil client is refused before anything is sent.
+func TestPostRunViaRedeemsARunCodeThroughTheGateway(t *testing.T) {
+	signer := generate(t)
+	rk, err := runkey.Key{RunID: gatewayRunID, Workspace: "ws_f1xt0re000000000", NodeID: "np_f1xt0re000000000", Gateway: "ng_f1xt0re000000000",
+		InstanceID: gatewayRunID, GatewayURL: "https://gateway.example:8443", GatewayKeys: []accesskey.PublicKey{generate(t).PublicKey()},
+		Issued: time.Unix(1700000000, 0), AttachBy: time.Unix(1700000600, 0)}.Sign(signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.RequestURI)
+		b, _ := io.ReadAll(r.Body)
+		var req accesskey.EnrolmentRequest
+		if json.Unmarshal(b, &req) != nil || !req.VerifyProof() {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		body := []byte(`{"version":1,"run_id":"` + gatewayRunID + `","run_key":"` + rk + `","apiary_public_key":[{"alg":"ed25519","public_key":"` + signer.PublicKey().String() + `"}]}`)
+		w.Header().Set(accesskey.HeaderSignature, signer.SignAnswer(accesskey.Answer{Enrolment: true, Status: 201, RequestSignature: req.Proof, Body: body}))
+		w.WriteHeader(http.StatusCreated)
+		w.Write(body)
+	}))
+	defer srv.Close()
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := server.Via{URL: srv.URL, CAFile: caFile}.Transport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := accesskey.NewEnrolmentRequest(generate(t), "qecr_F1XT0RE0000000000000000000."+signer.Fingerprint(), "run-01", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans, err := r.PostRunVia(context.Background(), &http.Client{Transport: tr}, "https://qory.example", srv.URL, "qory/test")
+	if err != nil || ans.RunID != gatewayRunID || ans.RunKey != rk || len(ans.Pin) != 1 {
+		t.Fatalf("redemption through via: %v, %v", ans, err)
+	}
+	if len(paths) != 1 || paths[0] != accesskey.EnrolmentPath {
+		t.Errorf("targets %q", paths)
+	}
+	if _, err := r.PostRunVia(context.Background(), nil, "https://qory.example", srv.URL, "qory/test"); err == nil || len(paths) != 1 {
+		t.Errorf("a nil client: %v; want it refused before anything is sent", err)
+	}
+}

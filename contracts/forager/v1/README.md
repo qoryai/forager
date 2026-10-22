@@ -2049,10 +2049,12 @@ code an owner or administrator of the server created: a prefix, 26 Crockford bas
 characters, then `.` and the fingerprint of the server's key, and during a rotation of
 that key a second `.` and the next key's fingerprint. The prefix names the kind of key
 the code enrols: `qecn_` a node's, `qecp_` a node pool's, `qecg_` a gateway's and
-`qeci_` an integration's (node_kind `adapter`). A code whose prefix names another kind
-than its node's is unknown to the server, which answers it `401` as any unknown code; a
-code with any other prefix is malformed, and the server refuses it as an invalid
-request, `400`. The body contains the code in its normalised form, the prefix in lower
+`qeci_` an integration's (node_kind `adapter`). `qecr_` is a run code: it enrols no
+access key and redeems a run's run key (**A run code**, in
+[The server](#the-server)). A code whose prefix names another kind than its node's is
+unknown to the server, which answers it `401` as any unknown code; a code with any
+other prefix is malformed, and the server refuses it as an invalid request, `400`. The
+body contains the code in its normalised form, the prefix in lower
 case and the 26 characters in upper case with `I` and `L` read as `1`, `O` as `0` and hyphens
 removed; a name for the access key; the raw public key; a timestamp; and
 `proof`, the Ed25519 signature under the new key of five lines joined by `\n`:
@@ -2093,6 +2095,46 @@ key it is given: a canonical encoding, a point on the curve, not of small order,
 prime order, and y ≠ 1; `fixtures/known-answers/small-order.json` lists keys it
 refuses. The known answers are `fixtures/enrolment/` and the enrolment lines of
 `signatures.json`.
+
+**A run code.** A provisioner that creates a machine for one run, on AWS EC2 say, puts
+a run code, `qecr_`, in the machine's start data in place of the run key: EC2 keeps user
+data readable for the machine's life, so the run key must not be there. At boot, qory
+makes a key pair in memory and posts the code with a proof under that key, through the
+gateway's relay, to `/.well-known/qory-enrolment`. The request is an enrolment request
+as above, and the redemption makes no access key. A run code is valid for 15 minutes and
+is used once. The `201` is `$defs/run_answer`, signed as the `201` to an access key's
+code is:
+
+```json
+{"version": 1, "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "run_key": "qrk_…",
+ "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
+```
+
+A retry by the same public key within the 15 minutes gets the same members, the same
+`run_id`, `run_key` and `apiary_public_key`, signed over the retry's proof. A
+redemption by another public key after the first is `401`, as is a code that is used,
+has expired or was cancelled; the signed `409` and `429` are those of an access key's
+code. The run key's `issued` is the time of the code's first redemption, not the time
+the code was made, and its `attach_by` is 600 seconds after `issued`. The machine
+checks the answer in this order: it verifies the signature under the listed key whose
+fingerprint is the code's first; it reads the body against `run_answer`; it keeps the
+listed keys whose fingerprints are in the code; it verifies `run_key` as the gateway
+does, under the kept key whose fingerprint is the run key's `signer`; and it checks
+that the run key's `run_id` is `run_id`. A verified `201` of the other kind, an access
+key's answer to a run code or a run's answer to an access key's code, uses the code,
+and the machine installs nothing of it. The machine keeps the run key in memory and
+passes it to the session as `RemoteGateway.RunKey`, and writes it to no file and no
+environment variable. In Go, `EnrolmentRequest.PostRunVia` of package `accesskey`
+sends the request through the gateway, `PostRun` sends it to the server, and
+`VerifyRunAnswer` reads the answer. Each returns an `accesskey.RunAnswer`, which fmt
+writes as `run <run id>`, and slog and encoding/json write as its `run_id` alone,
+except: fmt, and slog's text handler, which prints a struct through fmt, can print the
+run key of a `RunAnswer` in a struct field that is not exported, since fmt calls no
+method there.
+`PostVia`, `Post` and `VerifyAnswer` refuse a run code before they send or read
+anything, and the three run methods refuse an access key's code the same way. The
+known answers are `run_enrolment` in `fixtures/known-answers/through-gateway.json`,
+with `enrolment-run-request.json` and `enrolment-run-answer.json`.
 
 **The configuration document.** `configuration.schema.json`. A signed
 `GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery, per
@@ -2409,9 +2451,11 @@ qory-run-key-ed25519-v1\n<payload bytes>
 | `issued` | RFC 3339 in UTC, whole seconds | when Qory Apiary made it |
 | `attach_by` | RFC 3339 in UTC, whole seconds | the end of the attach window |
 
-Every member is required, and a member the schema does not define is refused. A gateway
-and Qory Apiary verify a run key in this order: split it on the last `.` after `qrk_`;
-decode both parts strictly; find the pinned server key whose fingerprint equals
+Every member is required, and a member the schema does not define is refused. For a run
+key that a run code redeems, `issued` is the time of the code's first redemption, and
+`attach_by` is 600 seconds after it (**A run code**, in [The server](#the-server)). A
+gateway and Qory Apiary verify a run key in this order: split it on the last `.` after
+`qrk_`; decode both parts strictly; find the pinned server key whose fingerprint equals
 `signer`; verify the signature over the domain line, a line feed and the payload bytes
 under it; then read the payload against the schema. A key that is not pinned, a
 signature that fails or a payload that does not read is no run key. A runner pins no

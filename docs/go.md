@@ -500,6 +500,45 @@ run, err := session.Open(ctx, session.OpenSpec{
   [the relay to a separate gateway](wall.md#the-relay-to-a-separate-gateway). The run key
   stays in the session's memory, in no environment and no file.
 
+### The run key from a run code
+
+A machine that a provisioner creates for one run gets a run code, `qecr_`, in its start
+data in place of the run key. The command redeems the code once at boot, through the
+gateway, and passes the run key to the session as `RemoteGateway.RunKey`
+([a run code](../contracts/forager/v1/README.md#the-server)).
+
+```go
+key, err := accesskey.Generate() // in memory: the redemption makes no access key
+req, err := accesskey.NewEnrolmentRequest(key, code, hostname, time.Now())
+tr, err := server.Via{URL: viaURL, CAFile: caFile}.Transport()
+ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, userAgent)
+// ans.RunID is the run, ans.RunKey its run key, ans.Pin the server keys it verified under
+```
+
+- `PostRunVia` verifies the answer under the server key that the code's first
+  fingerprint selects. It then verifies the run key as the gateway does, under the key
+  whose fingerprint is among the code's and is the run key's `signer`, and checks that
+  the run key's `run_id` is the answer's. `PostRun` sends the request to the server
+  without a gateway, and `VerifyRunAnswer` reads an answer that the caller sent.
+- `accesskey.RunAnswer` shows its run id and not its run key, except in a struct field
+  that is not exported. It formats as `run <run id>` whatever the verb, a `slog`
+  handler that calls `LogValue` writes `run_id` alone, and `encoding/json` writes
+  `{"run_id": …}` alone, also inside an exported field, a slice or a map. The
+  exception: fmt calls no method of a value reached through a struct field that is not
+  exported, so fmt, and slog's text handler, which prints a struct through fmt, can
+  print the run key there, as `%+v` of `struct{ a accesskey.RunAnswer }` does. Keep a
+  `RunAnswer` out of such a field. No error contains the run key.
+- An error of a verified answer starts with the fix, "use another run code: ",
+  because the code is used and a retry by the same key gets the same members: "use
+  another run code: the enrolment answer's run key is not valid: its signature does
+  not verify", say.
+  A `401` is an `*accesskey.Refusal` with the code `unauthorized`: the code is used, has
+  expired or was cancelled, or another key redeemed it first.
+- `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and `PostRunVia`, `PostRun`
+  and `VerifyRunAnswer` refuse an access key's code, before they send or read anything:
+  "redeem a run code with PostRunVia, PostRun or VerifyRunAnswer: …". A verified answer
+  of the other kind is an `*accesskey.KindError`.
+
 ### Sending the session's record again
 
 `session.Resend` sends a separate gateway what the session's run directory says it did
@@ -758,7 +797,8 @@ with `e2e` to check them together.
 - The core, at the module's root, which every part may import:
   - `contracts/`: the Go package that embeds the contract and validates every fixture.
   - `accesskey/`: the access key: its secret and Ed25519 key, the signed requests and
-    answers, the pin of the server's keys, enrolment, the instance id and its file, and
+    answers, the pin of the server's keys, enrolment, the redemption of a run code, the
+    instance id and its file, and
     the refusal codes of the server's answers.
   - `receiver/`: a server of the contract that is not a control plane. It is the
     handler the tests run Forager against. It is tested against the signed fixtures.
@@ -778,7 +818,9 @@ with `e2e` to check them together.
     `PublicKey.VerifyAnswer` sign and verify those answers, and
     `server.NewRemoteLink(runKey, trust, userAgent, digests)` is the session's client
     of the link, `server.HeaderRunID` the header a local batch names its run in.
-  - `internal/`: `jcs`, and `importrules`, the test of the rules below.
+  - `internal/`: `jcs`; `runkeywire`, the run key's form and payload, which `runkey`
+    and `accesskey` both read, since `runkey` imports `accesskey`; and `importrules`,
+    the test of the rules below.
 - `session/`: the session.
   - `session.Open` opens a run, with the gateway and the wall as values; `Run.Join`
     runs one session in it and returns the exit status, and `Run.Close` ends it. It

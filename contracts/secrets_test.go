@@ -118,9 +118,9 @@ func (k fixtureKeys) accessKey(t *testing.T) ed25519.PrivateKey {
 
 // TestSecretsFixturesValidate pins that every fixture of enrolment and of the known
 // answers passes its schema: discovery, the registration and its answer, the run key's
-// payload, the registration through a gateway, the attach and the outcome, each with
-// its answer, and the enrolment request, answer and signed refusals each against the
-// part of enrolment.schema.json it is.
+// payload, the registration through a gateway, the run code's redemption, the attach
+// and the outcome, each with its answer, and the enrolment request, answer and signed
+// refusals each against the part of enrolment.schema.json it is.
 func TestSecretsFixturesValidate(t *testing.T) {
 	c, err := contracts.Compiler()
 	if err != nil {
@@ -146,6 +146,8 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		"fixtures/known-answers/discovery-gateway.json":           {"configuration.schema.json"},
 		"fixtures/known-answers/outcome.json":                     {"run-outcome.schema.json"},
 		"fixtures/known-answers/outcome-answer.json":              {"run-outcome-answer.schema.json"},
+		"fixtures/known-answers/enrolment-run-request.json":       {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
+		"fixtures/known-answers/enrolment-run-answer.json":        {"enrolment.schema.json", "enrolment.schema.json#/$defs/run_answer"},
 		"fixtures/enrolment/request.json":                         {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
 		"fixtures/enrolment/request-two-fingerprints.json":        {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
 		"fixtures/enrolment/request-gateway.json":                 {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
@@ -182,10 +184,19 @@ func TestSecretsFixturesValidate(t *testing.T) {
 			}
 		}
 	}
-	// The halves of enrolment.schema.json are distinct: a request is no answer.
+	// The parts of enrolment.schema.json are distinct: a request is no answer, and an
+	// access key's answer is no run's.
 	request, _ := contracts.Document("fixtures/enrolment/request.json")
 	if schema("enrolment.schema.json#/$defs/answer")(request) == nil {
 		t.Error("the enrolment request passes as an answer")
+	}
+	answer, _ := contracts.Document("fixtures/enrolment/answer.json")
+	run, _ := contracts.Document("fixtures/known-answers/enrolment-run-answer.json")
+	if schema("enrolment.schema.json#/$defs/run_answer")(answer) == nil {
+		t.Error("an access key's enrolment answer passes as a run's")
+	}
+	if schema("enrolment.schema.json#/$defs/answer")(run) == nil {
+		t.Error("a run's enrolment answer passes as an access key's")
 	}
 }
 
@@ -211,7 +222,7 @@ func TestEnrolmentAnswerNodeKinds(t *testing.T) {
 }
 
 // TestEnrolmentCodePrefixes pins the prefixes of the enrolment request's code: qecn_,
-// qecp_, qecg_ and qeci_ in lower case pass, and qec_ alone, an unknown letter, qecx_,
+// qecp_, qecg_, qeci_ and qecr_ in lower case pass, and qec_ alone, an unknown letter, qecx_,
 // and a prefix in upper case are refused, as a server refuses a malformed code, an
 // invalid request, 400. The refused codes are tested inline, as documents here.
 func TestEnrolmentCodePrefixes(t *testing.T) {
@@ -231,8 +242,8 @@ func TestEnrolmentCodePrefixes(t *testing.T) {
 		return doc
 	}
 	for prefix, want := range map[string]bool{
-		"qecn_": true, "qecp_": true, "qecg_": true, "qeci_": true,
-		"qec_": false, "qecx_": false, "QECN_": false,
+		"qecn_": true, "qecp_": true, "qecg_": true, "qeci_": true, "qecr_": true,
+		"qec_": false, "qecx_": false, "QECN_": false, "QECR_": false,
 	} {
 		err := s.Validate(request(prefix + "F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg"))
 		if (err == nil) != want {
