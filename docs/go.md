@@ -640,19 +640,23 @@ out. `session.Open` refuses any other value before it contacts the gateway, and 
 error starts with the fix: `set OpenSpec.Setup to outside or inside, or leave it
 empty: "elsewhere"`.
 
-Set `HarnessHidden` from `harness_hidden` in the run's documents. When it is true, each
-session reads the files in its `HarnessHome` as it starts and masks their text in what
-it reports, after the forwarders' passwords: every `dev.qory.run.log` chunk of the
-session and every event its runtime's output and hooks map to. `[harness text: <path>]`
-replaces text that matches 3 consecutive lines or 200 characters of a file, `<path>`
-the file's path relative to the home, such as `skills/implement/SKILL.md`; text inside
-a JSON string matches too. The session reads regular files alone and follows no link.
-A file that contains a zero byte is not masked, and the session reports it through
-`Report`: `the text of the harness file bin/tool is not masked: it contains a zero
-byte`. The join fails, and its error starts with the fix and contains the file's path
-relative to the home, in each of these cases:
+Set `HarnessHidden` from `harness_hidden` in the run's documents. When it is true,
+each session reads the files in its `HarnessHome` as it starts and masks their text in
+what it reports, after the forwarders' passwords: every `dev.qory.run.log` chunk of
+the session and every event its runtime's output and hooks map to. `[harness text:
+<path>]` replaces text that matches 3 consecutive lines or 200 characters of a file,
+`<path>` the file's path relative to the home, such as `skills/implement/SKILL.md`;
+text inside a JSON string matches too. The session reads regular files alone. A run
+with a hidden harness fails at the join when its harness home contains a link:
+`Replace the link skills/implement in the harness home with a copy; the mask reads
+only files there.` The session reports the same line through `Report`. A file that
+contains a zero byte is not masked, and the session reports it through `Report`: `the
+text of the harness file bin/tool is not masked: it contains a zero byte`. The join
+fails, and its error starts with the fix and contains the file's path relative to the
+home, in each of these cases:
 
 - The home, a directory in it or a file in it cannot be read.
+- A file changes between the walk of the home and its read.
 - The home has more than `session.HarnessMaxFiles` files.
 - A file has more than `session.HarnessMaxFileSize` bytes: `make each harness file at
   most 1048576 bytes: skills/implement/ref.md has 2097152`.
@@ -665,10 +669,12 @@ last 64 KiB with the lines of the harness among them replaced. These are never
 matched: text wrapped to the terminal's width, a line with a terminal's escape codes
 in it, text in another Unicode normalisation form, base64, JSON inside a JSON string,
 text split across JSON strings, and the deltas of a stream of messages. These are not
-masked: the `command` and `args` of `dev.qory.session.started`, the setup steps of a
-run whose setup runs `outside`, the copy of the runtime's output to `Stdout` and
-`Stderr`, and the error that `Join` returns. False, the default, masks no harness
-text. See [`mask.Harness`](../mask/harness.go) for the matching.
+masked: the `command` and `args` of `dev.qory.session.started`; the failure line of a
+join that fails before the home is read; the setup steps of a run whose setup runs
+`outside`; the lines of the host's steps, which `Step.Log` writes with no session
+number; the copy of the runtime's output to `Stdout` and `Stderr`; and the error that
+`Join` returns. False, the default, masks no harness text. See
+[`mask.Harness`](../mask/harness.go) for the matching.
 
 `session.SessionSpec` has each session's: the runtime and its command, the variables,
 the mounts, the setup commands and the rest below. `Harness` lists the harness's sources,

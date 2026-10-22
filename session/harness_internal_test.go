@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -56,25 +57,11 @@ func readHome(t *testing.T, home string) (*mask.Harness, []string) {
 }
 
 // TestTheHarnessFilesAreReadOnce pins what readHarness reads: each regular file by
-// its path relative to the home, the files as they were when it read them, and no file
-// through a link, inside the home or out of it. A file with a zero byte is not read,
-// which is a report line.
+// its path relative to the home, and the files as they were when it read them. A file
+// with a zero byte is not read, which is a report line.
 func TestTheHarnessFilesAreReadOnce(t *testing.T) {
-	outside := filepath.Join(t.TempDir(), "outside.md")
-	outsideText := "Outside line one of the notes.\nOutside line two of the notes.\nOutside line three of the notes.\n"
-	os.WriteFile(outside, []byte(outsideText), 0o644)
 	binary := "Binary line one of the file.\nBinary line two of the file.\nBinary line three of the file.\n\x00"
 	home := writeHome(t, map[string]string{"skills/implement/SKILL.md": skillText, "bin/tool": binary})
-	for link, target := range map[string]string{
-		"skills/outside.md": outside,
-		"linked":            filepath.Dir(outside),
-		"skills/alias.md":   filepath.Join(home, "skills/implement/SKILL.md"),
-		"aliased":           filepath.Join(home, "skills"),
-	} {
-		if err := os.Symlink(target, filepath.Join(home, link)); err != nil {
-			t.Fatal(err)
-		}
-	}
 	h, lines := readHome(t, home)
 	if want := []string{"the text of the harness file bin/tool is not masked: it contains a zero byte"}; fmt.Sprint(lines) != fmt.Sprint(want) {
 		t.Errorf("the report lines %q, want %q", lines, want)
@@ -84,12 +71,89 @@ func TestTheHarnessFilesAreReadOnce(t *testing.T) {
 	for in, want := range map[string]string{
 		skillText: skillPut + "\n",
 		"Changed line one.\nChanged line two.\nChanged line three.\n": "Changed line one.\nChanged line two.\nChanged line three.\n",
-		outsideText:            outsideText,
 		binary[:len(binary)-1]: binary[:len(binary)-1],
 	} {
 		if got := h.Replace(in); got != want {
 			t.Errorf("%.40q: %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestALinkInTheHarnessHomeFailsTheRead pins a link anywhere in the home: to a file
+// outside the home or inside it, to a directory outside it, as qory links a skill to
+// the module's directory, to nothing, and deep in a subdirectory. Each fails the read,
+// and is one report line, with the same text, the link's path relative to the home.
+func TestALinkInTheHarnessHomeFailsTheRead(t *testing.T) {
+	cache := writeHome(t, map[string]string{"implement/SKILL.md": skillText, "notes.md": "notes\n"})
+	for _, c := range []struct{ name, link, target string }{
+		{"a file outside", "skills/notes.md", filepath.Join(cache, "notes.md")},
+		{"a file inside", "skills/alias.md", "implement/SKILL.md"},
+		{"a directory outside", "skills/implement", filepath.Join(cache, "implement")},
+		{"nothing", "skills/old.md", filepath.Join(cache, "missing.md")},
+		{"a link deep down", "skills/a/b/c/notes.md", filepath.Join(cache, "notes.md")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := writeHome(t, map[string]string{"skills/implement/SKILL.md": skillText, "skills/a/b/c/plan.md": "plan\n"})
+			if c.link == "skills/implement" {
+				os.RemoveAll(filepath.Join(home, "skills/implement"))
+			}
+			if err := os.Symlink(c.target, filepath.Join(home, c.link)); err != nil {
+				t.Fatal(err)
+			}
+			var lines []string
+			h, err := readHarness(home, func(l string) { lines = append(lines, l) })
+			want := "Replace the link " + c.link + " in the harness home with a copy; the mask reads only files there."
+			if err == nil || err.Error() != want {
+				t.Errorf("the error %v, masker %v, want %q", err, h, want)
+			}
+			if len(lines) != 1 || lines[0] != want {
+				t.Errorf("the report lines %q, want %q", lines, want)
+			}
+		})
+	}
+}
+
+// TestAFileSwappedForALinkFailsTheRead pins a file that the walk saw as a file and
+// that is a link when the session opens it: the read fails with the text of a link,
+// and a report line, for a link inside the home and out of it.
+func TestAFileSwappedForALinkFailsTheRead(t *testing.T) {
+	outside := writeHome(t, map[string]string{"notes.md": skillText})
+	for _, target := range []string{"other.md", filepath.Join(outside, "notes.md")} {
+		home := writeHome(t, map[string]string{"skills/SKILL.md": skillText, "skills/other.md": skillText})
+		root, err := os.OpenRoot(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		os.Remove(filepath.Join(home, "skills/SKILL.md"))
+		if err := os.Symlink(target, filepath.Join(home, "skills/SKILL.md")); err != nil {
+			t.Fatal(err)
+		}
+		var lines []string
+		_, err = readHarnessFile(root, "skills/SKILL.md", func(l string) { lines = append(lines, l) })
+		want := "Replace the link skills/SKILL.md in the harness home with a copy; the mask reads only files there."
+		if err == nil || err.Error() != want || len(lines) != 1 || lines[0] != want {
+			t.Errorf("a link to %s: the error %v and the report lines %q, want %q", target, err, lines, want)
+		}
+	}
+}
+
+// TestAFileSwappedForAPipeFailsTheRead pins a file that the walk saw as a regular file
+// and that is a named pipe when the session opens it: the read fails, and the error
+// starts with the fix.
+func TestAFileSwappedForAPipeFailsTheRead(t *testing.T) {
+	home := writeHome(t, map[string]string{"skills/other.md": skillText})
+	if err := syscall.Mkfifo(filepath.Join(home, "skills/SKILL.md"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	_, err = readHarnessFile(root, "skills/SKILL.md", func(string) {})
+	if want := "keep the harness home unchanged while the session starts: skills/SKILL.md changed while it was read"; err == nil || err.Error() != want {
+		t.Errorf("the error %v, want %q", err, want)
 	}
 }
 

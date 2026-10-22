@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // words is n bytes of text in which no 32 bytes repeat: words of a letter and a
@@ -127,5 +128,37 @@ func TestTheWriterIsLinearInALongLine(t *testing.T) {
 	one, two, three := scan(128<<10), scan(256<<10), scan(384<<10)
 	if second, third := two-one, three-two; float64(third) > 1.1*float64(second) {
 		t.Errorf("the third 128 KiB scanned %d bytes, more than 1.1 times the %d of the second", third, second)
+	}
+}
+
+// writes records each write it is given.
+type writes struct{ got [][]byte }
+
+func (w *writes) Write(b []byte) (int, error) {
+	w.got = append(w.got, bytes.Clone(b))
+	return len(b), nil
+}
+
+// TestTheCutIsAtTheStartOfACharacter pins a line of 100 KiB of €, 3 bytes each, that
+// is no text of the file, written in 64-byte writes, with a file whose longest line
+// is longer: the writer keeps the line back up to the cap, and each write it makes
+// ends at the end of a character, and all of them are the line.
+func TestTheCutIsAtTheStartOfACharacter(t *testing.T) {
+	h := ForHarness([]HarnessFile{{Path: "notes/long.md", Text: []byte("Notes.\n" + words("d", 200<<10) + "\nEnd of the notes.\n")}})
+	w := &writes{}
+	hw := h.Writer(w)
+	line := strings.Repeat("€", 100<<10/3)
+	writeInPieces(t, hw, line, 64)
+	if len(w.got) == 0 {
+		t.Fatal("the writer wrote nothing before the end of the line")
+	}
+	hw.Flush()
+	for i, b := range w.got {
+		if !utf8.Valid(b) {
+			t.Errorf("write %d of %d is not whole characters: it ends %q", i, len(w.got), b[max(0, len(b)-4):])
+		}
+	}
+	if got := string(bytes.Join(w.got, nil)); got != line {
+		t.Errorf("the writes are %d bytes, want the %d of the line", len(got), len(line))
 	}
 }

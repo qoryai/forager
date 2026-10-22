@@ -160,27 +160,52 @@ func TestAHarnessNotHiddenIsShown(t *testing.T) {
 	}
 }
 
-// TestAHiddenHarnessIsNotReadThroughALink pins a link in the home to a file outside
-// it: the file is not read, so its text, printed through the link, is shown.
-func TestAHiddenHarnessIsNotReadThroughALink(t *testing.T) {
+// harnessWithALink is the example harness's home with skills/review a link to a
+// directory outside it, as qory links a skill to the module's directory.
+func harnessWithALink(t *testing.T) string {
+	t.Helper()
+	home := harnessHome(t)
+	module := t.TempDir()
+	if err := os.Rename(filepath.Join(home, "skills", "review"), filepath.Join(module, "review")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(module, "review"), filepath.Join(home, "skills", "review")); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+// TestAHiddenHarnessWithALinkFailsTheJoin pins a home with a link in a run whose
+// harness is hidden: the join fails, its error is the step to replace the link with a
+// copy, and no runtime starts.
+func TestAHiddenHarnessWithALinkFailsTheJoin(t *testing.T) {
 	sp := spec(t)
 	sp.Forwarder = nil
-	home := harnessHome(t)
-	outside := filepath.Join(t.TempDir(), "notes.md")
-	text := "Outside line one of the notes.\nOutside line two of the notes.\nOutside line three of the notes.\n"
-	if err := os.WriteFile(outside, []byte(text), 0o644); err != nil {
-		t.Fatal(err)
+	sp.HarnessHome, sp.HarnessHidden = harnessWithALink(t), true
+	marker := filepath.Join(t.TempDir(), "started")
+	sp.Command, sp.Args = "/bin/sh", []string{"-c", `touch "$0"`, marker}
+	_, err := run(context.Background(), sp)
+	if want := "Replace the link skills/review in the harness home with a copy; the mask reads only files there."; err == nil || err.Error() != want {
+		t.Fatalf("the join's error %v, want %q", err, want)
 	}
-	if err := os.Symlink(outside, filepath.Join(home, "skills", "notes.md")); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the runtime started")
 	}
-	sp.HarnessHome, sp.HarnessHidden = home, true
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `cat "$QORY_HARNESS_HOME/skills/notes.md" "$QORY_HARNESS_HOME/skills/review/SKILL.md"`}
+}
+
+// TestAHarnessNotHiddenWithALinkIsShown pins the same home in a run whose harness is
+// not hidden: the session starts, and the review skill, read through the link, is
+// shown.
+func TestAHarnessNotHiddenWithALinkIsShown(t *testing.T) {
+	sp := spec(t)
+	sp.Forwarder = nil
+	sp.HarnessHome = harnessWithALink(t)
+	sp.Command, sp.Args = "/bin/sh", []string{"-c", `cat "$QORY_HARNESS_HOME/skills/review/SKILL.md"`}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out, _ := os.ReadFile(filepath.Join(res.Dir, sink.OutputFile)); string(out) != text+reviewPut+"\n" {
+	if out, _ := os.ReadFile(filepath.Join(res.Dir, sink.OutputFile)); string(out) != reviewSkill {
 		t.Errorf("output.log:\n%s", out)
 	}
 }

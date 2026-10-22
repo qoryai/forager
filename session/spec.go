@@ -119,15 +119,20 @@ type OpenSpec struct {
 	// mask.HarnessLines consecutive lines or mask.HarnessChars characters of a file is
 	// replaced with [harness text: <path>], <path> the file's path relative to the home,
 	// such as skills/implement/SKILL.md; see [mask.Harness]. The session reads regular
-	// files alone and follows no link. A file that contains a zero byte is skipped, its
-	// text is not masked, and it is a Report line. The join fails when the home, one of
-	// its directories or one of its files cannot be read, when the home has more than
-	// HarnessMaxFiles files, when a file has more than HarnessMaxFileSize bytes, or when
-	// the files have more than HarnessMaxSize bytes in all; the error starts with the fix
-	// and contains the file's path relative to the home. The session.started command and
-	// args, the lines of the run's setup outside a session, the copy of the runtime's
-	// output to Stdout and Stderr and the error of Join are not masked. False, the default, masks no harness text, and a
-	// session with no HarnessHome masks none either.
+	// files alone. A run with a hidden harness fails at the join when its harness home
+	// contains a link, and the error is a Report line as well. A file that contains a
+	// zero byte is skipped, its text is not masked, and it is a Report line. The join
+	// fails when the home, one of its directories or one of its files cannot be read,
+	// when a file changes between the walk of the home and its read, when the home has
+	// more than HarnessMaxFiles files, when a file has more than HarnessMaxFileSize
+	// bytes, or when the files have more than HarnessMaxSize bytes in all; the error
+	// starts with the fix and contains the file's path relative to the home. These are
+	// not masked: the session.started command and args; the failure line of a join that
+	// fails before the home is read; the lines of the run's setup outside a session; the
+	// lines of the host's steps, which Step.Log writes with no session number; the copy
+	// of the runtime's output to Stdout and Stderr; and the error of Join. False, the
+	// default, masks no harness text, and a session with no HarnessHome masks none
+	// either.
 	HarnessHidden bool
 }
 
