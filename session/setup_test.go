@@ -589,7 +589,9 @@ func TestTheRunsEntryListsTheSetupFolderDuringASession(t *testing.T) {
 // placeholder of a separate gateway's run answer, is placeholder_conflict, from
 // AgentEnv for --env and from Setup. LD_PRELOAD from wall.env is left out by AgentEnv,
 // as by the join, and refused by Setup. A QORY_ name other than QORY_RUN_SYSTEM and
-// QORY_RUN_REPOSITORIES is variable_reserved.
+// QORY_RUN_REPOSITORIES is variable_reserved, QORY_RUN_ID and QORY_RUN_SOCKET among
+// them, and so is a name the machine's credentials are read from. Each text starts
+// with the fix.
 func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 	ctx := context.Background()
 	setupRefused := func(t *testing.T, r *session.Run, w *setupWall, env []string) error {
@@ -629,8 +631,8 @@ func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 		if !errors.As(err, &ref) || ref.Code != "placeholder_conflict" || !slices.Equal(ref.Names, []string{"TOOL_TOKEN"}) {
 			t.Errorf("Setup: %v, want placeholder_conflict TOOL_TOKEN", err)
 		}
-		if err != nil && strings.Contains(err.Error(), "a-value-not-in-errors") {
-			t.Errorf("the error quotes the value: %v", err)
+		if want := "Leave TOOL_TOKEN out of the setup's variables: the run's placeholder takes its place."; err == nil || err.Error() != want {
+			t.Errorf("Setup: %v\nwant %s", err, want)
 		}
 	})
 	t.Run("LD_PRELOAD from wall.env", func(t *testing.T) {
@@ -652,7 +654,7 @@ func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 		}
 		w.got.Dir = sp.Dir
 		err = setupRefused(t, r, w, append(env, "LD_PRELOAD=/lib/inject.so"))
-		want := "Leave LD_PRELOAD out of the setup's variables: the deny list, denied-variables.json, leaves it out of the agent's environment."
+		want := "Leave LD_PRELOAD out of the setup's variables: denied-variables.json lists it."
 		if err == nil || err.Error() != want {
 			t.Errorf("Setup: %v\nwant %s", err, want)
 		}
@@ -667,10 +669,40 @@ func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 		}
 		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
 		w.got.Dir = sp.Dir
-		err = setupRefused(t, r, w, []string{"QORY_RUN_SYSTEM=tickets", "QORY_RUN_KEY=forged"})
+		env := []string{"QORY_RUN_SYSTEM=tickets", "QORY_RUN_REPOSITORIES=a b", "QORY_RUN_KEY=forged", "QORY_RUN_ID=forged", "QORY_RUN_SOCKET=forged"}
+		err = setupRefused(t, r, w, env)
 		var ref *session.Refusal
-		if !errors.As(err, &ref) || ref.Code != "variable_reserved" || !slices.Equal(ref.Names, []string{"QORY_RUN_KEY"}) {
-			t.Errorf("Setup: %v, want variable_reserved QORY_RUN_KEY", err)
+		if !errors.As(err, &ref) || ref.Code != "variable_reserved" || !slices.Equal(ref.Names, []string{"QORY_RUN_ID", "QORY_RUN_KEY", "QORY_RUN_SOCKET"}) {
+			t.Errorf("Setup: %v, want variable_reserved QORY_RUN_ID, QORY_RUN_KEY and QORY_RUN_SOCKET", err)
+		}
+		want := "Leave QORY_RUN_ID, QORY_RUN_KEY, QORY_RUN_SOCKET out of the setup's variables: the QORY_ names are Forager's."
+		if err == nil || err.Error() != want {
+			t.Errorf("Setup: %v\nwant %s", err, want)
+		}
+	})
+	t.Run("a name the machine's credentials are read from", func(t *testing.T) {
+		sp, g := specGateway(t)
+		g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+			a := linktest.RunAnswer(req)
+			a["reserved"] = []string{"MACHINE_TOKEN"}
+			return linktest.Reply{Status: 200, Body: a}
+		})
+		w := &setupWall{}
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+		w.got.Dir = sp.Dir
+		err = setupRefused(t, r, w, []string{"APP_ENV=test", "MACHINE_TOKEN=fake-machine-value"})
+		var ref *session.Refusal
+		if !errors.As(err, &ref) || ref.Code != "variable_reserved" || !slices.Equal(ref.Names, []string{"MACHINE_TOKEN"}) {
+			t.Errorf("Setup: %v, want variable_reserved MACHINE_TOKEN", err)
+		}
+		want := "Leave MACHINE_TOKEN out of the setup's variables: the machine's credentials are read from it."
+		if err == nil || err.Error() != want || strings.Contains(err.Error(), "fake-machine-value") {
+			t.Errorf("Setup: %v\nwant %s", err, want)
 		}
 	})
 }

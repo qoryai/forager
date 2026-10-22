@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
@@ -913,9 +914,10 @@ const agentEnvVariables = `{"variables":{"NODE_ENV":{"value":"test"},"APP_REGION
 	`"CODEX_HOME":{"value":"/server/home"},"ANTHROPIC_AUTH_TOKEN":{"value":"server-credential"},` +
 	`"QORY_RUN_SYSTEM":{"value":"tickets"},"QORY_ACCESS_KEY_SECRET":{"value":"x"},"QORY_RUN_ID":{"value":"x"},"HTTPS_PROXY":{"value":"http://x.example"}}}`
 
-// answerAgentEnv makes the gateway's run answer carry agentEnvVariables and the
-// placeholder TOOL_TOKEN.
-func answerAgentEnv(g *linktest.Fake) {
+// answerAgentEnv sets the fake gateway's run answer to one with agentEnvVariables
+// and the placeholder TOOL_TOKEN, and with byRef, the image by reference, as
+// byReference answers it.
+func answerAgentEnv(g *linktest.Fake, byRef bool) {
 	var vars struct {
 		Variables map[string]any `json:"variables"`
 	}
@@ -925,6 +927,11 @@ func answerAgentEnv(g *linktest.Fake) {
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
 		a := linktest.RunAnswer(req)
 		a["variables"], a["placeholders"] = vars.Variables, []string{"TOOL_TOKEN"}
+		if byRef {
+			a["image"] = map[string]any{"ref": pinned, "reference": true}
+			a["relay_image"] = "example.com/agent:1"
+			a["applied"].(map[string]any)["image"] = pinned
+		}
 		return linktest.Reply{Status: 200, Body: a}
 	})
 }
@@ -957,34 +964,43 @@ func (p recordingPrep) Model() (runtimes.ModelPlaces, bool) {
 // one with accept or ignore, the result is the agent's environment without the fixed
 // names, the placeholder, the preparation's names, the inherited PATH, a name of the
 // built-in deny list, and what the shell that dumps it adds, sorted. A name of the deny list from the server or from wall.env, LD_PRELOAD
-// among them, is not in it, and each call returns a new slice. AgentEnv writes no
+// among them, is not in it, and each call returns a new slice. For a run whose image is
+// a reference, a harness default's path in the workspace is under /workspace, as the
+// agent gets it. AgentEnv writes no
 // session directory and sends no join request.
 func TestAgentEnvIsWhatTheAgentGets(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		walled   bool
+		byRef    bool
 		unwalled string
 		logLevel string
 	}{
-		{"walled", true, "", "server"},
-		{"unwalled and accept", false, session.UnwalledAccept, "server"},
-		{"unwalled and ignore", false, session.UnwalledIgnore, "run"},
+		{"walled", true, false, "", "server"},
+		{"walled, image by reference", true, true, "", "server"},
+		{"unwalled and accept", false, false, session.UnwalledAccept, "server"},
+		{"unwalled and ignore", false, false, session.UnwalledIgnore, "run"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			sp, g := specGateway(t, "EDITOR=shell", "SHELL_ONLY=kept")
-			answerAgentEnv(g)
+			answerAgentEnv(g, tc.byRef)
 			out := dumpsEnv(t, &sp)
 			var prepared []string
 			sp.Runtime = recordingPrep{sp.Runtime, &prepared}
 			sp.LaunchFixed = []string{"CODEX_HOME=/computed/home"}
-			sp.LaunchDefaults = []string{"HARNESS_PROFILE=nextjs", "BUILD_NUMBER=0"}
+			sp.LaunchDefaults = []string{"HARNESS_PROFILE=nextjs", "BUILD_NUMBER=0", "CACHE_PATH=" + filepath.Join(sp.Dir, "cache")}
+			cache := filepath.Join(sp.Dir, "cache")
 			sp.Variables = session.Variables{
 				Run:     []string{"LOG_LEVEL=run", "EDITOR=vi"},
 				Machine: []string{"EDITOR=nano", "BUILD_NUMBER=7", "LD_PRELOAD=/lib/inject.so"},
 				Deny:    []string{"APP_*"}, Unwalled: tc.unwalled,
 			}
-			if tc.walled {
+			switch {
+			case tc.byRef:
+				sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = &targetWall{}, "base", images, []string{"registry.example/agents/"}
+				cache = "/workspace/cache"
+			case tc.walled:
 				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			}
 			r, err := session.Open(ctx, opened(sp))
@@ -1003,7 +1019,7 @@ func TestAgentEnvIsWhatTheAgentGets(t *testing.T) {
 				name, value, _ := strings.Cut(kv, "=")
 				has[name] = value
 			}
-			for name, value := range map[string]string{"LOG_LEVEL": tc.logLevel, "EDITOR": "vi", "BUILD_NUMBER": "7", "HARNESS_PROFILE": "nextjs", "SHELL_ONLY": "kept"} {
+			for name, value := range map[string]string{"LOG_LEVEL": tc.logLevel, "EDITOR": "vi", "BUILD_NUMBER": "7", "HARNESS_PROFILE": "nextjs", "SHELL_ONLY": "kept", "CACHE_PATH": cache} {
 				if has[name] != value {
 					t.Errorf("AgentEnv has %s=%q, want %q", name, has[name], value)
 				}
@@ -1094,7 +1110,7 @@ func TestAgentEnvRefusesWhatAJoinRefuses(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sp, g := specGateway(t)
-			answerAgentEnv(g)
+			answerAgentEnv(g, false)
 			tc.set(&sp)
 			r, err := session.Open(ctx, opened(sp))
 			if err != nil {
@@ -1115,7 +1131,7 @@ func TestAgentEnvRefusesWhatAJoinRefuses(t *testing.T) {
 				return
 			}
 			sp, g = specGateway(t)
-			answerAgentEnv(g)
+			answerAgentEnv(g, false)
 			tc.set(&sp)
 			_, joined := run(ctx, sp)
 			var want *session.Refusal
@@ -1135,4 +1151,55 @@ func TestAgentEnvRefusesWhatAJoinRefuses(t *testing.T) {
 	if got, err := r.AgentEnv(sp.SessionSpec); err == nil || !strings.HasPrefix(err.Error(), "open a new run") {
 		t.Errorf("after the close: %q, %v; want the fix first", got, err)
 	}
+}
+
+// TestAgentEnvLeavesOutWhatTheGatewayHolds pins what Run.AgentEnv leaves out of the
+// environment a run without a wall inherits, as Join does: a value of a name the
+// machine's credentials are read from, a value of the start key's variable and of the
+// runtime's other model-key variable, and a value of a placeholder's name, whose
+// placeholder the agent gets in its place.
+func TestAgentEnvLeavesOutWhatTheGatewayHolds(t *testing.T) {
+	ctx := context.Background()
+	agentEnv := func(t *testing.T, sp runSpec) string {
+		t.Helper()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+		env, err := r.AgentEnv(sp.SessionSpec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(env, "\n")
+	}
+	t.Run("a name the machine's credentials are read from", func(t *testing.T) {
+		sp, g := specGateway(t, "MACHINE_TOKEN=fake-machine-value")
+		g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+			a := linktest.RunAnswer(req)
+			a["reserved"] = []string{"MACHINE_TOKEN"}
+			return linktest.Reply{Status: 200, Body: a}
+		})
+		if env := agentEnv(t, sp); strings.Contains(env, "fake-machine-value") {
+			t.Errorf("AgentEnv has the inherited value of MACHINE_TOKEN:\n%s", env)
+		}
+	})
+	t.Run("the model-key variables", func(t *testing.T) {
+		sp, g := specGateway(t, apiKeyVariable+"=sk-fake-inherited", authTokenVariable+"=sk-fake-other")
+		answeringWith(g, []map[string]any{model(), sealed("forge", "api.github.com", "GITHUB_TOKEN")}, []string{"GITHUB_TOKEN"})
+		env := agentEnv(t, sp)
+		if strings.Contains(env, "sk-fake-inherited") {
+			t.Errorf("AgentEnv has the inherited value of the start key's variable:\n%s", env)
+		}
+		if strings.Contains(env, "sk-fake-other") {
+			t.Errorf("AgentEnv has the inherited value of the other model-key variable:\n%s", env)
+		}
+	})
+	t.Run("a placeholder's name", func(t *testing.T) {
+		sp, g := specGateway(t, "TOOL_TOKEN=fake-inherited-token")
+		answerAgentEnv(g, false)
+		if env := agentEnv(t, sp); strings.Contains(env, "TOOL_TOKEN=") {
+			t.Errorf("AgentEnv has a value of the placeholder TOOL_TOKEN:\n%s", env)
+		}
+	})
 }

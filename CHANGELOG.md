@@ -1203,8 +1203,11 @@ release may change what an existing document does, and says so under Upgrading.
   does, with the deny lists and the placeholders, without the runtime's preparation,
   and writes nothing and sends no request. It leaves out the names Forager, the proxy,
   the wall and `LaunchFixed` set, the placeholders, and a name of
-  `denied-variables.json` that `Env` has, such as `PATH`. A spec `Join` refuses, such as
-  one with `variable_reserved` or `placeholder_conflict`, is the same refusal.
+  `denied-variables.json` that `Env` has, such as `PATH`. A spec that `Join` refuses
+  before its join request or as it resolves the variables, such as one with
+  `variable_reserved` or `placeholder_conflict`, gets the same refusal. The result has
+  `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup`
+  accepts both.
 
 #### Fixed
 

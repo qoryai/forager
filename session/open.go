@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -472,12 +473,16 @@ func (r *Run) Repositories() string { return r.answer.Values()[envRunRepositorie
 // the value in the agent: AgentEnv runs no runtime preparation, writes nothing and
 // sends no request. It also leaves out a value of SessionSpec.Env whose name the
 // built-in deny list, denied-variables.json, matches, such as PATH, which Join passes
-// to the agent and [Run.Setup] refuses. The values are plain values, not secrets. A
-// caller that runs the setup passes the result as [SetupSpec.Env], with
-// QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES when it wants them. The error is the one
-// Join returns for spec before its join request or as it resolves the variables, the
-// same [refusal.VariableReserved] or [refusal.PlaceholderConflict] among them, or that
-// the run is closed or another call of the run is running.
+// to the agent and [Run.Setup] refuses. AgentEnv masks no value: it returns each value
+// as the server, the caller or the machine passed it, and no value the gateway holds
+// for a placeholder. For a run whose image is a reference, a path in LaunchDefaults is
+// written under /workspace, as Join writes it for the agent. A caller that runs the
+// setup passes the result as [SetupSpec.Env]. The result has QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES when the server sets them, and Setup accepts both. The error
+// is the one Join returns for spec before its join request, as it checks the places of
+// a run whose image is a reference, or as it resolves the variables, the same
+// [refusal.VariableReserved] or [refusal.PlaceholderConflict] among them, or that the
+// run is closed or another call of the run is running.
 func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 	if !r.joining.TryLock() {
 		return nil, errors.New("call AgentEnv after the run's other call returns: another call of the run is running")
@@ -491,10 +496,26 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 		return nil, err
 	}
 	// As in Join: without a wall the variables the machine's credentials are read from
-	// are left out of what the session inherits, and the session starts with its model
-	// key, which the join answer gives as the request's or the run's start key.
+	// are left out of what the session inherits. The session starts with
+	// spec.ModelCredential, or with the run's start key when spec has none: the join
+	// answer's model_credential is one of the two, by link-join-answer.schema.json.
 	if s.Wall == nil {
 		s.Env = withoutNames(s.Env, r.reserved)
+	}
+	// As in Join: a run whose policy names its image by its reference sees its
+	// workspace at /workspace, and the harness's values are written as the enclosure
+	// sees them. The places get the join's checks, for the session the next join
+	// numbers.
+	if r.byReference {
+		plan, err := checkMounts(s, r.dir, filepath.Join(r.dir, SessionsDir, strconv.Itoa(r.numbered+1)))
+		if err != nil {
+			return nil, err
+		}
+		_, inside, err := plan.atWorkspace()
+		if err != nil {
+			return nil, err
+		}
+		s.LaunchFixed, s.LaunchDefaults = insideValues(s.LaunchFixed, inside), insideValues(s.LaunchDefaults, inside)
 	}
 	model := s.ModelCredential
 	if model == "" {

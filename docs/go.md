@@ -792,17 +792,21 @@ the credential the join request asks the gateway for, for this session.
     from the server's variables, `Variables.Run`, `Variables.Machine`,
     `LaunchDefaults` and `Env`, `NAME=value`, sorted by name, in a new slice on every
     call. To give the setup container the agent's environment, call it before `Setup`
-    with the session's full spec, and pass the result as `SetupSpec.Env`, with
-    `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the setup commands use them. It
-    resolves the variables as `Join` does, with the deny lists and the placeholders,
-    and leaves out the names Forager, the proxy, the wall, the bundle and
-    `LaunchFixed` set, the placeholders, and a name of `denied-variables.json` that
-    `Env` has, such as `PATH`, which `Join` passes to the agent. It runs no runtime preparation, so a name
+    with the session's full spec, and pass the result as `SetupSpec.Env`. The result
+    has `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server sets them, and
+    `Setup` accepts both. It resolves the variables as `Join` does, with the deny
+    lists and the placeholders, and leaves out the names Forager, the proxy, the wall,
+    the bundle and `LaunchFixed` set, the placeholders, and a name of
+    `denied-variables.json` that `Env` has, such as `PATH`, which `Join` passes to the
+    agent. For a run whose image is a reference, a path in `LaunchDefaults` is written
+    under `/workspace`, as `Join` writes it. It runs no runtime preparation, so a name
     the preparation sets overrides the value in the agent. It writes nothing and sends
-    no request. The values are plain values, not secrets. The error is the one `Join`
-    returns for `spec` before its join request or as it resolves the variables, such
-    as `variable_reserved` or `placeholder_conflict`, or that the run is closed, or
-    that another call of the run is running.
+    no request. AgentEnv masks no value: it returns each value as the server, the
+    caller or the machine passed it, and no value the gateway holds for a placeholder.
+    The error is the one `Join` returns for `spec` before its join request, as it
+    checks the places of a run whose image is a reference, or as it resolves the
+    variables, such as `variable_reserved` or `placeholder_conflict`, or that the run
+    is closed, or that another call of the run is running.
 - `SocketGrace` is how long the run socket keeps accepting after the runtime exits, so
   a hook on its last event is still read. Zero or less means 200 ms. It is for tests:
   production leaves it zero.

@@ -13,6 +13,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/mask"
+	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/wall"
 )
@@ -345,28 +346,56 @@ func (r *Run) setupEnv(env []string) ([]string, error) {
 	return append(placeholders(r.answer.Placeholders, keyed{}), kept...), nil
 }
 
-// checkSetupEnv refuses a setup variable of env that the agent of the run could not
-// get, by the rules that hold for every session of a walled run, as [variables.Check]
-// refuses them for a join: a value for one of placeholders, the run's placeholders, is
-// [refusal.PlaceholderConflict], and a QORY_ name or one of reserved, the names the
-// machine's credentials are read from, is [refusal.VariableReserved]. QORY_RUN_SYSTEM
-// and QORY_RUN_REPOSITORIES, the server's names a setup command may use, are not
-// refused. A name the built-in deny list, denied-variables.json, matches is refused
-// too, such as LD_PRELOAD or HTTPS_PROXY: a join leaves its value out of the agent's
-// environment. The deny entries of a session, Variables.Deny and the runtime's denies,
+// checkSetupEnv refuses a setup variable of env by the rules that hold for every
+// session of a walled run, each text starting with the fix. A QORY_ name, in any case,
+// is [refusal.VariableReserved], QORY_RUN_ID and QORY_RUN_SOCKET among them; only
+// QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, the server's names a setup command may
+// use, are not refused. A name of reserved, the names the machine's credentials are
+// read from, is [refusal.VariableReserved] too, and a value for one of placeholders,
+// the run's placeholders, is [refusal.PlaceholderConflict]. A name the built-in deny
+// list, denied-variables.json, matches is refused with no code, such as LD_PRELOAD or
+// HTTPS_PROXY. The deny entries of a session, Variables.Deny and the runtime's denies,
 // apply in [Run.AgentEnv].
 func checkSetupEnv(env, placeholders, reserved []string) error {
-	checked := withoutNames(env, []string{envRunSystem, envRunRepositories})
-	if err := variables.Check(checked, true, placeholders, reserved); err != nil {
-		return err
+	checked := names(withoutNames(env, []string{envRunSystem, envRunRepositories}))
+	slices.Sort(checked)
+	checked = slices.Compact(checked)
+	pick := func(keep func(string) bool) []string {
+		var out []string
+		for _, name := range checked {
+			if keep(name) {
+				out = append(out, accesskey.ShownName(name, false))
+			}
+		}
+		return out
+	}
+	// leave is the refusal of names with code, its text the fix and then why: one,
+	// when names has one name, or many.
+	leave := func(code string, names []string, one, many string) error {
+		why := many
+		if len(names) == 1 {
+			why = one
+		}
+		r := refusal.New(code, names, "")
+		r.Text = "Leave " + strings.Join(names, ", ") + " out of the setup's variables: " + why + "."
+		return r
+	}
+	if qory := pick(func(n string) bool { return strings.HasPrefix(strings.ToUpper(n), "QORY_") }); len(qory) > 0 {
+		return leave(refusal.VariableReserved, qory, "the QORY_ names are Forager's", "the QORY_ names are Forager's")
+	}
+	if machine := pick(func(n string) bool { return slices.Contains(reserved, n) }); len(machine) > 0 {
+		return leave(refusal.VariableReserved, machine, "the machine's credentials are read from it", "the machine's credentials are read from them")
+	}
+	if conflict := pick(func(n string) bool { return slices.Contains(placeholders, n) }); len(conflict) > 0 {
+		return leave(refusal.PlaceholderConflict, conflict, "the run's placeholder takes its place", "the run's placeholders take their place")
 	}
 	deny, err := variables.List(nil)
 	if err != nil {
 		return err
 	}
-	for _, name := range names(checked) {
+	for _, name := range checked {
 		if deny.Matches(name) {
-			return fmt.Errorf("Leave %s out of the setup's variables: the deny list, denied-variables.json, leaves it out of the agent's environment.", accesskey.ShownName(name, false))
+			return fmt.Errorf("Leave %s out of the setup's variables: denied-variables.json lists it.", accesskey.ShownName(name, false))
 		}
 	}
 	return nil
