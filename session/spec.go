@@ -1,12 +1,15 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -49,6 +52,11 @@ type OpenSpec struct {
 	// image the run's sessions start in is fixed at the open. The run request carries
 	// them, so the gateway resolves the policy's selection against them.
 	Images []Image
+	// EngineProxy, when set, is where the machine's container engine sends the pull of
+	// the run's image: [Run.FetchImage] starts a forwarder there for its step alone, so
+	// the pull goes through the run's proxy. Nil means the engine pulls over the
+	// machine's network.
+	EngineProxy *EngineProxy
 	// ImagesAllow are the prefixes of the references pinned by digest a run's policy may
 	// name its image by, for qory images.allow: an entry covers a reference that starts
 	// with it when the entry ends in / or @, or the reference's next character is / or
@@ -101,6 +109,52 @@ type OpenSpec struct {
 	// Report receives one line per thing the run reports to its user; nil means
 	// os.Stderr, each line after "qory run: ".
 	Report func(string)
+}
+
+// EngineProxy is the proxy setting the machine's container engine reads when it
+// starts, such as http-proxy and https-proxy in Docker's daemon.json set to
+// http://qory:<password>@127.0.0.1:3129: the machine's start unit writes it, and
+// writes the same values for qory to read. Forager writes Password into no event, no
+// record and no error line. Its methods show the address alone, for an EngineProxy and
+// a pointer to one alike, where fmt calls Format, log/slog LogValue and encoding/json
+// MarshalJSON. fmt calls no method, and prints both fields, in three cases: %p of a
+// value, %w, since an EngineProxy is not an error, and a value in a struct field that
+// is not exported, which log/slog's text handler prints through fmt as well.
+type EngineProxy struct {
+	// Addr is the setting's address, a loopback host:port, such as 127.0.0.1:3129.
+	Addr string
+	// Password is the setting's password, which the engine sends in the
+	// Proxy-Authorization of each request.
+	Password string
+}
+
+// shownEngineProxy is what the methods of EngineProxy show: the address alone.
+type shownEngineProxy struct {
+	Addr string
+}
+
+// Format prints p as fmt prints a struct of its address alone, under every verb and
+// flag that fmt passes to it, the password left out.
+func (p EngineProxy) Format(f fmt.State, verb rune) {
+	out := fmt.Sprintf(fmt.FormatString(f, verb), shownEngineProxy{Addr: p.Addr})
+	if verb == 'v' && f.Flag('#') {
+		out = strings.Replace(out, "session.shownEngineProxy", "session.EngineProxy", 1)
+	}
+	io.WriteString(f, out)
+}
+
+// String is p as %v prints it: its address alone.
+func (p EngineProxy) String() string { return fmt.Sprintf("%v", p) }
+
+// GoString is p as %#v prints it: its address alone.
+func (p EngineProxy) GoString() string { return fmt.Sprintf("%#v", p) }
+
+// LogValue is p as log/slog logs it: its address alone.
+func (p EngineProxy) LogValue() slog.Value { return slog.GroupValue(slog.String("addr", p.Addr)) }
+
+// MarshalJSON writes p's address alone, as {"Addr":"127.0.0.1:3129"}.
+func (p EngineProxy) MarshalJSON() ([]byte, error) {
+	return json.Marshal(shownEngineProxy{Addr: p.Addr})
 }
 
 // SessionSpec is what one session of an open run is given: the program to start and

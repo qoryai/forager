@@ -125,9 +125,9 @@ At each `Join` the session:
 3. records `dev.qory.session.started`, with the runtime, the command, `terminal`, the
    image and the harness's sources, and `dev.qory.run.policy_applied` with the session's
    variables, the credential variables and the harness's hosts;
-4. behind a wall, records the image step, when the policy's image is a reference,
-   around the wall's preparation up to the image's fetch and the check of its user, and
-   the wall step, `start the wall`, around the rest of the wall's start up to the
+4. behind a wall, records the image step, when the policy's image is a reference that
+   no step fetched yet (`FetchImage`), around the image's fetch and the check of its
+   user, and the wall step, `start the wall`, around the wall's start up to the
    runtime's start;
 5. starts the runtime, in no step, records `dev.qory.session.exited` when it exits, and
    returns once the gateway accepted that batch, or the run ended.

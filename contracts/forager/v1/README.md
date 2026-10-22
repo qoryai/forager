@@ -342,7 +342,9 @@ harness, then joins a session.
    step is a `dev.qory.run.step_started`, the step's lines as `dev.qory.run.log` with
    `stream: stderr`, its number as `step` and no `session`, and a
    `dev.qory.run.step_exited` (§The events, Steps); the run's masker replaces each
-   forwarder's password in them, as in a session's output. For
+   forwarder's password in them, as in a session's output. The fetch of a walled run's
+   image by reference is host work too, a step of kind `image`
+   (`(*session.Run).FetchImage`, §Images). For
    every run with a certificate authority, walled or not, the open writes
    `ca-bundle.pem` into the run directory when the machine has a CA bundle
    (§Credentials, Termination).
@@ -1472,7 +1474,8 @@ kind of a setup command wherever it runs, inside the wall too; Forager writes no
 `setup` step, and a session's `preparation` runs with its runtime, in no step.
 
 The caller writes the steps of its host work, `fetch` and `compose`, before the first
-join or between two joins (`(*session.Run).StartStep`). Each join writes its steps:
+join or between two joins (`(*session.Run).StartStep`), and the image's, `image`
+(`(*session.Run).FetchImage`, §Images). Each join writes its steps:
 
 1. **The join step**, `join`, with the name `join session <n>`, the number the gateway
    gives the next join. It spans the join request and the session's checks, and ends right
@@ -1481,12 +1484,13 @@ join or between two joins (`(*session.Run).StartStep`). Each join writes its ste
    `-1`; then the session writes the join's `dev.qory.session.exited`, with the
    refusal's code when the failure has one. A session does not lie inside a join step.
 2. **The image step**, `image`, with the image's reference as its name, behind a wall
-   when the policy's image is a reference. It comes after `dev.qory.session.started`
-   and the session's `dev.qory.run.policy_applied`. The session writes that
+   when the policy's image is a reference and no step fetched it before the join. It
+   comes after `dev.qory.session.started` and the session's
+   `dev.qory.run.policy_applied`. The session writes that
    `dev.qory.run.policy_applied` right after `dev.qory.session.started` and before the
    wall, also for a session whose wall then fails to start. The image step spans the
-   wall's preparation up to the end of the image's fetch and the check of its user
-   (§Images).
+   image's fetch and the check of its user (§Images). A join after an image step that
+   succeeded finds the image by its digest and writes none.
 3. **The wall step**, `wall`, with the name `start the wall`, behind every wall. It spans the
    rest of the wall's start: the wall's networks, the session's forwarder and hook
    socket, the second check of the session's places and the launch's wrapping, up to
@@ -3939,8 +3943,8 @@ as that image first.
 runtime, with no daemon, as the wall's user, which for such an image is a uid and a gid
 in numbers, neither 0, so that no name or group of the image's `/etc/passwd` or
 `/etc/group` chooses who the agent is: a wall user given by name, or as a uid alone, is
-refused before anything is made. Before the run starts, the wall fetches it unless the
-engine holds it by that digest, and refuses one whose user is root. The relay always
+refused before anything is made. Before the wall starts, the image's fetch pulls it
+unless the engine holds it by that digest, and refuses one whose user is root. The relay always
 starts from the machine's default image, never from the run's. The run sees its
 workspace at `/workspace`, not at its path on the machine (below).
 
@@ -3981,7 +3985,8 @@ that selects another is refused, and the policy in force stays.
 
 **The user of an image by reference.** The wall fetches the image with the engine's
 pull, before it makes anything else for the run, unless the engine holds it by that
-digest, and reads the image's user. No user, `root`, and a uid of 0 in any spelling,
+digest, and reads the image's user. The wall's preparation then finds the image by its
+digest and pulls nothing. No user, `root`, and a uid of 0 in any spelling,
 with or without a group, are root, and so is a name the image's `/etc/passwd` maps to
 uid 0. A user given by a name the image's `/etc/passwd` does not map, or in an image
 with no `/etc/passwd`, cannot be checked and is refused the same way: such an image
@@ -4010,11 +4015,32 @@ sees its workspace at the same path as on the machine.
 **The record.** `dev.qory.session.started` contains `image`, the reference, and when the
 image is one the machine defines `image_name`, `container_runtime` when the definition
 sets one, and `docker: true` when the enclosure has nested Docker. For an image by
-reference, the session's image step spans the image's fetch, skipped when the engine
+reference, the run's image step spans the image's fetch, skipped when the engine
 holds it by that digest, and the check of its user; its `duration_ms` includes how long
 the wall took to find the image (§The events, Steps).
 `dev.qory.run.policy_applied` contains `image` when the policy or the run configuration
 selects or names one.
+
+**An image pulled through the gateway.** `(*session.Run).FetchImage` fetches the image
+by reference as a host step of kind `image`, named after the reference, before the first
+join or between joins. The machine's container engine pulls the image; Forager has no
+registry client. With `OpenSpec.EngineProxy`, the address and the password of the proxy
+setting the engine reads when it starts, the pull goes through the run's proxy, under the
+run's policy: for the step alone, a forwarder listens at that address, passes on only a
+request with the password, and reaches the gateway's proxy as the host proxy does
+(§The gateway's link, Host work). Each connection of the pull is a
+`dev.qory.run.egress`, and the engine checks the manifest and each layer against the
+pinned digest. For a run with a certificate authority, the Docker wall writes the run's
+certificate as `qory-run-<id>.crt` in `<CertsDir>/<host>/`, `/etc/docker/certs.d` by
+default, for the reference's registry host and for each host of `credential_hosts`, and
+removes the files when the step ends, also when the pull fails or its context ends.
+The agent's container, and the container the wall reads the image's files from, are
+created with `--pull=never`, so the engine pulls the image in the image step alone.
+Docker Engine reads that directory at each pull. On its classic image store it reads
+none for `docker.io`, so an image there comes only through a blind relay, with no
+credential; on its containerd image store this is unverified. Without
+`EngineProxy` the engine pulls over the machine's network. The password is in no event,
+no record and no error line.
 
 **What an image provides.** The wall builds no image and changes none. An image runs:
 
@@ -4103,8 +4129,10 @@ Forager's files are:
 - the private directories in the system's temporary directory where every gateway on the
   machine makes its link's socket, `qory-link-*` (§The gateway's link);
 - the wall's files: for `docker`, the directory of the `docker` command and of the
-  helper, and the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
-  whose context and credential helpers start programs;
+  helper, the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
+  whose context and credential helpers start programs, and `CertsDir`,
+  `/etc/docker/certs.d` by default, where a certificate an agent wrote would be one the
+  engine trusts for a registry;
 - the runs directory, where the session makes the run directories;
 - the session's registry of walled runs (below).
 

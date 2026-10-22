@@ -136,13 +136,14 @@ The steps come after `dev.qory.run.started`, numbered in the order they start, o
 a time:
 
 - The caller writes the `fetch` and `compose` steps of its host work with
-  `(*session.Run).StartStep`, before the first join or between two joins.
+  `(*session.Run).StartStep`, before the first join or between two joins, and the
+  `image` step of an image by reference with `(*session.Run).FetchImage`.
 - Each join writes a `join` step, `join session <n>`, around its join request and the
   session's checks. It ends before `dev.qory.session.started`, or `failed` before the
   `dev.qory.session.exited` of a refused join.
 - Behind a wall, after `dev.qory.session.started`, the join writes an `image` step,
-  with the image's reference as its name, when the policy's image is a reference,
-  and a `wall` step, `start the wall`, up to the runtime's start. The runtime runs in no
+  with the image's reference as its name, when the policy's image is a reference that
+  no step fetched yet, and a `wall` step, `start the wall`, up to the runtime's start. The runtime runs in no
   step, and a session's lines have `step` only in these two steps.
 
 The close ends a host step still open `cancelled` with -1, before

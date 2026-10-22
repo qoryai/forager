@@ -178,7 +178,7 @@ func TestARefusalOfAnImageWithASecretPrefixListsAPhrase(t *testing.T) {
 	} {
 		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: c.user}
 		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
-		_, err := d.Prepare(context.Background(), Request{RunID: runID, Image: c.image, RelayImage: "example.com/agent:1", Pull: true})
+		err := d.Pull(context.Background(), Request{RunID: runID, Image: c.image, RelayImage: "example.com/agent:1", Pull: true}, nil, nil)
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.ImageUserRoot {
 			t.Errorf("image %s, user %s: %v, want image_user_root", c.image, c.user, err)

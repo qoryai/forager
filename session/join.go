@@ -61,10 +61,11 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 //
 // The join writes its steps, numbered on from the run's last step: the join step, join
 // session <n>, from the join request to right before dev.qory.session.started, and,
-// behind a wall, the image step, when the policy's image is a reference, and the
-// wall step, up to the runtime's start. A refused join ends its join step failed with
-// -1 before its dev.qory.session.exited. Join returns an error and writes nothing while
-// a host step of [Run.StartStep] is open.
+// behind a wall, the image step, when the policy's image is a reference that no step
+// fetched yet ([Run.FetchImage]), and the wall step, up to the runtime's start. A
+// refused join ends its join step failed with -1 before its dev.qory.session.exited.
+// Join returns an error and writes nothing while a host step of [Run.StartStep] is
+// open.
 //
 // A session that starts has a directory in the run directory, sessions/<n>/ with n its
 // number ([Result.SessionDir]): its output.log, the bytes of its dev.qory.run.log
@@ -216,14 +217,13 @@ func (r *Run) refusedJoin(n int, err error) {
 // dev.qory.session.exited of a join that fails the session's checks.
 //
 // Behind a wall the session's start has two steps after dev.qory.session.started. The
-// image step, when the policy's image is a reference, spans the wall's
-// preparation up to the end of the image's fetch and the check of its user,
-// wall.Request.Fetched. The wall step spans the rest: the wall's networks, the
-// forwarder, the hook socket, the second check of the places and the wall's Wrap, up to
-// the runtime's start. The runtime runs in no step. A failure in either step ends it
-// failed with -1, after the failure's line with the session's number and the step's
-// when the failure has no refusal code, and before the session's
-// dev.qory.session.exited.
+// image step, when the policy's image is a reference and no step fetched it yet, spans
+// the wall's pull and the check of the image's user, wall.Puller. The wall step spans
+// the rest: the wall's preparation, its networks, the forwarder, the hook socket, the
+// second check of the places and the wall's Wrap, up to the runtime's start. The
+// runtime runs in no step. A failure in either step ends it failed with -1, after the
+// failure's line with the session's number and the step's when the failure has no
+// refusal code, and before the session's dev.qory.session.exited.
 func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Runtime, answer *server.LinkJoinAnswer, n int, joined *Step) (*Result, error) {
 	dir := r.dir
 	// sessionDir is the session's directory, made once the session's checks before the
@@ -480,34 +480,31 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	r.emitMu.Unlock()
 	defer r.setApplied(nil)
 	if spec.Wall != nil {
-		// The image step, for an image the wall fetches, ends once the fetch and the
-		// check of the image's user pass, and the wall step starts.
-		walling := false
-		wallStep := func() { open, walling = r.startStep(event.StepWall, "start the wall"), true }
-		req := wall.Request{RunID: r.id, Image: r.img.Ref, Runtime: r.img.Runtime, Docker: r.img.Docker, RelayImage: r.relayImage, Pull: r.byReference}
-		if req.Pull {
-			open = r.startStep(event.StepImage, r.img.Ref)
-			req.Fetched = func() {
-				endStep(event.StateSucceeded)
-				wallStep()
-			}
-		} else {
-			wallStep()
-		}
-		if enclosure, err = spec.Wall.Prepare(runCtx, req); err != nil {
-			// A refusal's code, such as an image that runs as root, is the reason the
-			// session ended; another failure, such as a pull, has no reason.
+		// refused is a failure of the image or the wall step: a refusal's code, such as
+		// an image that runs as root, is the reason the session ended; another failure,
+		// such as a pull, has no reason.
+		refused := func(err error) (*Result, error) {
 			var ref *Refusal
 			if errors.As(err, &ref) && refusal.Decides(ref.Code) {
 				return failWith(err, ref.Code)
 			}
 			return fail(err)
 		}
-		// A wall that fetched the image and did not call Fetched: the image step ends
-		// with the preparation.
-		if !walling {
+		// The image step, for an image by reference no step fetched yet, spans the
+		// wall's pull and the check of the image's user. After a fetch, the wall finds
+		// the image by its digest and the join writes no image step.
+		req := r.wallRequest()
+		if puller, ok := spec.Wall.(wall.Puller); ok && req.Pull && r.imageStep == 0 {
+			open = r.startStep(event.StepImage, r.img.Ref)
+			if err := r.pullImage(runCtx, puller); err != nil {
+				return refused(err)
+			}
+			r.imageStep = open.n
 			endStep(event.StateSucceeded)
-			wallStep()
+		}
+		open = r.startStep(event.StepWall, "start the wall")
+		if enclosure, err = spec.Wall.Prepare(runCtx, req); err != nil {
+			return refused(err)
 		}
 		defer func() {
 			// The session's context may be what ended it; the wall is removed regardless.
