@@ -583,7 +583,7 @@ func (d *Docker) Pull(ctx context.Context, req Request, ca []byte, hosts []strin
 		return err
 	}
 	if len(ca) > 0 {
-		remove, trustErr := d.trust(req.RunID, ca, append([]string{registryHost(req.Image)}, hosts...))
+		remove, trustErr := Trust(d.CertsDir, req.RunID, ca, append([]string{registryHost(req.Image)}, hosts...))
 		if trustErr != nil {
 			return trustErr
 		}
@@ -601,12 +601,13 @@ const defaultCertsDir = "/etc/docker/certs.d"
 // after: a host name or an IPv4 address in lower case, with an optional port.
 var certsHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$`)
 
-// trust writes ca as qory-run-<runID>.crt in the directory of CertsDir for each host
-// of certsHost's shape, once per host, making the directory when it is missing, and
-// returns what removes the files and every directory it made. A failure to write
-// removes what was written before it.
-func (d *Docker) trust(runID string, ca []byte, hosts []string) (func() error, error) {
-	dir := d.CertsDir
+// Trust writes ca as qory-run-<runID>.crt in dir/<host>/ for each of hosts, once per
+// host, making dir/<host> when it is missing, and returns what removes the files and
+// every directory it made. Empty dir means /etc/docker/certs.d, where Docker Engine
+// reads a registry's authorities from. A host name or an IPv4 address in lower case,
+// with an optional port, gets a certificate; any other host, such as a *. pattern,
+// gets none. A failure to write removes what was written before it.
+func Trust(dir, runID string, ca []byte, hosts []string) (func() error, error) {
 	if dir == "" {
 		dir = defaultCertsDir
 	}

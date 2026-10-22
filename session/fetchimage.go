@@ -97,32 +97,49 @@ func (r *Run) pullImage(ctx context.Context, puller wall.Puller) (err error) {
 	if p == nil {
 		return puller.Pull(ctx, r.wallRequest(), nil, nil)
 	}
-	if err := checkEngineProxy(p); err != nil {
+	fwd, err := r.listenEngine(p)
+	if err != nil {
 		return err
 	}
-	// The masker replaces the password in every line of the run's record from here on.
+	defer func() { err = r.maskEngine(errors.Join(err, fwd.Close()), p) }()
+	var hosts []string
+	for _, c := range r.answer.CredentialHosts {
+		hosts = append(hosts, c.Hosts...)
+	}
+	return puller.Pull(ctx, r.wallRequest(), r.authority, hosts)
+}
+
+// listenEngine starts the engine proxy's forwarder at p.Addr, after checkEngineProxy
+// and after the run's masker gets p.Password, so the masker replaces the password in
+// every line of the run's record from then on. The forwarder passes on only a request
+// with p.Password, and reaches the gateway's proxy as the host proxy does: with the
+// run's proxy secret on one machine, and with the run key behind a separate gateway.
+func (r *Run) listenEngine(p *EngineProxy) (*forwarder, error) {
+	if err := checkEngineProxy(p); err != nil {
+		return nil, err
+	}
 	r.masker.AddProxy(proxyUser, p.Password)
 	var fwd *forwarder
+	var err error
 	if r.remote == nil {
 		fwd, err = listenForwarder(p.Addr, r.disc.Proxy.Address, r.answer.ProxySecret, p.Password)
 	} else {
 		fwd, err = listenForwarding(p.Addr, forwarding{dial: r.link.DialProxy, password: p.Password})
 	}
 	if err != nil {
-		return unlistened(p.Addr, err)
+		return nil, unlistened(p.Addr, err)
 	}
-	defer func() {
-		err = errors.Join(err, fwd.Close())
-		// An engine's error may quote its proxy setting, the password with it.
-		if err != nil && strings.Contains(err.Error(), p.Password) {
-			err = errors.New(r.masker.Replace(err.Error()))
-		}
-	}()
-	var hosts []string
-	for _, c := range r.answer.CredentialHosts {
-		hosts = append(hosts, c.Hosts...)
+	return fwd, nil
+}
+
+// maskEngine is err with the run's masker applied to its text when the text contains
+// p.Password, since an engine's error text may contain its proxy setting, the password
+// with it; err as it is otherwise.
+func (r *Run) maskEngine(err error, p *EngineProxy) error {
+	if err != nil && p != nil && strings.Contains(err.Error(), p.Password) {
+		return errors.New(r.masker.Replace(err.Error()))
 	}
-	return puller.Pull(ctx, r.wallRequest(), r.authority, hosts)
+	return err
 }
 
 // unlistened is the error of a forwarder that cannot listen at the engine proxy's
