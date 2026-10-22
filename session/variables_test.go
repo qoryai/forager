@@ -538,7 +538,7 @@ func shownIn(t *testing.T, err error, want []any) {
 			t.Errorf("the refusal %v does not contain %s", err, w)
 		}
 	}
-	if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") {
+	if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") {
 		t.Errorf("the refusal prints a secret's prefix: %v", err)
 	}
 }
@@ -643,7 +643,7 @@ func TestAppliedVariablesSendAPhraseForASecret(t *testing.T) {
 		t.Errorf("the policy_applied does not validate: %v", err)
 	}
 	vars, _ := json.Marshal(data(pa[0])["variables"])
-	if lower := strings.ToLower(string(vars)); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+	if lower := strings.ToLower(string(vars)); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") {
 		t.Errorf("a secret's prefix in the variables: %s", vars)
 	}
 	if want := []string{"PLAIN_ONE<-run", "QAK_ONE<-run", "QRK_X_QAK_Y<-run", "qrk_two<-run"}; len(calls) != 1 || !slices.Equal(lines(calls[0]), want) {
@@ -813,7 +813,7 @@ func TestARunStartedSendsAPhraseForASecretInAnArgument(t *testing.T) {
 		t.Errorf("session.started args %v", args)
 	}
 	b, _ := json.Marshal(started)
-	if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") {
+	if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") {
 		t.Errorf("session.started contains a secret's prefix: %s", b)
 	}
 }
@@ -900,7 +900,7 @@ func TestAWrapThatFailsPrintsAPhraseForASecretInAPath(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s: the run started", p)
 		}
-		if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || !errors.Is(err, fs.ErrPermission) {
+		if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("%s: %q, want a phrase that wraps fs.ErrPermission", p, err)
 		}
 	}

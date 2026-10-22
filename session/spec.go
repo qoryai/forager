@@ -293,7 +293,7 @@ type SessionSpec struct {
 	Written []string
 	// Declared is the egress the harness declared, nil when nothing was. It is
 	// reported in the session's dev.qory.run.policy_applied as harness_hosts, a host
-	// that contains qak_ or qrk_ in any case as accesskey.ShownValue's phrase, and
+	// that contains qak_, qrk_ or qecr_ in any case as accesskey.ShownValue's phrase, and
 	// decides nothing: the policy alone decides.
 	Declared []string
 	// Forwarder is the command the Runtime installs as the program's hook: it reads the

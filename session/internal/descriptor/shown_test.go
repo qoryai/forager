@@ -39,7 +39,7 @@ func TestParsePrintsAPhraseForASecret(t *testing.T) {
 		"/d/qrk_y/amp.yaml": "a: [\n",
 	} {
 		_, err := descriptor.Parse(name, []byte(doc))
-		if err == nil || strings.Contains(strings.ToLower(err.Error()), "qak_") || strings.Contains(strings.ToLower(err.Error()), "qrk_") {
+		if err == nil || strings.Contains(strings.ToLower(err.Error()), "qak_") || strings.Contains(strings.ToLower(err.Error()), "qrk_") || strings.Contains(strings.ToLower(err.Error()), "qecr_") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

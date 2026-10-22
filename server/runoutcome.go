@@ -52,7 +52,7 @@ func (o Outcome) body() ([]byte, error) {
 	if o.Time == "" {
 		o.Time = RegistrationTime(time.Now())
 	}
-	// The body goes to Qory Apiary: a reason that contains qak_ or qrk_ in any case is
+	// The body goes to Qory Apiary: a reason that contains qak_, qrk_ or qecr_ in any case is
 	// accesskey.ShownName's phrase in its place.
 	o.Reason = accesskey.ShownName(o.Reason, false)
 	return json.Marshal(outcomeBody{Version: 1, Outcome: o})

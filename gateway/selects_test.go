@@ -300,10 +300,10 @@ const (
 	runKeyValuePhrase    = "(a value that contains a run key)"
 )
 
-// noSecretPrefix fails the test when text contains qak_ or qrk_ in any case.
+// noSecretPrefix fails the test when text contains qak_, qrk_ or qecr_ in any case.
 func noSecretPrefix(t *testing.T, what, text string) {
 	t.Helper()
-	if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+	if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") {
 		t.Errorf("%s: a secret's prefix in %s", what, text)
 	}
 }

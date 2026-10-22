@@ -272,7 +272,7 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	if s.StackProxySecret != "" {
 		s.StackProxySecret = redactedSecret
 	}
-	// A name or a value that contains qak_ or qrk_ in any case prints its phrase.
+	// A name or a value that contains qak_, qrk_ or qecr_ in any case prints its phrase.
 	s.Labels = ShownLabels(a.Labels)
 	if a.Variables != nil {
 		s.Variables = make(map[string]Variable, len(a.Variables))
@@ -314,8 +314,8 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 }
 
 // shownDocument is a document as it prints: the value's phrase, as a JSON string, in
-// place of all of it when a string or member name in it, as it decodes, contains qak_
-// or qrk_ in any case.
+// place of all of it when a string or member name in it, as it decodes, contains qak_,
+// qrk_ or qecr_ in any case.
 func shownDocument(d json.RawMessage) json.RawMessage {
 	secrets := jsonSecrets(d)
 	if secrets == "" {

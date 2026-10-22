@@ -389,7 +389,7 @@ type WalledRun struct {
 // engine of such an entry cannot be asked, or the entry records no engine, or an entry
 // whose lock is free cannot be read, the error is a *[Refusal] with the code
 // engine_unreachable, whose Names are the run's id and the path of its entry, a path
-// that contains qak_ or qrk_ in any case printed as [accesskey.ShownName]'s phrase,
+// that contains qak_, qrk_ or qecr_ in any case printed as [accesskey.ShownName]'s phrase,
 // and whose Detail says the run counts as still going; its EntryUnreadable is set for an
 // entry that cannot be read, and for no other. An entry whose lock is held and that
 // cannot be read, and a writable bind of a run still going that cannot be resolved now,
@@ -747,7 +747,7 @@ func writtenEntry(file string) (walledEntry, bool, error) {
 // containers: nothing is bound while one may, and such a run counts as still going. so
 // is what follows from it, [startsNot] for a run that starts. Its names are the earlier
 // run's id and file, the path of its entry, which the registry's directory makes
-// absolute, so the entry can be found and looked at. A path that contains qak_ or qrk_,
+// absolute, so the entry can be found and looked at. A path that contains qak_, qrk_ or qecr_,
 // in any case, is [accesskey.ShownName]'s phrase in its place in the names, and Detail
 // prints [accesskey.ShownValue]'s phrase in place of an error that contains one.
 func engineUnreachable(runID, file, so string, err error) *Refusal {

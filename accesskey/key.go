@@ -261,21 +261,24 @@ func (p PublicKey) Fixture() bool {
 }
 
 // shown is a value as an error quotes it: quoted, or, when it contains what starts an
-// access key secret or a run key, a secret pasted where another value belongs say, a
-// phrase in its place, so an error never contains a secret.
+// access key secret, a run key or a run code, a secret pasted where another value
+// belongs say, a phrase in its place, so an error never contains a secret.
 func shown(v string) string { return ShownValue(v, true) }
 
 // ShownValue is a value as a message prints it: quoted when quote is true, bare when it
-// is false, and, when it contains qak_ or qrk_ in any case, a phrase in its place. A
-// message passes it a whole part that is not a name, such as a path, or the text of an
-// error or of a program's error output, so that part never prints either prefix. A
-// value that contains both gets the access key secret's phrase.
+// is false, and, when it contains qak_, qrk_ or qecr_ in any case, a phrase in its
+// place. A message passes it a whole part that is not a name, such as a path, or the
+// text of an error or of a program's error output, so that part never prints any of
+// the three prefixes. A value with more than one prefix gets the phrase of the first
+// in that order: the access key secret's, then the run key's, then the run code's.
 func ShownValue(v string, quote bool) string {
 	switch {
 	case containsAccessKeySecret(v):
 		return "(a value that contains an access key secret)"
 	case containsRunKey(v):
 		return "(a value that contains a run key)"
+	case containsRunCode(v):
+		return "(a value that contains a run code)"
 	case quote:
 		return strconv.Quote(v)
 	}
@@ -283,15 +286,17 @@ func ShownValue(v string, quote bool) string {
 }
 
 // ShownName is a name as a message prints it: quoted when quote is true, bare when it is
-// false, and, when it contains qak_ or qrk_ in any case, a phrase in its place, so a
-// secret pasted where a name belongs never reaches the message. A name that contains
-// both gets the access key secret's phrase, as with shown.
+// false, and, when it contains qak_, qrk_ or qecr_ in any case, a phrase in its place,
+// so a secret pasted where a name belongs never reaches the message. A name with more
+// than one prefix gets the phrase of the first in the order [ShownValue] uses.
 func ShownName(v string, quote bool) string {
 	switch {
 	case containsAccessKeySecret(v):
 		return "(a name that contains an access key secret)"
 	case containsRunKey(v):
 		return "(a name that contains a run key)"
+	case containsRunCode(v):
+		return "(a name that contains a run code)"
 	case quote:
 		return strconv.Quote(v)
 	}
@@ -299,15 +304,16 @@ func ShownName(v string, quote bool) string {
 }
 
 // IsNamePhrase reports whether v is one of the phrases [ShownName] gives in place of a
-// name: what a reader of shown names, labels say, gets for a value that contains qak_
-// or qrk_ in any case.
+// name: what a reader of shown names, labels say, gets for a value that contains qak_,
+// qrk_ or qecr_ in any case.
 func IsNamePhrase(v string) bool {
-	return v == ShownName(SecretPrefix, false) || v == ShownName(runKeyPrefix, false)
+	return v == ShownName(SecretPrefix, false) || v == ShownName(runKeyPrefix, false) || v == ShownName(CodePrefixRun, false)
 }
 
 // ShownNames are names as a message or an event lists them: each as [ShownName] shows
 // it bare, in order, with each phrase once, so two names that give one phrase list it
-// once. A name without either prefix is listed as it is, as often as it is given.
+// once. A name without any of the three prefixes is listed as it is, as often as it is
+// given.
 func ShownNames(names []string) []string {
 	var out []string
 	for _, n := range names {
@@ -321,7 +327,7 @@ func ShownNames(names []string) []string {
 }
 
 // ShownError is err as a message wraps it: err itself, nil among them, or, when its
-// text contains qak_ or qrk_ in any case, an error that still wraps err and whose text
+// text contains qak_, qrk_ or qecr_ in any case, an error that still wraps err and whose text
 // is [ShownValue]'s phrase in place of all of err's text.
 func ShownError(err error) error {
 	if err == nil || !ContainsSecret(err.Error()) {
@@ -340,10 +346,15 @@ func (p phrasedError) Error() string { return ShownValue(p.err.Error(), false) }
 func (p phrasedError) Unwrap() error { return p.err }
 
 // ContainsSecret reports whether a value contains what starts an access key secret,
-// qak_, or a run key, qrk_, in any case. A reader of a document a secret does not
-// belong in, such as the server document or a pin, refuses one that contains it with a
-// fixed message, before a schema or a JSON decoder can quote the value in its error.
-func ContainsSecret(v string) bool { return containsAccessKeySecret(v) || containsRunKey(v) }
+// qak_, a run key, qrk_, or a run code, qecr_, in any case. A reader of a document a
+// secret does not belong in, such as the server document or a pin, refuses one that
+// contains it with a fixed message, before a schema or a JSON decoder can quote the
+// value in its error. A run code is a secret until it is redeemed or its 15 minutes
+// pass: whoever first redeems it through its gateway's relay gets the run's run key,
+// under a key of their choosing.
+func ContainsSecret(v string) bool {
+	return containsAccessKeySecret(v) || containsRunKey(v) || containsRunCode(v)
+}
 
 // containsAccessKeySecret reports whether a value contains qak_ in any case.
 func containsAccessKeySecret(v string) bool {
@@ -353,8 +364,12 @@ func containsAccessKeySecret(v string) bool {
 // containsRunKey reports whether a value contains qrk_ in any case.
 func containsRunKey(v string) bool { return strings.Contains(strings.ToLower(v), runKeyPrefix) }
 
+// containsRunCode reports whether a value contains qecr_ in any case.
+func containsRunCode(v string) bool { return strings.Contains(strings.ToLower(v), CodePrefixRun) }
+
 // DocumentContainsSecret reports whether a decoded document, as JSON or YAML decodes
-// to any, contains an access key secret or a run key in any string or member name. A
+// to any, contains an access key secret, a run key or a run code in any string or
+// member name, as [ContainsSecret] reports one. A
 // reader checks it after decoding as well as the raw bytes before, since an escape,
 // \u0071 in JSON or \x71 or a folded line in YAML, hides the secret from the bytes and
 // not from the decoded value a schema error quotes.
@@ -362,8 +377,9 @@ func DocumentContainsSecret(doc any) bool { return documentHas(doc, ContainsSecr
 
 // SecretInDocument is the error of a value or a decoded document that contains a
 // secret, as [DocumentContainsSecret] reports one: [ErrSecretInDocument] for an access
-// key secret, [ErrRunKeyInDocument] for a run key and no access key secret, and nil for
-// neither. A string is checked as it is, so a reader passes it the raw bytes before
+// key secret, [ErrRunKeyInDocument] for a run key and no access key secret,
+// [ErrRunCodeInDocument] for a run code and neither of the other two, and nil for
+// none. A string is checked as it is, so a reader passes it the raw bytes before
 // decoding and the decoded document after.
 func SecretInDocument(doc any) error {
 	switch {
@@ -371,6 +387,8 @@ func SecretInDocument(doc any) error {
 		return ErrSecretInDocument
 	case documentHas(doc, containsRunKey):
 		return ErrRunKeyInDocument
+	case documentHas(doc, containsRunCode):
+		return ErrRunCodeInDocument
 	}
 	return nil
 }
@@ -407,9 +425,10 @@ func documentHas(doc any, has func(string) bool) bool {
 // pin's keys left out. member is the top-level member that holds the pin,
 // apiary_public_key in the server document, or empty for a document that is the pin.
 // An entry's public_key is left out when it is one string that [ParsePublicKey] reads
-// and [PublicKey.Check] passes, so a key whose base64url contains qak_ or qrk_ by
-// chance is not refused. A key that starts with qak_ or qrk_, in any case, is checked,
-// since a secret cut to its first 43 characters can read as a key. The entry's alg, its
+// and [PublicKey.Check] passes, so a key whose base64url contains qak_, qrk_ or qecr_
+// by chance is not refused. A key that starts with qak_, qrk_ or qecr_, in any case, is
+// checked, since a secret cut to its first 43 characters can read as a key, and so can
+// a run code typed in groups with hyphens. The entry's alg, its
 // other members and the rest of the document are checked as SecretInDocument checks
 // them.
 //
@@ -438,10 +457,10 @@ func SecretInPinEntry(alg, publicKey string) error {
 }
 
 // pinKey reports whether v is a key a pin may list, [ParsePublicKey] reads it and
-// [PublicKey.Check] passes it, and does not start with qak_ or qrk_ in any case: about
-// one access key secret in 65 has a first 43 characters that read as a key.
+// [PublicKey.Check] passes it, and does not start with qak_, qrk_ or qecr_ in any case:
+// about one access key secret in 65 has a first 43 characters that read as a key.
 func pinKey(v string) bool {
-	if l := strings.ToLower(v); strings.HasPrefix(l, SecretPrefix) || strings.HasPrefix(l, runKeyPrefix) {
+	if l := strings.ToLower(v); strings.HasPrefix(l, SecretPrefix) || strings.HasPrefix(l, runKeyPrefix) || strings.HasPrefix(l, CodePrefixRun) {
 		return false
 	}
 	p, err := ParsePublicKey(v)
@@ -490,8 +509,8 @@ type span struct{ from, to int }
 
 // outsidePinKeys is the raw bytes of a document as parts, split where its pin writes a
 // key withoutPinKeys leaves out, those bytes left out. Such a span starts and ends with
-// a quote, or is a plain YAML scalar, which a separator bounds; neither qak_ nor qrk_
-// contains a quote or a separator, so no match runs across the edge of a span.
+// a quote, or is a plain YAML scalar, which a separator bounds; none of qak_, qrk_ and
+// qecr_ contains a quote or a separator, so no match runs across the edge of a span.
 func outsidePinKeys(raw, member string) []any {
 	b := []byte(raw)
 	spans, ok := jsonPinKeys(b, member)
@@ -810,8 +829,8 @@ var nameShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // CheckName refuses a name outside ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$: an access key's
 // name at enrolment, and an instance's display name, X-Qory-Instance-Name. A name that
-// contains an access key secret or a run key fits the pattern and is refused too, since
-// the name travels in clear.
+// contains an access key secret, a run key or a run code fits the pattern and is
+// refused too, since the name travels in clear.
 func CheckName(name string) error {
 	if !nameShape.MatchString(name) || ContainsSecret(name) {
 		return fmt.Errorf("the name %s is not 1 to 64 of A-Z, a-z, 0-9, dot, underscore and dash, starting with a letter or digit", shown(name))

@@ -97,7 +97,7 @@ type shown struct {
 	Reserved []string
 }
 
-// shown is l as it prints: a path or a name that contains qak_ or qrk_ in any case is
+// shown is l as it prints: a path or a name that contains qak_, qrk_ or qecr_ in any case is
 // accesskey.ShownValue's or accesskey.ShownName's phrase in its place.
 func (l Local) shown() shown {
 	files := make([]File, len(l.Files))

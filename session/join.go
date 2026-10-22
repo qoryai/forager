@@ -790,7 +790,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 }
 
 // sessionStarted is the data of the session's dev.qory.session.started. A value of the
-// session's that contains qak_ or qrk_ in any case is sent as a phrase in its place:
+// session's that contains qak_, qrk_ or qecr_ in any case is sent as a phrase in its place:
 // accesskey.ShownName's for the runtime, the image, its name and its container
 // runtime; accesskey.ShownValue's for the directory, the command, each argument, the
 // runtime's version, the name of each setup command and each harness source. In a run
@@ -917,7 +917,7 @@ func neutralRoot(placeholder string) string {
 // and the arguments as the session starts them, which in a run whose policy has its
 // image by reference are the paths inside, under /workspace; and each harness source
 // with its commit. A value that
-// contains qak_ or qrk_ is the phrase in its place, and the run's masker replaces each
+// contains qak_, qrk_ or qecr_ is the phrase in its place, and the run's masker replaces each
 // forwarder's password in the line.
 func (r *Run) launchLine(spec runSpec, n int, prepared runtimes.Launch) string {
 	var b strings.Builder

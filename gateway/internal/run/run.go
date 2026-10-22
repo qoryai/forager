@@ -1147,13 +1147,13 @@ func Egress(d proxy.Decision) map[string]any {
 		decision = "allowed"
 	}
 	// The host, the path, its rule and the request's method are as the run sent them or
-	// the policy gives them: a value that contains qak_ or qrk_ in any case is
+	// the policy gives them: a value that contains qak_, qrk_ or qecr_ in any case is
 	// accesskey.ShownValue's phrase in its place.
 	data := map[string]any{"host": accesskey.ShownValue(d.Host, false), "port": d.Port, "method": d.Method, "decision": decision, "mode": string(d.Mode), "rule": d.Rule, "outcome": d.Outcome}
 	if d.Path != "" {
 		data["request_method"], data["path"], data["path_rule"] = accesskey.ShownValue(d.RequestMethod, false), accesskey.ShownValue(d.Path, false), accesskey.ShownValue(d.PathRule, false)
 	}
-	// A credential's or a tool's name that contains qak_ or qrk_ in any case is sent as
+	// A credential's or a tool's name that contains qak_, qrk_ or qecr_ in any case is sent as
 	// accesskey.ShownName's phrase in its place.
 	if d.Credential != "" {
 		data["credential"] = accesskey.ShownName(d.Credential, false)
