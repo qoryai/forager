@@ -79,7 +79,7 @@ func TestARecordIsMaskedAtEveryDepth(t *testing.T) {
 		"list":            []any{"a " + fakeProxyPassword, 1.5, nil},
 		"tool":            inner,
 	}
-	got := fmt.Sprint(maskedRecord(m, data))
+	got := fmt.Sprint(maskedRecord(texts{secrets: m}, data))
 	want := fmt.Sprint(map[string]any{
 		"result":           mask.ProxyPassword,
 		mask.ProxyPassword: true,
@@ -92,7 +92,7 @@ func TestARecordIsMaskedAtEveryDepth(t *testing.T) {
 	if !strings.Contains(inner["env"].(string), fakeProxyPassword) {
 		t.Error("the record's map was changed")
 	}
-	if maskedRecord(nil, data)["result"] != fakeProxyPassword {
+	if maskedRecord(texts{}, data)["result"] != fakeProxyPassword {
 		t.Error("a nil masker changed the record")
 	}
 }

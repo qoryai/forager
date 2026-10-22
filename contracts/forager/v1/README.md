@@ -1837,6 +1837,33 @@ compose keeps it out of git:
   answers a run request; a gateway that starts again keeps a record that holds it, and
   the run request that comes again is `409` `run_attached`.
 
+**A hidden harness.** In a run whose harness is hidden, `[harness text: <path>]`
+replaces the text of each file in a session's harness home, after the forwarders'
+passwords are replaced, in every `dev.qory.run.log` chunk of the session, its setup
+steps' included, and in every event the descriptor maps from an output or hook record.
+`<path>` is the file's path relative to the home, such as `skills/implement/SKILL.md`,
+without control characters and bidirectional marks, and with `"` and `\` escaped as in
+a JSON string. Text is a file's once it matches at least 3 consecutive lines of the
+file, with the whitespace at the start and the end of each line and the blank lines
+left out, or at least 200 consecutive characters of it; text inside a JSON string
+matches with its escapes decoded. The session reads the home's regular files as it
+starts, and a change to the files after that changes nothing. A run with a hidden
+harness fails at the join when its harness home contains a link. A file that contains
+a zero byte is not masked, and the session reports it. A home, a directory or a file
+that cannot be read, or a home over the limits of files and size, fails the join. qory
+sets `OpenSpec.HarnessHidden` from `harness_hidden` in the run's documents; a run
+where it is false has no replacement.
+
+These are never matched: text wrapped to the terminal's width, a line with a
+terminal's escape codes in it, text in another Unicode normalisation form, base64,
+JSON inside a JSON string, text split across JSON strings, and the deltas of a stream
+of messages. These are not masked: the `command` and `args` of
+`dev.qory.session.started`; the failure line of a join that fails before the home is
+read; the setup steps of a run whose setup runs `outside`; the lines of the host's
+steps, which have no session number; the copy of the runtime's output that the session
+writes to the caller's `Stdout` and `Stderr`; and the error the caller gets when a
+join fails.
+
 The gateway writes `events.jsonl`, with its `delivered.log` and `undelivered/` (§The
 server, After Forager stops unexpectedly); the session writes `session.jsonl`, its
 record, numbered by its sequence (§The gateway's link), and `output.log`. On one machine

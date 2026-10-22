@@ -17,6 +17,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/parents"
@@ -300,6 +301,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// placeholders of neutralPaths, and in neutralText the working directory as
 	// /workspace as well.
 	neutral, neutralText := func(s string) string { return s }, func(s string) string { return s }
+	// hidden masks the text of a hidden harness in what the session reports, once the
+	// session has read the harness's files; nil until then, and for a harness not hidden.
+	var hidden *mask.Harness
 	// failWith ends a session that does not start, with its dev.qory.session.exited:
 	// the one of a refused join before dev.qory.session.started, and after it failed
 	// with -1, with reason as its reason unless reason is empty.
@@ -341,7 +345,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			if open != nil {
 				step = open.n
 			}
-			r.writeLog("stderr", n, step, []byte(neutral(string(failureLine(err)))))
+			r.writeLog("stderr", n, step, []byte(neutral(hidden.Replace(string(failureLine(err))))))
 		}
 		endStep(event.StateFailed)
 		r.write(event.SessionExited, exited)
@@ -398,6 +402,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	credentialHosts, placeholderNames, key, err := chosen(rt, r.answer.CredentialHosts, r.answer.Placeholders, model)
 	if err != nil {
 		return fail(err)
+	}
+	// A run whose harness is hidden masks the text of the harness's files, as they are
+	// at this point, in what the session reports.
+	if r.open.HarnessHidden && spec.HarnessHome != "" {
+		if hidden, err = readHarness(spec.HarnessHome, r.open.Report); err != nil {
+			return fail(err)
+		}
 	}
 	// The session's directory holds the session's output.log and what the session
 	// writes for its runtime, from here on; every log event of the session goes to its
@@ -594,12 +605,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// output: stdout and stderr share one lock, so the two writers never write at once.
 	var terminalMu sync.Mutex
 	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
-	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), neutral)
+	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), neutral, hidden)
 	// The mapper is reached from the socket's goroutine and the output's: it sets
 	// parent_agent_id on a subagent's start, which it may keep back for a while, and
 	// writes every event of the session's runtime in order.
 	mapper := parents.New(rt, func(e runtimes.Event) {
-		r.write(e.Type, withSession(neutralRecord(e.Type, maskedRecord(masker, e.Data), neutralText), n))
+		r.write(e.Type, withSession(neutralRecord(e.Type, maskedRecord(texts{secrets: masker, harness: hidden}, e.Data), neutralText), n))
 	}, parents.Real)
 	records := func(rec runtimes.Record) {
 		if rec.Source == runtimes.SourceSetup {
@@ -688,7 +699,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	resized := func(cols, rows int) {
 		r.write(event.RunResized, map[string]any{"cols": cols, "rows": rows, "session": n})
 	}
-	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: stdout, stderr: stderr, logs: logs, masker: masker, output: output, cols: cols, rows: rows, resized: resized}
+	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: stdout, stderr: stderr, logs: logs, masker: masker, harness: hidden, output: output, cols: cols, rows: rows, resized: resized}
 	// The limit ends the runtime and nothing else: the wall is closed on the caller's
 	// context, as after any exit. The run being closed from outside ends it the same
 	// way.
