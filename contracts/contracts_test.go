@@ -324,8 +324,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // reference, a link run
 // answer without applied, with a proxy secret or a stack proxy secret too short, whose image has no reference
 // or whose credential_hosts entry has a member it does not define, no hosts, no
-// placeholders, a format without an endpoint or an endpoint without a format, a link reload answer with the proxy secret or the certificate
-// authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
+// placeholders, a format without an endpoint or an endpoint without a format, a link reload answer with the proxy secret, the stack proxy secret or the
+// certificate authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
 // run.registered or a run.egress, a run.started opened by a gateway or a session, a run.exited with one of Forager's reasons
 // other than timeout, interrupted and no_session, its old names among them, or with timeout and a state other than cancelled
 // or an exit code other than 124, a session.exited cancelled with no reason, succeeded with exit status 1, with stopped,

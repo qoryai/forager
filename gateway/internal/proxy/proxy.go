@@ -188,6 +188,9 @@ type Proxy struct {
 	// unlisted, when set, is the body of the 403 of a host no allow entry matches under
 	// enforce ([Proxy.Unlisted]).
 	unlisted atomic.Pointer[func(host string, port int) string]
+	// guardBody, when set, is the body of the 403 of a host the guard refuses
+	// ([Proxy.GuardRefused]).
+	guardBody atomic.Pointer[func(host string, port int) string]
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
@@ -515,9 +518,17 @@ func (p *Proxy) AllowFirst(entries []string) {
 }
 
 // Unlisted sets the body of the 403 that refuses a host no allow entry matches under
-// enforce: body's text for the host and the port, in place of the line that names the
+// enforce: body's text for the host and the port, in place of the line with the
 // policy's mode. Every other refusal keeps its body.
 func (p *Proxy) Unlisted(body func(host string, port int) string) { p.unlisted.Store(&body) }
+
+// GuardRefused sets the body of the 403 that refuses a host by the guard's rule
+// ([GuardRule]), when the connection is decided and when its dial is: body's text for
+// the host and the port, in place of the guard's line. Every other refusal keeps its
+// body.
+func (p *Proxy) GuardRefused(body func(host string, port int) string) {
+	p.guardBody.Store(&body)
+}
 
 // Guarded reports whether [Proxy.Guard] was called.
 func (p *Proxy) Guarded() bool { return p.guarded.Load() }
@@ -1336,9 +1347,17 @@ func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 }
 
 // deny answers a refused connection as [deny] does, with the body [Proxy.Unlisted] set
-// for a host no allow entry matches under enforce.
+// for a host no allow entry matches under enforce, and the body [Proxy.GuardRefused]
+// set for a host the guard refuses.
 func (p *Proxy) deny(w http.ResponseWriter, d Decision) {
-	if body := p.unlisted.Load(); body != nil && d.Rule == "" && !d.Allowed && d.Mode == policy.Enforce {
+	body := p.unlisted.Load()
+	if d.Rule != "" || d.Allowed || d.Mode != policy.Enforce {
+		body = nil
+	}
+	if d.Rule == GuardRule {
+		body = p.guardBody.Load()
+	}
+	if body != nil {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusForbidden)
 		io.WriteString(w, (*body)(d.Host, d.Port))

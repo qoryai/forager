@@ -63,7 +63,7 @@ func checkRunLimits(l *RunLimits) error {
 }
 
 // stackHost is the shape of an entry of [Config.StackHosts], a policy's allow entry's:
-// a lower-case host name or a *. suffix.
+// a lower-case host name, an IPv4 address or a *. suffix.
 var stackHost = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // checkStackHosts refuses an entry of [Config.StackHosts] that is not in the form of a
@@ -73,7 +73,7 @@ func checkStackHosts(hosts []string) error {
 	for i, h := range hosts {
 		form, ok := policy.Host(h)
 		if !stackHost.MatchString(h) || (!strings.HasPrefix(h, "*.") && (!ok || form != h)) {
-			return fmt.Errorf("Set StackHosts[%d] to a lower-case host name or a *. suffix, such as git.example.com. It is %s.", i, accesskey.ShownValue(h, true))
+			return fmt.Errorf("Set StackHosts[%d] to a lower-case host name, an IPv4 address or a *. suffix, such as git.example.com. It is %s.", i, accesskey.ShownValue(h, true))
 		}
 	}
 	return nil

@@ -391,7 +391,7 @@ func (r *Run) start(ctx context.Context) (err error) {
 			return fail2(fmt.Errorf("the gateway's proxy secret: %w", err))
 		}
 		if err := link.CheckSecret(answer.StackProxySecret); err != nil {
-			return fail2(fmt.Errorf("the gateway's stack proxy secret: %w", err))
+			return fail2(fmt.Errorf("Use a gateway that sends stack_proxy_secret on its local link: the run answer's stack_proxy_secret is missing or malformed: %w", err))
 		}
 	}
 	// Behind a wall, the run's wall is built as the run opens: its networks, the run's

@@ -359,8 +359,8 @@ func (a LinkRunAnswer) LogValue() slog.Value {
 
 // MarshalJSON is a as encoding/json writes a struct, with its ProxySecret and
 // StackProxySecret redacted, for a log or a dump that writes it so. The gateway writes
-// the run answer from its own struct; reading one back is as encoding/json reads a
-// struct.
+// the run answer from a struct in package gateway, not through this method; reading
+// one back is as encoding/json reads a struct.
 func (a LinkRunAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
 
 // LinkReloadAnswer is what the gateway answers a reload with,

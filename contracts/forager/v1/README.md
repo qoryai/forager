@@ -3701,11 +3701,15 @@ proxy's is. On one machine it opens every connection to the gateway's proxy with
 `QORY-RELAY` and the run's `stack_proxy_secret`. Behind a separate gateway it opens
 them with `QORY-STACK` and the run key, over TLS, bound. The gateway serves these
 connections through the run's stack proxy: enforce mode, a CONNECT or a plain HTTP
-request to the hosts of `gateway.stack_hosts` alone, no certificate authority and no
-credential. Neither the run's policy nor the node's applies. Each decision is one line
-of the gateway's log, and no `dev.qory.run.egress` is written. The gateway closes the
-stack proxy at the run's first join request, so no session reaches it. qory also writes
-the fetch in the run machine's log.
+request to the hosts of `gateway.stack_hosts` alone, on any port, no certificate
+authority and no credential. The run's policy does not apply. Behind a wall or a
+separate gateway the stack proxy is guarded as the run's proxy is: it reaches the
+gateway's machine or a private network address only for a host that the node's policy
+and `gateway.stack_hosts` both list by name. Each decision is one line of the gateway's
+log, a refusal at the run's limits at most once a second per limit, and no
+`dev.qory.run.egress` is written. The gateway closes the stack proxy at the run's first
+join request, so no session reaches it. qory also writes the fetch in the run machine's
+log.
 
 ## The runtime
 

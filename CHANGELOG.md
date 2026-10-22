@@ -596,9 +596,13 @@ release may change what an existing document does, and says so under Upgrading.
 - `gateway.Config.StackHosts`, `gateway.stack_hosts` in `forager.yaml`, default
   empty. These are the hosts of a run's stack proxy until the run's first join
   request, for qory's fetch of the harness definition. The stack proxy passes a
-  CONNECT or a plain HTTP request to one of them, in enforce mode, with no certificate
-  authority and no credential, and the run's policy is not checked. Each decision is a line of `Config.Report`, never a `dev.qory.run.egress`.
-  Start refuses an entry that is not a host name or a `*.` suffix.
+  CONNECT or a plain HTTP request to one of them, on any port, in enforce mode, with no
+  certificate authority and no credential, and the run's policy is not checked. Behind
+  a wall or a separate gateway it is guarded as the run's proxy is, with the node's
+  policy's names. It counts at the run's limits, apart from the run's proxy. Each
+  decision is a line of `Config.Report`, never a `dev.qory.run.egress`, and a refusal
+  at the run's limits is reported at most once a second per limit. Start accepts a
+  lower-case host name, an IPv4 address or a `*.` suffix, and refuses any other entry.
 - `QORY-STACK`, `link.StackPreamble`, on a separate gateway's one address. From the
   run's first join request on, it is refused.
 - A separate gateway reads a renewed certificate and key from `gateway.TLS`'s files

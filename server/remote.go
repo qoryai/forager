@@ -317,7 +317,7 @@ func (k *Link) DialProxy(ctx context.Context) (net.Conn, error) {
 // stack_proxy_secret opens its stack proxy on loopback.
 func (k *Link) DialStack(ctx context.Context) (net.Conn, error) {
 	if k.remote == nil {
-		return nil, errors.New("the gateway's local link has no stack proxy over TLS")
+		return nil, errors.New("Open the stack proxy on the local link with the run answer's stack_proxy_secret: the local link has no stack proxy over TLS")
 	}
 	return k.dialOpened(ctx, "stack proxy", link.StackLine(k.remote.runKey))
 }

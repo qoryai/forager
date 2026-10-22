@@ -88,7 +88,7 @@ type linkRun struct {
 	// X-Qory-Run-Configuration of every answer for the run.
 	reloadBody   []byte
 	reloadDigest string
-	// answer is the run answer, given once; it holds the proxy secret and the stack
+	// answer is the run answer, made once; it contains the proxy secret and the stack
 	// proxy secret, so no print of the run shows it.
 	answer secretValue
 	// last is when the session last asked anything of the run; timer ends the run when
@@ -617,12 +617,13 @@ func (lr *linkRun) observe(d proxy.Decision) { lr.st.Emit(event.RunEgress, run.E
 // openStack makes the run's stack proxy, for qory's fetch of the harness definition
 // before the run's first session: in enforce mode, allowing the hosts of
 // [Config.StackHosts] alone, with no certificate authority, no credential and no model
-// key, at the run's limits, and guarded when guarded is true, with no name that opens
-// this machine's addresses or the private network addresses. Neither the run's policy
-// nor the node's is read. Each decision is a line of the gateway's report
-// ([stackLine]). On the local link it is registered under a fresh secret of its own,
-// the run answer's stack_proxy_secret; on the one address the run key opens it, after
-// [link.StackPreamble].
+// key, at the run's limits with counters apart from the run's proxy. When guarded is
+// true it is guarded as the run's proxy is: this machine's addresses and the private
+// network addresses are reached only for a host that the node's policy's allow list
+// and StackHosts both list by name. The run's policy is not read. Each decision is a
+// line of the gateway's report ([stackLine]). On the local link it is registered under
+// a fresh secret, the run answer's stack_proxy_secret, which no other proxy has; on
+// the one address the run key opens it, after [link.StackPreamble].
 func (lr *linkRun) openStack(guarded bool) error {
 	report := routine.ForRun(lr.g.report, lr.id)
 	px, err := proxy.New(policy.Enforce, slices.Clone(lr.g.cfg.StackHosts), nil, func(d proxy.Decision) { report(stackLine(d)) })
@@ -630,10 +631,17 @@ func (lr *linkRun) openStack(guarded bool) error {
 		return err
 	}
 	px.ReportPanics(report)
-	px.SetLimits(proxy.Limits{Connections: lr.g.cfg.RunLimits.Connections, RequestsPerSecond: lr.g.cfg.RunLimits.RequestsPerSecond, Burst: lr.g.cfg.RunLimits.Burst})
+	px.SetLimits(proxy.Limits{Connections: lr.g.cfg.RunLimits.Connections, RequestsPerSecond: lr.g.cfg.RunLimits.RequestsPerSecond, Burst: lr.g.cfg.RunLimits.Burst, Stack: true})
 	px.Unlisted(stackRefused)
 	if guarded {
-		px.Guard(nil)
+		// The names are the node's policy's allow entries, as for the run's proxy; the
+		// proxy opens one only for a host StackHosts lists too.
+		var names []string
+		if node := lr.g.cfg.Policy; node != nil {
+			names = slices.Clone(node.Egress.Allow)
+		}
+		px.Guard(names)
+		px.GuardRefused(stackGuarded)
 	}
 	lr.mu.Lock()
 	lr.stack = px
@@ -698,6 +706,14 @@ func stackLine(d proxy.Decision) string {
 func stackRefused(host string, port int) string {
 	return fmt.Sprintf("qory: add %s to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.\n"+
 		"qory: egress to %s:%d denied by the gateway: the host is not in gateway.stack_hosts\n", host, host, port)
+}
+
+// stackGuarded is the body of the 403 a run's guarded stack proxy answers for a host
+// the guard refuses: this machine's address or a private network address, by number or
+// at dial time, a link-local address or a cloud metadata address.
+func stackGuarded(host string, port int) string {
+	return fmt.Sprintf("qory: to fetch the harness definition from the gateway's machine or a private network address, list %s by name, not a *. pattern, in the allow list of the node's policy and in gateway.stack_hosts in forager.yaml.\n"+
+		"qory: egress to %s:%d denied by the gateway: the stack proxy reaches such an address only for a host listed by name in both, and never a link-local or cloud metadata address\n", host, host, port)
 }
 
 // touch says the session asked something of the run now.

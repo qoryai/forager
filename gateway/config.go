@@ -66,12 +66,16 @@ type Config struct {
 	// that one run cannot slow the others down. A field of zero is its default.
 	RunLimits RunLimits
 	// StackHosts are the hosts of a run's stack proxy, gateway.stack_hosts of qory's
-	// configuration: each a lower-case host name or a *. suffix, in the form of a policy's
-	// allow entry. Until the run's first join request the stack proxy passes a CONNECT or a
-	// plain HTTP request to one of them and refuses every other, in enforce mode, with no
-	// certificate authority and no credential; the run's policy is not checked. Behind a wall or a separate
-	// gateway it is guarded as the run's proxy is. Each decision is a line of Report, never
-	// a dev.qory.run.egress. Empty means every host is refused.
+	// configuration: each a lower-case host name, an IPv4 address or a *. suffix, in the
+	// form of a policy's allow entry. Until the run's first join request the stack proxy
+	// passes a CONNECT or a plain HTTP request to one of them, on any port, and refuses
+	// every other, in enforce mode, with no certificate authority and no credential; the
+	// run's policy is not checked. Behind a wall or a separate gateway it is guarded as
+	// the run's proxy is: it reaches this machine's addresses and the private network
+	// addresses only for a host that the allow list of Policy and StackHosts both list by
+	// name. Each decision is a line of Report, never a dev.qory.run.egress, and a refusal
+	// at RunLimits is reported at most once a second per limit. Empty means every host is
+	// refused.
 	StackHosts []string
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the
 	// system's choosing: the link for the sessions of other machines, the proxy for
@@ -139,7 +143,9 @@ type RunLimits struct {
 	// Connections is the most connections a run has open through the gateway at once:
 	// CONNECT tunnels, blind or terminated, and plain HTTP requests in flight. From 1 to
 	// 65536; zero means 256. The next connection is refused at once with 429 Too Many
-	// Requests and Retry-After: 1.
+	// Requests and Retry-After: 1. Until the run's first join request its stack proxy
+	// ([Config.StackHosts]) counts its connections and requests apart from the run's
+	// proxy, at the same limits.
 	Connections int
 	// RequestsPerSecond is how many requests a run sends a second, beyond Burst: every
 	// CONNECT, plain request and request inside a terminated tunnel takes one token of

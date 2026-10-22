@@ -25,8 +25,8 @@ const (
 // local link.
 const ProxySecret = "fake-proxy-secret-0123456789abcdef"
 
-// StackProxySecret is the stack proxy secret a fake gateway's default run answer gives
-// on the local link.
+// StackProxySecret is the stack proxy secret a fake gateway's default run answer
+// contains on the local link.
 const StackProxySecret = "fake-stack-proxy-secret-0123456789abcdef"
 
 // Reply is one answer of the fake gateway: its status, its body, marshalled as JSON

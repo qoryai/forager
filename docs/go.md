@@ -245,15 +245,29 @@ returns a `session.HostProxy`:
   `QORY-RELAY` and the run answer's `stack_proxy_secret`. Behind a separate gateway it
   dials the gateway's one address with `QORY-STACK` and the run key.
 - The stack proxy passes a CONNECT or a plain HTTP request to a host of
-  `gateway.Config.StackHosts` alone, in enforce mode, with no certificate authority and
-  no credential. The run's policy is not checked, and no `dev.qory.run.egress` is
-  written. `gateway.Config.Report` gets one line per decision, such as "run <id>: stack
-  fetch to git.example.com:443 allowed by gateway.stack_hosts entry git.example.com".
-  A host outside the list gets a `403` with this body:
+  `gateway.Config.StackHosts` alone, on any port, in enforce mode, with no certificate
+  authority and no credential. The run's policy is not checked, and no
+  `dev.qory.run.egress` is written. `gateway.Config.Report` gets one line per decision,
+  such as "run <id>: stack fetch to git.example.com:443 allowed by gateway.stack_hosts
+  entry git.example.com". A refusal at `gateway.Config.RunLimits` is reported at most
+  once a second per limit. Until the run's first join request the stack proxy counts
+  its connections and requests apart from the run's proxy, at the same limits. A host
+  outside the list gets a `403` with this body:
 
   ```
   qory: add other.example.net to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.
   qory: egress to other.example.net:443 denied by the gateway: the host is not in gateway.stack_hosts
+  ```
+- Behind a wall or a separate gateway the stack proxy is guarded as the run's proxy
+  is. It reaches the gateway's machine or a private network address only for a host
+  that the allow list of `gateway.Config.Policy` and `StackHosts` both list by name,
+  and never a link-local or cloud metadata address. A host the guard refuses gets a
+  `403` with this body, by its address and when its name resolves to such an address
+  at dial time:
+
+  ```
+  qory: to fetch the harness definition from the gateway's machine or a private network address, list git.internal by name, not a *. pattern, in the allow list of the node's policy and in gateway.stack_hosts in forager.yaml.
+  qory: egress to git.internal:443 denied by the gateway: the stack proxy reaches such an address only for a host listed by name in both, and never a link-local or cloud metadata address
   ```
 - `CABundle` is empty, and `Env` sets no CA variable.
 - `Close()` ends it as it ends a host proxy. The run's first `Join` closes it before
@@ -268,9 +282,9 @@ returns a `session.HostProxy`:
   error when the port cannot be opened.
 
 qory sets `gateway.Config.StackHosts` from `gateway.stack_hosts` in `forager.yaml`.
-`gateway.Start` refuses an entry that is not a lower-case host name or a `*.` suffix,
-such as "Set StackHosts[0] to a lower-case host name or a *. suffix, such as
-git.example.com. It is "https://git.example.com"."
+`gateway.Start` accepts a lower-case host name, an IPv4 address or a `*.` suffix, and
+refuses any other entry, such as "Set StackHosts[0] to a lower-case host name, an IPv4
+address or a *. suffix, such as git.example.com. It is "https://git.example.com"."
 
 ```go
 s, err := run.StackProxy()                        // before the first Join

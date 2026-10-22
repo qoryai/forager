@@ -127,8 +127,12 @@ gateway:
   the others. Each run has counters of its own. A field you leave out is its default.
   See [run limits](#run-limits).
 - `gateway.stack_hosts` lists the hosts qory fetches a run's harness definition from
-  before the run's first session, over HTTPS or plain HTTP. The run's policy is not
-  checked, and the fetch shows in the gateway's log, not in the run's record.
+  before the run's first session, over HTTPS or plain HTTP, on any port: each a
+  lower-case host name, an IPv4 address or a `*.` suffix. The run's policy is not
+  checked, and the fetch shows in the gateway's log, not in the run's record. Behind a
+  wall or a separate gateway, a host at this machine's address or a private network
+  address is reached only when `egress.allow` of the node's policy lists it by name
+  too.
 
 ## Run limits
 

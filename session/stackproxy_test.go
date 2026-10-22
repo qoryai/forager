@@ -220,7 +220,7 @@ func TestARunAnswerWithoutAStackProxySecretIsNoRun(t *testing.T) {
 		secret any
 		want   string
 	}{
-		{nil, "the gateway's stack proxy secret: link: a preamble's secret is 1 to 256 printable characters other than a space"},
+		{nil, "Use a gateway that sends stack_proxy_secret on its local link: the run answer's stack_proxy_secret is missing or malformed: link: a preamble's secret is 1 to 256 printable characters other than a space"},
 		{"a secret with spaces", "the run request at the gateway: link-run-answer.schema.json refuses /stack_proxy_secret (pattern)"},
 	} {
 		secret := c.secret

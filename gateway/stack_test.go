@@ -11,12 +11,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 )
@@ -29,6 +31,13 @@ import (
 func stackRefusedBody(host string, port int) string {
 	return "qory: add " + host + " to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.\n" +
 		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the host is not in gateway.stack_hosts\n", host, port)
+}
+
+// stackGuardedBody is the body of the 403 a run's guarded stack proxy answers for a
+// host the guard refuses.
+func stackGuardedBody(host string, port int) string {
+	return "qory: to fetch the harness definition from the gateway's machine or a private network address, list " + host + " by name, not a *. pattern, in the allow list of the node's policy and in gateway.stack_hosts in forager.yaml.\n" +
+		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the stack proxy reaches such an address only for a host listed by name in both, and never a link-local or cloud metadata address\n", host, port)
 }
 
 // connectThrough sends a CONNECT to target on c, opened and past its preamble, and
@@ -88,11 +97,11 @@ func TestStartRefusesAStackHostOfAnotherForm(t *testing.T) {
 		hosts []string
 		want  string
 	}{
-		{[]string{"git.example.com", "Git.Example.com:443"}, `Set StackHosts[1] to a lower-case host name or a *. suffix, such as git.example.com. It is "Git.Example.com:443".`},
-		{[]string{"https://git.example.com"}, `Set StackHosts[0] to a lower-case host name or a *. suffix, such as git.example.com. It is "https://git.example.com".`},
-		{[]string{"*"}, `Set StackHosts[0] to a lower-case host name or a *. suffix, such as git.example.com. It is "*".`},
-		{[]string{"1.2.3"}, `Set StackHosts[0] to a lower-case host name or a *. suffix, such as git.example.com. It is "1.2.3".`},
-		{[]string{""}, `Set StackHosts[0] to a lower-case host name or a *. suffix, such as git.example.com. It is "".`},
+		{[]string{"git.example.com", "Git.Example.com:443"}, `Set StackHosts[1] to a lower-case host name, an IPv4 address or a *. suffix, such as git.example.com. It is "Git.Example.com:443".`},
+		{[]string{"https://git.example.com"}, `Set StackHosts[0] to a lower-case host name, an IPv4 address or a *. suffix, such as git.example.com. It is "https://git.example.com".`},
+		{[]string{"*"}, `Set StackHosts[0] to a lower-case host name, an IPv4 address or a *. suffix, such as git.example.com. It is "*".`},
+		{[]string{"1.2.3"}, `Set StackHosts[0] to a lower-case host name, an IPv4 address or a *. suffix, such as git.example.com. It is "1.2.3".`},
+		{[]string{""}, `Set StackHosts[0] to a lower-case host name, an IPv4 address or a *. suffix, such as git.example.com. It is "".`},
 	} {
 		_, err := gateway.Start(context.Background(), gateway.Config{Dir: t.TempDir(), StackHosts: c.hosts})
 		if err == nil || err.Error() != c.want {
@@ -166,7 +175,16 @@ func TestTheStackProxyOnOneMachine(t *testing.T) {
 	if _, err := io.ReadAll(held); err != nil {
 		t.Errorf("the tunnel opened before the join is still open: %v", err)
 	}
+	refused := len(h.reportsWith(proxy.RefusedRelay))
 	closedUnansweredConn(t, localStack(t, h, a.StackProxySecret), "the stack proxy secret after the join")
+	// The secret is unregistered, so the listener refuses it as a secret no run has.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(h.reportsWith(proxy.RefusedRelay)) == refused && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(h.reportsWith(proxy.RefusedRelay)) == refused {
+		t.Errorf("the stack proxy secret after the join was not refused as no run's: %q", h.reportsWith(proxy.RefusedRelay))
+	}
 	resp, err = relay(h.g.Addr(), a.ProxySecret).Get("http://api.example/")
 	if err != nil {
 		t.Fatalf("the run's proxy after the join: %v", err)
@@ -196,8 +214,8 @@ func TestTheStackProxyOnOneMachine(t *testing.T) {
 
 // TestTheStackProxyIsGuardedBehindAWall pins the guard of a walled run's stack proxy:
 // this machine's address by number and by name, and the cloud metadata address, are
-// refused even when StackHosts lists them, nothing is dialled for them, and each
-// refusal is a line of the gateway's report.
+// refused with the stack proxy's guard body even when StackHosts lists them, nothing is
+// dialled for them, and each refusal is a line of the gateway's report.
 func TestTheStackProxyIsGuardedBehindAWall(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("the guarded stack proxy reached this machine: %s", r.URL)
@@ -207,8 +225,10 @@ func TestTheStackProxyIsGuardedBehindAWall(t *testing.T) {
 	h := start(t, gateway.Config{StackHosts: []string{"127.0.0.1", "169.254.169.254", "localhost"}})
 	a := h.open(server.LinkRunRequest{Wall: true})
 	for _, target := range []string{"127.0.0.1:" + port, "169.254.169.254:80", "localhost:" + port} {
+		host, p, _ := net.SplitHostPort(target)
+		n, _ := strconv.Atoi(p)
 		status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), target)
-		if status != http.StatusForbidden || !strings.Contains(body, "denied by the gateway") {
+		if status != http.StatusForbidden || body != stackGuardedBody(host, n) {
 			t.Errorf("%s: %d %q", target, status, body)
 		}
 	}
@@ -221,6 +241,70 @@ func TestTheStackProxyIsGuardedBehindAWall(t *testing.T) {
 		if !h.reported("run " + a.RunID + ": " + line) {
 			t.Errorf("no report %q", line)
 		}
+	}
+}
+
+// TestTheStackProxyOpensANameOfTheNodesPolicy pins the names of a walled run's stack
+// proxy: a host StackHosts lists that resolves to this machine's address is reached when
+// the allow list of the node's policy lists it by name too, and refused at dial time
+// with the stack proxy's guard body when it does not.
+func TestTheStackProxyOpensANameOfTheNodesPolicy(t *testing.T) {
+	if _, err := net.DefaultResolver.LookupHost(context.Background(), "stack.localhost."); err != nil {
+		t.Skipf("stack.localhost. does not resolve here: %v", err)
+	}
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "harness") }))
+	defer origin.Close()
+	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	n, _ := strconv.Atoi(port)
+	h := start(t, gateway.Config{StackHosts: []string{"stack.localhost", "other.localhost"},
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"stack.localhost"}}}})
+	a := h.open(server.LinkRunRequest{Wall: true})
+	stack := relay(h.g.Addr(), a.StackProxySecret)
+	resp, err := stack.Get("http://stack.localhost:" + port + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(b) != "harness" {
+		t.Errorf("the name of the node's policy: %d %q", resp.StatusCode, b)
+	}
+	resp, err = stack.Get("http://other.localhost:" + port + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || string(b) != stackGuardedBody("other.localhost", n) {
+		t.Errorf("a name the node's policy does not list: %d %q", resp.StatusCode, b)
+	}
+	if status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), "other.localhost:"+port); status != http.StatusForbidden || body != stackGuardedBody("other.localhost", n) {
+		t.Errorf("a CONNECT to a name the node's policy does not list: %d %q", status, body)
+	}
+}
+
+// TestTheStackProxyCountsAtTheRunsLimits pins the run's limits on its stack proxy:
+// past RunLimits.Connections the next connection is refused with the stack proxy's 429,
+// while the run's proxy counts apart and still takes one.
+func TestTheStackProxyCountsAtTheRunsLimits(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "harness") }))
+	defer origin.Close()
+	target := origin.Listener.Addr().String()
+	h := start(t, gateway.Config{StackHosts: []string{"127.0.0.1"}, RunLimits: gateway.RunLimits{Connections: 1}})
+	a := h.open(server.LinkRunRequest{})
+	held := localStack(t, h, a.StackProxySecret)
+	defer held.Close()
+	if status, body := connectThrough(t, held, target); status != http.StatusOK {
+		t.Fatalf("the first stack connection: %d %q", status, body)
+	}
+	const want = "qory: retry once one of this run's stack fetch connections closes. The run's stack proxy has 1 connections open, the most gateway.run_limits.connections allows; until the run's first join request it counts them apart from the run's proxy.\n"
+	if status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), target); status != http.StatusTooManyRequests || body != want {
+		t.Errorf("the stack connection past the limit: %d %q, want 429 %q", status, body, want)
+	}
+	run := localStack(t, h, a.ProxySecret)
+	defer run.Close()
+	if status, body := connectThrough(t, run, target); status == http.StatusTooManyRequests {
+		t.Errorf("the run's proxy counted the stack proxy's connection: %d %q", status, body)
 	}
 }
 
