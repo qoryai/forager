@@ -631,11 +631,12 @@ func (h *harness) newLink() *server.Link {
 	return l
 }
 
-// keep notes the proxy secret of a run answer: it may not reach a report.
+// keep notes the proxy secret and the stack proxy secret of a run answer: neither may
+// reach a report.
 func (h *harness) keep(a *server.LinkRunAnswer) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.secrets = append(h.secrets, a.ProxySecret)
+	h.secrets = append(h.secrets, a.ProxySecret, a.StackProxySecret)
 }
 
 // opened reports whether the harness opened the run on the local link.

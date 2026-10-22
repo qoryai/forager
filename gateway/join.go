@@ -122,6 +122,9 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		invalid(w)
 		return
 	}
+	// The run's first join request closes its stack proxy, whatever the answer: from
+	// here on no session reaches it.
+	lr.closeStack()
 	if !mediaType(r, server.LinkContentType) {
 		invalid(w)
 		return

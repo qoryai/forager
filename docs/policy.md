@@ -108,6 +108,7 @@ gateway:
     connections: 256                    # open at once, 1 to 65536
     requests_per_second: 50             # 1 to 10000
     burst: 200                          # requests at once after a pause, 1 to 100000
+  stack_hosts: [git.example.com, "*.example.org"]   # optional; where qory fetches the harness definition
   server:                               # optional
     url: https://qory.example
     access_key_id: ak_f1xt0re000000000  # or QORY_ACCESS_KEY_ID in the environment
@@ -125,6 +126,14 @@ gateway:
 - `gateway.run_limits` limits each run on the gateway, so that one run cannot slow down
   the others. Each run has counters of its own. A field you leave out is its default.
   See [run limits](#run-limits).
+- `gateway.stack_hosts` lists the hosts qory fetches a run's harness definition from
+  before the run's first session, over HTTPS or plain HTTP, on any port: each a
+  lower-case host name, an IPv4 address or a `*.` suffix. The run's policy is not
+  checked, and the fetch shows in the gateway's log, not in the run's record. Behind a
+  wall or a separate gateway, a host at this machine's address or a private network
+  address is reached only when `gateway.stack_hosts` and `egress.allow` of the node's
+  policy both list it by name, not by a `*.` pattern. A link-local or cloud metadata
+  address is never reached.
 
 ## Run limits
 

@@ -254,10 +254,12 @@ func (s *service) route(raw net.Conn) {
 // bind binds an edge's connection, whose [link.BindWord] line r has read: the gateway
 // writes its [link.BoundWord] line, signed under its access key over the connection's
 // exporter value, then reads the connection's next line within the same deadline. The
-// relay's preamble with a run key goes to that run's proxy ([Gateway.relayRun]); any
-// other line is the link's HTTP/1.1. admit lets go of c's count among the connections
-// whose run keys are not admitted, once its run key is; vouch keeps c from being closed
-// for a newer one, once a run key on it passed. It reports whether c was handed on.
+// relay's preamble with a run key goes to that run's proxy ([Gateway.relayRun]), and
+// [link.StackPreamble] with a run key to that run's stack proxy until the run's first
+// join request; any other line is the link's HTTP/1.1. admit lets go of c's count
+// among the connections whose run keys are not admitted, once its run key is; vouch
+// keeps c from being closed for a newer one, once a run key on it passed. It reports
+// whether c was handed on.
 func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch func()) bool {
 	cs := c.ConnectionState()
 	if cs.Version != tls.VersionTLS13 {
@@ -274,25 +276,29 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch func()) bool {
 	if !ok {
 		return false
 	}
-	if bytes.HasPrefix(line, []byte(link.RelayPreamble+" ")) {
-		value, ok := relayRunKey(line)
+	for _, word := range []string{link.RelayPreamble, link.StackPreamble} {
+		if !bytes.HasPrefix(line, []byte(word+" ")) {
+			continue
+		}
+		value, ok := relayRunKey(line, word)
 		if !ok {
 			return false
 		}
 		r.Discard(len(line))
-		return s.g.relayRun(c, r, value, admit)
+		return s.g.relayRun(c, r, value, admit, word == link.StackPreamble)
 	}
 	c.SetDeadline(time.Time{})
 	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit, vouch: vouch})
 }
 
-// relayRunKey is the run key of a line of the relay's preamble, its newline included,
-// and whether the line is within [maxRelayRunKey]: a longer one holds no run key.
-func relayRunKey(line []byte) (string, bool) {
+// relayRunKey is the run key of a line of the relay's preamble, or of
+// [link.StackPreamble], word, its newline included, and whether the line is within
+// [maxRelayRunKey]: a longer one has no run key. Both words have the same length.
+func relayRunKey(line []byte, word string) (string, bool) {
 	if len(line) > maxRelayRunKey {
 		return "", false
 	}
-	return strings.TrimSuffix(strings.TrimPrefix(string(line), link.RelayPreamble+" "), "\n"), true
+	return strings.TrimSuffix(strings.TrimPrefix(string(line), word+" "), "\n"), true
 }
 
 // boundLine is the gateway's answer to [link.BindWord] on the connection whose

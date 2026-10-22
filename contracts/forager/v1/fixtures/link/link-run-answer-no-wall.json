@@ -34,5 +34,6 @@
     "source": "config",
     "digest": "fba84d8241c88aa4214824cc7bb83ad149d7076d92d183808220842ad75240d4"
   },
-  "proxy_secret": "fixture-proxy-secret-0000000000000000000001"
+  "proxy_secret": "fixture-proxy-secret-0000000000000000000001",
+  "stack_proxy_secret": "fixture-stack-proxy-secret-00000000000000001"
 }

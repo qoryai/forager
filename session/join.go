@@ -150,9 +150,11 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 		return nil, err
 	}
 	// The run's host proxies and its engine proxy end before the join request and the
-	// wall's start, so their passwords open nothing while the session runs.
+	// wall's start, so their passwords open nothing while the session runs. The join
+	// request closes the run's stack proxy at the gateway.
 	r.hosts.closeAll()
 	r.closeEngine()
+	r.joinAsked.Store(true)
 
 	// runCtx ends when the join's context ends or the run is closed from outside: the
 	// start stops, or the runtime is stopped as at its time limit.

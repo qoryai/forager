@@ -17,6 +17,8 @@ type runSpec struct {
 	fetch   bool
 	setup   []session.SetupCommand
 	onSetup func(error)
+	// opened, when set, is called with the run once it opens, before anything else.
+	opened func(*session.Run)
 }
 
 // runOne opens a run, fetches its image when sp.fetch is set, runs its setup commands
@@ -28,6 +30,9 @@ func runOne(ctx context.Context, sp runSpec) (*session.Result, error) {
 	r, err := session.Open(ctx, sp.OpenSpec)
 	if err != nil {
 		return nil, err
+	}
+	if sp.opened != nil {
+		sp.opened(r)
 	}
 	if sp.fetch {
 		if err := r.FetchImage(ctx); err != nil {

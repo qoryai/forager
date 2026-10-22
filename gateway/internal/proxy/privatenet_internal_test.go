@@ -223,3 +223,53 @@ func TestTheGuardsErrorForAnAddressIn6to4OrLocalNAT64(t *testing.T) {
 		}
 	}
 }
+
+// TestTheGuardMarksTheAddressesNoNameOpens pins Decision.Never and the body
+// [Proxy.GuardRefused] gets: true for a link-local or cloud metadata address, by number
+// and at dial time, inside 64:ff9b::/96 too, and false for this machine's address and a
+// private network address.
+func TestTheGuardMarksTheAddressesNoNameOpens(t *testing.T) {
+	p, err := Listen("", policy.Enforce, []string{"*.example"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.Guard(nil)
+	p.GuardRefused(func(host string, port int, never bool) string {
+		if never {
+			return "never " + host
+		}
+		return "private " + host
+	})
+	for address, never := range map[string]bool{
+		"169.254.169.254":    true,
+		"fd00:ec2::254":      true,
+		"fe80::1":            true,
+		"64:ff9b::a9fe:a9fe": true,
+		"127.0.0.1":          false,
+		"10.0.0.5":           false,
+		"fd12::5":            false,
+	} {
+		// At dial time: a name of the allow list that resolved to the address.
+		d := failed(Decision{Host: "git.example", Port: 443, Rule: "*.example", Allowed: true, Mode: policy.Enforce}, p.guard(context.Background(), net.JoinHostPort(address, "443")))
+		if d.Rule != GuardRule || d.Never != never {
+			t.Errorf("%s at dial time: rule %q, never %v, want %v", address, d.Rule, d.Never, never)
+		}
+		w := httptest.NewRecorder()
+		p.deny(w, d)
+		want := "private git.example"
+		if never {
+			want = "never git.example"
+		}
+		if w.Code != http.StatusForbidden || w.Body.String() != want {
+			t.Errorf("%s at dial time: %d %q, want %q", address, w.Code, w.Body.String(), want)
+		}
+		// By number; an address inside 64:ff9b::/96 is judged at dial time alone.
+		if strings.HasPrefix(address, "64:ff9b:") {
+			continue
+		}
+		if d := p.decide("CONNECT", address, 443); d.Rule != GuardRule || d.Never != never {
+			t.Errorf("%s by number: rule %q, never %v, want %v", address, d.Rule, d.Never, never)
+		}
+	}
+}

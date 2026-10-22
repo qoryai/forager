@@ -41,6 +41,9 @@ type Limits struct {
 	// with 429. While Connections requests wait, the next that needs a token is refused
 	// with 429 at once.
 	RequestsPerSecond, Burst int
+	// Stack says the limits are a run's stack proxy's, counted apart from the run's
+	// proxy until the run's first join request: each 429's line says so.
+	Stack bool
 }
 
 // errRate says a request waited [RateWait] and got no token.
@@ -227,17 +230,25 @@ func (p *Proxy) limited(w http.ResponseWriter, d Decision, rule string, why erro
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Retry-After", "1")
 	w.WriteHeader(http.StatusTooManyRequests)
+	if rule == ConnectionLimit && lm.l.Stack {
+		fmt.Fprintf(w, "qory: retry once one of this run's stack fetch connections closes. The run's stack proxy has %d connections open, the most gateway.run_limits.connections allows; until the run's first join request it counts them apart from the run's proxy.\n", lm.l.Connections)
+		return
+	}
 	if rule == ConnectionLimit {
 		fmt.Fprintf(w, "qory: retry once one of this run's connections closes. The run has %d connections open through the gateway, the most gateway.run_limits.connections allows.\n", lm.l.Connections)
 		return
+	}
+	whose, waiting, apart := "This run's requests", "of its requests", ""
+	if lm.l.Stack {
+		whose, waiting, apart = "This run's stack fetch requests", "of them", "; until the run's first join request the stack proxy counts them apart from the run's proxy"
 	}
 	if errors.Is(why, errCrowded) {
 		n, verb := max(lm.l.Connections, 1), "were"
 		if n == 1 {
 			verb = "was"
 		}
-		fmt.Fprintf(w, "qory: retry in 1 second. This run's requests came faster than %d a second, the most gateway.run_limits.requests_per_second allows, and %d of its requests %s already waiting.\n", lm.l.RequestsPerSecond, n, verb)
+		fmt.Fprintf(w, "qory: retry in 1 second. %s came faster than %d a second, the most gateway.run_limits.requests_per_second allows, and %d %s %s already waiting%s.\n", whose, lm.l.RequestsPerSecond, n, waiting, verb, apart)
 		return
 	}
-	fmt.Fprintf(w, "qory: retry in 1 second. This run's requests came faster than %d a second, the most gateway.run_limits.requests_per_second allows, and this request waited %d seconds.\n", lm.l.RequestsPerSecond, int(RateWait/time.Second))
+	fmt.Fprintf(w, "qory: retry in 1 second. %s came faster than %d a second, the most gateway.run_limits.requests_per_second allows, and this request waited %d seconds%s.\n", whose, lm.l.RequestsPerSecond, int(RateWait/time.Second), apart)
 }
