@@ -40,8 +40,8 @@ func Conforms(t *testing.T, rt runtimes.Runtime) {
 	if stop.Grace < 0 {
 		t.Errorf("the stop grace %s is negative", stop.Grace)
 	}
-	if typ, _, ok := rt.Map(runtimes.Record{Source: runtimes.SourceHooks, Record: map[string]any{}}); ok {
-		t.Errorf("an empty record became %s; a record that says nothing is no event", typ)
+	if events := rt.Map(runtimes.Record{Source: runtimes.SourceHooks, Record: map[string]any{}}); len(events) > 0 {
+		t.Errorf("an empty record became %s; a record that says nothing is no event", events[0].Type)
 	}
 	if rt.Headless(nil) {
 		t.Error("no arguments at all are headless; a runtime started with none has whatever interface it has")
@@ -97,8 +97,8 @@ func Replays(t *testing.T, rt runtimes.Runtime, fsys fs.FS, dir string) {
 				if err := json.Unmarshal(b, &r); err != nil {
 					t.Fatal(err)
 				}
-				if typ, data, ok := rt.Map(r); ok {
-					got = append(got, roundTrip(t, map[string]any{"type": typ, "data": data}))
+				for _, e := range rt.Map(r) {
+					got = append(got, roundTrip(t, map[string]any{"type": e.Type, "data": e.Data}))
 				}
 			})
 			var want []map[string]any

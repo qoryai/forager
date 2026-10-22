@@ -3,8 +3,16 @@
 #
 # The hooks report the session in both modes, interactive and not, so they are the
 # canonical source. The standard output, JSON lines when the session runs on pipes, adds
-# only the result line, which no hook reports: the outcome, the turns and the cost.
-# Its init line is not mapped, because SessionStart already produced runtime.started.
+# what no hook reports: the result line, with the outcome, the turns and the cost; and,
+# with --output-format stream-json --verbose --forward-subagent-text, each subagent's
+# text blocks. Its init line is not mapped, because SessionStart already produced
+# runtime.started.
+#
+# The two message rules are written against the Agent SDK TypeScript reference
+# (SDKAssistantMessage, SDKUserMessage) and the headless page, for the versions whose
+# stream messages of a subagent contain agent_id: Agent SDK 0.3.292, which bundles
+# Claude Code 2.1.292, and later. An older Claude Code prints no agent_id there, so they
+# do not apply to it. No fixture beside this file is a recording of them.
 #
 # Work in the background has no separate hook. Its start is a tool call like any other,
 # with run_in_background in the input and whatever the tool returned in the response, and
@@ -202,3 +210,26 @@ rules:
       duration_ms: duration_ms
       cost_usd: total_cost_usd
       result: result
+  # A subagent's text blocks: each text block of an assistant message, and of a user
+  # message such as the first one, which contains the prompt that drives the subagent.
+  # A message of the main conversation has no agent_id.
+  - source: output
+    match: {type: assistant, agent_id: {present: true}, each.type: text}
+    each: message.content
+    type: dev.qory.runtime.message
+    data:
+      session_id: session_id
+      agent_id: agent_id
+      role: message.role
+      text: each.text
+      kind: each.type
+  - source: output
+    match: {type: user, agent_id: {present: true}, each.type: text}
+    each: message.content
+    type: dev.qory.runtime.message
+    data:
+      session_id: session_id
+      agent_id: agent_id
+      role: message.role
+      text: each.text
+      kind: each.type

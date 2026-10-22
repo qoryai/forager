@@ -105,6 +105,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `dev.qory.runtime.message`: one text block of a subagent, with `agent_id`, `role` and
+  `text`, from a session on pipes. Claude Code prints them with `--output-format
+  stream-json --verbose --forward-subagent-text`.
+- A descriptor rule may have `each`, a path to an array: the rule then produces one event
+  per element that matches.
 - `machine` and `setup` in `dev.qory.run.started`, both optional, so a reader shows
   where the run and its setup ran. `machine` is the adapter that made the run's
   machine, such as `aws-ec2`, or `none`: 1 to 64 of `a-z`, `0-9` and `-`, the first a

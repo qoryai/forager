@@ -562,8 +562,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			setupSteps.handle(rec)
 			return
 		}
-		if typ, data, ok := rt.Map(rec); ok {
-			r.write(typ, withSession(maskedRecord(masker, data), n))
+		for _, e := range rt.Map(rec) {
+			r.write(e.Type, withSession(maskedRecord(masker, e.Data), n))
 		}
 	}
 	go sock.Serve(records, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })

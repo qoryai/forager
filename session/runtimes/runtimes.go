@@ -42,9 +42,9 @@ type Runtime interface {
 	// ReadsOutput reports whether the program's standard output, when the session runs
 	// on pipes, is JSON lines the session passes to Map as records of [SourceOutput].
 	ReadsOutput() bool
-	// Map turns one record of the program into one event of the contract, its type and
-	// data, or reports that the record is none.
-	Map(Record) (typ string, data map[string]any, ok bool)
+	// Map turns one record of the program into the events of the contract it is, each
+	// with its type and data, in order; nil when the record is none.
+	Map(Record) []Event
 	// Stop is how the program is asked to leave. A run that names its own signal or
 	// grace overrides it.
 	Stop() Stop
@@ -219,6 +219,10 @@ type Endpoint = descriptor.Endpoint
 // Record is one unit of what a program reports.
 type Record = descriptor.Record
 
+// Event is one event of the contract that [Runtime.Map] produces: its type, a runtime
+// event's, and its data.
+type Event = descriptor.Event
+
 // The sources of a record. A runtime maps records of SourceOutput and SourceHooks;
 // the session reads the records of SourceSetup, a setup command's, and passes none of
 // them to a runtime.
@@ -260,7 +264,7 @@ func (bare) Prepare(a Attach) (Launch, error) { return a.Launch, nil }
 func (bare) ReadsOutput() bool { return false }
 
 // Map finds no event in any record.
-func (bare) Map(Record) (string, map[string]any, bool) { return "", nil, false }
+func (bare) Map(Record) []Event { return nil }
 
 // Stop is Forager's defaults.
 func (bare) Stop() Stop { return Stop{} }
@@ -351,7 +355,7 @@ func (r *described) Prepare(a Attach) (Launch, error) {
 }
 
 // Map applies the descriptor's rules.
-func (r *described) Map(rec Record) (string, map[string]any, bool) { return r.d.Map(rec) }
+func (r *described) Map(rec Record) []Event { return r.d.Map(rec) }
 
 // Secrets is the descriptor's secrets section, a copy; empty when it has none.
 func (r *described) Secrets() Declarations {

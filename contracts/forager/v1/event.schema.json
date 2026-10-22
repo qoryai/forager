@@ -60,6 +60,7 @@
             "dev.qory.runtime.turn_failed",
             "dev.qory.runtime.subagent_started",
             "dev.qory.runtime.subagent_finished",
+            "dev.qory.runtime.message",
             "dev.qory.runtime.notification",
             "dev.qory.runtime.ended",
             "dev.qory.runtime.result"
@@ -380,6 +381,19 @@
             },
             "data": {
               "$ref": "events/runtime.subagent_finished.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.runtime.message"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.message.schema.json"
+            },
+            "data": {
+              "$ref": "events/runtime.message.schema.json"
             }
           }
         },

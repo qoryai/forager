@@ -37,9 +37,9 @@ func TestARuntimeWrittenAsDataAlone(t *testing.T) {
 	if s := rt.Stop(); s.Signal != "SIGINT" || s.Grace != 45*time.Second {
 		t.Errorf("stop %+v", s)
 	}
-	typ, data, ok := rt.Map(runtimes.Record{Source: runtimes.SourceOutput, Record: map[string]any{"kind": "done", "text": "ok"}})
-	if !ok || typ != "dev.qory.runtime.result" || data["result"] != "ok" {
-		t.Errorf("%v %s %v", ok, typ, data)
+	events := rt.Map(runtimes.Record{Source: runtimes.SourceOutput, Record: map[string]any{"kind": "done", "text": "ok"}})
+	if len(events) != 1 || events[0].Type != "dev.qory.runtime.result" || events[0].Data["result"] != "ok" {
+		t.Errorf("%+v", events)
 	}
 	// With a forwarder and no hooks source there is still nothing to install.
 	launch := runtimes.Launch{Command: "other", Args: []string{"run"}}
