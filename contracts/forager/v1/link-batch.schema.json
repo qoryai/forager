@@ -18,7 +18,7 @@
         {
           "if": {"required": ["type"], "properties": {"type": {"const": "dev.qory.run.refused"}}},
           "then": {"properties": {"data": {"properties": {
-            "code": {"enum": ["run_configuration_invalid", "tool_unknown", "image_unknown", "image_not_allowed", "image_user_root", "variable_reserved", "placeholder_conflict", "model_key_missing", "mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run", "mount_through_link", "engine_unreachable"]},
+            "code": {"enum": ["run_configuration_invalid", "tool_unknown", "image_unknown", "image_not_allowed", "image_user_root", "image_missing", "variable_reserved", "placeholder_conflict", "model_key_missing", "mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run", "mount_through_link", "engine_unreachable"]},
             "names": {"items": {"not": {"pattern": "^(labels|about\\.details)\\.[^=]*="}}}
           }}}}
         },
@@ -44,7 +44,7 @@
         {
           "if": {"required": ["type"], "properties": {"type": {"const": "dev.qory.session.exited"}}},
           "then": {"properties": {"data": {
-            "properties": {"reason": {"enum": ["timeout", "interrupted", "run_configuration_invalid", "tool_unknown", "image_unknown", "image_not_allowed", "image_user_root", "variable_reserved", "placeholder_conflict", "model_key_missing", "mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run", "mount_through_link", "engine_unreachable"]}},
+            "properties": {"reason": {"enum": ["timeout", "interrupted", "run_configuration_invalid", "tool_unknown", "image_unknown", "image_not_allowed", "image_user_root", "image_missing", "variable_reserved", "placeholder_conflict", "model_key_missing", "mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run", "mount_through_link", "engine_unreachable"]}},
             "allOf": [
               {
                 "if": {"not": {"anyOf": [{"required": ["reason"]}, {"required": ["signal"]}]}, "required": ["exit_code"], "properties": {"exit_code": {"const": -1}}},

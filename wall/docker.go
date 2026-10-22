@@ -508,7 +508,8 @@ const pullWait = 10 * time.Minute
 // is refused as well, since it cannot be checked. The agent runs as the wall's user
 // whatever the image's, and that user is uid:gid in numbers, which Prepare requires
 // for such an image, so neither the image's /etc/passwd nor its /etc/group chooses who
-// the agent is; this keeps an image that expects root out of the run.
+// the agent is; this keeps an image that expects root out of the run. An image its
+// registry does not have is image_missing, [dockerEnclosure.fetch].
 func (e *dockerEnclosure) pull(ctx context.Context) error {
 	fetch, cancel := context.WithTimeout(ctx, pullWait)
 	defer cancel()
@@ -517,7 +518,7 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 		return err
 	}
 	if !held {
-		if _, err := e.docker(fetch, "pull", e.req.Image); err != nil {
+		if err := e.fetch(fetch); err != nil {
 			return err
 		}
 	}
@@ -526,7 +527,7 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 		return err
 	}
 	if config == nil && held {
-		if _, err := e.docker(fetch, "pull", e.req.Image); err != nil {
+		if err := e.fetch(fetch); err != nil {
 			return err
 		}
 		if config, err = e.imageConfig(ctx); err != nil {
@@ -566,6 +567,47 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 		return root()
 	}
 	return nil
+}
+
+// fetch runs docker pull of the run's image. A pull whose output shows that the image's
+// registry has no manifest of the reference, or no repository of its name, [imageMissing],
+// is image_missing, with the reference as its name; any other failure, such as a denied
+// pull, an unreachable registry or a timeout, is the pull's error.
+func (e *dockerEnclosure) fetch(ctx context.Context) error {
+	out, err := e.docker(ctx, "pull", e.req.Image)
+	if err != nil && imageMissing(out) {
+		image := accesskey.ShownName(e.req.Image, false)
+		return refusal.New(refusal.ImageMissing, []string{image}, "the image %s is not in its registry", image)
+	}
+	return err
+}
+
+// What docker pull prints, Docker Engine 26 to 29, when the image's registry has no
+// manifest of it. With the classic image store (moby's distribution/errors.go), the line
+// contains the registry's error code in lower case: manifestUnknown for MANIFEST_UNKNOWN,
+// nameUnknown for NAME_UNKNOWN. The line for DENIED, "pull access denied for <name>,
+// repository does not exist or may require 'docker login': denied: …", and the line for
+// UNAUTHORIZED match neither. The containerd image store's resolver (containerd's
+// core/remotes/docker/resolver.go) reads no error code: after a 404 to the request for
+// the manifest, the line is notResolved, the reference twice and then "not found".
+var (
+	manifestUnknown = regexp.MustCompile(`manifest for \S+ not found: manifest unknown: `)
+	nameUnknown     = regexp.MustCompile(`repository \S+ not found: name unknown: `)
+	notResolved     = regexp.MustCompile(`(?m)failed to resolve reference "([^"\s]+)": (\S+): not found$`)
+)
+
+// imageMissing reports whether the output of docker pull shows that the image's registry
+// has no manifest of the reference or no repository of its name.
+func imageMissing(out []byte) bool {
+	if manifestUnknown.Match(out) || nameUnknown.Match(out) {
+		return true
+	}
+	for _, m := range notResolved.FindAllSubmatch(out, -1) {
+		if bytes.Equal(m[1], m[2]) {
+			return true
+		}
+	}
+	return false
 }
 
 // Pull is [Puller.Pull] for a run's image by reference: it checks the request as

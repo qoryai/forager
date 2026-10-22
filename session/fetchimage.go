@@ -36,8 +36,8 @@ import (
 // already, or EngineProxy is not a loopback host:port with a password of the shape a
 // forwarder checks. A failure of the fetch writes its line in the step and ends the
 // step failed, or cancelled when ctx ended, with -1; an image whose user is root is a
-// [*Refusal], image_user_root. When the pull panics, the step ends failed and the
-// panic continues.
+// [*Refusal], image_user_root, and an image its registry does not have is a [*Refusal],
+// image_missing. When the pull panics, the step ends failed and the panic continues.
 func (r *Run) FetchImage(ctx context.Context) error {
 	if r.open.Wall == nil {
 		return errors.New("Open the run with a wall to fetch its image: a run without a wall has no image.")

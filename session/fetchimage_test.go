@@ -195,8 +195,9 @@ func TestTheImageIsFetchedOverTheMachinesNetwork(t *testing.T) {
 }
 
 // TestAFetchThatFailsEndsItsStep pins a pull that fails: its line in the step, the step
-// failed with -1, the error returned with the engine proxy's password replaced, and an
-// image whose user is root a refusal, image_user_root; a pull whose context ends ends
+// failed with -1, the error returned with the engine proxy's password replaced, an image
+// whose user is root a refusal, image_user_root, and an image its registry does not have
+// a refusal, image_missing; a pull whose context ends ends
 // its step cancelled; the engine proxy takes no connection after either; and a later
 // join fetches the image in its image step.
 func TestAFetchThatFailsEndsItsStep(t *testing.T) {
@@ -211,6 +212,8 @@ func TestAFetchThatFailsEndsItsStep(t *testing.T) {
 			"wall docker: docker pull: exit status 1: proxyconnect tcp: http://qory:qory-proxy-password@127.0.0.1 refused"},
 		{"an image whose user is root", refusals.New(refusals.ImageUserRoot, []string{pinned}, "the image %s runs as root; a run's image runs as the wall's user", pinned), false, "failed",
 			"the image " + pinned + " runs as root; a run's image runs as the wall's user: image_user_root: " + pinned},
+		{"an image its registry does not have", refusals.New(refusals.ImageMissing, []string{pinned}, "the image %s is not in its registry", pinned), false, "failed",
+			"the image " + pinned + " is not in its registry: image_missing: " + pinned},
 		{"a pull whose context ends", context.Canceled, true, "cancelled", "context canceled"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -243,6 +246,8 @@ func TestAFetchThatFailsEndsItsStep(t *testing.T) {
 			case strings.Contains(err.Error(), enginePassword):
 				t.Errorf("the error contains the password: %v", err)
 			case c.name == "an image whose user is root" && (!errors.As(err, &ref) || ref.Code != refusals.ImageUserRoot):
+				t.Errorf("the refusal: %v", err)
+			case c.name == "an image its registry does not have" && (!errors.As(err, &ref) || ref.Code != refusals.ImageMissing):
 				t.Errorf("the refusal: %v", err)
 			}
 			if conn, err := net.Dial("tcp", addr); err == nil {

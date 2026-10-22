@@ -929,6 +929,12 @@ release may change what an existing document does, and says so under Upgrading.
   digest, and none starts when the engine does not hold it. The agent's container, the
   setup container and the container the wall reads the image's files from are created
   with `--pull=never`, so the engine pulls such an image in the image step alone.
+- `image_missing`, a refusal code of `refusal.Decides`: `(*wall.Docker).Pull` refuses
+  an image whose registry has no manifest of its digest or no repository of its name,
+  with the reference as its name. When the join's image step pulls the image, the
+  session's `dev.qory.session.exited` is failed, with `exit_code` `-1` and `reason`
+  `image_missing`; `(*session.Run).FetchImage` returns the refusal. A denied pull, an
+  unreachable registry and a timeout stay failures with no reason.
 - `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
