@@ -28,10 +28,10 @@ const (
 	rkName  = "(a name that contains a run key)"
 )
 
-// leaks reports whether text contains qak_ or qrk_ in any case.
+// leaks reports whether text contains qak_, qrk_ or qecr_ in any case.
 func leaks(text string) bool {
 	l := strings.ToLower(text)
-	return strings.Contains(l, "qak_") || strings.Contains(l, "qrk_")
+	return strings.Contains(l, "qak_") || strings.Contains(l, "qrk_") || strings.Contains(l, "qecr_")
 }
 
 // mkdir makes the directory of the names joined, and returns its path.

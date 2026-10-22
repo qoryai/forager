@@ -14,7 +14,7 @@ release may change what an existing document does, and says so under Upgrading.
   access key secret, `qak_`, and a run key, `qrk_`. Forager refuses a run code where it
   refuses the other two, such as in a pin, a name or a built image, and sends and prints
   `(a name that contains a run code)` or `(a value that contains a run code)` in place
-  of a name or a value that contains one. `accesskey.SecretInDocument` returns the new
+  of a name or a value that contains one. `accesskey.SecretInDocument` returns
   `accesskey.ErrRunCodeInDocument` for a document that contains a run code and neither
   of the others; `errors.Is` reports it as `accesskey.ErrSecretInDocument`. The event
   schemas accept both phrases. Before, a run code passed as any other value.

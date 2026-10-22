@@ -320,11 +320,12 @@ var nameMessages = map[string]struct {
 	},
 }
 
-// noSecretPrefix fails the test when the error contains qak_ or qrk_ in any case.
+// noSecretPrefix fails the test when the error contains qak_, qrk_ or qecr_ in any
+// case.
 func noSecretPrefix(t *testing.T, what string, err error) {
 	t.Helper()
 	lower := strings.ToLower(err.Error())
-	if strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+	if strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") {
 		t.Errorf("%s: the error contains a secret's prefix: %v", what, err)
 	}
 }
@@ -638,7 +639,7 @@ func TestARenewalReportPrintsAPhraseForASecretInAName(t *testing.T) {
 	for name, phrase := range map[string]string{"qak_x": accessKeyPhrase, "a.qrk_b": runKeyPhrase, "qrk_x.qak_y": accessKeyPhrase, "model": "model"} {
 		if l := renewReport(t, name, fails, ""); !strings.HasPrefix(l, "credential "+phrase+" was not renewed: the adapter ") || !strings.HasSuffix(l, ": exit status 3: no installation") {
 			t.Errorf("a renewal of %s that fails: %s", name, l)
-		} else if lower := strings.ToLower(l); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+		} else if lower := strings.ToLower(l); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") {
 			t.Errorf("a renewal of %s that fails: a secret's prefix in %s", name, l)
 		}
 		want := "credential " + phrase + " was not renewed: the adapter answered with other hosts, schemes or paths than when the run started"

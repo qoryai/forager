@@ -46,8 +46,8 @@ type Built struct {
 // dev.qory.run.built already.
 //
 // EnvironmentRef must contain no credential. The masker replaces only the forwarders'
-// passwords, and accesskey.ShownValue replaces only a reference that contains qak_ or
-// qrk_; any other secret in EnvironmentRef is written as the caller passes it.
+// passwords, and accesskey.ShownValue replaces only a reference that contains qak_,
+// qrk_ or qecr_; any other secret in EnvironmentRef is written as the caller passes it.
 func (r *Run) Built(b Built) error {
 	if err := checkBuilt(b); err != nil {
 		return err

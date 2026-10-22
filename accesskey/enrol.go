@@ -54,14 +54,17 @@ var codeKinds = []struct{ prefix, kind string }{
 }
 
 // errCodeShape is the error of a code without one of the prefixes or without a dot,
-// the prefixes listed from codeKinds.
+// the prefixes of access keys' codes listed from codeKinds. The run code's prefix is
+// "a run code's prefix" in the text, which contains no qecr_, so ShownError keeps it.
 var errCodeShape = func() error {
 	var list []string
 	for _, k := range codeKinds {
-		list = append(list, k.prefix)
+		if k.kind != kindRun {
+			list = append(list, k.prefix)
+		}
 	}
-	return fmt.Errorf("an enrolment code is %s or %s, 26 characters, then a dot and a fingerprint",
-		strings.Join(list[:len(list)-1], ", "), list[len(list)-1])
+	return fmt.Errorf("an enrolment code is %s or a run code's prefix, 26 characters, then a dot and a fingerprint",
+		strings.Join(list, ", "))
 }()
 
 // codePrefix returns the prefix of codeKinds that starts head in any case, and the
@@ -280,8 +283,9 @@ func (e *KindError) Error() string {
 	return fmt.Sprintf("the enrolment answer: node_kind %q does not match the code's kind %q", e.Kind, e.codeKind)
 }
 
-// errRunCode is the error of an access key's enrolment method for a run code.
-var errRunCode = errors.New("redeem a run code with PostRunVia or VerifyRunAnswer: the request's code is a run code, qecr_, and PostVia, Post and VerifyAnswer enrol an access key")
+// errRunCode is the error of an access key's enrolment method for a run code. Its
+// text contains no qecr_, so ShownError keeps it.
+var errRunCode = errors.New("redeem a run code with PostRunVia or VerifyRunAnswer: the request's code is a run code, and PostVia, Post and VerifyAnswer enrol an access key")
 
 // forKey refuses a request whose code is a run code: an access key's enrolment method
 // reads no run's answer.
@@ -542,10 +546,10 @@ func checkOrigin(s string) error {
 		return errors.New("the server URL contains an access key secret")
 	}
 	if containsRunKey(s) {
-		return errors.New("the server URL contains a run key")
+		return errors.New("remove the run key from the server URL: a run key belongs in QORY_RUN_KEY only")
 	}
 	if containsRunCode(s) {
-		return errors.New("the server URL contains a run code")
+		return errors.New("remove the run code from the server URL: a run code belongs in a machine's start data only")
 	}
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {

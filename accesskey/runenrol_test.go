@@ -354,7 +354,7 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 	defer srv.Close()
 	ctx := context.Background()
 	run := runRequest(t, signer)
-	const toRun = "redeem a run code with PostRunVia or VerifyRunAnswer: the request's code is a run code, qecr_, and PostVia, Post and VerifyAnswer enrol an access key"
+	const toRun = "redeem a run code with PostRunVia or VerifyRunAnswer: the request's code is a run code, and PostVia, Post and VerifyAnswer enrol an access key"
 	for name, call := range map[string]func() error{
 		"VerifyAnswer": func() error { _, err := run.VerifyAnswer(created(run, signer, nil)); return err },
 		"Post":         func() error { _, err := run.Post(ctx, nil, srv.URL, "qory/test"); return err },

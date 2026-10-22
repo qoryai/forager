@@ -349,8 +349,9 @@ func (p phrasedError) Unwrap() error { return p.err }
 // qak_, a run key, qrk_, or a run code, qecr_, in any case. A reader of a document a
 // secret does not belong in, such as the server document or a pin, refuses one that
 // contains it with a fixed message, before a schema or a JSON decoder can quote the
-// value in its error. A run code is a secret until it is redeemed: whoever reads it
-// first can redeem it under a key of their choosing.
+// value in its error. A run code is a secret until it is redeemed or its 15 minutes
+// pass: whoever first redeems it through its gateway's relay gets the run's run key,
+// under a key of their choosing.
 func ContainsSecret(v string) bool {
 	return containsAccessKeySecret(v) || containsRunKey(v) || containsRunCode(v)
 }
@@ -508,8 +509,8 @@ type span struct{ from, to int }
 
 // outsidePinKeys is the raw bytes of a document as parts, split where its pin writes a
 // key withoutPinKeys leaves out, those bytes left out. Such a span starts and ends with
-// a quote, or is a plain YAML scalar, which a separator bounds; neither qak_ nor qrk_
-// contains a quote or a separator, so no match runs across the edge of a span.
+// a quote, or is a plain YAML scalar, which a separator bounds; none of qak_, qrk_ and
+// qecr_ contains a quote or a separator, so no match runs across the edge of a span.
 func outsidePinKeys(raw, member string) []any {
 	b := []byte(raw)
 	spans, ok := jsonPinKeys(b, member)
