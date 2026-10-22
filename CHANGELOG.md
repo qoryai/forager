@@ -109,11 +109,11 @@ release may change what an existing document does, and says so under Upgrading.
   this one, when the runtime reports it. Claude Code reports it in a session on pipes
   with `--output-format stream-json --verbose`. A descriptor sets where in the member
   `parent`.
-- `dev.qory.runtime.message`: one text block of a subagent, with `agent_id`, `role` and
-  `text`, from a session on pipes. Claude Code prints them with `--output-format
+- `dev.qory.runtime.message`: one text or thinking block of a subagent, with `agent_id`,
+  `role`, `text` and `kind`, from a session on pipes. Claude Code prints them with `--output-format
   stream-json --verbose --forward-subagent-text`.
-- A descriptor rule may have `each`, a path to an array: the rule then produces one event
-  per element that matches.
+- A descriptor rule may have `each`, a path to an array: each element then produces one
+  event, of the first rule with that `each` whose match the element meets.
 - `machine` and `setup` in `dev.qory.run.started`, both optional, so a reader shows
   where the run and its setup ran. `machine` is the adapter that made the run's
   machine, such as `aws-ec2`, or `none`: 1 to 64 of `a-z`, `0-9` and `-`, the first a
@@ -967,6 +967,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Return `[]runtimes.Event` from `Map` in a runtime written in Go: `Runtime.Map` returns
+  the events of one record in order, each with its type and data, and nil for none.
+  Before, it returned one type, its data and `ok`.
 - Replace `SessionSpec.Preparation` with `SessionSpec.Setup` and
   `SessionSpec.SetupRunner`: each command is a `setup` step.
 - Replace `session.Run` and `session.Spec` with `session.Open`, `(*session.Run).Join`

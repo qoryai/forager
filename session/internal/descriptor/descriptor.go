@@ -393,11 +393,11 @@ func (s *Secrets) check() error {
 // Map applies the rules to one record: the first rule of the record's source that
 // matches produces the events, and a record no rule matches produces nothing. A rule
 // without each matches when the record matches every entry of its match, and produces
-// one event. A rule with each matches when one element of its array matches it; then each
-// element, in the array's order, produces the event of the first rule from this one on
-// with the same source and each that the element matches, so one record's elements
-// may produce events of different rules, and an element no such rule matches produces
-// none. A rule whose path is no array matches no record.
+// one event. A rule with each matches when one element of its array matches it; then
+// each element, in the array's order, produces the event of the first rule from this
+// one on with the same source and each that the element matches, so one record's
+// elements may produce events of different rules, and an element no such rule matches
+// produces none. A rule whose path is no array matches no record.
 func (d *Descriptor) Map(r Record) []Event {
 	for i := range d.Rules {
 		rule := &d.Rules[i]

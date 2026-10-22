@@ -210,6 +210,7 @@ records come from outside. A **descriptor** maps those reports to events:
 | `dev.qory.runtime.turn_failed`       | A turn ended on an API error          |
 | `dev.qory.runtime.subagent_started`  | A subagent was spawned                |
 | `dev.qory.runtime.subagent_finished` | A subagent finished                   |
+| `dev.qory.runtime.message`           | A subagent wrote a message            |
 | `dev.qory.runtime.notification`      | The runtime notified its user         |
 | `dev.qory.runtime.ended`             | The runtime closed its session        |
 | `dev.qory.runtime.result`            | A headless session printed its result |
