@@ -382,8 +382,8 @@ type Outcome struct {
 // exit code under -1, a reason outside the pattern or one of Forager's reserved codes
 // other than timeout, interrupted and no_session, those three with another state or
 // exit code than they take, and image_missing other than failed with -1 for a run no
-// session joined, the one image_missing the gateway accepts. joined says a join of the
-// run was numbered, or may have been.
+// session joined, the one image_missing the gateway accepts. joined is true when a join
+// of the run was numbered, or may have been.
 func checkOutcome(o Outcome, joined bool) error {
 	switch {
 	case !event.IsState(o.State):

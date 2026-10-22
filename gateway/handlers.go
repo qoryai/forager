@@ -478,7 +478,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 // no_session or image_missing, the last two only for a run with no join the gateway
 // numbered, and image_missing only failed with exit_code -1, the close after a fetch of
 // the run's image that its registry did not have. The gateway writes the event of every
-// other end itself. joined says the gateway numbered a join of the run.
+// other end itself. joined is true when the gateway numbered a join of the run.
 func closeRule(data map[string]any, joined bool) string {
 	given, hasReason := data["reason"]
 	why, _ := given.(string)

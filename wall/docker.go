@@ -573,8 +573,11 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 // registry has no manifest of the reference, or no repository of its name, [imageMissing],
 // is image_missing, with the reference as its name; when the engine pulls from the
 // image's registry alone, any other failure, such as a denied pull, an unreachable
-// registry or a timeout, is the pull's error. With a mirror, a 404 from the mirror is
-// image_missing, even when the upstream is unreachable or denies the pull.
+// registry or a timeout, is the pull's error. On the containerd image store of Docker
+// Engine 29 (containerd 2.x), a 404 from a mirror is image_missing when the upstream
+// cannot be reached or its authorization fails; a 403 or another error status from the
+// upstream is a failure with no code. The classic image store, and containerd 1.7 in
+// Docker 26 and 27, return the upstream's error.
 func (e *dockerEnclosure) fetch(ctx context.Context) error {
 	out, err := e.docker(ctx, "pull", e.req.Image)
 	if err != nil && imageMissing(out) {
