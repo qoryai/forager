@@ -414,9 +414,17 @@ release may change what an existing document does, and says so under Upgrading.
 - A run with a run key writes neutral values in its events: `dev.qory.run.started`
   has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
   `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run
-  directory, the harness home and the inputs directory, and `harness` is left out.
-  The session reports the values of the machine to `OpenSpec.Report` in one line per
-  session, `session <n> starts on this machine: ...`. A run without a run key writes
+  directory, the harness home and the inputs directory, at whole path components,
+  and `harness` is left out. `cwd` of `dev.qory.runtime.started`, `prompt` of
+  `dev.qory.runtime.prompt_submitted` and the session's stderr line for a failure
+  after `dev.qory.session.started` have the same placeholders, with `/workspace` for
+  the working directory in `cwd` and `prompt`; a tool's input and output and every
+  other member of a runtime event are as the agent wrote them. `Join` refuses `/` as
+  the harness home or the inputs directory of such a run.
+  The session reports the host name, the directories on the machine, the command and
+  the arguments as the session starts them, and the harness sources to
+  `OpenSpec.Report` in one line per session, `session <n> starts on this machine:
+  ...`. A run without a run key writes
   the values of the machine, as before.
 - `dev.qory.run.step_started` of kind `setup`: Forager writes one per setup command, in
   a separate container or inside the wall. Before, Forager wrote no `setup` step.

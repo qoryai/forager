@@ -722,8 +722,8 @@ the credential the join request asks the gateway for, for this session.
     the server's.
   - `LaunchDefaults` is the values the harness's author wrote as defaults, and `Env`
     what the run inherits, the lowest.
-  - `HarnessHome` is the harness's home as the agent sees it. The session sets
-    `QORY_HARNESS_HOME` to it.
+  - `HarnessHome` is the harness's home on this machine. The session sets
+    `QORY_HARNESS_HOME` to its path as the agent sees it.
   - `InputsDir` is the run's inputs directory on this machine, an absolute path. In a
     run with a run key, `dev.qory.session.started` has `<inputs>` in place of each
     occurrence of it in `command` and `args`, as it has `<run>` and `<home>` for the

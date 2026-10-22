@@ -135,6 +135,26 @@ func fakeRuntime() int {
 			fmt.Fprintln(os.Stderr, "no SessionEnd hook installed:", err)
 			return 90
 		}
+		// FAKE_HOOKS is hook inputs, one JSON object a line, each run through the hooks
+		// of its hook_event_name before the SessionEnd.
+		for _, line := range strings.Split(strings.TrimSpace(os.Getenv("FAKE_HOOKS")), "\n") {
+			var in struct {
+				Event string `json:"hook_event_name"`
+			}
+			if line == "" || json.Unmarshal([]byte(line), &in) != nil {
+				continue
+			}
+			for _, group := range s.Hooks[in.Event] {
+				for _, h := range group.Hooks {
+					cmd := shell(h.Command)
+					cmd.Stdin, cmd.Stderr = strings.NewReader(line), os.Stderr
+					if err := cmd.Run(); err != nil {
+						fmt.Fprintln(os.Stderr, "hook:", err)
+						return 91
+					}
+				}
+			}
+		}
 		// Every group's every hook runs, as the runtime runs them: the launch's own and
 		// the session's forwarder.
 		for _, group := range s.Hooks["SessionEnd"] {

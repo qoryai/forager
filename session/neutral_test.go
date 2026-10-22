@@ -2,6 +2,9 @@ package session_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,12 +13,15 @@ import (
 	"testing"
 
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
-// neutralRun is a run of the fake runtime whose arguments contain the run directory,
-// the harness home and the inputs directory, in an argument of their own and inside a
-// -p prompt.
+// neutralRun is a run of the fake runtime, started through a script in the harness
+// home, whose arguments contain the run directory, the harness home and the inputs
+// directory, each as a whole argument and inside a -p prompt. The inputs directory is
+// passed with a trailing slash.
 type neutralRun struct {
 	*sepRun
 	runDir, home, inputs string
@@ -35,7 +41,14 @@ func newNeutralRun(t *testing.T, gw session.Gateway, runID, runsDir, home, input
 			t.Fatal(err)
 		}
 	}
-	r.sp.HarnessHome, r.sp.InputsDir, r.sp.Harness = home, inputs, r.harness
+	if err := os.MkdirAll(filepath.Join(home, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "bin", "agent"), []byte("#!/bin/sh\nexec /bin/sh \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.sp.Command = filepath.Join(home, "bin", "agent")
+	r.sp.HarnessHome, r.sp.InputsDir, r.sp.Harness = home, inputs+"/", r.harness
 	r.sp.Args = append(r.sp.Args,
 		"-p", "Read "+r.runDir+"/sessions/1/task.md, "+inputs+"/issue.md and "+home+"/CLAUDE.md, then work in "+r.sp.Dir+".",
 		"--settings", home+"/settings.json", "--add-dir", inputs, "--log", r.runDir+"/x.log")
@@ -47,7 +60,7 @@ func newNeutralRun(t *testing.T, gw session.Gateway, runID, runsDir, home, input
 // <home> and <inputs> in place of each occurrence of the run directory, the harness
 // home and the inputs directory in the arguments, the longer path first where one
 // contains the other, and no harness. No event contains the run directory, the
-// working directory, the harness home, the inputs directory or the host name. One
+// harness home, the inputs directory or the host name. One
 // line of Report has the values of this machine.
 func TestARunWithARunKeyShowsNeutralValues(t *testing.T) {
 	for _, c := range []struct {
@@ -88,7 +101,7 @@ func TestARunWithARunKeyShowsNeutralValues(t *testing.T) {
 			want := []any{"-c", `env > "$0"; exec "$1"`, r.envFile, os.Args[0],
 				"-p", "Read <run>/sessions/1/task.md, <inputs>/issue.md and <home>/CLAUDE.md, then work in " + r.sp.Dir + ".",
 				"--settings", "<home>/settings.json", "--add-dir", "<inputs>", "--log", "<run>/x.log"}
-			if started["dir"] != "/workspace" || started["command"] != "/bin/sh" || fmt.Sprint(started["args"]) != fmt.Sprint(want) || started["harness"] != nil {
+			if started["dir"] != "/workspace" || started["command"] != "<home>/bin/agent" || fmt.Sprint(started["args"]) != fmt.Sprint(want) || started["harness"] != nil {
 				t.Errorf("session.started %v\nwant args %q", started, want)
 			}
 			if posted := sessionStarted(t, g.Events()); fmt.Sprint(posted["args"]) != fmt.Sprint(want) || posted["harness"] != nil {
@@ -110,7 +123,7 @@ func TestARunWithARunKeyShowsNeutralValues(t *testing.T) {
 				t.Errorf("session.jsonl contains the working directory %d times, want once, in the prompt", n)
 			}
 			line := fmt.Sprintf("session 1 starts on this machine: host %s, dir %q, home %q, inputs %q, command %q, args %q, harness %q at %s",
-				host, r.sp.Dir, home, inputs, "/bin/sh", r.sp.Args, r.harness[0].Source, r.harness[0].Commit)
+				host, r.sp.Dir, home, r.sp.InputsDir, r.sp.Command, r.sp.Args, r.harness[0].Source, r.harness[0].Commit)
 			if !slices.Contains(r.reports, line) {
 				t.Errorf("the reports %q\nwant %q", r.reports, line)
 			}
@@ -172,5 +185,153 @@ func TestARelativeInputsDirectoryIsRefused(t *testing.T) {
 	}
 	if len(g.Joins()) != 0 {
 		t.Error("a relative inputs directory reached the gateway's join")
+	}
+}
+
+// TestARunWithARunKeyRefusesTheRootAsAPlace pins that a run with a run key refuses / as
+// the harness home or the inputs directory before the join request, which a local run
+// accepts.
+func TestARunWithARunKeyRefusesTheRootAsAPlace(t *testing.T) {
+	for _, c := range []struct{ home, inputs, want string }{
+		{"/", "", "set the harness home to a directory below /: a run with a run key writes <home> in place of it in dev.qory.session.started, and / starts every path"},
+		{"", "//", "set the inputs directory to a directory below /: a run with a run key writes <inputs> in place of it in dev.qory.session.started, and / starts every path"},
+	} {
+		sp, g, _ := remoteSpec(t, 0)
+		sp.HarnessHome, sp.InputsDir = c.home, c.inputs
+		if _, err := run(context.Background(), sp); err == nil || err.Error() != c.want {
+			t.Errorf("home %q, inputs %q: %v, want %s", c.home, c.inputs, err, c.want)
+		}
+		if len(g.Joins()) != 0 {
+			t.Errorf("home %q, inputs %q reached the gateway's join", c.home, c.inputs)
+		}
+	}
+	sp, _ := specGateway(t, "FAKE_EXIT=0")
+	sp.InputsDir = "/"
+	if _, err := run(context.Background(), sp); err != nil {
+		t.Errorf("a local run with / as its inputs: %v", err)
+	}
+}
+
+// hookRun is a spec of the fake Claude Code runtime that runs the hooks of
+// runtime.started, runtime.prompt_submitted and runtime.tool_started, each with the
+// run directory, the harness home, the inputs directory and the working directory in
+// it, behind the gateway that remote picks: a fake separate one with a run key, or a
+// local one.
+type hookRun struct {
+	sp                          runSpec
+	g                           *linktest.Fake
+	runDir, home, inputs, input string
+}
+
+func newHookRun(t *testing.T, remote bool) *hookRun {
+	t.Helper()
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	runID := event.NewRunID()
+	if remote {
+		g = startRemote(t)
+		g.SetInterval(30)
+		sp.Gateway = remoteGateway(g, g.RunKey(t, runID))
+	}
+	base := t.TempDir()
+	h := &hookRun{g: g, runDir: filepath.Join(sp.RunsDir, runID), home: filepath.Join(base, "home"), inputs: filepath.Join(base, "in")}
+	h.input = h.inputs + "/issue.md"
+	sp.RunID, sp.HarnessHome, sp.InputsDir = runID, h.home, h.inputs
+	line := func(m map[string]any) string { b, _ := json.Marshal(m); return string(b) }
+	hooks := []string{
+		line(map[string]any{"session_id": "fake", "hook_event_name": "SessionStart", "source": "startup", "cwd": sp.Dir + "/sub"}),
+		line(map[string]any{"session_id": "fake", "hook_event_name": "UserPromptSubmit",
+			"prompt": "Read " + h.input + " and " + h.home + "/CLAUDE.md in " + sp.Dir + ", and log to " + h.runDir + "/x.log."}),
+		line(map[string]any{"session_id": "fake", "hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "t1", "tool_input": map[string]any{"file_path": h.input}}),
+	}
+	sp.Env = append(sp.Env, "FAKE_SETTINGS="+filepath.Join(h.runDir, session.SessionsDir, "1", "settings.json"), "FAKE_HOOKS="+strings.Join(hooks, "\n"))
+	h.sp = sp
+	return h
+}
+
+// TestTheRuntimeEventsOfARunWithARunKeyShowNeutralPaths pins the runtime events of a run
+// with a run key: cwd of runtime.started and prompt of runtime.prompt_submitted have
+// /workspace for the working directory and <run>, <home> and <inputs>, in the record
+// and on the link, and a tool's input keeps its path; and a local run's have the paths
+// as the runtime wrote them.
+func TestTheRuntimeEventsOfARunWithARunKeyShowNeutralPaths(t *testing.T) {
+	for _, remote := range []bool{true, false} {
+		h := newHookRun(t, remote)
+		res, err := run(context.Background(), h.sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cwd, prompt := h.sp.Dir+"/sub", "Read "+h.input+" and "+h.home+"/CLAUDE.md in "+h.sp.Dir+", and log to "+h.runDir+"/x.log."
+		if remote {
+			cwd, prompt = "/workspace/sub", "Read <inputs>/issue.md and <home>/CLAUDE.md in /workspace, and log to <run>/x.log."
+		}
+		for where, evs := range map[string][]map[string]any{"the record": events(t, res), "the link": h.g.Events()} {
+			started, prompted, tools := ofType(evs, "dev.qory.runtime.started"), ofType(evs, "dev.qory.runtime.prompt_submitted"), ofType(evs, "dev.qory.runtime.tool_started")
+			if len(started) != 1 || data(started[0])["cwd"] != cwd {
+				t.Errorf("remote %v, %s: runtime.started %v, want cwd %s", remote, where, started, cwd)
+			}
+			if len(prompted) != 1 || data(prompted[0])["prompt"] != prompt {
+				t.Errorf("remote %v, %s: runtime.prompt_submitted %v, want prompt %q", remote, where, prompted, prompt)
+			}
+			if len(tools) != 1 || fmt.Sprint(data(tools[0])["input"]) != fmt.Sprint(map[string]any{"file_path": h.input}) {
+				t.Errorf("remote %v, %s: runtime.tool_started %v, want the input %s", remote, where, tools, h.input)
+			}
+		}
+	}
+}
+
+// failingWrapWall is an open wall whose start fails with err.
+type failingWrapWall struct {
+	openWall
+	err error
+}
+
+func (w *failingWrapWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *failingWrapWall) Wrap(context.Context, wall.Launch) (wall.Launch, error) {
+	return wall.Launch{}, w.err
+}
+
+// TestAFailureLineOfARunWithARunKeyShowsNeutralPaths pins the stderr line of a wall's
+// start that fails after session.started: in a run with a run key <run>, <home> and
+// <inputs> in place of the paths, in the record and on the link; in a local run the
+// paths as the failure has them.
+func TestAFailureLineOfARunWithARunKeyShowsNeutralPaths(t *testing.T) {
+	for _, remote := range []bool{true, false} {
+		h := newHookRun(t, remote)
+		text := func(run, home, inputs string) string {
+			return "wall open: start: " + run + "/sessions/1 and " + home + "/bin and " + inputs + " are not shared\n"
+		}
+		h.sp.Wall, h.sp.Image = &failingWrapWall{err: errors.New(strings.TrimSuffix(text(h.runDir, h.home, h.inputs), "\n"))}, "example.com/agent:1"
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(h.sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Join(ctx, h.sp.SessionSpec); err == nil {
+			t.Fatal("the wall's failure started the session")
+		}
+		closed, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := text(h.runDir, h.home, h.inputs)
+		if remote {
+			want = text("<run>", "<home>", "<inputs>")
+		}
+		for where, evs := range map[string][]map[string]any{"the record": events(t, &session.Result{Dir: closed.Dir}), "the link": h.g.Events()} {
+			var lines []string
+			for _, e := range ofType(evs, "dev.qory.run.log") {
+				if d := data(e); d["stream"] == "stderr" && d["session"] == float64(1) {
+					b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+					lines = append(lines, string(b))
+				}
+			}
+			if !slices.Contains(lines, want) {
+				t.Errorf("remote %v, %s: the session's stderr %q, want %q", remote, where, lines, want)
+			}
+		}
 	}
 }

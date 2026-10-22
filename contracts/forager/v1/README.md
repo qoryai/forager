@@ -1383,7 +1383,7 @@ The types, one namespace. Forager's:
 | Type | When | Data |
 |---|---|---|
 | `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
-| `dev.qory.run.started` | the run is open: the open wrote it, before the run's host work and before any session; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `host`, behind a wall `wall`; `machine` when the caller passes it, and `setup` when the run has setup commands (§The events, Where the run and its setup ran); and `labels` when the caller passes any, and `about` when the caller passes one |
+| `dev.qory.run.started` | the run is open: the open wrote it, before the run's host work and before any session; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `host` apart from a run with a run key, behind a wall `wall`; `machine` when the caller passes it, and `setup` when the run has setup commands (§The events, Where the run and its setup ran); and `labels` when the caller passes any, and `about` when the caller passes one |
 | `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `setup_commands` when the session has setup commands inside the wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used, apart from a run with a run key |
 | `dev.qory.run.policy_applied` | right after `dev.qory.run.started`, with an empty `variables`; right after each `dev.qory.session.started` and before the session's wall starts, also for a session whose wall then fails to start, with that session's `variables`, `credential_variables` and `harness_hosts`; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `allow_first`, `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.step_started` | a step of the run's host work started, such as a fetch or a compose; after `dev.qory.run.started`, numbered from 1 in the order the steps start (Steps, below) | `step`, `name`, `kind` |
@@ -1554,13 +1554,28 @@ leave out or replace these values of the machine:
 - In `command` and in each argument, at any place in it, such as inside a `-p`
   prompt, the run directory is `<run>`, the harness home (`SessionSpec.HarnessHome`)
   `<home>`, and the inputs directory (`SessionSpec.InputsDir`) `<inputs>`, each at its
-  path on the machine and at its path inside the enclosure. Of two of them where one
-  contains the other, the longer is replaced. Any other path is as the runtime
-  prepared it.
+  path on the machine and at its path inside the enclosure. A path is replaced at
+  whole path components: where it starts the value or follows a space, a quote, `:`,
+  `=` or another character that ends a shell word, and where it ends the value or is
+  followed by `/` or such a character. `/srv/home` is replaced in `/srv/home/a` and
+  `--dir=/srv/home`, and not in `/srv/home-old` or `https://git.example/srv/home`.
+  Of two of them where one contains the other, the longer is replaced first. Any
+  other path is as the runtime prepared it. `Join` refuses `/` as the harness home or
+  the inputs directory.
 - `dev.qory.session.started` has no `harness`.
+- `cwd` of `dev.qory.runtime.started` and `prompt` of
+  `dev.qory.runtime.prompt_submitted` have the same placeholders, and `/workspace` in
+  place of the working directory.
+- A `dev.qory.run.log` stderr line that the session writes for a failure after
+  `dev.qory.session.started`, such as a failed start of the wall, has the same
+  placeholders.
 
-The session reports the values of the machine in one line per session, to
-`OpenSpec.Report`, on stderr after `qory run: ` by default, with each value that
+Every other member of a runtime event, such as a tool's input and output, and the
+runtime's output in `dev.qory.run.log`, is as the agent wrote it.
+
+The session reports the host name, the directories on the machine, the command and the
+arguments as the session starts them, and the harness sources in one line per session,
+to `OpenSpec.Report`, on stderr after `qory run: ` by default, with each value that
 contains `qak_` or `qrk_` as its phrase and each forwarder's password as
 `qory-proxy-password`. For a Claude Code session whose `dev.qory.session.started` has
 `"args": ["--settings", "<run>/sessions/1/settings.json", "--add-dir", "<inputs>",

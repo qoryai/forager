@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -116,6 +117,11 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	}
 	if err := checkInputsDir(spec.InputsDir); err != nil {
 		return nil, err
+	}
+	if r.remote != nil {
+		if err := checkNeutral(spec); err != nil {
+			return nil, err
+		}
 	}
 	if err := checkHarness(spec.Harness); err != nil {
 		return nil, err
@@ -273,6 +279,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			open = nil
 		}
 	}
+	// neutral and neutralText write what the session writes after its
+	// dev.qory.session.started: as it is, or in a run with a run key with the
+	// placeholders of neutralPaths, and in neutralText the working directory as
+	// /workspace as well.
+	neutral, neutralText := func(s string) string { return s }, func(s string) string { return s }
 	// failWith ends a session that does not start, with its dev.qory.session.exited:
 	// the one of a refused join before dev.qory.session.started, and after it failed
 	// with -1, with reason as its reason unless reason is empty.
@@ -314,7 +325,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			if open != nil {
 				step = open.n
 			}
-			r.writeLog("stderr", n, step, failureLine(err))
+			r.writeLog("stderr", n, step, []byte(neutral(string(failureLine(err)))))
 		}
 		endStep(event.StateFailed)
 		r.write(event.SessionExited, exited)
@@ -419,6 +430,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(err)
 	}
 	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
+	if r.remote != nil {
+		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside)
+		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside)
+	}
 	// A value the runtime's preparation sets for one of key.Others is left out, walled
 	// or not; behind a wall the name is then unset inside.
 	prepared.Env = withoutNames(prepared.Env, key.Others)
@@ -477,7 +492,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the session's start.
 	endStep(event.StateSucceeded)
 	started, start = true, time.Now()
-	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, inside, interactive, cols, rows))
+	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, neutral, interactive, cols, rows))
 	if r.remote != nil {
 		r.open.Report(r.launchLine(spec, n, prepared))
 	}
@@ -570,7 +585,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return
 		}
 		if typ, data, ok := rt.Map(rec); ok {
-			r.write(typ, withSession(maskedRecord(masker, data), n))
+			r.write(typ, withSession(neutralRecord(typ, maskedRecord(masker, data), neutralText), n))
 		}
 	}
 	go sock.Serve(records, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
@@ -760,16 +775,15 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 // and <inputs> in place of the run directory, the harness home and the inputs
 // directory (neutralPaths), and harness is left out: launchLine reports the values of
 // this machine.
-func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, inside func(string) string, interactive bool, cols, rows int) map[string]any {
+func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, neutral func(string) string, interactive bool, cols, rows int) map[string]any {
 	command, args, dir := prepared.Command, prepared.Args, spec.Dir
 	if r.byReference {
 		dir = shown.Dir
 	}
 	if r.remote != nil {
-		neutral := r.neutralPaths(spec.HarnessHome, spec.InputsDir, inside)
-		command, args, dir = neutral.Replace(command), make([]string, len(prepared.Args)), workspaceInside
+		command, args, dir = neutral(command), make([]string, len(prepared.Args)), workspaceInside
 		for i, a := range prepared.Args {
-			args[i] = neutral.Replace(a)
+			args[i] = neutral(a)
 		}
 	}
 	started := map[string]any{
@@ -815,34 +829,68 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 }
 
 // neutralPaths writes, in a value of a run with a run key, <run> in place of the run
-// directory, <home> in place of the harness home and <inputs> in place of the inputs
-// directory: the home and the inputs at their path on this machine and, when it
-// differs, at their path inside the enclosure. Of two paths where one contains the
-// other, the longer is replaced.
-func (r *Run) neutralPaths(home, inputs string, inside func(string) string) *strings.Replacer {
+// directory, <home> in place of the harness home, <inputs> in place of the inputs
+// directory and, when dir is not empty, /workspace in place of the working directory
+// dir. Each is replaced at whole path components, as translate replaces them: the
+// home, the inputs and dir at their path on this machine and, when it differs, at
+// their path inside the enclosure. Of two paths where one contains the other, the
+// longer is replaced first. Join refuses / as the home or the inputs of a run with a
+// run key.
+func (r *Run) neutralPaths(home, inputs, dir string, inside func(string) string) func(string) string {
 	type pair struct{ from, to string }
 	pairs := []pair{{r.dir, "<run>"}}
-	for _, p := range []pair{{home, "<home>"}, {inputs, "<inputs>"}} {
+	for _, p := range []pair{{home, "<home>"}, {inputs, "<inputs>"}, {dir, workspaceInside}} {
 		if p.from == "" {
 			continue
 		}
+		p.from = filepath.Clean(p.from)
 		pairs = append(pairs, p)
 		if in := inside(p.from); in != p.from {
 			pairs = append(pairs, pair{in, p.to})
 		}
 	}
 	slices.SortStableFunc(pairs, func(a, b pair) int { return len(b.from) - len(a.from) })
-	var old []string
-	for _, p := range pairs {
-		old = append(old, p.from, p.to)
+	return func(s string) string {
+		for _, p := range pairs {
+			s = translate(s, p.from, p.to)
+		}
+		return s
 	}
-	return strings.NewReplacer(old...)
+}
+
+// neutralRecord is data of an event of type typ mapped from a runtime's record, with
+// text written by neutral in cwd of dev.qory.runtime.started and in prompt of
+// dev.qory.runtime.prompt_submitted. Every other member, and every other event, such
+// as a tool's input and output, is as the runtime wrote it.
+func neutralRecord(typ string, data map[string]any, text func(string) string) map[string]any {
+	key := map[string]string{"dev.qory.runtime.started": "cwd", "dev.qory.runtime.prompt_submitted": "prompt"}[typ]
+	v, ok := data[key].(string)
+	if !ok {
+		return data
+	}
+	out := maps.Clone(data)
+	out[key] = text(v)
+	return out
+}
+
+// checkNeutral refuses / as the harness home or the inputs directory of a run with a
+// run key: <home> or <inputs> would replace the start of every path.
+func checkNeutral(spec SessionSpec) error {
+	if spec.HarnessHome != "" && filepath.Clean(spec.HarnessHome) == string(filepath.Separator) {
+		return errors.New("set the harness home to a directory below /: a run with a run key writes <home> in place of it in dev.qory.session.started, and / starts every path")
+	}
+	if spec.InputsDir != "" && filepath.Clean(spec.InputsDir) == string(filepath.Separator) {
+		return errors.New("set the inputs directory to a directory below /: a run with a run key writes <inputs> in place of it in dev.qory.session.started, and / starts every path")
+	}
+	return nil
 }
 
 // launchLine is the line a run with a run key reports for session n, in place of the
-// values its dev.qory.session.started leaves out: the host name, the working
-// directory, the harness home, the inputs directory, the command and the arguments as
-// they are on this machine, and each harness source with its commit. A value that
+// values its dev.qory.session.started leaves out: the host name, and the working
+// directory, the harness home and the inputs directory on this machine; the command
+// and the arguments as the session starts them, which in a run whose image its policy
+// names by reference are the paths inside, under /workspace; and each harness source
+// with its commit. A value that
 // contains qak_ or qrk_ is the phrase in its place, and the run's masker replaces each
 // forwarder's password in the line.
 func (r *Run) launchLine(spec runSpec, n int, prepared runtimes.Launch) string {
