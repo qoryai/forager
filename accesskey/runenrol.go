@@ -198,22 +198,6 @@ func checkRunKey(runKey string, pin Pin) (string, error) {
 	return read.RunID, nil
 }
 
-// PostRun sends a request with a run code to the server's enrolment endpoint and
-// returns its verified answer, as [EnrolmentRequest.VerifyRunAnswer] reads it, with
-// serverURL, hc and userAgent as [EnrolmentRequest.Post] takes them. It reads at most
-// [MaxRunAnswer] of the answer's body. A request whose code is not a run code is an
-// error, and nothing is sent.
-func (r *EnrolmentRequest) PostRun(ctx context.Context, hc *http.Client, serverURL, userAgent string) (*RunAnswer, error) {
-	if err := r.forRun(); err != nil {
-		return nil, err
-	}
-	a, sig, err := r.direct(ctx, hc, serverURL, userAgent, MaxRunAnswer)
-	if err != nil {
-		return nil, err
-	}
-	return r.VerifyRunAnswer(a, sig)
-}
-
 // PostRunVia sends a request with a run code to the server's enrolment endpoint
 // through the gateway at viaURL, as [EnrolmentRequest.PostVia] sends an access key's,
 // and returns its verified answer, as [EnrolmentRequest.VerifyRunAnswer] reads it. hc

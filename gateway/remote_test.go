@@ -1522,12 +1522,16 @@ func TestABatchBehindTheGatewayTheLinkRefusesEndsItsRun(t *testing.T) {
 // TestTheRelay pins the relay of the server's four endpoints on unbound connections:
 // each forwarded with its target unchanged, in origin form when it came in absolute
 // form, the fields of one connection dropped both ways, those its Connection names
-// among them, and its answer passed back byte for byte, its signature among it; every other path 404 and
-// other method 405; a body over its endpoint's bound 413; and an answer over 1 MiB
+// among them, and its answer passed back byte for byte, its signature among it; the
+// enrolment signed under the gateway's access key, every value of the machine's
+// signed fields deleted, and a body with white space signed byte for byte; every
+// other request with the machine's signed fields as they came; every other path 404
+// and other method 405; a body over its endpoint's bound 413; and an answer over 1 MiB
 // 502, each the relay's own, with no body and nothing sent on.
 func TestTheRelay(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
 	var got []string
+	var enrolled [][]byte
 	var mu sync.Mutex
 	answerBody := []byte(`{"version":1}`)
 	f := func(w http.ResponseWriter, req *http.Request) bool {
@@ -1542,7 +1546,14 @@ func TestTheRelay(t *testing.T) {
 				hop += k + " "
 			}
 		}
-		got = append(got, req.Method+" "+req.RequestURI+" "+fmt.Sprint(len(b))+" "+hop+req.Header.Get(server.HeaderSignature))
+		sig := req.Header.Get(server.HeaderSignature)
+		if req.URL.Path == "/.well-known/qory-enrolment" {
+			sig = gatewaySigned(req, b)
+			enrolled = append(enrolled, b)
+		} else if id := req.Header.Values(server.HeaderAccessKeyID); sig != "" && !slices.Equal(id, spoofed[server.HeaderAccessKeyID]) {
+			sig = fmt.Sprintf("the access key ids %q", id)
+		}
+		got = append(got, req.Method+" "+req.RequestURI+" "+fmt.Sprint(len(b))+" "+hop+sig)
 		big := strings.HasSuffix(req.URL.Path, "/big")
 		mu.Unlock()
 		if req.URL.Query().Get("big") != "" || big {
@@ -1594,15 +1605,27 @@ func TestTheRelay(t *testing.T) {
 		if c.method == http.MethodPost {
 			body = bytes.Repeat([]byte("a"), c.size)
 		}
-		resp, b := send(c.method, c.target, body, http.Header{server.HeaderSignature: {"request-signature"},
-			"Connection": {"X-Secret"}, "X-Secret": {"of the connection"}, "Keep-Alive": {"timeout=5"}, "Proxy-Authorization": {"Basic eDp5"}, "Te": {"trailers"}})
+		header := http.Header{"Connection": {"X-Secret"}, "X-Secret": {"of the connection"}, "Keep-Alive": {"timeout=5"}, "Proxy-Authorization": {"Basic eDp5"}, "Te": {"trailers"}}
+		for k, v := range spoofed {
+			header[k] = v
+		}
+		if c.target == "/.well-known/qory-enrolment" {
+			header["X-QORY-SIGNATURE-ED25519"] = []string{"second-signature"}
+		}
+		resp, b := send(c.method, c.target, body, header)
 		if resp.StatusCode != http.StatusOK || !bytes.Equal(b, answerBody) || resp.Header.Get(server.HeaderSignature) != "answer-signature" || resp.Header.Get("X-Answer-Secret") != "" {
 			t.Errorf("%s %s: %d %q", c.method, c.target, resp.StatusCode, b)
 		}
 		mu.Lock()
 		last := got[len(got)-1]
 		mu.Unlock()
-		if want := c.method + " " + c.target + " " + fmt.Sprint(c.size) + " request-signature"; last != want {
+		// The enrolment goes on signed under the gateway's key, every field of the
+		// machine's signature replaced; every other request with the machine's.
+		sig := "request-signature"
+		if c.target == "/.well-known/qory-enrolment" {
+			sig = "signed by the gateway"
+		}
+		if want := c.method + " " + c.target + " " + fmt.Sprint(c.size) + " " + sig; last != want {
 			t.Errorf("forwarded %q; want %q", last, want)
 		}
 		if c.method == http.MethodPost {
@@ -1612,6 +1635,17 @@ func TestTheRelay(t *testing.T) {
 			}
 		}
 	}
+	// An enrolment's body with white space and a trailing line feed goes on, and is
+	// signed, byte for byte as it came.
+	spaced := []byte("{\n  \"version\": 1,\t\"name\": \"run-01\" }\n")
+	if resp, b := send(http.MethodPost, "/.well-known/qory-enrolment", spaced, nil); resp.StatusCode != http.StatusOK || !bytes.Equal(b, answerBody) {
+		t.Errorf("an enrolment with white space: %d %q", resp.StatusCode, b)
+	}
+	mu.Lock()
+	if last := got[len(got)-1]; last != "POST /.well-known/qory-enrolment "+fmt.Sprint(len(spaced))+" signed by the gateway" || !bytes.Equal(enrolled[len(enrolled)-1], spaced) {
+		t.Errorf("an enrolment with white space went on as %q, its body %q", last, enrolled[len(enrolled)-1])
+	}
+	mu.Unlock()
 	// A target in absolute form goes on in origin form, to the server's origin.
 	c := r.dialTLS(t)
 	io.WriteString(c, "GET https://other.example/.well-known/qory-configuration?x=2 HTTP/1.1\r\nHost: other.example\r\n\r\n")
@@ -1649,6 +1683,82 @@ func TestTheRelay(t *testing.T) {
 	mu.Unlock()
 	if resp, b := send(http.MethodGet, "/.well-known/qory-configuration?big=1", nil, nil); resp.StatusCode != http.StatusBadGateway || len(b) != 0 {
 		t.Errorf("an answer over its bound: %d %d bytes", resp.StatusCode, len(b))
+	}
+}
+
+// spoofed are the signed request's fields that TestTheRelay sends with every request,
+// one name in lower case. The relay passes them on as they came, except on the
+// enrolment, to which TestTheRelay adds a second signature under a name in upper case.
+var spoofed = http.Header{
+	server.HeaderAccessKeyID: {"ak_spoofed00000000a", "ak_spoofed00000000b"},
+	server.HeaderInstanceID:  {"i_spoofed"},
+	server.HeaderSignature:   {"request-signature"},
+	server.HeaderTimestamp:   {"1791720000"},
+	"x-qory-instance-name":   {"spoofed-name"},
+}
+
+// gatewaySigned is "signed by the gateway" for an enrolment whose X-Qory-Access-Key-Id
+// and X-Qory-Instance-Id are the tests' gateway's, each once, with no X-Qory-Instance-Name
+// and no X-Qory-Timestamp, and whose one X-Qory-Signature-Ed25519 verifies under the
+// gateway's access key as a POST to the target as it came over body; else what differs.
+func gatewaySigned(req *http.Request, body []byte) string {
+	id, instance, sig := req.Header.Values(server.HeaderAccessKeyID), req.Header.Values(server.HeaderInstanceID), req.Header.Values(server.HeaderSignature)
+	if !slices.Equal(id, []string{testKey}) || !slices.Equal(instance, []string{testInstance}) || len(sig) != 1 {
+		return fmt.Sprintf("the fields %q, %q, %q", id, instance, sig)
+	}
+	if n, ts := req.Header.Values(server.HeaderInstanceName), req.Header.Values(server.HeaderTimestamp); len(n) != 0 || len(ts) != 0 {
+		return fmt.Sprintf("the name %q and the timestamp %q", n, ts)
+	}
+	signed := accesskey.Request{AccessKeyID: testKey, InstanceID: testInstance, Method: req.Method, Target: req.RequestURI, Body: body}
+	if !testAccessKey.PublicKey().VerifyRequest(signed, sig[0]) {
+		return "a signature that does not verify under the gateway's key"
+	}
+	return "signed by the gateway"
+}
+
+// TestPostRunViaThroughTheRelay redeems a run code with PostRunVia through the relay of
+// a separate gateway, at a server that, as the server does, redeems the code only when
+// the request's signature verifies under the gateway's access key, and answers 401
+// otherwise: the client returns the run's id and its run key.
+func TestPostRunViaThroughTheRelay(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	runID := event.NewRunID()
+	rk := runKeyFor(t, runID, nil)
+	r.keys = append(r.keys, rk)
+	keys := `[{"alg":"ed25519","public_key":"` + testSigner.PublicKey().String() + `"}]`
+	f := func(w http.ResponseWriter, req *http.Request) bool {
+		if req.URL.Path != accesskey.EnrolmentPath {
+			return false
+		}
+		b, _ := io.ReadAll(req.Body)
+		var er accesskey.EnrolmentRequest
+		if json.Unmarshal(b, &er) != nil || !er.VerifyProof() || gatewaySigned(req, b) != "signed by the gateway" {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"unauthorized"}`))
+			return true
+		}
+		body := []byte(`{"version":1,"run_id":"` + runID + `","run_key":"` + rk + `","documents":{},"apiary_public_key":` + keys + `}`)
+		w.Header().Set(accesskey.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Enrolment: true, Status: http.StatusCreated, RequestSignature: er.Proof, Body: body}))
+		w.WriteHeader(http.StatusCreated)
+		w.Write(body)
+		return true
+	}
+	r.c.intercept.Store(&f)
+	machine, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	er, err := accesskey.NewEnrolmentRequest(machine, "qecr_F1XT0RE0000000000000000000."+testSigner.Fingerprint(), "run-01", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: r.pool, NextProtos: []string{"http/1.1"}}}}
+	ans, err := er.PostRunVia(context.Background(), hc, r.c.srv.URL, "https://"+r.g.Addr(), "qory/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.RunID != runID || ans.RunKey != rk {
+		t.Errorf("redeemed %s; want run %s and its run key", ans, runID)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
@@ -66,6 +67,14 @@ const (
 // relay never passes on: the server sees the gateway as the source.
 var sourceFields = []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"}
 
+// signedFields are the fields of a signed request. On the enrolment the relay deletes
+// every value of them that the machine sent, and then sets the gateway's access key id,
+// instance id and signature.
+var signedFields = []string{accesskey.HeaderAccessKeyID, accesskey.HeaderInstanceID, accesskey.HeaderInstanceName, accesskey.HeaderSignature, accesskey.HeaderTimestamp}
+
+// errNotSigned starts the line the gateway reports when signing an enrolment fails.
+const errNotSigned = "report this to the Forager maintainers: the relay sent no enrolment to the server, because signing it under the gateway's access key failed"
+
 // relayWait is how long the relay waits for the server's answer.
 const relayWait = 10 * time.Second
 
@@ -93,12 +102,14 @@ func dropHop(h http.Header) {
 
 // relay is the gateway's relay of the server's four endpoints, on connections of the
 // one address that open with no binding: a keyed machine's or a starter's enrolment,
-// discovery, registration and outcome, each signed by the holder's own key. It
-// forwards each request to the server's origin with its target in origin form, the path
-// it matched, and the query of a discovery, as the holder sent them, and passes the
-// answer back byte for byte, so the request's signature and the answer's are the
-// server's. It relays nothing else, the attach above all, and serves none of them
-// itself.
+// discovery, registration and outcome. It forwards each request to the server's origin
+// with its target in origin form, the path it matched, and the query of a discovery, as
+// the holder sent them, and passes the answer back byte for byte, so the answer's
+// signature is the server's. The holder signs a discovery, a registration and an
+// outcome under the holder's access key, and the relay passes that signature on as it
+// came. A machine's enrolment contains no request signature: the relay signs it under
+// the gateway's access key, the body byte for byte as it came ([signEnrolment]). It relays
+// nothing else, the attach above all, and serves none of them itself.
 type relay struct {
 	g      *Gateway
 	origin *url.URL
@@ -313,7 +324,8 @@ func (rl *relay) limit(method, path string) (int, int) {
 // ServeHTTP relays one request, in order: past its source's rate, or its IPv6 /48's,
 // 429; a method or a target the relay does not relay, 405 or 404, an escaped path and a
 // query on a POST among the latter; a body over its endpoint's bound, 413;
-// [relayInFlight] requests with the server already, 503; the server unreached, 502, or
+// [relayInFlight] requests with the server already, 503; an enrolment whose signing
+// fails, 500, with a line reported; the server unreached, 502, or
 // not answering within [relayWait], 504; an answer over [relayMaxAnswer], 502. Each of
 // these is the relay's own answer, with no body.
 // Otherwise the server's answer, its status, its fields but those of one connection,
@@ -372,6 +384,15 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, k := range sourceFields {
 		out.Header.Del(k)
 	}
+	if r.URL.Path == enrolmentPath {
+		// The bound above applies first: the relay signs at most relayEnrolment bytes,
+		// the slice that out sends.
+		if err := rl.signEnrolment(out.Header, out.URL.RequestURI(), body); err != nil {
+			rl.g.report(errNotSigned + ": " + accesskey.ShownError(err).Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	}
 	resp, err := rl.client.Do(out)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -396,6 +417,32 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Length", strconv.Itoa(len(answer)))
 	w.WriteHeader(resp.StatusCode)
 	w.Write(answer)
+}
+
+// signEnrolment deletes from h every value of [signedFields] that the machine sent, in
+// any case of the field's name, and sets X-Qory-Access-Key-Id and X-Qory-Instance-Id to
+// the gateway's and X-Qory-Signature-Ed25519 to the request's signature under the
+// gateway's access key: a POST to target, the origin-form target the relay sends, over
+// body, the bytes it sends. A POST signs no timestamp, so h has no X-Qory-Timestamp.
+// The server ignores the signature of every code but a run code, qecr_, whose
+// redemption it accepts only through the relay of the gateway the code is bound to.
+func (rl *relay) signEnrolment(h http.Header, target string, body []byte) error {
+	for k := range h {
+		for _, f := range signedFields {
+			if strings.EqualFold(k, f) {
+				delete(h, k)
+			}
+		}
+	}
+	s := rl.g.cfg.Server
+	sig, err := s.AccessKey.SignRequest(accesskey.Request{AccessKeyID: s.AccessKeyID, InstanceID: s.InstanceID, Method: http.MethodPost, Target: target, Body: body})
+	if err != nil {
+		return err
+	}
+	h.Set(accesskey.HeaderAccessKeyID, s.AccessKeyID)
+	h.Set(accesskey.HeaderInstanceID, s.InstanceID)
+	h.Set(accesskey.HeaderSignature, sig)
+	return nil
 }
 
 // close shuts the relay's server within ctx.

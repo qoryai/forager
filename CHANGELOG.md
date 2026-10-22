@@ -131,8 +131,8 @@ release may change what an existing document does, and says so under Upgrading.
   the same public key within the 15 minutes, while the run's dispatch lives, gets the
   same members, the same run key included, and another key gets `401`. The run key's
   `issued` is the time of the first redemption, and its `attach_by` 600 seconds after
-  it. `accesskey.EnrolmentRequest.PostRunVia`, `PostRun`
-  and `VerifyRunAnswer` return an `accesskey.RunAnswer`, after they verify the answer
+  it. `accesskey.EnrolmentRequest.PostRunVia` and `VerifyRunAnswer` return an
+  `accesskey.RunAnswer`, after they verify the answer
   under the server key the code selects and the run key as the gateway does, for the
   answer's `run_id`. fmt writes a `RunAnswer` as `run <run id>`, and slog and
   encoding/json write its `run_id` alone, except: fmt, and slog's text handler, which
@@ -159,7 +159,7 @@ release may change what an existing document does, and says so under Upgrading.
   call no method of `RunAnswer` and print every field, the run key and the documents
   included. slog's text handler prints such a value through fmt too.
 - A run code's answer of up to 1 MiB, `accesskey.MaxRunAnswer`, the most the gateway's
-  relay passes back: `PostRunVia` and `PostRun` read at most 1 MiB of its body, and
+  relay passes back: `PostRunVia` reads at most 1 MiB of its body, and
   `VerifyRunAnswer` counts a longer body as `answer_unsigned`.
 - `dev.qory.run.step_started`, `events/run.step_started.schema.json`, and
   `dev.qory.run.step_exited`, `events/run.step_exited.schema.json`: one step of the
@@ -453,6 +453,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- Redeem a run code with `accesskey.EnrolmentRequest.PostRunVia`, through a gateway's
+  relay. `PostRun`, which sent the code to the server without a gateway, is removed:
+  the server answers `401` to a run code that does not come through the relay of the
+  gateway the code is bound to.
 - `dev.qory.run.step_started` of kind `setup`: Forager writes one per setup command, in
   a separate container or inside the wall. Before, Forager wrote no `setup` step.
 - `dev.qory.session.started` contains `setup_commands`, the names of the session's
@@ -711,6 +715,18 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- The relay signs every enrolment it passes to the server,
+  `POST /.well-known/qory-enrolment`, under the gateway's access key. It deletes every
+  value of `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id`, `X-Qory-Instance-Name`,
+  `X-Qory-Signature-Ed25519` and `X-Qory-Timestamp` that the machine sent, sets
+  `X-Qory-Access-Key-Id` and `X-Qory-Instance-Id` to the gateway's, and signs the
+  request as a `POST` over the body byte for byte as it came. The server redeems a run
+  code, `qecr_`, only with that signature, under a key of the gateway the code is bound
+  to. If the signing fails, the relay answers `500` with no body, and the gateway
+  reports a line that starts with the fix. The relay passes every other request's
+  signature on unchanged. The known answer is `run_enrolment.relay` in
+  `fixtures/known-answers/through-gateway.json`. Before, the relay passed the
+  enrolment on as it came.
 - A certificate the proxy makes for an IP address has no common name; before, its
   common name was the address.
 - A reload that brings tools, path rules or an image to a run without a wall fails, and

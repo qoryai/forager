@@ -2079,10 +2079,12 @@ case and the 26 characters in upper case with `I` and `L` read as `1`, `O` as `0
 removed; a name for the access key; the raw public key; a timestamp; and
 `proof`, the Ed25519 signature under the new key of five lines joined by `\n`:
 `qory-enrol-ed25519-v1`, the code, the public key as in the body, the name, and the
-timestamp in decimal. The request contains no `X-Qory-Access-Key-Id` and no request
-signature: the code and the proof authenticate it. The server answers an enrolment in
-this order, unsigned until the code is accepted, the key passes the checks and the proof
-verifies under it: `413`; `415`; `400` `bad_request` for a header sent twice; `429` per
+timestamp in decimal. The request a machine sends contains no `X-Qory-Access-Key-Id`
+and no request signature: the code and the proof authenticate it. A gateway's relay
+adds the gateway's access key id, instance id and request signature (**The relay of
+the server's endpoints**, in [The gateway's link](#the-gateways-link)). The server
+answers an enrolment in this order, unsigned until the code is accepted, the key passes
+the checks and the proof verifies under it: `413`; `415`; `400` `bad_request` for a header sent twice; `429` per
 source address; `400` `unsupported_contract_version`; `400` `invalid_request`, a
 malformed code among them; `401` for a code it did not issue or that is used, expired
 or cancelled, for a code whose prefix names another kind than its node's, for a code
@@ -2158,9 +2160,9 @@ answer to a run code or a run's answer to an access key's code, uses the code, a
 machine installs nothing of it. The machine keeps the run key in memory and passes it to
 the session as `RemoteGateway.RunKey`, and writes it to no file and no environment
 variable. In Go, `EnrolmentRequest.PostRunVia` of package `accesskey` sends the request
-through the gateway, `PostRun` sends it to the server, and `VerifyRunAnswer` reads the
-answer. Each returns an `accesskey.RunAnswer`, whose `Documents` is the answer's
-`documents` as a `json.RawMessage`. Where fmt calls `Format`, slog `LogValue` and
+through the gateway, and `VerifyRunAnswer` reads the answer. Each returns an
+`accesskey.RunAnswer`, whose `Documents` is the answer's `documents` as a
+`json.RawMessage`. Where fmt calls `Format`, slog `LogValue` and
 encoding/json `MarshalJSON`, fmt writes a `RunAnswer` as `run <run id>`, and slog and
 encoding/json write its `run_id` alone. Pass fmt a `RunAnswer`, a pointer to one, or
 its `RunID` alone. Never pass a value that contains a `RunAnswer`, and never pass a
@@ -3029,9 +3031,16 @@ outcome, a `POST` to that path, a slash, a run's id and `/outcome`. It drops the
 of one connection (RFC 9110 §7.6.1), those its `Connection` names among them, and the
 fields that name a source, `X-Forwarded-For`, `Forwarded` and `X-Real-IP`, asks for no
 compression, and passes the server's answer back byte for byte, its status and its
-fields but those of one connection, so each request's signature and each answer's stay
-the server's. It relays nothing else, the attach above all, and answers none of them
-itself. Its limits, each answered by the relay itself with no body, in this order:
+fields but those of one connection, so each answer's signature is the server's. On the
+enrolment alone, the relay deletes every value of `X-Qory-Access-Key-Id`,
+`X-Qory-Instance-Id`, `X-Qory-Instance-Name`, `X-Qory-Signature-Ed25519` and
+`X-Qory-Timestamp` that the machine sent, sets `X-Qory-Access-Key-Id` and
+`X-Qory-Instance-Id` to the gateway's, and signs the request as a `POST` under the
+gateway's access key (**The request string**, in [The server](#the-server)), over the
+target it sends and the body byte for byte as it came. Every other request's
+signature, and every answer's, pass unchanged. It relays nothing else, the attach above
+all, and answers none of them itself. Its limits, each answered by the relay itself
+with no body, in this order:
 
 | Status | When |
 |---|---|
@@ -3041,6 +3050,7 @@ itself. Its limits, each answered by the relay itself with no body, in this orde
 | `404` | one of the four paths with its method, but a path with an escaped byte (`%2F` and the like) or a query on a `POST` |
 | `413` | a request's body over 16 KiB for the enrolment, 64 KiB for a registration or 4 KiB for an outcome |
 | `503` | 64 requests with the server already |
+| `500` | an enrolment whose signing under the gateway's access key fails; the gateway reports a line that starts with the fix |
 | `502` | the server not reached, or its answer over 1 MiB |
 | `504` | no answer from the server within 10 seconds |
 

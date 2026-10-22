@@ -364,8 +364,13 @@ link. Its `gateway.Config` sets it:
   registration and outcome
   ([§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)), for a
   keyed machine or a starter whose server document holds `via` (`server.Via`). The
-  gateway a request is relayed through sees the registration answer's run key, so `via`
-  names a gateway trusted at least as much as the run's gateway. The proxy of every run
+  relay signs each enrolment under the gateway's access key, over the body byte for
+  byte as it came: it deletes the machine's `X-Qory-Access-Key-Id`,
+  `X-Qory-Instance-Id`, `X-Qory-Instance-Name`, `X-Qory-Signature-Ed25519` and
+  `X-Qory-Timestamp`, and sets the gateway's access key id, instance id and signature.
+  It passes every other request's signature on unchanged. The gateway a request is
+  relayed through sees the registration answer's run key, so `via` names a gateway
+  trusted at least as much as the run's gateway. The proxy of every run
   served there is guarded, wall or none. `Gateway.Addr` is this address.
 - `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
   address speaks TLS 1.3 alone. `Listen` needs it. `Start` fails when it cannot read
@@ -569,8 +574,8 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
 - `PostRunVia` verifies the answer under the server key that the code's first
   fingerprint selects. It then verifies the run key as the gateway does, under the key
   whose fingerprint is among the code's and is the run key's `signer`, and checks that
-  the run key's `run_id` is the answer's. `PostRun` sends the request to the server
-  without a gateway, and `VerifyRunAnswer` reads an answer that the caller sent.
+  the run key's `run_id` is the answer's. `VerifyRunAnswer` reads an answer that the
+  caller sent through a gateway.
 - `RunAnswer.Documents` is the answer's `documents` member, a `json.RawMessage` byte
   for byte as the answer contains it. `VerifyRunAnswer` checks that it is a JSON object
   and reads none of its members. Its schema is `documents.schema.json` of

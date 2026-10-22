@@ -281,7 +281,7 @@ func (e *KindError) Error() string {
 }
 
 // errRunCode is the error of an access key's enrolment method for a run code.
-var errRunCode = errors.New("redeem a run code with PostRunVia, PostRun or VerifyRunAnswer: the request's code is a run code, qecr_, and PostVia, Post and VerifyAnswer enrol an access key")
+var errRunCode = errors.New("redeem a run code with PostRunVia or VerifyRunAnswer: the request's code is a run code, qecr_, and PostVia, Post and VerifyAnswer enrol an access key")
 
 // forKey refuses a request whose code is a run code: an access key's enrolment method
 // reads no run's answer.
@@ -296,7 +296,7 @@ func (r *EnrolmentRequest) forKey() error {
 // no access key's answer.
 func (r *EnrolmentRequest) forRun() error {
 	if kind, err := CodeKind(r.Code); err == nil && kind != kindRun {
-		return fmt.Errorf("enrol an access key with PostVia, Post or VerifyAnswer: the request's code enrols an access key of node_kind %q, and PostRunVia, PostRun and VerifyRunAnswer redeem a run code", kind)
+		return fmt.Errorf("enrol an access key with PostVia, Post or VerifyAnswer: the request's code enrols an access key of node_kind %q, and PostRunVia and VerifyRunAnswer redeem a run code", kind)
 	}
 	return nil
 }
@@ -431,7 +431,7 @@ func (a *EnrolmentAnswer) check() error {
 // origin, https or http to a loopback address; hc is the client, nil for one with a
 // ten-second timeout, and in either case one that follows no redirect and keeps no
 // cookie; userAgent is sent as User-Agent. A request with a run code is an error, and
-// nothing is sent: [EnrolmentRequest.PostRun] redeems one.
+// nothing is sent: [EnrolmentRequest.PostRunVia] redeems one.
 func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL, userAgent string) (*EnrolmentAnswer, error) {
 	if err := r.forKey(); err != nil {
 		return nil, err
