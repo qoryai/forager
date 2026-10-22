@@ -103,10 +103,11 @@ type OpenSpec struct {
 	// is 1 to 64 of a-z, 0-9 and -, and starts with a letter; [Open] refuses anything
 	// else. Empty leaves machine out of run.started.
 	Machine string
-	// Setup is where the run's setup commands run: [event.SetupOutside], in a container
-	// apart from the agent's, or [event.SetupInside], in the agent's container. run.started reports it as
-	// setup. [Open] refuses any other value. Empty leaves setup out of run.started, for a
-	// run with no setup commands.
+	// Setup is where the run's setup commands run, or would run if it had any:
+	// [event.SetupOutside], in a container apart from the agent's, or
+	// [event.SetupInside], in the agent's container. run.started reports it as setup.
+	// [Open] refuses any other value. Empty leaves setup out of run.started, for a run
+	// that has nowhere to run setup commands.
 	Setup string
 	// Report receives one line per thing the run reports to its user; nil means
 	// os.Stderr, each line after "qory run: ".
@@ -201,10 +202,18 @@ type SessionSpec struct {
 	// the variables of the server's run configuration, which the gateway's run answer
 	// contains.
 	Variables Variables
-	// HarnessHome is the harness's home as the agent's process sees it, an absolute
-	// path; empty means none. When set, the session sets QORY_HARNESS_HOME to it, as one
-	// of Forager's names, like QORY_RUN_ID.
+	// HarnessHome is the harness's home on this machine, an absolute path; empty means
+	// none. When set, the session sets QORY_HARNESS_HOME to its path as the agent's
+	// process sees it, as one of Forager's variables, like QORY_RUN_ID: /workspace and
+	// the rest of the path when the harness home lies in the workspace of a run whose
+	// policy has its image by reference, and HarnessHome itself otherwise.
 	HarnessHome string
+	// InputsDir is the run's inputs directory on this machine, an absolute path; empty
+	// means none. [Run.Join] refuses a relative path, and / in a run with a run key. The
+	// session passes it to no process: in a run with a run key,
+	// dev.qory.session.started has <inputs> in place of each occurrence of it in the
+	// command and the arguments.
+	InputsDir string
 	// Harness are the harness sources the session's compose used, each with the commit
 	// compose used, reported in dev.qory.session.started as harness; nil reports none.
 	Harness []HarnessSource

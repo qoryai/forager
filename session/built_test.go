@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -269,6 +270,103 @@ func TestBuiltKeepsAKeyOutOfItsEvent(t *testing.T) {
 			if strings.Contains(strings.ToLower(string(f)), "fake0123456789") || strings.Contains(string(f), password) {
 				t.Errorf("%s contains a fake key or the host proxy's password", name)
 			}
+		}
+	}
+}
+
+// TestBuiltWritesTheImagesItIsGiven pins environment_image and base: Built writes each
+// one it is given, by its digest as given, in the record and on the link, and writes no
+// member for one it is not given; a run.built without either has the four required
+// members alone, as builtIn pins.
+func TestBuiltWritesTheImagesItIsGiven(t *testing.T) {
+	environment := "registry.example/example-org/env@sha256:" + strings.Repeat("a7", 32)
+	base := "registry.example/example-org/base@sha256:" + strings.Repeat("5c", 32)
+	for _, c := range []struct {
+		what              string
+		environment, base string
+	}{
+		{"both", environment, base},
+		{"the environment image alone", environment, ""},
+		{"the base alone", "", base},
+	} {
+		sp, g := specGateway(t)
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := aBuild()
+		b.EnvironmentImage, b.Base = c.environment, c.base
+		if err := r.Built(b); err != nil {
+			t.Fatalf("%s: %v", c.what, err)
+		}
+		if _, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1}); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]any{"image": b.Image, "size": float64(b.Size), "commit": b.Commit, "environment_ref": b.EnvironmentRef}
+		if c.environment != "" {
+			want["environment_image"] = c.environment
+		}
+		if c.base != "" {
+			want["base"] = c.base
+		}
+		for where, evs := range map[string][]map[string]any{"the record": events(t, &session.Result{Dir: r.Dir()}), "the link": g.Events()} {
+			got := ofType(evs, event.RunBuilt)
+			if len(got) != 1 || !maps.Equal(data(got[0]), want) {
+				t.Errorf("%s, %s: run.built %v, want data %v", c.what, where, got, want)
+			}
+		}
+	}
+}
+
+// TestBuiltChecksTheEnvironmentImageAndTheBase pins what Built refuses in
+// EnvironmentImage and Base, each with an error that starts with the fix, of 100
+// characters at most, with no value, and with nothing written: a tag in place of a
+// digest, upper case, and qak_ or qrk_ in any case.
+func TestBuiltChecksTheEnvironmentImageAndTheBase(t *testing.T) {
+	sp := spec(t)
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := "@sha256:" + strings.Repeat("3f", 32)
+	for _, m := range []struct {
+		name string
+		set  func(*session.Built, string)
+	}{
+		{"environment image", func(b *session.Built, v string) { b.EnvironmentImage = v }},
+		{"base image", func(b *session.Built, v string) { b.Base = v }},
+	} {
+		shape := "set the " + m.name + " to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag"
+		key := "set the " + m.name + " to a reference without qak_, qrk_ or qecr_: "
+		for _, c := range []struct{ value, fix string }{
+			{"registry.example/example-org/env:latest", shape},
+			{"registry.example/example-org/env", shape},
+			{"registry.example/Example-Org/env" + digest, shape},
+			{"registry.example/qak_fake0123456789/env" + digest, key},
+			{"registry.example/example-org/qrk_fake0123456789" + digest, key},
+			{"registry.example/QAK_FAKE0123456789/env" + digest, key},
+		} {
+			b := aBuild()
+			m.set(&b, c.value)
+			err := r.Built(b)
+			if err == nil || !strings.HasPrefix(err.Error(), c.fix) || len(err.Error()) > 100 ||
+				strings.Contains(strings.ToLower(err.Error()), "fake") || strings.Contains(err.Error(), "example-org") {
+				t.Errorf("a %s of %q: %v, want an error of 100 characters at most that starts %q", m.name, c.value, err, c.fix)
+			}
+		}
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: "failed", ExitCode: -1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ofType(events(t, &session.Result{Dir: r.Dir()}), event.RunBuilt); len(got) != 0 {
+		t.Errorf("the record has %v, want no run.built", got)
+	}
+	for _, name := range []string{sink.SessionFile, sink.OutputFile} {
+		f, _ := os.ReadFile(filepath.Join(r.Dir(), name))
+		if strings.Contains(strings.ToLower(string(f)), "fake0123456789") {
+			t.Errorf("%s contains a fake key", name)
 		}
 	}
 }

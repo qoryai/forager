@@ -136,9 +136,10 @@ release may change what an existing document does, and says so under Upgrading.
 - `machine` and `setup` in `dev.qory.run.started`, both optional, so a reader shows
   where the run and its setup ran. `machine` is the adapter that made the run's
   machine, such as `aws-ec2`, or `none`: 1 to 64 of `a-z`, `0-9` and `-`, the first a
-  letter. `setup` is `outside`, for setup commands in a container apart from the
-  agent's, or `inside`, for setup commands in the agent's container before the runtime
-  starts, and is absent for a run with no setup commands. `session.OpenSpec.Machine` and `session.OpenSpec.Setup` set them, and
+  letter. `setup` is where the run's setup commands run, or would run if it had any:
+  `outside`, in a container apart from the agent's, or `inside`, in the agent's
+  container before the runtime starts. A run that has nowhere to run setup commands
+  has no `setup`. `session.OpenSpec.Machine` and `session.OpenSpec.Setup` set them, and
   empty leaves them out. `session.Open` refuses any other value before it contacts the
   gateway, with an error that starts with the fix. `event.MachineNone`,
   `event.SetupOutside` and `event.SetupInside` are the values in Go.
@@ -237,6 +238,14 @@ release may change what an existing document does, and says so under Upgrading.
   characters, and seven invalid fixtures have an image with a tag, a size of 0, a
   commit in upper case or of 39 characters, an empty or a missing `environment_ref`,
   and a member the schema does not define.
+- `environment_image` and `base` in `dev.qory.run.built`, optional: the environment
+  image the build pushed or started from, and the base image the build pulled, each
+  by its digest, of the form of `image`. `session.Built.EnvironmentImage` and
+  `session.Built.Base` set them; `Built` writes each one only when it is set, and
+  returns an error for one with a tag, in upper case, or with `qak_` or `qrk_` in any
+  case. `fixtures/batch/built-environment-image-base.json` is the event with both,
+  `fixtures/link/link-batch-built.json` has both, and three invalid fixtures have an
+  environment image with a tag, a base with a tag and an empty environment image.
 - `session` in `dev.qory.run.log`, `dev.qory.run.resized` and every
   `dev.qory.runtime.*` event of a session: the session's number, from 1, so a reader
   shows each session's terminal and events apart. The member is optional, and an event
@@ -475,6 +484,23 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A run with a run key writes neutral values in its events: `dev.qory.run.started`
+  has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
+  `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run
+  directory, the harness home and the inputs directory, wherever the path is not
+  part of a longer name, in one pass, and `harness` is left out. `cwd` of
+  `dev.qory.runtime.started`, `prompt` of `dev.qory.runtime.prompt_submitted`, and
+  Forager's stderr lines for a failure after `dev.qory.session.started`, the
+  session's and the setup runner's inside the wall, have the same placeholders, with
+  `/workspace` for the working directory in `cwd` and `prompt`. A tool's input and output, every other member of a runtime event and
+  a setup command's output keep their paths as the agent wrote them. `Join` refuses
+  `/` as the harness home or the inputs directory of such a run. The session reports
+  the host name, the directories on the machine, the command and the arguments as
+  the session starts them, and the harness sources to `OpenSpec.Report` in one line
+  per session, `session <n> starts on this machine: ...`. A run without a run key
+  writes the values of the machine, as before.
+- A setup record of the `line` event has `runner: true` on a line the runner writes
+  when it cannot start or wait for the command.
 - `dev.qory.run.step_started` of kind `setup`: Forager writes one per setup command, in
   a separate container or inside the wall. Before, Forager wrote no `setup` step.
 - `dev.qory.session.started` contains `setup_commands`, the names of the session's
@@ -1122,6 +1148,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `Run.StackProxy`, a forwarder for the fetch of the harness definition. It is
   refused after the run's first `Join` and ends at it.
+- `session.SessionSpec.InputsDir`, the run's inputs directory, an absolute path: in a
+  run with a run key, `dev.qory.session.started` has `<inputs>` in place of each
+  occurrence of it in `command` and `args`. `Join` refuses a relative path with
+  `set the inputs directory to an absolute path: "pool/in" is relative`.
 - `session.RemoteGateway.TLS`, a `server.RemoteTLS`: how the session trusts the
   certificate of the run key's gateway, on the run's link and on a resend's. With
   `CAFile`, the session checks the chain against the authorities of that PEM file in
@@ -1157,7 +1187,11 @@ release may change what an existing document does, and says so under Upgrading.
   image, on the wall's internal network, one `setup` step each; the container runs until
   the run closes. `SetupSpec.ForagerFiles` and `SetupSpec.Written` are checked against
   the working folder as a join's, and with `SetupSpec.Limits` the setup container gets
-  the limit flags the agent's container gets.
+  the limit flags the agent's container gets. Before any step, `Setup` refuses a
+  `SetupSpec.Env` value for one of the run's placeholders with `placeholder_conflict`,
+  a `QORY_` name other than `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` or a reserved
+  name with `variable_reserved`, and a name of `denied-variables.json`, such as
+  `LD_PRELOAD`.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
@@ -1276,6 +1310,18 @@ release may change what an existing document does, and says so under Upgrading.
   `wall.RunContainersExist` is that method of a Docker with no field set, which a nil d
   asks through. A run's check against the registry asks through its wall when it is a
   `*wall.Docker`.
+- `(*session.Run).AgentEnv(spec)`, the environment a session of `spec` gets from the
+  server's variables, `Variables.Run`, `Variables.Machine`, `LaunchDefaults` and
+  `Env`, `NAME=value`, sorted by name, so a caller can give the setup container the
+  agent's environment: pass it as `SetupSpec.Env`. It resolves the variables as `Join`
+  does, with the deny lists and the placeholders, without the runtime's preparation,
+  and writes nothing and sends no request. It leaves out the names Forager, the proxy,
+  the wall and `LaunchFixed` set, the placeholders, and a name of
+  `denied-variables.json` that `Env` has, such as `PATH`. A spec that `Join` refuses
+  before its join request or as it resolves the variables, such as one with
+  `variable_reserved` or `placeholder_conflict`, gets the same refusal. The result has
+  `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup`
+  accepts both.
 
 #### Fixed
 

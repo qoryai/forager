@@ -370,6 +370,11 @@ with the members of `session.Built`:
   reference that contains `qak_`, `qrk_` or `qecr_` is a phrase in its place, as in a step's
   `name`. Pass no other credential in it: `Built` writes any other secret as you pass
   it.
+- `EnvironmentImage` as `environment_image`: the environment image the build pushed,
+  or the one it started from, of the form of `Image`. Leave it empty if you do not
+  report it: `Built` then writes no `environment_image`.
+- `Base` as `base`: the base image the build pulled, of the form of `Image`. Leave it
+  empty if you do not report it: `Built` then writes no `base`.
 
 Call `Built` once per run, with no host step open, before the first `Join` or after a
 `Join` returns. Each error starts with the fix, and writes nothing:
@@ -378,6 +383,10 @@ Call `Built` once per run, with no host step open, before the first `Join` or af
 |---|---|
 | an image that contains `qak_`, `qrk_` or `qecr_` | `set the built image to a reference without qak_, qrk_ or qecr_: each starts a secret` |
 | an image with a tag, in upper case or without a digest | `set the built image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
+| an `EnvironmentImage` that contains `qak_`, `qrk_` or `qecr_` | `set the environment image to a reference without qak_, qrk_ or qecr_: each starts a secret` |
+| an `EnvironmentImage` with a tag, in upper case or without a digest | `set the environment image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
+| a `Base` that contains `qak_`, `qrk_` or `qecr_` | `set the base image to a reference without qak_, qrk_ or qecr_: each starts a secret` |
+| a `Base` with a tag, in upper case or without a digest | `set the base image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
 | a size of 0 | `set the built image's size to its size in bytes, 1 or more, not 0` |
 | a commit that is not a full commit id | `set the commit of the build to a full commit id, 40 or 64 hexadecimal characters in lower case` |
 | an empty `EnvironmentRef` | `set the build's environment reference: dev.qory.run.built requires a non-empty environment_ref` |
@@ -400,6 +409,9 @@ err = run.Built(session.Built{
 	Size:           size,
 	Commit:         commit,
 	EnvironmentRef: "env-example-01",
+	// Both are optional: leave either empty if the build does not report that image.
+	EnvironmentImage: "registry.example/example-org/env@sha256:" + environmentDigest,
+	Base:             "registry.example/example-org/base@sha256:" + baseDigest,
 })
 ```
 
@@ -832,8 +844,8 @@ A program that needs custom code implements the interface.
 `ImagesAllow`, `RunsDir`, `ForagerVersion`, `RunID`, `Labels`, `About`, `Machine`,
 `Setup` and `Report`. `Machine` is the adapter that made the run's machine, such as
 `aws-ec2`, or `none` when no adapter made it. `Setup` is where the run's setup commands
-run: `outside`, in a container apart from the agent's, or `inside`, in the agent's
-container before the runtime starts.
+run, or would run if it had any: `outside`, in a container apart from the agent's, or
+`inside`, in the agent's container before the runtime starts.
 `dev.qory.run.started` contains them as `machine` and `setup`, and an empty one is left
 out. `session.Open` refuses any other value before it contacts the gateway, and the
 error starts with the fix: `set OpenSpec.Setup to outside or inside, or leave it
@@ -921,10 +933,34 @@ the credential the join request asks the gateway for, for this session.
     the server's.
   - `LaunchDefaults` is the values the harness's author wrote as defaults, and `Env`
     what the run inherits, the lowest.
-  - `HarnessHome` is the harness's home as the agent sees it. The session sets
-    `QORY_HARNESS_HOME` to it.
+  - `HarnessHome` is the harness's home on this machine. The session sets
+    `QORY_HARNESS_HOME` to its path as the agent sees it.
+  - `InputsDir` is the run's inputs directory on this machine, an absolute path. In a
+    run with a run key, `dev.qory.session.started` has `<inputs>` in place of each
+    occurrence of it in `command` and `args`, as it has `<run>` and `<home>` for the
+    run directory and `HarnessHome`.
   - `OnVariables` receives each name, its source and the values that lost, once, before
     the agent starts.
+  - `(*session.Run).AgentEnv(spec)` returns the environment a session of `spec` gets
+    from the server's variables, `Variables.Run`, `Variables.Machine`,
+    `LaunchDefaults` and `Env`, `NAME=value`, sorted by name, in a new slice on every
+    call. To give the setup container the agent's environment, call it before `Setup`
+    with the session's full spec, and pass the result as `SetupSpec.Env`. The result
+    has `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server sets them, and
+    `Setup` accepts both. It resolves the variables as `Join` does, with the deny
+    lists and the placeholders, and leaves out the names Forager, the proxy, the wall,
+    the bundle and `LaunchFixed` set, the placeholders, and a name of
+    `denied-variables.json` that `Env` has, such as `PATH`, which `Join` passes to the
+    agent. For a run whose image is a reference, a path in the workspace in
+    `LaunchDefaults` is written at `/workspace`, as `Join` writes it. It runs no runtime
+    preparation, so a name the preparation sets overrides the value in the agent. It
+    writes nothing and sends no request. AgentEnv masks no value: apart from that
+    rewrite, it returns each value as the server, the caller or the machine passed it,
+    and no value the gateway holds for a placeholder.
+    The error is the one `Join` returns for `spec` before its join request, as it
+    checks the places of a run whose image is a reference, or as it resolves the
+    variables, such as `variable_reserved` or `placeholder_conflict`, or that the run
+    is closed, or that another call of the run is running.
 - `SocketGrace` is how long the run socket keeps accepting after the runtime exits, so
   a hook on its last event is still read. Zero or less means 200 ms. It is for tests:
   production leaves it zero.

@@ -74,7 +74,7 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.run.policy_applied` | After the open; after each session's start; when a new policy takes effect |
 | `dev.qory.run.step_started`   | A step of the run's host work started, such as a fetch or a compose        |
 | `dev.qory.run.step_exited`    | A step ended, with its state and exit code                                 |
-| `dev.qory.run.built`          | After a build of an image: its digest, size, commit and environment        |
+| `dev.qory.run.built`          | After a build: image, size, commit, environment, environment image, base   |
 | `dev.qory.session.started`    | A session joined the run: its runtime is about to start                    |
 | `dev.qory.run.log`            | One per chunk of a session's output, or of host work outside a session     |
 | `dev.qory.run.resized`        | The pseudo-terminal was resized                                            |
@@ -91,8 +91,9 @@ whose session sends nothing for three. The exit code of a run is its last sessio
 `dev.qory.run.started` contains `machine` and `setup` when the caller sets
 `OpenSpec.Machine` and `OpenSpec.Setup`. `machine` is the adapter that made the run's
 machine, such as `aws-ec2`, or `none` when no adapter made it. `setup` is `outside`
-when the run's setup commands run in a container apart from the agent's, and `inside`
-when they run in the agent's container before the runtime starts. A run with no setup commands has no `setup`.
+when the run's setup commands run, or would run if it had any, in a container apart
+from the agent's, and `inside` when they run, or would run, in the agent's container
+before the runtime starts. A run that has nowhere to run setup commands has no `setup`.
 
 `dev.qory.run.started` shows what opened the run, in `opened_by`: `run`, Forager's open
 of the run at its gateway, before any session. Each session then has a

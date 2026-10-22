@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/run.built.schema.json",
   "title": "dev.qory.run.built",
-  "description": "The result of a build of an image of an environment, as the run's caller writes it: the image by its digest, its size, the commit it was built from and the environment it is for. At most one per run, after dev.qory.run.started and before dev.qory.run.exited, outside every session and every step. The caller writes it with (*session.Run).Built, which checks the form of each member and returns an error for an image that contains qak_, qrk_ or qecr_ in any case.",
+  "description": "The result of a build of an image of an environment, as the run's caller writes it: the image by its digest, its size, the commit it was built from and the environment it is for, and, when the caller reports them, the environment image and the base image by their digests. At most one per run, after dev.qory.run.started and before dev.qory.run.exited, outside every session and every step. The caller writes it with (*session.Run).Built, which checks the form of each member and returns an error for an image, an environment image or a base image that contains qak_, qrk_ or qecr_ in any case.",
   "type": "object",
   "additionalProperties": false,
   "required": ["image", "size", "commit", "environment_ref"],
@@ -10,6 +10,8 @@
     "image": {"description": "The image that the build made, by its digest: NAME@sha256: and 64 lower-case hexadecimal digits, with no tag, of the form of a policy's image reference.", "$ref": "../policy.schema.json#/$defs/image_reference"},
     "size": {"description": "The image's size in bytes, 1 or more.", "type": "integer", "minimum": 1},
     "commit": {"description": "The full commit id the image was built from: 40 or 64 hexadecimal characters, in lower case.", "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"},
-    "environment_ref": {"description": "A reference to the environment the image is for, as the caller passes it, 1 character or more. The run's masker replaces each forwarder's password in it, and a reference that contains qak_, qrk_ or qecr_ in any case is `(a value that contains an access key secret)` in its place, `(a value that contains a run key)` when it contains qrk_ and no qak_, or `(a value that contains a run code)` when it contains qecr_ and neither of the others.", "type": "string", "minLength": 1}
+    "environment_ref": {"description": "A reference to the environment the image is for, as the caller passes it, 1 character or more. The run's masker replaces each forwarder's password in it, and a reference that contains qak_, qrk_ or qecr_ in any case is `(a value that contains an access key secret)` in its place, `(a value that contains a run key)` when it contains qrk_ and no qak_, or `(a value that contains a run code)` when it contains qecr_ and neither of the others.", "type": "string", "minLength": 1},
+    "environment_image": {"description": "The environment image the build pushed, or the one it started from, by its digest: NAME@sha256: and 64 lower-case hexadecimal digits, with no tag, of the form of a policy's image reference. Absent when the caller does not report it.", "$ref": "../policy.schema.json#/$defs/image_reference"},
+    "base": {"description": "The base image the build pulled, by its digest: NAME@sha256: and 64 lower-case hexadecimal digits, with no tag, of the form of a policy's image reference. Absent when the caller does not report it.", "$ref": "../policy.schema.json#/$defs/image_reference"}
   }
 }

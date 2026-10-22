@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -21,6 +23,8 @@ import (
 	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
+	"github.com/qoryai/forager/session/internal/variables"
+	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/sink"
 	"github.com/qoryai/forager/wall"
 )
@@ -413,8 +417,12 @@ func (r *Run) start(ctx context.Context) (err error) {
 	r.startedAt = time.Now()
 	// A value of the run's that contains qak_, qrk_ or qecr_ in any case is sent as a phrase in
 	// its place: accesskey.ShownName's for the host and the wall, and server.ShownLabels'
-	// and server.ShownAbout's for the labels and about.
-	started := map[string]any{"opened_by": event.OpenedByRun, "forager_version": spec.ForagerVersion, "host": accesskey.ShownName(hostname(), false)}
+	// and server.ShownAbout's for the labels and about. A run with a run key has no host:
+	// each session's line of Report has it.
+	started := map[string]any{"opened_by": event.OpenedByRun, "forager_version": spec.ForagerVersion}
+	if r.remote == nil {
+		started["host"] = accesskey.ShownName(hostname(), false)
+	}
 	if spec.Wall != nil {
 		started["wall"] = accesskey.ShownName(spec.Wall.Name(), false)
 	}
@@ -467,6 +475,108 @@ func (r *Run) System() string { return r.answer.Values()[envRunSystem] }
 // Repositories is the server's value of QORY_RUN_REPOSITORIES in the run answer's
 // variables, the repositories the run may fetch; empty when the server sets none.
 func (r *Run) Repositories() string { return r.answer.Values()[envRunRepositories] }
+
+// AgentEnv is the environment a session of spec gets from the server's variables,
+// Variables.Run, Variables.Machine, LaunchDefaults and SessionSpec.Env, as [Run.Join]
+// resolves it for spec: NAME=value, sorted by name, in a new slice on every call. The
+// deny lists, the endpoint rule and the run's placeholders apply as in Join. It leaves
+// out the names Forager, the proxy, the wall and the bundle set, LaunchFixed, the
+// placeholders and the access key's variables. The result matches what the agent gets
+// from those sources, apart from a name the runtime preparation sets, which overrides
+// the value in the agent: AgentEnv runs no runtime preparation, writes nothing and
+// sends no request. It also leaves out a value of SessionSpec.Env whose name the
+// built-in deny list, denied-variables.json, matches, such as PATH, which Join passes
+// to the agent and [Run.Setup] refuses. For a run whose image is a reference, a path in
+// the workspace in LaunchDefaults is written at /workspace, as Join writes it.
+// AgentEnv masks no value: apart from that rewrite, it returns each value as the
+// server, the caller or the machine passed it, and no value the gateway holds for a
+// placeholder. A caller that runs the setup passes the result as [SetupSpec.Env]. The result has QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES when the server sets them, and Setup accepts both. The error
+// is the one Join returns for spec before its join request, as it checks the places of
+// a run whose image is a reference, or as it resolves the variables, the same
+// [refusal.VariableReserved] or [refusal.PlaceholderConflict] among them, or that the
+// run is closed or another call of the run is running.
+func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
+	if !r.joining.TryLock() {
+		return nil, errors.New("call AgentEnv after the run's other call returns: another call of the run is running")
+	}
+	defer r.joining.Unlock()
+	if r.closed {
+		return nil, errors.New("open a new run for the agent's environment: the run is closed")
+	}
+	s, rt, err := r.checkSession(spec)
+	if err != nil {
+		return nil, err
+	}
+	// As in Join: without a wall the variables the machine's credentials are read from
+	// are left out of what the session inherits. The session starts with
+	// spec.ModelCredential, or with the run's start key when spec has none: the join
+	// answer's model_credential is one of the two, by link-join-answer.schema.json.
+	if s.Wall == nil {
+		s.Env = withoutNames(s.Env, r.reserved)
+	}
+	// As in Join: a run whose policy names its image by its reference sees its
+	// workspace at /workspace, and the harness's values are written as the enclosure
+	// sees them. The places get the join's checks, for the session the next join
+	// numbers.
+	if r.byReference {
+		plan, err := checkMounts(s, r.dir, filepath.Join(r.dir, SessionsDir, strconv.Itoa(r.numbered+1)))
+		if err != nil {
+			return nil, err
+		}
+		_, inside, err := plan.atWorkspace()
+		if err != nil {
+			return nil, err
+		}
+		s.LaunchFixed, s.LaunchDefaults = insideValues(s.LaunchFixed, inside), insideValues(s.LaunchDefaults, inside)
+	}
+	model := s.ModelCredential
+	if model == "" {
+		model = r.answer.ModelCredential
+	}
+	credentialHosts, placeholderNames, key, err := chosen(rt, r.answer.CredentialHosts, r.answer.Placeholders, model)
+	if err != nil {
+		return nil, err
+	}
+	prepared := runtimes.Launch{Command: s.Command, Args: s.Args}
+	bundle := names(r.caVars)
+	vars, _, err := resolve(s, rt, r.answer.Values(), credentialHosts, prepared, placeholderNames, r.reserved, r.img.Docker, r.authority != nil, bundle, key)
+	if err != nil {
+		return nil, err
+	}
+	fixed := slices.Concat(foragerNames(s, prepared, bundle, key), names(vars.Fixed), placeholderNames)
+	if w, ok := s.Wall.(wall.Setter); ok {
+		fixed = append(fixed, w.Sets()...)
+	}
+	if r.img.Docker {
+		fixed = append(fixed, wall.NestSets()...)
+	}
+	// What the session inherits goes under the resolved values, without the runtime's
+	// other model-key variables, as environment writes the agent's. A name of the
+	// built-in deny list is left out of it too, which Join leaves in: Setup refuses
+	// such a name.
+	deny, err := variables.List(nil)
+	if err != nil {
+		return nil, err
+	}
+	var inherited []string
+	for _, kv := range withoutNames(s.Env, key.Others) {
+		if name, _, _ := strings.Cut(kv, "="); !deny.Matches(name) {
+			inherited = append(inherited, kv)
+		}
+	}
+	env := withoutNames(environment(inherited, vars.Env), fixed)
+	last := map[string]string{}
+	for _, kv := range env {
+		name, value, _ := strings.Cut(kv, "=")
+		last[name] = value
+	}
+	out := make([]string, 0, len(last))
+	for _, name := range slices.Sorted(maps.Keys(last)) {
+		out = append(out, name+"="+last[name])
+	}
+	return out, nil
+}
 
 // The server's variables a [Run] gives its caller.
 const (
