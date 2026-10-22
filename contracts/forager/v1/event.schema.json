@@ -51,6 +51,7 @@
             "dev.qory.session.exited",
             "dev.qory.run.step_started",
             "dev.qory.run.step_exited",
+            "dev.qory.run.built",
             "dev.qory.runtime.started",
             "dev.qory.runtime.prompt_submitted",
             "dev.qory.runtime.tool_started",
@@ -263,6 +264,19 @@
             },
             "data": {
               "$ref": "events/run.step_exited.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.built"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.built.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.built.schema.json"
             }
           }
         },

@@ -74,6 +74,7 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.run.policy_applied` | After the open; after each session's start; when a new policy takes effect |
 | `dev.qory.run.step_started`   | A step of the run's host work started, such as a fetch or a compose        |
 | `dev.qory.run.step_exited`    | A step ended, with its state and exit code                                 |
+| `dev.qory.run.built`          | After a build of an image: its digest, size, commit and environment        |
 | `dev.qory.session.started`    | A session joined the run: its runtime is about to start                    |
 | `dev.qory.run.log`            | One per chunk of a session's output, or of host work outside a session     |
 | `dev.qory.run.resized`        | The pseudo-terminal was resized                                            |
@@ -126,7 +127,7 @@ and the log lines of each step.
 
 - `dev.qory.run.step_started` has `step`, the step's number in the run from 1, `name`,
   a readable name such as `fetch github.com/example-org/app`, and `kind`: `fetch`,
-  `compose`, `image`, `setup`, `join` or `wall`.
+  `compose`, `image`, `setup`, `join`, `wall` or `build`.
 - `dev.qory.run.step_exited` has the same `step`, `state` (`succeeded`, `failed` or
   `cancelled`), `exit_code`, -1 when no process exit status exists, and `duration_ms`.
 - Each host line of a step is a `dev.qory.run.log` with the step's number in `step`,
@@ -135,7 +136,7 @@ and the log lines of each step.
 The steps come after `dev.qory.run.started`, numbered in the order they start, one at
 a time:
 
-- The caller writes the `fetch` and `compose` steps of its host work with
+- The caller writes the `fetch`, `compose` and `build` steps of its host work with
   `(*session.Run).StartStep`, before the first join or between two joins, and the
   `image` step of an image by reference with `(*session.Run).FetchImage`.
 - Each join writes a `join` step, `join session <n>`, around its join request and the

@@ -199,7 +199,8 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // with timeout, two with interrupted, one of a refused join, two of a failure at the join
 // after its session.started, with no reason and with the wall's refusal's code, and one
 // of a run closed with no session, a batch of a setup step after a run.started with
-// machine and setup, a join request with and without model_credential, a join answer with and
+// machine and setup, a batch of a build step and the run's run.built, a join request
+// with and without model_credential, a join answer with and
 // without model_credential, and refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
@@ -307,7 +308,10 @@ const beyondLinkSchema = "-beyond-schema-"
 // with exit status 0 and no reason, cancelled with stopped and an exit status, cancelled
 // with gateway_lost, or of a refused join with an exit status other than -1, a run.log
 // whose step is 0, a run.step_started with an unknown kind, without its name or numbered
-// 0, a run.step_exited without its state, with a state other than the three, with an
+// 0, a run.built whose image has a tag, whose size is 0, whose commit is in upper case
+// or of 39 characters, whose environment_ref is empty or missing, or with a member it
+// does not define, a
+// run.step_exited without its state, with a state other than the three, with an
 // exit code below -1 or without its duration, a run.exited with no_session and succeeded,
 // a run.exited without state, with a state other than the three, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no

@@ -25,13 +25,14 @@ type Step struct {
 
 // StartStep starts a step of the run's host work and writes its
 // dev.qory.run.step_started, with the run's next step number as step, name as name and
-// kind as kind: event.StepFetch or event.StepCompose. Join numbers its steps from the
-// same counter. The run's masker replaces each forwarder's password in name, and a name
-// that contains qak_ or qrk_ in any case is a phrase in its place, as accesskey.ShownValue
-// gives it. Write the step's lines with [Step.Log], and end it with [Step.Exit].
+// kind as kind: event.StepFetch, event.StepCompose or event.StepBuild. Join numbers its
+// steps from the same counter. The run's masker replaces each forwarder's password in
+// name, and a name that contains qak_ or qrk_ in any case is a phrase in its place, as
+// accesskey.ShownValue gives it. Write the step's lines with [Step.Log], and end it with
+// [Step.Exit].
 //
-// An error means nothing is written: the kind is not fetch or compose, the name is
-// empty, a session of the run is running, another host step is open, or the run is
+// An error means nothing is written: the kind is not fetch, compose or build, the name
+// is empty, a session of the run is running, another host step is open, or the run is
 // closed. Host steps go before the first join and between joins, never during one: Join
 // returns an error and writes nothing while a host step is open.
 //
@@ -39,8 +40,8 @@ type Step struct {
 // replaces only the forwarders' passwords, and accesskey.ShownValue replaces only a
 // name that contains qak_ or qrk_; any other secret in name is written as given.
 func (r *Run) StartStep(kind, name string) (*Step, error) {
-	if kind != event.StepFetch && kind != event.StepCompose {
-		return nil, fmt.Errorf("start a host step of kind fetch or compose, not %s: Join writes the join, image and wall steps", accesskey.ShownValue(kind, true))
+	if kind != event.StepFetch && kind != event.StepCompose && kind != event.StepBuild {
+		return nil, fmt.Errorf("start a host step of kind fetch, compose or build, not %s: Join writes the join, image and wall steps", accesskey.ShownValue(kind, true))
 	}
 	if name == "" {
 		return nil, fmt.Errorf("give the step a name, such as %q: a step's name is never empty", "fetch github.com/example-org/app")
