@@ -161,7 +161,22 @@ func (r *Run) post(typ string, data any) {
 // run's host work, and with step as step, or with no step member when step is 0. A run
 // the gateway closed has the chunks in its record alone.
 func (r *Run) writeLog(stream string, n, step int, b []byte) {
-	emit := func(c []byte) {
+	masker := r.masker
+	if masker.Empty() {
+		masker = nil
+	}
+	chunks := chunk.New(r.logEmit(stream, n, step))
+	masked := mask.NewWriter(chunks, masker)
+	masked.Write(b)
+	masked.Flush()
+	chunks.Flush()
+}
+
+// logEmit is what writes each chunk of stream as a dev.qory.run.log, with n as
+// session, or with no session member when n is 0, and with step as step, or with no
+// step member when step is 0.
+func (r *Run) logEmit(stream string, n, step int) func([]byte) {
+	return func(c []byte) {
 		data := map[string]any{"stream": stream, "bytes": encode(c)}
 		if n > 0 {
 			data["session"] = n
@@ -171,15 +186,6 @@ func (r *Run) writeLog(stream string, n, step int, b []byte) {
 		}
 		r.post(event.RunLog, data)
 	}
-	masker := r.masker
-	if masker.Empty() {
-		masker = nil
-	}
-	chunks := chunk.New(emit)
-	masked := mask.NewWriter(chunks, masker)
-	masked.Write(b)
-	masked.Flush()
-	chunks.Flush()
 }
 
 // failureLine is the text of err as one stderr line of the session's output: what a

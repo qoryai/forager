@@ -1747,6 +1747,18 @@ compose keeps it out of git:
   answers a run request; a gateway that starts again keeps a record that holds it, and
   the run request that comes again is `409` `run_attached`.
 
+**A hidden harness.** In a run whose harness is hidden, `[harness text: <path>]`
+replaces the text of each file in a session's harness home, after the forwarders'
+passwords are replaced, in every `dev.qory.run.log` chunk of the session, its setup
+steps' included, and in every event the descriptor maps from an output or hook record.
+`<path>` is the file's path relative to the home, such as `skills/implement/SKILL.md`.
+Text is a file's once it matches at least 3 consecutive lines of the file, with the
+whitespace at the start and the end of each line and the blank lines left out, or at
+least 200 consecutive characters of it; text inside a JSON string matches with its
+escapes decoded. The session reads the home's files as it starts, and a change to them
+after that changes nothing. qory sets `OpenSpec.HarnessHidden` from `harness_hidden`
+in the run's documents; a run where it is false has no replacement.
+
 The gateway writes `events.jsonl`, with its `delivered.log` and `undelivered/` (§The
 server, After Forager stops unexpectedly); the session writes `session.jsonl`, its
 record, numbered by its sequence (§The gateway's link), and `output.log`. On one machine

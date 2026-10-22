@@ -20,6 +20,8 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/mask"
+	"github.com/qoryai/forager/session/internal/chunk"
 	"github.com/qoryai/forager/session/internal/descriptor"
 	"github.com/qoryai/forager/session/internal/socket"
 	"github.com/qoryai/forager/session/runtimes"
@@ -95,6 +97,11 @@ type setupSteps struct {
 	commands []SetupCommand
 	// terminal writes a setup line, masked, to the user's terminal.
 	terminal func(stream string, b []byte)
+	// harness masks the text of a hidden harness in the lines, nil for a harness that
+	// is not hidden; lines are then the open step's streams, each through the harness
+	// writer, from the step's first line to its end.
+	harness *mask.Harness
+	lines   map[string]*setupStream
 	// base is the number of the last step before the setup's, the wall step's.
 	base int
 
@@ -113,9 +120,57 @@ type setupSteps struct {
 }
 
 // newSetupSteps returns the setup steps of session n, whose setup is commands, once the
-// session's last step before them has started; terminal gets each line of the steps.
-func (r *Run) newSetupSteps(n int, commands []SetupCommand, terminal func(stream string, b []byte)) *setupSteps {
-	return &setupSteps{r: r, session: n, commands: commands, terminal: terminal, base: r.steps, next: 1, ended: len(commands) == 0}
+// session's last step before them has started; terminal gets each line of the steps,
+// and harness, when not nil, masks the text of a hidden harness in them.
+func (r *Run) newSetupSteps(n int, commands []SetupCommand, terminal func(stream string, b []byte), harness *mask.Harness) *setupSteps {
+	return &setupSteps{r: r, session: n, commands: commands, terminal: terminal, harness: harness, base: r.steps, next: 1, ended: len(commands) == 0}
+}
+
+// setupStream is one stream of a setup step whose lines go through the harness writer:
+// the harness writer writes to the step's chunks and to the terminal.
+type setupStream struct {
+	harness *mask.HarnessWriter
+	chunks  *chunk.Writer
+}
+
+// streamOf is the stream of the open step, made at its first line.
+func (s *setupSteps) streamOf(stream string) *setupStream {
+	if l, ok := s.lines[stream]; ok {
+		return l
+	}
+	chunks := chunk.New(s.r.logEmit(stream, s.session, s.open.n))
+	l := &setupStream{chunks: chunks, harness: s.harness.Writer(writerFunc(func(b []byte) {
+		chunks.Write(b)
+		s.terminal(stream, b)
+	}))}
+	if s.lines == nil {
+		s.lines = map[string]*setupStream{}
+	}
+	s.lines[stream] = l
+	return l
+}
+
+// endStep writes what the harness writers of the open step keep back, then ends the
+// step with state and code.
+func (s *setupSteps) endStep(state string, code int) {
+	for _, stream := range []string{"stdout", "stderr"} {
+		if l, ok := s.lines[stream]; ok {
+			l.harness.Flush()
+			l.chunks.Flush()
+		}
+	}
+	s.lines = nil
+	s.open.end(state, code)
+	s.open = nil
+}
+
+// writerFunc is a function that takes each write, as an io.Writer.
+type writerFunc func([]byte)
+
+// Write passes b to f.
+func (f writerFunc) Write(b []byte) (int, error) {
+	f(b)
+	return len(b), nil
 }
 
 // setupTerminal writes a setup line to the user's terminal as the runtime's output
@@ -182,6 +237,10 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 		// The record has the line once, through the sink, and the terminal has it once,
 		// masked the same way.
 		masked := []byte(s.r.masker.Replace(string(got.bytes)))
+		if s.harness != nil {
+			s.streamOf(got.stream).harness.Write(masked)
+			return
+		}
 		s.r.writeLog(got.stream, s.session, s.open.n, masked)
 		s.terminal(got.stream, masked)
 		return
@@ -193,8 +252,7 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 		case got.code != 0:
 			state = event.StateFailed
 		}
-		s.open.end(state, got.code)
-		s.open = nil
+		s.endStep(state, got.code)
 		s.next++
 		s.ended = got.code != 0 || s.next > len(s.commands)
 		return
@@ -213,8 +271,7 @@ func (s *setupSteps) finish(stopped bool) {
 		if stopped {
 			state = event.StateCancelled
 		}
-		s.open.end(state, -1)
-		s.open = nil
+		s.endStep(state, -1)
 	}
 	s.ended = true
 }

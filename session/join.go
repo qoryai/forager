@@ -15,6 +15,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/socket"
@@ -368,6 +369,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if err != nil {
 		return fail(err)
 	}
+	// A run whose harness is hidden masks the text of the harness's files, as they are
+	// at this point, in what the session reports.
+	var hidden *mask.Harness
+	if r.open.HarnessHidden && spec.HarnessHome != "" {
+		if hidden, err = readHarness(spec.HarnessHome, r.open.Report); err != nil {
+			return fail(err)
+		}
+	}
 	// The session's directory holds the session's output.log and what the session
 	// writes for its runtime, from here on; every log event of the session goes to its
 	// output.log as well as to the run's, until the session ends.
@@ -556,14 +565,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// output: stdout and stderr share one lock, so the two writers never write at once.
 	var terminalMu sync.Mutex
 	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
-	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr))
+	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), hidden)
 	records := func(rec runtimes.Record) {
 		if rec.Source == runtimes.SourceSetup {
 			setupSteps.handle(rec)
 			return
 		}
 		if typ, data, ok := rt.Map(rec); ok {
-			r.write(typ, withSession(maskedRecord(masker, data), n))
+			r.write(typ, withSession(maskedRecord(texts{secrets: masker, harness: hidden}, data), n))
 		}
 	}
 	go sock.Serve(records, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
@@ -645,7 +654,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	resized := func(cols, rows int) {
 		r.write(event.RunResized, map[string]any{"cols": cols, "rows": rows, "session": n})
 	}
-	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: stdout, stderr: stderr, logs: logs, masker: masker, output: output, cols: cols, rows: rows, resized: resized}
+	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: stdout, stderr: stderr, logs: logs, masker: masker, harness: hidden, output: output, cols: cols, rows: rows, resized: resized}
 	// The limit ends the runtime and nothing else: the wall is closed on the caller's
 	// context, as after any exit. The run being closed from outside ends it the same
 	// way.

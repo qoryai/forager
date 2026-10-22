@@ -109,6 +109,22 @@ type OpenSpec struct {
 	// Report receives one line per thing the run reports to its user; nil means
 	// os.Stderr, each line after "qory run: ".
 	Report func(string)
+	// HarnessHidden, when true, means the session masks the text of the files in each
+	// session's SessionSpec.HarnessHome: qory sets it from harness_hidden in the run's
+	// documents, true in a run whose harness belongs to an organisation other than the
+	// run's. Each session reads the files as it starts, before its join step ends, and
+	// masks what it reports with them until it ends: every dev.qory.run.log chunk of the
+	// session, its setup steps' lines among them, and every event the descriptor maps
+	// from an output or hook record, after the run's masker. Text that matches at least
+	// mask.HarnessLines consecutive lines or mask.HarnessChars characters of a file is
+	// replaced with [harness text: <path>], <path> the file's path relative to the home,
+	// such as skills/implement/SKILL.md; see [mask.Harness]. A home that cannot be read
+	// fails the join. The session reads regular files alone, follows no link, skips a
+	// file that contains a zero byte, and reads at most HarnessMaxFiles files, each of at
+	// most HarnessMaxFileSize bytes, HarnessMaxSize bytes in all: a file it does not read
+	// is a Report line, and its text is not masked. False, the default, masks no harness
+	// text, and a session with no HarnessHome masks none either.
+	HarnessHidden bool
 }
 
 // EngineProxy is the proxy setting the machine's container engine reads when it

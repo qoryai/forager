@@ -631,7 +631,7 @@ A program that needs custom code implements the interface.
 
 `session.OpenSpec` has the run's fields: `Gateway`, `Wall`, `CAEnv`, `Image`, `Images`,
 `ImagesAllow`, `RunsDir`, `ForagerVersion`, `RunID`, `Labels`, `About`, `Machine`,
-`Setup` and `Report`. `Machine` is the adapter that made the run's machine, such as
+`Setup`, `Report` and `HarnessHidden`. `Machine` is the adapter that made the run's machine, such as
 `aws-ec2`, or `none` when no adapter made it. `Setup` is where the run's setup commands
 run: `outside`, in a container apart from the agent's, or `inside`, in the agent's
 container before the runtime starts.
@@ -639,6 +639,21 @@ container before the runtime starts.
 out. `session.Open` refuses any other value before it contacts the gateway, and the
 error starts with the fix: `set OpenSpec.Setup to outside or inside, or leave it
 empty: "elsewhere"`.
+
+Set `HarnessHidden` from `harness_hidden` in the run's documents. When it is true, each
+session reads the files in its `HarnessHome` as it starts and masks their text in what
+it reports, after the forwarders' passwords: every `dev.qory.run.log` chunk of the
+session and every event its runtime's output and hooks map to. `[harness text: <path>]`
+replaces text that matches 3 consecutive lines or 200 characters of a file, `<path>` the
+file's path relative to the home, such as `skills/implement/SKILL.md`; text inside a
+JSON string matches too. The session reads regular files alone, follows no link and
+skips binary files. It reads at most `session.HarnessMaxFiles` files of at most
+`session.HarnessMaxFileSize` bytes each, `session.HarnessMaxSize` bytes in all, and
+reports each file it does not read through `Report`; that file's text is not masked. A
+home that cannot be read fails the join, "give the session a harness home it can read".
+Since a match may start in them, the session writes each stream's last 199 characters,
+and up to its last 3 lines, once more output follows them or the stream ends. False, the default, masks no harness
+text. See [`mask.Harness`](../mask/harness.go) for the matching.
 `session.SessionSpec` has each session's: the runtime and its command, the variables,
 the mounts, the setup commands and the rest below. `Harness` lists the harness's sources,
 each a `source` and a full `commit`; `dev.qory.session.started` records them, a source
