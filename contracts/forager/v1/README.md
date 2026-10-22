@@ -2119,9 +2119,9 @@ header sent twice; `429` per source address; `400` `unsupported_contract_version
 `invalid_request`, a malformed code among them; `401` for a code it did not issue or
 that is used, expired or cancelled, for a code whose prefix names another kind than its
 node's, for a code whose fingerprints are not its keys', for a run code, `qecr_`, that
-does not come through the relay of the gateway the code is bound to, signed under that
-gateway's access key, and for a timestamp outside ±300 seconds; `409` `key_invalid` for
-a key the checks refuse or a `proof` that does not verify under it,
+does not come through the relay of the gateway the code is bound to, signed under a
+live access key of that gateway, and for a timestamp outside ±300 seconds; `409`
+`key_invalid` for a key the checks refuse or a `proof` that does not verify under it,
 the key checked first. Then, signed: `429` `rate_limited` per code; `409` `key_invalid`
 for a key already enrolled, a revoked one included; `409` `key_limit`; and `201`. The
 server signs an answer only to a proof that verifies under a key the checks pass, so a
@@ -2181,10 +2181,10 @@ gets the same members, the same `run_id`, `run_key`, `apiary_public_key` and
 `documents`, signed over the retry's proof.
 A redemption by another public key after the first is `401`, as is a code that is used,
 has expired or was cancelled, and a run code, `qecr_`, that does not come through the
-relay of the gateway the code is bound to, signed under that gateway's access key; the
-signed `409` and `429` are those of an access key's code. The run key's `issued` is the
-time of the code's first redemption, not the time the code was made, and its `attach_by`
-is 600 seconds after `issued`. The machine
+relay of the gateway the code is bound to, signed under a live access key of that
+gateway; the signed `409` and `429` are those of an access key's code. The run key's
+`issued` is the time of the code's first redemption, not the time the code was made, and
+its `attach_by` is 600 seconds after `issued`. The machine
 checks the answer in this order: it verifies the signature under the listed key whose
 fingerprint is the code's first; it reads the body against `run_answer`; it keeps the
 listed keys whose fingerprints are in the code; it verifies `run_key` as the gateway
