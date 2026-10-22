@@ -145,11 +145,12 @@ release may change what an existing document does, and says so under Upgrading.
   not an object, is an error that starts with the fix. The signature covers
   `documents`, and a retry by the same key gets the same `documents`. Where fmt calls
   `Format`, slog `LogValue` and encoding/json `MarshalJSON`, a `RunAnswer` shows
-  `run_id` alone. fmt prints the run key and the documents with the other fields under
-  `%p` of a value, under `%w`, and for a `RunAnswer` in a struct field that is not
-  exported, which slog's text handler prints through fmt as well: in such a field the
-  documents come out as text under `%s`, quoted under `%q`, in hex under `%x`, and as
-  bytes in decimal under `%v` and `%+v`.
+  `run_id` alone. fmt prints every field, the run key and the documents included,
+  whenever it calls no method of `RunAnswer`: under `%p` and `%w` of an argument that
+  is a `RunAnswer` or contains one by value, such as an array of them or a struct with
+  one in any field, under `%w` of a pointer to a `RunAnswer`, and for a `RunAnswer`, or
+  a pointer to one, in a struct field that is not exported, which slog's text handler
+  also prints through fmt. Log a `RunAnswer` through its methods, or log its `RunID`.
 - A run code's answer of up to 1 MiB, `accesskey.MaxRunAnswer`, the most the gateway's
   relay passes back: `PostRunVia` and `PostRun` read at most 1 MiB of its body, and
   `VerifyRunAnswer` counts a longer body as `answer_unsigned`.

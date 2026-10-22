@@ -389,14 +389,14 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 }
 
 // TestARunAnswerShowsItsRunIDAlone pins that a RunAnswer, by value and by pointer,
-// prints its run id and never its run key or a byte of its documents: under every fmt
-// verb, through slog's text and JSON handlers, through encoding/json, and in an
-// exported field of a struct, in a slice and in a map under the JSON handler. It also
-// pins the three open cases, where fmt prints the run key and the documents: a
-// RunAnswer in a struct field that is not exported, under fmt and slog's text handler,
-// with the documents as text under %s, quoted under %q, in hex under %x and as bytes in
-// decimal under %v and %+v; %p of a value, also in an array or an embedding struct;
-// and %w of a value and of a pointer.
+// prints its run id and never its run key or a byte of its documents: under %v, %+v,
+// %#v, %s, %q, %x and %d, through slog's text and JSON handlers, through
+// encoding/json, and in an exported field of a struct, in a slice and in a map under
+// the JSON handler. It also pins sample cases where fmt calls no method of RunAnswer
+// and prints the run key: a RunAnswer, and a pointer to one, in a struct field that is
+// not exported, under fmt and slog's text handler; %p of a value, an array, an
+// embedding struct and a struct with a RunAnswer field; and %w of a value, a pointer
+// and a slice.
 func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
@@ -464,38 +464,37 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 			t.Errorf("%%+v of %T: %s", c.v, got)
 		}
 	}
-	// The open case, which RunAnswer's doc describes: fmt calls no method of a value it
-	// reaches through a struct field that is not exported, so fmt and slog's text
-	// handler print the run key and the documents' bytes there, and the JSON handler
-	// writes {} for the field. A change to that behaviour fails here, so the doc is
-	// updated with it.
+	// The cases RunAnswer's doc describes, where fmt calls no method of RunAnswer and
+	// prints every field: a RunAnswer, or a pointer to one, in a struct field that is
+	// not exported, under fmt and slog's text handler, and %p and %w of arguments that
+	// contain one. Each expects the run key, as text or in hex under %x, so a change to
+	// that behaviour fails here and the doc is updated with it. The JSON handler writes
+	// {} for a field that is not exported. pVerb and wVerb are variables, so that vet's
+	// printf check accepts the arguments.
+	hasKey := func(s string) bool {
+		return strings.Contains(s, secret) || strings.Contains(s, fmt.Sprintf("%x", secret))
+	}
 	type hidden struct{ a any }
-	if got := fmt.Sprintf("%+v", hidden{*ans}); !strings.Contains(got, secret) || !strings.Contains(got, inputBytes) {
-		t.Errorf("%%+v of a RunAnswer in a field that is not exported: %s; RunAnswer's doc describes the run key and the documents' bytes there", got)
-	}
-	// In such a field each verb prints the documents in its form: %s as text, %q quoted,
-	// %x in hex and %v as bytes in decimal, with the run key under each.
-	inputHex := fmt.Sprintf("%x", testInput)
-	for verb, want := range map[string]string{"%s": testInput, "%q": `\"` + testInput + `\"`, "%x": inputHex, "%v": inputBytes} {
-		if got := fmt.Sprintf(verb, hidden{*ans}); !strings.Contains(got, want) || (!strings.Contains(got, secret) && !strings.Contains(got, fmt.Sprintf("%x", secret))) {
-			t.Errorf("%s of a RunAnswer in a field that is not exported: %s; RunAnswer's doc describes the run key and the documents as %s there", verb, got, want)
-		}
-	}
-	// The other two open cases: fmt calls no method of an argument under %p of a value
-	// that is not a pointer, also inside an array or an embedding struct, or under %w,
-	// since a RunAnswer is not an error, and prints every field. pVerb and wVerb are
-	// variables, so that vet's printf check accepts the arguments.
 	type embedding struct{ accesskey.RunAnswer }
+	type field struct{ A accesskey.RunAnswer }
 	pVerb, wVerb := "%p", "%w"
 	for _, c := range []struct{ name, got string }{
+		{"%+v of a RunAnswer in a field that is not exported", fmt.Sprintf("%+v", hidden{*ans})},
+		{"%s of a RunAnswer in a field that is not exported", fmt.Sprintf("%s", hidden{*ans})},
+		{"%q of a RunAnswer in a field that is not exported", fmt.Sprintf("%q", hidden{*ans})},
+		{"%x of a RunAnswer in a field that is not exported", fmt.Sprintf("%x", hidden{*ans})},
+		{"%v of a RunAnswer in a field that is not exported", fmt.Sprintf("%v", hidden{*ans})},
+		{"%s of a *RunAnswer in a field that is not exported", fmt.Sprintf("%s", hidden{ans})},
 		{"%p of a value", fmt.Sprintf(pVerb, *ans)},
 		{"%p of an array", fmt.Sprintf(pVerb, [1]accesskey.RunAnswer{*ans})},
 		{"%p of an embedding struct", fmt.Sprintf(pVerb, embedding{*ans})},
+		{"%p of a struct with a RunAnswer field", fmt.Sprintf(pVerb, field{*ans})},
 		{"fmt.Errorf with %w of a value", fmt.Errorf(wVerb, *ans).Error()},
 		{"fmt.Errorf with %w of a pointer", fmt.Errorf(wVerb, ans).Error()},
+		{"fmt.Errorf with %w of a slice", fmt.Errorf(wVerb, []accesskey.RunAnswer{*ans}).Error()},
 	} {
-		if !strings.Contains(c.got, secret) || !strings.Contains(c.got, inputBytes) {
-			t.Errorf("%s: %s; RunAnswer's doc describes the run key and the documents' bytes there", c.name, c.got)
+		if !hasKey(c.got) {
+			t.Errorf("%s: %s; RunAnswer's doc describes the run key there", c.name, c.got)
 		}
 	}
 	if got := fmt.Sprintf(pVerb, ans); leaks(got) {
@@ -503,8 +502,8 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	}
 	b.Reset()
 	slog.New(slog.NewTextHandler(&b, nil)).Info("redeemed", "hidden", hidden{*ans})
-	if got := b.String(); !strings.Contains(got, secret) || !strings.Contains(got, inputBytes) {
-		t.Errorf("slog's text handler with a RunAnswer in a field that is not exported wrote %s; RunAnswer's doc describes the run key and the documents' bytes there", got)
+	if got := b.String(); !hasKey(got) {
+		t.Errorf("slog's text handler with a RunAnswer in a field that is not exported wrote %s; RunAnswer's doc describes the run key there", got)
 	}
 	b.Reset()
 	slog.New(slog.NewJSONHandler(&b, nil)).Info("redeemed", "hidden", hidden{*ans})

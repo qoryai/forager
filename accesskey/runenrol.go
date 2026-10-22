@@ -22,18 +22,14 @@ import (
 // Format, log/slog LogValue and encoding/json MarshalJSON, for a RunAnswer and a
 // pointer to one alike: fmt prints "run <run id>", a slog handler that calls LogValue
 // writes run_id alone, and encoding/json writes run_id alone, also inside an exported
-// field, a slice or a map, as slog's JSON handler writes them. fmt calls no method, and
-// prints every field, the run key and the documents included, in three cases:
-//   - %p of a RunAnswer value, also inside an array or an embedding struct;
-//   - %w, of a value and of a pointer, since a RunAnswer is not an error;
-//   - a RunAnswer in a struct field that is not exported, which slog's text handler
-//     prints through fmt as well.
+// field, a slice or a map, as slog's JSON handler writes them.
 //
-// Under %p and %w the documents come out as bytes in decimal. In a field that is not
-// exported they come out as text under %s, quoted under %q, in hex under %x, and as
-// bytes in decimal under %v and %+v; a *RunAnswer in such a field prints as its address
-// under %v, %+v and %x, and with every field under %s and %q. Keep a RunAnswer out of
-// these cases in a value you print or log.
+// fmt prints every field, the run key and the documents included, whenever it calls no
+// method of RunAnswer. That happens under %p and %w of an argument that is a RunAnswer
+// or contains one by value, such as an array of them or a struct with one in any field,
+// and under %w of a pointer to a RunAnswer too. It also happens for a RunAnswer, or a
+// pointer to one, in a struct field that is not exported, which slog's text handler
+// also prints through fmt. Log a RunAnswer through its methods, or log its RunID.
 type RunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -46,9 +42,10 @@ type RunAnswer struct {
 	// Documents is the run's documents: the answer's documents member, a JSON object,
 	// byte for byte as the answer contains it. VerifyRunAnswer checks that it is an
 	// object and reads none of its members. Its schema is documents.schema.json of
-	// qoryai/integrations, https://qory.dev/contracts/run/v1/documents.schema.json. The answer's
-	// signature covers it as it covers the other members. String, Format, LogValue and MarshalJSON write no byte of it,
-	// because the run's documents can contain values that must stay out of logs.
+	// qoryai/integrations, https://qory.dev/contracts/run/v1/documents.schema.json.
+	// The answer's signature covers it as it covers the other members. String,
+	// Format, LogValue and MarshalJSON write no byte of it, because the run's
+	// documents can contain values that must stay out of logs.
 	Documents json.RawMessage `json:"documents"`
 	// Pin are the keys of ApiaryPublicKey whose fingerprints are in the code: the
 	// keys the run key's signature verified under.
@@ -68,8 +65,8 @@ func (a RunAnswer) String() string { return "run " + a.RunID }
 // GoString returns what String returns.
 func (a RunAnswer) GoString() string { return a.String() }
 
-// Format writes what String returns, under every verb fmt calls it with. fmt does not
-// call it for %p of a value or for %w, as the doc of [RunAnswer] states.
+// Format writes what String returns, under every verb fmt calls it with. In the cases
+// the doc of [RunAnswer] lists, fmt calls no method and prints every field.
 func (a RunAnswer) Format(f fmt.State, _ rune) { io.WriteString(f, a.String()) }
 
 // LogValue returns a group with run_id alone, so a slog handler that calls LogValue

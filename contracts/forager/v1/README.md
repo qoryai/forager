@@ -2126,14 +2126,15 @@ the server's keys and `documents`, the run's documents, and every member is requ
 
 ```json
 {"version": 1, "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "run_key": "qrk_…",
- "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}],
+ "apiary_public_key": [
+   {"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}],
  "documents": {…}}
 ```
 
 `documents` is a JSON object, whose schema is `documents.schema.json` of
-`qoryai/integrations`, `https://qory.dev/contracts/run/v1/documents.schema.json`. Forager checks
-that `documents` is an object, reads none of its members, and passes it to the caller
-byte for byte as the answer contains it.
+`qoryai/integrations`, `https://qory.dev/contracts/run/v1/documents.schema.json`.
+Forager checks that `documents` is an object, reads none of its members, and passes it
+to the caller byte for byte as the answer contains it.
 
 The answer is at most 1 MiB: Forager reads at most 1 MiB of the body of an answer to a
 run code, the most the gateway's relay passes back, and counts a longer body as
@@ -2158,15 +2159,17 @@ through the gateway, `PostRun` sends it to the server, and `VerifyRunAnswer` rea
 answer. Each returns an `accesskey.RunAnswer`, whose `Documents` is the answer's
 `documents` as a `json.RawMessage`. Where fmt calls `Format`, slog `LogValue` and
 encoding/json `MarshalJSON`, fmt writes a `RunAnswer` as `run <run id>`, and slog and
-encoding/json write its `run_id` alone. fmt calls no method, and prints every field, the
-run key and the documents included, in three cases: `%p` of a value, also inside an
-array or an embedding struct; `%w`, since a `RunAnswer` is not an error; and a
-`RunAnswer` in a struct field that is not exported, which slog's text handler prints
-through fmt as well. In such a field the documents come out as text under `%s`, quoted
-under `%q`, in hex under `%x`, and as bytes in decimal under `%v` and `%+v`. `PostVia`,
-`Post` and `VerifyAnswer` refuse a run code before they send or read anything, and the
-three run methods refuse an access key's code the same way. The known answers are `run_enrolment` in `fixtures/known-answers/through-gateway.json`, with
-`enrolment-run-request.json` and `enrolment-run-answer.json`.
+encoding/json write its `run_id` alone. fmt prints every field, the run key and the
+documents included, whenever it calls no method of `RunAnswer`. That happens under `%p`
+and `%w` of an argument that is a `RunAnswer` or contains one by value, such as an array
+of them or a struct with one in any field, and under `%w` of a pointer to a `RunAnswer`
+too. It also happens for a `RunAnswer`, or a pointer to one, in a struct field that is
+not exported, which slog's text handler also prints through fmt. Log a `RunAnswer`
+through its methods, or log its `RunID`. `PostVia`, `Post` and `VerifyAnswer` refuse a
+run code before they send or read anything, and the three run methods refuse an access
+key's code the same way. The known answers are `run_enrolment` in
+`fixtures/known-answers/through-gateway.json`, with `enrolment-run-request.json` and
+`enrolment-run-answer.json`.
 
 **The configuration document.** `configuration.schema.json`. A signed
 `GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery, per
