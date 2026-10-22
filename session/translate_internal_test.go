@@ -24,6 +24,11 @@ func TestTranslateIsAtWholeComponents(t *testing.T) {
 			t.Errorf("%q: %q, want %q", in, got, want)
 		}
 	}
+	// / is replaced only where it stands alone: every other path starts with / and a
+	// component after it.
+	if got := translate("/ //x --a=/ /usr/bin", "/", "<home>"); got != "<home> <home>/x --a=<home> /usr/bin" {
+		t.Errorf("/: %q", got)
+	}
 	if got := translate("/work/app", "", "/workspace"); got != "/work/app" {
 		t.Errorf("no root: %q", got)
 	}

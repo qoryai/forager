@@ -483,39 +483,65 @@ func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 }
 
 // translate is s with every occurrence of the absolute path from, at whole components,
-// written as to: where from starts s or follows a separator of words, and ends s or is
-// followed by a slash or such a separator. /work/app becomes /workspace/app for /work,
-// and /workshop, /a/work and work stay as they are. A separator of words is a space, a
-// quote, a colon, as in a list of paths, an equals sign, as in --flag=path, or one of
-// the shell's characters that end a word.
+// written as to ([replacePaths]). /work/app becomes /workspace/app for /work, and
+// /workshop, /a/work and work stay as they are.
 func translate(s, from, to string) string {
 	if from == "" || from == to {
 		return s
 	}
+	return replacePaths(s, []pathPair{{from, to}})
+}
+
+// pathPair is an absolute path, from, and the text written in its place, to.
+type pathPair struct{ from, to string }
+
+// replacePaths is s with each path of pairs written as its to, in one pass over s: at
+// each place where a path component starts, the first path of pairs that matches there
+// is replaced, and the text written in its place is not matched again. A path matches
+// at whole components: where it starts s, follows a separator of words or follows
+// file://, and where it ends s, is followed by a slash or such a separator, or is
+// followed by ., ? or ! that ends s or comes before white space, as at the end of a
+// sentence. A separator of words is white space, a quote, a comma, a colon, as in a
+// list of paths, an equals sign, as in --flag=path, ] or }, or one of the shell's
+// characters that end a word. With the longer path first in pairs, the longer of two
+// paths where one contains the other is replaced.
+func replacePaths(s string, pairs []pathPair) string {
 	var b strings.Builder
 	last := 0
-	for i := 0; i < len(s); {
-		j := strings.Index(s[i:], from)
-		if j < 0 {
-			break
-		}
-		j += i
-		end := j + len(from)
-		if (j == 0 || wordEnd(s[j-1])) && (end == len(s) || s[end] == '/' || wordEnd(s[end])) {
-			b.WriteString(s[last:j])
-			b.WriteString(to)
-			last, i = end, end
+	for i := 0; i < len(s); i++ {
+		if s[i] != '/' || (i > 0 && !wordEnd(s[i-1]) && !strings.HasSuffix(s[:i], "file://")) {
 			continue
 		}
-		i = j + 1
+		for _, p := range pairs {
+			end := i + len(p.from)
+			if p.from == "" || !strings.HasPrefix(s[i:], p.from) || !pathEnd(s, end) {
+				continue
+			}
+			b.WriteString(s[last:i])
+			b.WriteString(p.to)
+			last, i = end, end-1
+			break
+		}
+	}
+	if last == 0 {
+		return s
 	}
 	b.WriteString(s[last:])
 	return b.String()
 }
 
+// pathEnd reports whether a path that ends at end of s ends at a whole component: see
+// [replacePaths].
+func pathEnd(s string, end int) bool {
+	if end == len(s) || s[end] == '/' || wordEnd(s[end]) {
+		return true
+	}
+	return strings.IndexByte(".?!", s[end]) >= 0 && (end+1 == len(s) || strings.IndexByte(" \t\n\r", s[end+1]) >= 0)
+}
+
 // wordEnd reports whether c separates a path from what is beside it in a word or a
-// line: see [translate].
-func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c) >= 0 }
+// line: see [replacePaths].
+func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>]}", c) >= 0 }
 
 // checkMounts refuses a caller's Forager file that is not an absolute path and, behind a
 // wall, the places the run lists that it cannot bind as they are, and returns what the

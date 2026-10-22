@@ -831,31 +831,26 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 // neutralPaths writes, in a value of a run with a run key, <run> in place of the run
 // directory, <home> in place of the harness home, <inputs> in place of the inputs
 // directory and, when dir is not empty, /workspace in place of the working directory
-// dir. Each is replaced at whole path components, as translate replaces them: the
-// home, the inputs and dir at their path on this machine and, when it differs, at
-// their path inside the enclosure. Of two paths where one contains the other, the
-// longer is replaced first. Join refuses / as the home or the inputs of a run with a
-// run key.
+// dir. Each is replaced at whole path components, as replacePaths replaces them, in
+// one pass over the value: the home, the inputs and dir at their path on this machine
+// and, when it differs, at their path inside the enclosure. Of two paths where one
+// contains the other, the longer is replaced, and the text written in its place is not
+// replaced again. Join refuses / as the home or the inputs of a run with a run key
+// (checkNeutral).
 func (r *Run) neutralPaths(home, inputs, dir string, inside func(string) string) func(string) string {
-	type pair struct{ from, to string }
-	pairs := []pair{{r.dir, "<run>"}}
-	for _, p := range []pair{{home, "<home>"}, {inputs, "<inputs>"}, {dir, workspaceInside}} {
+	pairs := []pathPair{{r.dir, "<run>"}}
+	for _, p := range []pathPair{{home, "<home>"}, {inputs, "<inputs>"}, {dir, workspaceInside}} {
 		if p.from == "" {
 			continue
 		}
 		p.from = filepath.Clean(p.from)
 		pairs = append(pairs, p)
 		if in := inside(p.from); in != p.from {
-			pairs = append(pairs, pair{in, p.to})
+			pairs = append(pairs, pathPair{in, p.to})
 		}
 	}
-	slices.SortStableFunc(pairs, func(a, b pair) int { return len(b.from) - len(a.from) })
-	return func(s string) string {
-		for _, p := range pairs {
-			s = translate(s, p.from, p.to)
-		}
-		return s
-	}
+	slices.SortStableFunc(pairs, func(a, b pathPair) int { return len(b.from) - len(a.from) })
+	return func(s string) string { return replacePaths(s, pairs) }
 }
 
 // neutralRecord is data of an event of type typ mapped from a runtime's record, with
@@ -874,15 +869,23 @@ func neutralRecord(typ string, data map[string]any, text func(string) string) ma
 }
 
 // checkNeutral refuses / as the harness home or the inputs directory of a run with a
-// run key: <home> or <inputs> would replace the start of every path.
+// run key. Paths are replaced at whole components, so / is replaced only where it
+// stands alone, as in /, //x or --a=/, and every path below it keeps its real form.
 func checkNeutral(spec SessionSpec) error {
 	if spec.HarnessHome != "" && filepath.Clean(spec.HarnessHome) == string(filepath.Separator) {
-		return errors.New("set the harness home to a directory below /: a run with a run key writes <home> in place of it in dev.qory.session.started, and / starts every path")
+		return errors.New("Set the harness home to a directory below /.\n" + neutralRoot("<home>"))
 	}
 	if spec.InputsDir != "" && filepath.Clean(spec.InputsDir) == string(filepath.Separator) {
-		return errors.New("set the inputs directory to a directory below /: a run with a run key writes <inputs> in place of it in dev.qory.session.started, and / starts every path")
+		return errors.New("Set the inputs directory to a directory below /.\n" + neutralRoot("<inputs>"))
 	}
 	return nil
+}
+
+// neutralRoot is the second line of checkNeutral's error for / as the directory that
+// placeholder stands for.
+func neutralRoot(placeholder string) string {
+	return "A run with a run key writes " + placeholder + " in place of the directory in args, cwd, prompt and failure lines. " +
+		"It replaces / only where / stands alone, so paths below / would keep their real form."
 }
 
 // launchLine is the line a run with a run key reports for session n, in place of the

@@ -1555,13 +1555,16 @@ leave out or replace these values of the machine:
   prompt, the run directory is `<run>`, the harness home (`SessionSpec.HarnessHome`)
   `<home>`, and the inputs directory (`SessionSpec.InputsDir`) `<inputs>`, each at its
   path on the machine and at its path inside the enclosure. A path is replaced at
-  whole path components: where it starts the value or follows a space, a quote, `:`,
-  `=` or another character that ends a shell word, and where it ends the value or is
-  followed by `/` or such a character. `/srv/home` is replaced in `/srv/home/a` and
-  `--dir=/srv/home`, and not in `/srv/home-old` or `https://git.example/srv/home`.
-  Of two of them where one contains the other, the longer is replaced first. Any
-  other path is as the runtime prepared it. `Join` refuses `/` as the harness home or
-  the inputs directory.
+  whole path components: where it starts the value, follows white space, a quote,
+  `,`, `:`, `=`, `]`, `}` or another character that ends a shell word, or follows
+  `file://`; and where it ends the value, is followed by `/` or such a character, or
+  is followed by `.`, `?` or `!` that ends the value or comes before white space.
+  `/srv/home` is replaced in `/srv/home/a`, `--dir=/srv/home`, `file:///srv/home/a`
+  and `See /srv/home.`, and not in `/srv/home-old`, `/srv/home.bak` or
+  `https://git.example/srv/home`. The value is replaced in one pass: at each place,
+  of two of them where one contains the other, the longer is replaced, and the text
+  written in its place is not replaced again. Any other path is as the runtime
+  prepared it. `Join` refuses `/` as the harness home or the inputs directory.
 - `dev.qory.session.started` has no `harness`.
 - `cwd` of `dev.qory.runtime.started` and `prompt` of
   `dev.qory.runtime.prompt_submitted` have the same placeholders, and `/workspace` in

@@ -415,7 +415,8 @@ release may change what an existing document does, and says so under Upgrading.
   has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
   `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run
   directory, the harness home and the inputs directory, at whole path components,
-  and `harness` is left out. `cwd` of `dev.qory.runtime.started`, `prompt` of
+  also after `file://` and before `.`, `?` or `!` at the end of a sentence, in one
+  pass, and `harness` is left out. `cwd` of `dev.qory.runtime.started`, `prompt` of
   `dev.qory.runtime.prompt_submitted`, and Forager's stderr lines for a failure after
   `dev.qory.session.started`, the session's and the setup runner's inside the wall,
   have the same placeholders, with `/workspace` for the working directory in `cwd`

@@ -20,8 +20,9 @@ import (
 
 // neutralRun is a run of the fake runtime, started through a script in the harness
 // home, whose arguments contain the run directory, the harness home and the inputs
-// directory, each as a whole argument and inside a -p prompt. The inputs directory is
-// passed with a trailing slash.
+// directory, each as a whole argument and inside a -p prompt, and the working
+// directory as a whole argument and at the end of a sentence of the prompt. The inputs
+// directory is passed with a trailing slash.
 type neutralRun struct {
 	*sepRun
 	runDir, home, inputs string
@@ -51,7 +52,7 @@ func newNeutralRun(t *testing.T, gw session.Gateway, runID, runsDir, home, input
 	r.sp.HarnessHome, r.sp.InputsDir, r.sp.Harness = home, inputs+"/", r.harness
 	r.sp.Args = append(r.sp.Args,
 		"-p", "Read "+r.runDir+"/sessions/1/task.md, "+inputs+"/issue.md and "+home+"/CLAUDE.md, then work in "+r.sp.Dir+".",
-		"--settings", home+"/settings.json", "--add-dir", inputs, "--log", r.runDir+"/x.log")
+		"--settings", home+"/settings.json", "--add-dir", inputs, "--log", r.runDir+"/x.log", "--cwd", r.sp.Dir)
 	return r
 }
 
@@ -59,7 +60,8 @@ func newNeutralRun(t *testing.T, gw session.Gateway, runID, runsDir, home, input
 // dev.qory.session.started of a run with a run key: no host, dir /workspace, <run>,
 // <home> and <inputs> in place of each occurrence of the run directory, the harness
 // home and the inputs directory in the arguments, the longer path first where one
-// contains the other, and no harness. No event contains the run directory, the
+// contains the other, the working directory in the arguments as it is, and no
+// harness. No event contains the run directory, the
 // harness home, the inputs directory or the host name. One
 // line of Report has the values of this machine.
 func TestARunWithARunKeyShowsNeutralValues(t *testing.T) {
@@ -100,7 +102,7 @@ func TestARunWithARunKeyShowsNeutralValues(t *testing.T) {
 			started := sessionStarted(t, evs)
 			want := []any{"-c", `env > "$0"; exec "$1"`, r.envFile, os.Args[0],
 				"-p", "Read <run>/sessions/1/task.md, <inputs>/issue.md and <home>/CLAUDE.md, then work in " + r.sp.Dir + ".",
-				"--settings", "<home>/settings.json", "--add-dir", "<inputs>", "--log", "<run>/x.log"}
+				"--settings", "<home>/settings.json", "--add-dir", "<inputs>", "--log", "<run>/x.log", "--cwd", r.sp.Dir}
 			if started["dir"] != "/workspace" || started["command"] != "<home>/bin/agent" || fmt.Sprint(started["args"]) != fmt.Sprint(want) || started["harness"] != nil {
 				t.Errorf("session.started %v\nwant args %q", started, want)
 			}
@@ -117,10 +119,10 @@ func TestARunWithARunKeyShowsNeutralValues(t *testing.T) {
 					t.Errorf("session.jsonl contains %s:\n%s", real, record)
 				}
 			}
-			// The working directory is the prompt's text alone: the arguments are the
-			// caller's, and only the three directories are written in their place.
-			if n := strings.Count(string(record), r.sp.Dir); n != 1 {
-				t.Errorf("session.jsonl contains the working directory %d times, want once, in the prompt", n)
+			// The working directory in the arguments is as the caller passed it: only the
+			// three directories are written in their place.
+			if n := strings.Count(string(record), r.sp.Dir); n != 2 {
+				t.Errorf("session.jsonl contains the working directory %d times, want twice, in the prompt and after --cwd", n)
 			}
 			line := fmt.Sprintf("session 1 starts on this machine: host %s, dir %q, home %q, inputs %q, command %q, args %q, harness %q at %s",
 				host, r.sp.Dir, home, r.sp.InputsDir, r.sp.Command, r.sp.Args, r.harness[0].Source, r.harness[0].Commit)
@@ -193,8 +195,10 @@ func TestARelativeInputsDirectoryIsRefused(t *testing.T) {
 // accepts.
 func TestARunWithARunKeyRefusesTheRootAsAPlace(t *testing.T) {
 	for _, c := range []struct{ home, inputs, want string }{
-		{"/", "", "set the harness home to a directory below /: a run with a run key writes <home> in place of it in dev.qory.session.started, and / starts every path"},
-		{"", "//", "set the inputs directory to a directory below /: a run with a run key writes <inputs> in place of it in dev.qory.session.started, and / starts every path"},
+		{"/", "", "Set the harness home to a directory below /.\nA run with a run key writes <home> in place of the directory in args, cwd, prompt and failure lines. " +
+			"It replaces / only where / stands alone, so paths below / would keep their real form."},
+		{"", "//", "Set the inputs directory to a directory below /.\nA run with a run key writes <inputs> in place of the directory in args, cwd, prompt and failure lines. " +
+			"It replaces / only where / stands alone, so paths below / would keep their real form."},
 	} {
 		sp, g, _ := remoteSpec(t, 0)
 		sp.HarnessHome, sp.InputsDir = c.home, c.inputs
