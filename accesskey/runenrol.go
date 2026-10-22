@@ -2,6 +2,7 @@ package accesskey
 
 import (
 	"context"
+	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -14,14 +15,21 @@ import (
 )
 
 // RunAnswer is the server's 201 to a run code, [CodePrefixRun]: the run's id, its run
-// key and the server's keys. The code's redemption makes no access key. A RunAnswer
-// formats as its run id alone, whatever the verb, and a structured log of it shows
-// run_id alone, so a log line that prints one never contains the run key.
+// key and the server's keys. The code's redemption makes no access key.
+//
+// A RunAnswer shows its run id and never its run key: fmt prints it as String returns
+// it, whatever the verb; slog writes run_id alone through LogValue; and encoding/json
+// writes run_id alone through MarshalJSON, also inside an exported field, a slice or a
+// map that a JSON handler writes. One case is open: fmt calls no method of a value it
+// reaches through a struct field that is not exported, so it can print the run key of
+// a RunAnswer, or of a *RunAnswer, in such a field, as %+v of struct{ a RunAnswer }
+// does. Keep a RunAnswer out of unexported fields of a value you print.
 type RunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
-	// RunKey is the run's run key, verified under Pin and for RunID. It belongs in
-	// QORY_RUN_KEY, [EnvRunKey], and nowhere else.
+	// RunKey is the run's run key, verified under Pin and for RunID. The machine keeps
+	// it in memory and passes it to the session as session.RemoteGateway.RunKey, and
+	// writes it to no file and no environment variable.
 	RunKey string `json:"run_key"`
 	// ApiaryPublicKey are the server's keys as it lists them, current then next.
 	ApiaryPublicKey Pin `json:"apiary_public_key"`
@@ -43,6 +51,15 @@ func (a RunAnswer) Format(f fmt.State, _ rune) { io.WriteString(f, a.String()) }
 // LogValue returns a group with run_id alone, so slog writes no run key.
 func (a RunAnswer) LogValue() slog.Value { return slog.GroupValue(slog.String("run_id", a.RunID)) }
 
+// MarshalJSON writes {"run_id": RunID} alone, for a log or a dump that encodes a
+// RunAnswer as JSON: no run key, version or keys. A RunAnswer is read from the wire,
+// never written to it, so no writer needs the other members.
+func (a RunAnswer) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		RunID string `json:"run_id"`
+	}{a.RunID})
+}
+
 // runIDShape is a run's id: a UUID in the canonical lower-case form.
 var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
@@ -51,7 +68,7 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 var runKeyShape = regexp.MustCompile(`^qrk_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`)
 
 // fixRunCode starts every error of a run answer that the server signed: the code is
-// used, and a retry by the same key gets the same answer.
+// used, and a retry by the same key gets the same members.
 const fixRunCode = "use another run code: "
 
 // VerifyRunAnswer reads the server's answer to a request with a run code, as

@@ -111,12 +111,13 @@ release may change what an existing document does, and says so under Upgrading.
   the gateway's relay, at `POST /.well-known/qory-enrolment`. The signed `201` is
   `$defs/run_answer` of `enrolment.schema.json`: `version`, `run_id`, `run_key` and
   `apiary_public_key`. The code is valid for 15 minutes and is used once; a retry by
-  the same public key gets the same body, the same run key included, and another key
-  gets `401`. The run key's `issued` is the time of the first redemption, and its
+  the same public key gets the same members, the same run key included, and another
+  key gets `401`. The run key's `issued` is the time of the first redemption, and its
   `attach_by` 600 seconds after it. `accesskey.EnrolmentRequest.PostRunVia`, `PostRun`
   and `VerifyRunAnswer` return an `accesskey.RunAnswer`, after they verify the answer
   under the server key the code selects and the run key as the gateway does, for the
-  answer's `run_id`. A `RunAnswer` formats and logs as its run id alone.
+  answer's `run_id`. fmt, slog and encoding/json write a `RunAnswer` as its run id
+  alone; fmt can print its run key in a struct field that is not exported.
   `accesskey.CodePrefixRun` is `qecr_`, and `accesskey.CodeKind` returns `run` for it.
   `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and the run methods refuse an
   access key's code, before they send anything. The known answers are `run_enrolment`

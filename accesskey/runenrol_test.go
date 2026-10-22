@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -150,8 +151,8 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // TestPostRunRedeemsARunCode posts a run code to a fake server that signs a run answer
-// under a test key: the client returns the run's id and its run key, its pin the
-// test key, and a retry by the same key gets the same run key.
+// under a test key: the client returns the run's id and its run key, its pin the test
+// key, and the same request sent again gets the same run key.
 func TestPostRunRedeemsARunCode(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
@@ -173,12 +174,60 @@ func TestPostRunRedeemsARunCode(t *testing.T) {
 	}
 }
 
-// TestRunAnswerFailures pins each refusal of a run code's answer: a wrong signature and
-// an unsigned 201 are answer_unsigned; a signed answer of an access key to a run code is
-// a *KindError; a run key for another run, a run key signed by a key the code does not
-// carry, a run key whose signature another key made, a run_id that is no UUID and a
-// later version and a missing run_key are errors that start with the fix; a 401 is unauthorized; a signed 409
-// and 429 are their refusals. No error contains the run key.
+// TestARetryWithAnotherProofGetsTheSameMembers pins a retry by the same key with
+// another request: a timestamp one second later, so another proof. The server signs
+// the same members over each request's proof, and the client returns the same run id,
+// run key and pin for both. The first answer's signature does not verify for the
+// second request, since line 3 of the signed lines is the request's proof.
+func TestARetryWithAnotherProofGetsTheSameMembers(t *testing.T) {
+	signer, key := newKey(t), newKey(t)
+	rk := testRunKey(t, signer, testRunID)
+	f := &fakeServer{status: http.StatusCreated, signer: signer, body: func(accesskey.EnrolmentRequest) []byte { return runAnswerBody(testRunID, rk, signer) }}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	runCode := "qecr_F1XT0RE0000000000000000000." + signer.Fingerprint()
+	now := time.Now()
+	first, err := accesskey.NewEnrolmentRequest(key, runCode, "run-01", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := accesskey.NewEnrolmentRequest(key, runCode, "run-01", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PublicKey != retry.PublicKey || first.Proof == retry.Proof {
+		t.Fatal("the retry is not the same key with another proof")
+	}
+	a, err := first.PostRun(context.Background(), nil, srv.URL, "qory/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := retry.PostRun(context.Background(), nil, srv.URL, "qory/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.RunID != b.RunID || a.RunKey != b.RunKey || !slices.Equal(a.ApiaryPublicKey, b.ApiaryPublicKey) || !slices.Equal(a.Pin, b.Pin) {
+		t.Errorf("the retry got %s, pin %v; the first %s, pin %v", b, b.Pin, a, a.Pin)
+	}
+	answer, sig := created(first, signer, runAnswerBody(testRunID, rk, signer))
+	if _, err := retry.VerifyRunAnswer(answer, sig); code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("the first answer's signature for the retry: %v; want answer_unsigned", err)
+	}
+}
+
+// TestRunAnswerFailures pins each refusal of a run code's answer, one case each:
+//   - answer_unsigned: a wrong signature, an unsigned 201, a member the schema does not
+//     define, and an apiary_public_key with no key, since no listed key has the code's
+//     first fingerprint;
+//   - a *KindError: a signed answer of an access key to a run code;
+//   - an error that starts with the fix: a run key for another run; a run key signed by
+//     a key that is not listed; a run key signed by a key that the answer lists and
+//     whose fingerprint is not in the code; a run key whose signature another key made;
+//     a run_id in upper case; a run_key of another form; a run_key over 2048
+//     characters; an apiary_public_key with 3 keys; version 2; a missing run_key;
+//   - a 401 is unauthorized, and a signed 409 and 429 are their refusals.
+//
+// No error contains the run key.
 func TestRunAnswerFailures(t *testing.T) {
 	signer, other := newKey(t), newKey(t)
 	r := runRequest(t, signer)
@@ -192,6 +241,7 @@ func TestRunAnswerFailures(t *testing.T) {
 	}
 	forged := runkey.Prefix + payload + "." + base64.RawURLEncoding.EncodeToString(other.Sign(append([]byte(runkey.Domain+"\n"), p...)))
 	keys := `"apiary_public_key":[{"alg":"ed25519","public_key":"` + signer.PublicKey().String() + `"}]`
+	long := runkey.Prefix + strings.Repeat("A", 2040) + "." + strings.Repeat("A", 10)
 	for _, c := range []struct {
 		name   string
 		status int
@@ -207,12 +257,19 @@ func TestRunAnswerFailures(t *testing.T) {
 			"use another run code: the enrolment answer's run key is for run 0192f0c1-7d4e-7a2b-8c3d-000000000000, and its run_id is " + testRunID},
 		{"a run key signed by another key", 201, runAnswerBody(testRunID, testRunKey(t, other, testRunID), signer), signer,
 			"use another run code: the enrolment answer's run key is not valid: it is signed by a server key this side does not pin"},
+		{"a run key signed by a key listed but not in the code", 201, runAnswerBody(testRunID, testRunKey(t, other, testRunID), signer, other), signer,
+			"use another run code: the enrolment answer's run key is not valid: it is signed by a server key this side does not pin"},
 		{"a run key whose signature another key made", 201, runAnswerBody(testRunID, forged, signer), signer,
 			"use another run code: the enrolment answer's run key is not valid: its signature does not verify"},
 		{"a run_id in upper case", 201, runAnswerBody(strings.ToUpper(testRunID), rk, signer), signer,
 			`use another run code: the enrolment answer's run_id "0192F0C1-7D4E-7A2B-8C3D-4E5F6A7B8C9D" is not a UUID in lower case`},
 		{"a run_key of another form", 201, runAnswerBody(testRunID, "qrk_"+payload, signer), signer,
 			"use another run code: the enrolment answer's run_key is not qrk_ and two parts of base64url joined by a dot, at most 2048 characters"},
+		{"a run_key over 2048 characters", 201, runAnswerBody(testRunID, long, signer), signer,
+			"use another run code: the enrolment answer's run_key is not qrk_ and two parts of base64url joined by a dot, at most 2048 characters"},
+		{"no key listed", 201, []byte(`{"version":1,"run_id":"` + testRunID + `","run_key":"` + rk + `","apiary_public_key":[]}`), signer, accesskey.CodeAnswerUnsigned},
+		{"three keys listed", 201, runAnswerBody(testRunID, rk, signer, other, newKey(t)), signer,
+			"use another run code: the enrolment answer's apiary_public_key lists 3 keys; one or two belong"},
 		{"version 2", 201, bytes.Replace(runAnswerBody(testRunID, rk, signer), []byte(`"version":1`), []byte(`"version":2`), 1), signer,
 			"update Forager to read the enrolment answer: its version is 2, and this Forager reads version 1"},
 		{"a member the schema does not define", 201, bytes.Replace(runAnswerBody(testRunID, rk, signer), []byte(`"version":1,`), []byte(`"version":1,"access_key_id":"ak_f1xt0re000000000",`), 1), signer, accesskey.CodeAnswerUnsigned},
@@ -314,7 +371,9 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 
 // TestARunAnswerShowsItsRunIDAlone pins that a RunAnswer, by value and by pointer,
 // prints its run id and never its run key: under every fmt verb, through slog's text
-// and JSON handlers, and inside a struct slog logs.
+// and JSON handlers, through encoding/json, and in an exported field of a struct, in a
+// slice and in a map under the JSON handler. A field that is not exported is the one
+// case fmt prints field by field, which RunAnswer's doc states.
 func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
@@ -347,5 +406,36 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	}
 	if v := ans.LogValue(); v.Kind() != slog.KindGroup || len(v.Group()) != 1 || v.Group()[0].Key != "run_id" || v.Group()[0].Value.String() != testRunID {
 		t.Errorf("LogValue: %v", v)
+	}
+	// encoding/json writes run_id alone, by value, by pointer, in an exported field of
+	// a struct, in a slice and in a map, and so does slog's JSON handler, which encodes
+	// a struct, a slice and a map with encoding/json.
+	type nested struct {
+		Answer  accesskey.RunAnswer
+		Pointer *accesskey.RunAnswer
+	}
+	want := `{"run_id":"` + testRunID + `"}`
+	for _, c := range []struct {
+		v    any
+		want string
+	}{
+		{*ans, want},
+		{ans, want},
+		{nested{*ans, ans}, `{"Answer":` + want + `,"Pointer":` + want + `}`},
+		{[]accesskey.RunAnswer{*ans, *ans}, "[" + want + "," + want + "]"},
+		{map[string]*accesskey.RunAnswer{"a": ans}, `{"a":` + want + `}`},
+	} {
+		got, err := json.Marshal(c.v)
+		if err != nil || string(got) != c.want {
+			t.Errorf("json.Marshal of %T: %s, %v; want %s", c.v, got, err, c.want)
+		}
+		if got := fmt.Sprintf("%+v", c.v); strings.Contains(got, secret) {
+			t.Errorf("%%+v of %T: %s", c.v, got)
+		}
+	}
+	b.Reset()
+	slog.New(slog.NewJSONHandler(&b, nil)).Info("redeemed", "nested", nested{*ans, ans}, "slice", []accesskey.RunAnswer{*ans}, "map", map[string]accesskey.RunAnswer{"a": *ans})
+	if got := b.String(); strings.Contains(got, secret) || strings.Contains(got, runkey.Prefix) || strings.Count(got, `"run_id":"`+testRunID+`"`) != 4 {
+		t.Errorf("slog's JSON handler wrote %s", got)
 	}
 }

@@ -35,8 +35,8 @@ const (
 	// CodePrefixAdapter starts the enrolment code of an adapter's access key.
 	CodePrefixAdapter = "qeci_"
 	// CodePrefixRun starts a run code: the code a provisioner puts in a machine's start
-	// data in place of the run key. It enrols no access key: its 201 is the run's run
-	// key, [EnrolmentRequest.VerifyRunAnswer].
+	// data in place of the run key. It enrols no access key: its 201 contains the
+	// run's run key, [EnrolmentRequest.VerifyRunAnswer].
 	CodePrefixRun = "qecr_"
 )
 

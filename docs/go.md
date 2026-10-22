@@ -465,14 +465,19 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
 
 - `PostRunVia` verifies the answer under the server key that the code's first
   fingerprint selects. It then verifies the run key as the gateway does, under the key
-  among the code's fingerprints that is the run key's `signer`, and checks that the
-  run key's `run_id` is the answer's. `PostRun` sends the request to the server without
-  a gateway, and `VerifyRunAnswer` reads an answer that the caller sent.
-- `accesskey.RunAnswer` formats as `run <run id>` whatever the verb, and `slog` writes
-  it as `run_id` alone. No error contains the run key.
+  whose fingerprint is among the code's and is the run key's `signer`, and checks that
+  the run key's `run_id` is the answer's. `PostRun` sends the request to the server
+  without a gateway, and `VerifyRunAnswer` reads an answer that the caller sent.
+- `accesskey.RunAnswer` formats as `run <run id>` whatever the verb, `slog` writes it
+  as `run_id` alone, and `encoding/json` writes `{"run_id": …}` alone, also inside an
+  exported field, a slice or a map. fmt calls no method of a value reached through a
+  struct field that is not exported, so `%+v` of `struct{ a accesskey.RunAnswer }`
+  prints the run key: keep a `RunAnswer` out of such a field. No error contains the run
+  key.
 - An error of a verified answer starts with the fix, "use another run code: ",
-  because the code is used and a retry by the same key gets the same answer: "use
-  another run code: the enrolment answer's run key is not valid: its signature does not verify", say.
+  because the code is used and a retry by the same key gets the same members: "use
+  another run code: the enrolment answer's run key is not valid: its signature does
+  not verify", say.
   A `401` is an `*accesskey.Refusal` with the code `unauthorized`: the code is used, has
   expired or was cancelled, or another key redeemed it first.
 - `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and `PostRunVia`, `PostRun`

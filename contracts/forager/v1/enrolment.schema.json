@@ -122,13 +122,13 @@
     },
     "run_answer": {
       "title": "Run code answer",
-      "description": "The 201 to a run code, qecr_: the run's id, its run key and the server's public keys. Every member is required. The redemption makes no access key. A run code is valid for 15 minutes and is used once: a redemption by another public key after the first is 401, and a retry by the same public key within the 15 minutes gets the same body, byte for byte, the same run key included. The run key's issued is the time of the code's first redemption, not the time the code was made, and its attach_by is 600 seconds after issued. The answer is signed as the 201 to an access key's code is. The machine verifies it under the listed key whose fingerprint is the code's first, then verifies run_key as the gateway does, under the listed key whose fingerprint is in the code and is the run key's signer, and checks that the run key's run_id is run_id.",
+      "description": "The 201 to a run code, qecr_: the run's id, its run key and the server's public keys. Every member is required. The redemption makes no access key. A run code is valid for 15 minutes and is used once: a redemption by another public key after the first is 401, and a retry by the same public key within the 15 minutes gets the same members, the same run_id, run_key and apiary_public_key, signed over the retry's proof. The run key's issued is the time of the code's first redemption, not the time the code was made, and its attach_by is 600 seconds after issued. The answer is signed as the 201 to an access key's code is. The machine verifies it under the listed key whose fingerprint is the code's first, then verifies run_key as the gateway does, under the listed key whose fingerprint is in the code and is the run key's signer, and checks that the run key's run_id is run_id.",
       "type": "object",
       "additionalProperties": false,
       "required": ["version", "run_id", "run_key", "apiary_public_key"],
       "properties": {
         "version": {
-          "description": "The document format. Forager refuses a version it does not read.",
+          "description": "The document format. For a version it does not read, Forager returns an error.",
           "const": 1
         },
         "run_id": {
@@ -137,7 +137,7 @@
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         },
         "run_key": {
-          "description": "The run's run key, run-key.schema.json: qrk_, the payload in base64url without padding, a dot and the signature. The machine passes it in QORY_RUN_KEY and writes it nowhere else.",
+          "description": "The run's run key, run-key.schema.json: qrk_, the payload in base64url without padding, a dot and the signature. The machine keeps it in memory and passes it to the session as RemoteGateway.RunKey, and writes it to no file and no environment variable.",
           "type": "string",
           "maxLength": 2048,
           "pattern": "^qrk_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
