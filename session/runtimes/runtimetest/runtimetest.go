@@ -14,8 +14,10 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/session/internal/parents"
 	"github.com/qoryai/forager/session/runtimes"
 )
 
@@ -40,8 +42,8 @@ func Conforms(t *testing.T, rt runtimes.Runtime) {
 	if stop.Grace < 0 {
 		t.Errorf("the stop grace %s is negative", stop.Grace)
 	}
-	if typ, _, ok := rt.Map(runtimes.Record{Source: runtimes.SourceHooks, Record: map[string]any{}}); ok {
-		t.Errorf("an empty record became %s; a record that says nothing is no event", typ)
+	if events := rt.Map(runtimes.Record{Source: runtimes.SourceHooks, Record: map[string]any{}}); len(events) > 0 {
+		t.Errorf("an empty record became %s; a record that contains nothing is no event", events[0].Type)
 	}
 	if rt.Headless(nil) {
 		t.Error("no arguments at all are headless; a runtime started with none has whatever interface it has")
@@ -82,7 +84,10 @@ func Conforms(t *testing.T, rt runtimes.Runtime) {
 // Replays checks the runtime's Map against recorded cases: in every directory of fsys
 // under dir, the records of records.jsonl, each {"source", "record"}, produce exactly
 // the events of expected/events.jsonl, each {"type", "data"}, in order; every type is a
-// runtime event's, and its data passes the contract's schema for it.
+// runtime event's, and its data passes the contract's schema for it. The records go
+// through the session's mapper, as in a session, so a subagent's start has the
+// parent_agent_id the session sets; no time passes while they do, and the events the
+// mapper keeps back at the last record are written after it.
 func Replays(t *testing.T, rt runtimes.Runtime, fsys fs.FS, dir string) {
 	t.Helper()
 	cases, err := fs.ReadDir(fsys, dir)
@@ -92,15 +97,17 @@ func Replays(t *testing.T, rt runtimes.Runtime, fsys fs.FS, dir string) {
 	for _, c := range cases {
 		t.Run(c.Name(), func(t *testing.T) {
 			var got []map[string]any
+			mapper := parents.New(rt, func(e runtimes.Event) {
+				got = append(got, roundTrip(t, map[string]any{"type": e.Type, "data": e.Data}))
+			}, stopped{})
 			lines(t, fsys, path.Join(dir, c.Name(), "records.jsonl"), func(b []byte) {
 				var r runtimes.Record
 				if err := json.Unmarshal(b, &r); err != nil {
 					t.Fatal(err)
 				}
-				if typ, data, ok := rt.Map(r); ok {
-					got = append(got, roundTrip(t, map[string]any{"type": typ, "data": data}))
-				}
+				mapper.Handle(r)
 			})
+			mapper.Close()
 			var want []map[string]any
 			lines(t, fsys, path.Join(dir, c.Name(), "expected", "events.jsonl"), func(b []byte) {
 				var e map[string]any
@@ -133,6 +140,12 @@ func Replays(t *testing.T, rt runtimes.Runtime, fsys fs.FS, dir string) {
 		})
 	}
 }
+
+// stopped is a clock in which no time passes: its timers never fire.
+type stopped struct{}
+
+// AfterFunc starts no timer; the stop it returns reports true.
+func (stopped) AfterFunc(time.Duration, func()) func() bool { return func() bool { return true } }
 
 func lines(t *testing.T, fsys fs.FS, name string, into func([]byte)) {
 	t.Helper()

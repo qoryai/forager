@@ -241,8 +241,20 @@
         }
       }
     },
+    "parent": {
+      "description": "Where the runtime reports which tool call started a subagent, for parent_agent_id on dev.qory.runtime.subagent_started. A record from `source` that matches the rule contains a subagent's id and the id of the tool call that started it. The agent that made that call, in the session's dev.qory.runtime.tool_started, is the subagent's parent. Absent, the session sets no parent.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "match", "agent_id", "tool_use_id"],
+      "properties": {
+        "source": {"description": "output or hooks.", "type": "string", "enum": ["output", "hooks"]},
+        "match": {"description": "As in rules.", "$ref": "#/$defs/match"},
+        "agent_id": {"description": "The path of the subagent's id in the record.", "$ref": "#/$defs/path"},
+        "tool_use_id": {"description": "The path of the id of the tool call that started the subagent.", "$ref": "#/$defs/path"}
+      }
+    },
     "rules": {
-      "description": "Evaluated in order against every record of the rule's source; the first rule whose match succeeds produces one event, and a record no rule matches produces nothing.",
+      "description": "Evaluated in order against every record of the rule's source. The first rule that matches a record produces its events: one event for a rule without each; for a rule with each, one event per element that a rule with that each matches. A record that no rule matches produces nothing.",
       "type": "array",
       "minItems": 1,
       "items": {
@@ -262,37 +274,11 @@
               "hooks"
             ]
           },
-          "match": {
-            "description": "Every entry must match: a path into the record equals the value, a string, number or boolean; or, with {present: true}, the path exists. Nothing else: no patterns, no ranges, no expressions.",
-            "type": "object",
-            "minProperties": 1,
-            "propertyNames": {
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
-            },
-            "additionalProperties": {
-              "oneOf": [
-                {
-                  "type": [
-                    "string",
-                    "number",
-                    "boolean"
-                  ]
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "present"
-                  ],
-                  "properties": {
-                    "present": {
-                      "const": true
-                    }
-                  }
-                }
-              ]
-            }
+          "each": {
+            "description": "A dotted path to an array in the record. The rule matches a record when one element of the array matches it. When it is the first rule that matches, each element, in order, produces one event: that of the first rule from this one on with the same source and each that the element matches, so one record's elements may produce events of different rules. An element that no such rule matches produces nothing. A path in match or data that starts with each. reads the element; any other path reads the record.",
+            "$ref": "#/$defs/path"
           },
+          "match": {"$ref": "#/$defs/match"},
           "type": {
             "description": "The runtime event type produced.",
             "type": "string",
@@ -306,13 +292,14 @@
               "dev.qory.runtime.turn_failed",
               "dev.qory.runtime.subagent_started",
               "dev.qory.runtime.subagent_finished",
+              "dev.qory.runtime.message",
               "dev.qory.runtime.notification",
               "dev.qory.runtime.ended",
               "dev.qory.runtime.result"
             ]
           },
           "data": {
-            "description": "The event's data: each key is a field of the type's data, each value a dotted path into the record whose value is copied there unchanged. A path that does not exist leaves the field out.",
+            "description": "The event's data: each key is a field of the type's data, each value a dotted path into the record whose value is copied there unchanged. A path that does not exist leaves the field out. In a rule with each, a path that starts with each. reads the element.",
             "type": "object",
             "minProperties": 1,
             "propertyNames": {
@@ -328,6 +315,38 @@
     }
   },
   "$defs": {
+    "match": {
+      "description": "Every entry must match: a path into the record equals the value, a string, number or boolean; or, with {present: true}, the path exists. Nothing else: no patterns, no ranges, no expressions.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "present"
+            ],
+            "properties": {
+              "present": {
+                "const": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    "path": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
     "place": {
       "description": "Where a value goes, exactly one of: flag, an argument the runtime is started with, which takes the value; setting, a dotted key in the JSON settings file the launch passes; variable, an environment variable.",
       "type": "object",

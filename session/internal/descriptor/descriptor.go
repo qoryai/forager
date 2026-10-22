@@ -11,8 +11,11 @@
 //
 // [Descriptor.Map] is the whole of the mapping engine: the first rule of the record's
 // source whose match holds produces one event, type and data, by copying values out of
-// the record. It matches and copies; it never computes, and there is nothing to
-// configure that would make it.
+// the record. A rule with each produces one event per element of an array in the record
+// that a rule with that each matches, each by the first such rule it matches. It matches
+// and copies; it never computes, and there is nothing to configure that would make it.
+// [Descriptor.Link] reads the descriptor's parent member: which tool call started a
+// subagent, for the session to set the subagent's parent.
 //
 // A descriptor's [Secrets] defines the secrets the runtime reads and the variables it
 // keeps for itself, and its [Model] the API formats the runtime sends, where a composer
@@ -46,7 +49,19 @@ type Descriptor struct {
 	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
 	Secrets        *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
 	Model          *Model    `yaml:"model" json:"model,omitempty"`
+	Parent         *Parent   `yaml:"parent" json:"parent,omitempty"`
 	Rules          []Rule    `yaml:"rules" json:"rules"`
+}
+
+// Parent is where the runtime reports which tool call started a subagent: a record of
+// Source that matches Match contains the subagent's id at the path AgentID and the id
+// of the tool call that started it at the path ToolUseID. Nil when the descriptor has
+// no parent member.
+type Parent struct {
+	Source    string         `yaml:"source" json:"source"`
+	Match     map[string]any `yaml:"match" json:"match"`
+	AgentID   string         `yaml:"agent_id" json:"agent_id"`
+	ToolUseID string         `yaml:"tool_use_id" json:"tool_use_id"`
 }
 
 // Model is the API formats the runtime sends its requests in, and where a composer
@@ -197,12 +212,22 @@ type Hooks struct {
 // Rule maps records of one source to one event type.
 type Rule struct {
 	Source string `yaml:"source" json:"source"`
+	// Each is a dotted path to an array in the record, or empty. With it, the rule
+	// applies to the elements of the array, and a path of Match or Data that starts
+	// with "each." reads the element.
+	Each string `yaml:"each" json:"each,omitempty"`
 	// Match holds paths into the record and the values they must equal, or
 	// map[string]any{"present": true} for a path that must exist.
 	Match map[string]any `yaml:"match" json:"match"`
 	Type  string         `yaml:"type" json:"type"`
 	// Data holds the event's fields and the record paths their values are copied from.
 	Data map[string]string `yaml:"data" json:"data"`
+}
+
+// Event is one event a rule produces: its type and its data.
+type Event struct {
+	Type string
+	Data map[string]any
 }
 
 // Record is one unit of runtime output as a descriptor reads it.
@@ -366,30 +391,84 @@ func (s *Secrets) check() error {
 	return nil
 }
 
-// Map applies the rules to one record: the first rule of the record's source whose
-// match holds produces the event's type and data, and ok is true. A record no rule
-// matches produces nothing.
-func (d *Descriptor) Map(r Record) (typ string, data map[string]any, ok bool) {
+// Map applies the rules to one record: the first rule of the record's source that
+// matches produces the events, and a record no rule matches produces nothing. A rule
+// without each matches when the record matches every entry of its match, and produces
+// one event. A rule with each matches when one element of its array matches it; then
+// each element, in the array's order, produces the event of the first rule from this
+// one on with the same source and each that the element matches, so one record's
+// elements may produce events of different rules, and an element no such rule matches
+// produces none. A rule whose path is no array matches no record.
+func (d *Descriptor) Map(r Record) []Event {
 	for i := range d.Rules {
 		rule := &d.Rules[i]
-		if rule.Source != r.Source || !matches(rule.Match, r.Record) {
+		if rule.Source != r.Source {
 			continue
 		}
-		data = map[string]any{}
-		for field, path := range rule.Data {
-			if v, ok := lookup(r.Record, path); ok {
-				data[field] = v
+		if rule.Each == "" {
+			if matches(rule.Match, r.Record, nil) {
+				return []Event{{Type: rule.Type, Data: copied(rule.Data, r.Record, nil)}}
+			}
+			continue
+		}
+		list, _ := lookup(r.Record, rule.Each)
+		elements, _ := list.([]any)
+		if !slices.ContainsFunc(elements, func(e any) bool { return matches(rule.Match, r.Record, &e) }) {
+			continue
+		}
+		var events []Event
+		for k := range elements {
+			element := &elements[k]
+			for j := i; j < len(d.Rules); j++ {
+				other := &d.Rules[j]
+				if other.Source == r.Source && other.Each == rule.Each && matches(other.Match, r.Record, element) {
+					events = append(events, Event{Type: other.Type, Data: copied(other.Data, r.Record, element)})
+					break
+				}
 			}
 		}
-		return rule.Type, data, true
+		return events
 	}
-	return "", nil, false
+	return nil
 }
 
-// matches reports whether every entry of match holds against the record.
-func matches(match map[string]any, record map[string]any) bool {
+// Link applies the parent member to one record: when the record is of the member's
+// source and matches, it returns the subagent's id and the id of the tool call that
+// started it, both strings that are not empty, and true.
+func (d *Descriptor) Link(r Record) (agentID, toolUseID string, ok bool) {
+	p := d.Parent
+	if p == nil || p.Source != r.Source || !matches(p.Match, r.Record, nil) {
+		return "", "", false
+	}
+	a, _ := lookup(r.Record, p.AgentID)
+	c, _ := lookup(r.Record, p.ToolUseID)
+	agentID, _ = a.(string)
+	toolUseID, _ = c.(string)
+	if agentID == "" || toolUseID == "" {
+		return "", "", false
+	}
+	return agentID, toolUseID, true
+}
+
+// eachPrefix is how a path of a rule with each starts when it reads the element.
+const eachPrefix = "each."
+
+// copied is the data of a rule's event: each field whose path exists, with its value.
+func copied(data map[string]string, record map[string]any, element *any) map[string]any {
+	out := map[string]any{}
+	for field, path := range data {
+		if v, ok := read(record, element, path); ok {
+			out[field] = v
+		}
+	}
+	return out
+}
+
+// matches reports whether the record matches every entry of match, or the element for a
+// path that starts with each. when element is not nil.
+func matches(match map[string]any, record map[string]any, element *any) bool {
 	for path, want := range match {
-		got, ok := lookup(record, path)
+		got, ok := read(record, element, path)
 		if !ok {
 			return false
 		}
@@ -404,6 +483,19 @@ func matches(match map[string]any, record map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// read follows path through the element when element is not nil and path starts with
+// each., and through the record otherwise.
+func read(record map[string]any, element *any, path string) (any, bool) {
+	if rest, ok := strings.CutPrefix(path, eachPrefix); ok && element != nil {
+		m, ok := (*element).(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		return lookup(m, rest)
+	}
+	return lookup(record, path)
 }
 
 // lookup follows a dotted path through nested objects.

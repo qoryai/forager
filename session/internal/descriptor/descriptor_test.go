@@ -36,11 +36,11 @@ func TestMatchIsEqualityOrPresenceOnly(t *testing.T) {
 		}
 		return descriptor.Record{Source: "output", Record: m}
 	}
-	typ, data, ok := d.Map(rec(`{"type":"result","num_turns":1,"ok":true,"meta":{"kind":"x"}}`))
-	if !ok || typ != "dev.qory.runtime.result" || data["n"] != 1.0 || data["k"] != "x" {
-		t.Errorf("Map = %s %v %v", typ, data, ok)
+	events := d.Map(rec(`{"type":"result","num_turns":1,"ok":true,"meta":{"kind":"x"}}`))
+	if len(events) != 1 || events[0].Type != "dev.qory.runtime.result" || events[0].Data["n"] != 1.0 || events[0].Data["k"] != "x" {
+		t.Fatalf("Map = %+v", events)
 	}
-	if _, hasMissing := data["missing"]; hasMissing {
+	if _, hasMissing := events[0].Data["missing"]; hasMissing {
 		t.Error("a missing path produced a field")
 	}
 	for _, js := range []string{
@@ -49,11 +49,11 @@ func TestMatchIsEqualityOrPresenceOnly(t *testing.T) {
 		`{"type":"result","num_turns":1,"ok":true,"meta":{}}`,
 		`{"type":"result","num_turns":"1","ok":true,"meta":{"kind":"x"}}`,
 	} {
-		if _, _, ok := d.Map(rec(js)); ok {
+		if events := d.Map(rec(js)); events != nil {
 			t.Errorf("%s matched", js)
 		}
 	}
-	if _, _, ok := d.Map(descriptor.Record{Source: "hooks", Record: map[string]any{"type": "result"}}); ok {
+	if events := d.Map(descriptor.Record{Source: "hooks", Record: map[string]any{"type": "result"}}); events != nil {
 		t.Error("a rule matched a record of another source")
 	}
 }

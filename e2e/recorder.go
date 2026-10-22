@@ -52,8 +52,9 @@ const (
 // and [RecorderEnv] in a container of its own, which the proxy reaches over the
 // network. It answers HTTPS on 8443, with a certificate of the suite's authority for
 // its own addresses, and HTTP on 8080; on both ports it answers as the Messages API,
-// with a fixed text. It records the method, the host, the path and the headers of each
-// request in [RecorderFile], and prints [RecorderReady] once it listens on both ports.
+// with a fixed text, or with the answers of a [Script] that [ScriptEnv] passes it. It
+// records the method, the host, the path and the headers of each request in
+// [RecorderFile], and prints [RecorderReady] once it listens on both ports.
 type Recorder struct {
 	// Host is the address the proxy reaches it on.
 	Host string
@@ -242,6 +243,12 @@ func serveRecorder() int {
 	if err != nil {
 		return fail(err)
 	}
+	var script Script
+	if v := os.Getenv(envScript); v != "" {
+		if err := json.Unmarshal([]byte(v), &script); err != nil {
+			return fail(fmt.Errorf("%s: %w", envScript, err))
+		}
+	}
 	var mu sync.Mutex
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -249,7 +256,7 @@ func serveRecorder() int {
 		mu.Lock()
 		f.Write(append(b, '\n'))
 		mu.Unlock()
-		answer(w, body)
+		answer(w, body, script)
 	})
 	plain, err := net.Listen("tcp", ":"+recorderPlain)
 	if err != nil {
@@ -266,25 +273,162 @@ func serveRecorder() int {
 	return fail(<-errs)
 }
 
-// recorderAnswer is the text of every answer a recorder makes.
+// recorderAnswer is the text of every answer a recorder makes that no script sets.
 const recorderAnswer = "the recorder answered"
 
-// answer answers a request as the Messages API does, streamed when the request's body
-// sets stream, with [recorderAnswer] as the text and the request's model as the model.
-func answer(w http.ResponseWriter, body []byte) {
-	var req struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream"`
+// envScript is the variable that passes a recorder its [Script], as JSON.
+const envScript = "QORY_WALLTEST_SCRIPT"
+
+// Script is the answers a recorder replays, one list per conversation. A request
+// belongs to the first conversation whose When is in the text of the request's first
+// message, and gets the answer at the index of the number of assistant messages in
+// the request: the first answer to the first request, the second to the request that
+// follows the first answer, and so on. A request of no conversation, past the last
+// answer, or offered no tool of the answer's tool call gets the fixed text.
+type Script struct {
+	Conversations []Conversation `json:"conversations"`
+}
+
+// Conversation is one conversation of a [Script]: the text its first message contains,
+// and its answers in order.
+type Conversation struct {
+	When    string   `json:"when"`
+	Answers []Answer `json:"answers"`
+}
+
+// Answer is one scripted answer, exactly one of its fields set: Text, a text block;
+// Tool, a call of a tool; Agent, a call of Claude Code's Agent tool, which starts a
+// subagent.
+type Answer struct {
+	Text  string     `json:"text,omitempty"`
+	Tool  *ToolCall  `json:"tool,omitempty"`
+	Agent *AgentCall `json:"agent,omitempty"`
+}
+
+// ToolCall is a call of the tool Name with Input.
+type ToolCall struct {
+	Name  string         `json:"name"`
+	Input map[string]any `json:"input"`
+}
+
+// AgentCall is a call of the Agent tool: the subagent's type, a short description and
+// the prompt that drives it.
+type AgentCall struct {
+	Type        string `json:"subagent_type"`
+	Description string `json:"description"`
+	Prompt      string `json:"prompt"`
+}
+
+// ScriptEnv is the NAME=value that passes s to a recorder, beside [RecorderEnv].
+func ScriptEnv(s Script) (string, error) {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return "", err
 	}
+	return envScript + "=" + string(b), nil
+}
+
+// request is what a recorder reads of a Messages API request.
+type request struct {
+	Model    string `json:"model"`
+	Stream   bool   `json:"stream"`
+	Messages []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	} `json:"messages"`
+	Tools []struct {
+		Name string `json:"name"`
+	} `json:"tools"`
+}
+
+// firstText is the text of the request's first message: its content as a string, or
+// the text of its text blocks.
+func (r *request) firstText() string {
+	if len(r.Messages) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(r.Messages[0].Content, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	json.Unmarshal(r.Messages[0].Content, &blocks)
+	var b strings.Builder
+	for _, bl := range blocks {
+		if bl.Type == "text" {
+			b.WriteString(bl.Text)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// offers reports whether the request offers the tool name.
+func (r *request) offers(name string) bool {
+	for _, t := range r.Tools {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// block returns the content block that the script sets for the request, and the stop
+// reason: a tool_use block for a tool or Agent call, a text block otherwise.
+func (s Script) block(r *request) (map[string]any, string) {
+	text := map[string]any{"type": "text", "text": recorderAnswer}
+	first := r.firstText()
+	for c, conv := range s.Conversations {
+		if conv.When == "" || !strings.Contains(first, conv.When) {
+			continue
+		}
+		step := 0
+		for _, m := range r.Messages {
+			if m.Role == "assistant" {
+				step++
+			}
+		}
+		if step >= len(conv.Answers) {
+			return text, "end_turn"
+		}
+		a := conv.Answers[step]
+		call := a.Tool
+		if a.Agent != nil {
+			call = &ToolCall{Name: "Agent", Input: map[string]any{"subagent_type": a.Agent.Type, "description": a.Agent.Description, "prompt": a.Agent.Prompt}}
+		}
+		if call == nil {
+			return map[string]any{"type": "text", "text": a.Text}, "end_turn"
+		}
+		if !r.offers(call.Name) {
+			return text, "end_turn"
+		}
+		input := call.Input
+		if input == nil {
+			input = map[string]any{}
+		}
+		return map[string]any{"type": "tool_use", "id": fmt.Sprintf("toolu_walltest_%d_%d", c, step), "name": call.Name, "input": input}, "tool_use"
+	}
+	return text, "end_turn"
+}
+
+// answer writes the response to a request in the format of the Messages API, streamed
+// when the request's body sets stream, with the script's block for it and the request's
+// model as the model.
+func answer(w http.ResponseWriter, body []byte, script Script) {
+	var req request
 	json.Unmarshal(body, &req)
 	if req.Model == "" {
 		req.Model = "walltest"
 	}
+	block, stop := script.block(&req)
 	usage := map[string]int{"input_tokens": 1, "output_tokens": 1}
 	message := map[string]any{"id": "msg_walltest", "type": "message", "role": "assistant", "model": req.Model, "stop_reason": nil, "stop_sequence": nil, "usage": usage}
 	if !req.Stream {
-		message["content"] = []any{map[string]string{"type": "text", "text": recorderAnswer}}
-		message["stop_reason"] = "end_turn"
+		message["content"] = []any{block}
+		message["stop_reason"] = stop
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(message)
 		return
@@ -292,12 +436,18 @@ func answer(w http.ResponseWriter, body []byte) {
 	message["content"] = []any{}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	start, delta := map[string]any{"type": "text", "text": ""}, map[string]any{"type": "text_delta", "text": block["text"]}
+	if block["type"] == "tool_use" {
+		input, _ := json.Marshal(block["input"])
+		start = map[string]any{"type": "tool_use", "id": block["id"], "name": block["name"], "input": map[string]any{}}
+		delta = map[string]any{"type": "input_json_delta", "partial_json": string(input)}
+	}
 	for _, e := range []map[string]any{
 		{"type": "message_start", "message": message},
-		{"type": "content_block_start", "index": 0, "content_block": map[string]string{"type": "text", "text": ""}},
-		{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": recorderAnswer}},
+		{"type": "content_block_start", "index": 0, "content_block": start},
+		{"type": "content_block_delta", "index": 0, "delta": delta},
 		{"type": "content_block_stop", "index": 0},
-		{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]int{"output_tokens": 1}},
+		{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "stop_sequence": nil}, "usage": map[string]int{"output_tokens": 1}},
 		{"type": "message_stop"},
 	} {
 		b, _ := json.Marshal(e)

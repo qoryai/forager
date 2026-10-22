@@ -1406,8 +1406,9 @@ The runtime's, produced by a descriptor from what the runtime reports:
 | `dev.qory.runtime.tool_failed` | a tool ran and failed | the same, `error`, `interrupted`, `duration_ms` |
 | `dev.qory.runtime.turn_finished` | the runtime finished responding | `session_id`, `message`, `background_tasks` |
 | `dev.qory.runtime.turn_failed` | a turn ended on an API error | `session_id`, `error`, `details`, `message` |
-| `dev.qory.runtime.subagent_started` | a subagent was spawned | `session_id`, `agent_id`, `agent_type` |
+| `dev.qory.runtime.subagent_started` | a subagent was spawned | `session_id`, `agent_id`, `agent_type`, `parent_agent_id` |
 | `dev.qory.runtime.subagent_finished` | a subagent finished | the same, `message`, `background_tasks` |
+| `dev.qory.runtime.message` | a subagent wrote a message, read from the runtime's standard output | `session_id`, `agent_id`, `role`, `text`, `kind` |
 | `dev.qory.runtime.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
 | `dev.qory.runtime.ended` | the runtime closed its session | `session_id`, `reason` |
 | `dev.qory.runtime.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
@@ -1443,6 +1444,30 @@ output, contains neither. The schema of each type, under `events/`, defines whic
 are required and what each contains. Values are copied from the runtime unchanged:
 `input` and `response` have the tool's shape, `error` is display text, and the
 enumerations in `source`, `reason`, `kind`, `outcome` are the runtime's words.
+
+**A subagent's parent.** `dev.qory.runtime.subagent_started` contains `parent_agent_id`
+when another subagent started this one and the runtime reported it. Claude Code 2.1.292
+and later reports it only in its JSON output, so only a session on pipes with
+`--output-format stream-json --verbose` has it. Each message of a subagent there has the
+subagent's `agent_id` and `parent_tool_use_id`, the id of the tool call that started the
+subagent. Claude Code 2.1.273 prints `parent_tool_use_id` there and no `agent_id`, so its
+subagents have no `parent_agent_id`. The session's
+`dev.qory.runtime.tool_started` with that `tool_use_id` has the agent that made the
+call. Once the session has read a JSON object line from the runtime's standard output,
+and until it reads such a message, it keeps the subagent's `subagent_started` and the
+hook events after it back, for at most 5 seconds, and then writes them in their order.
+An interactive session, and a session whose output is text, writes each event as it
+comes. When no such message arrives within 5 seconds, `parent_agent_id` is absent.
+Absent `parent_agent_id` means the main agent started the subagent, or the runtime did
+not report the parent.
+
+**A subagent's messages.** `dev.qory.runtime.message` is one text block or thinking
+block of a subagent, as the runtime printed it on its standard output, with `kind`
+`text` or `thinking`. Claude Code 2.1.292 and later prints them with
+`--output-format stream-json --verbose --forward-subagent-text`. An interactive session
+has none, and the main conversation's messages are not events. The session masks a
+message as it masks every runtime event. The same line is also in the session's
+`dev.qory.run.log`.
 
 **Steps.** A step is one named unit of the run's host work, such as a fetch of a
 repository or a compose of the harness, as a step of a CI job is: it has a start, an
@@ -3714,7 +3739,7 @@ reported in `dev.qory.session.started`; how a launch is prepared so the program 
 to the session and runs with the run's placeholders, which may change the command and
 arguments, add variables and write into the run directory, and nothing else (a script it
 writes there may record an approval where the program reads it, then start the program);
-whether the program's standard output is records to read; what event, if any, one record
+whether the program's standard output is records to read; what events, if any, one record
 is; how the program is stopped, a signal and a grace; whether the arguments it is
 started with mean it runs without an interface, so the session is on pipes whatever the
 caller has; and the secrets it declares, a descriptor's `secrets` (below), which a
@@ -3763,10 +3788,25 @@ so an installed hook observes and never changes what the runtime does.
 the record to values: equality with a string, number or boolean, or `{present: true}`.
 Every entry must match. `data` is a map of the event's fields to dotted paths whose
 values are copied unchanged; a path that does not exist leaves the field out, which is
-how optional fields work. Rules run in order and the first that matches produces one
-event; a record no rule matches produces nothing. No patterns, no expressions, no
-defaults, no concatenation. A mapping that needs more than equality and presence is a
-Forager change.
+how optional fields work. Rules run in order and the first that matches produces the
+events; a record no rule matches produces nothing. A rule without `each` produces one
+event. No patterns, no expressions, no defaults, no concatenation. A mapping that needs
+more than equality and presence is a Forager change. A rule with `each`, a path to an
+array, matches a record when one element matches it; a path that starts with `each.`
+reads the element: `each: message.content`, `each.type: text`, `text: each.text`. When
+it is the first rule that matches, each element, in order, produces one event: that of
+the first rule from this one on with the same `source` and `each` that the element
+matches. One line's elements may so produce events of different rules, such as a
+thinking block's and then a text block's; an element no such rule matches produces
+nothing.
+
+**Parent**, optional: where the runtime reports which tool call started a subagent.
+`source`, `match` as in a rule, and two paths, `agent_id` and `tool_use_id`. A record
+that matches contains a subagent's id and the id of the call that started it. The
+session keeps, for each `dev.qory.runtime.tool_started` it wrote, the agent that made
+the call, and sets the subagent's `parent_agent_id` to that agent when it is a subagent.
+This is the one place where the session uses an earlier record; it still computes no
+value.
 
 **Stop**, optional: `signal`, one of the six above, and `grace`, a duration. It is how a
 runtime that closes its session on one signal and drops it on another defines which.
@@ -4571,7 +4611,11 @@ Public sources this contract was written from, and nothing else:
   the [Agent SDK types](https://code.claude.com/docs/en/agent-sdk/typescript) for the
   JSON lines of `--output-format stream-json`; the [sessions page](https://code.claude.com/docs/en/sessions)
   for the statement that the transcript format is internal, which is why no descriptor
-  reads it.
+  reads it; the headless page's section [Follow subagent
+  messages](https://code.claude.com/docs/en/headless#follow-subagent-messages) for
+  `parent_tool_use_id` and `--forward-subagent-text`, and `SDKAssistantMessage` in the
+  [Agent SDK types](https://code.claude.com/docs/en/agent-sdk/typescript) for
+  `agent_id`.
 - The gateway's link: [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446.html), TLS 1.3,
   the only version a separate gateway speaks, and §7.5 for the exporter the binding
   signs;

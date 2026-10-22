@@ -672,10 +672,13 @@ res, err := session.Resend(ctx, session.ResendSpec{
 [`runtimes.Runtime`](../session/runtimes/runtimes.go). It defines:
 
 - how its launch is prepared,
-- what its records mean,
+- what its records mean: `Map` returns the events of one record in order, each a
+  `runtimes.Event` with its type and data,
 - how it is stopped,
 - the secrets it declares, through the optional `runtimes.Secrets`; a runtime without
-  it declares nothing.
+  it declares nothing,
+- which tool call started a subagent, through the optional `runtimes.Parents`, so the
+  session sets `parent_agent_id`; a runtime without it sets no parent.
 
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:
 
