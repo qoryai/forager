@@ -3966,8 +3966,8 @@ of the `setup` source, which the session writes as the setup steps of a session 
 setup commands inside the wall (§The wall, Setup inside the wall). Its `record` has
 `command`, the command's number from 1, and `event`: `started`; `line`, with `stream`,
 `stdout` or `stderr`, and `bytes`, the line in standard base64, a long line in parts of
-4096 bytes, and `runner: true` on a line the runner writes about its own failure to
-start or wait for the command; or `exited`, with `exit_code`, 0 to 255. The session cuts off a connection
+4096 bytes, and `runner: true` on a line the runner writes when it cannot start or
+wait for the command; or `exited`, with `exit_code`, 0 to 255. The session cuts off a connection
 that stays open longer than 5 seconds, so the runner opens a connection for each batch
 of records. The socket is removed when the run ends.
 

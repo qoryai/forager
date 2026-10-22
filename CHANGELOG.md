@@ -426,8 +426,8 @@ release may change what an existing document does, and says so under Upgrading.
   the session starts them, and the harness sources to `OpenSpec.Report` in one line
   per session, `session <n> starts on this machine: ...`. A run without a run key
   writes the values of the machine, as before.
-- A setup record of the `line` event has `runner: true` when the setup runner writes
-  it about its own failure to start or wait for the command.
+- A setup record of the `line` event has `runner: true` on a line the runner writes
+  when it cannot start or wait for the command.
 - `dev.qory.run.step_started` of kind `setup`: Forager writes one per setup command, in
   a separate container or inside the wall. Before, Forager wrote no `setup` step.
 - `dev.qory.session.started` contains `setup_commands`, the names of the session's

@@ -29,7 +29,7 @@ import (
 // setup record is the record member of a record of the setup source: command, the
 // command's number in SessionSpec.Setup from 1, and event; a line has stream, stdout
 // or stderr, and bytes, the line's bytes in standard base64; an exit has exit_code,
-// from 0 to 255. A line the runner writes about its own failure to run the command,
+// from 0 to 255. A line the runner writes when it cannot start or wait for the command,
 // in place of the command's output, has runner set to true.
 const (
 	setupStarted = "started"
@@ -44,7 +44,8 @@ type setupRecord struct {
 	stream  string
 	bytes   []byte
 	code    int
-	// runner is true for a line the setup runner writes about its own failure.
+	// runner is true on a line the setup runner writes when it cannot start or wait for
+	// the command.
 	runner bool
 }
 
@@ -99,8 +100,9 @@ type setupSteps struct {
 	commands []SetupCommand
 	// terminal writes a setup line, masked, to the user's terminal.
 	terminal func(stream string, b []byte)
-	// neutral writes a line the setup runner writes about its own failure as the
-	// record has it: in a run with a run key with the placeholders of neutralPaths.
+	// neutral writes a line the setup runner writes when it cannot start or wait for
+	// the command as the record has it: in a run with a run key with the
+	// placeholders of neutralPaths.
 	neutral func(string) string
 	// base is the number of the last step before the setup's, the wall step's.
 	base int
@@ -121,7 +123,8 @@ type setupSteps struct {
 
 // newSetupSteps returns the setup steps of session n, whose setup is commands, once the
 // session's last step before them has started; terminal gets each line of the steps,
-// and neutral writes each line the setup runner writes about its own failure.
+// and neutral writes each line the setup runner writes when it cannot start or wait
+// for the command.
 func (r *Run) newSetupSteps(n int, commands []SetupCommand, terminal func(stream string, b []byte), neutral func(string) string) *setupSteps {
 	return &setupSteps{r: r, session: n, commands: commands, terminal: terminal, neutral: neutral, base: r.steps, next: 1, ended: len(commands) == 0}
 }
@@ -309,8 +312,8 @@ func RunSetupCommand(args []string, stderr io.Writer) int {
 const setupOutputGrace = time.Second
 
 // runSetup runs the program and arguments of words with no input, passes TERM on to it,
-// hands line every line of its output and failed the line of its own failure to start
-// or wait for the program, and returns its exit status as a shell reports it.
+// hands line every line of its output and failed the line it writes when it cannot
+// start or wait for the program, and returns its exit status as a shell reports it.
 func runSetup(words []string, line func(stream string, b []byte), failed func(b []byte)) int {
 	var mu sync.Mutex
 	stdout := &setupLines{mu: &mu, stream: "stdout", line: line}
