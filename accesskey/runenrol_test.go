@@ -372,8 +372,8 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 // TestARunAnswerShowsItsRunIDAlone pins that a RunAnswer, by value and by pointer,
 // prints its run id and never its run key: under every fmt verb, through slog's text
 // and JSON handlers, through encoding/json, and in an exported field of a struct, in a
-// slice and in a map under the JSON handler. A field that is not exported is the one
-// case fmt prints field by field, which RunAnswer's doc states.
+// slice and in a map under the JSON handler. It also pins the one open case: in a
+// struct field that is not exported, fmt and slog's text handler print the run key.
 func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
@@ -432,6 +432,24 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 		if got := fmt.Sprintf("%+v", c.v); strings.Contains(got, secret) {
 			t.Errorf("%%+v of %T: %s", c.v, got)
 		}
+	}
+	// The open case, which RunAnswer's doc describes: fmt calls no method of a value it
+	// reaches through a struct field that is not exported, so fmt and slog's text
+	// handler print the run key there, and the JSON handler writes {} for the field. A
+	// change to that behaviour fails here, so the doc is updated with it.
+	type hidden struct{ a any }
+	if got := fmt.Sprintf("%+v", hidden{*ans}); !strings.Contains(got, secret) {
+		t.Errorf("%%+v of a RunAnswer in a field that is not exported: %s; the doc says it contains the run key", got)
+	}
+	b.Reset()
+	slog.New(slog.NewTextHandler(&b, nil)).Info("redeemed", "hidden", hidden{*ans})
+	if got := b.String(); !strings.Contains(got, secret) {
+		t.Errorf("slog's text handler with a RunAnswer in a field that is not exported wrote %s; the doc says it contains the run key", got)
+	}
+	b.Reset()
+	slog.New(slog.NewJSONHandler(&b, nil)).Info("redeemed", "hidden", hidden{*ans})
+	if got := b.String(); strings.Contains(got, secret) || !strings.Contains(got, `"hidden":{}`) {
+		t.Errorf("slog's JSON handler with a RunAnswer in a field that is not exported wrote %s", got)
 	}
 	b.Reset()
 	slog.New(slog.NewJSONHandler(&b, nil)).Info("redeemed", "nested", nested{*ans, ans}, "slice", []accesskey.RunAnswer{*ans}, "map", map[string]accesskey.RunAnswer{"a": *ans})

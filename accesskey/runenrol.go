@@ -17,13 +17,15 @@ import (
 // RunAnswer is the server's 201 to a run code, [CodePrefixRun]: the run's id, its run
 // key and the server's keys. The code's redemption makes no access key.
 //
-// A RunAnswer shows its run id and never its run key: fmt prints it as String returns
-// it, whatever the verb; slog writes run_id alone through LogValue; and encoding/json
-// writes run_id alone through MarshalJSON, also inside an exported field, a slice or a
-// map that a JSON handler writes. One case is open: fmt calls no method of a value it
-// reaches through a struct field that is not exported, so it can print the run key of
-// a RunAnswer, or of a *RunAnswer, in such a field, as %+v of struct{ a RunAnswer }
-// does. Keep a RunAnswer out of unexported fields of a value you print.
+// A RunAnswer shows its run id and not its run key, except in one case: fmt prints it
+// as String returns it, "run <run id>", whatever the verb; a slog handler that calls
+// LogValue writes run_id alone; and encoding/json writes run_id alone through
+// MarshalJSON, also inside an exported field, a slice or a map, as slog's JSON handler
+// writes them. The exception: fmt calls no method of a value it reaches through a
+// struct field that is not exported, so fmt, and slog's text handler, which prints a
+// struct through fmt, can print the run key of a RunAnswer, or of a *RunAnswer, in
+// such a field, as %+v of struct{ a RunAnswer } does. Keep a RunAnswer out of
+// unexported fields of a value you print or log.
 type RunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -48,7 +50,8 @@ func (a RunAnswer) GoString() string { return a.String() }
 // Format writes what String returns, whatever the verb.
 func (a RunAnswer) Format(f fmt.State, _ rune) { io.WriteString(f, a.String()) }
 
-// LogValue returns a group with run_id alone, so slog writes no run key.
+// LogValue returns a group with run_id alone, so a slog handler that calls LogValue
+// writes no run key.
 func (a RunAnswer) LogValue() slog.Value { return slog.GroupValue(slog.String("run_id", a.RunID)) }
 
 // MarshalJSON writes {"run_id": RunID} alone, for a log or a dump that encodes a

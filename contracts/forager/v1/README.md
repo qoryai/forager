@@ -2112,9 +2112,11 @@ and the machine installs nothing of it. The machine keeps the run key in memory 
 passes it to the session as `RemoteGateway.RunKey`, and writes it to no file and no
 environment variable. In Go, `EnrolmentRequest.PostRunVia` of package `accesskey`
 sends the request through the gateway, `PostRun` sends it to the server, and
-`VerifyRunAnswer` reads the answer. Each returns an `accesskey.RunAnswer`, which fmt,
-slog and encoding/json write as its run id alone; fmt can print the run key of a
-`RunAnswer` in a struct field that is not exported, since it calls no method there.
+`VerifyRunAnswer` reads the answer. Each returns an `accesskey.RunAnswer`, which fmt
+writes as `run <run id>`, and slog and encoding/json write as its `run_id` alone,
+except: fmt, and slog's text handler, which prints a struct through fmt, can print the
+run key of a `RunAnswer` in a struct field that is not exported, since fmt calls no
+method there.
 `PostVia`, `Post` and `VerifyAnswer` refuse a run code before they send or read
 anything, and the three run methods refuse an access key's code the same way. The
 known answers are `run_enrolment` in `fixtures/known-answers/through-gateway.json`,

@@ -468,12 +468,14 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   whose fingerprint is among the code's and is the run key's `signer`, and checks that
   the run key's `run_id` is the answer's. `PostRun` sends the request to the server
   without a gateway, and `VerifyRunAnswer` reads an answer that the caller sent.
-- `accesskey.RunAnswer` formats as `run <run id>` whatever the verb, `slog` writes it
-  as `run_id` alone, and `encoding/json` writes `{"run_id": …}` alone, also inside an
-  exported field, a slice or a map. fmt calls no method of a value reached through a
-  struct field that is not exported, so `%+v` of `struct{ a accesskey.RunAnswer }`
-  prints the run key: keep a `RunAnswer` out of such a field. No error contains the run
-  key.
+- `accesskey.RunAnswer` shows its run id and not its run key, except in a struct field
+  that is not exported. It formats as `run <run id>` whatever the verb, a `slog`
+  handler that calls `LogValue` writes `run_id` alone, and `encoding/json` writes
+  `{"run_id": …}` alone, also inside an exported field, a slice or a map. The
+  exception: fmt calls no method of a value reached through a struct field that is not
+  exported, so fmt, and slog's text handler, which prints a struct through fmt, can
+  print the run key there, as `%+v` of `struct{ a accesskey.RunAnswer }` does. Keep a
+  `RunAnswer` out of such a field. No error contains the run key.
 - An error of a verified answer starts with the fix, "use another run code: ",
   because the code is used and a retry by the same key gets the same members: "use
   another run code: the enrolment answer's run key is not valid: its signature does

@@ -26,7 +26,8 @@
 // gateway that relays it to the server, and verifies the answer the same way. A run
 // code, [CodePrefixRun], enrols no key: [EnrolmentRequest.PostRunVia] and
 // [EnrolmentRequest.PostRun] redeem it for a run's run key, verified as package runkey
-// verifies one, and return a [RunAnswer], which formats as its run id alone.
+// verifies one, and return a [RunAnswer], which shows its run id and not its run key,
+// except in a struct field that is not exported ([RunAnswer]).
 //
 // An instance is one running copy of qory with the access key. [NewInstanceID] makes
 // its id, and [InstanceFile] and [ReadInstanceFile] are the two lines qory keeps it in,

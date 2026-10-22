@@ -116,8 +116,10 @@ release may change what an existing document does, and says so under Upgrading.
   `attach_by` 600 seconds after it. `accesskey.EnrolmentRequest.PostRunVia`, `PostRun`
   and `VerifyRunAnswer` return an `accesskey.RunAnswer`, after they verify the answer
   under the server key the code selects and the run key as the gateway does, for the
-  answer's `run_id`. fmt, slog and encoding/json write a `RunAnswer` as its run id
-  alone; fmt can print its run key in a struct field that is not exported.
+  answer's `run_id`. fmt writes a `RunAnswer` as `run <run id>`, and slog and
+  encoding/json write its `run_id` alone, except: fmt, and slog's text handler, which
+  prints a struct through fmt, can print the run key of a `RunAnswer` in a struct
+  field that is not exported.
   `accesskey.CodePrefixRun` is `qecr_`, and `accesskey.CodeKind` returns `run` for it.
   `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and the run methods refuse an
   access key's code, before they send anything. The known answers are `run_enrolment`
