@@ -370,6 +370,11 @@ with the members of `session.Built`:
   reference that contains `qak_` or `qrk_` is a phrase in its place, as in a step's
   `name`. Pass no other credential in it: `Built` writes any other secret as you pass
   it.
+- `EnvironmentImage` as `environment_image`: the environment image the build pushed,
+  or the one it started from, of the form of `Image`. Leave it empty if you do not
+  report it: `Built` then writes no `environment_image`.
+- `Base` as `base`: the base image the build pulled, of the form of `Image`. Leave it
+  empty if you do not report it: `Built` then writes no `base`.
 
 Call `Built` once per run, with no host step open, before the first `Join` or after a
 `Join` returns. Each error starts with the fix, and writes nothing:
@@ -378,6 +383,10 @@ Call `Built` once per run, with no host step open, before the first `Join` or af
 |---|---|
 | an image that contains `qak_` or `qrk_` | `set the built image to a reference without qak_ or qrk_: an image with either prefix may contain an access key secret or a run key` |
 | an image with a tag, in upper case or without a digest | `set the built image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
+| an `EnvironmentImage` that contains `qak_` or `qrk_` | `set the environment image to a reference without qak_ or qrk_: a key may start with either` |
+| an `EnvironmentImage` with a tag, in upper case or without a digest | `set the environment image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
+| a `Base` that contains `qak_` or `qrk_` | `set the base image to a reference without qak_ or qrk_: a key may start with either` |
+| a `Base` with a tag, in upper case or without a digest | `set the base image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
 | a size of 0 | `set the built image's size to its size in bytes, 1 or more, not 0` |
 | a commit that is not a full commit id | `set the commit of the build to a full commit id, 40 or 64 hexadecimal characters in lower case` |
 | an empty `EnvironmentRef` | `set the build's environment reference: dev.qory.run.built requires a non-empty environment_ref` |
@@ -400,6 +409,9 @@ err = run.Built(session.Built{
 	Size:           size,
 	Commit:         commit,
 	EnvironmentRef: "env-example-01",
+	// Both are optional: leave either empty if the build does not report that image.
+	EnvironmentImage: "registry.example/example-org/env@sha256:" + environmentDigest,
+	Base:             "registry.example/example-org/base@sha256:" + baseDigest,
 })
 ```
 

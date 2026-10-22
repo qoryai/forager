@@ -69,7 +69,9 @@
       "image": "example.registry/example-org/env@sha256:3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f",
       "size": 734003200,
       "commit": "9b2e4c1d7a0f3e6b8c5d2a1f4e7b0c3d6a9f2e5b",
-      "environment_ref": "env-example-01"
+      "environment_ref": "env-example-01",
+      "environment_image": "example.registry/example-org/env@sha256:a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "base": "example.registry/example-org/base@sha256:5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c"
     }
   },
   {

@@ -309,8 +309,9 @@ const beyondLinkSchema = "-beyond-schema-"
 // with gateway_lost, or of a refused join with an exit status other than -1, a run.log
 // whose step is 0, a run.step_started with an unknown kind, without its name or numbered
 // 0, a run.built whose image has a tag, whose size is 0, whose commit is in upper case
-// or of 39 characters, whose environment_ref is empty or missing, or with a member it
-// does not define, a
+// or of 39 characters, whose environment_ref is empty or missing, whose environment_image
+// or base has a tag, whose environment_image is empty, or with a member it does not
+// define, a
 // run.step_exited without its state, with a state other than the three, with an
 // exit code below -1 or without its duration, a run.exited with no_session and succeeded,
 // a run.exited without state, with a state other than the three, with a reason that is
