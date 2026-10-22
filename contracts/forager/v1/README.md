@@ -1549,8 +1549,9 @@ its sessions). What each session starts, `runtime`, `command`, `args`, `dir`,
 `setup` when the caller passes them. `machine` is the adapter that made the machine the
 run was opened on, such as `aws-ec2`, or `none` when no adapter made it: 1 to 64 of
 `a-z`, `0-9` and `-`, the first a letter. `setup` is where the run's setup commands
-run: `outside`, in a container apart from the agent's, or `inside`, in the agent's
-container before the runtime starts. A run with no setup commands has no `setup`.
+run, or would run if it had any: `outside`, in a container apart from the agent's, or
+`inside`, in the agent's container before the runtime starts. A run that has nowhere to
+run setup commands has no `setup`.
 Forager checks both values before the run request
 and refuses any other, and the gateway passes both as the session sent them. Neither
 member selects or changes a policy.

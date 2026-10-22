@@ -695,8 +695,8 @@ A program that needs custom code implements the interface.
 `ImagesAllow`, `RunsDir`, `ForagerVersion`, `RunID`, `Labels`, `About`, `Machine`,
 `Setup` and `Report`. `Machine` is the adapter that made the run's machine, such as
 `aws-ec2`, or `none` when no adapter made it. `Setup` is where the run's setup commands
-run: `outside`, in a container apart from the agent's, or `inside`, in the agent's
-container before the runtime starts.
+run, or would run if it had any: `outside`, in a container apart from the agent's, or
+`inside`, in the agent's container before the runtime starts.
 `dev.qory.run.started` contains them as `machine` and `setup`, and an empty one is left
 out. `session.Open` refuses any other value before it contacts the gateway, and the
 error starts with the fix: `set OpenSpec.Setup to outside or inside, or leave it

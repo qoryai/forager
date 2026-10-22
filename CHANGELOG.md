@@ -114,9 +114,10 @@ release may change what an existing document does, and says so under Upgrading.
 - `machine` and `setup` in `dev.qory.run.started`, both optional, so a reader shows
   where the run and its setup ran. `machine` is the adapter that made the run's
   machine, such as `aws-ec2`, or `none`: 1 to 64 of `a-z`, `0-9` and `-`, the first a
-  letter. `setup` is `outside`, for setup commands in a container apart from the
-  agent's, or `inside`, for setup commands in the agent's container before the runtime
-  starts, and is absent for a run with no setup commands. `session.OpenSpec.Machine` and `session.OpenSpec.Setup` set them, and
+  letter. `setup` is where the run's setup commands run, or would run if it had any:
+  `outside`, in a container apart from the agent's, or `inside`, in the agent's
+  container before the runtime starts. A run that has nowhere to run setup commands
+  has no `setup`. `session.OpenSpec.Machine` and `session.OpenSpec.Setup` set them, and
   empty leaves them out. `session.Open` refuses any other value before it contacts the
   gateway, with an error that starts with the fix. `event.MachineNone`,
   `event.SetupOutside` and `event.SetupInside` are the values in Go.
