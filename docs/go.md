@@ -238,10 +238,10 @@ failed and its lines:
 
 - `(*session.Run).StartStep(kind, name)` writes `dev.qory.run.step_started` with the
   run's next step number, shared with each join's steps, and returns a `*session.Step`.
-  `kind` is `event.StepFetch` or `event.StepCompose`. The run's masker replaces each
-  forwarder's password in `name`, and a `name` that contains `qak_` or `qrk_` is a
-  phrase in its place. Pass a `name` with no URL userinfo, token or other credential:
-  `StartStep` writes any other secret in `name` as given.
+  `kind` is `event.StepFetch`, `event.StepCompose` or `event.StepBuild`. The run's
+  masker replaces each forwarder's password in `name`, and a `name` that contains
+  `qak_` or `qrk_` is a phrase in its place. Pass a `name` with no URL userinfo, token
+  or other credential: `StartStep` writes any other secret in `name` as given.
 - `(*session.Step).Log(b)` writes the step's lines, such as what the fetch or the
   compose prints: each line is a `dev.qory.run.log` with `stream` `stderr`, the step's
   number as `step` and no `session`, cut at 4096 bytes as a session's lines on pipes
@@ -261,7 +261,7 @@ the fix, and writes nothing:
 
 | Call | When | Error |
 |---|---|---|
-| `StartStep` | a kind other than fetch and compose | `start a host step of kind fetch or compose, not "setup": Join writes the join, image and wall steps` |
+| `StartStep` | a kind other than fetch, compose and build | `start a host step of kind fetch, compose or build, not "setup": Join writes the join, image and wall steps` |
 | `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
 | `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
 | `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |
@@ -281,6 +281,49 @@ if err := fetch.Run(); err != nil {
 if err := step.Exit(state, code); err != nil {
 	return err
 }
+```
+
+After a build of an image, write the build as a step of kind `event.StepBuild`, then
+write its result with `(*session.Run).Built(b)`. `Built` writes `dev.qory.run.built`
+with the members of `session.Built`:
+
+- `Image` as `image`: the image by its digest, `NAME@sha256:` and 64 lower-case
+  hexadecimal digits, with no tag.
+- `Size` as `size`: the image's size in bytes, 1 or more.
+- `Commit` as `commit`: the full commit id the image was built from, 40 or 64
+  hexadecimal characters in lower case.
+- `EnvironmentRef` as `environment_ref`: your reference to the environment the image
+  is for, not empty. Forager writes it as given, so pass no credential in it.
+
+Call `Built` once per run, with no host step open, before the first `Join`, after a
+`Join` returns, or after the last. Each error starts with the fix, and writes nothing:
+
+| When | Error |
+|---|---|
+| an image with a tag, in upper case or without a digest | `set the built image to NAME@sha256: and 64 lower-case hexadecimal digits, in lower case, with no tag` |
+| a size of 0 | `set the built image's size to its bytes, 1 or more, not 0` |
+| a commit that is not a full commit id | `set the commit of the build to a full commit id, 40 or 64 hexadecimal characters in lower case` |
+| an empty `EnvironmentRef` | `set the build's environment reference: dev.qory.run.built requires a non-empty environment_ref` |
+| while a `Join` runs | `write the build's result after Join returns: a session of the run is still running` |
+| while step 1 is open | `exit step 1 before the build's result: Built writes nothing while a host step is open` |
+| after `Close` | `open a new run for the build's result: the run is closed` |
+| a second call | `write the build's result once per run: the run has its dev.qory.run.built already` |
+
+```go
+step, err := run.StartStep(event.StepBuild, "build the environment image")
+if err != nil {
+	return err
+}
+// Build the image, write the build's lines with step.Log, then exit the step.
+if err := step.Exit(event.StateSucceeded, 0); err != nil {
+	return err
+}
+err = run.Built(session.Built{
+	Image:          "registry.example/example-org/env@sha256:" + digest,
+	Size:           size,
+	Commit:         commit,
+	EnvironmentRef: "env-example-01",
+})
 ```
 
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,

@@ -160,8 +160,8 @@ func TestCloseEndsAnOpenHostStep(t *testing.T) {
 }
 
 // TestAStepsErrorsStartWithTheFix pins what a host step refuses, each with an error
-// that starts with the fix and with nothing written: a kind other than fetch and
-// compose, an empty name, a state outside the three, an exit code below -1, a second
+// that starts with the fix and with nothing written: a kind other than fetch, compose
+// and build, an empty name, a state outside the three, an exit code below -1, a second
 // host step while one is open, a join while one is open, a line or an exit after the
 // step exited, and a step while a session runs.
 func TestAStepsErrorsStartWithTheFix(t *testing.T) {
@@ -178,9 +178,9 @@ func TestAStepsErrorsStartWithTheFix(t *testing.T) {
 		}
 	}
 	_, err = r.StartStep(event.StepSetup, "make setup")
-	refused("a setup step", err, "start a host step of kind fetch or compose, not \"setup\"")
+	refused("a setup step", err, "start a host step of kind fetch, compose or build, not \"setup\"")
 	_, err = r.StartStep(event.StepJoin, "join")
-	refused("a join step", err, "start a host step of kind fetch or compose")
+	refused("a join step", err, "start a host step of kind fetch, compose or build")
 	_, err = r.StartStep(event.StepFetch, "")
 	refused("an empty name", err, "give the step a name")
 	s, err := r.StartStep(event.StepFetch, "fetch github.com/example-org/app")

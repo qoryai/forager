@@ -43,11 +43,15 @@ const (
 	// or a compose: its start, and its end with an outcome.
 	StepStarted = "dev.qory.run.step_started"
 	StepExited  = "dev.qory.run.step_exited"
+	// RunBuilt is the result of a build of an image that the run's caller writes:
+	// the image by its digest, its size, the commit it was built from and the
+	// environment it is for.
+	RunBuilt = "dev.qory.run.built"
 )
 
 // The kinds of a step, the kind of dev.qory.run.step_started: a fetch of a source, a
-// compose of the harness, a fetch or a build of an image, a setup command, the join of
-// a session, and the start of a wall.
+// compose of the harness, a fetch of the run's image, a setup command, the join of a
+// session, the start of a wall, and a build of an image.
 const (
 	StepFetch   = "fetch"
 	StepCompose = "compose"
@@ -55,6 +59,7 @@ const (
 	StepSetup   = "setup"
 	StepJoin    = "join"
 	StepWall    = "wall"
+	StepBuild   = "build"
 )
 
 // OpenedByRun is the opened_by of dev.qory.run.started that the contract accepts:

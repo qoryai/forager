@@ -88,6 +88,8 @@ type Run struct {
 	// imageStep is the number of the step that fetched the run's image by reference, 0
 	// until one did.
 	imageStep int
+	// built is true once [Run.Built] wrote the run's dev.qory.run.built.
+	built bool
 	// enclosure is the run's wall, built as the run opens, nil for a run without one;
 	// wallFwd is the run's forwarder behind it, where the wall's relay sends every
 	// connection, and relayToken what the relay opens each of them with.

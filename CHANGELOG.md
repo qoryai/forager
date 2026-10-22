@@ -140,16 +140,18 @@ release may change what an existing document does, and says so under Upgrading.
   run's host work, such as a fetch or a compose, with a start, an end, an outcome and
   its log lines, so a reader shows each step and the step that failed.
   `dev.qory.run.step_started` has `step`, the step's number from 1, `name` and `kind`:
-  `fetch`, `compose`, `image`, `setup`, `join` or `wall`. `dev.qory.run.step_exited`
-  has `step`, `state` (`succeeded`, `failed` or `cancelled`), `exit_code`, -1 when no
-  process exit status exists, and `duration_ms`. Steps come after
+  `fetch`, `compose`, `image`, `setup`, `join`, `wall` or `build`.
+  `dev.qory.run.step_exited` has `step`, `state` (`succeeded`, `failed` or
+  `cancelled`), `exit_code`, -1 when no process exit status exists, and
+  `duration_ms`. Steps come after
   `dev.qory.run.started`, one at a time, and each ends before `dev.qory.run.exited`.
   A run the gateway ends during a step has no `dev.qory.run.step_exited` for it in the
   run's stream. `setup` is the kind of a setup command.
   A step's `name` has `qory-proxy-password` in place of a forwarder's password, and a
   phrase in place of a name that contains `qak_` or `qrk_`. `event.StepStarted`,
-  `event.StepExited` and the six kinds, `event.StepFetch` to `event.StepWall`, are the
-  names in Go.
+  `event.StepExited` and the seven kinds, `event.StepFetch` to `event.StepBuild`, are
+  the names in Go. `image` is a fetch of the run's image, and `build` a build of an
+  image.
 - `step` in `dev.qory.run.log`: the number of the step whose line the chunk is,
   between that step's `dev.qory.run.step_started` and `dev.qory.run.step_exited`. The
   member is optional, and a line outside every step has none. A session's chunk has
@@ -173,6 +175,17 @@ release may change what an existing document does, and says so under Upgrading.
   it, a `join` step outside every session, no session to start during a `join` step,
   an `image` or `wall` step inside a session, and a session's `dev.qory.run.log` with
   `step` in an `image` or `wall` step only.
+- `dev.qory.run.built`, `events/run.built.schema.json`: the result of a build of an
+  image of an environment, which the run's caller writes with `(*session.Run).Built`,
+  at most once per run. Each member is required: `image`, the image by its
+  digest, `NAME@sha256:` and 64 lower-case hexadecimal digits, with no tag; `size`,
+  its bytes, 1 or more; `commit`, the full commit id the image was built from, 40 or
+  64 lower-case hexadecimal characters; and `environment_ref`, the caller's reference
+  to the environment, 1 character or more, which Forager writes as given.
+  `event.RunBuilt` is the name in Go. `fixtures/link/link-batch-built.json` is a batch
+  with a `build` step and the event, and six invalid fixtures have an image with a
+  tag, a size of 0, a commit in upper case or of 39 characters, and an empty or a
+  missing `environment_ref`.
 - `session` in `dev.qory.run.log`, `dev.qory.run.resized` and every
   `dev.qory.runtime.*` event of a session: the session's number, from 1, so a reader
   shows each session's terminal and events apart. The member is optional, and an event
@@ -1029,8 +1042,8 @@ release may change what an existing document does, and says so under Upgrading.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
-- `(*session.Run).StartStep(kind, name)` starts a step of the run's host work, `fetch`
-  or `compose`, and returns a `*session.Step`: `Log` writes its lines as
+- `(*session.Run).StartStep(kind, name)` starts a step of the run's host work, `fetch`,
+  `compose` or `build`, and returns a `*session.Step`: `Log` writes its lines as
   `dev.qory.run.log` with `stream: stderr`, its `step` and no `session`, after the run's
   masker, to the record and `output.log`, and `Exit(state, exitCode)` writes its
   `dev.qory.run.step_exited` with the `duration_ms` Forager measures. `Close` ends a
@@ -1038,6 +1051,11 @@ release may change what an existing document does, and says so under Upgrading.
   the fix, and writes nothing, while a `Join` runs, after `Close`, while another host
   step is open, for a state outside the three and after the step exited; `Join`
   returns one while a host step is open.
+- `(*session.Run).Built(session.Built)` writes the run's `dev.qory.run.built`, with
+  `Image`, `Size`, `Commit` and `EnvironmentRef` as its members, once per run. It
+  returns an error that starts with the fix, and writes nothing, for a member that is
+  not of its form, while a `Join` runs, while a host step is open, after `Close` and on
+  a second call.
 - `(*session.Run).HostProxy` starts a forwarder on loopback with a password for
   programs on the host, such as a fetch or a compose before a session joins, for every
   run, walled or not. `session.HostProxy` has `ProxyURL`,
