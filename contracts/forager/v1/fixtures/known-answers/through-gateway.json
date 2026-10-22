@@ -107,7 +107,7 @@
     }
   ],
   "run_enrolment": {
-    "note": "The redemption of a run code: the request of enrolment-run-request.json, its proof under the fixture access key secret over the five lines qory-enrol-ed25519-v1, the code, the public key, the name and the timestamp; then the 201 of enrolment-run-answer.json, the run's id and the run key of run-key-payload.json, signed under the fixture signing key with the domain line qory-enrol-answer-ed25519-v1 and the request's proof as line 3.",
+    "note": "The redemption of a run code: the request of enrolment-run-request.json, its proof under the fixture access key secret over the five lines qory-enrol-ed25519-v1, the code, the public key, the name and the timestamp; then the 201 of enrolment-run-answer.json, the run's id, the run key of run-key-payload.json, the step explore and the run's documents, signed under the fixture signing key with the domain line qory-enrol-answer-ed25519-v1 and the request's proof as line 3.",
     "request": "fixtures/known-answers/enrolment-run-request.json",
     "proof_lines": [
       "qory-enrol-ed25519-v1",
@@ -119,17 +119,17 @@
     "proof_length": 138,
     "proof": "Vk6wlEpWPUu3qfmdJ2XAa5_3BxOedkHtfyz_IWtNpjTsNCzQ9iAXxV5ydPGqTqWCSb3boiJg3JPZ9m849gzAAQ",
     "answer": "fixtures/known-answers/enrolment-run-answer.json",
-    "body_length": 859,
+    "body_length": 1679,
     "lines": [
       "qory-enrol-answer-ed25519-v1",
       "201",
       "Vk6wlEpWPUu3qfmdJ2XAa5_3BxOedkHtfyz_IWtNpjTsNCzQ9iAXxV5ydPGqTqWCSb3boiJg3JPZ9m849gzAAQ",
-      "0e4bc2729eea3af3971908136d78455abafdf5d7a991e8161652aaf048ec1e49",
+      "c90f4073c017d9a0da964c2b8d3cdf3559683fcc7a0f7b7b4a4a7ba31e804d5b",
       "",
       ""
     ],
     "length": 186,
-    "signature": "YnJwN3VR0ld6waIbbhFfvzIaGmEpIK_VSMKIu0WgVx8qGieBY5sLO3aQIIv_jMRmvJF28oQW0SyBVSxvaOmPCg"
+    "signature": "lzeRGYnVVISCag8UUuOgyc38T-E9Ses0BdXj7WlcW0lm1QTASwCsAUCTQJAKGiUQx2ayxGjfzlD_BDUUqmQ1Bg"
   },
   "binding": {
     "note": "The binding of a connection to the gateway, for the fixed exporter value ekm, the 32 bytes counting up from 129, in place of the one a connection derives with the label: the gateway signs the three lines under the fixture gateway key, and answers QORY-BIND with bound_line, QORY-BOUND, a space, the fingerprint, a space, the signature in base64url without padding, and a newline.",

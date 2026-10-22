@@ -3,6 +3,7 @@ package accesskey
 import (
 	"context"
 	"encoding/json"
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -10,22 +11,30 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
+	"strings"
+	"sync"
 
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/internal/runkeywire"
+	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 )
 
 // RunAnswer is the server's 201 to a run code, [CodePrefixRun]: the run's id, its run
-// key and the server's keys. The code's redemption makes no access key.
+// key, the server's keys, the step and the run's documents. The code's redemption makes
+// no access key.
 //
-// A RunAnswer shows its run id and not its run key, except in one case: fmt prints it
-// as String returns it, "run <run id>", whatever the verb; a slog handler that calls
-// LogValue writes run_id alone; and encoding/json writes run_id alone through
-// MarshalJSON, also inside an exported field, a slice or a map, as slog's JSON handler
-// writes them. The exception: fmt calls no method of a value it reaches through a
-// struct field that is not exported, so fmt, and slog's text handler, which prints a
-// struct through fmt, can print the run key of a RunAnswer, or of a *RunAnswer, in
-// such a field, as %+v of struct{ a RunAnswer } does. Keep a RunAnswer out of
-// unexported fields of a value you print or log.
+// A RunAnswer shows its run id and not its run key or its documents, except in one
+// case: fmt prints it as String returns it, "run <run id>", whatever the verb; a slog
+// handler that calls LogValue writes run_id alone; and encoding/json writes run_id
+// alone through MarshalJSON, also inside an exported field, a slice or a map, as slog's
+// JSON handler writes them. The exception: fmt calls no method of a value it reaches
+// through a struct field that is not exported, so fmt, and slog's text handler, which
+// prints a struct through fmt, can print the run key of a RunAnswer, or of a
+// *RunAnswer, in such a field, and its documents as their bytes in decimal, as %+v of
+// struct{ a RunAnswer } does. Keep a RunAnswer out of unexported fields of a value you
+// print or log.
 type RunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -35,10 +44,31 @@ type RunAnswer struct {
 	RunKey string `json:"run_key"`
 	// ApiaryPublicKey are the server's keys as it lists them, current then next.
 	ApiaryPublicKey Pin `json:"apiary_public_key"`
+	// Step is the step the run is for, such as explore or prebuild.
+	Step string `json:"step"`
+	// Domain, Access, Target, WorkItem, RunSettings, Inputs, Stack and Workflow are
+	// the run's documents: each member's JSON as the answer contains it, checked
+	// against $defs/run_answer of enrolment.schema.json and decoded no further. A
+	// member the answer leaves out is nil. Domain and Inputs are in every verified
+	// answer.
+	Domain      json.RawMessage `json:"domain"`
+	Access      json.RawMessage `json:"access"`
+	Target      json.RawMessage `json:"target"`
+	WorkItem    json.RawMessage `json:"work_item"`
+	RunSettings json.RawMessage `json:"run_settings"`
+	Inputs      json.RawMessage `json:"inputs"`
+	Stack       json.RawMessage `json:"stack"`
+	Workflow    json.RawMessage `json:"workflow"`
 	// Pin are the keys of ApiaryPublicKey whose fingerprints are in the code: the
 	// keys the run key's signature verified under.
 	Pin Pin `json:"-"`
 }
+
+// MaxRunAnswer is the most of the body of an answer to a run code the client reads
+// before it counts the answer as unsigned: a 201 to a run code is at most 1 MiB, the
+// most the gateway's relay passes back. A refusal is at most [MaxAnswer] for either
+// kind of code.
+const MaxRunAnswer = 1 << 20
 
 // String returns "run" and the run's id. It and Format have value receivers, so a
 // RunAnswer printed by value shows the same and no more.
@@ -55,8 +85,8 @@ func (a RunAnswer) Format(f fmt.State, _ rune) { io.WriteString(f, a.String()) }
 func (a RunAnswer) LogValue() slog.Value { return slog.GroupValue(slog.String("run_id", a.RunID)) }
 
 // MarshalJSON writes {"run_id": RunID} alone, for a log or a dump that encodes a
-// RunAnswer as JSON: no run key, version or keys. A RunAnswer is read from the wire,
-// never written to it, so no writer needs the other members.
+// RunAnswer as JSON: no run key, version, keys, step or documents. A RunAnswer is read
+// from the wire, never written to it, so no writer needs the other members.
 func (a RunAnswer) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		RunID string `json:"run_id"`
@@ -78,13 +108,15 @@ const fixRunCode = "use another run code: "
 // [EnrolmentRequest.VerifyAnswer] reads an access key's: the same statuses, the same
 // refusals and the same signature, under EnrolAnswerDomain with the request's proof as
 // the third line and under the listed key whose fingerprint is the code's first.
-// A verified 201 is the run's answer: the run's id, its run key and the server's keys.
-// Its Pin is then the entries whose fingerprints are in the code, and the run key must
-// verify under the key of Pin whose fingerprint is the signer of the run key's payload,
-// as the gateway verifies it, with run_id equal to the answer's run_id. A
-// verified 201 that enrols an access key is a [*KindError]. A request whose code is not
-// a run code is an error, and nothing is read: [EnrolmentRequest.VerifyAnswer] reads
-// its answer. No error contains the run key.
+// A verified 201 is the run's answer: the run's id, its run key, the server's keys, the
+// step and the run's documents, read against $defs/run_answer of enrolment.schema.json;
+// a body over [MaxRunAnswer] is answer_unsigned. Its Pin is then the entries whose
+// fingerprints are in the code, and the run key must verify under the key of Pin whose
+// fingerprint is the signer of the run key's payload, as the gateway verifies it, with
+// run_id equal to the answer's run_id. A verified 201 that enrols an access key is a
+// [*KindError]. A request whose code is not a run code is an error, and nothing is
+// read: [EnrolmentRequest.VerifyAnswer] reads its answer. No error contains the run key
+// or a value of a document.
 func (r *EnrolmentRequest) VerifyRunAnswer(a Answer, signature string) (*RunAnswer, error) {
 	if err := r.forRun(); err != nil {
 		return nil, err
@@ -92,6 +124,9 @@ func (r *EnrolmentRequest) VerifyRunAnswer(a Answer, signature string) (*RunAnsw
 	verified, unsigned, err := r.created(&a, signature)
 	if err != nil {
 		return nil, err
+	}
+	if len(a.Body) > MaxRunAnswer {
+		return nil, unsigned
 	}
 	var ans RunAnswer
 	if err := jsonv2.Unmarshal(a.Body, &ans, jsonv2.RejectUnknownMembers(true)); err != nil || !verified(ans.ApiaryPublicKey) {
@@ -102,6 +137,9 @@ func (r *EnrolmentRequest) VerifyRunAnswer(a Answer, signature string) (*RunAnsw
 		return nil, unsigned
 	}
 	if err := ans.check(); err != nil {
+		return nil, err
+	}
+	if err := checkRunAnswerSchema(a.Body); err != nil {
 		return nil, err
 	}
 	if ans.Pin, err = r.pinOf(ans.ApiaryPublicKey); err != nil {
@@ -140,6 +178,68 @@ func (a *RunAnswer) check() error {
 	return nil
 }
 
+// runAnswerSchema is $defs/run_answer of enrolment.schema.json, compiled once.
+var runAnswerSchema = sync.OnceValues(func() (*jsonschema.Schema, error) {
+	return contracts.Compile("enrolment.schema.json#/$defs/run_answer")
+})
+
+// checkRunAnswerSchema reads a run answer's body against $defs/run_answer of
+// enrolment.schema.json. An error starts with the fix and states where in the answer
+// each failure is, the rule and the names of missing members, never a value.
+func checkRunAnswerSchema(body []byte) error {
+	s, err := runAnswerSchema()
+	if err != nil {
+		return fmt.Errorf("rebuild Forager: enrolment.schema.json does not compile: %w", err)
+	}
+	doc, err := contracts.Decode("run-answer.json", body)
+	if err != nil {
+		return errors.New(fixRunCode + "the enrolment answer is not JSON")
+	}
+	if err := s.Validate(doc); err != nil {
+		var ve *jsonschema.ValidationError
+		if !errors.As(err, &ve) {
+			return errors.New(fixRunCode + "the enrolment answer does not match $defs/run_answer of enrolment.schema.json")
+		}
+		return fmt.Errorf(fixRunCode+"the enrolment answer does not match $defs/run_answer of enrolment.schema.json at %s", strings.Join(schemaLeaves(ve), ", "))
+	}
+	return nil
+}
+
+// schemaLeaves returns, for each failure at the leaves of ve, its JSON pointer in the
+// document and the keyword that failed, with the missing members' names for required
+// and dependentRequired, sorted and each once.
+func schemaLeaves(ve *jsonschema.ValidationError) []string {
+	if len(ve.Causes) == 0 {
+		var ptr jsontext.Pointer
+		for _, t := range ve.InstanceLocation {
+			ptr = ptr.AppendToken(t)
+		}
+		where := string(ptr)
+		if where == "" {
+			where = "/"
+		}
+		if ve.ErrorKind == nil {
+			return []string{where}
+		}
+		kw := strings.Join(ve.ErrorKind.KeywordPath(), "/")
+		switch k := ve.ErrorKind.(type) {
+		case *kind.Required:
+			kw += ": " + strings.Join(k.Missing, ", ")
+		case *kind.DependentRequired:
+			kw = "dependentRequired: " + strings.Join(k.Missing, ", ") + " with " + k.Prop
+		case *kind.Not:
+			kw = "not"
+		}
+		return []string{where + " (" + kw + ")"}
+	}
+	var out []string
+	for _, c := range ve.Causes {
+		out = append(out, schemaLeaves(c)...)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 // checkRunKey verifies a run key as package runkey's Verify does, under the key of pin
 // whose fingerprint is the payload's signer, reads its payload against
 // run-key.schema.json, and returns its run_id. Package runkey imports this package, so
@@ -168,13 +268,14 @@ func checkRunKey(runKey string, pin Pin) (string, error) {
 
 // PostRun sends a request with a run code to the server's enrolment endpoint and
 // returns its verified answer, as [EnrolmentRequest.VerifyRunAnswer] reads it, with
-// serverURL, hc and userAgent as [EnrolmentRequest.Post] takes them. A request whose
-// code is not a run code is an error, and nothing is sent.
+// serverURL, hc and userAgent as [EnrolmentRequest.Post] takes them. It reads at most
+// [MaxRunAnswer] of the answer's body. A request whose code is not a run code is an
+// error, and nothing is sent.
 func (r *EnrolmentRequest) PostRun(ctx context.Context, hc *http.Client, serverURL, userAgent string) (*RunAnswer, error) {
 	if err := r.forRun(); err != nil {
 		return nil, err
 	}
-	a, sig, err := r.direct(ctx, hc, serverURL, userAgent)
+	a, sig, err := r.direct(ctx, hc, serverURL, userAgent, MaxRunAnswer)
 	if err != nil {
 		return nil, err
 	}
@@ -184,13 +285,13 @@ func (r *EnrolmentRequest) PostRun(ctx context.Context, hc *http.Client, serverU
 // PostRunVia sends a request with a run code to the server's enrolment endpoint
 // through the gateway at viaURL, as [EnrolmentRequest.PostVia] sends an access key's,
 // and returns its verified answer, as [EnrolmentRequest.VerifyRunAnswer] reads it. hc
-// is required, as for PostVia. A request whose code is not a run code is an error, and
-// nothing is sent.
+// is required, as for PostVia. It reads at most [MaxRunAnswer] of the answer's body. A
+// request whose code is not a run code is an error, and nothing is sent.
 func (r *EnrolmentRequest) PostRunVia(ctx context.Context, hc *http.Client, serverURL, viaURL, userAgent string) (*RunAnswer, error) {
 	if err := r.forRun(); err != nil {
 		return nil, err
 	}
-	a, sig, err := r.via(ctx, hc, serverURL, viaURL, userAgent)
+	a, sig, err := r.via(ctx, hc, serverURL, viaURL, userAgent, MaxRunAnswer)
 	if err != nil {
 		return nil, err
 	}

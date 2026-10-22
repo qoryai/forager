@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+  "run_key": "qrk_eyJ2ZXJzaW9uIjoxLCJzaWduZXIiOiJ1b0VTLWt1ajF2azBzcTBxb0dsbUFnIiwicnVuX2lkIjoiMDE5MmYwYzEtN2Q0ZS03YTJiLThjM2QtNGU1ZjZhN2I4YzlkIiwid29ya3NwYWNlIjoid3NfZjF4dDByZTAwMDAwMDAwMCIsIm5vZGVfaWQiOiJucF9mMXh0MHJlMDAwMDAwMDAwIiwiZ2F0ZXdheSI6Im5nX2YxeHQwcmUwMDAwMDAwMDAiLCJnYXRld2F5X3VybCI6Imh0dHBzOi8vZ2F0ZXdheS5leGFtcGxlOjg0NDMiLCJnYXRld2F5X3B1YmxpY19rZXkiOlt7ImFsZyI6ImVkMjU1MTkiLCJwdWJsaWNfa2V5IjoiaUMwT283S0dUbnBZZno1cGpPcEVXWm1ERXVaVjRGLWw2TFVSbll1cXlNMCJ9XSwiaW5zdGFuY2VfaWQiOiJpX2dZS0RoSVdHaDRpSmlvdU1qWTZQa0EiLCJpc3N1ZWQiOiIyMDI2LTEwLTExVDEyOjAwOjAwWiIsImF0dGFjaF9ieSI6IjIwMjYtMTAtMTFUMTI6MTA6MDBaIn0.yUWE4vdQuSfML2OcqdMfci8yz-SsJLox2axjdUcV2kApoefXtYRtCtjALoeoBvj4WSeIervaVsET-0PuSHA2Cg",
+  "step": "prebuild",
+  "domain": "software",
+  "access": "read",
+  "target": {"system": "git.example", "path": "example/widgets"},
+  "inputs": {"version": 1, "environment_ref": "env-1"},
+  "work_item": {"id": "wi_f1xt0re0", "url": "https://qory.example/work/wi_f1xt0re0", "title": "Add a health check"},
+  "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]
+}

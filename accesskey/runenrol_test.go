@@ -48,14 +48,26 @@ func testRunKey(t *testing.T, signer *accesskey.Key, runID string) string {
 	return s
 }
 
-// runAnswerBody returns a run answer's body with the run's id, its run key and the
-// server keys listed.
+// testDocuments are the step and the run's documents of the tests' run answers: the
+// step explore, with the members it requires.
+const testDocuments = `"step":"explore","domain":"software",` +
+	`"work_item":{"id":"wi_f1xt0re0","url":"https://qory.example/work/wi_f1xt0re0","title":"Add a health check"},` +
+	`"inputs":{"version":1}`
+
+// runAnswerBody returns a run answer's body with the run's id, its run key,
+// testDocuments and the server keys listed.
 func runAnswerBody(runID, runKey string, listed ...*accesskey.Key) []byte {
+	return runAnswerWith(runID, runKey, testDocuments, listed...)
+}
+
+// runAnswerWith returns a run answer's body with the run's id, its run key, the members
+// in documents, written as the inside of a JSON object, and the server keys listed.
+func runAnswerWith(runID, runKey, documents string, listed ...*accesskey.Key) []byte {
 	var keys []string
 	for _, k := range listed {
 		keys = append(keys, `{"alg":"ed25519","public_key":"`+k.PublicKey().String()+`"}`)
 	}
-	return []byte(`{"version":1,"run_id":"` + runID + `","run_key":"` + runKey + `","apiary_public_key":[` + strings.Join(keys, ",") + `]}`)
+	return []byte(`{"version":1,"run_id":"` + runID + `","run_key":"` + runKey + `",` + documents + `,"apiary_public_key":[` + strings.Join(keys, ",") + `]}`)
 }
 
 // runRequest returns a request with a run code whose fingerprint is signer's.
@@ -77,7 +89,8 @@ func created(r *accesskey.EnrolmentRequest, signer *accesskey.Key, body []byte) 
 // TestTheRunEnrolmentKnownAnswer pins the redemption of a run code in
 // through-gateway.json: the fixture access key builds the request byte for byte, its
 // proof is the vector's, the 201's six lines are the vector's and verify under the
-// fixture signing key, and VerifyRunAnswer returns the run's id and run key.
+// fixture signing key, and VerifyRunAnswer returns the run's id, run key, step and the
+// eight documents as the answer contains them.
 func TestTheRunEnrolmentKnownAnswer(t *testing.T) {
 	var v struct {
 		RunEnrolment struct {
@@ -116,12 +129,24 @@ func TestTheRunEnrolmentKnownAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var body struct {
-		RunKey string `json:"run_key"`
-	}
+	var body map[string]json.RawMessage
 	load(t, e.Answer, &body)
-	if ans.RunID != testRunID || ans.RunKey != body.RunKey || len(ans.Pin) != 1 || ans.Pin[0].PublicKey != k.SigningKey.PublicKey {
-		t.Errorf("verified %s, pin %v", ans, ans.Pin)
+	var runKey, step string
+	if json.Unmarshal(body["run_key"], &runKey) != nil || json.Unmarshal(body["step"], &step) != nil {
+		t.Fatalf("%s has no run_key or step", e.Answer)
+	}
+	if ans.RunID != testRunID || ans.RunKey != runKey || ans.Step != step || len(ans.Pin) != 1 || ans.Pin[0].PublicKey != k.SigningKey.PublicKey {
+		t.Errorf("verified %s, step %q, pin %v", ans, ans.Step, ans.Pin)
+	}
+	// Each document is the answer's member byte for byte, and the known answer has all
+	// eight.
+	for name, got := range map[string]json.RawMessage{
+		"domain": ans.Domain, "access": ans.Access, "target": ans.Target, "work_item": ans.WorkItem,
+		"run_settings": ans.RunSettings, "inputs": ans.Inputs, "stack": ans.Stack, "workflow": ans.Workflow,
+	} {
+		if want, ok := body[name]; !ok || !bytes.Equal(got, want) {
+			t.Errorf("%s is %s; want %s", name, got, want)
+		}
 	}
 }
 
@@ -370,10 +395,11 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 }
 
 // TestARunAnswerShowsItsRunIDAlone pins that a RunAnswer, by value and by pointer,
-// prints its run id and never its run key: under every fmt verb, through slog's text
-// and JSON handlers, through encoding/json, and in an exported field of a struct, in a
-// slice and in a map under the JSON handler. It also pins the one open case: in a
-// struct field that is not exported, fmt and slog's text handler print the run key.
+// prints its run id and never its run key or a value of its documents: under every fmt
+// verb, through slog's text and JSON handlers, through encoding/json, and in an
+// exported field of a struct, in a slice and in a map under the JSON handler. It also
+// pins the one open case: in a struct field that is not exported, fmt and slog's text
+// handler print the run key, and the documents as their bytes in decimal.
 func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
@@ -383,10 +409,19 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	secret := rk[len(runkey.Prefix):]
+	// domainBytes is the domain document as fmt prints a json.RawMessage, its bytes in
+	// decimal.
+	domainBytes := strings.Trim(fmt.Sprint([]byte(`"software"`)), "[]")
+	// leaks reports whether s contains the run key or a value of the answer's
+	// documents, as text or as bytes in decimal.
+	leaks := func(s string) bool {
+		return strings.Contains(s, secret) || strings.Contains(s, "wi_f1xt0re0") || strings.Contains(s, "health check") ||
+			strings.Contains(s, "software") || strings.Contains(s, domainBytes)
+	}
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
 		for _, v := range []any{ans, *ans} {
 			got := fmt.Sprintf(verb, v)
-			if strings.Contains(got, secret) || strings.Contains(got, runkey.Prefix) || !strings.Contains(got, testRunID) {
+			if leaks(got) || strings.Contains(got, runkey.Prefix) || !strings.Contains(got, testRunID) {
 				t.Errorf("%s of %T: %s", verb, v, got)
 			}
 		}
@@ -401,7 +436,7 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	for _, h := range []slog.Handler{slog.NewTextHandler(&b, nil), slog.NewJSONHandler(&b, nil)} {
 		slog.New(h).Info("redeemed", "answer", ans, "value", *ans)
 	}
-	if got := b.String(); strings.Contains(got, secret) || strings.Contains(got, runkey.Prefix) || strings.Count(got, "run_id="+testRunID) != 2 || strings.Count(got, `"run_id":"`+testRunID+`"`) != 2 {
+	if got := b.String(); leaks(got) || strings.Contains(got, runkey.Prefix) || strings.Count(got, "run_id="+testRunID) != 2 || strings.Count(got, `"run_id":"`+testRunID+`"`) != 2 {
 		t.Errorf("slog wrote %s", got)
 	}
 	if v := ans.LogValue(); v.Kind() != slog.KindGroup || len(v.Group()) != 1 || v.Group()[0].Key != "run_id" || v.Group()[0].Value.String() != testRunID {
@@ -429,31 +464,196 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 		if err != nil || string(got) != c.want {
 			t.Errorf("json.Marshal of %T: %s, %v; want %s", c.v, got, err, c.want)
 		}
-		if got := fmt.Sprintf("%+v", c.v); strings.Contains(got, secret) {
+		if got := fmt.Sprintf("%+v", c.v); leaks(got) {
 			t.Errorf("%%+v of %T: %s", c.v, got)
 		}
 	}
 	// The open case, which RunAnswer's doc describes: fmt calls no method of a value it
 	// reaches through a struct field that is not exported, so fmt and slog's text
-	// handler print the run key there, and the JSON handler writes {} for the field. A
-	// change to that behaviour fails here, so the doc is updated with it.
+	// handler print the run key and the documents' bytes there, and the JSON handler
+	// writes {} for the field. A change to that behaviour fails here, so the doc is
+	// updated with it.
 	type hidden struct{ a any }
-	if got := fmt.Sprintf("%+v", hidden{*ans}); !strings.Contains(got, secret) {
-		t.Errorf("%%+v of a RunAnswer in a field that is not exported: %s; the doc says it contains the run key", got)
+	if got := fmt.Sprintf("%+v", hidden{*ans}); !strings.Contains(got, secret) || !strings.Contains(got, domainBytes) {
+		t.Errorf("%%+v of a RunAnswer in a field that is not exported: %s; RunAnswer's doc describes the run key and the documents' bytes there", got)
 	}
 	b.Reset()
 	slog.New(slog.NewTextHandler(&b, nil)).Info("redeemed", "hidden", hidden{*ans})
-	if got := b.String(); !strings.Contains(got, secret) {
-		t.Errorf("slog's text handler with a RunAnswer in a field that is not exported wrote %s; the doc says it contains the run key", got)
+	if got := b.String(); !strings.Contains(got, secret) || !strings.Contains(got, domainBytes) {
+		t.Errorf("slog's text handler with a RunAnswer in a field that is not exported wrote %s; RunAnswer's doc describes the run key and the documents' bytes there", got)
 	}
 	b.Reset()
 	slog.New(slog.NewJSONHandler(&b, nil)).Info("redeemed", "hidden", hidden{*ans})
-	if got := b.String(); strings.Contains(got, secret) || !strings.Contains(got, `"hidden":{}`) {
+	if got := b.String(); leaks(got) || !strings.Contains(got, `"hidden":{}`) {
 		t.Errorf("slog's JSON handler with a RunAnswer in a field that is not exported wrote %s", got)
 	}
 	b.Reset()
 	slog.New(slog.NewJSONHandler(&b, nil)).Info("redeemed", "nested", nested{*ans, ans}, "slice", []accesskey.RunAnswer{*ans}, "map", map[string]accesskey.RunAnswer{"a": *ans})
-	if got := b.String(); strings.Contains(got, secret) || strings.Contains(got, runkey.Prefix) || strings.Count(got, `"run_id":"`+testRunID+`"`) != 4 {
+	if got := b.String(); leaks(got) || strings.Contains(got, runkey.Prefix) || strings.Count(got, `"run_id":"`+testRunID+`"`) != 4 {
 		t.Errorf("slog's JSON handler wrote %s", got)
+	}
+}
+
+// prebuildDocuments are the step and the run's documents of a run of the step prebuild:
+// a target with its access, and inputs of exactly version and environment_ref.
+const prebuildDocuments = `"step":"prebuild","domain":"software","access":"read",` +
+	`"target":{"system":"git.example","path":"example/widgets"},"inputs":{"version":1,"environment_ref":"env-1"}`
+
+// TestARunAnswerOfThePrebuildStep pins a run answer with the members the step prebuild
+// requires: VerifyRunAnswer returns each document as the answer contains it, and nil
+// for each member the answer leaves out.
+func TestARunAnswerOfThePrebuildStep(t *testing.T) {
+	signer := newKey(t)
+	r := runRequest(t, signer)
+	ans, err := r.VerifyRunAnswer(created(r, signer, runAnswerWith(testRunID, testRunKey(t, signer, testRunID), prebuildDocuments, signer)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Step != "prebuild" || string(ans.Domain) != `"software"` || string(ans.Access) != `"read"` ||
+		string(ans.Target) != `{"system":"git.example","path":"example/widgets"}` || string(ans.Inputs) != `{"version":1,"environment_ref":"env-1"}` {
+		t.Errorf("step %q, domain %s, access %s, target %s, inputs %s", ans.Step, ans.Domain, ans.Access, ans.Target, ans.Inputs)
+	}
+	if ans.WorkItem != nil || ans.RunSettings != nil || ans.Stack != nil || ans.Workflow != nil {
+		t.Errorf("work_item %s, run_settings %s, stack %s, workflow %s; want each nil", ans.WorkItem, ans.RunSettings, ans.Stack, ans.Workflow)
+	}
+}
+
+// TestRunAnswerDocumentRules pins each rule of step and the run's documents in
+// $defs/run_answer, one case each, with an error that starts with the fix and states
+// where the failure is and which rule failed: a missing step, domain or inputs; the
+// step explore without work_item; the step prebuild without access and target, with
+// work_item, with run_settings, and with inputs of another member or without
+// environment_ref; target without access and access without target; stack without
+// workflow and workflow without stack; run_settings with effort, tiers or model alone,
+// and provider_models without model; a member of another type, a null, a value outside
+// its pattern or its length, and an unknown member inside a document. An unknown member
+// of the answer and a member twice inside a document are answer_unsigned, as for every
+// run answer. No error contains a value of a document.
+func TestRunAnswerDocumentRules(t *testing.T) {
+	signer := newKey(t)
+	r := runRequest(t, signer)
+	rk := testRunKey(t, signer, testRunID)
+	const (
+		workItem = `"work_item":{"id":"wi_f1xt0re0","url":"https://qory.example/work/wi_f1xt0re0","title":"Add a health check"}`
+		explore  = `"step":"explore","domain":"software",` + workItem + `,"inputs":{"version":1}`
+		target   = `"target":{"system":"git.example","path":"example/widgets"}`
+		stack    = `"stack":{"url":"https://stacks.example/hello.git","commit":"0123456789abcdef0123456789abcdef01234567","path":"stacks/hello"}`
+		fix      = "use another run code: the enrolment answer does not match $defs/run_answer of enrolment.schema.json at "
+	)
+	for _, c := range []struct{ name, documents, want string }{
+		{"no step", `"domain":"software","inputs":{"version":1}`, fix + "/ (required: step)"},
+		{"no domain", `"step":"explore",` + workItem + `,"inputs":{"version":1}`, fix + "/ (required: domain)"},
+		{"no inputs", `"step":"explore","domain":"software",` + workItem, fix + "/ (required: inputs)"},
+		{"explore without work_item", `"step":"explore","domain":"software","inputs":{"version":1}`, fix + "/ (required: work_item)"},
+		{"prebuild without access and target", `"step":"prebuild","domain":"software","inputs":{"version":1,"environment_ref":"env-1"}`, fix + "/ (required: access, target)"},
+		{"prebuild with work_item", prebuildDocuments + "," + workItem, fix + "/ (not)"},
+		{"prebuild with run_settings", prebuildDocuments + `,"run_settings":{"runtime":"claude"}`, fix + "/step (const)"},
+		{"prebuild inputs with another member", strings.Replace(prebuildDocuments, `"environment_ref":"env-1"`, `"environment_ref":"env-1","extra":1`, 1), fix + "/inputs (additionalProperties)"},
+		{"prebuild inputs without environment_ref", strings.Replace(prebuildDocuments, `,"environment_ref":"env-1"`, ``, 1), fix + "/inputs (required: environment_ref)"},
+		{"target without access", explore + "," + target, fix + "/ (dependentRequired: access with target)"},
+		{"access without target", explore + `,"access":"write"`, fix + "/ (dependentRequired: target with access)"},
+		{"stack without workflow", explore + "," + stack, fix + "/ (dependentRequired: workflow with stack)"},
+		{"workflow without stack", explore + `,"workflow":"hello"`, fix + "/ (dependentRequired: stack with workflow)"},
+		{"effort without model", explore + `,"run_settings":{"runtime":"claude","effort":"high"}`, fix + "/run_settings (dependentRequired: model with effort)"},
+		{"tiers without model", explore + `,"run_settings":{"runtime":"claude","tiers":{"light":"example-model-1"}}`, fix + "/run_settings (dependentRequired: model with tiers)"},
+		{"model without provider_models", explore + `,"run_settings":{"runtime":"claude","model":"example-model-1"}`, fix + "/run_settings (dependentRequired: provider_models with model)"},
+		{"provider_models without model", explore + `,"run_settings":{"runtime":"claude","provider_models":[{"id":"example-model-1"}]}`, fix + "/run_settings (dependentRequired: model with provider_models)"},
+		{"run_settings without runtime", explore + `,"run_settings":{}`, fix + "/run_settings (required: runtime)"},
+		{"a domain that is a number", strings.Replace(explore, `"domain":"software"`, `"domain":7`, 1), fix + "/domain (type)"},
+		{"a null target", explore + `,"access":"write","target":null`, fix + "/target (type)"},
+		{"an access of another value", explore + `,"access":"admin",` + target, fix + "/access (enum)"},
+		{"a step in upper case", strings.Replace(explore, `"step":"explore"`, `"step":"Explore"`, 1), fix + "/step (pattern)"},
+		{"a work item title of 1025 characters", strings.Replace(explore, "Add a health check", strings.Repeat("x", 1025), 1), fix + "/work_item/title (maxLength)"},
+		{"a stack url with a query", explore + "," + strings.Replace(stack, "hello.git", "hello.git?ref=main", 1) + `,"workflow":"hello"`, fix + "/stack/url (pattern)"},
+		{"a stack path with a .. segment", explore + "," + strings.Replace(stack, "stacks/hello", "stacks/../hello", 1) + `,"workflow":"hello"`, fix + "/stack/path (not)"},
+		{"an unknown member in target", explore + `,"access":"write","target":{"system":"git.example","path":"example/widgets","branch":"main"}`, fix + "/target (additionalProperties)"},
+		{"an unknown member of the answer", explore + `,"revision":3`, accesskey.CodeAnswerUnsigned},
+		{"a member twice inside a document", explore + `,"access":"write","target":{"system":"git.example","system":"git.example","path":"example/widgets"}`, accesskey.CodeAnswerUnsigned},
+	} {
+		ans, err := r.VerifyRunAnswer(created(r, signer, runAnswerWith(testRunID, rk, c.documents, signer)))
+		if ans != nil || code(err) != c.want {
+			t.Errorf("%s: %v, %v; want %s", c.name, ans, err, c.want)
+		}
+		if err != nil && (strings.Contains(err.Error(), "health check") || strings.Contains(err.Error(), "git.example") || strings.Contains(err.Error(), "software")) {
+			t.Errorf("%s: the error contains a value of a document: %v", c.name, err)
+		}
+	}
+}
+
+// padded returns a run answer of exactly n bytes: testDocuments with inputs padded by
+// a member of x characters.
+func padded(t *testing.T, rk string, signer *accesskey.Key, n int) []byte {
+	t.Helper()
+	docs := func(pad int) string {
+		return strings.Replace(testDocuments, `"inputs":{"version":1}`, `"inputs":{"version":1,"pad":"`+strings.Repeat("x", pad)+`"}`, 1)
+	}
+	short := len(runAnswerWith(testRunID, rk, docs(0), signer))
+	if n < short {
+		t.Fatalf("a run answer of %d bytes is shorter than the %d bytes of its members", n, short)
+	}
+	b := runAnswerWith(testRunID, rk, docs(n-short), signer)
+	if len(b) != n {
+		t.Fatalf("padded to %d bytes; want %d", len(b), n)
+	}
+	return b
+}
+
+// TestARunAnswerUpTo1MiB pins the limits of the answer's body: PostRun reads a signed
+// run answer of 200 KiB, more than an access key's answer may be, and one of exactly
+// MaxRunAnswer, 1 MiB; one byte more is answer_unsigned, from PostRun and from
+// VerifyRunAnswer. Post reads at most MaxAnswer, 64 KiB, of an access key's answer, as
+// before: a signed answer of 64 KiB passes, and one of 200 KiB is answer_unsigned.
+func TestARunAnswerUpTo1MiB(t *testing.T) {
+	if accesskey.MaxRunAnswer != 1<<20 || accesskey.MaxAnswer != 64<<10 {
+		t.Fatalf("MaxRunAnswer %d, MaxAnswer %d; want 1 MiB and 64 KiB", accesskey.MaxRunAnswer, accesskey.MaxAnswer)
+	}
+	signer := newKey(t)
+	rk := testRunKey(t, signer, testRunID)
+	r := runRequest(t, signer)
+	for _, c := range []struct {
+		n    int
+		want string
+	}{
+		{200 << 10, ""},
+		{accesskey.MaxRunAnswer, ""},
+		{accesskey.MaxRunAnswer + 1, accesskey.CodeAnswerUnsigned},
+	} {
+		body := padded(t, rk, signer, c.n)
+		f := &fakeServer{status: http.StatusCreated, signer: signer, body: func(accesskey.EnrolmentRequest) []byte { return body }}
+		srv := httptest.NewServer(f)
+		ans, err := r.PostRun(context.Background(), nil, srv.URL, "qory/test")
+		srv.Close()
+		if c.want == "" && (err != nil || ans.RunKey != rk || len(ans.Inputs) < c.n/2) {
+			t.Errorf("a run answer of %d bytes: %v, %v", c.n, ans, err)
+		}
+		if c.want != "" && (ans != nil || code(err) != c.want) {
+			t.Errorf("a run answer of %d bytes: %v, %v; want %s", c.n, ans, err, c.want)
+		}
+	}
+	if _, err := r.VerifyRunAnswer(created(r, signer, padded(t, rk, signer, accesskey.MaxRunAnswer+1))); code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("VerifyRunAnswer of %d bytes: %v; want answer_unsigned", accesskey.MaxRunAnswer+1, err)
+	}
+	// An access key's answer, padded with spaces inside its object.
+	key, err := accesskey.NewEnrolmentRequest(newKey(t), "qecn_F1XT0RE0000000000000000000."+signer.Fingerprint(), "build-01", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"node","stored_secrets":false,` +
+		`"apiary_public_key":[{"alg":"ed25519","public_key":"` + signer.PublicKey().String() + `"}]`
+	for _, c := range []struct {
+		n    int
+		want string
+	}{
+		{accesskey.MaxAnswer, ""},
+		{200 << 10, accesskey.CodeAnswerUnsigned},
+	} {
+		body := []byte(answer + strings.Repeat(" ", c.n-len(answer)-1) + "}")
+		f := &fakeServer{status: http.StatusCreated, signer: signer, body: func(accesskey.EnrolmentRequest) []byte { return body }}
+		srv := httptest.NewServer(f)
+		ans, err := key.Post(context.Background(), nil, srv.URL, "qory/test")
+		srv.Close()
+		if (c.want == "" && (err != nil || ans.AccessKeyID != "ak_f1xt0re000000000")) || (c.want != "" && (ans != nil || code(err) != c.want)) {
+			t.Errorf("an access key's answer of %d bytes: %v, %v; want %q", c.n, ans, err, c.want)
+		}
 	}
 }

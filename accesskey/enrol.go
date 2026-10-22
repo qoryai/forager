@@ -76,7 +76,8 @@ func codePrefix(head string) (prefix, kind string, ok bool) {
 }
 
 // MaxAnswer is the most of an answer's body the client reads before it counts the
-// answer as unsigned: a refusal body is at most 64 KiB.
+// answer as unsigned, for an access key's code: an answer and a refusal body are at
+// most 64 KiB. A 201 to a run code is at most [MaxRunAnswer].
 const MaxAnswer = 64 << 10
 
 // crockford maps a character a person may type in an enrolment code to the character
@@ -435,7 +436,7 @@ func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL,
 	if err := r.forKey(); err != nil {
 		return nil, err
 	}
-	a, sig, err := r.direct(ctx, hc, serverURL, userAgent)
+	a, sig, err := r.direct(ctx, hc, serverURL, userAgent, MaxAnswer)
 	if err != nil {
 		return nil, err
 	}
@@ -458,24 +459,26 @@ func (r *EnrolmentRequest) PostVia(ctx context.Context, hc *http.Client, serverU
 	if err := r.forKey(); err != nil {
 		return nil, err
 	}
-	a, sig, err := r.via(ctx, hc, serverURL, viaURL, userAgent)
+	a, sig, err := r.via(ctx, hc, serverURL, viaURL, userAgent, MaxAnswer)
 	if err != nil {
 		return nil, err
 	}
 	return r.VerifyAnswer(a, sig)
 }
 
-// direct checks serverURL and sends the request to the server's enrolment endpoint.
-func (r *EnrolmentRequest) direct(ctx context.Context, hc *http.Client, serverURL, userAgent string) (Answer, string, error) {
+// direct checks serverURL and sends the request to the server's enrolment endpoint,
+// reading at most limit bytes of the answer's body.
+func (r *EnrolmentRequest) direct(ctx context.Context, hc *http.Client, serverURL, userAgent string, limit int) (Answer, string, error) {
 	if err := checkOrigin(serverURL); err != nil {
 		return Answer{}, "", err
 	}
-	return r.send(ctx, hc, serverURL, serverURL, userAgent)
+	return r.send(ctx, hc, serverURL, serverURL, userAgent, limit)
 }
 
 // via checks hc, serverURL and viaURL and sends the request to the server's enrolment
-// endpoint through the gateway at viaURL.
-func (r *EnrolmentRequest) via(ctx context.Context, hc *http.Client, serverURL, viaURL, userAgent string) (Answer, string, error) {
+// endpoint through the gateway at viaURL, reading at most limit bytes of the answer's
+// body.
+func (r *EnrolmentRequest) via(ctx context.Context, hc *http.Client, serverURL, viaURL, userAgent string, limit int) (Answer, string, error) {
 	if hc == nil {
 		return Answer{}, "", errors.New("an enrolment through a gateway needs a client with the gateway's trust, built from the server package's Via.Transport")
 	}
@@ -485,13 +488,14 @@ func (r *EnrolmentRequest) via(ctx context.Context, hc *http.Client, serverURL, 
 	if err := checkOrigin(viaURL); err != nil || !strings.HasPrefix(viaURL, "https://") {
 		return Answer{}, "", fmt.Errorf("the via URL %s is not an https origin, scheme and host only", shown(viaURL))
 	}
-	return r.send(ctx, hc, serverURL, viaURL, userAgent)
+	return r.send(ctx, hc, serverURL, viaURL, userAgent, limit)
 }
 
 // send sends the request to the enrolment endpoint under sendTo, the server's origin
-// or a gateway's, and returns the answer unread and its signature header; errors name
-// the endpoint under serverURL.
-func (r *EnrolmentRequest) send(ctx context.Context, hc *http.Client, serverURL, sendTo, userAgent string) (Answer, string, error) {
+// or a gateway's, and returns the answer unread, at most limit bytes of its body and
+// one more so that a longer body is seen, and its signature header; errors name the
+// endpoint under serverURL.
+func (r *EnrolmentRequest) send(ctx context.Context, hc *http.Client, serverURL, sendTo, userAgent string, limit int) (Answer, string, error) {
 	body, err := json.Marshal(r)
 	if err != nil {
 		return Answer{}, "", err
@@ -516,7 +520,7 @@ func (r *EnrolmentRequest) send(ctx context.Context, hc *http.Client, serverURL,
 		return Answer{}, "", fmt.Errorf("enrolment %s: %w", ShownValue(u, false), ShownError(err))
 	}
 	defer resp.Body.Close()
-	answer, err := io.ReadAll(io.LimitReader(resp.Body, MaxAnswer+1))
+	answer, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		return Answer{}, "", fmt.Errorf("enrolment %s: %w", ShownValue(u, false), ShownError(err))
 	}
