@@ -83,3 +83,10 @@ func SetMachineBundles(paths []string) (restore func()) {
 func ReadableDir(places []string) func(string) (string, error) {
 	return readableDir(func() ([]string, error) { return places, nil })
 }
+
+// HoldJoining takes the run's joining lock, as Join and the host steps take it, and
+// returns the call that gives it back.
+func HoldJoining(r *Run) func() {
+	r.joining.Lock()
+	return r.joining.Unlock
+}

@@ -140,13 +140,16 @@ func (r *Run) HostProxy() (HostProxy, error) {
 // run's masker gets it before the forwarder starts.
 func (r *Run) StackProxy() (HostProxy, error) {
 	if !r.joining.TryLock() {
-		return HostProxy{}, errStackAfterJoin
+		if r.joinAsked.Load() {
+			return HostProxy{}, errStackAfterJoin
+		}
+		return HostProxy{}, errors.New("Call StackProxy after the run's other call returns: another call of the run is running.")
 	}
 	defer r.joining.Unlock()
 	if r.closed {
 		return HostProxy{}, errors.New("Open another run: this run is closed.")
 	}
-	if r.joinAsked {
+	if r.joinAsked.Load() {
 		return HostProxy{}, errStackAfterJoin
 	}
 	password, err := newForwarderSecret()
@@ -171,5 +174,6 @@ func (r *Run) StackProxy() (HostProxy, error) {
 	}, nil
 }
 
-// errStackAfterJoin refuses a stack proxy once a Join of the run has started.
+// errStackAfterJoin refuses a stack proxy once a Join of the run has reached its join
+// request.
 var errStackAfterJoin = errors.New("Call StackProxy before the run's first Join: the gateway closes the stack proxy at the first join request.")

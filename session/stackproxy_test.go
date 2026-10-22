@@ -24,8 +24,13 @@ import (
 // The tests of this file start a run's stack proxy, the forwarder on loopback that qory
 // fetches the harness definition through before the run's first session joins.
 
-// stackAfterJoin is StackProxy's refusal once a Join of the run has started.
+// stackAfterJoin is StackProxy's refusal once a Join of the run has reached its join
+// request.
 const stackAfterJoin = "Call StackProxy before the run's first Join: the gateway closes the stack proxy at the first join request."
+
+// stackBusy is StackProxy's refusal while another call of the run takes the joining
+// lock before any join request.
+const stackBusy = "Call StackProxy after the run's other call returns: another call of the run is running."
 
 // TestTheStackProxyReachesTheRunsStackProxy pins the stack proxy of a run on one
 // machine, walled or not, and behind a separate gateway: its URL is a port on loopback
@@ -152,6 +157,57 @@ func TestTheStackProxyEndsAtTheFirstJoin(t *testing.T) {
 	}
 	if _, err := r.StackProxy(); err == nil || err.Error() != stackAfterJoin {
 		t.Errorf("StackProxy after a refused join: %v, want %q", err, stackAfterJoin)
+	}
+}
+
+// TestTheStackProxyWaitsForTheRunsOtherCall pins StackProxy's refusal while another
+// call of the run takes the joining lock before any join request, and that it starts
+// once the call returns.
+func TestTheStackProxyWaitsForTheRunsOtherCall(t *testing.T) {
+	ctx := context.Background()
+	sp, _ := specGateway(t, "FAKE_EXIT=0")
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateFailed})
+	giveBack := session.HoldJoining(r)
+	_, err = r.StackProxy()
+	giveBack()
+	if err == nil || err.Error() != stackBusy {
+		t.Errorf("StackProxy while another call runs: %v, want %q", err, stackBusy)
+	}
+	h, err := r.StackProxy()
+	if err != nil {
+		t.Fatalf("StackProxy once the other call returned: %v", err)
+	}
+	h.Close()
+}
+
+// TestTheStackProxyDuringTheFirstJoin pins StackProxy's refusal while the run's first
+// Join runs, past its join request: the gateway has closed the stack proxy.
+func TestTheStackProxyDuringTheFirstJoin(t *testing.T) {
+	ctx := context.Background()
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	runs := make(chan *session.Run, 1)
+	during := make(chan error, 1)
+	g.OnJoin(func(linktest.Join) linktest.Reply {
+		_, err := (<-runs).StackProxy()
+		during <- err
+		return linktest.Reply{Status: 200, Body: map[string]any{"version": 1, "session": 1}}
+	})
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs <- r
+	res, err := r.Join(ctx, sp.SessionSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, outcomeOf(res, nil))
+	if err := <-during; err == nil || err.Error() != stackAfterJoin {
+		t.Errorf("StackProxy during the first join: %v, want %q", err, stackAfterJoin)
 	}
 }
 

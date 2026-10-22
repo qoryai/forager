@@ -260,10 +260,12 @@ returns a `session.HostProxy`:
   the join request. At that join request the gateway closes the stack proxy, whatever
   the answer, and every connection through it, one opened before the join among them.
 - `StackProxy` returns "Call StackProxy before the run's first Join: the gateway
-  closes the stack proxy at the first join request." after the run's first `Join`, and
-  while another call of the run runs, such as `Join` or a step. It returns "Open
-  another run: this run is closed." after `Close`, and an error when the port cannot be
-  opened.
+  closes the stack proxy at the first join request." once the run's first `Join` has
+  reached its join request, while that `Join` runs and after it returns. It returns
+  "Call StackProxy after the run's other call returns: another call of the run is
+  running." while another call of the run, such as `Setup` or `Close`, runs before any
+  join request. It returns "Open another run: this run is closed." after `Close`, and an
+  error when the port cannot be opened.
 
 qory sets `gateway.Config.StackHosts` from `gateway.stack_hosts` in `forager.yaml`.
 `gateway.Start` refuses an entry that is not a lower-case host name or a `*.` suffix,

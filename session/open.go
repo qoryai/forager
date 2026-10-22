@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -77,8 +78,9 @@ type Run struct {
 	maybeJoined bool
 	lastExit    int
 	// joinAsked says a Join reached its join request: the gateway closed the run's
-	// stack proxy then, and [Run.StackProxy] starts none from then on.
-	joinAsked bool
+	// stack proxy then, and [Run.StackProxy] starts none from then on. It is read
+	// without the joining lock too, by a StackProxy that finds the lock taken.
+	joinAsked atomic.Bool
 	// keptBy is the number of the session whose wall's removal failed, 0 for none:
 	// its entry among the walled runs still going stays, and no session joins after it.
 	keptBy         int
