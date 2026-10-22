@@ -1571,7 +1571,7 @@ leave out or replace these values of the machine:
   placeholders.
 
 Every other member of a runtime event, such as a tool's input and output, and the
-runtime's output in `dev.qory.run.log`, is as the agent wrote it.
+runtime's output in `dev.qory.run.log` keep their paths as the agent wrote them.
 
 The session reports the host name, the directories on the machine, the command and the
 arguments as the session starts them, and the harness sources in one line per session,

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/runtime.started.schema.json",
   "title": "dev.qory.runtime.started",
-  "description": "The runtime opened its session. In a run with a run key, Forager writes placeholders in cwd alone; every other member is as the runtime wrote it.",
+  "description": "The runtime opened its session. In a run with a run key, Forager writes placeholders in cwd alone; every other member keeps its paths as the runtime wrote them.",
   "type": "object",
   "additionalProperties": false,
   "required": ["session_id", "source"],

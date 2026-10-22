@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/runtime.prompt_submitted.schema.json",
   "title": "dev.qory.runtime.prompt_submitted",
-  "description": "A prompt reached the runtime, before it acted on it. In a run with a run key, Forager writes placeholders in prompt alone; every other member is as the runtime wrote it.",
+  "description": "A prompt reached the runtime, before it acted on it. In a run with a run key, Forager writes placeholders in prompt alone; every other member keeps its paths as the runtime wrote them.",
   "type": "object",
   "additionalProperties": false,
   "required": ["session_id", "prompt"],
