@@ -254,7 +254,7 @@
       }
     },
     "rules": {
-      "description": "Evaluated in order against every record of the rule's source; the first rule that matches produces the events, one for a rule without each and one per element that a rule with that each matches for a rule with each, and a record no rule matches produces nothing.",
+      "description": "Evaluated in order against every record of the rule's source. The first rule that matches a record produces its events: one event for a rule without each; for a rule with each, one event per element that a rule with that each matches. A record that no rule matches produces nothing.",
       "type": "array",
       "minItems": 1,
       "items": {
