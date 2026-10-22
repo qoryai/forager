@@ -882,11 +882,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
-- `wall.Request.Pull`: `wall.Docker` pulls the image before it makes any network, unless
-  the engine holds it by that digest, under a timeout, and refuses with `image_user_root`
-  an image whose user is root, a uid of 0 or a name its `/etc/passwd` maps to uid 0, or a
-  name it cannot map. A pull that fails leaves no container or network. `wall.Fetcher`
-  reports how long finding the image took, the pull included when there was one.
+- `wall.Request.Pull` and `wall.Puller`: `(*wall.Docker).Pull` pulls a run's image by
+  reference, unless the engine holds it by that digest, under a timeout, and refuses
+  with `image_user_root` an image whose user is root, a uid of 0 or a name its
+  `/etc/passwd` maps to uid 0, or a name it cannot map. With the run's certificate, it
+  writes the certificate in `wall.Docker.CertsDir`, `/etc/docker/certs.d` by default,
+  for the pull alone. `Prepare` with `Pull` finds the image by its digest, and makes no
+  container or network when the engine does not hold it. The run's containers start
+  with `--pull=never`, so the engine pulls such an image in the image step alone.
 - `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
@@ -894,8 +897,6 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
-- `wall.Puller` replaces `wall.Request.Fetched` and `wall.Fetcher`: the pull of an image
-  by reference runs as a separate step after the open.
 - The relay now starts from the machine's default image, never from the run's, when the
   machine has a default image.
 
@@ -958,10 +959,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `(*session.Run).FetchImage`: the engine pulls the run's image by reference as an
   `image` step, through the gateway's proxy when `OpenSpec.EngineProxy` is set, so a
-  machine whose only route is the gateway runs it. fmt, `log/slog` and
-  `encoding/json` show an `EngineProxy`'s address alone, never its password. A walled
-  run refuses a mount of `wall.Docker.CertsDir`, where the engine reads the
-  certificates it trusts for a registry.
+  machine whose only route is the gateway runs it. Where fmt calls `Format`,
+  `log/slog` `LogValue` and `encoding/json` `MarshalJSON`, an `EngineProxy` shows its
+  address alone. fmt prints the password with the address under `%p` of a value, under
+  `%w`, and for a value in a struct field that is not exported. A walled run refuses a
+  mount of `wall.Docker.CertsDir`, where the engine reads the certificates it trusts
+  for a registry.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
@@ -974,9 +977,6 @@ release may change what an existing document does, and says so under Upgrading.
   the fix, and writes nothing, while a `Join` runs, after `Close`, while another host
   step is open, for a state outside the three and after the step exited; `Join`
   returns one while a host step is open.
-- `wall.Request.Fetched`: Prepare calls it once the fetch of an image by reference and
-  the check of its user pass, so the session ends the image step there and starts the
-  wall step.
 - `(*session.Run).HostProxy` starts a forwarder on loopback with a password for
   programs on the host, such as a fetch or a compose before a session joins, for every
   run, walled or not. `session.HostProxy` has `ProxyURL`,

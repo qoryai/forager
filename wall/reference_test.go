@@ -56,7 +56,7 @@ func TestDockerFetchesAnImageByReferenceFirst(t *testing.T) {
 	if relay < 0 || !strings.Contains(rec.lines[relay], " --entrypoint /qory/qory example.com/agent:1 relay ") {
 		t.Errorf("the relay does not start from the machine's default:\n%s", strings.Join(rec.lines, "\n"))
 	}
-	image := at(rec.lines, "docker create --name qory-"+runID+"-image --label dev.qory.run="+runID+" --network none --entrypoint /qory/qory "+byReference)
+	image := at(rec.lines, "docker create --name qory-"+runID+"-image --label dev.qory.run="+runID+" --network none --pull=never --entrypoint /qory/qory "+byReference)
 	if image < relay {
 		t.Errorf("the image's container is not created after the relay:\n%s", strings.Join(rec.lines, "\n"))
 	}
@@ -65,6 +65,34 @@ func TestDockerFetchesAnImageByReferenceFirst(t *testing.T) {
 	}
 	if entry := slices.Index(wrapped.Args, "--entrypoint"); entry < 0 || wrapped.Args[entry+2] != byReference {
 		t.Errorf("the agent does not start from the image by reference: %s", words(wrapped.Args))
+	}
+	if never := slices.Index(wrapped.Args, "--pull=never"); never < 0 || never > slices.Index(wrapped.Args, "--entrypoint") {
+		t.Errorf("the agent's container may pull the image by reference: %s", words(wrapped.Args))
+	}
+}
+
+// TestDockerPullsAMachinesImageAsBefore pins the containers of an image the machine
+// defines: neither the container the wall reads the image's files from nor the agent's
+// runs with --pull=never, so the engine pulls an image of the machine's that it does
+// not have when it creates them.
+func TestDockerPullsAMachinesImageAsBefore(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	req := Request{RunID: runID, Image: "example.com/agent:1", RelayImage: "example.com/relay:1"}
+	e, err := d.Prepare(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped, err := e.Wrap(context.Background(), launch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	image := at(rec.lines, "docker create --name qory-"+runID+"-image ")
+	if image < 0 || strings.Contains(rec.lines[image], "--pull") || slices.Contains(wrapped.Args, "--pull=never") {
+		t.Errorf("a machine's image with --pull:\n%s\n%s", strings.Join(rec.lines, "\n"), words(wrapped.Args))
 	}
 }
 
@@ -489,6 +517,56 @@ func TestDockerTrustsTheRunsCertificateForThePullAlone(t *testing.T) {
 				t.Errorf("after the pull, CertsDir has %q, want %q", got, after)
 			}
 		})
+	}
+}
+
+// TestDockerRemovesTheCertificatesBeforeAFailedWrite pins a write of the run's
+// certificate that fails for the second host: Pull returns the error of that host, and
+// the first host's file and the directory Pull made for it are gone, with no pull.
+func TestDockerRemovesTheCertificatesBeforeAFailedWrite(t *testing.T) {
+	ca := []byte("-----BEGIN CERTIFICATE-----\nRUN\n-----END CERTIFICATE-----\n")
+	dir := t.TempDir()
+	// A file where the second host's directory would be: the write into it fails.
+	if err := os.WriteFile(filepath.Join(dir, "auth.registry.example"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, CertsDir: dir, sys: rec}
+	err := d.Pull(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true}, ca, []string{"auth.registry.example"})
+	want := "Make " + dir + " writable for this user, as the machine's start unit does: the run's certificate for auth.registry.example could not be written ("
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("the second host's write: %v, want an error that starts with %s", err, want)
+	}
+	if got, after := certsOf(t, dir), map[string]string{"auth.registry.example": "not a directory"}; !maps.Equal(got, after) {
+		t.Errorf("after the failed write, CertsDir has %q, want %q", got, after)
+	}
+	if len(rec.lines) != 0 {
+		t.Errorf("commands after the failed write:\n%s", strings.Join(rec.lines, "\n"))
+	}
+}
+
+// TestDockerCleansUpAPullThatPanics pins a pull that panics while it reads the image's
+// /etc/passwd, as a caller that recovers meets it: the run's certificate is removed,
+// and so is the container the wall read the file from.
+func TestDockerCleansUpAPullThatPanics(t *testing.T) {
+	dir := t.TempDir()
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"app"`}
+	rec.onCopy = func() { panic("docker cp") }
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, CertsDir: dir, sys: rec}
+	recovered := func() (v any) {
+		defer func() { v = recover() }()
+		d.Pull(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true}, []byte("CA"), nil)
+		return nil
+	}()
+	if recovered != "docker cp" {
+		t.Errorf("the caller recovered %v", recovered)
+	}
+	if got := certsOf(t, dir); len(got) != 0 {
+		t.Errorf("after the panic, CertsDir has %q", got)
+	}
+	created, removed := at(rec.lines, "docker create --name qory-"+runID+"-image "), at(rec.lines, "docker rm --force --volumes qory-"+runID+"-image")
+	if created < 0 || removed < created {
+		t.Errorf("the image's container after the panic:\n%s", strings.Join(rec.lines, "\n"))
 	}
 }
 

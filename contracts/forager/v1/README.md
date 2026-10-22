@@ -1489,8 +1489,8 @@ join or between two joins (`(*session.Run).StartStep`), and the image's, `image`
    `dev.qory.run.policy_applied`. The session writes that
    `dev.qory.run.policy_applied` right after `dev.qory.session.started` and before the
    wall, also for a session whose wall then fails to start. The image step spans the
-   image's fetch and the check of its user (§Images). A join after an image step finds
-   the image by its digest and writes none.
+   image's fetch and the check of its user (§Images). A join after an image step that
+   succeeded finds the image by its digest and writes none.
 3. **The wall step**, `wall`, with the name `start the wall`, behind every wall. It spans the
    rest of the wall's start: the wall's networks, the session's forwarder and hook
    socket, the second check of the session's places and the launch's wrapping, up to
@@ -3964,7 +3964,7 @@ sees its workspace at the same path as on the machine.
 **The record.** `dev.qory.session.started` contains `image`, the reference, and when the
 image is one the machine defines `image_name`, `container_runtime` when the definition
 sets one, and `docker: true` when the enclosure has nested Docker. For an image by
-reference, the session's image step spans the image's fetch, skipped when the engine
+reference, the run's image step spans the image's fetch, skipped when the engine
 holds it by that digest, and the check of its user; its `duration_ms` includes how long
 the wall took to find the image (§The events, Steps).
 `dev.qory.run.policy_applied` contains `image` when the policy or the run configuration
@@ -3983,6 +3983,8 @@ pinned digest. For a run with a certificate authority, the Docker wall writes th
 certificate as `qory-run-<id>.crt` in `<CertsDir>/<host>/`, `/etc/docker/certs.d` by
 default, for the reference's registry host and for each host of `credential_hosts`, and
 removes the files when the step ends, also when the pull fails or its context ends.
+The agent's container, and the container the wall reads the image's files from, start
+with `--pull=never`, so the engine pulls the image in the image step alone.
 Docker Engine reads that directory at each pull. On its classic image store it reads
 none for `docker.io`, so an image there comes only through a blind relay, with no
 credential; on its containerd image store this is unverified. Without

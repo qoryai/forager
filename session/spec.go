@@ -115,8 +115,11 @@ type OpenSpec struct {
 // starts, such as http-proxy and https-proxy in Docker's daemon.json set to
 // http://qory:<password>@127.0.0.1:3129: the machine's start unit writes it, and
 // writes the same values for qory to read. Forager writes Password into no event, no
-// record and no error line, and fmt, log/slog and encoding/json show the address
-// alone, of an EngineProxy and of a pointer to one alike.
+// record and no error line. Its methods show the address alone, for an EngineProxy and
+// a pointer to one alike, where fmt calls Format, log/slog LogValue and encoding/json
+// MarshalJSON. fmt calls no method, and prints both fields, in three cases: %p of a
+// value, %w, since an EngineProxy is not an error, and a value in a struct field that
+// is not exported, which log/slog's text handler prints through fmt as well.
 type EngineProxy struct {
 	// Addr is the setting's address, a loopback host:port, such as 127.0.0.1:3129.
 	Addr string
@@ -125,14 +128,13 @@ type EngineProxy struct {
 	Password string
 }
 
-// shownEngineProxy is what fmt, log/slog and encoding/json show of an EngineProxy:
-// the address alone.
+// shownEngineProxy is what the methods of EngineProxy show: the address alone.
 type shownEngineProxy struct {
 	Addr string
 }
 
 // Format prints p as fmt prints a struct of its address alone, under every verb and
-// flag, the password left out.
+// flag that fmt passes to it, the password left out.
 func (p EngineProxy) Format(f fmt.State, verb rune) {
 	out := fmt.Sprintf(fmt.FormatString(f, verb), shownEngineProxy{Addr: p.Addr})
 	if verb == 'v' && f.Flag('#') {

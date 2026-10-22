@@ -254,9 +254,9 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 			return nil, err
 		}
 	}
-	// An image a run names by its reference was fetched by Pull, and its user checked:
-	// one the engine does not hold by that digest leaves no container or network, and
-	// nothing pulls it here.
+	// A run's image by reference was fetched by Pull, and its user checked: one the
+	// engine does not hold by that digest leaves no container or network, and nothing
+	// pulls it here.
 	if req.Pull {
 		held, err := e.held(ctx)
 		if err == nil && !held {
@@ -556,14 +556,15 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 	return nil
 }
 
-// Pull is [Puller.Pull] for an image a run names by its reference: it checks the
-// request as Prepare does, then, with ca, writes ca as qory-run-<id>.crt, id the run's,
-// in the directory of CertsDir for the registry host of req.Image and for each of
-// hosts, runs the pull, docker pull unless the engine holds the image by that digest,
-// and the check of its user, under [pullWait], and removes the certificates and the
-// container it read the image's /etc/passwd from. A host that cannot be a directory
-// name, such as a *. pattern, gets no certificate. The engine reads a host's directory
-// at each pull, so the run's certificate is trusted for the pull alone.
+// Pull is [Puller.Pull] for a run's image by reference: it checks the request as
+// Prepare does, then, with ca, writes ca as qory-run-<id>.crt, id the run's, in the
+// directory of CertsDir for the registry host of req.Image and for each of hosts, runs
+// the pull, docker pull unless the engine holds the image by that digest, and the check
+// of its user, under [pullWait], and removes the certificates and the container it read
+// the image's /etc/passwd from, in deferred calls that also run on a panic. A host that
+// cannot be a directory name, such as a *. pattern, gets no certificate. The engine
+// reads a host's directory at each pull, so the run's certificate is trusted for the
+// pull alone.
 func (d *Docker) Pull(ctx context.Context, req Request, ca []byte, hosts []string) (err error) {
 	sys, user, err := d.checked(req)
 	if err != nil || !req.Pull {
@@ -577,8 +578,8 @@ func (d *Docker) Pull(ctx context.Context, req Request, ca []byte, hosts []strin
 		defer func() { err = errors.Join(err, remove()) }()
 	}
 	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID, env: d.selected()}
-	err = e.pull(ctx)
-	return errors.Join(err, e.Close(context.WithoutCancel(ctx)))
+	defer func() { err = errors.Join(err, e.Close(context.WithoutCancel(ctx))) }()
+	return e.pull(ctx)
 }
 
 // defaultCertsDir is where Docker Engine reads a registry's authorities from.
@@ -797,9 +798,10 @@ func (e *dockerEnclosure) copyOut(ctx context.Context, container, p string) ([]b
 }
 
 // createImage creates the container of the run's image that is never started, once,
-// under [relayWait], since it pulls an image the engine does not have: the image's
-// files are read out of it, and the image is there before the agent's container
-// starts.
+// under [relayWait], since it pulls an image the machine defines that the engine does
+// not have: the image's files are read out of it, and the image is there before the
+// agent's container starts. For an image by reference it runs with --pull=never, as
+// the agent's container does: the engine pulls that image in the image step alone.
 func (e *dockerEnclosure) createImage(ctx context.Context) error {
 	if e.created {
 		return nil
@@ -807,10 +809,23 @@ func (e *dockerEnclosure) createImage(ctx context.Context) error {
 	pull, cancel := context.WithTimeout(ctx, relayWait)
 	defer cancel()
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.image()})
-	if _, err := e.docker(pull, "create", "--name", e.image(), "--label", e.label(), "--network", "none", "--entrypoint", HelperPath, e.req.Image); err != nil {
+	create := []string{"create", "--name", e.image(), "--label", e.label(), "--network", "none"}
+	create = append(create, e.neverPull()...)
+	create = append(create, "--entrypoint", HelperPath, e.req.Image)
+	if _, err := e.docker(pull, create...); err != nil {
 		return err
 	}
 	e.created = true
+	return nil
+}
+
+// neverPull is --pull=never for a run's image by reference, which the engine pulls in
+// the image step alone, through the gateway's proxy when the run has an engine proxy,
+// and nothing for an image the machine defines.
+func (e *dockerEnclosure) neverPull() []string {
+	if e.req.Pull {
+		return []string{"--pull=never"}
+	}
 	return nil
 }
 
@@ -956,6 +971,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if bundle != "" {
 		run = append(run, "--mount", bundle)
 	}
+	run = append(run, e.neverPull()...)
 	if e.req.Docker {
 		run = append(run, "--entrypoint", HelperPath, e.req.Image)
 		run = append(run, e.d.NestArgs...)

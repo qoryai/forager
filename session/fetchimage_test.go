@@ -271,7 +271,8 @@ func TestAFetchThatFailsEndsItsStep(t *testing.T) {
 // TestAFetchThatCannotStartWritesNothing pins each error of FetchImage before its step,
 // with its text, and that the record then has no step of it: a run without a wall, a
 // session that runs, a closed run, a host step that is open, a second fetch, and an
-// engine proxy whose address is not a loopback host:port or whose password is empty.
+// engine proxy whose address is not a loopback host:port, or whose password is empty,
+// contains a space or is over 256 bytes.
 func TestAFetchThatCannotStartWritesNothing(t *testing.T) {
 	ctx := context.Background()
 	open := func(t *testing.T, change func(*runSpec)) (*session.Run, *pullingWall, runSpec, *linktest.Fake) {
@@ -367,6 +368,8 @@ func TestAFetchThatCannotStartWritesNothing(t *testing.T) {
 		{"127.0.0.1:0", enginePassword, `Set the engine proxy's address to a loopback host:port, such as 127.0.0.1:3129: "127.0.0.1:0" is not one.`},
 		{"localhost:3129", enginePassword, `Set the engine proxy's address to a loopback host:port, such as 127.0.0.1:3129: "localhost:3129" is not one.`},
 		{"127.0.0.1:3129", "", "Give the engine proxy the password from the daemon's proxy setting: the password is empty."},
+		{"127.0.0.1:3129", "fake password", "Set the daemon's proxy password to 1 to 256 printable ASCII characters other than a space: the forwarder checks only that shape."},
+		{"127.0.0.1:3129", strings.Repeat("p", 257), "Set the daemon's proxy password to 1 to 256 printable ASCII characters other than a space: the forwarder checks only that shape."},
 	} {
 		t.Run("the engine proxy "+c.addr, func(t *testing.T) {
 			r, w, _, _ := open(t, func(sp *runSpec) { sp.EngineProxy = &session.EngineProxy{Addr: c.addr, Password: c.password} })
@@ -377,5 +380,81 @@ func TestAFetchThatCannotStartWritesNothing(t *testing.T) {
 				t.Errorf("the steps %q, the pulls %+v", got, w.pulls)
 			}
 		})
+	}
+}
+
+// TestAFetchWhoseAddressIsTakenEndsItsStep pins an engine proxy's address that another
+// listener has, such as a second run's image step on the machine: the step ends failed
+// with an error whose fix is one image step at a time, and the wall pulls nothing.
+func TestAFetchWhoseAddressIsTakenEndsItsStep(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	byReference(g)
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	w := &pullingWall{}
+	sp.Wall, sp.Image, sp.ImagesAllow = w, "example.com/agent:1", []string{"registry.example/"}
+	sp.EngineProxy = &session.EngineProxy{Addr: taken.Addr().String(), Password: enginePassword}
+	r, err := session.Open(context.Background(), opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.FetchImage(context.Background())
+	if want := "Run one image step at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at " + taken.Addr().String() + " ("; err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("FetchImage: %v, want an error that starts with %s", err, want)
+	}
+	closed, err := r.Close(context.Background(), session.Outcome{State: event.StateSucceeded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := stepOrder(events(t, &session.Result{Dir: closed.Dir}))
+	if len(got) != 4 || got[0] != "step 1 image "+pinned || !strings.HasPrefix(got[1], "log <nil> 1 Run one image step at a time") || got[2] != "step 1 failed -1" || len(w.pulls) != 0 {
+		t.Errorf("the steps %q, the pulls %+v", got, w.pulls)
+	}
+}
+
+// TestAFetchThatPanicsEndsItsStep pins a pull that panics, as a caller that recovers
+// meets it: the panic reaches the caller, the image step is ended failed, the engine
+// proxy's forwarder takes no connection, and the run starts a host step after it.
+func TestAFetchThatPanicsEndsItsStep(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	byReference(g)
+	addr := freeLoopback(t)
+	w := &pullingWall{}
+	w.during = func(context.Context) error { panic("the engine's client") }
+	sp.Wall, sp.Image, sp.ImagesAllow = w, "example.com/agent:1", []string{"registry.example/"}
+	sp.EngineProxy = &session.EngineProxy{Addr: addr, Password: enginePassword}
+	r, err := session.Open(context.Background(), opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered := func() (v any) {
+		defer func() { v = recover() }()
+		r.FetchImage(context.Background())
+		return nil
+	}()
+	if recovered != "the engine's client" {
+		t.Errorf("the caller recovered %v", recovered)
+	}
+	if conn, err := net.Dial("tcp", addr); err == nil {
+		conn.Close()
+		t.Error("the engine proxy takes a connection after the panic")
+	}
+	s, err := r.StartStep(event.StepFetch, "fetch github.com/example-org/app")
+	if err != nil {
+		t.Fatalf("a host step after the panic: %v", err)
+	}
+	if err := s.Exit(event.StateSucceeded, 0); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := r.Close(context.Background(), session.Outcome{State: event.StateSucceeded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"step 1 image " + pinned, "step 1 failed -1", "step 2 fetch fetch github.com/example-org/app", "step 2 succeeded 0", "run exited"}
+	if got := stepOrder(events(t, &session.Result{Dir: closed.Dir})); !slices.Equal(got, want) {
+		t.Errorf("the steps:\n%q\nwant\n%q", got, want)
 	}
 }

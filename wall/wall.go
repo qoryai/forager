@@ -106,16 +106,16 @@ type Request struct {
 	// RelayImage is the image the relay starts from, the machine's default; empty is
 	// Image.
 	RelayImage string
-	// Pull is set when the run's policy named Image by its reference pinned by digest: a
+	// Pull is set when Image is the run's image by reference, pinned by digest: a
 	// [Puller] fetched it before Prepare, and Prepare finds it by that digest and pulls
 	// nothing. Such an image never gets nested Docker.
 	Pull bool
 }
 
-// Puller is a wall that fetches the image a run names by its reference, for a [Request]
-// with Pull, before [Wall.Prepare]: the engine pulls it unless it holds it by that
-// digest, and an image whose user is root is refused, image_user_root. The session runs
-// Pull as the run's image step.
+// Puller is a wall that fetches a run's image by reference, for a [Request] with Pull,
+// before [Wall.Prepare]: the engine pulls it unless it holds it by that digest, and an
+// image whose user is root is refused, image_user_root. The session runs Pull as the
+// run's image step.
 type Puller interface {
 	// Pull fetches req.Image; a request without Pull fetches nothing. With ca, the run's
 	// certificate as PEM, the engine trusts ca for the registry host of req.Image and for

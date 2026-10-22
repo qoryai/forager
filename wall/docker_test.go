@@ -66,8 +66,10 @@ type recorder struct {
 	endless  string
 	streamed int64
 	stopped  bool
-	// onPull, when set, is called at each docker pull, before the pull's answer.
+	// onPull, when set, is called at each docker pull, before the pull's answer, and
+	// onCopy at each docker cp.
 	onPull func()
+	onCopy func()
 }
 
 func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
@@ -134,6 +136,9 @@ func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error)
 	case strings.Contains(line, " image inspect ") && r.user != "":
 		return []byte(`{"Env":["PATH=/bin"],"User":` + r.user + "}\n"), nil
 	case strings.Contains(line, " cp --follow-link "):
+		if r.onCopy != nil {
+			r.onCopy()
+		}
 		_, inside, _ := strings.Cut(argv[len(argv)-2], ":")
 		if f, ok := r.files[inside]; ok {
 			return tarred(f), nil

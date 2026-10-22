@@ -60,10 +60,11 @@ func checkShown(t *testing.T, what, out string, wantAddr bool) {
 // flag: a value, a pointer and an OpenSpec that contains one show the address and
 // never the password, so a %v of a run's spec in a log line leaks no secret.
 //
-// fmt calls no method of an argument under %w outside fmt.Errorf with an error, or
-// under %p of a value that is not a pointer: it prints the fields as %v would with
+// fmt calls no method of an argument under %w, since an EngineProxy is not an error,
+// or under %p of a value that is not a pointer: it prints the fields as %v would with
 // no methods (badVerb in fmt/print.go). Those two cases run for an OpenSpec alone,
-// whose EngineProxy field is a pointer that fmt then prints as an address.
+// whose EngineProxy field is a pointer that fmt then prints as an address. The third
+// case, a field that is not exported, is TestAnUnexportedEngineProxyPrintsItsFields.
 func TestAnEngineProxyPrintsItsAddressAlone(t *testing.T) {
 	p := session.EngineProxy{Addr: engineProxyAddr, Password: enginePassword}
 	spec := session.OpenSpec{RunID: "run-1", EngineProxy: &p}
@@ -177,5 +178,33 @@ func TestAnEngineProxyMarshalsItsAddressAlone(t *testing.T) {
 			t.Errorf("json.Marshal of %s wrote %s, want %s", c.name, out, c.want)
 		}
 		checkShown(t, "json.Marshal of "+c.name, string(out), true)
+	}
+}
+
+// TestAnUnexportedEngineProxyPrintsItsFields pins the third case that the doc of
+// EngineProxy lists: fmt calls no method of a value in a struct field that is not
+// exported, and prints the password with the address, under %v and %+v and in
+// log/slog's text handler. When fmt calls Format there, this test fails, and the doc
+// and the CHANGELOG drop the case.
+func TestAnUnexportedEngineProxyPrintsItsFields(t *testing.T) {
+	type unexported struct {
+		name  string
+		proxy session.EngineProxy
+	}
+	held := unexported{name: "n", proxy: session.EngineProxy{Addr: engineProxyAddr, Password: enginePassword}}
+	var b bytes.Buffer
+	slog.New(slog.NewTextHandler(&b, nil)).Info("open", "config", held)
+	for what, out := range map[string]string{
+		"%v":                    fmt.Sprintf("%v", held),
+		"%+v":                   fmt.Sprintf("%+v", held),
+		"the slog text handler": b.String(),
+	} {
+		if !strings.Contains(out, enginePassword) {
+			t.Errorf("%s of an unexported EngineProxy field printed %s, without the password the doc says it prints", what, out)
+		}
+	}
+	// encoding/json writes no field that is not exported.
+	if out, err := json.Marshal(held); err != nil || string(out) != "{}" {
+		t.Errorf("json.Marshal of an unexported EngineProxy field wrote %s, %v", out, err)
 	}
 }

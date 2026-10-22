@@ -10,29 +10,33 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/wall"
 )
 
-// FetchImage fetches the run's image that the policy names by its reference, as a host
-// step of kind event.StepImage with the reference as its name, before the first join or
-// between joins: the wall's [wall.Puller] pulls it, unless the engine holds it by that
-// digest, and checks its user. With OpenSpec.EngineProxy the engine sends the pull
-// through the run's proxy. For the step alone, a forwarder listens at its Addr, passes
-// on only a request with its Password, and reaches the gateway's proxy as the host proxy
-// does, and, for a run with a certificate authority, the engine trusts the run's
-// certificate for the image's registry host and for each host of the run's
-// credentials. Without EngineProxy the engine pulls over the machine's network. A join after the fetch finds the image by its digest and writes no
-// image step; the first join of a run with no fetch fetches the image in its image
-// step, after its dev.qory.session.started.
+// FetchImage fetches the run's image by reference, the policy's image pinned by digest,
+// as a host step of kind event.StepImage with the reference as its name, before the
+// first join or between joins: the wall's [wall.Puller] pulls it, unless the engine
+// holds it by that digest, and checks its user. With OpenSpec.EngineProxy the engine
+// sends the pull through the run's proxy. For the step alone, a forwarder listens at
+// its Addr, passes on only a request with its Password, and reaches the gateway's proxy
+// as the host proxy does, and, for a run with a certificate authority, the engine
+// trusts the run's certificate for the image's registry host and for each host of the
+// run's credentials. Without EngineProxy the engine pulls over the machine's network.
+// A join after the fetch finds the image by its digest and writes no image step; the
+// first join of a run with no fetch fetches the image in its image step, after its
+// dev.qory.session.started.
 //
 // A run whose image the machine defines, or whose wall is no wall.Puller, has nothing to
 // fetch: FetchImage writes no step and returns nil.
 //
 // An error before the step means nothing is written: the run has no wall, a session of
 // the run is running, the run is closed, a host step is open, a step fetched the image
-// already, or EngineProxy is not a loopback host:port with a password. A failure of the
-// fetch writes its line in the step and ends the step failed, or cancelled when ctx
-// ended, with -1; an image whose user is root is a [*Refusal], image_user_root.
+// already, or EngineProxy is not a loopback host:port with a password of the shape a
+// forwarder checks. A failure of the fetch writes its line in the step and ends the
+// step failed, or cancelled when ctx ended, with -1; an image whose user is root is a
+// [*Refusal], image_user_root. When the pull panics, the step ends failed and the
+// panic continues.
 func (r *Run) FetchImage(ctx context.Context) error {
 	if r.open.Wall == nil {
 		return errors.New("Open the run with a wall to fetch its image: a run without a wall has no image.")
@@ -59,6 +63,9 @@ func (r *Run) FetchImage(ctx context.Context) error {
 	}
 	r.hostStep = r.startStep(event.StepImage, r.img.Ref)
 	step := r.hostStep
+	// A panic that a caller recovers leaves no host step open; end does nothing for a
+	// step that ended.
+	defer step.end(event.StateFailed, -1)
 	if err := r.pullImage(ctx, puller); err != nil {
 		r.writeLog("stderr", 0, step.n, failureLine(err))
 		state := event.StateFailed
@@ -73,17 +80,18 @@ func (r *Run) FetchImage(ctx context.Context) error {
 	return nil
 }
 
-// wallRequest is what the run's wall is asked for: the run's image, and Pull for an
-// image by reference.
+// wallRequest is the request that the session passes to the run's wall: the run's
+// image, and Pull for an image by reference.
 func (r *Run) wallRequest() wall.Request {
 	return wall.Request{RunID: r.id, Image: r.img.Ref, Runtime: r.img.Runtime, Docker: r.img.Docker, RelayImage: r.relayImage, Pull: r.byReference}
 }
 
 // pullImage runs the wall's pull of the run's image by reference: with
-// OpenSpec.EngineProxy behind the engine proxy's forwarder, which it closes before it
-// returns, and with the run's certificate for the image's registry host and the hosts
-// of the run's credentials. The caller holds r.joining and writes the step.
-func (r *Run) pullImage(ctx context.Context, puller wall.Puller) error {
+// OpenSpec.EngineProxy behind the engine proxy's forwarder, which a deferred call
+// closes, also on a panic, and with the run's certificate for the image's registry host
+// and the hosts of the run's credentials. The caller holds r.joining and writes the
+// step.
+func (r *Run) pullImage(ctx context.Context, puller wall.Puller) (err error) {
 	p := r.open.EngineProxy
 	if p == nil {
 		return puller.Pull(ctx, r.wallRequest(), nil, nil)
@@ -94,30 +102,32 @@ func (r *Run) pullImage(ctx context.Context, puller wall.Puller) error {
 	// The masker replaces the password in every line of the run's record from here on.
 	r.masker.AddProxy(proxyUser, p.Password)
 	var fwd *forwarder
-	var err error
 	if r.remote == nil {
 		fwd, err = listenForwarder(p.Addr, r.disc.Proxy.Address, r.answer.ProxySecret, p.Password)
 	} else {
 		fwd, err = listenForwarding(p.Addr, forwarding{dial: r.link.DialProxy, password: p.Password})
 	}
 	if err != nil {
-		return accesskey.ShownError(err)
+		return fmt.Errorf("Run one image step at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at %s (%s).", accesskey.ShownValue(p.Addr, false), accesskey.ShownError(err))
 	}
+	defer func() {
+		err = errors.Join(err, fwd.Close())
+		// An engine's error may quote its proxy setting, the password with it.
+		if err != nil && strings.Contains(err.Error(), p.Password) {
+			err = errors.New(r.masker.Replace(err.Error()))
+		}
+	}()
 	var hosts []string
 	for _, c := range r.answer.CredentialHosts {
 		hosts = append(hosts, c.Hosts...)
 	}
-	err = puller.Pull(ctx, r.wallRequest(), r.authority, hosts)
-	err = errors.Join(err, fwd.Close())
-	// An engine's error may quote its proxy setting, the password with it.
-	if err != nil && strings.Contains(err.Error(), p.Password) {
-		err = errors.New(r.masker.Replace(err.Error()))
-	}
-	return err
+	return puller.Pull(ctx, r.wallRequest(), r.authority, hosts)
 }
 
 // checkEngineProxy refuses an engine proxy whose address is not a loopback host:port
-// with a port from 1 to 65535, or whose password is empty. Nil is no engine proxy.
+// with a port from 1 to 65535, or whose password is not 1 to [link.MaxSecret] printable
+// ASCII characters other than a space, the shape a forwarder checks. Nil is no engine
+// proxy.
 func checkEngineProxy(p *EngineProxy) error {
 	if p == nil {
 		return nil
@@ -127,6 +137,9 @@ func checkEngineProxy(p *EngineProxy) error {
 	}
 	if p.Password == "" {
 		return errors.New("Give the engine proxy the password from the daemon's proxy setting: the password is empty.")
+	}
+	if link.CheckSecret(p.Password) != nil {
+		return fmt.Errorf("Set the daemon's proxy password to 1 to %d printable ASCII characters other than a space: the forwarder checks only that shape.", link.MaxSecret)
 	}
 	return nil
 }
