@@ -143,12 +143,12 @@ func (r *Run) maskEngine(err error, p *EngineProxy) error {
 }
 
 // unlistened is the error of a forwarder that cannot listen at the engine proxy's
-// address addr: an address in use, such as by a second run's image step, has the fix
-// of one image step at a time, and any other failure, such as a port this user may not
-// listen at, a fix about the address.
+// address addr: an address in use, such as by a second run's image step or engine
+// proxy, has the fix of one at a time, and any other failure, such as a port this user
+// may not listen at, a fix about the address.
 func unlistened(addr string, err error) error {
 	if errors.Is(err, syscall.EADDRINUSE) {
-		return fmt.Errorf("Run one image step at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at %s (%s).", accesskey.ShownValue(addr, false), accesskey.ShownError(err))
+		return fmt.Errorf("Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at %s (%s).", accesskey.ShownValue(addr, false), accesskey.ShownError(err))
 	}
 	return fmt.Errorf("Set the engine proxy's address to one this user can listen at: the forwarder cannot listen at %s (%s).", accesskey.ShownValue(addr, false), accesskey.ShownError(err))
 }

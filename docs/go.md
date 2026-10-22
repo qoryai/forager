@@ -331,7 +331,7 @@ starts with the fix, and opens nothing:
 | no `OpenSpec.EngineProxy` | `Set OpenSpec.EngineProxy to the engine's proxy setting: the run has no engine proxy.` |
 | no host step is open | `Start a host step before you open the engine proxy: the engine proxy opens only during a host step.` |
 | the run's engine proxy is open | `Close the engine proxy before you open it again: the engine has one proxy setting, and the run's engine proxy is open.` |
-| the address is in use | `Run one image step at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at 127.0.0.1:3129 (…).` |
+| the address is in use | `Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at 127.0.0.1:3129 (…).` |
 | a certificate cannot be written | `Make /etc/docker/certs.d writable for this user, as the machine's start unit does: the run's certificate for registry.example could not be written (…).` |
 | while a `Join` runs | `Open the engine proxy after Join returns: a session of the run is still running.` |
 | after `Close` | `Open a new run for the engine proxy: the run is closed.` |

@@ -385,7 +385,8 @@ func TestAFetchThatCannotStartWritesNothing(t *testing.T) {
 
 // TestAFetchWhoseAddressIsTakenEndsItsStep pins an engine proxy's address that another
 // listener has, such as a second run's image step on the machine: the step ends failed
-// with an error whose fix is one image step at a time, and the wall pulls nothing.
+// with an error whose fix is one image step or engine proxy at a time, and the wall
+// pulls nothing.
 func TestAFetchWhoseAddressIsTakenEndsItsStep(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0")
 	byReference(g)
@@ -402,7 +403,7 @@ func TestAFetchWhoseAddressIsTakenEndsItsStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = r.FetchImage(context.Background())
-	if want := "Run one image step at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at " + taken.Addr().String() + " ("; err == nil || !strings.HasPrefix(err.Error(), want) {
+	if want := "Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at " + taken.Addr().String() + " ("; err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Errorf("FetchImage: %v, want an error that starts with %s", err, want)
 	}
 	closed, err := r.Close(context.Background(), session.Outcome{State: event.StateSucceeded})
@@ -410,7 +411,7 @@ func TestAFetchWhoseAddressIsTakenEndsItsStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := stepOrder(events(t, &session.Result{Dir: closed.Dir}))
-	if len(got) != 4 || got[0] != "step 1 image "+pinned || !strings.HasPrefix(got[1], "log <nil> 1 Run one image step at a time") || got[2] != "step 1 failed -1" || len(w.pulls) != 0 {
+	if len(got) != 4 || got[0] != "step 1 image "+pinned || !strings.HasPrefix(got[1], "log <nil> 1 Run one image step or engine proxy at a time") || got[2] != "step 1 failed -1" || len(w.pulls) != 0 {
 		t.Errorf("the steps %q, the pulls %+v", got, w.pulls)
 	}
 }

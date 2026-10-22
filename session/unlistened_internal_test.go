@@ -9,9 +9,9 @@ import (
 )
 
 // TestAnEngineProxyThatCannotListenHasTheFixOfItsCause pins unlistened: an address in
-// use, as a listener of the test's makes it, has the fix of one image step at a time;
-// a port this user may not listen at and an address the machine does not have, as
-// net.Listen returns them, have the fix about the address.
+// use, as a listener of the test's makes it, has the fix of one image step or engine
+// proxy at a time; a port this user may not listen at and an address the machine does
+// not have, as net.Listen returns them, have the fix about the address.
 func TestAnEngineProxyThatCannotListenHasTheFixOfItsCause(t *testing.T) {
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -31,7 +31,7 @@ func TestAnEngineProxyThatCannotListenHasTheFixOfItsCause(t *testing.T) {
 		err  error
 		fix  string
 	}{
-		{"an address in use", inUse, "Run one image step at a time on this machine: "},
+		{"an address in use", inUse, "Run one image step or engine proxy at a time on this machine: "},
 		{"a port this user may not listen at", listenErr(syscall.EACCES), "Set the engine proxy's address to one this user can listen at: "},
 		{"an address the machine does not have", listenErr(syscall.EADDRNOTAVAIL), "Set the engine proxy's address to one this user can listen at: "},
 	} {

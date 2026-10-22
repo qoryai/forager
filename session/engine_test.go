@@ -208,7 +208,7 @@ func TestAnEngineProxyThatCannotOpen(t *testing.T) {
 					t.Fatal(err)
 				}
 			}},
-		{"an address in use", "Run one image step at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at " + taken.Addr().String() + " (", nil},
+		{"an address in use", "Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at " + taken.Addr().String() + " (", nil},
 		{"a closed run", "Open a new run for the engine proxy: the run is closed.",
 			func(r *session.Run, _ *session.Step) {
 				r.Close(context.Background(), session.Outcome{State: event.StateSucceeded})
@@ -244,6 +244,66 @@ func TestAnEngineProxyThatCannotOpen(t *testing.T) {
 			}
 			if c.name != "an address in use" && c.name != "a second holder" && sp.EngineProxy != nil {
 				refused(t, sp.EngineProxy.Addr, "after a refusal")
+			}
+		})
+	}
+}
+
+// TestAnEngineProxyDuringAJoin pins EngineProxy while a join runs: when the join request
+// reaches the gateway, EngineProxy returns the error whose fix is to wait for Join.
+func TestAnEngineProxyDuringAJoin(t *testing.T) {
+	ctx := context.Background()
+	r, c := engineRun(t, false, "FAKE_EXIT=0")
+	c.step.Exit(event.StateSucceeded, 0)
+	var during error
+	c.g.OnJoin(func(linktest.Join) linktest.Reply {
+		_, during = r.EngineProxy(nil)
+		return linktest.Reply{Status: 200, Body: map[string]any{"version": 1, "session": 1}}
+	})
+	if _, err := r.Join(ctx, c.sp.SessionSpec); err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+	if want := "Open the engine proxy after Join returns: a session of the run is still running."; during == nil || during.Error() != want {
+		t.Errorf("EngineProxy during the join: %v, want %s", during, want)
+	}
+	refused(t, c.sp.EngineProxy.Addr, "after a refusal during a join")
+}
+
+// TestAnEngineProxysCertificateThatStaysIsReported pins a certificate that the next join
+// or the run's close cannot remove: OpenSpec.Report gets the line whose fix is to remove
+// the file by hand.
+func TestAnEngineProxysCertificateThatStaysIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes a file from a directory of mode 0500")
+	}
+	ctx := context.Background()
+	for _, end := range []string{"Join", "Run.Close"} {
+		t.Run(end, func(t *testing.T) {
+			r, c := engineRun(t, false, "FAKE_EXIT=0")
+			if _, err := r.EngineProxy([]string{"registry.example"}); err != nil {
+				t.Fatal(err)
+			}
+			host := filepath.Join(c.certs, "registry.example")
+			if err := os.Chmod(host, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(host, 0o755) })
+			c.step.Exit(event.StateSucceeded, 0)
+			var err error
+			if end == "Join" {
+				_, err = r.Join(ctx, c.sp.SessionSpec)
+			} else {
+				_, err = r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+			f := filepath.Join(host, "qory-run-"+r.ID()+".crt")
+			want := "Remove " + f + " by hand: the run's certificate stays trusted for registry.example until it is removed (remove " + f + ": permission denied)."
+			if got := c.reports(); !slices.Contains(got, want) {
+				t.Errorf("after %s, the reports %q lack %q", end, got, want)
 			}
 		})
 	}
