@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -111,6 +112,9 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 		return nil, err
 	}
 	if err := checkHarnessHome(spec.HarnessHome); err != nil {
+		return nil, err
+	}
+	if err := checkInputsDir(spec.InputsDir); err != nil {
 		return nil, err
 	}
 	if err := checkHarness(spec.Harness); err != nil {
@@ -473,7 +477,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the session's start.
 	endStep(event.StateSucceeded)
 	started, start = true, time.Now()
-	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, interactive, cols, rows))
+	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, inside, interactive, cols, rows))
+	if r.remote != nil {
+		r.open.Report(r.launchLine(spec, n, prepared))
+	}
 	// policyApplied is this session's members of policy_applied: its variables as
 	// resolved, the variables its credentials' placeholders are in, and the harness's
 	// hosts. Each reload while the session runs records them too.
@@ -748,14 +755,26 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 // session's that contains qak_ or qrk_ in any case is sent as a phrase in its place:
 // accesskey.ShownName's for the runtime, the image, its name and its container
 // runtime; accesskey.ShownValue's for the directory, the command, each argument, the
-// runtime's version, the name of each setup command and each harness source.
-func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, interactive bool, cols, rows int) map[string]any {
-	started := map[string]any{
-		"session": n, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(prepared.Command, false), "args": shownValues(prepared.Args),
-		"dir": accesskey.ShownValue(spec.Dir, false), "interactive": interactive,
-	}
+// runtime's version, the name of each setup command and each harness source. In a run
+// with a run key, dir is /workspace, the command and the arguments have <run>, <home>
+// and <inputs> in place of the run directory, the harness home and the inputs
+// directory (neutralPaths), and harness is left out: launchLine reports the values of
+// this machine.
+func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, inside func(string) string, interactive bool, cols, rows int) map[string]any {
+	command, args, dir := prepared.Command, prepared.Args, spec.Dir
 	if r.byReference {
-		started["dir"] = accesskey.ShownValue(shown.Dir, false)
+		dir = shown.Dir
+	}
+	if r.remote != nil {
+		neutral := r.neutralPaths(spec.HarnessHome, spec.InputsDir, inside)
+		command, args, dir = neutral.Replace(command), make([]string, len(prepared.Args)), workspaceInside
+		for i, a := range prepared.Args {
+			args[i] = neutral.Replace(a)
+		}
+	}
+	started := map[string]any{
+		"session": n, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(command, false), "args": shownValues(args),
+		"dir": accesskey.ShownValue(dir, false), "interactive": interactive,
 	}
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = accesskey.ShownValue(v, false)
@@ -785,7 +804,7 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 			started["docker"] = true
 		}
 	}
-	if len(spec.Harness) > 0 {
+	if len(spec.Harness) > 0 && r.remote == nil {
 		harness := make([]map[string]any, len(spec.Harness))
 		for i, h := range spec.Harness {
 			harness[i] = map[string]any{"source": accesskey.ShownValue(h.Source, false), "commit": h.Commit}
@@ -793,4 +812,55 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 		started["harness"] = harness
 	}
 	return started
+}
+
+// neutralPaths writes, in a value of a run with a run key, <run> in place of the run
+// directory, <home> in place of the harness home and <inputs> in place of the inputs
+// directory: the home and the inputs at their path on this machine and, when it
+// differs, at their path inside the enclosure. Of two paths where one contains the
+// other, the longer is replaced.
+func (r *Run) neutralPaths(home, inputs string, inside func(string) string) *strings.Replacer {
+	type pair struct{ from, to string }
+	pairs := []pair{{r.dir, "<run>"}}
+	for _, p := range []pair{{home, "<home>"}, {inputs, "<inputs>"}} {
+		if p.from == "" {
+			continue
+		}
+		pairs = append(pairs, p)
+		if in := inside(p.from); in != p.from {
+			pairs = append(pairs, pair{in, p.to})
+		}
+	}
+	slices.SortStableFunc(pairs, func(a, b pair) int { return len(b.from) - len(a.from) })
+	var old []string
+	for _, p := range pairs {
+		old = append(old, p.from, p.to)
+	}
+	return strings.NewReplacer(old...)
+}
+
+// launchLine is the line a run with a run key reports for session n, in place of the
+// values its dev.qory.session.started leaves out: the host name, the working
+// directory, the harness home, the inputs directory, the command and the arguments as
+// they are on this machine, and each harness source with its commit. A value that
+// contains qak_ or qrk_ is the phrase in its place, and the run's masker replaces each
+// forwarder's password in the line.
+func (r *Run) launchLine(spec runSpec, n int, prepared runtimes.Launch) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "session %d starts on this machine:", n)
+	if h := hostname(); h != "" {
+		fmt.Fprintf(&b, " host %s,", accesskey.ShownName(h, false))
+	}
+	fmt.Fprintf(&b, " dir %q,", accesskey.ShownValue(spec.Dir, false))
+	if spec.HarnessHome != "" {
+		fmt.Fprintf(&b, " home %q,", accesskey.ShownValue(spec.HarnessHome, false))
+	}
+	if spec.InputsDir != "" {
+		fmt.Fprintf(&b, " inputs %q,", accesskey.ShownValue(spec.InputsDir, false))
+	}
+	fmt.Fprintf(&b, " command %q, args %q", accesskey.ShownValue(prepared.Command, false), shownValues(prepared.Args))
+	for _, h := range spec.Harness {
+		fmt.Fprintf(&b, ", harness %q at %s", accesskey.ShownValue(h.Source, false), h.Commit)
+	}
+	return r.masker.Replace(b.String())
 }

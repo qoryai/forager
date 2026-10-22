@@ -203,6 +203,12 @@ type SessionSpec struct {
 	// path; empty means none. When set, the session sets QORY_HARNESS_HOME to it, as one
 	// of Forager's names, like QORY_RUN_ID.
 	HarnessHome string
+	// InputsDir is the run's inputs directory on this machine, an absolute path outside
+	// the run directory; empty means none. [Run.Join] refuses a relative path. The
+	// session passes it to no process: in a run with a run key,
+	// dev.qory.session.started has <inputs> in place of each occurrence of it in the
+	// command and the arguments.
+	InputsDir string
 	// Harness are the harness sources the session's compose used, each with the commit
 	// compose used, reported in dev.qory.session.started as harness; nil reports none.
 	Harness []HarnessSource

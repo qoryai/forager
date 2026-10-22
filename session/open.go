@@ -402,8 +402,12 @@ func (r *Run) start(ctx context.Context) (err error) {
 	r.startedAt = time.Now()
 	// A value of the run's that contains qak_ or qrk_ in any case is sent as a phrase in
 	// its place: accesskey.ShownName's for the host and the wall, and server.ShownLabels'
-	// and server.ShownAbout's for the labels and about.
-	started := map[string]any{"opened_by": event.OpenedByRun, "forager_version": spec.ForagerVersion, "host": accesskey.ShownName(hostname(), false)}
+	// and server.ShownAbout's for the labels and about. A run with a run key has no host:
+	// each session's line of Report has it.
+	started := map[string]any{"opened_by": event.OpenedByRun, "forager_version": spec.ForagerVersion}
+	if r.remote == nil {
+		started["host"] = accesskey.ShownName(hostname(), false)
+	}
 	if spec.Wall != nil {
 		started["wall"] = accesskey.ShownName(spec.Wall.Name(), false)
 	}

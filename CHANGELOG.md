@@ -411,6 +411,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A run with a run key writes neutral values in its events: `dev.qory.run.started`
+  has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
+  `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run
+  directory, the harness home and the inputs directory, and `harness` is left out.
+  The session reports the values of the machine to `OpenSpec.Report` in one line per
+  session, `session <n> starts on this machine: ...`. A run without a run key writes
+  the values of the machine, as before.
 - `dev.qory.run.step_started` of kind `setup`: Forager writes one per setup command, in
   a separate container or inside the wall. Before, Forager wrote no `setup` step.
 - `dev.qory.session.started` contains `setup_commands`, the names of the session's
@@ -1000,6 +1007,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `session.SessionSpec.InputsDir`, the run's inputs directory, an absolute path: in a
+  run with a run key, `dev.qory.session.started` has `<inputs>` in place of each
+  occurrence of it in `command` and `args`. `Join` refuses a relative path with
+  `set the inputs directory to an absolute path: "pool/in" is relative`.
 - `session.RemoteGateway.TLS`, a `server.RemoteTLS`: how the session trusts the
   certificate of the run key's gateway, on the run's link and on a resend's. With
   `CAFile`, the session checks the chain against the authorities of that PEM file in
