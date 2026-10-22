@@ -264,7 +264,7 @@ func RunSetupCommand(args []string, stderr io.Writer) int {
 		if shown == "" {
 			shown = `""`
 		}
-		fmt.Fprintf(stderr, "Run the setup command through QORY_RUN_SOCKET: the socket %s is not reachable.\n", shown)
+		fmt.Fprintf(stderr, "Run setup outside the wall's container on this machine: the run socket %s does not reach the container, so setup inside cannot write its steps.\n", shown)
 		return setupRunnerFailed
 	}
 	record := func(m map[string]any) descriptor.Record {

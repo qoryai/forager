@@ -103,7 +103,7 @@ func TestTheSetupRunnerNeedsTheSocket(t *testing.T) {
 		t.Setenv(EnvSocket, addr)
 		var stderr bytes.Buffer
 		code := RunSetupCommand([]string{"1", "--", "touch", ran}, &stderr)
-		if want := "Run the setup command through QORY_RUN_SOCKET: the socket " + shown + " is not reachable.\n"; code != 125 || stderr.String() != want {
+		if want := "Run setup outside the wall's container on this machine: the run socket " + shown + " does not reach the container, so setup inside cannot write its steps.\n"; code != 125 || stderr.String() != want {
 			t.Errorf("exit %d, stderr %q, want 125 and %q", code, stderr.String(), want)
 		}
 	}
