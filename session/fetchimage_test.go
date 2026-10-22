@@ -403,7 +403,7 @@ func TestAFetchWhoseAddressIsTakenEndsItsStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = r.FetchImage(context.Background())
-	if want := "Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at " + taken.Addr().String() + " ("; err == nil || !strings.HasPrefix(err.Error(), want) {
+	if want := "Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and the engine proxy's forwarder cannot listen at " + taken.Addr().String() + " ("; err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Errorf("FetchImage: %v, want an error that starts with %s", err, want)
 	}
 	closed, err := r.Close(context.Background(), session.Outcome{State: event.StateSucceeded})

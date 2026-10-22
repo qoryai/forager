@@ -606,7 +606,9 @@ var certsHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a
 // every directory it made. Empty dir means /etc/docker/certs.d, where Docker Engine
 // reads a registry's authorities from. A host name or an IPv4 address in lower case,
 // with an optional port, gets a certificate; any other host, such as a *. pattern,
-// gets none. A failure to write removes what was written before it.
+// gets none. A symbolic link at dir/<host> or at the file is refused, so the
+// certificate goes to no place outside dir. A failure to write removes what was
+// written before it.
 func Trust(dir, runID string, ca []byte, hosts []string) (func() error, error) {
 	if dir == "" {
 		dir = defaultCertsDir
@@ -632,19 +634,32 @@ func Trust(dir, runID string, ca []byte, hosts []string) (func() error, error) {
 		}
 		seen[host] = true
 		hostDir := filepath.Join(dir, host)
-		if _, err := os.Lstat(hostDir); errors.Is(err, fs.ErrNotExist) {
+		info, err := os.Lstat(hostDir)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
 			if err := os.Mkdir(hostDir, 0o755); err != nil {
 				return nil, errors.Join(unwritten(dir, host, err), remove())
 			}
 			made = append(made, hostDir)
+		case err == nil && info.Mode()&fs.ModeSymlink != 0:
+			return nil, errors.Join(linked("Replace the symbolic link "+accesskey.ShownValue(hostDir, false)+" with a directory", host), remove())
 		}
 		f := filepath.Join(hostDir, "qory-run-"+runID+".crt")
+		if info, err := os.Lstat(f); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+			return nil, errors.Join(linked("Remove the symbolic link "+accesskey.ShownValue(f, false), host), remove())
+		}
 		if err := os.WriteFile(f, ca, 0o644); err != nil {
 			return nil, errors.Join(unwritten(dir, host, err), remove())
 		}
 		files = append(files, f)
 	}
 	return remove, nil
+}
+
+// linked is the error of a symbolic link where the run's certificate for host would be
+// written, a directory of dir or the file in it, with fix first.
+func linked(fix, host string) error {
+	return fmt.Errorf("%s: the run's certificate for %s is never written through a symbolic link.", fix, accesskey.ShownValue(host, false))
 }
 
 // unwritten is the error of a certificate for host that could not be written in dir.

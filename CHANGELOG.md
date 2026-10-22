@@ -931,7 +931,9 @@ release may change what an existing document does, and says so under Upgrading.
   with `--pull=never`, so the engine pulls such an image in the image step alone.
 - `wall.Trust` writes the run's certificate as `qory-run-<id>.crt` in a certificates
   directory, `/etc/docker/certs.d` by default, for each of a list of hosts, as
-  `(*wall.Docker).Pull` does, and returns what removes the files.
+  `(*wall.Docker).Pull` does, and returns what removes the files. Both refuse a
+  symbolic link at a host's directory or at the certificate's file, with an error that
+  starts with the fix.
 - `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
@@ -1025,13 +1027,15 @@ release may change what an existing document does, and says so under Upgrading.
   mount of `wall.Docker.CertsDir`, where the engine reads the certificates it trusts
   for a registry.
 - `(*session.Run).EngineProxy(hosts)`: in a run with no wall, the machine's container
-  engine sends its requests during a host step, such as a build's pulls and push,
-  through the run's proxy at `OpenSpec.EngineProxy`, so a build runs on a machine whose
-  only route out is the gateway. For a run with a certificate authority, it writes the
-  run's certificate in `/etc/docker/certs.d/<host>/` for each of `hosts`. The returned
-  `close`, the next `Join` and `Close` end it and remove the certificates. It returns
-  an error that starts with the fix for a walled run, without `OpenSpec.EngineProxy`,
-  with no host step open and while the run's engine proxy is open.
+  engine sends its requests, such as a build's pulls and push, through the run's proxy
+  at `OpenSpec.EngineProxy`, so a build runs on a machine whose only route out is the
+  gateway. It opens only while a host step is open, and stays open after the step
+  exits. For a run with a certificate authority, it writes the run's certificate in
+  `/etc/docker/certs.d/<host>/` for each of `hosts`. The returned `close` ends it and
+  removes the certificates; `Join` ends it before its join request, and an accepted
+  `Close` ends it. It returns an error that starts with the fix for a walled run,
+  without `OpenSpec.EngineProxy`, with no host step open and while the run's engine
+  proxy is open.
 - `(*session.Run).Setup`: runs setup commands in a separate container of the run's
   image, on the wall's internal network, one `setup` step each; the container runs until
   the run closes. `SetupSpec.ForagerFiles` and `SetupSpec.Written` are checked against

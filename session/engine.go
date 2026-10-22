@@ -40,23 +40,26 @@ func (e *engineProxies) held() bool {
 }
 
 // close ends o, when it is open still, or the open engine proxy when o is nil: its
-// forwarder takes no connection, and its certificates are removed.
+// forwarder takes no connection, and its certificates are removed. o stays the open
+// engine proxy until both are done, so a second EngineProxy is refused until then and
+// writes no certificate that o's removal would remove.
 func (e *engineProxies) close(o *engineOpen) error {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if o == nil {
 		o = e.open
 	}
 	if o == nil || e.open != o {
-		e.mu.Unlock()
 		return nil
 	}
+	err := errors.Join(o.fwd.Close(), o.remove())
 	e.open = nil
-	e.mu.Unlock()
-	return errors.Join(o.fwd.Close(), o.remove())
+	return err
 }
 
-// closeEngine ends the open engine proxy at a join or at the close, and passes the
-// error of a certificate that could not be removed to OpenSpec.Report.
+// closeEngine ends the open engine proxy before a join request or at an accepted
+// close, and passes the error of a certificate that could not be removed to
+// OpenSpec.Report.
 func (r *Run) closeEngine() {
 	if err := r.engine.close(nil); err != nil {
 		r.open.Report(accesskey.ShownError(r.maskEngine(err, r.open.EngineProxy)).Error())
@@ -76,16 +79,18 @@ func (r *Run) closeEngine() {
 // step exits.
 //
 // close ends it: the forwarder takes no connection, and the certificates and the
-// directories made for them are removed. The next [Run.Join] and [Run.Close] end it
-// too, and pass the error of a certificate they could not remove to OpenSpec.Report.
-// A second close, or a close after a join or the run's close, returns nil.
+// directories made for them are removed. [Run.Join] ends it before its join request,
+// and an accepted [Run.Close] ends it; each passes the error of a certificate it could
+// not remove to OpenSpec.Report. A second close, or a close after a join or the run's
+// close, returns nil.
 //
 // An error means nothing is open and no certificate of the call is left: a session of
 // the run is running, the run is closed, the run has a wall, whose image step listens
 // at the engine proxy's address, OpenSpec.EngineProxy is nil or not a loopback
 // host:port with a password of the shape a forwarder checks, no host step is open, an
-// engine proxy of the run is open, the address is in use, or a certificate could not
-// be written. Each error starts with its fix and contains no password.
+// engine proxy of the run is open, the address is in use, a certificate could not be
+// written, or a symbolic link is where a certificate would be written. Each error
+// starts with its fix and contains no password.
 func (r *Run) EngineProxy(hosts []string) (close func() error, err error) {
 	if !r.joining.TryLock() {
 		return nil, errors.New("Open the engine proxy after Join returns: a session of the run is still running.")

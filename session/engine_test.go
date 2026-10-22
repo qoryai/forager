@@ -208,7 +208,10 @@ func TestAnEngineProxyThatCannotOpen(t *testing.T) {
 					t.Fatal(err)
 				}
 			}},
-		{"an address in use", "Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at " + taken.Addr().String() + " (", nil},
+		{"an address not on loopback", "Set the engine proxy's address to a loopback host:port, such as 127.0.0.1:3129: ", nil},
+		{"an empty password", "Give the engine proxy the password from the daemon's proxy setting: the password is empty.", nil},
+		{"a password of another shape", "Set the daemon's proxy password to 1 to 256 printable ASCII characters other than a space: the forwarder checks only that shape.", nil},
+		{"an address in use", "Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and the engine proxy's forwarder cannot listen at " + taken.Addr().String() + " (", nil},
 		{"a closed run", "Open a new run for the engine proxy: the run is closed.",
 			func(r *session.Run, _ *session.Step) {
 				r.Close(context.Background(), session.Outcome{State: event.StateSucceeded})
@@ -225,6 +228,12 @@ func TestAnEngineProxyThatCannotOpen(t *testing.T) {
 				sp.EngineProxy = nil
 			case "an address in use":
 				sp.EngineProxy.Addr = taken.Addr().String()
+			case "an address not on loopback":
+				sp.EngineProxy.Addr = strings.Replace(sp.EngineProxy.Addr, "127.0.0.1", "0.0.0.0", 1)
+			case "an empty password":
+				sp.EngineProxy.Password = ""
+			case "a password of another shape":
+				sp.EngineProxy.Password = "two words"
 			}
 			r, err := session.Open(context.Background(), opened(sp))
 			if err != nil {
@@ -243,7 +252,7 @@ func TestAnEngineProxyThatCannotOpen(t *testing.T) {
 				t.Errorf("EngineProxy: %v, want %s", err, c.want)
 			}
 			if c.name != "an address in use" && c.name != "a second holder" && sp.EngineProxy != nil {
-				refused(t, sp.EngineProxy.Addr, "after a refusal")
+				refused(t, strings.Replace(sp.EngineProxy.Addr, "0.0.0.0", "127.0.0.1", 1), "after a refusal")
 			}
 		})
 	}
@@ -307,4 +316,56 @@ func TestAnEngineProxysCertificateThatStaysIsReported(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestARefusedJoinOrCloseLeavesTheEngineProxyOpen pins a Join refused while a host
+// step is open and a Close refused for its outcome: neither reaches the point where it
+// ends the engine proxy, so its port and its certificate stay until close.
+func TestARefusedJoinOrCloseLeavesTheEngineProxyOpen(t *testing.T) {
+	ctx := context.Background()
+	r, c := engineRun(t, false)
+	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+	stop, err := r.EngineProxy([]string{"registry.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Join(ctx, c.sp.SessionSpec); err == nil {
+		t.Fatal("a join while a host step is open was not refused")
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: "skipped"}); err == nil {
+		t.Fatal("a close with the state skipped was not refused")
+	}
+	addr := c.sp.EngineProxy.Addr
+	if status, _ := throughHost(t, "http://qory:"+enginePassword+"@"+addr, "http://registry.example/v2/"); status != http.StatusOK {
+		t.Errorf("the request through the engine proxy after the refusals got %d", status)
+	}
+	if got := certFiles(c.certs); len(got) != 1 {
+		t.Errorf("after the refusals, the certificates directory has %q", got)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, addr, "after its close")
+}
+
+// TestAnEngineProxyRefusesASymbolicLinkInTheCertificatesDirectory pins a symbolic link
+// at a host's directory: EngineProxy returns the error whose fix is the link, writes
+// nothing where the link leads, and nothing listens at the address.
+func TestAnEngineProxyRefusesASymbolicLinkInTheCertificatesDirectory(t *testing.T) {
+	r, c := engineRun(t, false)
+	defer r.Close(context.Background(), session.Outcome{State: event.StateSucceeded})
+	elsewhere := t.TempDir()
+	link := filepath.Join(c.certs, "registry.example")
+	if err := os.Symlink(elsewhere, link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.EngineProxy([]string{"registry.example"})
+	want := "Replace the symbolic link " + link + " with a directory: the run's certificate for registry.example is never written through a symbolic link."
+	if err == nil || err.Error() != want {
+		t.Errorf("EngineProxy: %v, want %s", err, want)
+	}
+	if got := certFiles(elsewhere); len(got) != 0 {
+		t.Errorf("where the link leads: %q", got)
+	}
+	refused(t, c.sp.EngineProxy.Addr, "after the refusal")
 }

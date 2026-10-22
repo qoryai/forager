@@ -148,7 +148,7 @@ func (r *Run) maskEngine(err error, p *EngineProxy) error {
 // may not listen at, a fix about the address.
 func unlistened(addr string, err error) error {
 	if errors.Is(err, syscall.EADDRINUSE) {
-		return fmt.Errorf("Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at %s (%s).", accesskey.ShownValue(addr, false), accesskey.ShownError(err))
+		return fmt.Errorf("Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and the engine proxy's forwarder cannot listen at %s (%s).", accesskey.ShownValue(addr, false), accesskey.ShownError(err))
 	}
 	return fmt.Errorf("Set the engine proxy's address to one this user can listen at: the forwarder cannot listen at %s (%s).", accesskey.ShownValue(addr, false), accesskey.ShownError(err))
 }

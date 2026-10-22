@@ -319,8 +319,12 @@ the `http-proxy` and `https-proxy` of Docker's `daemon.json`.
   the engine trusts the run's certificate for those registries. A host that cannot be
   a directory name, such as `*.registry.example`, gets none.
 - The returned `close` ends it: the port takes no connection, and the certificates
-  and the directories made for them are removed. The next `Join` and `Close` end it
-  too, and pass the error of a certificate they cannot remove to `OpenSpec.Report`.
+  and the directories made for them are removed. `Join` ends it before its join
+  request, and an accepted `Close` ends it; each passes the error of a certificate it
+  cannot remove to `OpenSpec.Report`. A `Join` or a `Close` that returns an error
+  before then leaves it open.
+- A symbolic link at `/etc/docker/certs.d/<host>` or at the certificate's file is
+  refused, so the certificate is written into `/etc/docker/certs.d` alone.
 
 Open it while a host step is open; it stays open after the step exits. Each error
 starts with the fix, and opens nothing:
@@ -331,8 +335,12 @@ starts with the fix, and opens nothing:
 | no `OpenSpec.EngineProxy` | `Set OpenSpec.EngineProxy to the engine's proxy setting: the run has no engine proxy.` |
 | no host step is open | `Start a host step before you open the engine proxy: the engine proxy opens only during a host step.` |
 | the run's engine proxy is open | `Close the engine proxy before you open it again: the engine has one proxy setting, and the run's engine proxy is open.` |
-| the address is in use | `Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and its forwarder cannot listen at 127.0.0.1:3129 (…).` |
+| an address that is not a loopback host:port | `Set the engine proxy's address to a loopback host:port, such as 127.0.0.1:3129: "0.0.0.0:3129" is not one.` |
+| an empty password | `Give the engine proxy the password from the daemon's proxy setting: the password is empty.` |
+| a password of another shape | `Set the daemon's proxy password to 1 to 256 printable ASCII characters other than a space: the forwarder checks only that shape.` |
+| the address is in use | `Run one image step or engine proxy at a time on this machine: the engine has one proxy setting, and the engine proxy's forwarder cannot listen at 127.0.0.1:3129 (…).` |
 | a certificate cannot be written | `Make /etc/docker/certs.d writable for this user, as the machine's start unit does: the run's certificate for registry.example could not be written (…).` |
+| a symbolic link at a host's directory | `Replace the symbolic link /etc/docker/certs.d/registry.example with a directory: the run's certificate for registry.example is never written through a symbolic link.` |
 | while a `Join` runs | `Open the engine proxy after Join returns: a session of the run is still running.` |
 | after `Close` | `Open a new run for the engine proxy: the run is closed.` |
 
@@ -342,7 +350,7 @@ if err != nil {
 	return err
 }
 err = exec.Command("docker", "push", "registry.example/app:1").Run()
-if cerr := closeProxy(); err == nil {             // Join and Close end it too
+if cerr := closeProxy(); err == nil {             // Join and an accepted Close end it too
 	err = cerr
 }
 ```
