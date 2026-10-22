@@ -798,11 +798,12 @@ the credential the join request asks the gateway for, for this session.
     lists and the placeholders, and leaves out the names Forager, the proxy, the wall,
     the bundle and `LaunchFixed` set, the placeholders, and a name of
     `denied-variables.json` that `Env` has, such as `PATH`, which `Join` passes to the
-    agent. For a run whose image is a reference, a path in `LaunchDefaults` is written
-    under `/workspace`, as `Join` writes it. It runs no runtime preparation, so a name
-    the preparation sets overrides the value in the agent. It writes nothing and sends
-    no request. AgentEnv masks no value: it returns each value as the server, the
-    caller or the machine passed it, and no value the gateway holds for a placeholder.
+    agent. For a run whose image is a reference, a path in the workspace in
+    `LaunchDefaults` is written at `/workspace`, as `Join` writes it. It runs no runtime
+    preparation, so a name the preparation sets overrides the value in the agent. It
+    writes nothing and sends no request. AgentEnv masks no value: apart from that
+    rewrite, it returns each value as the server, the caller or the machine passed it,
+    and no value the gateway holds for a placeholder.
     The error is the one `Join` returns for `spec` before its join request, as it
     checks the places of a run whose image is a reference, or as it resolves the
     variables, such as `variable_reserved` or `placeholder_conflict`, or that the run

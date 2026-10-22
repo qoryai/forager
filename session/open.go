@@ -473,11 +473,11 @@ func (r *Run) Repositories() string { return r.answer.Values()[envRunRepositorie
 // the value in the agent: AgentEnv runs no runtime preparation, writes nothing and
 // sends no request. It also leaves out a value of SessionSpec.Env whose name the
 // built-in deny list, denied-variables.json, matches, such as PATH, which Join passes
-// to the agent and [Run.Setup] refuses. AgentEnv masks no value: it returns each value
-// as the server, the caller or the machine passed it, and no value the gateway holds
-// for a placeholder. For a run whose image is a reference, a path in LaunchDefaults is
-// written under /workspace, as Join writes it for the agent. A caller that runs the
-// setup passes the result as [SetupSpec.Env]. The result has QORY_RUN_SYSTEM and
+// to the agent and [Run.Setup] refuses. For a run whose image is a reference, a path in
+// the workspace in LaunchDefaults is written at /workspace, as Join writes it.
+// AgentEnv masks no value: apart from that rewrite, it returns each value as the
+// server, the caller or the machine passed it, and no value the gateway holds for a
+// placeholder. A caller that runs the setup passes the result as [SetupSpec.Env]. The result has QORY_RUN_SYSTEM and
 // QORY_RUN_REPOSITORIES when the server sets them, and Setup accepts both. The error
 // is the one Join returns for spec before its join request, as it checks the places of
 // a run whose image is a reference, or as it resolves the variables, the same

@@ -589,8 +589,8 @@ func TestTheRunsEntryListsTheSetupFolderDuringASession(t *testing.T) {
 // placeholder of a separate gateway's run answer, is placeholder_conflict, from
 // AgentEnv for --env and from Setup. LD_PRELOAD from wall.env is left out by AgentEnv,
 // as by the join, and refused by Setup. A QORY_ name other than QORY_RUN_SYSTEM and
-// QORY_RUN_REPOSITORIES is variable_reserved, QORY_RUN_ID and QORY_RUN_SOCKET among
-// them, and so is a name the machine's credentials are read from. Each text starts
+// QORY_RUN_REPOSITORIES, in any case, is variable_reserved, QORY_RUN_ID and
+// QORY_RUN_SOCKET among them, and so is a name the machine's credentials are read from. Each text starts
 // with the fix.
 func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 	ctx := context.Background()
@@ -675,8 +675,15 @@ func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 		if !errors.As(err, &ref) || ref.Code != "variable_reserved" || !slices.Equal(ref.Names, []string{"QORY_RUN_ID", "QORY_RUN_KEY", "QORY_RUN_SOCKET"}) {
 			t.Errorf("Setup: %v, want variable_reserved QORY_RUN_ID, QORY_RUN_KEY and QORY_RUN_SOCKET", err)
 		}
-		want := "Leave QORY_RUN_ID, QORY_RUN_KEY, QORY_RUN_SOCKET out of the setup's variables: the QORY_ names are Forager's."
+		want := "Leave these out of the setup's variables, the QORY_ names are Forager's: QORY_RUN_ID, QORY_RUN_KEY and QORY_RUN_SOCKET."
 		if err == nil || err.Error() != want {
+			t.Errorf("Setup: %v\nwant %s", err, want)
+		}
+		err = setupRefused(t, r, w, []string{"qory_run_key=forged"})
+		if !errors.As(err, &ref) || ref.Code != "variable_reserved" || !slices.Equal(ref.Names, []string{"qory_run_key"}) {
+			t.Errorf("Setup: %v, want variable_reserved qory_run_key", err)
+		}
+		if want := "Leave qory_run_key out of the setup's variables: the QORY_ names are Forager's."; err == nil || err.Error() != want {
 			t.Errorf("Setup: %v\nwant %s", err, want)
 		}
 	})

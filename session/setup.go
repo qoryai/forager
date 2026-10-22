@@ -369,15 +369,16 @@ func checkSetupEnv(env, placeholders, reserved []string) error {
 		}
 		return out
 	}
-	// leave is the refusal of names with code, its text the fix and then why: one,
-	// when names has one name, or many.
+	// leave is the refusal of names with code, its text the fix and then why: one, with
+	// the name in the fix, when names has one name; otherwise many, with the names after
+	// it, so the first words of the text are the fix for any number of names.
 	leave := func(code string, names []string, one, many string) error {
-		why := many
-		if len(names) == 1 {
-			why = one
-		}
 		r := refusal.New(code, names, "")
-		r.Text = "Leave " + strings.Join(names, ", ") + " out of the setup's variables: " + why + "."
+		if len(names) == 1 {
+			r.Text = "Leave " + names[0] + " out of the setup's variables: " + one + "."
+		} else {
+			r.Text = "Leave these out of the setup's variables, " + many + ": " + orList(names, ", ", " and ") + "."
+		}
 		return r
 	}
 	if qory := pick(func(n string) bool { return strings.HasPrefix(strings.ToUpper(n), "QORY_") }); len(qory) > 0 {
