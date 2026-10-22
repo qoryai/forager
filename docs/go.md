@@ -158,7 +158,8 @@ settings stay for the life of the process. Call `gateway.HardenProcess` first in
 configuration, a key or its environment; `Start` makes the same calls again. See
 [the gateway's process](credentials.md#the-gateways-process).
 
-The agent reaches the gateway's proxy through the session's forwarder, on loopback.
+Without a wall the agent reaches the gateway's proxy through the session's forwarder, on
+loopback; behind one, through the wall's relay and the run's forwarder.
 On the local link every connection to the proxy opens with the relay's preamble and the
 run's proxy secret: without a wall the forwarder writes it, behind one the wall's relay
 does. Without a wall the agent's proxy URL is the forwarder on loopback with a password,

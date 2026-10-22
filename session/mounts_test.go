@@ -177,7 +177,7 @@ func runErr(sp runSpec) error {
 
 // TestAMountOfTheForagersFilesIsNoRun pins the refusal of a walled run whose mount
 // contains a Forager file's directory: it names the mount, then Forager's path, the
-// join's session.exited has the code, no session starts and the wall builds nothing.
+// join's session.exited has the code, no session starts and the wall wraps nothing.
 func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 	parent, dir := foragerDir(t)
 	w := &openWall{}
@@ -193,8 +193,8 @@ func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 		t.Errorf("detail %q", r.Detail)
 	}
 	joinRefusedOnLink(t, g, "mount_contains_forager_files")
-	if w.req.RunID != "" || w.wrapped {
-		t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+	if w.wrapped {
+		t.Errorf("the wall was wrapped: %+v", w.got)
 	}
 
 	// A mount inside Forager's directory, and the workspace itself, are refused too.
@@ -294,6 +294,16 @@ func TestAMountOfTheGatewaysFilesIsNoRun(t *testing.T) {
 	}
 }
 
+// filedDocker is an open wall with the name and the files of a Docker adapter: a join
+// checks its places against them, and no engine runs.
+type filedDocker struct {
+	openWall
+	d *wall.Docker
+}
+
+func (w *filedDocker) Name() string    { return w.d.Name() }
+func (w *filedDocker) Files() []string { return w.d.Files() }
+
 // TestTheGatewaysDirectoriesComeAfterTheWalls pins the order Forager's files are
 // checked in, which decides what a mount that holds several is refused for: the
 // directories the gateway keeps come last, after the wall's
@@ -310,7 +320,7 @@ func TestTheGatewaysDirectoriesComeAfterTheWalls(t *testing.T) {
 	if err := os.WriteFile(docker, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	sp.Wall, sp.Image = &wall.Docker{Command: docker, Helper: os.Args[0]}, "example.com/agent:1"
+	sp.Wall, sp.Image = &filedDocker{d: &wall.Docker{Command: docker, Helper: os.Args[0]}}, "example.com/agent:1"
 	startGateway(t, &sp, gateway.Config{Dir: filepath.Join(home, ".local", "state", "qory")})
 	sp.Mounts = []wall.Mount{{Path: home}}
 	want := "the mount " + home + " contains " + filepath.Join(home, ".docker") + ", one of the docker wall's files"
@@ -351,7 +361,7 @@ func TestForagerFilesAreAbsolutePaths(t *testing.T) {
 func TestAMountOfTheWallsFilesIsNoRun(t *testing.T) {
 	helpers := filepath.Join(t.TempDir(), "helpers")
 	sp := spec(t, "FAKE_EXIT=0")
-	sp.Wall, sp.Image = &wall.Docker{Helper: filepath.Join(helpers, "qory"), RelayArgs: []string{"relay"}}, "example.com/agent:1"
+	sp.Wall, sp.Image = &filedDocker{d: &wall.Docker{Helper: filepath.Join(helpers, "qory"), RelayArgs: []string{"relay"}}}, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: filepath.Dir(helpers), ReadOnly: true}}
 	r := mountRefusal(t, runErr(sp))
 	if want := []string{filepath.Dir(helpers), helpers}; !slices.Equal(r.Names, want) || !strings.Contains(r.Detail, "the docker wall's files") {
@@ -370,7 +380,7 @@ func TestAMountOfTheEnginesRegistryAuthoritiesIsNoRun(t *testing.T) {
 	}
 	for _, mounted := range []string{certs, filepath.Dir(certs)} {
 		sp := spec(t, "FAKE_EXIT=0")
-		sp.Wall, sp.Image = &wall.Docker{Helper: filepath.Join(t.TempDir(), "qory"), RelayArgs: []string{"relay"}, CertsDir: certs}, "example.com/agent:1"
+		sp.Wall, sp.Image = &filedDocker{d: &wall.Docker{Helper: filepath.Join(t.TempDir(), "qory"), RelayArgs: []string{"relay"}, CertsDir: certs}}, "example.com/agent:1"
 		sp.Mounts = []wall.Mount{{Path: mounted}}
 		r := mountRefusal(t, runErr(sp))
 		if !slices.Contains(r.Names, certs) || !strings.Contains(r.Detail, "the docker wall's files") {
@@ -379,18 +389,18 @@ func TestAMountOfTheEnginesRegistryAuthoritiesIsNoRun(t *testing.T) {
 	}
 }
 
-// swappingWall is an open wall that, while it is prepared, puts a link where a mount
-// was checked: what the enclosure would show changes between the start and the wrap.
-type swappingWall struct {
-	openWall
-	link, to string
-}
-
-func (w *swappingWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
-	if err := os.Symlink(w.to, w.link); err != nil {
-		return nil, err
-	}
-	return w.openWall.Prepare(ctx, req)
+// afterTheJoinsCheck calls f once, after the join of the test's walled run checked its
+// places and before its wall step checks them again: at the run's second check against
+// the registry of walled runs, its open's being the first.
+func afterTheJoinsCheck(t *testing.T, f func()) {
+	t.Helper()
+	calls := 0
+	session.SetRegisterPause(func(string) {
+		if calls++; calls == 2 {
+			f()
+		}
+	})
+	t.Cleanup(func() { session.SetRegisterPause(nil) })
 }
 
 // TestTheMountsAreCheckedAgainBeforeTheWrap pins the second check: a mount that led
@@ -399,7 +409,12 @@ func (w *swappingWall) Prepare(ctx context.Context, req wall.Request) (wall.Encl
 func TestTheMountsAreCheckedAgainBeforeTheWrap(t *testing.T) {
 	parent, dir := foragerDir(t)
 	link := filepath.Join(t.TempDir(), "later")
-	w := &swappingWall{link: link, to: parent}
+	afterTheJoinsCheck(t, func() {
+		if err := os.Symlink(parent, link); err != nil {
+			t.Error(err)
+		}
+	})
+	w := &openWall{}
 	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: link}}

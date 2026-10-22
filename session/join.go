@@ -41,18 +41,22 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // seconds, so the next join may follow. It sends the gateway the join request with the
 // names of the variables the session passes a value for and its model key, then checks
 // the session's places, prepares the runtime, resolves the variables, writes
-// dev.qory.session.started and the session's dev.qory.run.policy_applied, prepares the
-// wall, and starts the runtime. Sessions of one run join one after another.
+// dev.qory.session.started and the session's dev.qory.run.policy_applied, behind a
+// wall wraps the launch in the wall that [Open] built, and starts the runtime. Behind
+// the Docker wall the wrap starts the agent's container, and the session's end removes
+// it; the rest of the wall stays until [Run.Close]. Sessions of one run join one after
+// another.
 //
 // An error means the session did not start. An error before the join request, of a
-// spec the session refuses, writes nothing. A join the gateway refuses with a 403, or
-// that fails the session's checks, writes dev.qory.session.exited, failed with -1, the
-// refusal's code as its reason when the session decides that code, and duration_ms 0;
-// a refusal with a code is a [*Refusal]. A failure once the wall is being prepared,
-// such as an image that runs as root, an image that cannot be fetched or a wall that
-// does not start, writes dev.qory.session.started, then dev.qory.session.exited, failed
-// with -1, with the refusal's code as its reason when the wall refused with a code the
-// session decides, and no reason otherwise; a failure with no reason has its text as a
+// spec the session refuses or of a run whose setup step of [Run.Setup] failed, writes
+// nothing. A join the gateway refuses with a 403, or that fails the session's checks,
+// writes dev.qory.session.exited, failed with -1, the refusal's code as its reason when
+// the session decides that code, and duration_ms 0; a refusal with a code is a
+// [*Refusal]. A failure in the image or the wall step, such as an image that runs as
+// root, an image that cannot be fetched or an agent's container that does not start,
+// writes dev.qory.session.started, then dev.qory.session.exited, failed with -1, with
+// the refusal's code as its reason when the wall refused with a code the session
+// decides, and no reason otherwise; a failure with no reason has its text as a
 // dev.qory.run.log chunk of the session on stderr before that dev.qory.session.exited.
 // The run stays open: what follows is the caller's.
 //
@@ -92,6 +96,10 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	// join would rewrite that entry with the join's places alone.
 	if r.keptBy > 0 {
 		return nil, fmt.Errorf("Open a new run. The wall of session %d could not be removed and may still run, so this run takes no more sessions.", r.keptBy)
+	}
+	// A run whose setup failed is not set up as its sessions need.
+	if r.setupFailed > 0 {
+		return nil, fmt.Errorf("Open another run: setup step %d of this run failed, so no session can join it.", r.setupFailed)
 	}
 	spec = sessionDefaults(spec, r.open.Wall != nil)
 	s := runSpec{OpenSpec: r.open, SessionSpec: spec}
@@ -447,17 +455,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if masker.Empty() {
 		masker = nil
 	}
-	// The wall comes before the forwarder, because it says where the forwarder must
-	// listen, and goes after everything else, because the forwarder outlives the last
-	// connection. The session starts before the wall: dev.qory.session.started and the
-	// session's policy_applied come first, then the image and wall steps, so a failure
-	// of the wall follows the session's dev.qory.session.started.
+	// Behind a wall the run's wall, its forwarder and its relay started as the run
+	// opened, and the session starts the agent's container alone. The session starts
+	// before the wall step: dev.qory.session.started and the session's policy_applied
+	// come first, then the image and wall steps, so a failure of the wall follows the
+	// session's dev.qory.session.started.
 	var enclosure wall.Enclosure
-	// relayToken is what the wall's relay opens every connection with: the run's proxy
-	// secret on one machine; behind a separate gateway a secret of this session's
-	// forwarder, which the forwarder takes off before it opens the gateway's proxy with
-	// the run key inside TLS.
-	bind, secret, relayToken := link.Loopback, r.answer.ProxySecret, r.answer.ProxySecret
 	var cols, rows int
 	if interactive {
 		cols, rows = terminalSize(spec.Stdin)
@@ -496,8 +499,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		// The image step, for an image by reference no step fetched yet, spans the
 		// wall's pull and the check of the image's user. After a fetch, the wall finds
 		// the image by its digest and the join writes no image step.
-		req := r.wallRequest()
-		if puller, ok := spec.Wall.(wall.Puller); ok && req.Pull && r.imageStep == 0 {
+		if puller, ok := spec.Wall.(wall.Puller); ok && r.byReference && r.imageStep == 0 {
 			open = r.startStep(event.StepImage, r.img.Ref)
 			if err := r.pullImage(runCtx, puller); err != nil {
 				return refused(err)
@@ -506,48 +508,38 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			endStep(event.StateSucceeded)
 		}
 		open = r.startStep(event.StepWall, "start the wall")
-		if enclosure, err = spec.Wall.Prepare(runCtx, req); err != nil {
-			return refused(err)
+		enclosure = r.enclosure
+		if u, ok := enclosure.(unwrapper); ok {
+			defer func() {
+				// The session's context may be what ended it; the agent's container is
+				// removed regardless.
+				if err := u.Unwrap(context.WithoutCancel(ctx)); err != nil {
+					r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
+					// The agent's container may outlive the session: the entry stays, and
+					// is the run's while one of the run's containers exists.
+					r.listed.keep()
+					r.keptBy = n
+				}
+			}()
 		}
-		defer func() {
-			// The session's context may be what ended it; the wall is removed regardless.
-			if err := enclosure.Close(context.WithoutCancel(ctx)); err != nil {
-				r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
-				// Its containers may outlive the session: the entry stays, and is the
-				// run's while one of them exists.
-				r.listed.keep()
-				r.keptBy = n
-			}
-		}()
-		// Behind a wall the wall's relay opens every connection with the run's proxy
-		// secret, and the forwarder passes on what arrives as it is.
-		bind, secret = enclosure.ProxyAddr(), ""
 	}
-	var fwd *forwarder
-	switch {
-	case r.remote == nil:
-		// On one machine: without a wall the forwarder on loopback takes a connection
-		// only with the password and opens it to the gateway's proxy with the run's
-		// proxy secret; behind a wall it passes on what the wall's relay sends.
-		fwd, err = listenForwarder(bind, r.disc.Proxy.Address, secret, password)
-	case spec.Wall != nil:
-		// Behind a wall and a separate gateway: the relay opens every connection with the
-		// hop secret, and the forwarder, which checks it, opens the connection to the
-		// gateway over TLS, bound, with the run key.
-		if relayToken, err = newForwarderSecret(); err != nil {
+	// Behind a wall the run's forwarder passes on what the wall's relay sends. Without
+	// one, the session's forwarder on loopback takes a connection only with the
+	// password: on one machine it opens the connection to the gateway's proxy with the
+	// run's proxy secret, and behind a separate gateway it sends it to the gateway
+	// inside TLS, bound, opened with the run key.
+	fwd := r.wallFwd
+	if spec.Wall == nil {
+		if r.remote == nil {
+			fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.ProxySecret, password)
+		} else {
+			fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, password: password})
+		}
+		if err != nil {
 			return fail(err)
 		}
-		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, hop: relayToken})
-	default:
-		// Without a wall, behind a separate gateway: the forwarder on loopback takes a
-		// connection only with the password, and sends it to the gateway inside TLS,
-		// bound, opened with the run key.
-		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, password: password})
+		defer fwd.Close()
 	}
-	if err != nil {
-		return fail(err)
-	}
-	defer fwd.Close()
 
 	sock, err := socket.Listen(spec.SocketGrace)
 	if err != nil {
@@ -622,7 +614,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key)),
 			CA:    r.authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
-			ProxyToken: relayToken,
+			ProxyToken: r.relayToken,
 		})
 		if err != nil {
 			return fail(accesskey.ShownError(err))

@@ -207,29 +207,35 @@ func TestEachSessionsResizeHasItsNumber(t *testing.T) {
 	}
 }
 
-// TestAFailureWithNoCodeIsInTheSessionsOutput pins a pull and a wall's start that fail
-// with no refusal code: the record and the link have the join step, session.started,
-// the wall step, a stderr run.log of session 1 and of the wall step with the error's
-// text, the wall step failed with -1, then session.exited failed with -1 and no reason;
-// sessions/1/output.log has that text. A wall's refusal with a code, which is the
-// reason of session.exited, writes no such chunk.
+// TestAFailureWithNoCodeIsInTheSessionsOutput pins an image the engine does not hold and
+// a wall's start that fail the wrap with no refusal code: the record and the link have
+// the join step, session.started, the wall step, a stderr run.log of session 1 and of
+// the wall step with the error's text, the wall step failed with -1, then session.exited
+// failed with -1 and no reason; sessions/1/output.log has that text. The wall's refusal
+// of an image by reference with a code, in the join's image step, is the reason of
+// session.exited and writes no such chunk.
 func TestAFailureWithNoCodeIsInTheSessionsOutput(t *testing.T) {
-	pull := errors.New("wall docker: pull example.com/agent:1: exit status 1")
+	held := errors.New("wall docker: fetch example.com/agent:1 with Pull before its first container starts: the engine does not hold it by its digest")
 	start := errors.New("wall docker: start qory-relay: exit status 125")
-	root := refusals.New(refusals.ImageUserRoot, []string{"example.com/agent:1"}, "the image %s runs as root; a run's image runs as the wall's user", "example.com/agent:1")
+	root := refusals.New(refusals.ImageUserRoot, []string{pinned}, "the image %s runs as root; a run's image runs as the wall's user", pinned)
 	for _, c := range []struct {
 		name   string
 		wall   wall.Wall
 		text   string
 		reason string
+		step   string
 	}{
-		{"pull", &prepareFailing{err: pull}, pull.Error(), ""},
-		{"start", &wrapFails{err: start}, start.Error(), ""},
-		{"refusal", &prepareFailing{err: root}, "", refusals.ImageUserRoot},
+		{"held", &wrapFails{err: held}, held.Error(), "", "step 2 wall start the wall"},
+		{"start", &wrapFails{err: start}, start.Error(), "", "step 2 wall start the wall"},
+		{"refusal", &targetWall{refuse: root}, "", refusals.ImageUserRoot, "step 2 image " + pinned},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sp, g := specGateway(t)
 			sp.Wall, sp.Image = c.wall, "example.com/agent:1"
+			if c.reason != "" {
+				byReference(g)
+				sp.ImagesAllow = []string{"registry.example/"}
+			}
 			ctx := context.Background()
 			r, err := session.Open(ctx, opened(sp))
 			if err != nil {
@@ -242,7 +248,7 @@ func TestAFailureWithNoCodeIsInTheSessionsOutput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started", "step 2 wall start the wall"}
+			want := []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started", c.step}
 			if c.text != "" {
 				want = append(want, "log 1 2 "+c.text)
 			}

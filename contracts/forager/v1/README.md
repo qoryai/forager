@@ -1474,8 +1474,9 @@ kind of a setup command wherever it runs. Forager writes a `setup` step for each
 command of `(*session.Run).Setup` and of `SessionSpec.Setup`.
 
 The caller writes the steps of its host work, `fetch` and `compose`, before the first
-join or between two joins (`(*session.Run).StartStep`), and the image's, `image`
-(`(*session.Run).FetchImage`, §Images). Each join writes its steps:
+join or between two joins (`(*session.Run).StartStep`), the image's, `image`
+(`(*session.Run).FetchImage`, §Images), and the setup's, `wall` and `setup`
+(`(*session.Run).Setup`, §The wall, Setup). Each join writes its steps:
 
 1. **The join step**, `join`, with the name `join session <n>`, the number the gateway
    gives the next join. It spans the join request and the session's checks, and ends right
@@ -1492,9 +1493,10 @@ join or between two joins (`(*session.Run).StartStep`), and the image's, `image`
    image's fetch and the check of its user (§Images). A join after an image step that
    succeeded finds the image by its digest and writes none.
 3. **The wall step**, `wall`, with the name `start the wall`, behind every wall. It spans the
-   rest of the wall's start: the wall's networks, the session's forwarder and hook
-   socket, the second check of the session's places and the launch's wrapping, up to
-   the launch's start.
+   rest of the session's start: the session's hook socket, the second check of the
+   session's places and the launch's wrapping, which for `docker` starts the agent's
+   container, up to the launch's start. The wall's networks, the run's forwarder and the
+   relay start as the run opens, and go when it closes (§The wall).
 4. **The setup steps**, `setup`, one for each command of `SessionSpec.Setup`, with the
    command's name, such as `install`, behind a wall, after the wall step, one after
    another, before the runtime starts (§The wall, Setup inside the wall). Each spans
@@ -3631,8 +3633,8 @@ The run endpoint).
 the discovery's `proxy.address` on loopback: inside a wall the relay opens every
 connection with `QORY-RELAY`, a space, the run's proxy secret and a newline (§Limits),
 and without a wall the session's forwarder does.
-Behind a separate gateway the session's forwarder opens every connection to the
-gateway's one address over TLS 1.3, with the link's trust, bound as every connection of
+Behind a separate gateway the forwarder, the run's behind a wall and the session's
+without one, opens every connection to the gateway's one address over TLS 1.3, with the link's trust, bound as every connection of
 the link is (The binding, above), and with `QORY-RELAY`, a space, the run key and a
 newline. Behind a wall the forwarder takes the relay's connection, which opens with
 `QORY-RELAY` and a value the session makes for the run's forwarder alone, and takes that
@@ -4007,17 +4009,18 @@ reference as its name: "the image <ref> is under none of the machine's allowed p
 that selects another is refused, and the policy in force stays.
 
 **The user of an image by reference.** The wall fetches the image with the engine's
-pull, before it makes anything else for the run, unless the engine holds it by that
-digest, and reads the image's user. The wall's preparation then finds the image by its
-digest and pulls nothing. No user, `root`, and a uid of 0 in any spelling,
+pull in the run's image step, before the first container of the image starts, unless
+the engine holds it by that digest, and reads the image's user. That container then
+finds the image by its digest and pulls nothing. No user, `root`, and a uid of 0 in any spelling,
 with or without a group, are root, and so is a name the image's `/etc/passwd` maps to
 uid 0. A user given by a name the image's `/etc/passwd` does not map, or in an image
 with no `/etc/passwd`, cannot be checked and is refused the same way: such an image
 gives its user as a uid. Root is
 `image_user_root`, with the reference as its name: "the image <ref> runs as root; a
 run's image runs as the wall's user". The image's user decides nothing else: the agent
-runs as the wall's numeric uid:gid. A fetch that fails is no run, and leaves no
-container or network of the run's; an image the engine pulled stays in its store.
+runs as the wall's numeric uid:gid. A fetch that fails starts no container of the
+image, and the run's close removes the run's containers and networks; an image the
+engine pulled stays in its store.
 
 **The workspace at `/workspace`.** A run whose policy names its image by reference sees
 the bind that holds its workspace, the outermost, at `/workspace`, and the working
@@ -4057,9 +4060,9 @@ pinned digest. For a run with a certificate authority, the Docker wall writes th
 certificate as `qory-run-<id>.crt` in `<CertsDir>/<host>/`, `/etc/docker/certs.d` by
 default, for the reference's registry host and for each host of `credential_hosts`, and
 removes the files when the step ends, also when the pull fails or its context ends.
-The agent's container, and the container the wall reads the image's files from, are
-created with `--pull=never`, so the engine pulls the image in the image step alone.
-Docker Engine reads that directory at each pull. On its classic image store it reads
+The agent's container, the setup container, and the container the wall reads the image's
+files from, are created with `--pull=never`, so the engine pulls the image in the image
+step alone. Docker Engine reads that directory at each pull. On its classic image store it reads
 none for `docker.io`, so an image there comes only through a blind relay, with no
 credential; on its containerd image store this is unverified. Without
 `EngineProxy` the engine pulls over the machine's network. The password is in no event,
@@ -4312,6 +4315,40 @@ the engine in a virtual machine the network's gateway is the virtual machine's, 
 host's. It forwards no packet between its two networks: IP forwarding is off in its
 namespace, so what it passes on is the connections it copies and nothing routed
 through it.
+
+**Setup.** `(*session.Run).Setup` runs a walled run's setup commands in the setup
+container, a separate container of the run's image on the enclosure's internal network,
+where its name is `qory-setup`. It runs once per run, before the first join and outside
+every host step, and only behind `docker`: behind another wall it returns an error. Its
+steps follow the run's last step (§The events, Steps): the image step when the policy's
+image is a reference no step fetched yet; the wall step, `start the setup container`;
+and a `setup` step for each command, with the command's name, its standard output and
+standard error as the step's lines, with no `session`, and its exit status as the
+step's `exit_code`. The setup container runs as the agent's container does without
+nested Docker: as the wall's user, with no capability and none to gain, under `--init`,
+with no health check of the image's and no IPv6 address but loopback's. It gets the
+working folder, writable, at `/workspace` for an image by reference (§Images), with a
+join's checks of its places, and the helper at `/qory/qory` and, with an authority, the
+bundle at `/qory/ca-bundle.pem`, both read-only: no home, run directory, hook socket or
+container runtime's socket. It reaches only the relay, at `qory-proxy:3128`. Its
+environment is the relay's proxy variables, the bundle's variables, the run's
+placeholders, then the caller's variables without the reserved names, the access key's
+variables and `QORY_RUN_KEY`; a value that contains the password of one of the run's
+forwarders, such as a host proxy's URL, is refused. The helper keeps the container
+running (`Docker.HoldArgs`), and each command runs in it through `docker exec`, as the
+wall's user, in the working folder, with no input. The container runs until the run
+closes, so a service a setup command starts is reachable from the agent's container by
+the name `qory-setup`, such as `qory-setup:5432`; such a service writes its output to a
+file, so its command returns. A command that exits otherwise than 0 ends its step
+`failed` with its exit status, and `Setup` returns a `*session.SetupError`. Any other
+failure in a step of the setup, such as a setup container that does not start or that
+stopped, ends the step `failed` with `-1`, or `cancelled` when the caller's context
+ended, after the failure's text as a `dev.qory.run.log` line on `stderr` with the
+step's `step` and no `session`, and is the error `Setup` returns. After a step
+of the setup that does not end `succeeded`, no later step of it starts and no session
+joins the run. The setup container has no Docker daemon. Its services run through every
+session on the same relay, so a request recorded during a session may be a service's;
+the setup container and the agent's run code from the working folder as the wall's user.
 
 **Setup inside the wall.** With `wall.setup: inside`, a walled session may have setup
 commands, `SessionSpec.Setup`: each a name, such as `install` or `start services`, and

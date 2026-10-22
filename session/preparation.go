@@ -71,6 +71,13 @@ func checkSetup(spec runSpec) error {
 	case slices.ContainsFunc(runner, hasNUL):
 		return errors.New("Remove the NUL from SessionSpec.SetupRunner: no argument contains one.")
 	}
+	return checkSetupCommands(setup)
+}
+
+// checkSetupCommands refuses a setup command with no name, an empty program or a NUL,
+// inside the wall or in the setup container.
+func checkSetupCommands(setup []SetupCommand) error {
+	hasNUL := func(w string) bool { return strings.ContainsRune(w, 0) }
 	for i, c := range setup {
 		switch {
 		case c.Name == "":

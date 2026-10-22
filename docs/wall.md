@@ -271,7 +271,7 @@ refused.
 ### The relay to a separate gateway
 
 Behind a `session.RemoteGateway` the gateway's proxy is on another machine, at the
-gateway's one address, the run key's `gateway_url`. The relay still reaches the session's
+gateway's one address, the run key's `gateway_url`. The relay still reaches the run's
 forwarder, on the address the enclosure names, as on one machine, and the forwarder
 carries every connection to the gateway over TLS 1.3. The forwarder checks the chain
 for the host name of the gateway's URL with the trust in `RemoteGateway.TLS`: the
@@ -669,7 +669,8 @@ unwalled launch passes them unchecked.
   Forager access to /a/mcp.json, or pass another --mcp-config path.", and any other
   error "Fix the error at the end of this message, or pass another --mcp-config path."
 
-A refusal stops the run before the wall is prepared, with the prefix `runtime claude: `.
+A refusal stops the session before the wall starts the agent's container, with the
+prefix `runtime claude: `.
 Claude Code also loads plugin directories named in `CLAUDE_CODE_PLUGIN_DIRS`,
 adds the directories named in `CLAUDE_RELAUNCH_SESSION_ADD_DIRS`, and reads plugins or
 settings from `CLAUDE_CODE_PLUGIN_SEED_DIR`, `CLAUDE_CODE_PLUGIN_CACHE_DIR` and
@@ -735,8 +736,9 @@ An image by reference starts as the default does: under the default's runtime, w
 nested Docker, as the node's user, which must then be given as `uid:gid` in numbers,
 neither 0: the engine would look a name, or a uid's groups, up in the image's
 `/etc/passwd` and `/etc/group`, which the image writes, so a user given by name or as a
-uid alone is refused. The wall pulls it before it makes anything else for the run,
-unless the engine holds it by that digest, and refuses with `image_user_root` an image
+uid alone is refused. The wall pulls it in the run's `image` step, before the first
+container of the image starts, unless the engine holds it by that digest, and refuses
+with `image_user_root` an image
 whose user is root: no user, `root`, uid 0, or a name the image's `/etc/passwd` maps to
 uid 0. An image whose user is a name its `/etc/passwd` does not map, or that has no
 `/etc/passwd`, is refused the same way, since its user cannot be checked: give the user
@@ -745,7 +747,8 @@ default image, never from the run's, and the authorities the run trusts are read
 the run's image. The run's `image` step spans the fetch and the check of the image's
 user, and its `dev.qory.run.step_exited` has how long they took as `duration_ms`
 ([the record](events.md)). `(*session.Run).FetchImage` runs that step before the first
-join; without it, the first join runs it after its `dev.qory.session.started`.
+join; without it, `(*session.Run).Setup` runs it first, or else the first join after its
+`dev.qory.session.started`.
 
 In such an image the checkout is mounted at `/workspace` and the working directory is
 under it; the paths Forager puts inside name it there, and values from the server,
@@ -798,8 +801,9 @@ For a run with a certificate authority, the Docker wall writes the run's certifi
 `qory-run-<id>.crt` in the directory of the image's registry host and of each host of
 the run's credentials, and removes the files when the step ends, also when the pull
 fails. Each later join finds the image by its digest and writes no `image` step. The
-agent's container, and the container the wall reads the image's files from, are
-created with `--pull=never`, so the engine pulls the image in the `image` step alone. Without
+agent's container, the setup container, and the container the wall reads the image's
+files from, are created with `--pull=never`, so the engine pulls the image in the
+`image` step alone. Without
 `EngineProxy`, the engine pulls over the machine's network.
 
 What to know:
@@ -811,6 +815,52 @@ What to know:
   On its containerd image store this is unverified.
 - The `docker` group, which the user that runs Forager is in, has root's reach on the
   machine ([Docker's attack surface page](https://docs.docker.com/engine/security/#docker-daemon-attack-surface)).
+
+## Setup in a separate container
+
+`(*session.Run).Setup` runs a walled run's setup commands before the first join, in the
+setup container: a container of the run's image on the wall's inside network, beside
+the agent's. Give the Docker wall `HoldArgs`, the mode of the helper that calls
+`wall.Hold`, which keeps the setup container running:
+
+```go
+run, err := session.Open(ctx, session.OpenSpec{
+	Wall: &wall.Docker{
+		Helper:    linuxBuild,
+		RelayArgs: []string{"relay"},
+		HoldArgs:  []string{"hold"},              // the mode of it that calls wall.Hold
+	},
+	// the rest as in From Go
+})
+if err != nil {
+	return err
+}
+err = run.Setup(ctx, session.SetupSpec{
+	Dir: checkout,                                // the working folder, checked as a join's
+	Env: []string{"APP_ENV=test"},                // the setup container's variables
+	Commands: []session.SetupCommand{
+		{Name: "install", Args: []string{"make", "deps"}},
+		{Name: "start services", Args: []string{"sh", "-c", "pg_ctl start >/tmp/pg.log 2>&1"}},
+	},
+})
+var failed *session.SetupError // a command exited otherwise than 0: no session joins the run
+```
+
+- `Setup` writes the `image` step when no step fetched the image yet, the `wall` step
+  `start the setup container`, and a `setup` step for each command, with its output and
+  exit status.
+- The setup container runs as the wall's user, with no capability, and reaches only the
+  relay. It gets the working folder, writable, and the helper and the run's bundle,
+  read-only: no home, run directory, hook socket or engine socket. It gets no host
+  proxy's URL or password.
+- It runs until the run closes. The agent reaches a service that setup starts by the
+  name `qory-setup`, such as `qory-setup:5432`. Send a service's output to a file, so
+  its command returns.
+- Packages that setup installs outside the working folder stay in the setup container.
+
+The setup container has no Docker daemon, so a setup command that calls docker fails
+with Docker's error in its step's log. With wall.setup: inside, the setup commands run
+in the agent's container, which has nested Docker when the wall starts it with one.
 
 ## Nested Docker
 

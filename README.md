@@ -112,6 +112,7 @@ The proxy sees only programs that honour it. A **wall** makes the rest fail:
 
 - The agent starts in a container, on a network with no route out.
 - A relay leads to the proxy, and nowhere else.
+- Setup runs in a separate container on the same network, so it reaches only the relay too.
 - The session, the gateway, the policy and the access key secret stay outside. The
   record is written from outside.
 

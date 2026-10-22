@@ -232,8 +232,8 @@ func (w *heldEngined) Engine(context.Context) wall.Engine { return w.engine }
 
 func (w *heldEngined) EngineID(context.Context) (string, error) { return "", nil }
 
-// closeFailing is a wall in a container engine whose Close fails, as one whose
-// containers could not be removed.
+// closeFailing is a wall in a container engine whose Unwrap and Close fail, as one
+// whose agent's container, and then whose other containers, could not be removed.
 type closeFailing struct{ enginedWall }
 
 func (w *closeFailing) Prepare(
@@ -243,8 +243,56 @@ func (w *closeFailing) Prepare(
 	return w, nil
 }
 
+func (w *closeFailing) Unwrap(context.Context) error {
+	return errors.New("wall docker: rm: exit status 1")
+}
+
 func (w *closeFailing) Close(context.Context) error {
 	return errors.New("wall docker: rm: exit status 1")
+}
+
+// runCloseFailing is a wall in a container engine whose agent's container is removed
+// at each session's end, and whose Close at the run's close fails.
+type runCloseFailing struct{ enginedWall }
+
+func (w *runCloseFailing) Prepare(
+	_ context.Context, req wall.Request,
+) (wall.Enclosure, error) {
+	w.req = req
+	return w, nil
+}
+
+func (w *runCloseFailing) Unwrap(context.Context) error { return nil }
+
+func (w *runCloseFailing) Close(context.Context) error {
+	return errors.New("wall docker: network rm: exit status 1")
+}
+
+// TestAnEntryStaysWhenTheRunsWallIsNotRemoved pins a run whose wall could not be
+// removed at the run's close, its sessions' containers removed: the entry stays, with
+// the run's binds and no session's, and the close reports the failure.
+func TestAnEntryStaysWhenTheRunsWallIsNotRemoved(t *testing.T) {
+	root := t.TempDir()
+	w := &runCloseFailing{enginedWall{engine: leftEngine}}
+	sp := walledSpec(t, w)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
+	var reports []string
+	sp.Report = func(s string) { reports = append(reports, s) }
+	if _, err := run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(registry(t), w.req.RunID)
+	t.Cleanup(func() { os.Remove(file) })
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("the entry of a run whose wall stays is gone: %v", err)
+	}
+	if strings.Contains(string(b), `"`+root+`"`) {
+		t.Errorf("the entry %s lists the session's bind %s", b, root)
+	}
+	if !slices.Equal(reports, []string{"removing the wall: wall docker: network rm: exit status 1"}) {
+		t.Errorf("reports %q", reports)
+	}
 }
 
 // TestAnEntryStaysWhenTheWallIsNotRemoved pins a run whose wall could not be removed:
