@@ -13,6 +13,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/mask"
+	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -147,9 +148,12 @@ func (r *Run) closeWall(ctx context.Context) {
 // SessionSpec.Limits. It gets Dir, writable, and the helper and, for a run
 // with an authority, the bundle, read-only: no harness home, run directory, hook socket
 // or engine socket. Its environment is the relay's proxy variables, the bundle's
-// variables, the run's placeholders, and then Env without the names the machine's
-// credentials are read from, the access key's variables and QORY_RUN_KEY. It gets no
-// host proxy's URL or password. A value of Env is refused when it contains the password
+// variables, the run's placeholders, and then Env, which a caller fills from
+// [Run.AgentEnv]. Env is refused before any step when it has a value for one of the
+// run's placeholders, [refusal.PlaceholderConflict]; a QORY_ name other than
+// QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, or a name the machine's credentials are
+// read from, [refusal.VariableReserved]; or a name the built-in deny list matches, such
+// as LD_PRELOAD. It gets no host proxy's URL or password. A value of Env is refused when it contains the password
 // of one of the run's forwarders or of OpenSpec.EngineProxy: as it is, as in a proxy URL
 // such as http://qory:<password>@host, or as the base64 of qory:<password> that
 // Proxy-Authorization: Basic has. The setup container has no Docker daemon: a command
@@ -318,13 +322,16 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) error {
 }
 
 // setupEnv is the part of the setup container's environment that comes after the
-// wall's variables: the run's placeholders, then env without the names the machine's
-// credentials are read from, the access key's variables and QORY_RUN_KEY. A value is
-// refused when it contains, in a form the run's masker replaces, the password of one of
-// the run's forwarders or of OpenSpec.EngineProxy: the run's masker gets the engine
-// proxy's password only in the image step, which comes after this check.
+// wall's variables: the run's placeholders, then env, which [checkSetupEnv] checks
+// first, without the access key's variables and QORY_RUN_KEY. A
+// value is refused when it contains, in a form the run's masker replaces, the password
+// of one of the run's forwarders or of OpenSpec.EngineProxy: the run's masker gets the
+// engine proxy's password only in the image step, which comes after this check.
 func (r *Run) setupEnv(env []string) ([]string, error) {
-	kept := accesskey.WithoutVariables(withoutNames(env, r.reserved))
+	if err := checkSetupEnv(env, r.answer.Placeholders, r.reserved); err != nil {
+		return nil, err
+	}
+	kept := accesskey.WithoutVariables(env)
 	var engine *mask.Masker
 	if p := r.open.EngineProxy; p != nil {
 		engine = mask.Proxy(proxyUser, p.Password)
@@ -336,4 +343,31 @@ func (r *Run) setupEnv(env []string) ([]string, error) {
 		}
 	}
 	return append(placeholders(r.answer.Placeholders, keyed{}), kept...), nil
+}
+
+// checkSetupEnv refuses a setup variable of env that the agent of the run could not
+// get, by the rules that hold for every session of a walled run, as [variables.Check]
+// refuses them for a join: a value for one of placeholders, the run's placeholders, is
+// [refusal.PlaceholderConflict], and a QORY_ name or one of reserved, the names the
+// machine's credentials are read from, is [refusal.VariableReserved]. QORY_RUN_SYSTEM
+// and QORY_RUN_REPOSITORIES, the server's names a setup command may use, are not
+// refused. A name the built-in deny list, denied-variables.json, matches is refused
+// too, such as LD_PRELOAD or HTTPS_PROXY: a join leaves its value out of the agent's
+// environment. The deny entries of a session, Variables.Deny and the runtime's denies,
+// apply in [Run.AgentEnv].
+func checkSetupEnv(env, placeholders, reserved []string) error {
+	checked := withoutNames(env, []string{envRunSystem, envRunRepositories})
+	if err := variables.Check(checked, true, placeholders, reserved); err != nil {
+		return err
+	}
+	deny, err := variables.List(nil)
+	if err != nil {
+		return err
+	}
+	for _, name := range names(checked) {
+		if deny.Matches(name) {
+			return fmt.Errorf("Leave %s out of the setup's variables: the deny list, denied-variables.json, leaves it out of the agent's environment.", accesskey.ShownName(name, false))
+		}
+	}
+	return nil
 }

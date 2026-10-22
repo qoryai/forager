@@ -462,27 +462,29 @@ func (r *Run) System() string { return r.answer.Values()[envRunSystem] }
 // variables, the repositories the run may fetch; empty when the server sets none.
 func (r *Run) Repositories() string { return r.answer.Values()[envRunRepositories] }
 
-// ServerEnv is the server's variables that a session of spec would get, as [Run.Join]
-// resolves them for spec: NAME=value, sorted by name, in a new slice on every call,
-// empty when the session would get none. It leaves out Forager's names, the proxy's,
-// the wall's, the placeholders, spec.LaunchFixed, the access key's variables and each
-// name the spec's rules leave out: a name of the deny list, a name the runtime
-// declares, reserves or denies, and every name for a run without a wall that does not
-// accept the server's variables. The values are plain values, not secrets: the agent
-// gets each as it is, and the run's records contain none of them. ServerEnv runs no
-// runtime preparation, writes nothing and sends no request, so the result differs from
-// the agent's environment in one way: a name the runtime preparation sets overrides
-// the server's value in the agent. A caller that gives another container the agent's
-// environment appends the result after its machine and run variables, so the server's
-// values win, as in Join. The error is the one Join returns for spec before its join
-// request, or that the run is closed or another call of the run is running.
-func (r *Run) ServerEnv(spec SessionSpec) ([]string, error) {
+// AgentEnv is the environment a session of spec gets from the server's variables,
+// Variables.Run, Variables.Machine, LaunchDefaults and SessionSpec.Env, as [Run.Join]
+// resolves it for spec: NAME=value, sorted by name, in a new slice on every call. The
+// deny lists, the endpoint rule and the run's placeholders apply as in Join. It leaves
+// out the names Forager, the proxy, the wall and the bundle set, LaunchFixed, the
+// placeholders and the access key's variables. The result matches what the agent gets
+// from those sources, apart from a name the runtime preparation sets, which overrides
+// the value in the agent: AgentEnv runs no runtime preparation, writes nothing and
+// sends no request. It also leaves out a value of SessionSpec.Env whose name the
+// built-in deny list, denied-variables.json, matches, such as PATH, which Join passes
+// to the agent and [Run.Setup] refuses. The values are plain values, not secrets. A caller that runs the
+// setup passes the result as [SetupSpec.Env], with QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES when it wants them. The error is the one Join returns for spec
+// before its join request or as it resolves the variables, the same
+// [refusal.VariableReserved] or [refusal.PlaceholderConflict] among them, or that the
+// run is closed or another call of the run is running.
+func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 	if !r.joining.TryLock() {
-		return nil, errors.New("call ServerEnv after the run's other call returns: another call of the run is running")
+		return nil, errors.New("call AgentEnv after the run's other call returns: another call of the run is running")
 	}
 	defer r.joining.Unlock()
 	if r.closed {
-		return nil, errors.New("open a new run for the server's variables: the run is closed")
+		return nil, errors.New("open a new run for the agent's environment: the run is closed")
 	}
 	s, rt, err := r.checkSession(spec)
 	if err != nil {
@@ -503,29 +505,43 @@ func (r *Run) ServerEnv(spec SessionSpec) ([]string, error) {
 		return nil, err
 	}
 	prepared := runtimes.Launch{Command: s.Command, Args: s.Args}
-	vars, _, err := resolve(s, rt, r.answer.Values(), credentialHosts, prepared, placeholderNames, r.reserved, r.img.Docker, r.authority != nil, names(r.caVars), key)
+	bundle := names(r.caVars)
+	vars, _, err := resolve(s, rt, r.answer.Values(), credentialHosts, prepared, placeholderNames, r.reserved, r.img.Docker, r.authority != nil, bundle, key)
 	if err != nil {
 		return nil, err
 	}
-	return serverValues(vars), nil
-}
-
-// serverValues are the values of vars.Env whose source is the server, in vars.Env's
-// order, without the access key's variables, in a new slice.
-func serverValues(vars variables.Resolved) []string {
-	server := map[string]bool{}
-	for _, e := range vars.Applied {
-		if e.From == variables.FromApiary {
-			server[e.Name] = true
+	fixed := slices.Concat(foragerNames(s, prepared, bundle, key), names(vars.Fixed), placeholderNames)
+	if w, ok := s.Wall.(wall.Setter); ok {
+		fixed = append(fixed, w.Sets()...)
+	}
+	if r.img.Docker {
+		fixed = append(fixed, wall.NestSets()...)
+	}
+	// What the session inherits goes under the resolved values, without the runtime's
+	// other model-key variables, as environment writes the agent's. A name of the
+	// built-in deny list is left out of it too, which Join leaves in: Setup refuses
+	// such a name.
+	deny, err := variables.List(nil)
+	if err != nil {
+		return nil, err
+	}
+	var inherited []string
+	for _, kv := range withoutNames(s.Env, key.Others) {
+		if name, _, _ := strings.Cut(kv, "="); !deny.Matches(name) {
+			inherited = append(inherited, kv)
 		}
 	}
-	out := []string{}
-	for _, kv := range vars.Env {
-		if name, _, _ := strings.Cut(kv, "="); server[name] {
-			out = append(out, kv)
-		}
+	env := withoutNames(environment(inherited, vars.Env), fixed)
+	last := map[string]string{}
+	for _, kv := range env {
+		name, value, _ := strings.Cut(kv, "=")
+		last[name] = value
 	}
-	return accesskey.WithoutVariables(out)
+	out := make([]string, 0, len(last))
+	for _, name := range slices.Sorted(maps.Keys(last)) {
+		out = append(out, name+"="+last[name])
+	}
+	return out, nil
 }
 
 // The server's variables a [Run] gives its caller.

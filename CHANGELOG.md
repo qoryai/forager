@@ -1073,7 +1073,11 @@ release may change what an existing document does, and says so under Upgrading.
   image, on the wall's internal network, one `setup` step each; the container runs until
   the run closes. `SetupSpec.ForagerFiles` and `SetupSpec.Written` are checked against
   the working folder as a join's, and with `SetupSpec.Limits` the setup container gets
-  the limit flags the agent's container gets.
+  the limit flags the agent's container gets. Before any step, `Setup` refuses a
+  `SetupSpec.Env` value for one of the run's placeholders with `placeholder_conflict`,
+  a `QORY_` name other than `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` or a reserved
+  name with `variable_reserved`, and a name of `denied-variables.json`, such as
+  `LD_PRELOAD`.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
@@ -1192,12 +1196,15 @@ release may change what an existing document does, and says so under Upgrading.
   `wall.RunContainersExist` is that method of a Docker with no field set, which a nil d
   asks through. A run's check against the registry asks through its wall when it is a
   `*wall.Docker`.
-- `(*session.Run).ServerEnv(spec)`, the server's variables that a session of `spec`
-  gets, `NAME=value`, sorted by name, so a caller can give the setup container the
-  agent's environment. Call it before `Setup` with the session's full spec, and append
-  the result after the machine's and the run's variables. It resolves the variables as
-  `Join` does, without the runtime's preparation, and writes nothing and sends no
-  request. The values are plain values, not secrets.
+- `(*session.Run).AgentEnv(spec)`, the environment a session of `spec` gets from the
+  server's variables, `Variables.Run`, `Variables.Machine`, `LaunchDefaults` and
+  `Env`, `NAME=value`, sorted by name, so a caller can give the setup container the
+  agent's environment: pass it as `SetupSpec.Env`. It resolves the variables as `Join`
+  does, with the deny lists and the placeholders, without the runtime's preparation,
+  and writes nothing and sends no request. It leaves out the names Forager, the proxy,
+  the wall and `LaunchFixed` set, the placeholders, and a name of
+  `denied-variables.json` that `Env` has, such as `PATH`. A spec `Join` refuses, such as
+  one with `variable_reserved` or `placeholder_conflict`, is the same refusal.
 
 #### Fixed
 

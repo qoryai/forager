@@ -4354,10 +4354,12 @@ join's checks of its places, and the helper at `/qory/qory` and, with an authori
 bundle at `/qory/ca-bundle.pem`, both read-only: no home, run directory, hook socket or
 container runtime's socket. It reaches only the relay, at `qory-proxy:3128`. Its
 environment is the relay's proxy variables, the bundle's variables, the run's
-placeholders, then the caller's variables without the reserved names, the access key's
-variables and `QORY_RUN_KEY`; a value that contains the password of one of the run's
-forwarders or of the engine proxy, as it is, in a proxy URL or as the base64 of
-`qory:<password>`, is refused. The helper keeps the container
+placeholders, then the caller's variables. Before any step, `Setup` refuses a caller's
+variable for one of the run's placeholders with `placeholder_conflict`; a `QORY_` name
+other than `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, or a reserved name, with
+`variable_reserved`; and a name of `denied-variables.json`, such as `LD_PRELOAD`. A
+value that contains the password of one of the run's forwarders or of the engine proxy,
+as it is, in a proxy URL or as the base64 of `qory:<password>`, is refused. The helper keeps the container
 running (`Docker.HoldArgs`), and each command runs in it through `docker exec`, as the
 wall's user, in the working folder, with no input. The container runs until the run
 closes, so a service a setup command starts is reachable from the agent's container by

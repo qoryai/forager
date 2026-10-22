@@ -15,6 +15,7 @@ import (
 
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
+	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/wall"
 )
@@ -91,8 +92,8 @@ func streamsOf(evs []map[string]any, step int) []string {
 // after a fetch: the wall step "start the setup container" and a setup step per command
 // follow the run's last step, each command's stdout and stderr are its step's lines with
 // no session, and the join's steps come after. The setup container gets the working
-// folder as its one mount, the run's forwarder and proxy secret, the caller's variables
-// without the reserved ones and no proxy variable, and SetupSpec.Limits, and the agent's
+// folder as its one mount, the run's forwarder and proxy secret, the caller's variables,
+// QORY_RUN_SYSTEM among them, and no proxy variable, and SetupSpec.Limits, and the agent's
 // container reaches the same forwarder.
 func TestTheSetupRunsInTheSetupContainer(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -104,7 +105,7 @@ func TestTheSetupRunsInTheSetupContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	hostStep(t, r, event.StepFetch, "fetch github.com/example-org/app", "Cloning into 'app'...\n")
-	env := []string{"APP_ENV=test", "QORY_ACCESS_KEY_SECRET=forged", "QORY_RUN_KEY=forged"}
+	env := []string{"APP_ENV=test", "QORY_RUN_SYSTEM=tickets"}
 	limits := wall.Limits{CPUs: "2", Memory: "4g", PIDs: 512, ShmSize: "1g"}
 	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Env: env, Commands: twoCommands, Limits: limits}); err != nil {
 		t.Fatal(err)
@@ -145,7 +146,7 @@ func TestTheSetupRunsInTheSetupContainer(t *testing.T) {
 		t.Errorf("the setup container's proxy %q and token %q; the agent's proxy %q", w.setup.Proxy, w.setup.ProxyToken, w.got.Proxy)
 	}
 	setupEnv := strings.Join(w.setup.Env, "\n")
-	if !slices.Contains(w.setup.Env, "APP_ENV=test") || strings.Contains(setupEnv, "forged") || strings.Contains(setupEnv, "PROXY") {
+	if !slices.Contains(w.setup.Env, "APP_ENV=test") || !slices.Contains(w.setup.Env, "QORY_RUN_SYSTEM=tickets") || strings.Contains(setupEnv, "PROXY") {
 		t.Errorf("the setup container's variables:\n%s", setupEnv)
 	}
 }
@@ -332,9 +333,9 @@ func TestASetupThatCannotStartWritesNothing(t *testing.T) {
 				t.Fatal(err)
 			}
 			s := setup(sp)
-			s.Env = []string{"APP_PROXY=" + h.ProxyURL}
+			s.Env = []string{"APP_URL=" + h.ProxyURL}
 			return s
-		}, "Leave the host proxy's URL out of the setup's variables: APP_PROXY contains its password, which the setup container never gets."},
+		}, "Leave the host proxy's URL out of the setup's variables: APP_URL contains its password, which the setup container never gets."},
 		{"a closed run", nil, func(t *testing.T, sp runSpec, r *session.Run) session.SetupSpec {
 			if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
 				t.Fatal(err)
@@ -494,8 +495,8 @@ func TestASetupVariableWithTheEngineProxysPasswordIsRefused(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
-			err = r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Env: []string{"APP_PROXY=" + value}, Commands: twoCommands})
-			want := "Leave the host proxy's URL out of the setup's variables: APP_PROXY contains its password, which the setup container never gets."
+			err = r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Env: []string{"APP_URL=" + value}, Commands: twoCommands})
+			want := "Leave the host proxy's URL out of the setup's variables: APP_URL contains its password, which the setup container never gets."
 			if err == nil || err.Error() != want {
 				t.Errorf("got %v\nwant %s", err, want)
 			}
@@ -580,4 +581,96 @@ func TestTheRunsEntryListsTheSetupFolderDuringASession(t *testing.T) {
 	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestASetupVariableTheAgentCannotGetIsRefused pins the two ways a setup variable
+// could reach the setup container while the agent gets no such value, each refused
+// before any step and before the setup container starts. A value for TOOL_TOKEN, a
+// placeholder of a separate gateway's run answer, is placeholder_conflict, from
+// AgentEnv for --env and from Setup. LD_PRELOAD from wall.env is left out by AgentEnv,
+// as by the join, and refused by Setup. A QORY_ name other than QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES is variable_reserved.
+func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
+	ctx := context.Background()
+	setupRefused := func(t *testing.T, r *session.Run, w *setupWall, env []string) error {
+		t.Helper()
+		steps := len(ofType(events(t, &session.Result{Dir: r.Dir()}), event.StepStarted))
+		err := r.Setup(ctx, session.SetupSpec{Dir: w.got.Dir, Env: env, Commands: twoCommands})
+		if got := len(ofType(events(t, &session.Result{Dir: r.Dir()}), event.StepStarted)); got != steps {
+			t.Errorf("the setup wrote %d steps", got-steps)
+		}
+		if w.starts != 0 {
+			t.Errorf("the setup container started %d times", w.starts)
+		}
+		return err
+	}
+	t.Run("a placeholder of a separate gateway", func(t *testing.T) {
+		sp, g, _ := remoteSpec(t, 0)
+		g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+			a := linktest.RunAnswer(req)
+			a["placeholders"] = []string{"TOOL_TOKEN"}
+			return linktest.Reply{Status: 200, Body: a}
+		})
+		w := &setupWall{}
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		sp.Variables.Run = []string{"TOOL_TOKEN=a-value-not-in-errors"}
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+		_, err = r.AgentEnv(sp.SessionSpec)
+		var ref *session.Refusal
+		if !errors.As(err, &ref) || ref.Code != "placeholder_conflict" || !slices.Equal(ref.Names, []string{"TOOL_TOKEN"}) {
+			t.Errorf("AgentEnv: %v, want placeholder_conflict TOOL_TOKEN", err)
+		}
+		w.got.Dir = sp.Dir
+		err = setupRefused(t, r, w, []string{"APP_ENV=test", "TOOL_TOKEN=a-value-not-in-errors"})
+		if !errors.As(err, &ref) || ref.Code != "placeholder_conflict" || !slices.Equal(ref.Names, []string{"TOOL_TOKEN"}) {
+			t.Errorf("Setup: %v, want placeholder_conflict TOOL_TOKEN", err)
+		}
+		if err != nil && strings.Contains(err.Error(), "a-value-not-in-errors") {
+			t.Errorf("the error quotes the value: %v", err)
+		}
+	})
+	t.Run("LD_PRELOAD from wall.env", func(t *testing.T) {
+		sp := spec(t)
+		w := &setupWall{}
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		sp.Variables.Machine = []string{"LD_PRELOAD=/lib/inject.so", "APP_ENV=test"}
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+		env, err := r.AgentEnv(sp.SessionSpec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(env, "APP_ENV=test") || slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "LD_PRELOAD=") }) {
+			t.Errorf("AgentEnv %q, want APP_ENV and no LD_PRELOAD", env)
+		}
+		w.got.Dir = sp.Dir
+		err = setupRefused(t, r, w, append(env, "LD_PRELOAD=/lib/inject.so"))
+		want := "Leave LD_PRELOAD out of the setup's variables: the deny list, denied-variables.json, leaves it out of the agent's environment."
+		if err == nil || err.Error() != want {
+			t.Errorf("Setup: %v\nwant %s", err, want)
+		}
+	})
+	t.Run("a QORY_ name", func(t *testing.T) {
+		sp := spec(t)
+		w := &setupWall{}
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+		w.got.Dir = sp.Dir
+		err = setupRefused(t, r, w, []string{"QORY_RUN_SYSTEM=tickets", "QORY_RUN_KEY=forged"})
+		var ref *session.Refusal
+		if !errors.As(err, &ref) || ref.Code != "variable_reserved" || !slices.Equal(ref.Names, []string{"QORY_RUN_KEY"}) {
+			t.Errorf("Setup: %v, want variable_reserved QORY_RUN_KEY", err)
+		}
+	})
 }

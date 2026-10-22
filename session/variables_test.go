@@ -15,6 +15,7 @@ import (
 
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/internal/linktest"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes"
@@ -904,39 +905,85 @@ func TestAWrapThatFailsPrintsAPhraseForASecretInAPath(t *testing.T) {
 	}
 }
 
-// serverEnvVariables is serverVariables with the server's QORY_RUN_SYSTEM, which the
+// agentEnvVariables is serverVariables with the server's QORY_RUN_SYSTEM, which the
 // agent gets, and three names it never gets from the server: an access key's
 // variable, one of Forager's names and a proxy name.
-const serverEnvVariables = `{"variables":{"NODE_ENV":{"value":"test"},"APP_REGION":{"value":"eu-west-1"},` +
+const agentEnvVariables = `{"variables":{"NODE_ENV":{"value":"test"},"APP_REGION":{"value":"eu-west-1"},` +
 	`"ANTHROPIC_BASE_URL":{"value":"https://elsewhere.example"},"PATH":{"value":"/nowhere"},"LOG_LEVEL":{"value":"server"},` +
 	`"CODEX_HOME":{"value":"/server/home"},"ANTHROPIC_AUTH_TOKEN":{"value":"server-credential"},` +
 	`"QORY_RUN_SYSTEM":{"value":"tickets"},"QORY_ACCESS_KEY_SECRET":{"value":"x"},"QORY_RUN_ID":{"value":"x"},"HTTPS_PROXY":{"value":"http://x.example"}}}`
 
-// TestServerEnvIsWhatTheAgentGetsFromTheServer pins Run.ServerEnv against a real
-// join of the same spec: behind a wall, and without one with accept or ignore, the
-// result is the server's values in the agent's environment, the names the record lists
-// from the server, sorted. A name of the deny list, a name the runtime declares, a
-// name of LaunchFixed, Forager's, the proxy's and an access key's variable are not in
-// it, and each call returns a new slice.
-func TestServerEnvIsWhatTheAgentGetsFromTheServer(t *testing.T) {
-	served := []string{"LOG_LEVEL=server", "NODE_ENV=test", "QORY_RUN_SYSTEM=tickets"}
+// answerAgentEnv makes the gateway's run answer carry agentEnvVariables and the
+// placeholder TOOL_TOKEN.
+func answerAgentEnv(g *linktest.Fake) {
+	var vars struct {
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal([]byte(agentEnvVariables), &vars); err != nil {
+		panic(err)
+	}
+	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+		a := linktest.RunAnswer(req)
+		a["variables"], a["placeholders"] = vars.Variables, []string{"TOOL_TOKEN"}
+		return linktest.Reply{Status: 200, Body: a}
+	})
+}
+
+// recordingPrep is a runtime whose preparation's variables, by name, go to names. It
+// has the runtime's secrets and model section.
+type recordingPrep struct {
+	runtimes.Runtime
+	names *[]string
+}
+
+func (p recordingPrep) Prepare(a runtimes.Attach) (runtimes.Launch, error) {
+	l, err := p.Runtime.Prepare(a)
+	for _, kv := range l.Env {
+		name, _, _ := strings.Cut(kv, "=")
+		*p.names = append(*p.names, name)
+	}
+	return l, err
+}
+
+func (p recordingPrep) Secrets() runtimes.Declarations { return p.Runtime.(runtimes.Secrets).Secrets() }
+
+func (p recordingPrep) Model() (runtimes.ModelPlaces, bool) {
+	return p.Runtime.(runtimes.Model).Model()
+}
+
+// TestAgentEnvIsWhatTheAgentGets pins Run.AgentEnv against a real join of the same
+// spec, with variables from the server, --env, wall.env, the harness's defaults and
+// what the run inherits, a deny entry and a placeholder: behind a wall, and without
+// one with accept or ignore, the result is the agent's environment without the fixed
+// names, the placeholder, the preparation's names, the inherited PATH, a name of the
+// built-in deny list, and what the shell that dumps it adds, sorted. A name of the deny list from the server or from wall.env, LD_PRELOAD
+// among them, is not in it, and each call returns a new slice. AgentEnv writes no
+// session directory and sends no join request.
+func TestAgentEnvIsWhatTheAgentGets(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		walled   bool
 		unwalled string
-		want     []string
+		logLevel string
 	}{
-		{"walled", true, "", served},
-		{"unwalled and accept", false, session.UnwalledAccept, served},
-		{"unwalled and ignore", false, session.UnwalledIgnore, []string{}},
+		{"walled", true, "", "server"},
+		{"unwalled and accept", false, session.UnwalledAccept, "server"},
+		{"unwalled and ignore", false, session.UnwalledIgnore, "run"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			sp, g := specGateway(t)
-			answerVariables(g, serverEnvVariables)
+			sp, g := specGateway(t, "EDITOR=shell", "SHELL_ONLY=kept")
+			answerAgentEnv(g)
 			out := dumpsEnv(t, &sp)
+			var prepared []string
+			sp.Runtime = recordingPrep{sp.Runtime, &prepared}
 			sp.LaunchFixed = []string{"CODEX_HOME=/computed/home"}
-			sp.Variables = session.Variables{Run: []string{"LOG_LEVEL=run"}, Machine: []string{"NODE_ENV=machine"}, Deny: []string{"APP_*"}, Unwalled: tc.unwalled}
+			sp.LaunchDefaults = []string{"HARNESS_PROFILE=nextjs", "BUILD_NUMBER=0"}
+			sp.Variables = session.Variables{
+				Run:     []string{"LOG_LEVEL=run", "EDITOR=vi"},
+				Machine: []string{"EDITOR=nano", "BUILD_NUMBER=7", "LD_PRELOAD=/lib/inject.so"},
+				Deny:    []string{"APP_*"}, Unwalled: tc.unwalled,
+			}
 			if tc.walled {
 				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			}
@@ -944,32 +991,42 @@ func TestServerEnvIsWhatTheAgentGetsFromTheServer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := r.ServerEnv(sp.SessionSpec)
+			got, err := r.AgentEnv(sp.SessionSpec)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(got, tc.want) {
-				t.Errorf("ServerEnv %q, want %q", got, tc.want)
-			}
 			if !slices.IsSorted(got) {
-				t.Errorf("ServerEnv %q is not sorted", got)
+				t.Errorf("AgentEnv %q is not sorted", got)
 			}
-			if len(got) > 0 {
-				got[0] = "CHANGED=by-the-caller"
-				again, err := r.ServerEnv(sp.SessionSpec)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !slices.Equal(again, tc.want) {
-					t.Errorf("after a change to the first result, ServerEnv %q, want %q", again, tc.want)
-				}
-				got = again
+			has := map[string]string{}
+			for _, kv := range got {
+				name, value, _ := strings.Cut(kv, "=")
+				has[name] = value
 			}
+			for name, value := range map[string]string{"LOG_LEVEL": tc.logLevel, "EDITOR": "vi", "BUILD_NUMBER": "7", "HARNESS_PROFILE": "nextjs", "SHELL_ONLY": "kept"} {
+				if has[name] != value {
+					t.Errorf("AgentEnv has %s=%q, want %q", name, has[name], value)
+				}
+			}
+			for _, name := range []string{"LD_PRELOAD", "APP_REGION", "TOOL_TOKEN", "CODEX_HOME", "ANTHROPIC_AUTH_TOKEN", "QORY_ACCESS_KEY_SECRET", "QORY_RUN_ID", "HTTPS_PROXY"} {
+				if value, ok := has[name]; ok {
+					t.Errorf("AgentEnv has %s=%q, a name the agent does not get from these sources", name, value)
+				}
+			}
+			again, err := r.AgentEnv(sp.SessionSpec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got[0] = "CHANGED=by-the-caller"
+			if slices.Contains(again, got[0]) {
+				t.Error("two calls of AgentEnv share a slice")
+			}
+			got = again
 			if _, err := os.Stat(filepath.Join(r.Dir(), session.SessionsDir)); !errors.Is(err, fs.ErrNotExist) {
-				t.Errorf("ServerEnv left the sessions' directory: %v", err)
+				t.Errorf("AgentEnv left the sessions' directory: %v", err)
 			}
 			if n := len(g.Joins()); n != 0 {
-				t.Errorf("ServerEnv sent %d join requests, want none", n)
+				t.Errorf("AgentEnv sent %d join requests, want none", n)
 			}
 			res, err := r.Join(ctx, sp.SessionSpec)
 			if _, cerr := r.Close(ctx, outcomeOf(res, err)); cerr != nil {
@@ -981,35 +1038,42 @@ func TestServerEnvIsWhatTheAgentGetsFromTheServer(t *testing.T) {
 			if res.ExitCode != 0 {
 				t.Fatalf("exit %d", res.ExitCode)
 			}
-			env := envOf(t, out)
-			agent := []string{}
+			// What AgentEnv leaves out: the fixed names, as the record lists them,
+			// Forager's and the proxy's names, the placeholder, the preparation's names,
+			// PATH, the one inherited name of the built-in deny list, and the variables
+			// the shell that dumps the environment sets.
+			left := slices.Concat(prepared, []string{"TOOL_TOKEN", "QORY_RUN_ID", "QORY_RUN_SOCKET", "PATH", "PWD", "SHLVL", "_", "OLDPWD"})
+			for _, kv := range link.ProxyEnv("") {
+				name, _, _ := strings.Cut(kv, "=")
+				left = append(left, name)
+			}
 			for _, line := range variablesApplied(t, res) {
-				name, rest, _ := strings.Cut(line, "<-")
-				if from, _, _ := strings.Cut(rest, " "); from != "apiary" {
-					continue
+				if name, rest, ok := strings.Cut(line, "<-"); ok && strings.HasPrefix(rest, "fixed") {
+					left = append(left, name)
 				}
-				if value, ok := env[name]; ok {
+			}
+			agent := []string{}
+			for name, value := range envOf(t, out) {
+				if !slices.Contains(left, name) {
 					agent = append(agent, name+"="+value)
 				}
 			}
+			slices.Sort(agent)
 			if !slices.Equal(got, agent) {
-				t.Errorf("ServerEnv %q, the server's values in the agent's environment %q", got, agent)
-			}
-			for _, kv := range got {
-				name, _, _ := strings.Cut(kv, "=")
-				if slices.Contains([]string{"APP_REGION", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CODEX_HOME", "PATH", "QORY_ACCESS_KEY_SECRET", "QORY_RUN_ID", "HTTPS_PROXY"}, name) {
-					t.Errorf("ServerEnv has %s, a name the agent does not get from the server", name)
-				}
+				t.Errorf("AgentEnv\n%q\nthe agent's environment without the fixed names, the placeholder and the preparation's\n%q", got, agent)
 			}
 		})
 	}
 }
 
-// TestServerEnvRefusesWhatAJoinRefuses pins the errors of Run.ServerEnv: a spec a join
-// refuses before its join request, a refusal of what the run passes in with its code,
-// and a closed run. None of them sends a join request.
-func TestServerEnvRefusesWhatAJoinRefuses(t *testing.T) {
+// TestAgentEnvRefusesWhatAJoinRefuses pins the errors of Run.AgentEnv: a spec a join
+// refuses before its join request, and a value for a placeholder or a QORY_ name from
+// wall.env behind a wall, each the refusal a real join of the same spec returns, with
+// its code and names. None of them sends a join request. After the close, the error
+// starts with the fix.
+func TestAgentEnvRefusesWhatAJoinRefuses(t *testing.T) {
 	ctx := context.Background()
+	walled := func(sp *runSpec) { sp.Wall, sp.Image = &openWall{}, "example.com/agent:1" }
 	for _, tc := range []struct {
 		name string
 		set  func(*runSpec)
@@ -1018,33 +1082,45 @@ func TestServerEnvRefusesWhatAJoinRefuses(t *testing.T) {
 		{"a variable with no value", func(sp *runSpec) { sp.Variables.Run = []string{"ONLY_A_NAME"} }, "ONLY_A_NAME has no value"},
 		{"an unwalled mode of neither", func(sp *runSpec) { sp.Variables.Unwalled = "sometimes" }, "neither accept nor ignore"},
 		{"a deny entry of no shape", func(sp *runSpec) { sp.Variables.Deny = []string{"A-B"} }, "variables.deny"},
-		{"a walled run with no Exec", func(sp *runSpec) {
-			sp.Wall, sp.Image, sp.Exec = &openWall{}, "example.com/agent:1", nil
-		}, "Exec"},
-		{"a walled run that passes a QORY_ name", func(sp *runSpec) {
-			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		{"a walled run with no Exec", func(sp *runSpec) { walled(sp); sp.Exec = nil }, "Exec"},
+		{"a QORY_ name from wall.env", func(sp *runSpec) {
+			walled(sp)
 			sp.Variables.Machine = []string{"QORY_RUN_SYSTEM=x"}
 		}, "variable_reserved"},
+		{"a placeholder from --env", func(sp *runSpec) {
+			walled(sp)
+			sp.Variables.Run = []string{"TOOL_TOKEN=a-value"}
+		}, "placeholder_conflict"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sp, g := specGateway(t)
-			answerVariables(g, serverEnvVariables)
+			answerAgentEnv(g)
 			tc.set(&sp)
 			r, err := session.Open(ctx, opened(sp))
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer func() {
-				if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
-					t.Fatal(err)
-				}
-			}()
-			got, err := r.ServerEnv(sp.SessionSpec)
+			got, err := r.AgentEnv(sp.SessionSpec)
 			if err == nil || !strings.Contains(refusal(err), tc.want) {
-				t.Errorf("ServerEnv %q, %v; want an error with %q", got, err, tc.want)
+				t.Errorf("AgentEnv %q, %v; want an error with %q", got, err, tc.want)
 			}
 			if n := len(g.Joins()); n != 0 {
 				t.Errorf("%d join requests, want none", n)
+			}
+			if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+				t.Fatal(err)
+			}
+			var ref *session.Refusal
+			if !errors.As(err, &ref) {
+				return
+			}
+			sp, g = specGateway(t)
+			answerAgentEnv(g)
+			tc.set(&sp)
+			_, joined := run(ctx, sp)
+			var want *session.Refusal
+			if !errors.As(joined, &want) || want.Code != ref.Code || !slices.Equal(want.Names, ref.Names) {
+				t.Errorf("AgentEnv's refusal %v, the join's %v", err, joined)
 			}
 		})
 	}
@@ -1056,7 +1132,7 @@ func TestServerEnvRefusesWhatAJoinRefuses(t *testing.T) {
 	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := r.ServerEnv(sp.SessionSpec); err == nil || !strings.HasPrefix(err.Error(), "open a new run") {
+	if got, err := r.AgentEnv(sp.SessionSpec); err == nil || !strings.HasPrefix(err.Error(), "open a new run") {
 		t.Errorf("after the close: %q, %v; want the fix first", got, err)
 	}
 }
