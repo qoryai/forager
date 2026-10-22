@@ -1628,7 +1628,10 @@ outcome kept: the run has no reason, but for a `cancelled` run, whose reason is 
 `stopped`, as when its starter gave none (§The gateway's link, The end member). The
 close writes `timeout`, `interrupted` and `no_session`, the resend of a record writes
 `gateway_lost` (§The server), and the gateway writes the others, on a session's run on
-its link. The state of each of Forager's endings:
+its link. The close writes `image_missing`, the refusal code of `refusal.Decides`, when
+its caller gives it: after `(*session.Run).FetchImage` returned that refusal, `failed`
+with `exit_code` `-1`, in a run with no join, so a control plane can tell a missing
+image from another failure. The state of each of Forager's endings:
 
 | Ending | `state` | `reason` |
 |---|---|---|
@@ -1637,6 +1640,7 @@ its link. The state of each of Forager's endings:
 | the run's time limit was reached, during the host work or a session, whose runtime the session stopped; `exit_code` is `124` | `cancelled` | `timeout` |
 | the run was stopped from where it was started (a Ctrl-C) before its close; `exit_code` is the last session's, `-1` when no session ran | `cancelled` | `interrupted` |
 | the run was closed with no join, after its host work failed, such as a fetch or a compose; `exit_code` is `-1` | `failed` | `no_session` |
+| the run was closed with no join, after the fetch of the run's image found that its registry does not have it; `exit_code` is `-1` | `failed` | `image_missing` |
 | the gateway heard nothing from the session for 3 × its heartbeat interval | `failed` | `session_lost` |
 | the gateway was lost before the run's exit was recorded, because Forager died; written when the record is sent again, `duration_ms` to the last event recorded | `failed` | `gateway_lost` |
 | the gateway refused a batch from the run's session (§The gateway's link) | `failed` | `batch_refused` |
@@ -3431,10 +3435,13 @@ its events:
   `dev.qory.run.exited` or `dev.qory.run.refused`: nothing follows either; or is a
   `dev.qory.run.refused` after the run's `dev.qory.run.started`, whose place it takes;
 - is a `dev.qory.run.exited` other than the close's: one with a `reason` other than
-  `timeout`, `interrupted` and `no_session`. A session's batch contains only the close's
-  `dev.qory.run.exited`, with the caller's outcome, its time limit, its stop from where
-  it was started or a close with no join, and the gateway writes the event of every
-  other reason itself (The end of a run at the gateway, below); or is a
+  `timeout`, `interrupted`, `no_session` and `image_missing`; one with `no_session` or
+  `image_missing` after the gateway numbered a join of the run; or one with
+  `image_missing` that is not `failed` with `exit_code` `-1`. A session's batch
+  contains only the close's `dev.qory.run.exited`, with the caller's outcome, its time
+  limit, its stop from where it was started, a close with no join, or a close with no
+  join after the fetch of an image its registry does not have, and the gateway writes
+  the event of every other reason itself (The end of a run at the gateway, below); or is a
   `dev.qory.run.exited` while a join is open, from the gateway's `200` to it until the
   gateway numbers its `dev.qory.session.exited`;
 - is a `dev.qory.session.started` whose `session` is not the number of a join the
@@ -4025,8 +4032,12 @@ runs as the wall's numeric uid:gid. A fetch that fails starts no container of th
 image, and the run's close removes the run's containers and networks; an image the
 engine pulled stays in its store. An image its registry does not have, with no manifest
 of the digest or no repository of the name, is `image_missing`, with the reference as
-its name: "the image <ref> is not in its registry". A denied pull, an unreachable
-registry and a pull that times out are failures with no code.
+its name: "the image <ref> is not in its registry". When the engine pulls from the
+image's registry alone, a denied pull, an unreachable registry and a pull that times
+out are failures with no code. With a mirror, a 404 from the mirror gives
+`image_missing`, even when the upstream is unreachable or denies the pull. Docker Hub
+answers `401` for a repository that does not exist, so that case stays a failure with
+no code.
 
 **The workspace at `/workspace`.** A run whose policy names its image by reference sees
 the bind that holds its workspace, the outermost, at `/workspace`, and the working

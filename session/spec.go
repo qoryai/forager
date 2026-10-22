@@ -14,6 +14,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/wall"
 )
@@ -365,11 +366,12 @@ func checkMachine(spec OpenSpec) error {
 
 // Outcome is how the caller says the run ended, which [Run.Close] writes in
 // dev.qory.run.exited: State, succeeded, failed or cancelled; Reason, empty for none,
-// timeout or interrupted with cancelled, timeout with ExitCode 124, or a code of the
-// caller's, which is none of Forager's reserved codes; and ExitCode, the run's exit
-// code: the last session's, 124 at the run's time limit, -1 when no session ran. A
-// failed run with no reason that no session joined is closed as failed with no_session
-// and -1.
+// timeout or interrupted with cancelled, timeout with ExitCode 124, image_missing,
+// failed with -1 for a run no session joined, after [Run.FetchImage] returned that
+// refusal, or a code of the caller's, which is none of Forager's reserved codes; and
+// ExitCode, the run's exit code: the last session's, 124 at the run's time limit, -1
+// when no session ran. A failed run with no reason that no session joined is closed as
+// failed with no_session and -1.
 type Outcome struct {
 	State    string
 	Reason   string
@@ -378,15 +380,20 @@ type Outcome struct {
 
 // checkOutcome refuses an outcome the close cannot write: a state outside the three, an
 // exit code under -1, a reason outside the pattern or one of Forager's reserved codes
-// other than timeout, interrupted and no_session, and those three with another state
-// or exit code than they take. joined says a join of the run was numbered, or may have
-// been.
+// other than timeout, interrupted and no_session, those three with another state or
+// exit code than they take, and image_missing other than failed with -1 for a run no
+// session joined, the one image_missing the gateway accepts. joined says a join of the
+// run was numbered, or may have been.
 func checkOutcome(o Outcome, joined bool) error {
 	switch {
 	case !event.IsState(o.State):
 		return fmt.Errorf("the outcome's state %q is none of succeeded, failed and cancelled", o.State)
 	case o.ExitCode < -1:
 		return fmt.Errorf("the outcome's exit code %d is under -1", o.ExitCode)
+	case o.Reason == refusal.ImageMissing:
+		if o.State != event.StateFailed || o.ExitCode != -1 || joined {
+			return errors.New("an outcome with the reason image_missing is failed with the exit code -1, of a run no session joined")
+		}
 	case o.Reason == "", event.StarterReason(o.Reason):
 		return nil
 	case o.Reason == event.ReasonTimeout:

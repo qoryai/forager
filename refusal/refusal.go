@@ -37,8 +37,8 @@ const (
 	// the wall reads it from the image after it fetches it, or finds the engine holds it
 	// by that digest: its name is the reference.
 	ImageUserRoot = "image_user_root"
-	// ImageMissing is an image a policy names by its reference that its registry does
-	// not have, as the engine's pull reports it: no manifest of that digest, or no
+	// ImageMissing is an image in a policy by its reference that its registry does not
+	// have, as the engine's pull reports it: no manifest of that digest, or no
 	// repository of that name. Its name is the reference.
 	ImageMissing = "image_missing"
 	// VariableReserved is a walled run whose environment passes a QORY_ variable, or a

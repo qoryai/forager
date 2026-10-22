@@ -474,10 +474,11 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 }
 
 // closeRule is why the link refuses a session's dev.qory.run.exited, its data, empty
-// when it accepts it: the close's, with no reason or with timeout, interrupted or
-// no_session, and no_session only for a run with no join the gateway numbered. The
-// gateway writes the event of every other end itself. joined says the gateway numbered
-// a join of the run.
+// when it accepts it: the close's, with no reason or with timeout, interrupted,
+// no_session or image_missing, the last two only for a run with no join the gateway
+// numbered, and image_missing only failed with exit_code -1, the close after a fetch of
+// the run's image that its registry did not have. The gateway writes the event of every
+// other end itself. joined says the gateway numbered a join of the run.
 func closeRule(data map[string]any, joined bool) string {
 	given, hasReason := data["reason"]
 	why, _ := given.(string)
@@ -486,6 +487,14 @@ func closeRule(data map[string]any, joined bool) string {
 	case why == event.ReasonNoSession:
 		if joined {
 			return "a run.exited no_session of a run with a join"
+		}
+	case why == refusal.ImageMissing:
+		code, _ := data["exit_code"].(float64)
+		switch {
+		case joined:
+			return "a run.exited image_missing of a run with a join"
+		case data["state"] != event.StateFailed || code != -1:
+			return "a run.exited image_missing that is not failed with exit_code -1"
 		}
 	default:
 		return "a run.exited with a reason the gateway decides"

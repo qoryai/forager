@@ -190,8 +190,11 @@ func TestDockerLeavesNothingWhenTheFetchFails(t *testing.T) {
 // name, is image_missing, with the reference as its name; a denied pull, an unreachable
 // registry, a timeout, a missing layer and a missing platform are the pull's error.
 // Docker Engine 29.8.2's lines, containerd image store, are recorded against registry:2
-// and Zot on a test machine, the deleted digest and repository among them, which print
-// the same line; Docker Engine 26.1.5's, classic image store, are as its
+// and Zot on a test machine: a digest or a tag the repository does not have, a
+// repository the registry does not have and a deleted digest print the same line, the
+// reference twice and then "not found"; a "not found" line whose second reference
+// differs from the first is the pull's error. Docker Engine 26.1.5's, classic image
+// store, are as its
 // distribution/errors.go writes them; the denied lines of the containerd store are as
 // moby's daemon/containerd/image_pull.go and registry_errors.go write them.
 func TestDockerRefusesAnImageItsRegistryDoesNotHave(t *testing.T) {
@@ -205,6 +208,7 @@ func TestDockerRefusesAnImageItsRegistryDoesNotHave(t *testing.T) {
 		missing   bool
 	}{
 		{"29, a digest, repository or deleted digest the registry lacks", resolve(byReference + ": not found"), true},
+		{"29, not found with another reference", resolve(name + "@sha256:" + strings.Repeat("f", 64) + ": not found"), false},
 		{"29, no login", resolve("pull access denied, repository does not exist or may require authorization: authorization failed: no basic auth credentials"), false},
 		{"29, a token's 401", "Error response from daemon: pull access denied for " + name + ", repository does not exist or may require 'docker login'\n", false},
 		{"29, DENIED", "Error response from daemon: error from registry: requested access to the resource is denied\n", false},

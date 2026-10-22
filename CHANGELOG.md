@@ -933,8 +933,15 @@ release may change what an existing document does, and says so under Upgrading.
   an image whose registry has no manifest of its digest or no repository of its name,
   with the reference as its name. When the join's image step pulls the image, the
   session's `dev.qory.session.exited` is failed, with `exit_code` `-1` and `reason`
-  `image_missing`; `(*session.Run).FetchImage` returns the refusal. A denied pull, an
-  unreachable registry and a timeout stay failures with no reason.
+  `image_missing`; `(*session.Run).FetchImage` returns the refusal. When the engine
+  pulls from the image's registry alone, a denied pull, an unreachable registry and a
+  timeout stay failures with no reason. With a mirror, a 404 from the mirror gives
+  `image_missing`, even when the upstream is unreachable or denies the pull.
+- `image_missing` as the reason of a session's `dev.qory.run.exited`: after
+  `(*session.Run).FetchImage` returns that refusal, close a run with no join with
+  `failed`, `image_missing` and `-1`, and the gateway accepts the batch. `Close`
+  refuses the outcome, and the gateway the batch, with another state or exit code, or
+  after a join.
 - `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one

@@ -298,6 +298,52 @@ func TestAGatewayTakesASessionEndedByAMissingImage(t *testing.T) {
 	startedThenExited(t, "the gateway's record", record(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)}), refusals.ImageMissing)
 }
 
+// TestAGatewayTakesARunClosedForAMissingImage pins the close after FetchImage's
+// image_missing through a real gateway: the close's outcome, failed with -1 and the
+// reason image_missing, is taken with no join, nothing is undelivered, and the
+// gateway's record ends with that dev.qory.run.exited.
+func TestAGatewayTakesARunClosedForAMissingImage(t *testing.T) {
+	c := newControl(t)
+	c.serveDocument(`{"version":1,"image":"` + pinned + `"}`)
+	w := &targetWall{refuse: refusals.New(refusals.ImageMissing, []string{pinned}, "the image %s is not in its registry", pinned)}
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow, sp.RunID = w, "base", images, []string{"registry.example/agents/"}, event.NewRunID()
+	rg := startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
+	ctx := context.Background()
+	fetched, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r *session.Refusal
+	if err := fetched.FetchImage(ctx); !errors.As(err, &r) || r.Code != refusals.ImageMissing {
+		t.Fatalf("the fetch: %v, want image_missing", err)
+	}
+	closed, err := fetched.Close(ctx, session.Outcome{State: event.StateFailed, Reason: refusals.ImageMissing, ExitCode: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.State != event.StateFailed || closed.Reason != refusals.ImageMissing || closed.ExitCode != -1 || closed.RunClosed || closed.Undelivered != 0 {
+		t.Errorf("closed %+v", closed)
+	}
+	if d := rg.close(t); d != (gateway.Delivery{}) {
+		t.Errorf("delivery %+v", d)
+	}
+	rg.mu.Lock()
+	reports := rg.reports
+	rg.mu.Unlock()
+	if len(reports) > 0 {
+		t.Errorf("the gateway reported %q", reports)
+	}
+	rec := record(t, &session.Result{Dir: closed.Dir})
+	if len(ofType(rec, "dev.qory.session.started")) != 0 {
+		t.Errorf("the gateway's record has a session: %v", types(rec))
+	}
+	last := rec[len(rec)-1]
+	if d := data(last); last["type"] != event.RunExited || d["state"] != event.StateFailed || d["reason"] != refusals.ImageMissing || d["exit_code"] != float64(-1) {
+		t.Errorf("the gateway's record ends %v", last)
+	}
+}
+
 // anyStrings are the strings of a decoded JSON array.
 func anyStrings(v any) []string {
 	var out []string
