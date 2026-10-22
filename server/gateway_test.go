@@ -925,7 +925,7 @@ func TestPostViaEnrolsThroughTheGateway(t *testing.T) {
 // transport: a run code's redemption goes to via.url's origin at
 // /.well-known/qory-enrolment, and its answer verifies under the server's key as
 // without the gateway, the run key under the same key, so the client returns the run's
-// id, run key, step and documents; a nil client is refused before anything is sent.
+// id, run key and documents; a nil client is refused before anything is sent.
 func TestPostRunViaRedeemsARunCodeThroughTheGateway(t *testing.T) {
 	signer := generate(t)
 	rk, err := runkey.Key{RunID: gatewayRunID, Workspace: "ws_f1xt0re000000000", NodeID: "np_f1xt0re000000000", Gateway: "ng_f1xt0re000000000",
@@ -943,8 +943,7 @@ func TestPostRunViaRedeemsARunCodeThroughTheGateway(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		body := []byte(`{"version":1,"run_id":"` + gatewayRunID + `","run_key":"` + rk + `","step":"prebuild","domain":"software","access":"read",` +
-			`"target":{"system":"git.example","path":"example/widgets"},"inputs":{"version":1,"environment_ref":"env-1"},` +
+		body := []byte(`{"version":1,"run_id":"` + gatewayRunID + `","run_key":"` + rk + `","documents":{"note":"an example"},` +
 			`"apiary_public_key":[{"alg":"ed25519","public_key":"` + signer.PublicKey().String() + `"}]}`)
 		w.Header().Set(accesskey.HeaderSignature, signer.SignAnswer(accesskey.Answer{Enrolment: true, Status: 201, RequestSignature: req.Proof, Body: body}))
 		w.WriteHeader(http.StatusCreated)
@@ -964,7 +963,7 @@ func TestPostRunViaRedeemsARunCodeThroughTheGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	ans, err := r.PostRunVia(context.Background(), &http.Client{Transport: tr}, "https://qory.example", srv.URL, "qory/test")
-	if err != nil || ans.RunID != gatewayRunID || ans.RunKey != rk || len(ans.Pin) != 1 || ans.Step != "prebuild" || string(ans.Inputs) != `{"version":1,"environment_ref":"env-1"}` {
+	if err != nil || ans.RunID != gatewayRunID || ans.RunKey != rk || len(ans.Pin) != 1 || string(ans.Documents) != `{"note":"an example"}` {
 		t.Fatalf("redemption through via: %v, %v", ans, err)
 	}
 	if len(paths) != 1 || paths[0] != accesskey.EnrolmentPath {

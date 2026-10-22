@@ -20,7 +20,6 @@ import (
 
 	"github.com/qoryai/forager/contracts"
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 )
 
 // The fixtures of the access key: enrolment's schema, and the known answers this
@@ -157,7 +156,6 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		"fixtures/enrolment/answer.json":                          {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
 		"fixtures/enrolment/answer-gateway.json":                  {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
 		"fixtures/enrolment/answer-adapter.json":                  {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
-		"fixtures/enrolment/run-answer-prebuild.json":             {"enrolment.schema.json", "enrolment.schema.json#/$defs/run_answer"},
 		"fixtures/enrolment/refusal-key-limit.json":               {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 		"fixtures/enrolment/refusal-key-invalid.json":             {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 		"fixtures/enrolment/refusal-key-limit-rotation.json":      {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
@@ -227,8 +225,9 @@ func TestEnrolmentAnswerNodeKinds(t *testing.T) {
 
 // TestRunAnswerFixturesBreakOneRule pins each invalid fixture of a run code's answer to
 // the one rule of $defs/run_answer it breaks: the place in the answer and the keyword
-// that fails there, and no other. An unknown member, access_key_id or revision, fails
-// additionalProperties at the top.
+// that fails there, and no other. An unknown member, access_key_id, fails
+// additionalProperties at the top, and documents of another type than object fails
+// type at /documents.
 func TestRunAnswerFixturesBreakOneRule(t *testing.T) {
 	c, err := contracts.Compiler()
 	if err != nil {
@@ -239,27 +238,12 @@ func TestRunAnswerFixturesBreakOneRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"access-key-id":                      "/ additionalProperties",
-		"revision":                           "/ additionalProperties",
-		"no-run-key":                         "/ required",
-		"run-id-upper-case":                  "/run_id pattern",
-		"no-step":                            "/ required",
-		"no-domain":                          "/ required",
-		"no-inputs":                          "/ required",
-		"explore-no-work-item":               "/ required",
-		"prebuild-no-target":                 "/ required",
-		"prebuild-work-item":                 "/ not",
-		"prebuild-run-settings":              "/step const",
-		"prebuild-inputs-extra":              "/inputs additionalProperties",
-		"prebuild-inputs-no-environment-ref": "/inputs required",
-		"target-without-access":              "/ dependentRequired",
-		"access-without-target":              "/ dependentRequired",
-		"stack-without-workflow":             "/ dependentRequired",
-		"workflow-without-stack":             "/ dependentRequired",
-		"effort-without-model":               "/run_settings dependentRequired",
-		"model-without-provider-models":      "/run_settings dependentRequired",
-		"stack-path-parent":                  "/stack/path not",
-		"target-unknown-member":              "/target additionalProperties",
+		"access-key-id":     "/ additionalProperties",
+		"no-run-key":        "/ required",
+		"run-id-upper-case": "/run_id pattern",
+		"no-documents":      "/ required",
+		"documents-array":   "/documents type",
+		"documents-null":    "/documents type",
 	}
 	const prefix = "fixtures/invalid/enrolment-run-answer-"
 	seen := map[string]bool{}
@@ -296,19 +280,11 @@ func TestRunAnswerFixturesBreakOneRule(t *testing.T) {
 }
 
 // failures returns the leaves of ve, each its place in the document and the last
-// keyword of its keyword path, the keyword alone for dependentRequired and not, sorted
-// and each once.
+// keyword of its keyword path, sorted and each once.
 func failures(ve *jsonschema.ValidationError) []string {
 	if len(ve.Causes) == 0 {
-		where := "/" + strings.Join(ve.InstanceLocation, "/")
-		switch ve.ErrorKind.(type) {
-		case *kind.Not:
-			return []string{where + " not"}
-		case *kind.DependentRequired:
-			return []string{where + " dependentRequired"}
-		}
 		kw := ve.ErrorKind.KeywordPath()
-		return []string{where + " " + kw[len(kw)-1]}
+		return []string{"/" + strings.Join(ve.InstanceLocation, "/") + " " + kw[len(kw)-1]}
 	}
 	var out []string
 	for _, c := range ve.Causes {

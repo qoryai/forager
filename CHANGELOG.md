@@ -116,38 +116,39 @@ release may change what an existing document does, and says so under Upgrading.
   `event.SetupOutside` and `event.SetupInside` are the values in Go.
   `fixtures/link/link-batch-setup-outside.json` is a batch with both members, and two
   invalid fixtures have a `machine` in upper case and an unknown `setup`.
-- A run code, `qecr_`: the code a provisioner puts in a machine's start data in place of
-  the run key, since a cloud such as AWS EC2 keeps start data readable for the machine's
-  life. qory redeems it once at boot with a key pair made in memory, through the
-  gateway's relay, at `POST /.well-known/qory-enrolment`. The signed `201` is
-  `$defs/run_answer` of `enrolment.schema.json`: `version`, `run_id`, `run_key`,
-  `apiary_public_key`, `step`, and the run's documents `domain`, `inputs`, `access`,
-  `target`, `work_item`, `run_settings`, `stack` and `workflow`, so the machine gets
-  everything the run needs from the answer and the start data contains only the code.
-  `step` and the documents have the shapes and the rules of the run-key form of the
-  provisioner contract's handover answer at commit `022bfb7` of `qoryai/integrations`,
-  whose definitions the schema copies. The answer is at most 1 MiB: the client reads at
-  most 1 MiB of an answer to a run code, `accesskey.MaxRunAnswer`, and 64 KiB of an
-  answer to an access key's code, `accesskey.MaxAnswer`. The code is valid for 15
-  minutes and is used once; a retry by the same public key gets the same members, the
-  same run key included, and another key gets `401`. The run key's `issued` is the time
-  of the first redemption, and its `attach_by` 600 seconds after it.
-  `accesskey.EnrolmentRequest.PostRunVia`, `PostRun` and `VerifyRunAnswer` return an
-  `accesskey.RunAnswer`, after they verify the answer under the server key the code
-  selects, read it against `$defs/run_answer`, and verify the run key as the gateway
-  does, for the answer's `run_id`. `RunAnswer.Step` is the step, and `Domain`, `Access`,
-  `Target`, `WorkItem`, `RunSettings`, `Inputs`, `Stack` and `Workflow` are each
-  document as a `json.RawMessage`, `nil` when the answer leaves it out. fmt writes a
-  `RunAnswer` as `run <run id>`, and slog and encoding/json write its `run_id` alone,
-  except: fmt, and slog's text handler, which prints a struct through fmt, can print the
-  run key of a `RunAnswer` in a struct field that is not exported, and its documents as
-  their bytes in decimal. `accesskey.CodePrefixRun` is `qecr_`, and `accesskey.CodeKind`
-  returns `run` for it. `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and the
-  run methods refuse an access key's code, before they send anything. The known answers
-  are `run_enrolment` in `fixtures/known-answers/through-gateway.json`, a run of the
-  step explore with every document; `fixtures/enrolment/run-answer-prebuild.json` is a
-  run of the step prebuild, and each `fixtures/invalid/enrolment-run-answer-*.json`
-  breaks one rule.
+- A run code, `qecr_`: the code a provisioner puts in a machine's start data in place
+  of the run key, since a cloud such as AWS EC2 keeps start data readable for the
+  machine's life. qory redeems it once at boot with a key pair made in memory, through
+  the gateway's relay, at `POST /.well-known/qory-enrolment`. The signed `201` is
+  `$defs/run_answer` of `enrolment.schema.json`: `version`, `run_id`, `run_key` and
+  `apiary_public_key`. The code is valid for 15 minutes and is used once; a retry by
+  the same public key gets the same members, the same run key included, and another
+  key gets `401`. The run key's `issued` is the time of the first redemption, and its
+  `attach_by` 600 seconds after it. `accesskey.EnrolmentRequest.PostRunVia`, `PostRun`
+  and `VerifyRunAnswer` return an `accesskey.RunAnswer`, after they verify the answer
+  under the server key the code selects and the run key as the gateway does, for the
+  answer's `run_id`. fmt writes a `RunAnswer` as `run <run id>`, and slog and
+  encoding/json write its `run_id` alone, except: fmt, and slog's text handler, which
+  prints a struct through fmt, can print the run key of a `RunAnswer` in a struct
+  field that is not exported.
+  `accesskey.CodePrefixRun` is `qecr_`, and `accesskey.CodeKind` returns `run` for it.
+  `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and the run methods refuse an
+  access key's code, before they send anything. The known answers are `run_enrolment`
+  in `fixtures/known-answers/through-gateway.json`.
+- `documents` in the `201` to a run code, `$defs/run_answer` of `enrolment.schema.json`:
+  the run's documents, a required JSON object, so the start data contains only the
+  code. `run-documents.schema.json` of `qoryai/integrations` defines its members.
+  `VerifyRunAnswer` checks that `documents` is an object, reads none of its members,
+  and returns it as `accesskey.RunAnswer.Documents`, a `json.RawMessage` byte for byte
+  as the answer contains it. An answer without `documents`, or with `documents` that is
+  not an object, is an error that starts with the fix. The signature covers
+  `documents`, and a retry by the same key gets the same `documents`. fmt, slog and
+  encoding/json write no byte of it from a `RunAnswer`, except in a struct field that
+  is not exported, where fmt and slog's text handler write its bytes in decimal.
+- A run code's answer of up to 1 MiB, `accesskey.MaxRunAnswer`, the most the gateway's
+  relay passes back: `PostRunVia` and `PostRun` read at most 1 MiB of its body, and
+  `VerifyRunAnswer` counts a longer body as `answer_unsigned`. The methods of an access
+  key's code read at most 64 KiB, `accesskey.MaxAnswer`, as before.
 - `dev.qory.run.step_started`, `events/run.step_started.schema.json`, and
   `dev.qory.run.step_exited`, `events/run.step_exited.schema.json`: one step of the
   run's host work, such as a fetch or a compose, with a start, an end, an outcome and

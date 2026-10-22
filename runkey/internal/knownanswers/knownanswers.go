@@ -3,8 +3,8 @@
 // run key, one registration through a gateway and its answer with the run key, one
 // redemption of a run code and its answer with the run key and the run's documents,
 // one attach and its answer, and one outcome and its answer, each request signed under
-// its fixture access key and each answer under the fixture signing key of the server; and,
-// for a fixed exporter value, one binding of a connection to the gateway and one answer
+// its fixture access key and each answer under the fixture signing key of the server;
+// and, for a fixed exporter value, one binding of a connection to the gateway and one answer
 // of the gateway on its link, each signed under the fixture gateway key.
 //
 // Everything is derived from the published fixture seeds of keys.json, and Ed25519
@@ -104,25 +104,10 @@ func RunCode() string {
 	return "qecr_F1XT0RE0000000000000000000." + SigningKey().Fingerprint()
 }
 
-// RunDocuments are the step and the run's documents of the run code's answer: a run of
-// the step explore with every member, in neutral example data.
-var RunDocuments = struct {
-	Step                                                                   string
-	Domain, Access, Target, WorkItem, RunSettings, Inputs, Stack, Workflow json.RawMessage
-}{
-	Step:     "explore",
-	Domain:   json.RawMessage(`"software"`),
-	Access:   json.RawMessage(`"write"`),
-	Target:   json.RawMessage(`{"system":"git.example","path":"example/widgets"}`),
-	WorkItem: json.RawMessage(`{"id":"wi_f1xt0re0","url":"https://qory.example/work/wi_f1xt0re0","title":"Add a health check"}`),
-	RunSettings: json.RawMessage(`{"runtime":"claude","model":"example-model-2","effort":"high",` +
-		`"provider_models":[{"id":"example-model-1"},{"id":"example-model-2","effort":["low","high"]}],` +
-		`"tiers":{"light":"example-model-1","thinking":{"model":"example-model-2","effort":"high"}}}`),
-	Inputs: json.RawMessage(`{"version":1,"domain":"software","target":{"system":"git.example","path":"example/widgets"},` +
-		`"work_item":{"id":"wi_f1xt0re0","number":7,"url":"https://qory.example/work/wi_f1xt0re0"}}`),
-	Stack:    json.RawMessage(`{"url":"https://stacks.example/hello.git","commit":"0123456789abcdef0123456789abcdef01234567","path":"stacks/hello"}`),
-	Workflow: json.RawMessage(`"hello"`),
-}
+// RunDocuments is the run's documents of the run code's answer: a JSON object in
+// neutral example data. Forager checks that it is an object and reads none of its
+// members.
+var RunDocuments = json.RawMessage(`{"example":"f1xt0re"}`)
 
 // Labels and About are what the registration carries, and the attach answer gives back.
 var (
@@ -339,23 +324,13 @@ func Files() (map[string][]byte, error) {
 		return nil, err
 	}
 	files["enrolment-run-request.json"] = append(erBody, '\n')
-	d := RunDocuments
 	runAnswer, err := json.Marshal(struct {
 		Version         int                   `json:"version"`
 		RunID           string                `json:"run_id"`
 		RunKey          string                `json:"run_key"`
-		Step            string                `json:"step"`
-		Domain          json.RawMessage       `json:"domain"`
-		Access          json.RawMessage       `json:"access"`
-		Target          json.RawMessage       `json:"target"`
-		WorkItem        json.RawMessage       `json:"work_item"`
-		RunSettings     json.RawMessage       `json:"run_settings"`
-		Inputs          json.RawMessage       `json:"inputs"`
-		Stack           json.RawMessage       `json:"stack"`
-		Workflow        json.RawMessage       `json:"workflow"`
 		ApiaryPublicKey []accesskey.ServerKey `json:"apiary_public_key"`
-	}{1, RunID, rk, d.Step, d.Domain, d.Access, d.Target, d.WorkItem, d.RunSettings, d.Inputs, d.Stack, d.Workflow,
-		[]accesskey.ServerKey{{Alg: "ed25519", PublicKey: signing.PublicKey().String()}}})
+		Documents       json.RawMessage       `json:"documents"`
+	}{1, RunID, rk, []accesskey.ServerKey{{Alg: "ed25519", PublicKey: signing.PublicKey().String()}}, RunDocuments})
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +338,7 @@ func Files() (map[string][]byte, error) {
 	ea := accesskey.Answer{Enrolment: true, Status: 201, RequestSignature: er.Proof, Body: runAnswer}
 	pm, am := er.ProofMessage(), ea.Message()
 	v.RunEnrolment = RunEnrolment{
-		Note:        "The redemption of a run code: the request of enrolment-run-request.json, its proof under the fixture access key secret over the five lines qory-enrol-ed25519-v1, the code, the public key, the name and the timestamp; then the 201 of enrolment-run-answer.json, the run's id, the run key of run-key-payload.json, the step explore and the run's documents, signed under the fixture signing key with the domain line qory-enrol-answer-ed25519-v1 and the request's proof as line 3.",
+		Note:        "The redemption of a run code: the request of enrolment-run-request.json, its proof under the fixture access key secret over the five lines qory-enrol-ed25519-v1, the code, the public key, the name and the timestamp; then the 201 of enrolment-run-answer.json, the run's id, the run key of run-key-payload.json and the run's documents, signed under the fixture signing key with the domain line qory-enrol-answer-ed25519-v1 and the request's proof as line 3.",
 		Request:     Dir + "/enrolment-run-request.json",
 		ProofLines:  strings.Split(string(pm), "\n"),
 		ProofLength: len(pm),

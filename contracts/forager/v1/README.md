@@ -2121,49 +2121,30 @@ makes a key pair in memory and posts the code with a proof under that key, throu
 gateway's relay, to `/.well-known/qory-enrolment`. The request is an enrolment request
 as above, and the redemption makes no access key. A run code is valid for 15 minutes and
 is used once. The `201` is `$defs/run_answer`, signed as the `201` to an access key's
-code is, the signature covering the whole body. It contains everything the machine
-needs to run the step: the run's id, its run key, the server's keys, `step`, and the
-run's documents, `domain`, `inputs`, `access`, `target`, `work_item`, `run_settings`,
-`stack` and `workflow`. A run of the step prebuild:
+code is, the signature covering the whole body. It contains the run's id, its run key,
+the server's keys and `documents`, the run's documents, and every member is required:
 
 ```json
 {"version": 1, "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "run_key": "qrk_…",
- "step": "prebuild", "domain": "software", "access": "read",
- "target": {"system": "git.example", "path": "example/widgets"},
- "inputs": {"version": 1, "environment_ref": "env-1"},
- "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
+ "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}],
+ "documents": {…}}
 ```
 
-`step` and the run's documents have the shapes and the rules of the run-key form of
-the provisioner contract's handover answer,
-`https://qory.dev/contracts/provisioner/v1/handover-answer.schema.json`, at commit
-`022bfb7ced59a916bd97f1e9e1a20ff403b63d3e` of `qoryai/integrations`. The definitions
-they use are copied into `enrolment.schema.json` as `$defs/run_step`, `run_domain`,
-`run_access`, `run_target`, `run_work_item`, `run_environment_ref`, `run_model_id`,
-`run_effort_value`, `run_https_url`, `run_tier` and `run_text`, each with its source,
-so the schema refers to no schema outside this repository. The rules:
-
-- `step`, `domain` and `inputs` are required, beside `version`, `run_id`, `run_key` and
-  `apiary_public_key`.
-- `target` and `access` come together, and so do `stack` and `workflow`.
-- The step `explore` requires `work_item`. The step `prebuild` requires `access` and
-  `target`, has no `work_item`, and its `inputs` are exactly `version`, `1`, and
-  `environment_ref`.
-- `run_settings` is present only for the step `explore`. In it, `effort` and `tiers`
-  need `model`, and `model` and `provider_models` come together.
-- For a step other than `prebuild`, `inputs` takes any member beside `version`: the
-  step's schema sets its shape.
+`documents` is a JSON object. `run-documents.schema.json` of `qoryai/integrations`,
+`https://qory.dev/contracts/provisioner/v1/run-documents.schema.json`, defines its
+members. Forager checks that `documents` is an object, reads none of its members, and
+passes it to the caller byte for byte as the answer contains it.
 
 The answer is at most 1 MiB: Forager reads at most 1 MiB of the body of an answer to a
 run code, the most the gateway's relay passes back, and at most 64 KiB of an answer to
-an access key's code, and counts a larger answer as unsigned, `answer_unsigned`.
+an access key's code, and counts a longer body as unsigned, `answer_unsigned`.
 
 A retry by the same public key within the 15 minutes gets the same members, the same
-`run_id`, `run_key`, `apiary_public_key`, `step` and documents, signed over the retry's
-proof. A redemption by another public key after the first is `401`, as is a code that is
-used, has expired or was cancelled; the signed `409` and `429` are those of an access
-key's code. The run key's `issued` is the time of the code's first redemption, not the
-time the code was made, and its `attach_by` is 600 seconds after `issued`. The machine
+`run_id`, `run_key`, `apiary_public_key` and `documents`, signed over the retry's proof.
+A redemption by another public key after the first is `401`, as is a code that is used,
+has expired or was cancelled; the signed `409` and `429` are those of an access key's
+code. The run key's `issued` is the time of the code's first redemption, not the time
+the code was made, and its `attach_by` is 600 seconds after `issued`. The machine
 checks the answer in this order: it verifies the signature under the listed key whose
 fingerprint is the code's first; it reads the body against `run_answer`; it keeps the
 listed keys whose fingerprints are in the code; it verifies `run_key` as the gateway
@@ -2174,19 +2155,15 @@ machine installs nothing of it. The machine keeps the run key in memory and pass
 the session as `RemoteGateway.RunKey`, and writes it to no file and no environment
 variable. In Go, `EnrolmentRequest.PostRunVia` of package `accesskey` sends the request
 through the gateway, `PostRun` sends it to the server, and `VerifyRunAnswer` reads the
-answer. Each returns an `accesskey.RunAnswer`, with `Step` and each document as the
-answer's JSON, a `json.RawMessage` that `VerifyRunAnswer` checks against the schema and
-decodes no further, `nil` for a member the answer leaves out. fmt writes a `RunAnswer`
-as `run <run id>`, and slog and encoding/json write its `run_id` alone, except: fmt, and
-slog's text handler, which prints a struct through fmt, can print the run key of a
-`RunAnswer` in a struct field that is not exported, and its documents as their bytes in
-decimal, since fmt calls no method there. `PostVia`, `Post` and `VerifyAnswer` refuse a
-run code before they send or read anything, and the three run methods refuse an access
-key's code the same way. The known answers are `run_enrolment` in
-`fixtures/known-answers/through-gateway.json`, with `enrolment-run-request.json` and
-`enrolment-run-answer.json`, a run of the step explore with every document;
-`fixtures/enrolment/run-answer-prebuild.json` is a run of the step prebuild, and each
-`fixtures/invalid/enrolment-run-answer-*.json` breaks one rule.
+answer. Each returns an `accesskey.RunAnswer`, whose `Documents` is the answer's
+`documents` as a `json.RawMessage`. fmt writes a `RunAnswer` as `run <run id>`, and slog
+and encoding/json write its `run_id` alone, except: fmt, and slog's text handler, which
+prints a struct through fmt, can print the run key of a `RunAnswer` in a struct field
+that is not exported, and its documents as their bytes in decimal, since fmt calls no
+method there. `PostVia`, `Post` and `VerifyAnswer` refuse a run code before they send or
+read anything, and the three run methods refuse an access key's code the same way. The
+known answers are `run_enrolment` in `fixtures/known-answers/through-gateway.json`, with
+`enrolment-run-request.json` and `enrolment-run-answer.json`.
 
 **The configuration document.** `configuration.schema.json`. A signed
 `GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery, per
@@ -4523,7 +4500,7 @@ the option experimental.
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
 | `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall, one with a wall and its `images`, and one with a narrowing as well, one with `images.allow` and a policy that names its image by reference, a run answer with a wall, its labels, `placeholders`, `reserved`, `credential_hosts`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one with an image by reference, its `reference` and `relay_image`, one whose `credential_hosts` has an API credential from the server with its `auth`, `format` and `endpoint`, with `model_credential`, one without a wall and one without a policy, each with its `applied`, one without a wall whose gateway holds a credential, with its `placeholders`, `credential_hosts` and `certificate_authority` and no `image`, one behind a separate gateway, without labels and `proxy_secret`, a reload answer with and without a policy, each with its `applied`, and one whose `applied` has `ceiling_paths`, a batch of a session's events without `sequence`, its `dev.qory.run.started` and `dev.qory.session.started` first, a batch of the `dev.qory.run.refused` of a session's code, a batch of a `dev.qory.session.exited` and a `dev.qory.run.exited` with `timeout`, `cancelled`, the run's with exit code `124`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, one of a refused join, `mount_mode_conflict`, one of a failure at the join after `dev.qory.session.started`, `failed` with `exit_code` `-1` and no reason, one of the wall's refusal at the join after `dev.qory.session.started`, `failed` with `exit_code` `-1` and `image_user_root`, and one of a run closed with `no_session` after a line of host work, one of a run closed with `no_session` after a `fetch` step that failed with exit status `128`, `link-batch-step-failed.json`, a join request with `passes`, and with `model_credential` too, a join answer with `model_credential` and one of a run with no model key, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `image_not_allowed`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, one with `timeout` and an exit code other than `124`, and one with `interrupted` and `failed`, a `dev.qory.run.started` opened by a session or with a runtime member, a `dev.qory.run.log` whose `session` is `0` or whose `step` is `0` and a `dev.qory.runtime.started` whose `session` is text, a `dev.qory.run.step_started` with a `kind` outside the list, with no `name` or numbered `0`, a `dev.qory.run.step_exited` with no `state`, with a `state` outside the three, with an `exit_code` of `-2` or with no `duration_ms`, a `dev.qory.session.started` whose `harness` is empty, has a member it does not define or a commit of 39 characters, a `dev.qory.session.exited` `cancelled` with no reason, `succeeded` with exit status 1, of a refused join with exit status 1, with `stopped` and an exit status, `cancelled` with `gateway_lost`, and, in a session's batch, with `stopped`, `succeeded` with no exit status and `cancelled` with a refusal's code, and a run configuration whose `image` has a tag and one whose `image` is the machine's name for one, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited` with a reason of the starter's | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
-| `fixtures/enrolment/` | enrolment requests with a node's code, `qecn_`, one carrying one fingerprint and one carrying two, and a gateway's request with a gateway's code, `qecg_`, under the fixture gateway key, the answer, the answer to the gateway's request, the answer for an adapter's key, `answer-adapter.json`, unsigned, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key, and a run code's answer of the step prebuild, `run-answer-prebuild.json`, unsigned | `enrolment.schema.json`; each proof under the fixture access key, the gateway's under the fixture gateway key, each answer's and refusal's signature under the fixture signing key, `answer-adapter.json` and `run-answer-prebuild.json` being checked against the schema alone |
+| `fixtures/enrolment/` | enrolment requests with a node's code, `qecn_`, one carrying one fingerprint and one carrying two, and a gateway's request with a gateway's code, `qecg_`, under the fixture gateway key, the answer, the answer to the gateway's request, the answer for an adapter's key, `answer-adapter.json`, unsigned, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, the gateway's under the fixture gateway key, each answer's and refusal's signature under the fixture signing key, `answer-adapter.json` being checked against the schema alone |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `attach-run-configuration.json`, `discovery-gateway.json`, `outcome.json` and `outcome-answer.json`, and, for a fixed exporter value, a binding and an answer of the gateway on its link, signed under the fixture gateway key (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
 | `fixtures/sealed/` | the secrets request's fixture: `run-configuration.json`, a run configuration with two credentials; `secrets-request.json`, the request for them; `secrets-answer.json`, its envelope, sealed to the fixture access key with a fixed ephemeral key, bytes 33 to 64, and signed under the fixture signing key; `sealed-plaintext.json`, what it opens to; `vectors.json`, its `info`, `aad`, lengths and hashes and the refused cases; and under `invalid/` envelopes each refused at one step, a wrong `aad`, a wrong `info`, a bad signature, an `exp` past the window, an `exp` too far ahead, another digest, another run id, an unknown suite and a value for a credential not requested, and `plaintext-other-digest.json` and `plaintext-not-requested.json`, the plaintexts the cases of another digest and of a value not requested were sealed from | each file against its schema, and `invalid/` against `secrets-answer.schema.json`, which refuses only the unknown suite; each envelope sealed again with the standard library, its signature verified and signed again, and opened with `crypto/hpke`; each refused one at its step and at no step before |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |

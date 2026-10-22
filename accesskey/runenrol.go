@@ -3,7 +3,6 @@ package accesskey
 import (
 	"context"
 	"encoding/json"
-	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -11,19 +10,13 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"slices"
-	"strings"
-	"sync"
 
-	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/internal/runkeywire"
-	"github.com/santhosh-tekuri/jsonschema/v6"
-	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 )
 
 // RunAnswer is the server's 201 to a run code, [CodePrefixRun]: the run's id, its run
-// key, the server's keys, the step and the run's documents. The code's redemption makes
-// no access key.
+// key, the server's keys and the run's documents. The code's redemption makes no
+// access key.
 //
 // A RunAnswer shows its run id and not its run key or its documents, except in one
 // case: fmt prints it as String returns it, "run <run id>", whatever the verb; a slog
@@ -44,21 +37,13 @@ type RunAnswer struct {
 	RunKey string `json:"run_key"`
 	// ApiaryPublicKey are the server's keys as it lists them, current then next.
 	ApiaryPublicKey Pin `json:"apiary_public_key"`
-	// Step is the step the run is for, such as explore or prebuild.
-	Step string `json:"step"`
-	// Domain, Access, Target, WorkItem, RunSettings, Inputs, Stack and Workflow are
-	// the run's documents: each member's JSON as the answer contains it, checked
-	// against $defs/run_answer of enrolment.schema.json and decoded no further. A
-	// member the answer leaves out is nil. Domain and Inputs are in every verified
-	// answer.
-	Domain      json.RawMessage `json:"domain"`
-	Access      json.RawMessage `json:"access"`
-	Target      json.RawMessage `json:"target"`
-	WorkItem    json.RawMessage `json:"work_item"`
-	RunSettings json.RawMessage `json:"run_settings"`
-	Inputs      json.RawMessage `json:"inputs"`
-	Stack       json.RawMessage `json:"stack"`
-	Workflow    json.RawMessage `json:"workflow"`
+	// Documents is the run's documents: the answer's documents member, a JSON object,
+	// byte for byte as the answer contains it. VerifyRunAnswer checks that it is an
+	// object and reads none of its members, which run-documents.schema.json of
+	// qoryai/integrations defines. The answer's signature covers it as it covers the
+	// other members. String, Format, LogValue and MarshalJSON write no byte of it,
+	// because the run's documents can contain values that must stay out of logs.
+	Documents json.RawMessage `json:"documents"`
 	// Pin are the keys of ApiaryPublicKey whose fingerprints are in the code: the
 	// keys the run key's signature verified under.
 	Pin Pin `json:"-"`
@@ -85,8 +70,8 @@ func (a RunAnswer) Format(f fmt.State, _ rune) { io.WriteString(f, a.String()) }
 func (a RunAnswer) LogValue() slog.Value { return slog.GroupValue(slog.String("run_id", a.RunID)) }
 
 // MarshalJSON writes {"run_id": RunID} alone, for a log or a dump that encodes a
-// RunAnswer as JSON: no run key, version, keys, step or documents. A RunAnswer is read
-// from the wire, never written to it, so no writer needs the other members.
+// RunAnswer as JSON: no run key, version, keys or documents. A RunAnswer is read from the wire,
+// never written to it, so no writer needs the other members.
 func (a RunAnswer) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		RunID string `json:"run_id"`
@@ -108,15 +93,15 @@ const fixRunCode = "use another run code: "
 // [EnrolmentRequest.VerifyAnswer] reads an access key's: the same statuses, the same
 // refusals and the same signature, under EnrolAnswerDomain with the request's proof as
 // the third line and under the listed key whose fingerprint is the code's first.
-// A verified 201 is the run's answer: the run's id, its run key, the server's keys, the
-// step and the run's documents, read against $defs/run_answer of enrolment.schema.json;
-// a body over [MaxRunAnswer] is answer_unsigned. Its Pin is then the entries whose
-// fingerprints are in the code, and the run key must verify under the key of Pin whose
-// fingerprint is the signer of the run key's payload, as the gateway verifies it, with
-// run_id equal to the answer's run_id. A verified 201 that enrols an access key is a
-// [*KindError]. A request whose code is not a run code is an error, and nothing is
-// read: [EnrolmentRequest.VerifyAnswer] reads its answer. No error contains the run key
-// or a value of a document.
+// A verified 201 is the run's answer: the run's id, its run key, the server's keys and
+// the run's documents, which must be a JSON object; a body over [MaxRunAnswer] is
+// answer_unsigned. Its Pin is then the entries whose fingerprints are in the code, and
+// the run key must verify under the key of Pin whose fingerprint is the signer of the
+// run key's payload, as the gateway verifies it, with run_id equal to the answer's
+// run_id. A verified 201 that enrols an access key is a [*KindError]. A request whose
+// code is not a run code is an error, and nothing is read:
+// [EnrolmentRequest.VerifyAnswer] reads its answer. No error contains the run key or a
+// byte of the documents.
 func (r *EnrolmentRequest) VerifyRunAnswer(a Answer, signature string) (*RunAnswer, error) {
 	if err := r.forRun(); err != nil {
 		return nil, err
@@ -139,9 +124,6 @@ func (r *EnrolmentRequest) VerifyRunAnswer(a Answer, signature string) (*RunAnsw
 	if err := ans.check(); err != nil {
 		return nil, err
 	}
-	if err := checkRunAnswerSchema(a.Body); err != nil {
-		return nil, err
-	}
 	if ans.Pin, err = r.pinOf(ans.ApiaryPublicKey); err != nil {
 		return nil, fmt.Errorf(fixRunCode+"the enrolment answer: %w", err)
 	}
@@ -155,7 +137,8 @@ func (r *EnrolmentRequest) VerifyRunAnswer(a Answer, signature string) (*RunAnsw
 	return &ans, nil
 }
 
-// check refuses a run answer the schema refuses. No error contains the run key.
+// check refuses a run answer the schema refuses. No error contains the run key or a
+// byte of the documents.
 func (a *RunAnswer) check() error {
 	if a.Version != 1 {
 		return fmt.Errorf("update Forager to read the enrolment answer: its version is %d, and this Forager reads version 1", a.Version)
@@ -175,69 +158,13 @@ func (a *RunAnswer) check() error {
 	if err := a.ApiaryPublicKey.Check(); err != nil {
 		return fmt.Errorf(fixRunCode+"the enrolment answer: %w", err)
 	}
-	return nil
-}
-
-// runAnswerSchema is $defs/run_answer of enrolment.schema.json, compiled once.
-var runAnswerSchema = sync.OnceValues(func() (*jsonschema.Schema, error) {
-	return contracts.Compile("enrolment.schema.json#/$defs/run_answer")
-})
-
-// checkRunAnswerSchema reads a run answer's body against $defs/run_answer of
-// enrolment.schema.json. An error starts with the fix and states where in the answer
-// each failure is, the rule and the names of missing members, never a value.
-func checkRunAnswerSchema(body []byte) error {
-	s, err := runAnswerSchema()
-	if err != nil {
-		return fmt.Errorf("rebuild Forager: enrolment.schema.json does not compile: %w", err)
+	if len(a.Documents) == 0 {
+		return errors.New(fixRunCode + "the enrolment answer has no documents")
 	}
-	doc, err := contracts.Decode("run-answer.json", body)
-	if err != nil {
-		return errors.New(fixRunCode + "the enrolment answer is not JSON")
-	}
-	if err := s.Validate(doc); err != nil {
-		var ve *jsonschema.ValidationError
-		if !errors.As(err, &ve) {
-			return errors.New(fixRunCode + "the enrolment answer does not match $defs/run_answer of enrolment.schema.json")
-		}
-		return fmt.Errorf(fixRunCode+"the enrolment answer does not match $defs/run_answer of enrolment.schema.json at %s", strings.Join(schemaLeaves(ve), ", "))
+	if a.Documents[0] != '{' {
+		return errors.New(fixRunCode + "the enrolment answer's documents is not a JSON object")
 	}
 	return nil
-}
-
-// schemaLeaves returns, for each failure at the leaves of ve, its JSON pointer in the
-// document and the keyword that failed, with the missing members' names for required
-// and dependentRequired, sorted and each once.
-func schemaLeaves(ve *jsonschema.ValidationError) []string {
-	if len(ve.Causes) == 0 {
-		var ptr jsontext.Pointer
-		for _, t := range ve.InstanceLocation {
-			ptr = ptr.AppendToken(t)
-		}
-		where := string(ptr)
-		if where == "" {
-			where = "/"
-		}
-		if ve.ErrorKind == nil {
-			return []string{where}
-		}
-		kw := strings.Join(ve.ErrorKind.KeywordPath(), "/")
-		switch k := ve.ErrorKind.(type) {
-		case *kind.Required:
-			kw += ": " + strings.Join(k.Missing, ", ")
-		case *kind.DependentRequired:
-			kw = "dependentRequired: " + strings.Join(k.Missing, ", ") + " with " + k.Prop
-		case *kind.Not:
-			kw = "not"
-		}
-		return []string{where + " (" + kw + ")"}
-	}
-	var out []string
-	for _, c := range ve.Causes {
-		out = append(out, schemaLeaves(c)...)
-	}
-	slices.Sort(out)
-	return slices.Compact(out)
 }
 
 // checkRunKey verifies a run key as package runkey's Verify does, under the key of pin

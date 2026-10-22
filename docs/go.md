@@ -507,8 +507,8 @@ A machine that a provisioner creates for one run gets a run code, `qecr_`, in it
 data in place of the run key. The command redeems the code once at boot, through the
 gateway, and passes the run key to the session as `RemoteGateway.RunKey`
 ([a run code](../contracts/forager/v1/README.md#the-server)). The answer also contains
-the step and the run's documents, everything else the run needs, so the start data
-contains only the code.
+the run's documents, a JSON object that Forager passes to the caller unread, so the
+start data contains only the code.
 
 ```go
 key, err := accesskey.Generate() // in memory: the redemption makes no access key
@@ -516,7 +516,7 @@ req, err := accesskey.NewEnrolmentRequest(key, code, hostname, time.Now())
 tr, err := server.Via{URL: viaURL, CAFile: caFile}.Transport()
 ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, userAgent)
 // ans.RunID is the run, ans.RunKey its run key, ans.Pin the server keys it verified under,
-// ans.Step the step, and ans.Domain, ans.Inputs and the other documents the answer's JSON
+// and ans.Documents the run's documents, the answer's JSON byte for byte
 ```
 
 - `PostRunVia` verifies the answer under the server key that the code's first
@@ -524,16 +524,13 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   whose fingerprint is among the code's and is the run key's `signer`, and checks that
   the run key's `run_id` is the answer's. `PostRun` sends the request to the server
   without a gateway, and `VerifyRunAnswer` reads an answer that the caller sent.
-- `accesskey.RunAnswer` has `Step`, a string, and the run's documents `Domain`,
-  `Access`, `Target`, `WorkItem`, `RunSettings`, `Inputs`, `Stack` and `Workflow`, each
-  a `json.RawMessage` of the member as the answer contains it. `PostRunVia` checks
-  them against `$defs/run_answer` of `enrolment.schema.json` and decodes them no
-  further; a member the answer leaves out is `nil`. `Domain` and `Inputs` are in every
-  verified answer, and the schema sets which of the others the step requires.
-- An answer that breaks a rule of the schema is an error that starts with the fix and
-  states the place and the rule, and no value. For an answer of the step `explore`
-  without `work_item`, the error is "use another run code: the enrolment answer does
-  not match $defs/run_answer of enrolment.schema.json at / (required: work_item)".
+- `RunAnswer.Documents` is the answer's `documents` member, a `json.RawMessage` byte
+  for byte as the answer contains it. `VerifyRunAnswer` checks that it is a JSON object
+  and reads none of its members; `run-documents.schema.json` of `qoryai/integrations`
+  defines them. An answer without `documents` is the error "use another run code: the
+  enrolment answer has no documents", and one whose `documents` is not an object,
+  `null` included, is "use another run code: the enrolment answer's documents is not a
+  JSON object".
 - `PostRunVia` and `PostRun` read at most `accesskey.MaxRunAnswer`, 1 MiB, of the
   answer's body, and `VerifyRunAnswer` counts a longer body as `answer_unsigned`. The
   methods of an access key's code read at most `accesskey.MaxAnswer`, 64 KiB.
@@ -545,7 +542,7 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   field that is not exported, so fmt, and slog's text handler, which prints a struct
   through fmt, can print the run key there, and the documents as their bytes in
   decimal, as `%+v` of `struct{ a accesskey.RunAnswer }` does. Keep a `RunAnswer` out of
-  such a field. No error contains the run key or a value of a document.
+  such a field. No error contains the run key or a byte of the documents.
 - An error of a verified answer starts with the fix, "use another run code: ",
   because the code is used and a retry by the same key gets the same members: "use
   another run code: the enrolment answer's run key is not valid: its signature does
