@@ -137,6 +137,15 @@ func TestTheStackProxyOnOneMachine(t *testing.T) {
 	if status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), "other.example.net:443"); status != http.StatusForbidden || body != stackRefusedBody("other.example.net", 443) {
 		t.Errorf("another host: %d %q", status, body)
 	}
+	resp, err = stack.Get("http://other.example.net/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || string(b) != stackRefusedBody("other.example.net", 80) {
+		t.Errorf("another host over plain HTTP: %d %q", resp.StatusCode, b)
+	}
 	// The run's proxy decides by the run's policy, which denies the stack host.
 	resp, err = relay(h.g.Addr(), a.ProxySecret).Get(origin.URL)
 	if err != nil {
@@ -168,6 +177,7 @@ func TestTheStackProxyOnOneMachine(t *testing.T) {
 	want := []string{
 		fmt.Sprintf("run %s: stack fetch to 127.0.0.1:%s allowed by gateway.stack_hosts entry 127.0.0.1", a.RunID, port),
 		fmt.Sprintf("run %s: stack fetch to other.example.net:443 denied: the host is not in gateway.stack_hosts", a.RunID),
+		fmt.Sprintf("run %s: stack fetch to other.example.net:80 denied: the host is not in gateway.stack_hosts", a.RunID),
 		fmt.Sprintf("run %s: stack fetch to 127.0.0.1:%s allowed by gateway.stack_hosts entry 127.0.0.1", a.RunID, port),
 	}
 	if got := h.reportsWith("stack fetch"); !slices.Equal(got, want) {

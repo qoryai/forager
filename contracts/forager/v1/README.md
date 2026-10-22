@@ -3700,12 +3700,12 @@ definition through the stack proxy. This is a forwarder on loopback that
 proxy's is. On one machine it opens every connection to the gateway's proxy with
 `QORY-RELAY` and the run's `stack_proxy_secret`. Behind a separate gateway it opens
 them with `QORY-STACK` and the run key, over TLS, bound. The gateway serves these
-connections through the run's stack proxy: enforce mode, the hosts of
-`gateway.stack_hosts` alone, no certificate authority and no credential. Neither the
-run's policy nor the node's applies. Each decision is one line of the gateway's log,
-and no `dev.qory.run.egress` is written. The gateway closes the stack proxy at the
-run's first join request, so no session reaches it. qory also writes the fetch in the
-run machine's log.
+connections through the run's stack proxy: enforce mode, a CONNECT or a plain HTTP
+request to the hosts of `gateway.stack_hosts` alone, no certificate authority and no
+credential. Neither the run's policy nor the node's applies. Each decision is one line
+of the gateway's log, and no `dev.qory.run.egress` is written. The gateway closes the
+stack proxy at the run's first join request, so no session reaches it. qory also writes
+the fetch in the run machine's log.
 
 ## The runtime
 

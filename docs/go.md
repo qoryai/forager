@@ -38,7 +38,9 @@ The module is a library with two entry points: the gateway and the session.
 - Before a session joins, programs on the host, such as a fetch of the run's
   repositories or a compose of the harness, reach the run's proxy through
   `(*session.Run).HostProxy`, a forwarder on loopback with a password, for every run,
-  walled or not: see [the host proxy](#the-host-proxy).
+  walled or not: see [the host proxy](#the-host-proxy). qory fetches the run's harness
+  definition through `(*session.Run).StackProxy` instead, which reaches the hosts of
+  `gateway.stack_hosts` alone.
 - It joins a session to the run, `(*session.Run).Join`, with a
   [`session.SessionSpec`](../session/spec.go): the program to start, and how. It gets a
   [`session.Result`](../session/spec.go) back once the runtime has exited and the
@@ -231,6 +233,53 @@ fetch.Env = append(os.Environ(), "GIT_CONFIG_COUNT=2",
 	"GIT_CONFIG_KEY_1=http.sslCAInfo", "GIT_CONFIG_VALUE_1="+h.CABundle)
 err = fetch.Run()
 h.Close()                                         // Join closes it too
+```
+
+`(*session.Run).StackProxy` starts a forwarder of the same kind for qory's fetch of the
+run's harness definition. Call it after `Open` and before the run's first `Join`. It
+returns a `session.HostProxy`:
+
+- `ProxyURL` and `Env` are as for `HostProxy`, with a password made for this forwarder
+  alone. Every connection through it reaches the run's stack proxy, not the run's
+  proxy. On one machine the forwarder opens each connection to the gateway's proxy with
+  `QORY-RELAY` and the run answer's `stack_proxy_secret`. Behind a separate gateway it
+  dials the gateway's one address with `QORY-STACK` and the run key.
+- The stack proxy passes a CONNECT or a plain HTTP request to a host of
+  `gateway.Config.StackHosts` alone, in enforce mode, with no certificate authority and
+  no credential. The run's policy is not checked, and no `dev.qory.run.egress` is
+  written. `gateway.Config.Report` gets one line per decision, such as "run <id>: stack
+  fetch to git.example.com:443 allowed by gateway.stack_hosts entry git.example.com".
+  A host outside the list gets a `403` with this body:
+
+  ```
+  qory: add other.example.net to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.
+  qory: egress to other.example.net:443 denied by the gateway: the host is not in gateway.stack_hosts
+  ```
+- `CABundle` is empty, and `Env` sets no CA variable.
+- `Close()` ends it as it ends a host proxy. The run's first `Join` closes it before
+  the join request. At that join request the gateway closes the stack proxy, whatever
+  the answer, and every connection through it, one opened before the join among them.
+- `StackProxy` returns "Call StackProxy before the run's first Join: the gateway
+  closes the stack proxy at the first join request." after the run's first `Join`, and
+  while another call of the run runs, such as `Join` or a step. It returns "Open
+  another run: this run is closed." after `Close`, and an error when the port cannot be
+  opened.
+
+qory sets `gateway.Config.StackHosts` from `gateway.stack_hosts` in `forager.yaml`.
+`gateway.Start` refuses an entry that is not a lower-case host name or a `*.` suffix,
+such as "Set StackHosts[0] to a lower-case host name or a *. suffix, such as
+git.example.com. It is "https://git.example.com"."
+
+```go
+s, err := run.StackProxy()                        // before the first Join
+if err != nil {
+	return err
+}
+fetch := exec.Command("git", "clone", "--depth=1", "https://git.example.com/harness.git")
+fetch.Env = append(os.Environ(), "GIT_CONFIG_COUNT=1",
+	"GIT_CONFIG_KEY_0=http.proxy", "GIT_CONFIG_VALUE_0="+s.ProxyURL)
+err = fetch.Run()
+s.Close()                                         // Join closes it too
 ```
 
 Write the host work as steps, one at a time, so a reader shows each step, the step that
