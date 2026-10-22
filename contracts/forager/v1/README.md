@@ -1566,9 +1566,11 @@ leave out or replace these values of the machine:
 - `cwd` of `dev.qory.runtime.started` and `prompt` of
   `dev.qory.runtime.prompt_submitted` have the same placeholders, and `/workspace` in
   place of the working directory.
-- A `dev.qory.run.log` stderr line that the session writes for a failure after
-  `dev.qory.session.started`, such as a failed start of the wall, has the same
-  placeholders.
+- A `dev.qory.run.log` stderr line that Forager writes for a failure after
+  `dev.qory.session.started` has the same placeholders: the session's line, such as
+  for a failed start of the wall, and the setup runner's line when it cannot start
+  or wait for a setup command inside the wall. A setup command's output keeps its
+  paths.
 
 Every other member of a runtime event, such as a tool's input and output, and the
 runtime's output in `dev.qory.run.log` keep their paths as the agent wrote them.
@@ -3964,7 +3966,8 @@ of the `setup` source, which the session writes as the setup steps of a session 
 setup commands inside the wall (§The wall, Setup inside the wall). Its `record` has
 `command`, the command's number from 1, and `event`: `started`; `line`, with `stream`,
 `stdout` or `stderr`, and `bytes`, the line in standard base64, a long line in parts of
-4096 bytes; or `exited`, with `exit_code`, 0 to 255. The session cuts off a connection
+4096 bytes, and `runner: true` on a line the runner writes about its own failure to
+start or wait for the command; or `exited`, with `exit_code`, 0 to 255. The session cuts off a connection
 that stays open longer than 5 seconds, so the runner opens a connection for each batch
 of records. The socket is removed when the run ends.
 

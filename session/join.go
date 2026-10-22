@@ -578,7 +578,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// output: stdout and stderr share one lock, so the two writers never write at once.
 	var terminalMu sync.Mutex
 	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
-	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr))
+	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), neutral)
 	records := func(rec runtimes.Record) {
 		if rec.Source == runtimes.SourceSetup {
 			setupSteps.handle(rec)
@@ -888,8 +888,8 @@ func checkNeutral(spec SessionSpec) error {
 // launchLine is the line a run with a run key reports for session n, in place of the
 // values its dev.qory.session.started leaves out: the host name, and the working
 // directory, the harness home and the inputs directory on this machine; the command
-// and the arguments as the session starts them, which in a run whose image its policy
-// names by reference are the paths inside, under /workspace; and each harness source
+// and the arguments as the session starts them, which in a run whose policy has its
+// image by reference are the paths inside, under /workspace; and each harness source
 // with its commit. A value that
 // contains qak_ or qrk_ is the phrase in its place, and the run's masker replaces each
 // forwarder's password in the line.

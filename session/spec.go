@@ -201,9 +201,9 @@ type SessionSpec struct {
 	Variables Variables
 	// HarnessHome is the harness's home on this machine, an absolute path; empty means
 	// none. When set, the session sets QORY_HARNESS_HOME to its path as the agent's
-	// process sees it, as one of Forager's names, like QORY_RUN_ID: /workspace and the
-	// rest of the path when the harness home lies in the workspace of a run whose image
-	// its policy names by reference, and HarnessHome itself otherwise.
+	// process sees it, as one of Forager's variables, like QORY_RUN_ID: /workspace and
+	// the rest of the path when the harness home lies in the workspace of a run whose
+	// policy has its image by reference, and HarnessHome itself otherwise.
 	HarnessHome string
 	// InputsDir is the run's inputs directory on this machine, an absolute path; empty
 	// means none. [Run.Join] refuses a relative path, and / in a run with a run key. The

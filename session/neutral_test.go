@@ -335,3 +335,59 @@ func TestAFailureLineOfARunWithARunKeyShowsNeutralPaths(t *testing.T) {
 		}
 	}
 }
+
+// TestASetupRunnerFailureLineOfARunWithARunKeyShowsNeutralPaths pins the stderr line the
+// setup runner inside the wall writes when it cannot start a setup command: in a run
+// with a run key <inputs> in place of the inputs directory, in the record and on the
+// link; in a local run the path as the failure has it. The line a setup command writes
+// keeps its path in both.
+func TestASetupRunnerFailureLineOfARunWithARunKeyShowsNeutralPaths(t *testing.T) {
+	for _, remote := range []bool{true, false} {
+		sp := preparedSpec(t, "true")
+		g := (*linktest.Fake)(nil)
+		runID := event.NewRunID()
+		if remote {
+			g = startRemote(t)
+			g.SetInterval(30)
+			sp.Gateway = remoteGateway(g, g.RunKey(t, runID))
+		}
+		inputs := filepath.Join(t.TempDir(), "in")
+		sp.RunID, sp.InputsDir = runID, inputs
+		said := inputs + "/notes.md\n"
+		sp.SessionSpec.Setup = []session.SetupCommand{
+			{Name: "say", Args: []string{"/bin/sh", "-c", "echo " + inputs + "/notes.md >&2"}},
+			{Name: "install", Args: []string{inputs + "/missing-tool"}},
+		}
+		res, err := run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		missing := inputs + "/missing-tool"
+		if remote {
+			missing = "<inputs>/missing-tool"
+		}
+		lists := map[string][]map[string]any{"the record": events(t, res)}
+		if remote {
+			lists["the link"] = g.Events()
+		}
+		for where, evs := range lists {
+			var lines []string
+			for _, e := range ofType(evs, "dev.qory.run.log") {
+				if d := data(e); d["stream"] == "stderr" && d["step"] != nil {
+					b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+					lines = append(lines, string(b))
+				}
+			}
+			if !slices.Contains(lines, said) {
+				t.Errorf("remote %v, %s: the setup's stderr %q lacks the command's line %q", remote, where, lines, said)
+			}
+			failure := false
+			for _, l := range lines {
+				failure = failure || (strings.Contains(l, missing) && l != said)
+			}
+			if !failure || remote && slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, inputs+"/missing-tool") }) {
+				t.Errorf("remote %v, %s: the setup's stderr %q, want the runner's failure with %s", remote, where, lines, missing)
+			}
+		}
+	}
+}

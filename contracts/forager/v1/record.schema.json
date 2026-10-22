@@ -20,7 +20,7 @@
       ]
     },
     "record": {
-      "description": "The JSON object as the runtime produced it, unchanged; for setup, command, the command's number from 1, and event: started, line with stream (stdout or stderr) and bytes (the line in standard base64), or exited with exit_code (0 to 255).",
+      "description": "The JSON object as the runtime produced it, unchanged; for setup, command, the command's number from 1, and event: started, line with stream (stdout or stderr), bytes (the line in standard base64) and, on a line the runner writes about its own failure to start or wait for the command, runner true, or exited with exit_code (0 to 255).",
       "type": "object"
     }
   }

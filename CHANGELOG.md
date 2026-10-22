@@ -416,16 +416,18 @@ release may change what an existing document does, and says so under Upgrading.
   `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run
   directory, the harness home and the inputs directory, at whole path components,
   and `harness` is left out. `cwd` of `dev.qory.runtime.started`, `prompt` of
-  `dev.qory.runtime.prompt_submitted` and the session's stderr line for a failure
-  after `dev.qory.session.started` have the same placeholders, with `/workspace` for
-  the working directory in `cwd` and `prompt`; a tool's input and output and every
-  other member of a runtime event keep their paths as the agent wrote them. `Join` refuses `/` as
-  the harness home or the inputs directory of such a run.
-  The session reports the host name, the directories on the machine, the command and
-  the arguments as the session starts them, and the harness sources to
-  `OpenSpec.Report` in one line per session, `session <n> starts on this machine:
-  ...`. A run without a run key writes
-  the values of the machine, as before.
+  `dev.qory.runtime.prompt_submitted`, and Forager's stderr lines for a failure after
+  `dev.qory.session.started`, the session's and the setup runner's inside the wall,
+  have the same placeholders, with `/workspace` for the working directory in `cwd`
+  and `prompt`. A tool's input and output, every other member of a runtime event and
+  a setup command's output keep their paths as the agent wrote them. `Join` refuses
+  `/` as the harness home or the inputs directory of such a run. The session reports
+  the host name, the directories on the machine, the command and the arguments as
+  the session starts them, and the harness sources to `OpenSpec.Report` in one line
+  per session, `session <n> starts on this machine: ...`. A run without a run key
+  writes the values of the machine, as before.
+- A setup record of the `line` event has `runner: true` when the setup runner writes
+  it about its own failure to start or wait for the command.
 - `dev.qory.run.step_started` of kind `setup`: Forager writes one per setup command, in
   a separate container or inside the wall. Before, Forager wrote no `setup` step.
 - `dev.qory.session.started` contains `setup_commands`, the names of the session's
