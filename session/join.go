@@ -831,7 +831,7 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 // neutralPaths writes, in a value of a run with a run key, <run> in place of the run
 // directory, <home> in place of the harness home, <inputs> in place of the inputs
 // directory and, when dir is not empty, /workspace in place of the working directory
-// dir. Each is replaced at whole path components, as replacePaths replaces them, in
+// dir. Each is replaced wherever it is not part of a longer name, by [shownPaths], in
 // one pass over the value: the home, the inputs and dir at their path on this machine
 // and, when it differs, at their path inside the enclosure. Of two paths where one
 // contains the other, the longer is replaced, and the text written in its place is not
@@ -850,7 +850,7 @@ func (r *Run) neutralPaths(home, inputs, dir string, inside func(string) string)
 		}
 	}
 	slices.SortStableFunc(pairs, func(a, b pathPair) int { return len(b.from) - len(a.from) })
-	return func(s string) string { return replacePaths(s, pairs) }
+	return func(s string) string { return replacePaths(s, pairs, shownPaths) }
 }
 
 // neutralRecord is data of an event of type typ mapped from a runtime's record, with
@@ -869,8 +869,8 @@ func neutralRecord(typ string, data map[string]any, text func(string) string) ma
 }
 
 // checkNeutral refuses / as the harness home or the inputs directory of a run with a
-// run key. Paths are replaced at whole components, so / is replaced only where it
-// stands alone, as in /, //x or --a=/, and every path below it keeps its real form.
+// run key. By shownPaths, / is replaced only where it is not part of a longer name, as
+// in /, //x or --a=/, and every path below it, such as /usr, keeps its real form.
 func checkNeutral(spec SessionSpec) error {
 	if spec.HarnessHome != "" && filepath.Clean(spec.HarnessHome) == string(filepath.Separator) {
 		return errors.New("Set the harness home to a directory below /.\n" + neutralRoot("<home>"))
@@ -884,8 +884,8 @@ func checkNeutral(spec SessionSpec) error {
 // neutralRoot is the second line of checkNeutral's error for / as the directory that
 // placeholder stands for.
 func neutralRoot(placeholder string) string {
-	return "A run with a run key writes " + placeholder + " in place of the directory in args, cwd, prompt and failure lines. " +
-		"It replaces / only where / stands alone, so paths below / would keep their real form."
+	return "A run with a run key writes " + placeholder + " in place of the directory in command, args, cwd, prompt and failure lines. " +
+		"Forager replaces / only where it is not part of a longer name, so paths below / would keep their real form."
 }
 
 // launchLine is the line a run with a run key reports for session n, in place of the

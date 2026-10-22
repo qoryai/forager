@@ -414,13 +414,12 @@ release may change what an existing document does, and says so under Upgrading.
 - A run with a run key writes neutral values in its events: `dev.qory.run.started`
   has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
   `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run
-  directory, the harness home and the inputs directory, at whole path components,
-  also after `file://` and before `.`, `?` or `!` at the end of a sentence, in one
-  pass, and `harness` is left out. `cwd` of `dev.qory.runtime.started`, `prompt` of
-  `dev.qory.runtime.prompt_submitted`, and Forager's stderr lines for a failure after
-  `dev.qory.session.started`, the session's and the setup runner's inside the wall,
-  have the same placeholders, with `/workspace` for the working directory in `cwd`
-  and `prompt`. A tool's input and output, every other member of a runtime event and
+  directory, the harness home and the inputs directory, wherever the path is not
+  part of a longer name, in one pass, and `harness` is left out. `cwd` of
+  `dev.qory.runtime.started`, `prompt` of `dev.qory.runtime.prompt_submitted`, and
+  Forager's stderr lines for a failure after `dev.qory.session.started`, the
+  session's and the setup runner's inside the wall, have the same placeholders, with
+  `/workspace` for the working directory in `cwd` and `prompt`. A tool's input and output, every other member of a runtime event and
   a setup command's output keep their paths as the agent wrote them. `Join` refuses
   `/` as the harness home or the inputs directory of such a run. The session reports
   the host name, the directories on the machine, the command and the arguments as

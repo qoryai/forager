@@ -26,13 +26,14 @@ func TestTheLaunchLineIsMasked(t *testing.T) {
 	}
 }
 
-// TestNeutralPathsReplaceWholeComponents pins neutralPaths: a path is replaced at
-// whole path components, after its trailing slash is cleaned, at the end of a
-// sentence, before ] or } and after file://, and not in a sibling, a name with a
-// suffix or a URL that contains its text; of two paths where one contains the other
-// the longer is replaced, and the text written in its place is not replaced again; the
-// home's, the inputs' and the working directory's paths inside the enclosure are
-// replaced as well as those on this machine.
+// TestNeutralPathsReplaceWholeComponents pins neutralPaths: a path is replaced, after
+// its trailing slash is cleaned, wherever it is not part of a longer name, such as
+// after @, [, {, * or }, before ., ?, ! or ) at the end of a sentence and after
+// file://, and not in a sibling, a name with a suffix, a path below another or a URL
+// that contains its text; of two paths where one contains the other the longer is
+// replaced, and the text written in its place is not replaced again; the home's, the
+// inputs' and the working directory's paths inside the enclosure are replaced as well
+// as those on this machine.
 func TestNeutralPathsReplaceWholeComponents(t *testing.T) {
 	r := &Run{dir: "/srv/runs/r1"}
 	inside := func(s string) string { return translate(s, "/srv", workspaceInside) }
@@ -60,6 +61,17 @@ func TestNeutralPathsReplaceWholeComponents(t *testing.T) {
 		{"/srv/work", "", "/srv/work/app", atWork, "/workspace/app /srv/work/app /workspace/x /srv/work/x", "/workspace /workspace <home>/x <home>/x"},
 		{"", "/srv/work", "/srv/work/app", atWork, "/workspace/app/f /workspace/f", "/workspace/f <inputs>/f"},
 		{"/home/u/app", "", "", same, "file:///home/u/app/f file:///home/u/apps xfile:///home/u/app", "file://<home>/f file:///home/u/apps xfile://<home>"},
+		{"/srv/home", "/srv/in", "", same, "Read @/srv/in/issue.md", "Read @<inputs>/issue.md"},
+		{"/srv/home", "/srv/in", "", same, "[/srv/in/issue.md](/srv/in/issue.md)", "[<inputs>/issue.md](<inputs>/issue.md)"},
+		{"/srv/home", "/srv/in", "", same, "[/srv/in/a](/srv/in/a)", "[<inputs>/a](<inputs>/a)"},
+		{"/srv/home", "/srv/in", "", same, "{/srv/in}", "{<inputs>}"},
+		{"/srv/home", "/srv/in", "", same, "**/srv/in**", "**<inputs>**"},
+		{"/srv/home", "/srv/in", "", same, "/srv/in...", "<inputs>..."},
+		{"/srv/home", "/srv/in", "", same, "/srv/in.)", "<inputs>.)"},
+		{"/srv/home", "/srv/in", "", same, "Is it /srv/in?", "Is it <inputs>?"},
+		{"/srv/home", "/srv/in", "", same, "${BASE}/srv/in/x $(pwd)/srv/in", "${BASE}<inputs>/x $(pwd)<inputs>"},
+		{"/srv/home", "/srv/in", "", same, "https://host/srv/home /a/srv/home //srv/home /srv/in-old /srv/in~ /srv/in_x ./srv/in /srv/in..x",
+			"https://host/srv/home /a/srv/home //srv/home /srv/in-old /srv/in~ /srv/in_x ./srv/in /srv/in..x"},
 	} {
 		if got := r.neutralPaths(c.home, c.inputs, c.dir, c.inside)(c.in); got != c.want {
 			t.Errorf("home %q, inputs %q, dir %q: %q is %q, want %q", c.home, c.inputs, c.dir, c.in, got, c.want)

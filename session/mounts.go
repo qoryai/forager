@@ -482,39 +482,97 @@ func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 	return out, inside, nil
 }
 
-// translate is s with every occurrence of the absolute path from, at whole components,
-// written as to ([replacePaths]). /work/app becomes /workspace/app for /work, and
-// /workshop, /a/work and work stay as they are.
+// translate is s with every occurrence of the absolute path from, at whole components
+// by [argPaths], written as to. /work/app becomes /workspace/app for /work, and
+// /workshop, /a/work, ${A}/work and work stay as they are.
 func translate(s, from, to string) string {
 	if from == "" || from == to {
 		return s
 	}
-	return replacePaths(s, []pathPair{{from, to}})
+	return replacePaths(s, []pathPair{{from, to}}, argPaths)
 }
 
 // pathPair is an absolute path, from, and the text written in its place, to.
 type pathPair struct{ from, to string }
 
+// pathRule is where replacePaths matches a path: start reports whether a path may start
+// at byte i of s, and end whether a path that ends at byte end of s ends at a whole
+// component there.
+type pathRule struct {
+	start func(s string, i int) bool
+	end   func(s string, end int) bool
+}
+
+// argPaths is the rule for a value the agent gets, such as an argument or a variable,
+// where a wrong replacement changes what the agent does. A path matches where it starts
+// s, follows a separator of words or follows file://, and where it ends s, is followed
+// by a slash, a separator of words, ] or }, or is followed by ., ? or ! that ends s or
+// comes before white space, as at the end of a sentence. A separator of words is white
+// space, a quote, a comma, a colon, as in a list of paths, an equals sign, as in
+// --flag=path, or one of the shell's characters that end a word. ${A}/work and
+// $(pwd)/work stay as they are for /work.
+var argPaths = pathRule{
+	start: func(s string, i int) bool {
+		return i == 0 || strings.IndexByte(wordSeparators, s[i-1]) >= 0 || strings.HasSuffix(s[:i], "file://")
+	},
+	end: func(s string, end int) bool {
+		if end == len(s) || s[end] == '/' || strings.IndexByte(wordSeparators+"]}", s[end]) >= 0 {
+			return true
+		}
+		return strings.IndexByte(".?!", s[end]) >= 0 && (end+1 == len(s) || strings.IndexByte(" \t\n\r", s[end+1]) >= 0)
+	},
+}
+
+// wordSeparators are the characters of argPaths that separate a path from what is
+// before it in a word or a line.
+const wordSeparators = " \t\n\r\"'`:;=,&|()<>"
+
+// shownPaths is the rule for a value that is only shown, such as an event's argument
+// or prompt, where a path left in its real form costs more than a wrong replacement: a
+// path matches wherever it is not part of a longer name. It matches where it starts s,
+// follows a character other than a slash or a character of a name ([nameByte]), or
+// follows file://, and where it ends s, is followed by a slash or by a character other
+// than one of a name. Of ., ? and !, one or more of them match unless a character of a
+// name follows them: /srv/in., /srv/in..., /srv/in.) and /srv/in? match /srv/in, and
+// /srv/in.bak, /srv/in.d and /srv/in?x=1 do not. ${BASE}/srv/in becomes ${BASE}<inputs>
+// for /srv/in, and https://host/srv/in and /a/srv/in stay as they are.
+var shownPaths = pathRule{
+	start: func(s string, i int) bool {
+		return i == 0 || (s[i-1] != '/' && !nameByte(s[i-1])) || strings.HasSuffix(s[:i], "file://")
+	},
+	end: func(s string, end int) bool {
+		k := end
+		for k < len(s) && strings.IndexByte(".?!", s[k]) >= 0 {
+			k++
+		}
+		if k == end {
+			return end == len(s) || s[end] == '/' || !nameByte(s[end])
+		}
+		return k == len(s) || !nameByte(s[k])
+	},
+}
+
+// nameByte reports whether c is a character of a name in a path: a letter or a digit
+// of ASCII, ., _, ~ or -.
+func nameByte(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("._~-", c) >= 0
+}
+
 // replacePaths is s with each path of pairs written as its to, in one pass over s: at
-// each place where a path component starts, the first path of pairs that matches there
-// is replaced, and the text written in its place is not matched again. A path matches
-// at whole components: where it starts s, follows a separator of words or follows
-// file://, and where it ends s, is followed by a slash or such a separator, or is
-// followed by ., ? or ! that ends s or comes before white space, as at the end of a
-// sentence. A separator of words is white space, a quote, a comma, a colon, as in a
-// list of paths, an equals sign, as in --flag=path, ] or }, or one of the shell's
-// characters that end a word. With the longer path first in pairs, the longer of two
-// paths where one contains the other is replaced.
-func replacePaths(s string, pairs []pathPair) string {
+// each slash where rule lets a path start, the first path of pairs that matches there
+// and ends where rule lets it end is replaced, and the text written in its place is
+// not matched again. With the longer path first in pairs, the longer of two paths
+// where one contains the other is replaced.
+func replacePaths(s string, pairs []pathPair, rule pathRule) string {
 	var b strings.Builder
 	last := 0
 	for i := 0; i < len(s); i++ {
-		if s[i] != '/' || (i > 0 && !wordEnd(s[i-1]) && !strings.HasSuffix(s[:i], "file://")) {
+		if s[i] != '/' || !rule.start(s, i) {
 			continue
 		}
 		for _, p := range pairs {
 			end := i + len(p.from)
-			if p.from == "" || !strings.HasPrefix(s[i:], p.from) || !pathEnd(s, end) {
+			if p.from == "" || !strings.HasPrefix(s[i:], p.from) || !rule.end(s, end) {
 				continue
 			}
 			b.WriteString(s[last:i])
@@ -529,19 +587,6 @@ func replacePaths(s string, pairs []pathPair) string {
 	b.WriteString(s[last:])
 	return b.String()
 }
-
-// pathEnd reports whether a path that ends at end of s ends at a whole component: see
-// [replacePaths].
-func pathEnd(s string, end int) bool {
-	if end == len(s) || s[end] == '/' || wordEnd(s[end]) {
-		return true
-	}
-	return strings.IndexByte(".?!", s[end]) >= 0 && (end+1 == len(s) || strings.IndexByte(" \t\n\r", s[end+1]) >= 0)
-}
-
-// wordEnd reports whether c separates a path from what is beside it in a word or a
-// line: see [replacePaths].
-func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>]}", c) >= 0 }
 
 // checkMounts refuses a caller's Forager file that is not an absolute path and, behind a
 // wall, the places the run lists that it cannot bind as they are, and returns what the

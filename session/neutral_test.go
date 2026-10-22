@@ -195,10 +195,10 @@ func TestARelativeInputsDirectoryIsRefused(t *testing.T) {
 // accepts.
 func TestARunWithARunKeyRefusesTheRootAsAPlace(t *testing.T) {
 	for _, c := range []struct{ home, inputs, want string }{
-		{"/", "", "Set the harness home to a directory below /.\nA run with a run key writes <home> in place of the directory in args, cwd, prompt and failure lines. " +
-			"It replaces / only where / stands alone, so paths below / would keep their real form."},
-		{"", "//", "Set the inputs directory to a directory below /.\nA run with a run key writes <inputs> in place of the directory in args, cwd, prompt and failure lines. " +
-			"It replaces / only where / stands alone, so paths below / would keep their real form."},
+		{"/", "", "Set the harness home to a directory below /.\nA run with a run key writes <home> in place of the directory in command, args, cwd, prompt and failure lines. " +
+			"Forager replaces / only where it is not part of a longer name, so paths below / would keep their real form."},
+		{"", "//", "Set the inputs directory to a directory below /.\nA run with a run key writes <inputs> in place of the directory in command, args, cwd, prompt and failure lines. " +
+			"Forager replaces / only where it is not part of a longer name, so paths below / would keep their real form."},
 	} {
 		sp, g, _ := remoteSpec(t, 0)
 		sp.HarnessHome, sp.InputsDir = c.home, c.inputs

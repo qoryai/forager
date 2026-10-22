@@ -1554,13 +1554,15 @@ leave out or replace these values of the machine:
 - In `command` and in each argument, at any place in it, such as inside a `-p`
   prompt, the run directory is `<run>`, the harness home (`SessionSpec.HarnessHome`)
   `<home>`, and the inputs directory (`SessionSpec.InputsDir`) `<inputs>`, each at its
-  path on the machine and at its path inside the enclosure. A path is replaced at
-  whole path components: where it starts the value, follows white space, a quote,
-  `,`, `:`, `=`, `]`, `}` or another character that ends a shell word, or follows
-  `file://`; and where it ends the value, is followed by `/` or such a character, or
-  is followed by `.`, `?` or `!` that ends the value or comes before white space.
-  `/srv/home` is replaced in `/srv/home/a`, `--dir=/srv/home`, `file:///srv/home/a`
-  and `See /srv/home.`, and not in `/srv/home-old`, `/srv/home.bak` or
+  path on the machine and at its path inside the enclosure. A path is replaced
+  wherever it is not part of a longer name: where it starts the value, follows
+  `file://`, or follows a character other than `/` or a character of a name (a
+  letter, a digit, `.`, `_`, `~` or `-`); and where it ends the value or is followed
+  by `/` or a character other than one of a name. One or more of `.`, `?` and `!`
+  after it count as such a character unless a character of a name comes next. `/srv/home` is replaced in `/srv/home/a`, `--dir=/srv/home`,
+  `@/srv/home/a`, `[/srv/home](/srv/home)`, `**/srv/home**`, `file:///srv/home/a`,
+  `See /srv/home.`, `/srv/home...` and `${BASE}/srv/home`, and not in
+  `/srv/home-old`, `/srv/home.bak`, `/srv/home?x=1`, `/a/srv/home` or
   `https://git.example/srv/home`. The value is replaced in one pass: at each place,
   of two of them where one contains the other, the longer is replaced, and the text
   written in its place is not replaced again. Any other path is as the runtime
