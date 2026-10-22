@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -155,6 +157,14 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 	if err := checkHarnessHome(spec.HarnessHome); err != nil {
 		return runSpec{}, nil, err
 	}
+	if err := checkInputsDir(spec.InputsDir); err != nil {
+		return runSpec{}, nil, err
+	}
+	if r.remote != nil {
+		if err := checkNeutral(spec); err != nil {
+			return runSpec{}, nil, err
+		}
+	}
 	if err := checkHarness(spec.Harness); err != nil {
 		return runSpec{}, nil, err
 	}
@@ -285,6 +295,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			open = nil
 		}
 	}
+	// neutral and neutralText write what the session writes after its
+	// dev.qory.session.started: as it is, or in a run with a run key with the
+	// placeholders of neutralPaths, and in neutralText the working directory as
+	// /workspace as well.
+	neutral, neutralText := func(s string) string { return s }, func(s string) string { return s }
 	// failWith ends a session that does not start, with its dev.qory.session.exited:
 	// the one of a refused join before dev.qory.session.started, and after it failed
 	// with -1, with reason as its reason unless reason is empty.
@@ -326,7 +341,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			if open != nil {
 				step = open.n
 			}
-			r.writeLog("stderr", n, step, failureLine(err))
+			r.writeLog("stderr", n, step, []byte(neutral(string(failureLine(err)))))
 		}
 		endStep(event.StateFailed)
 		r.write(event.SessionExited, exited)
@@ -431,6 +446,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(err)
 	}
 	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
+	if r.remote != nil {
+		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside)
+		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside)
+	}
 	// A value the runtime's preparation sets for one of key.Others is left out, walled
 	// or not; behind a wall the name is then unset inside.
 	prepared.Env = withoutNames(prepared.Env, key.Others)
@@ -489,7 +508,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the session's start.
 	endStep(event.StateSucceeded)
 	started, start = true, time.Now()
-	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, interactive, cols, rows))
+	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, neutral, interactive, cols, rows))
+	if r.remote != nil {
+		r.open.Report(r.launchLine(spec, n, prepared))
+	}
 	// policyApplied is this session's members of policy_applied: its variables as
 	// resolved, the variables its credentials' placeholders are in, and the harness's
 	// hosts. Each reload while the session runs records them too.
@@ -572,12 +594,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// output: stdout and stderr share one lock, so the two writers never write at once.
 	var terminalMu sync.Mutex
 	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
-	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr))
+	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), neutral)
 	// The mapper is reached from the socket's goroutine and the output's: it sets
 	// parent_agent_id on a subagent's start, which it may keep back for a while, and
 	// writes every event of the session's runtime in order.
 	mapper := parents.New(rt, func(e runtimes.Event) {
-		r.write(e.Type, withSession(maskedRecord(masker, e.Data), n))
+		r.write(e.Type, withSession(neutralRecord(e.Type, maskedRecord(masker, e.Data), neutralText), n))
 	}, parents.Real)
 	records := func(rec runtimes.Record) {
 		if rec.Source == runtimes.SourceSetup {
@@ -771,14 +793,25 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 // session's that contains qak_ or qrk_ in any case is sent as a phrase in its place:
 // accesskey.ShownName's for the runtime, the image, its name and its container
 // runtime; accesskey.ShownValue's for the directory, the command, each argument, the
-// runtime's version, the name of each setup command and each harness source.
-func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, interactive bool, cols, rows int) map[string]any {
-	started := map[string]any{
-		"session": n, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(prepared.Command, false), "args": shownValues(prepared.Args),
-		"dir": accesskey.ShownValue(spec.Dir, false), "interactive": interactive,
-	}
+// runtime's version, the name of each setup command and each harness source. In a run
+// with a run key, dir is /workspace, the command and the arguments have <run>, <home>
+// and <inputs> in place of the run directory, the harness home and the inputs
+// directory (neutralPaths), and harness is left out: launchLine reports the values of
+// this machine.
+func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, neutral func(string) string, interactive bool, cols, rows int) map[string]any {
+	command, args, dir := prepared.Command, prepared.Args, spec.Dir
 	if r.byReference {
-		started["dir"] = accesskey.ShownValue(shown.Dir, false)
+		dir = shown.Dir
+	}
+	if r.remote != nil {
+		command, args, dir = neutral(command), make([]string, len(prepared.Args)), workspaceInside
+		for i, a := range prepared.Args {
+			args[i] = neutral(a)
+		}
+	}
+	started := map[string]any{
+		"session": n, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(command, false), "args": shownValues(args),
+		"dir": accesskey.ShownValue(dir, false), "interactive": interactive,
 	}
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = accesskey.ShownValue(v, false)
@@ -808,7 +841,7 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 			started["docker"] = true
 		}
 	}
-	if len(spec.Harness) > 0 {
+	if len(spec.Harness) > 0 && r.remote == nil {
 		harness := make([]map[string]any, len(spec.Harness))
 		for i, h := range spec.Harness {
 			harness[i] = map[string]any{"source": accesskey.ShownValue(h.Source, false), "commit": h.Commit}
@@ -816,4 +849,92 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 		started["harness"] = harness
 	}
 	return started
+}
+
+// neutralPaths writes, in a value of a run with a run key, <run> in place of the run
+// directory, <home> in place of the harness home, <inputs> in place of the inputs
+// directory and, when dir is not empty, /workspace in place of the working directory
+// dir. Each is replaced wherever it is not part of a longer name, by [shownPaths], in
+// one pass over the value: the home, the inputs and dir at their path on this machine
+// and, when it differs, at their path inside the enclosure. Of two paths where one
+// contains the other, the longer is replaced, and the text written in its place is not
+// replaced again. Join refuses / as the home or the inputs of a run with a run key
+// (checkNeutral).
+func (r *Run) neutralPaths(home, inputs, dir string, inside func(string) string) func(string) string {
+	pairs := []pathPair{{r.dir, "<run>"}}
+	for _, p := range []pathPair{{home, "<home>"}, {inputs, "<inputs>"}, {dir, workspaceInside}} {
+		if p.from == "" {
+			continue
+		}
+		p.from = filepath.Clean(p.from)
+		pairs = append(pairs, p)
+		if in := inside(p.from); in != p.from {
+			pairs = append(pairs, pathPair{in, p.to})
+		}
+	}
+	slices.SortStableFunc(pairs, func(a, b pathPair) int { return len(b.from) - len(a.from) })
+	return func(s string) string { return replacePaths(s, pairs, shownPaths) }
+}
+
+// neutralRecord is data of an event of type typ mapped from a runtime's record, with
+// text written by neutral in cwd of dev.qory.runtime.started and in prompt of
+// dev.qory.runtime.prompt_submitted. Every other member, and every other event, such
+// as a tool's input and output, is as the runtime wrote it.
+func neutralRecord(typ string, data map[string]any, text func(string) string) map[string]any {
+	key := map[string]string{"dev.qory.runtime.started": "cwd", "dev.qory.runtime.prompt_submitted": "prompt"}[typ]
+	v, ok := data[key].(string)
+	if !ok {
+		return data
+	}
+	out := maps.Clone(data)
+	out[key] = text(v)
+	return out
+}
+
+// checkNeutral refuses / as the harness home or the inputs directory of a run with a
+// run key. By shownPaths, / is replaced only where it is not part of a longer name, as
+// in /, //x or --a=/, and every path below it, such as /usr, keeps its real form.
+func checkNeutral(spec SessionSpec) error {
+	if spec.HarnessHome != "" && filepath.Clean(spec.HarnessHome) == string(filepath.Separator) {
+		return errors.New("Set the harness home to a directory below /.\n" + neutralRoot("<home>"))
+	}
+	if spec.InputsDir != "" && filepath.Clean(spec.InputsDir) == string(filepath.Separator) {
+		return errors.New("Set the inputs directory to a directory below /.\n" + neutralRoot("<inputs>"))
+	}
+	return nil
+}
+
+// neutralRoot is the second line of checkNeutral's error for / as the directory that
+// placeholder stands for.
+func neutralRoot(placeholder string) string {
+	return "A run with a run key writes " + placeholder + " in place of the directory in command, args, cwd, prompt and failure lines. " +
+		"Forager replaces / only where it is not part of a longer name, so paths below / would keep their real form."
+}
+
+// launchLine is the line a run with a run key reports for session n, in place of the
+// values its dev.qory.session.started leaves out: the host name, and the working
+// directory, the harness home and the inputs directory on this machine; the command
+// and the arguments as the session starts them, which in a run whose policy has its
+// image by reference are the paths inside, under /workspace; and each harness source
+// with its commit. A value that
+// contains qak_ or qrk_ is the phrase in its place, and the run's masker replaces each
+// forwarder's password in the line.
+func (r *Run) launchLine(spec runSpec, n int, prepared runtimes.Launch) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "session %d starts on this machine:", n)
+	if h := hostname(); h != "" {
+		fmt.Fprintf(&b, " host %s,", accesskey.ShownName(h, false))
+	}
+	fmt.Fprintf(&b, " dir %q,", accesskey.ShownValue(spec.Dir, false))
+	if spec.HarnessHome != "" {
+		fmt.Fprintf(&b, " home %q,", accesskey.ShownValue(spec.HarnessHome, false))
+	}
+	if spec.InputsDir != "" {
+		fmt.Fprintf(&b, " inputs %q,", accesskey.ShownValue(spec.InputsDir, false))
+	}
+	fmt.Fprintf(&b, " command %q, args %q", accesskey.ShownValue(prepared.Command, false), shownValues(prepared.Args))
+	for _, h := range spec.Harness {
+		fmt.Fprintf(&b, ", harness %q at %s", accesskey.ShownValue(h.Source, false), h.Commit)
+	}
+	return r.masker.Replace(b.String())
 }

@@ -69,6 +69,14 @@ func checkHarnessHome(home string) error {
 	return nil
 }
 
+// checkInputsDir refuses an inputs directory that is not an absolute path.
+func checkInputsDir(dir string) error {
+	if dir != "" && !path.IsAbs(dir) && !filepath.IsAbs(dir) {
+		return fmt.Errorf("set the inputs directory to an absolute path: %s is relative", accesskey.ShownValue(dir, true))
+	}
+	return nil
+}
+
 // passes are the names of the variables the run passes a value for from the node: in
 // what it inherits, what the harness sets, or the run's or the machine's variables,
 // sorted, each once. A name outside the grammar of a variable's name is left out: it

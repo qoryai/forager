@@ -9,7 +9,7 @@
   "properties": {
     "opened_by": {"description": "What opened the run: run, Forager's open of a run at its gateway, which writes this event once, before any session joins the run.", "type": "string", "enum": ["run"]},
     "forager_version": {"description": "The version of the Forager that opened the run.", "type": "string", "minLength": 1},
-    "host": {"description": "The host name of the machine the run was opened on, the one its sessions run on.", "type": "string", "minLength": 1},
+    "host": {"description": "The host name of the machine the run was opened on, the one its sessions run on. Absent in a run with a run key: each session's line session <n> starts on this machine, which the session reports on stderr by default, contains it.", "type": "string", "minLength": 1},
     "wall": {"description": "The adapter that builds the enclosure each session of the run runs in: docker. Absent when the run has no wall.", "type": "string", "minLength": 1},
     "machine": {"description": "The adapter that made the machine the run was opened on, such as aws-ec2, or none when no adapter made it. It is 1 to 64 of a-z, 0-9 and -, the first a letter. Absent when the caller passes none.", "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
     "setup": {"description": "Where the run's setup commands run, or would run if it had any: outside, in a container apart from the agent's, or inside, in the agent's container before the runtime starts. Absent when the run has nowhere to run setup commands.", "type": "string", "enum": ["outside", "inside"]},
