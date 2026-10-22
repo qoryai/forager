@@ -165,7 +165,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	cfg.Credentials, cfg.Tools = copyCredentials(cfg.Credentials), copyTools(cfg.Tools)
 	// A Selection holds strings alone: the list's copy shares nothing with it.
 	cfg.Selects = slices.Clone(cfg.Selects)
-	cert, err := checkService(&cfg)
+	certs, err := checkService(&cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +252,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		// A gateway with an address serves other machines alone: no local link, and no
 		// proxy on loopback.
 		g.stream = stream.New(stream.Config{Dir: cfg.Dir, RunDir: cfg.RunDir, Events: cfg.Events, Report: report, CloseWait: cfg.closeWait})
-		if g.svc, err = g.startService(cert); err != nil {
+		if g.svc, err = g.startService(certs); err != nil {
 			return nil, err
 		}
 		ok = true

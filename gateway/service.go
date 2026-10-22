@@ -43,9 +43,9 @@ type side struct {
 var localSide = &side{}
 
 // checkService refuses a config whose one address cannot be served, before anything
-// starts, and returns the certificate it serves, nil for none. It never reads the key's
-// content into an error.
-func checkService(cfg *Config) (*tls.Certificate, error) {
+// starts, and returns the certificate and key files it serves, nil for none. It never
+// reads the key's content into an error.
+func checkService(cfg *Config) (*certFiles, error) {
 	if cfg.Listen == "" {
 		if cfg.TLS != nil {
 			return nil, errors.New("the gateway has a certificate and no address to serve it on")
@@ -68,11 +68,15 @@ func checkService(cfg *Config) (*tls.Certificate, error) {
 	if cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "" {
 		return nil, errors.New("the gateway's TLS needs a certificate file and a key file")
 	}
-	cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("the gateway's certificate %s and key %s: %w", accesskey.ShownValue(cfg.TLS.CertFile, false), accesskey.ShownValue(cfg.TLS.KeyFile, false), accesskey.ShownError(err))
+	every := certCheck
+	if cfg.certCheck != 0 {
+		every = cfg.certCheck
 	}
-	return &cert, nil
+	certs, err := newCertFiles(cfg.TLS.CertFile, cfg.TLS.KeyFile, every)
+	if err != nil {
+		return nil, fmt.Errorf("the gateway's certificate %s and key %s: %w", accesskey.ShownValue(cfg.TLS.CertFile, false), accesskey.ShownValue(cfg.TLS.KeyFile, false), err)
+	}
+	return certs, nil
 }
 
 // maxRelayRunKey is the longest relay preamble with a run key, its newline included:
@@ -138,15 +142,17 @@ type service struct {
 	wg      sync.WaitGroup
 }
 
-// startService listens on the config's address with cert and serves it.
-func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
+// startService listens on the config's address and serves the pair of certs, read again
+// when its files change.
+func (g *Gateway) startService(certs *certFiles) (*service, error) {
 	ln, err := net.Listen("tcp", g.cfg.Listen)
 	if err != nil {
 		return nil, accesskey.ShownError(err)
 	}
 	s := &service{g: g, ln: ln, side: &side{remote: true, scheme: "https"}, edgeQ: newConnQueue(ln.Addr()), pending: map[net.Conn]struct{}{},
 		conns: newConnLimit(maxConns, maxSourceConns, maxBlockConns)}
-	s.tls = &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{*cert}, NextProtos: []string{"http/1.1"}}
+	certs.report = g.report
+	s.tls = &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, GetCertificate: certs.get, NextProtos: []string{"http/1.1"}}
 	// OPTIONS * goes to the handler too, which refuses it for its run key: no request
 	// without one keeps a connection open.
 	s.edge = &http.Server{Handler: routine.Handler(g.report, g.edgeHandler(s.side)), ReadHeaderTimeout: link.PreambleWait, ReadTimeout: edgeReadWait, MaxHeaderBytes: edgeMaxHeader,

@@ -320,7 +320,29 @@ link. Its `gateway.Config` sets it:
   names a gateway trusted at least as much as the run's gateway. The proxy of every run
   served there is guarded, wall or none. `Gateway.Addr` is this address.
 - `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
-  address speaks TLS 1.3 alone. `Listen` needs it.
+  address speaks TLS 1.3 alone. `Listen` needs it. `Start` fails when it cannot read
+  the pair, or when the key is not the certificate's. The gateway reads each file only
+  when it is a regular file of at most 1 MiB, and it opens a named pipe without waiting
+  for a writer. The gateway reads both files again without a restart, so an ACME client
+  such as Caddy can renew the certificate in place. A check runs on the first handshake
+  60 s or more after the previous check. The check compares each file's identity,
+  modification time and size with those of the files the pair in force came from, and
+  reads both files again when one of them differs. A file replaced by a rename counts as
+  changed. Handshakes get the renewed pair from the first check after the renewal, at
+  most 60 s later. Connections already open keep their TLS session. If the two files do
+  not parse as a certificate and its key, as between the two renames of a renewal, the
+  gateway reads both files again at the next check before it reports a failure. The
+  gateway delays a report this way once after each read that succeeded, and it reports
+  a later failure at its check. If a read fails, for a half-written file, a key of
+  another certificate, a file the gateway cannot open, a file that is not a regular
+  file or a file longer than 1 MiB, the gateway keeps serving the pair in force. It reports one line per failure, not one per check, and
+  the line starts with the fix: "replace the gateway's certificate <file> and key
+  <file> with a certificate and its key, in PEM". The gateway reads both files again at
+  each check until the read succeeds. Each connection's binding uses that connection's
+  TLS exporter value and the gateway's access key, never the certificate, so a renewal
+  changes no run's binding. A session that pins the certificate's public key
+  (`server.RemoteTLS.CertificateSHA256`) fails the handshake with a renewed certificate
+  of another key.
 - `Server`, whose access key is a gateway's, `ng_`: the gateway verifies each run key
   under the server's pin, on every request of the run and every proxy connection, not
   only the first, so once the gateway restarts with a server key out of the pin, a run
