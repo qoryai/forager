@@ -3,7 +3,10 @@ package session
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/qoryai/forager/session/internal/descriptor"
 	"github.com/qoryai/forager/session/internal/socket"
+	"github.com/qoryai/forager/session/runtimes"
 )
 
 // runnerRecords runs RunSetupCommand with args against a socket of the test's and
@@ -105,5 +109,64 @@ func TestTheSetupRunnerNeedsTheSocket(t *testing.T) {
 	}
 	if matches, _ := filepath.Glob(ran); len(matches) != 0 {
 		t.Error("the command ran with no socket to report on")
+	}
+}
+
+// stopInScript writes the setup's script for commands into a directory of the test's,
+// with `kill -TERM $$` written in front of the first line that starts with before, so
+// the stop reaches the script exactly there, and runs it with a runtime that touches
+// a file. It returns the script's exit status and whether the runtime ran.
+func stopInScript(t *testing.T, before string, commands ...SetupCommand) (int, bool) {
+	t.Helper()
+	dir := t.TempDir()
+	runner := []string{"/bin/sh", "-c", `shift 2; exec "$@"`, "runner"}
+	launch, err := withSetup(dir, runner, commands, runtimes.Launch{Command: "touch", Args: []string{filepath.Join(dir, "runtime-ran")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, PreparationScript)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := strings.Index(string(b), "\n"+before)
+	if i < 0 {
+		t.Fatalf("the script has no line that starts with %q:\n%s", before, b)
+	}
+	script := string(b[:i+1]) + "kill -TERM $$\n" + string(b[i+1:])
+	if err := os.WriteFile(path, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = exec.Command(launch.Command, launch.Args...).Run()
+	code := 0
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		code = exit.ExitCode()
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	_, statErr := os.Stat(filepath.Join(dir, "runtime-ran"))
+	return code, statErr == nil
+}
+
+// TestAStopAfterTheLastSetupCommandStartsNoRuntime pins that a stop that reaches the
+// script after its last setup command's check and before its trap is reset starts no
+// runtime: the script exits with the last command's status.
+func TestAStopAfterTheLastSetupCommandStartsNoRuntime(t *testing.T) {
+	code, ran := stopInScript(t, "trap - ", SetupCommand{Name: "install", Args: []string{"true"}})
+	if ran || code != 0 {
+		t.Errorf("exit %d; the runtime ran: %v", code, ran)
+	}
+}
+
+// TestAStopBetweenSetupCommandsStartsNoMore pins that a stop that reaches the script
+// between two setup commands starts neither the next command nor the runtime.
+func TestAStopBetweenSetupCommandsStartsNoMore(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "second-ran")
+	code, ran := stopInScript(t, "setup '/bin/sh' '-c' 'shift 2; exec \"$@\"' 'runner' 2 ",
+		SetupCommand{Name: "install", Args: []string{"true"}},
+		SetupCommand{Name: "start services", Args: []string{"touch", marker}})
+	if _, err := os.Stat(marker); err == nil || ran || code != 0 {
+		t.Errorf("exit %d; the runtime ran: %v; the second command ran: %v", code, ran, err == nil)
 	}
 }

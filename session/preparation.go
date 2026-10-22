@@ -19,22 +19,25 @@ const PreparationScript = "preparation.sh"
 
 // preparationScript runs the setup commands written in place of @SETUP@, one setup
 // line each: setup, the runner's words, the command's number, -- and the command's
-// words, each word quoted. It then starts the command its arguments hold, once every
+// words, each word quoted. It then starts the command and its arguments, once every
 // setup command exits 0. A setup command that exits otherwise is the script's exit
 // status, and neither a later setup command nor the command starts. Each runner runs
 // in the background so a signal reaches the script while it runs: TERM, INT, HUP,
 // QUIT, USR1 or USR2 asks the runner to leave with TERM, which a program in the
 // background has not ignored, and the command never starts; the script exits with the
+// runner's status. A stop between two setup commands, or after the last one and
+// before the command starts, starts nothing more, and the script exits with the last
 // runner's status.
-const preparationScript = `# Runs the session's setup commands, one after another, then starts the command its
-# arguments hold once every one exits 0. Written by Forager for one run.
-pid= stopped=
+const preparationScript = `# Runs the session's setup commands, one after another, then starts the command and
+# its arguments once every one exits 0. Written by Forager for one run.
+pid= stopped= status=0
 stop() {
 	stopped=1
 	[ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null
 }
 trap stop TERM INT HUP QUIT USR1 USR2
 setup() {
+	[ -z "$stopped" ] || exit "$status"
 	"$@" </dev/null &
 	pid=$!
 	[ -z "$stopped" ] || kill -TERM "$pid" 2>/dev/null
@@ -48,6 +51,7 @@ setup() {
 }
 @SETUP@
 trap - TERM INT HUP QUIT USR1 USR2
+[ -z "$stopped" ] || exit "$status"
 exec "$@"
 `
 

@@ -375,8 +375,9 @@ func TestAStopDuringASetupCommandEndsTheRun(t *testing.T) {
 
 // TestSetupRecordsOutOfOrderAreNotRecorded pins that the session writes the setup steps
 // only from records in order: a record for a command that is not the next, a second
-// start, one that is not a setup record, and one after the setup ended are reported
-// and change no step, as code in the working folder that writes them can.
+// start while its step is open, a start of a command that exited with no step open,
+// one that is not a setup record, and one after the setup ended are reported and
+// change no step, as code in the working folder that writes them can.
 func TestSetupRecordsOutOfOrderAreNotRecorded(t *testing.T) {
 	forged := strings.Join([]string{
 		`{"command": 1, "event": "started"}`,
@@ -385,6 +386,10 @@ func TestSetupRecordsOutOfOrderAreNotRecorded(t *testing.T) {
 		`{"command": 9, "event": "line", "stream": "stdout", "bytes": "Zm9yZ2Vk"}`,
 		`{"command": "one", "event": "started"}`,
 		`{"command": 1, "event": "line", "stream": "terminal", "bytes": "Zm9yZ2Vk"}`,
+		// With no step open: the exit closes command 1's step, a second start of
+		// command 1 is out of order, and so is the runner's exit after it.
+		`{"command": 1, "event": "exited", "exit_code": 0}`,
+		`{"command": 1, "event": "started"}`,
 	}, "\n")
 	sp := preparedSpec(t, `FAKE_SETUP_RECORDS='{"command": 2, "event": "started"}' "$0"`, "FAKE_SETUP_RECORDS="+forged)
 	sp.Args = append(sp.Args, os.Args[0])
@@ -423,6 +428,8 @@ func TestSetupRecordsOutOfOrderAreNotRecorded(t *testing.T) {
 		"a setup record for step 11 arrived out of order and is not recorded",
 		"socket: not a setup record: its command is not a number from 1",
 		"socket: not a setup record: a line has stream stdout or stderr and its bytes in base64",
+		"a setup record for step 3 arrived out of order and is not recorded",
+		"a setup record for step 3 arrived out of order and is not recorded",
 		"a setup record arrived after the setup ended and is not recorded",
 	}
 	var got []string
