@@ -109,7 +109,7 @@ func record(t *testing.T, res *session.Result) []map[string]any {
 func TestARunThroughARealGateway(t *testing.T) {
 	sp := spec(t, "FAKE_DENIED_URL=http://denied.invalid/a", "FAKE_EXIT=0")
 	sp.Labels = map[string]string{"repository": "example-namespace/project"}
-	sp.Machine, sp.Setup = "aws-ec2", event.SetupOutside
+	sp.Machine, sp.OpenSpec.Setup = "aws-ec2", event.SetupOutside
 	rg := startGateway(t, &sp, gateway.Config{Version: "test", Heartbeat: time.Second,
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}})
 	res, closed, err := runWithSettingsEnvClosed(t, sp)

@@ -87,7 +87,7 @@ type report struct {
 	KeySeen []string `json:"key_seen"`
 	// Environs is how many of the processes' environments under /proc were read.
 	Environs int `json:"environs"`
-	// Prepared is what the run's preparation left in the workspace as the probe started,
+	// Prepared is what the run's setup command left in the workspace as the probe started,
 	// and PreparedErr why there was nothing to read.
 	Prepared    *preparedReport `json:"prepared,omitempty"`
 	PreparedErr string          `json:"prepared_err"`
@@ -101,14 +101,17 @@ type report struct {
 	ImageDenied string `json:"image_denied"`
 }
 
-// preparedFile is where in the workspace the run's preparation leaves its report.
+// preparedFile is where in the workspace the run's setup command leaves its report.
 const preparedFile = "prepared-was-here"
 
-// preparationWords are the words the run's preparation is given after its mode, one
+// preparedLine is the line the run's setup command writes on its standard output.
+const preparedLine = "prepared the workspace"
+
+// preparationWords are the words the run's setup command is given after its mode, one
 // with a space and one with what a shell would expand.
 var preparationWords = []string{"a word", "it's $HOME `id`"}
 
-// preparedReport is what the run's preparation found: what the origin answered through
+// preparedReport is what the run's setup command found: what the origin answered through
 // the proxy, its network and mount namespaces, its user and the words it was given.
 type preparedReport struct {
 	Allowed    int      `json:"allowed"`
@@ -119,8 +122,9 @@ type preparedReport struct {
 	Args       []string `json:"args"`
 }
 
-// prepare is the run's preparation: it reaches the origin through the proxy and leaves
-// what it found in the workspace, for the probe to read as it starts.
+// prepare is the run's setup command: it reaches the origin through the proxy, leaves
+// what it found in the workspace, for the probe to read as it starts, and writes
+// preparedLine.
 func prepare(args []string) int {
 	r := preparedReport{Args: args, UID: os.Getuid()}
 	r.Allowed, r.AllowedErr = get(os.Getenv("PROBE_ALLOWED"))
@@ -131,6 +135,7 @@ func prepare(args []string) int {
 		fmt.Fprintln(os.Stderr, "prepare: the workspace:", err)
 		return 1
 	}
+	fmt.Println(preparedLine)
 	return 0
 }
 
@@ -142,7 +147,7 @@ const wait = 3 * time.Second
 // as told.
 func probe(args []string) int {
 	var r report
-	// First, so what the preparation left is what it left before the probe started.
+	// First, so what the setup command left is what it left before the probe started.
 	if b, err := os.ReadFile(preparedFile); err != nil {
 		r.PreparedErr = err.Error()
 	} else if err := json.Unmarshal(b, &r.Prepared); err != nil {

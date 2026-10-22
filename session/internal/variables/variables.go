@@ -56,7 +56,7 @@ const (
 )
 
 // The QORY_ names the server's variables may set, by these names exactly: the system
-// and the repositories a run's preparation may use, as the server sets them. The
+// and the repositories a session's setup commands may use, as the server sets them. The
 // built-in deny list leaves the server's values of them in; every other source that
 // sets one is held to the rules of any QORY_ name.
 const (

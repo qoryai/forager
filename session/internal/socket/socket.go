@@ -6,10 +6,12 @@
 // answer. [Listen] opens the socket in a private directory of its own, because a socket
 // path has a short limit on some systems and a run directory inside a deep checkout can
 // exceed it. [Forward] is the client the session installs as a hook: it wraps what it
-// reads as one record of the hooks source and writes it.
+// reads as one record of the hooks source and writes it. [Send] writes records the
+// caller made, such as a setup command's records of the setup source.
 //
-// Nothing on the socket reaches a receiver except through a descriptor's rules; the
-// listener hands records to a function and does nothing else with them.
+// The listener hands records to a function and does nothing else with them: a record
+// of the hooks or the output source reaches a receiver only through a descriptor's
+// rules, and the session writes the setup steps from the records of the setup source.
 package socket
 
 import (
@@ -107,7 +109,7 @@ func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 			continue
 		}
 		var rec descriptor.Record
-		if err := json.Unmarshal(line, &rec); err != nil || (rec.Source != descriptor.SourceHooks && rec.Source != descriptor.SourceOutput) || rec.Record == nil {
+		if err := json.Unmarshal(line, &rec); err != nil || (rec.Source != descriptor.SourceHooks && rec.Source != descriptor.SourceOutput && rec.Source != descriptor.SourceSetup) || rec.Record == nil {
 			if bad != nil {
 				if err == nil {
 					err = fmt.Errorf("not a record: %.80s", accesskey.ShownValue(string(line), false))
@@ -203,5 +205,37 @@ func Forward(ctx context.Context, addr string, r io.Reader) error {
 		conn.SetDeadline(deadline)
 	}
 	_, err = conn.Write(append(line, '\n'))
+	return accesskey.ShownError(err)
+}
+
+// Send writes recs to the socket at addr, the value of [link.EnvRunSocket], one line
+// each, over one connection, which it closes. The dial and the write end with ctx, and
+// within [Patience] at most, since the session reads one connection at a time and cuts
+// off one that takes longer.
+func Send(ctx context.Context, addr string, recs []descriptor.Record) error {
+	var b []byte
+	for _, rec := range recs {
+		line, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		b = append(append(b, line...), '\n')
+	}
+	netw, path, err := network(addr)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, Patience)
+	defer cancel()
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, netw, path)
+	if err != nil {
+		return accesskey.ShownError(err)
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	}
+	_, err = conn.Write(b)
 	return accesskey.ShownError(err)
 }

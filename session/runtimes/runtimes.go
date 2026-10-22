@@ -219,10 +219,13 @@ type Endpoint = descriptor.Endpoint
 // Record is one unit of what a program reports.
 type Record = descriptor.Record
 
-// The sources of a record.
+// The sources of a record. A runtime maps records of SourceOutput and SourceHooks;
+// the session reads the records of SourceSetup, a setup command's, and passes none of
+// them to a runtime.
 const (
 	SourceOutput = descriptor.SourceOutput
 	SourceHooks  = descriptor.SourceHooks
+	SourceSetup  = descriptor.SourceSetup
 )
 
 // Stop is how a program is asked to leave: Signal, one [CheckStopSignal] passes, and

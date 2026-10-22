@@ -30,7 +30,7 @@
       "minimum": 1
     },
     "step": {
-      "description": "The number of the step whose log line the chunk is, from 1: the step of its dev.qory.run.step_started. The chunk lies between that event and the step's dev.qory.run.step_exited. A chunk outside every step has none. A chunk of a session has step only during the session's image or wall step: the text of a failure in that step.",
+      "description": "The number of the step whose log line the chunk is, from 1: the step of its dev.qory.run.step_started. The chunk lies between that event and the step's dev.qory.run.step_exited. A chunk outside every step has none. A chunk of a session has step only during the session's image, wall or setup step: the text of a failure in an image or a wall step, and a setup command's output in its setup step.",
       "type": "integer",
       "minimum": 1
     }

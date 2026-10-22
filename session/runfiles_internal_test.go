@@ -38,7 +38,7 @@ func preparationReplacesALink(t *testing.T, perm os.FileMode) {
 	if err := os.Symlink(target, path); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := withPreparation(run, []string{"make", "deps"}, runtimes.Launch{Command: "agent"}); err != nil {
+	if _, err := withSetup(run, []string{"runner"}, []SetupCommand{{Name: "install", Args: []string{"make", "deps"}}}, runtimes.Launch{Command: "agent"}); err != nil {
 		t.Fatal(err)
 	}
 	if b, err := os.ReadFile(target); err != nil || string(b) != "the target's content" {
@@ -48,8 +48,8 @@ func preparationReplacesALink(t *testing.T, perm os.FileMode) {
 	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != perm {
 		t.Fatalf("the script is %v, %v; want a regular file of mode %v", fi, err, perm)
 	}
-	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "'make' 'deps'") {
-		t.Errorf("the script contains %q; want the preparation", b)
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "setup 'runner' 1 -- 'make' 'deps'") {
+		t.Errorf("the script contains %q; want the setup command", b)
 	}
 }
 
@@ -60,8 +60,8 @@ func TestAFailedPreparationScriptLeavesNoNewFile(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(run, PreparationScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := withPreparation(run, []string{"true"}, runtimes.Launch{Command: "agent"}); !errors.Is(err, syscall.EEXIST) {
-		t.Errorf("withPreparation returned %v; want EEXIST", err)
+	if _, err := withSetup(run, []string{"runner"}, []SetupCommand{{Name: "install", Args: []string{"true"}}}, runtimes.Launch{Command: "agent"}); !errors.Is(err, syscall.EEXIST) {
+		t.Errorf("withSetup returned %v; want EEXIST", err)
 	}
 	entries, err := os.ReadDir(run)
 	if err != nil || len(entries) != 1 {

@@ -75,7 +75,7 @@ func byReference(g *linktest.Fake) {
 // the wall is asked to fetch it, with the default's image for the relay; the bind that
 // holds the workspace is shown at /workspace and the working directory is under it;
 // what Forager puts inside names the workspace there, the harness's values, its home,
-// the preparation's words and the settings it copies, and what the run, the machine
+// the setup commands' words and the settings it copies, and what the run, the machine
 // and the inherited environment set is left as it is; and the record says the
 // working directory inside, how long the fetch took, and no name for the image.
 func TestARunInAnImageByReference(t *testing.T) {
@@ -97,7 +97,8 @@ func TestARunInAnImageByReference(t *testing.T) {
 	sp.LaunchDefaults = []string{"CACHE_PATH=" + dir + "/cache:" + dir + "x"}
 	sp.Variables.Run = []string{"MINE=" + dir}
 	sp.Env = append(sp.Env, "INHERITED="+dir)
-	sp.Preparation = []string{"true", dir + "/prepare.sh"}
+	sp.SetupRunner = setupRunner
+	sp.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: []string{"true", dir + "/prepare.sh"}}}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -123,8 +124,8 @@ func TestARunInAnImageByReference(t *testing.T) {
 		}
 	}
 	script, err := os.ReadFile(filepath.Join(res.SessionDir, session.PreparationScript))
-	if err != nil || !strings.Contains(string(script), "'true' '/workspace/prepare.sh'") {
-		t.Errorf("the preparation script: %s, %v", script, err)
+	if err != nil || !strings.Contains(string(script), "1 -- 'true' '/workspace/prepare.sh'") {
+		t.Errorf("the setup's script: %s, %v", script, err)
 	}
 	copied, err := os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 	if err != nil || !strings.Contains(string(copied), `"sh /workspace/hook.sh"`) || !strings.Contains(string(copied), `"`+dir+`shop"`) {
@@ -136,10 +137,11 @@ func TestARunInAnImageByReference(t *testing.T) {
 		started["docker"] != nil || started["image_fetch_ms"] != nil {
 		t.Errorf("session.started %v", started)
 	}
-	// The fetch is the image step, after session.started, and the rest of the wall's
-	// start the wall step.
+	// The fetch is the image step, after session.started, the rest of the wall's start
+	// the wall step, and the setup command a setup step.
 	steps := []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started",
-		"step 2 image " + pinned, "step 2 succeeded -1", "step 3 wall start the wall", "step 3 succeeded -1", "session 1 exited", "run exited"}
+		"step 2 image " + pinned, "step 2 succeeded -1", "step 3 wall start the wall", "step 3 succeeded -1",
+		"step 4 setup install", "step 4 succeeded 0", "session 1 exited", "run exited"}
 	if got := stepOrder(evs); !slices.Equal(got, steps) {
 		t.Errorf("the steps:\n%q\nwant\n%q", got, steps)
 	}

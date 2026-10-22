@@ -76,7 +76,7 @@ release may change what an existing document does, and says so under Upgrading.
 - Take a session's runtime members from `dev.qory.session.started`, not
   `dev.qory.run.started`: `runtime`, `runtime_version`, `command`, `args`, `dir`,
   `interactive`, `terminal`, `image`, `image_name`, `container_runtime`, `docker` and
-  `preparation`. `dev.qory.run.started` keeps `opened_by`,
+  `setup_commands`, which replaces `preparation`. `dev.qory.run.started` keeps `opened_by`,
   `forager_version`, `host`, `wall`, `labels` and `about`, and requires only the first
   two. Its `opened_by` is `run`; a `dev.qory.run.started` with `opened_by: "session"`
   fails validation, and a link batch with one is `400` `invalid_request`.
@@ -180,7 +180,7 @@ release may change what an existing document does, and says so under Upgrading.
 - `dev.qory.session.started`, `events/session.started.schema.json`: one per session
   that joins a run, before its runtime starts, with `session`, its number from 1, and
   the runtime members that `dev.qory.run.started` contained before, from `runtime` to
-  `preparation`.
+  `docker`, and `setup_commands` in place of `preparation`.
 - `harness` in `dev.qory.session.started`: the harness sources the session's compose
   used, one `{source, commit}` per source, `source` as it is configured and `commit`
   the full commit id, 40 or 64 hexadecimal characters. Optional; never empty. A
@@ -325,7 +325,7 @@ release may change what an existing document does, and says so under Upgrading.
 - `dev.qory.run.started` has `preparation`, the run's preparation as the caller gave it,
   when the run has one.
 - The server's variables may set `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, the
-  system and the repositories a run's preparation may use: the built-in `QORY_*` deny
+  system and the repositories a session's setup commands may use: the built-in `QORY_*` deny
   entry leaves the server's values of these two names in, by these names exactly. Set
   by any other source, they stay reserved as any `QORY_` name.
 - `dev.qory.run.policy_applied` has `ceiling_paths`: the path rules of each ceiling a
@@ -411,6 +411,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- `dev.qory.session.started` contains `setup_commands`, the names of the session's
+  setup commands, in place of `preparation`.
 - `dev.qory.run.started` is written at the open of a run, before its host work and
   before any session, with `opened_by: "run"`. It requires only `opened_by` and
   `forager_version`, and keeps `host`, `wall`, `labels` and `about`.
@@ -946,6 +948,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Replace `SessionSpec.Preparation` with `SessionSpec.Setup` and
+  `SessionSpec.SetupRunner`: each command is a `setup` step.
 - Replace `session.Run` and `session.Spec` with `session.Open`, `(*session.Run).Join`
   and `(*session.Run).Close`. `session.Run` is the open run. Move the run's fields of
   `Spec` to `session.OpenSpec`: `Gateway`, `Wall`, `CAEnv`, `Image`, `Images`,

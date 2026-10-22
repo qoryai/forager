@@ -38,7 +38,8 @@ func TestEachSessionHasItsDirectory(t *testing.T) {
 	var mounts [][]wall.Mount
 	for _, word := range []string{"one", "two"} {
 		s := sp.SessionSpec
-		s.Preparation = []string{"/bin/sh", "-c", "echo preparing session " + word}
+		s.SetupRunner = setupRunner
+		s.Setup = []session.SetupCommand{{Name: "install", Args: []string{"/bin/sh", "-c", "echo preparing session " + word}}}
 		res, err := r.Join(ctx, s)
 		if err != nil {
 			t.Fatal(err)
