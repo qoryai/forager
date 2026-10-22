@@ -63,8 +63,11 @@ const (
 	modeNest     = "nest"
 	modeInner    = "inner"
 	modeRecorder = "recorder"
-	// modePrepare is the run's preparation, which runs inside before the probe.
+	// modePrepare is the run's setup command, which runs inside before the probe.
 	modePrepare = "prepare"
+	// modeSetupCommand is the setup runner, which runs a setup command and reports it on
+	// the run's socket.
+	modeSetupCommand = "setup-command"
 	// modeNeighbours is the probe in a container the agent started, privileged on the
 	// enclosure's own network, that looks for neighbours on the inside network.
 	modeNeighbours = "neighbours"
@@ -149,7 +152,7 @@ const (
 const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 
 // Main makes the test binary the helper when it was started as one: the relay, the hook
-// forwarder, the run's preparation, the probe, the start of a Docker of the agent's
+// forwarder, the setup runner, the run's setup command, the probe, the start of a Docker of the agent's
 // own, the probe in a container the agent started, the search for neighbours in one, a
 // recorder, or the probe of a sealed credential. It returns at once otherwise.
 func Main() {
@@ -172,6 +175,8 @@ func Main() {
 			fmt.Fprintln(os.Stderr, "forward:", err)
 		}
 		os.Exit(0)
+	case modeSetupCommand:
+		os.Exit(session.RunSetupCommand(os.Args[2:], os.Stderr))
 	case modePrepare:
 		os.Exit(prepare(os.Args[2:]))
 	case modeProbe:
@@ -334,8 +339,13 @@ func Run(t *testing.T, o Options) {
 		}
 	}
 	originHost := mustHost(t, o.Origin)
-	// The preparation reaches the origin first, before the probe starts.
-	want := "[" + originHost + " allowed " + originHost + " " + originHost + " allowed " + originHost + " denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address " + originHost + " denied " + originHost + " " + credentialHost + " denied " + credentialHost + " " + credentialHost + " allowed " + credentialHost + " " + toolHost + " allowed " + toolHost + " " + toolHost + " denied " + toolHost
+	// The setup command reaches the origin first, before the probe starts, where the run
+	// socket crosses into the enclosure.
+	want := "["
+	if o.Hooks {
+		want += originHost + " allowed " + originHost + " "
+	}
+	want += originHost + " allowed " + originHost + " denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address " + originHost + " denied " + originHost + " " + credentialHost + " denied " + credentialHost + " " + credentialHost + " allowed " + credentialHost + " " + toolHost + " allowed " + toolHost + " " + toolHost + " denied " + toolHost
 	if len(origin.recorders) == 3 {
 		// A runtime's two credentials to their hosts, then the other host plainly and
 		// through a tunnel.
@@ -433,24 +443,61 @@ func Run(t *testing.T, o Options) {
 		t.Errorf("no runtime.ended among the events; the hook said: %s", p.Hook)
 	})
 	check("the exit status is the runtime's", r.res.ExitCode == 7, r.res.ExitCode)
-	// The preparation left its report in the workspace before the probe started, from
+	// The setup command left its report in the workspace before the probe started, from
 	// the probe's namespaces, as its user, with its words as given, and reached the
-	// origin through the proxy, first; the record names it.
-	pr := p.Prepared
-	if pr == nil {
-		pr = &preparedReport{}
-	}
-	var preparation any
-	for _, e := range r.events {
-		if e["type"] == "dev.qory.session.started" {
-			preparation = e["data"].(map[string]any)["preparation"]
+	// origin through the proxy, first; the record has its name in setup_commands, and has
+	// it as a setup step after the wall step, with its line. The runner reports on the run socket, so the
+	// check needs the socket inside.
+	t.Run("the setup command runs inside, before the runtime, through the proxy", func(t *testing.T) {
+		if !o.Hooks {
+			t.Skip("the run socket does not cross into the enclosure on this machine, and a setup command reports on it")
 		}
-	}
-	check("the preparation runs inside, before the runtime, through the proxy",
-		p.PreparedErr == "" && pr.Allowed == 200 && pr.Net != "" && pr.Net == p.Namespaces["net"] && pr.Mnt == p.Namespaces["mnt"] && pr.UID == p.UID &&
+		pr := p.Prepared
+		if pr == nil {
+			pr = &preparedReport{}
+		}
+		var names any
+		for _, e := range r.events {
+			if e["type"] == "dev.qory.session.started" {
+				names = e["data"].(map[string]any)["setup_commands"]
+			}
+		}
+		if !(p.PreparedErr == "" && pr.Allowed == 200 && pr.Net != "" && pr.Net == p.Namespaces["net"] && pr.Mnt == p.Namespaces["mnt"] && pr.UID == p.UID &&
 			fmt.Sprint(pr.Args) == fmt.Sprint(preparationWords) && len(egress) > 1 && egress[0] == originHost+" allowed "+originHost &&
-			fmt.Sprint(preparation) == fmt.Sprint(append([]string{o.Probe, modePrepare}, preparationWords...)),
-		fmt.Sprintf("the probe found %+v (%s) in the workspace as it started, beside the probe's namespaces %v and uid %d; the first egress %v; session.started's preparation %v", *pr, p.PreparedErr, p.Namespaces, p.UID, egress, preparation))
+			fmt.Sprint(names) == "[install]") {
+			t.Errorf("the probe found %+v (%s) in the workspace as it started, beside the probe's namespaces %v and uid %d; the first egress %v; session.started's setup_commands %v", *pr, p.PreparedErr, p.Namespaces, p.UID, egress, names)
+		}
+	})
+	t.Run("each setup command inside is a setup step after the wall step, with its lines", func(t *testing.T) {
+		if !o.Hooks {
+			t.Skip("the run socket does not cross into the enclosure on this machine, and a setup command reports on it")
+		}
+		var order []string
+		var lines bytes.Buffer
+		setupStep := 0.0
+		for _, e := range r.events {
+			d, _ := e["data"].(map[string]any)
+			switch e["type"] {
+			case "dev.qory.run.step_started":
+				order = append(order, fmt.Sprint(d["kind"], " ", d["name"]))
+				if d["kind"] == "setup" {
+					setupStep = d["step"].(float64)
+				}
+			case "dev.qory.run.step_exited":
+				if d["step"] == setupStep {
+					order = append(order, fmt.Sprint(d["state"], " ", d["exit_code"]))
+				}
+			case "dev.qory.run.log":
+				if d["step"] == setupStep && d["session"] == 1.0 {
+					b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+					lines.Write(b)
+				}
+			}
+		}
+		if len(order) < 3 || order[len(order)-3] != "wall start the wall" || order[len(order)-2] != "setup install" || order[len(order)-1] != "succeeded 0" || lines.String() != preparedLine+"\n" {
+			t.Errorf("the steps %q; the setup step's lines %q", order, lines.String())
+		}
+	})
 	var wallName any
 	for _, e := range r.events {
 		if e["type"] == "dev.qory.run.started" {
@@ -977,8 +1024,13 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			Stderr:      &errs,
 			Forwarder:   o.Forwarder,
 			Exec:        o.Exec,
-			Preparation: append([]string{o.Probe, modePrepare}, preparationWords...),
+			SetupRunner: []string{o.Probe, modeSetupCommand},
 		},
+	}
+	// The setup runner reports on the run socket, so a run has its setup command where
+	// the socket crosses into the enclosure.
+	if o.Hooks {
+		spec.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: append([]string{o.Probe, modePrepare}, preparationWords...)}}
 	}
 	if v.started != nil {
 		going, stop := context.WithCancel(ctx)

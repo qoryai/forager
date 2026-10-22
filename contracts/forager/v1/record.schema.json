@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/record.schema.json",
   "title": "Record",
-  "description": "One unit of runtime output as a descriptor reads it: the source it came from and the record itself. The shape of the lines a hook forwarder writes to the local socket, and of a descriptor fixture's records.jsonl.",
+  "description": "One unit of runtime output as a descriptor reads it, or one report of a setup command that runs inside the wall: the source it came from and the record itself. The shape of the lines a hook forwarder and a setup runner write to the local socket, and of a descriptor fixture's records.jsonl.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -11,15 +11,16 @@
   ],
   "properties": {
     "source": {
-      "description": "output for a JSON line the runtime printed on its standard output; hooks for the JSON a hook command received on its standard input.",
+      "description": "output for a JSON line the runtime printed on its standard output; hooks for the JSON a hook command received on its standard input; setup for a report of a setup command, which the session writes as the command's setup step and no descriptor's rule maps.",
       "type": "string",
       "enum": [
         "output",
-        "hooks"
+        "hooks",
+        "setup"
       ]
     },
     "record": {
-      "description": "The JSON object as the runtime produced it, unchanged.",
+      "description": "The JSON object as the runtime produced it, unchanged; for setup, command, the command's number from 1, and event: started, line with stream (stdout or stderr) and bytes (the line in standard base64), or exited with exit_code (0 to 255).",
       "type": "object"
     }
   }

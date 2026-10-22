@@ -51,18 +51,26 @@ func must[T any](v T, err error) T {
 	return v
 }
 
-// TestMain lets the test binary stand in for a runtime, for the hook forwarder and for
-// a run's preparation, so no real runtime and no shell script are needed: with
-// FAKE_RUNTIME set it acts as a runtime, with QORY_TEST_FORWARD set as the forwarder,
-// and with FAKE_PREPARATION set as a preparation.
+// TestMain lets the test binary stand in for a runtime, for the hook forwarder, for the
+// setup runner and for a setup command, so no real runtime and no shell script are
+// needed: with FAKE_RUNTIME set it acts as a runtime, with QORY_TEST_FORWARD set as the
+// forwarder, with setup-command as its first argument as the runner, with
+// FAKE_PREPARATION set as a setup command, and with FAKE_SETUP_RECORDS set as a setup
+// command that writes records of the setup source itself.
 func TestMain(m *testing.M) {
-	// The helper's exec, as the caller's binary runs it in its exec mode.
+	// The helper's exec and setup runner, as the caller's binary runs them in their
+	// modes.
 	if len(os.Args) > 1 && os.Args[1] == "exec" {
 		os.Exit(session.Exec(os.Args[2:], os.Stderr))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-command" {
+		os.Exit(session.RunSetupCommand(os.Args[2:], os.Stderr))
 	}
 	switch {
 	case os.Getenv("FAKE_PREPARATION") != "":
 		os.Exit(fakePreparation())
+	case os.Getenv("FAKE_SETUP_RECORDS") != "":
+		os.Exit(fakeSetupRecords())
 	case os.Getenv("QORY_TEST_FORWARD") != "":
 		if err := socket.Forward(context.Background(), os.Getenv(session.EnvSocket), os.Stdin); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -805,7 +813,7 @@ func TestMachineAndSetupAreInRunStarted(t *testing.T) {
 	} {
 		sp := spec(t)
 		sp.Forwarder = nil
-		sp.Machine, sp.Setup = c.machine, c.setup
+		sp.Machine, sp.OpenSpec.Setup = c.machine, c.setup
 		res, err := run(context.Background(), sp)
 		if err != nil {
 			t.Fatal(err)
@@ -839,7 +847,7 @@ func TestMachineAndSetupAreInRunStarted(t *testing.T) {
 	} {
 		sp, g := specGateway(t)
 		sp.Forwarder = nil
-		sp.Machine, sp.Setup = c.machine, c.setup
+		sp.Machine, sp.OpenSpec.Setup = c.machine, c.setup
 		if _, err := run(context.Background(), sp); err == nil || err.Error() != c.want {
 			t.Errorf("machine %q, setup %q: %v, want %s", c.machine, c.setup, err, c.want)
 		}

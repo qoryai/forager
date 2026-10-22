@@ -548,7 +548,7 @@ out. `session.Open` refuses any other value before it contacts the gateway, and 
 error starts with the fix: `set OpenSpec.Setup to outside or inside, or leave it
 empty: "elsewhere"`.
 `session.SessionSpec` has each session's: the runtime and its command, the variables,
-the mounts, the preparation and the rest below. `Harness` lists the harness's sources,
+the mounts, the setup commands and the rest below. `Harness` lists the harness's sources,
 each a `source` and a full `commit`; `dev.qory.session.started` records them, a source
 that contains `qak_` or `qrk_` as the value's phrase in its place. `ModelCredential` is
 the credential the join request asks the gateway for, for this session.
@@ -590,11 +590,21 @@ the credential the join request asks the gateway for, for this session.
   `Wall`, a place whose path goes through a link inside one of them and does not
   resolve into it is no run, `mount_through_link`. See
   [no file read from a place an agent can write](wall.md#no-file-read-from-a-place-an-agent-can-write).
-- `Preparation` is the run's preparation, the program and then its arguments: the
-  session runs it inside the wall before the runtime, through the run's proxy, and
-  starts the runtime once it exits 0. A preparation that exits otherwise is the run's
-  exit status, and the runtime never starts. It needs a `Wall`, and `Timeout` counts
-  it. See [the contract](../contracts/forager/v1/README.md#the-wall).
+- `Setup` is the session's setup commands for `wall.setup: inside`, each a
+  `session.SetupCommand` with a `Name`, such as `install` or `start services`, and
+  `Args`, the program and then its arguments. The session runs them inside the wall
+  before the runtime, one after another, through the run's proxy, and starts the
+  runtime once every one exits 0. Each command is a `setup` step with its name, its
+  output as the step's lines and its exit status. A command that exits otherwise is
+  the run's exit status, and neither a later command nor the runtime starts. Setup
+  needs a `Wall` and `SetupRunner`, and `Timeout` counts it. See
+  [the contract](../contracts/forager/v1/README.md#the-wall).
+- `SetupRunner` is the command inside the enclosure that runs one setup command: a
+  binary that calls `session.RunSetupCommand(args, os.Stderr)` and exits with its
+  status, such as qory's `/qory/qory run setup-command`. It sends the command's
+  records to the run socket, `QORY_RUN_SOCKET`, and the session writes the step from
+  them. Where the run socket does not cross into the enclosure, an engine in a virtual
+  machine such as a Mac's, the runner exits 125 and the session with it.
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
   link the gateway hands out, `(*gateway.Gateway).LocalLink()`, or a
   `session.RemoteGateway` on a separate machine (see

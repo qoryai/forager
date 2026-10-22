@@ -62,7 +62,8 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // The join writes its steps, numbered on from the run's last step: the join step, join
 // session <n>, from the join request to right before dev.qory.session.started, and,
 // behind a wall, the image step, when the policy's image is a reference, and the
-// wall step, up to the runtime's start. A refused join ends its join step failed with
+// wall step, up to the launch's start, then a setup step for each command of
+// SessionSpec.Setup, from the records of its runner. A refused join ends its join step failed with
 // -1 before its dev.qory.session.exited. Join returns an error and writes nothing while
 // a host step of [Run.StartStep] is open.
 //
@@ -102,7 +103,7 @@ func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if err := checkHarness(spec.Harness); err != nil {
 		return nil, err
 	}
-	if err := checkPreparation(s); err != nil {
+	if err := checkSetup(s); err != nil {
 		return nil, err
 	}
 	if err := checkExec(s); err != nil {
@@ -220,7 +221,9 @@ func (r *Run) refusedJoin(n int, err error) {
 // preparation up to the end of the image's fetch and the check of its user,
 // wall.Request.Fetched. The wall step spans the rest: the wall's networks, the
 // forwarder, the hook socket, the second check of the places and the wall's Wrap, up to
-// the runtime's start. The runtime runs in no step. A failure in either step ends it
+// the launch's start. Each setup command of SessionSpec.Setup then has a setup step,
+// which the session writes from its runner's records. The runtime runs in no step. A
+// failure in the image or the wall step ends it
 // failed with -1, after the failure's line with the session's number and the step's
 // when the failure has no refusal code, and before the session's
 // dev.qory.session.exited.
@@ -394,9 +397,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if prepared, err = rt.Prepare(attach); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
-	// The session's preparation runs inside, after the runtime's, and starts the launch
-	// as the runtime prepared it.
-	if prepared, err = withPreparation(sessionDir, insideAll(spec.Preparation, inside), prepared); err != nil {
+	// The session's setup commands run inside, after the runtime's preparation, and then
+	// start the launch as the runtime prepared it.
+	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
 		return fail(err)
 	}
 	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
@@ -554,8 +557,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(err)
 	}
 	// An event mapped from a record of the session's runtime has the session's number
-	// as session, as each chunk of its output and each resize below has.
+	// as session, as each chunk of its output and each resize below has. A record of the
+	// setup source is one of the session's setup steps, which the runtime does not map.
+	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup)
 	records := func(rec runtimes.Record) {
+		if rec.Source == runtimes.SourceSetup {
+			setupSteps.handle(rec)
+			return
+		}
 		if typ, data, ok := rt.Map(rec); ok {
 			r.write(typ, withSession(maskedRecord(masker, data), n))
 		}
@@ -624,7 +633,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if errors.Is(context.Cause(runCtx), errRunClosed) {
 		return fail(errRunClosed)
 	}
-	// The wall step ends as the runtime starts, which runs in no step.
+	// The wall step ends as the launch starts: the setup commands, each in its setup
+	// step, then the runtime, which runs in no step.
 	endStep(event.StateSucceeded)
 	logs := func(stream string) func([]byte) {
 		return func(b []byte) {
@@ -662,6 +672,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			exitObserved()
 		}
 	}
+	// The setup's records are recorded once the launch starts; a command that exits
+	// otherwise than 0 once the session stops the launch, at the limit, the context's
+	// end or the run's close, was cancelled. The end of limited once the launch exited
+	// is no stop.
+	setupSteps.start(func() bool {
+		return errors.Is(context.Cause(limited), errTimeout) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
+	})
 	var exit exitStatus
 	if interactive {
 		exit, err = proc.runPTY(limited)
@@ -673,6 +690,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	closed := errors.Is(context.Cause(runCtx), errRunClosed)
 	cancelLimit()
 	closeSocket()
+	// A setup step still open when the launch ended has no exit status.
+	setupSteps.finish(closed || timedOut || cancelled)
 	if err != nil && !closed {
 		r.write(event.SessionExited, map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": time.Since(start).Milliseconds()})
 		r.lastExit = -1
@@ -732,7 +751,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 // session's that contains qak_ or qrk_ in any case is sent as a phrase in its place:
 // accesskey.ShownName's for the runtime, the image, its name and its container
 // runtime; accesskey.ShownValue's for the directory, the command, each argument, the
-// runtime's version, each word of the preparation and each harness source.
+// runtime's version, the name of each setup command and each harness source.
 func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, interactive bool, cols, rows int) map[string]any {
 	started := map[string]any{
 		"session": n, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(prepared.Command, false), "args": shownValues(prepared.Args),
@@ -744,8 +763,12 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = accesskey.ShownValue(v, false)
 	}
-	if len(spec.Preparation) > 0 {
-		started["preparation"] = shownValues(spec.Preparation)
+	if setup := spec.SessionSpec.Setup; len(setup) > 0 {
+		names := make([]string, len(setup))
+		for i, c := range setup {
+			names[i] = c.Name
+		}
+		started["setup_commands"] = shownValues(names)
 	}
 	// The pseudo-terminal's size is in the record, so a replay can lay the redraws of
 	// a full-screen program over each other: the size it starts with here, each change

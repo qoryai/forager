@@ -760,7 +760,7 @@ func shownStarted(evs []event.Event) {
 var (
 	startedNames  = []string{"runtime", "host", "wall", "image", "image_name", "container_runtime"}
 	startedValues = []string{"dir", "command", "runtime_version"}
-	startedLists  = []string{"args", "preparation"}
+	startedLists  = []string{"args", "setup_commands"}
 )
 
 // unescaped is v as JSON without HTML escaping, so the rest of an event's data keeps

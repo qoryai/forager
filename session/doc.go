@@ -35,7 +35,8 @@
 //     each runtime event, log chunk and resize of a session has the session's number
 //     as session, and a line of the host work, which [Step.Log] writes, has none
 //   - records the run's steps: the host steps the caller starts with [Run.StartStep],
-//     and each join's join step and, behind a wall, its image and wall steps
+//     and each join's join step and, behind a wall, its image and wall steps and a
+//     setup step for each of its setup commands
 //
 // The package knows nothing of stacks, modules, homes or reports. The caller, the qory
 // command, turns those into the spec.

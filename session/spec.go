@@ -103,6 +103,13 @@ type OpenSpec struct {
 	Report func(string)
 }
 
+// SetupCommand is one setup command: one setup step of the run, whose name is Name and
+// whose lines are the command's output.
+type SetupCommand struct {
+	Name string   // the step's name: "install"
+	Args []string // the program inside, then its arguments
+}
+
 // SessionSpec is what one session of an open run is given: the program to start and
 // how, its variables, its places and its limits.
 type SessionSpec struct {
@@ -163,21 +170,29 @@ type SessionSpec struct {
 	Stdin       io.Reader
 	Stdout      io.Writer
 	Stderr      io.Writer
-	// Preparation is the session's preparation, the program and then its arguments,
-	// which the session runs inside the wall before the runtime: after the runtime's
-	// preparation, as the runtime's user, in Dir, with the runtime's environment, through
-	// the run's proxy and with its placeholders, so it reaches what the policy allows
-	// with the credentials the policy selects. The session starts the runtime through a
-	// script it writes into the session's directory, PreparationScript, with /bin/sh, so an
-	// image for such a run contains /bin/sh. The script runs the preparation with no
-	// input and its output where the runtime's goes, and starts the runtime once the
-	// preparation exits 0. A preparation that exits otherwise ends the session with its
-	// exit status, and the runtime never starts. A stop during the preparation asks it to
-	// leave with SIGTERM, whatever the stop signal, and the runtime never starts.
-	// dev.qory.session.started reports the preparation as given, and the script as its
-	// command and args. Empty means none. A preparation needs the run's Wall and a
-	// program that is not empty.
-	Preparation []string
+	// Setup is the session's setup commands, which the session runs inside the wall
+	// before the runtime, one after another, each as one setup step of the run: after the
+	// runtime's preparation, as the runtime's user, in Dir, with the runtime's
+	// environment, through the run's proxy and with its placeholders, so a command
+	// reaches what the policy allows with the credentials the policy selects. The session
+	// starts the runtime through a script it writes into the session's directory,
+	// PreparationScript, with /bin/sh, so an image for such a run contains /bin/sh. The
+	// script runs each command through SetupRunner with no input, and starts the runtime
+	// once every command exits 0. A command that exits otherwise ends the session with
+	// its exit status, and neither a later command nor the runtime starts. A stop during
+	// a command asks it to leave with SIGTERM, whatever the stop signal, and the runtime
+	// never starts. Each step has the command's Name as its name and its output as its
+	// lines, which the runner sends on QORY_RUN_SOCKET as records of the setup source.
+	// dev.qory.session.started contains the names as setup_commands, and the script as
+	// its command and args. Empty means none. Setup needs the run's Wall and SetupRunner,
+	// and each command a name and a program.
+	Setup []SetupCommand
+	// SetupRunner is the command, a path inside the enclosure and its arguments, that
+	// runs one setup command and reports it on QORY_RUN_SOCKET: a binary that calls
+	// [RunSetupCommand], such as {wall.HelperPath, "run", "setup-command"}. The script
+	// starts it as SetupRunner, then the command's number from 1, then --, then the
+	// command's Args. Setup needs it; without Setup it is not used.
+	SetupRunner []string
 	// Mounts are what the enclosure shows of this machine, each at its path: the
 	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
 	// one of the same mode is reached through the outer one, which alone is bound; one of
@@ -226,7 +241,7 @@ type SessionSpec struct {
 	// denied ones, so the runtime sees them unset, never as the image's values or empty.
 	// dev.qory.session.started reports the launch without it. The run's Wall needs one.
 	Exec []string
-	// Timeout is how long the runtime may run, the session's preparation included; zero
+	// Timeout is how long the runtime may run, the session's setup commands included; zero
 	// means no limit. At the limit the runtime is stopped the way the context ending
 	// stops it, and dev.qory.session.exited contains the reason. qory passes the time
 	// left of the run's limit.

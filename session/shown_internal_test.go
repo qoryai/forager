@@ -514,7 +514,7 @@ type bindsFail struct {
 func (b bindsFail) Binds(wall.Launch) ([]wall.Bind, error) { return nil, b.err }
 
 // TestTheSessionsFileErrorsPrintAPhraseForASecretInAPath pins the errors of the run
-// directory's files, the lock, the preparation, the socket, the registry's walk and a
+// directory's files, the lock, the setup's script, the socket, the registry's walk and a
 // wall's binds: a path that contains qak_ or qrk_ is the phrase, and each error still
 // wraps the error of the file system.
 func TestTheSessionsFileErrorsPrintAPhraseForASecretInAPath(t *testing.T) {
@@ -537,8 +537,8 @@ func TestTheSessionsFileErrorsPrintAPhraseForASecretInAPath(t *testing.T) {
 		phrased(t, "the mark's read", err, syscall.ENOTDIR)
 		_, err = sessionRecord(filepath.Join(missing, "session.jsonl"))
 		phrased(t, "the record", err, fs.ErrNotExist)
-		_, err = withPreparation(missing, []string{"true"}, runtimes.Launch{Command: "agent"})
-		phrased(t, "the preparation", err, fs.ErrNotExist)
+		_, err = withSetup(missing, []string{"runner"}, []SetupCommand{{Name: "install", Args: []string{"true"}}}, runtimes.Launch{Command: "agent"})
+		phrased(t, "the setup's script", err, fs.ErrNotExist)
 		_, err = RunsBinding(context.Background(), nil, filepath.Join(file, "child"))
 		phrased(t, "the registry's walk", err, syscall.ENOTDIR)
 		_, err = wallBinds(bindsFail{err: &fs.PathError{Op: "open", Path: filepath.Join(base, "bind"), Err: fs.ErrPermission}}, "", nil)

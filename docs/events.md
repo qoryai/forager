@@ -142,14 +142,16 @@ a time:
   `dev.qory.session.exited` of a refused join.
 - Behind a wall, after `dev.qory.session.started`, the join writes an `image` step,
   with the image's reference as its name, when the policy's image is a reference,
-  and a `wall` step, `start the wall`, up to the runtime's start. The runtime runs in no
-  step, and a session's lines have `step` only in these two steps.
+  and a `wall` step, `start the wall`, up to the launch's start.
+- With setup commands inside the wall, `SessionSpec.Setup`, each command is a `setup`
+  step after the `wall` step, with the command's name, such as `install`, its output as
+  the step's lines and its exit status. The runtime runs in no step, and a session's
+  lines have `step` only in its `image`, `wall` and `setup` steps.
 
 The close ends a host step still open `cancelled` with -1, before
 `dev.qory.run.exited`. When the gateway ends a run during a step, the run's stream has
 no `dev.qory.run.step_exited` for that step; the session writes that step's
-`dev.qory.run.step_exited` in `session.jsonl` alone, with the step's outcome. Forager writes no `setup` step: a session's `preparation`
-runs with its runtime, in no step. A step's `name` has `qory-proxy-password` in place
+`dev.qory.run.step_exited` in `session.jsonl` alone, with the step's outcome. A step's `name` has `qory-proxy-password` in place
 of a forwarder's password, and a phrase in place of a name that contains `qak_` or
 `qrk_`.
 

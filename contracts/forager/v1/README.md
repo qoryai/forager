@@ -350,7 +350,7 @@ harness, then joins a session.
    `passes` (§The gateway's link, Joining a session) and receives the session's number,
    from 1. It writes `dev.qory.session.started`, with that number as `session` and what
    the session starts: `runtime`, `runtime_version`, `command`, `args`, `dir`,
-   `interactive`, `terminal`, the image's members, `preparation`, and `harness`, the
+   `interactive`, `terminal`, the image's members, `setup_commands`, and `harness`, the
    harness sources the session's compose used, when the caller passes them. It then
    writes `dev.qory.run.policy_applied` with that session's `variables`,
    `credential_variables` and `harness_hosts`, and steps 6 to 9 run. The session's
@@ -1251,7 +1251,7 @@ refusal is posted on the link, as the session's other refusals are.
 
 **The run's system and repositories.** The server's variables may set two `QORY_`
 names, `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`: the system and the repositories a
-run's preparation may use (§The wall), as the server sets them. Forager reads nothing
+session's setup commands may use (§The wall), as the server sets them. Forager reads nothing
 into their values. The built-in `QORY_*` entry leaves the server's values of them in,
 by these names exactly, in upper case: a name that only begins with one, such as
 `QORY_RUN_SYSTEMX`, or one in lower case, is denied as any `QORY_` name. The runtime's
@@ -1380,7 +1380,7 @@ The types, one namespace. Forager's:
 |---|---|---|
 | `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
 | `dev.qory.run.started` | the run is open: the open wrote it, before the run's host work and before any session; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `host`, behind a wall `wall`; `machine` when the caller passes it, and `setup` when the run has setup commands (§The events, Where the run and its setup ran); and `labels` when the caller passes any, and `about` when the caller passes one |
-| `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `preparation` when the run has a wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used |
+| `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `setup_commands` when the session has setup commands inside the wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used |
 | `dev.qory.run.policy_applied` | right after `dev.qory.run.started`, with an empty `variables`; right after each `dev.qory.session.started` and before the session's wall starts, also for a session whose wall then fails to start, with that session's `variables`, `credential_variables` and `harness_hosts`; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `allow_first`, `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.step_started` | a step of the run's host work started, such as a fetch or a compose; after `dev.qory.run.started`, numbered from 1 in the order the steps start (Steps, below) | `step`, `name`, `kind` |
 | `dev.qory.run.step_exited` | a step ended; one per step, after its `dev.qory.run.step_started` and after every `dev.qory.run.log` of the step | `step`, `state`, `exit_code`, `duration_ms` |
@@ -1468,8 +1468,8 @@ one at a time. The host lines of a step are `dev.qory.run.log` events with the s
 number as `step`, between its `dev.qory.run.step_started` and its
 `dev.qory.run.step_exited`. A host line outside every step has no `step`. `step` is
 optional on `dev.qory.run.log`, so a record with no steps validates. `setup` is the
-kind of a setup command wherever it runs, inside the wall too; Forager writes no
-`setup` step, and a session's `preparation` runs with its runtime, in no step.
+kind of a setup command wherever it runs. Forager writes a `setup` step for each
+command of `(*session.Run).Setup` and of `SessionSpec.Setup`.
 
 The caller writes the steps of its host work, `fetch` and `compose`, before the first
 join or between two joins (`(*session.Run).StartStep`). Each join writes its steps:
@@ -1490,13 +1490,23 @@ join or between two joins (`(*session.Run).StartStep`). Each join writes its ste
 3. **The wall step**, `wall`, with the name `start the wall`, behind every wall. It spans the
    rest of the wall's start: the wall's networks, the session's forwarder and hook
    socket, the second check of the session's places and the launch's wrapping, up to
-   the runtime's start.
+   the launch's start.
+4. **The setup steps**, `setup`, one for each command of `SessionSpec.Setup`, with the
+   command's name, such as `install`, behind a wall, after the wall step, one after
+   another, before the runtime starts (§The wall, Setup inside the wall). Each spans
+   the command's run; its lines are the command's output, with the session's `session`,
+   and its `exit_code` is the command's exit status. It ends `succeeded` on 0,
+   `cancelled` when the session stopped the launch first, and `failed` otherwise. A
+   step whose exit record never arrives, such as one whose runner is killed at the end
+   of the stop grace, ends with the session: `cancelled` with `-1` when the session
+   stopped the launch, and `failed` with `-1` otherwise. After a step that does not end
+   `succeeded`, no later setup step starts.
 
 The runtime runs in no step. A failure in the image or the wall step ends that step
 `failed` with `-1`. A failure with no refusal code has its text as a `dev.qory.run.log`
 on `stderr` with both the session's `session` and the step's `step`, before the
 step's `dev.qory.run.step_exited`. Then comes the session's `dev.qory.session.exited`.
-So a session's `dev.qory.run.log` has `step` only during its image or wall step.
+So a session's `dev.qory.run.log` has `step` only during its image, wall or setup step.
 
 Every step ends before `dev.qory.run.exited`: the close ends a host step still open
 `cancelled` with `-1`, right before `dev.qory.run.exited`. A run the gateway ends during
@@ -1545,7 +1555,7 @@ each with `source`, the source as it is configured, and `commit`, the full commi
 compose used, 40 or 64 hexadecimal characters, in lower case. A `source` that contains
 `qak_` or `qrk_` in any case is `(a value that contains an access key secret)` in its
 place, or `(a value that contains a run key)` when it contains `qrk_` and no `qak_`, as
-are `dir`, `command`, an argument, `runtime_version` and a word of `preparation`.
+are `dir`, `command`, an argument, `runtime_version` and a name of `setup_commands`.
 Forager changes nothing else in them. The list is never empty; a caller that passes no
 source leaves `harness` out.
 
@@ -1714,8 +1724,8 @@ compose keeps it out of git:
   - `output.log`: the bytes of the session's `dev.qory.run.log` chunks, those with its
     number as `session`, masked as the
     run's `output.log` is, so the session's terminal can be replayed from it alone.
-  - `preparation.sh`: the script the runtime starts through, for a session with a
-    preparation (§The wall).
+  - `preparation.sh`: the script the runtime starts through, for a session with setup
+    commands inside the wall (§The wall).
   - `settings.json`: the runtime's settings with Forager's hooks added, when hooks are
     installed.
   - `approve-key.sh` and the copies of the `--mcp-config`, `--agents` and
@@ -3807,9 +3817,9 @@ same 20 characters. A headless session, and an OAuth credential in either mode, 
 approval, and Claude Code starts as it is. A run without a wall starts Claude Code as it
 is too: the script would write into the developer's configuration, so Claude Code shows
 its approval prompt for the placeholder value, and the approval the person gives stays
-in that configuration for later runs. A run's preparation (§The wall) is started
-the same way, through a script the session writes into the run directory,
-`preparation.sh`, which then starts the launch as the runtime prepared it, through
+in that configuration for later runs. A session's setup commands inside the wall (§The
+wall) are started the same way, through a script the session writes into the run
+directory, `preparation.sh`, which then starts the launch as the runtime prepared it, through
 `approve-key.sh` when the runtime prepared that.
 
 **`runtimes.json`** lists, for a server to vendor, every descriptor this contract ships,
@@ -3844,8 +3854,21 @@ and closes; the session reads until end of file, one connection at a time in the
 they arrive, so two hook calls in a row keep their order. There is no answer and no
 framing beyond the newline. The forwarder the session installs as a hook is one such
 client; a harness that reports something itself writes the same shape with
-`source: hooks`. Nothing on the socket reaches a receiver except through the
-descriptor's rules. The socket is removed when the run ends.
+`source: hooks`. A record of the `hooks` or the `output` source reaches a receiver only
+through the descriptor's rules. The setup runner is another client: it writes records
+of the `setup` source, which the session writes as the setup steps of a session with
+setup commands inside the wall (§The wall, Setup inside the wall). Its `record` has
+`command`, the command's number from 1, and `event`: `started`; `line`, with `stream`,
+`stdout` or `stderr`, and `bytes`, the line in standard base64, a long line in parts of
+4096 bytes; or `exited`, with `exit_code`, 0 to 255. The session cuts off a connection
+that stays open longer than 5 seconds, so the runner opens a connection for each batch
+of records. The socket is removed when the run ends.
+
+```json
+{"source": "setup", "record": {"command": 1, "event": "started"}}
+{"source": "setup", "record": {"command": 1, "event": "line", "stream": "stdout", "bytes": "YWRkZWQgMjE0IHBhY2thZ2VzCg=="}}
+{"source": "setup", "record": {"command": 1, "event": "exited", "exit_code": 0}}
+```
 
 ## Images
 
@@ -3945,8 +3968,8 @@ the bind that holds its workspace, the outermost, at `/workspace`, and the worki
 directory under it where it lies in that bind. Another bind whose path inside is
 `/workspace`, holds it or lies under it is refused before the wall is asked. Forager
 names the workspace at `/workspace`, by whole path components, in what it puts inside:
-the working directory, the runtime's command, arguments and variables, the preparation's
-words, `QORY_HARNESS_HOME`, the harness's fixed and default values, and the settings the
+the working directory, the runtime's command, arguments and variables, the setup
+commands' words, `QORY_HARNESS_HOME`, the harness's fixed and default values, and the settings the
 runtime copies; `dir` of `dev.qory.session.started` is the working directory inside. A
 value of the server's, of `--env` or of the machine passes as it is. The working folder
 must be a full repository: a git worktree's `.git` file names the main checkout by its
@@ -4007,7 +4030,7 @@ for all of them.
 
 **Names unset inside.** When a walled run has names to unset, its launch starts through
 Forager's helper, the caller's binary, at the front of everything the launch starts, the
-run's preparation and Claude Code's approval of its key included, and after the wall's
+session's setup commands and Claude Code's approval of its key included, and after the wall's
 programs: `exec --unset NAME … -- program args…`, which removes the names from its
 environment and executes the program, found in `PATH`. A program found only through `.`
 or an empty entry of `PATH` is not run, and ends the run with 127. The names are those a
@@ -4211,23 +4234,40 @@ host's. It forwards no packet between its two networks: IP forwarding is off in 
 namespace, so what it passes on is the connections it copies and nothing routed
 through it.
 
-**A run's preparation.** A walled run may have a preparation: a program and its
-arguments, which the session runs inside the enclosure before the runtime, after the
-runtime's preparation (§The runtime), as the runtime's user, in its working directory,
-with its environment, through the relay and the proxy: it reaches what the policy
-allows, with the run's placeholders where the gateway sets the run's credentials.
-Forager reads nothing into what it does. The session writes `preparation.sh` into the
-session's directory, each word of the preparation in single quotes, and starts the runtime
-through it with `/bin/sh`, so an image for such a run contains `/bin/sh`. The script
-runs the preparation with no input and its output where the runtime's goes, and starts
-the runtime, as the runtime prepared it, once the preparation exits 0. A preparation
-that exits otherwise is the session's exit status, and the runtime never starts;
-`dev.qory.session.exited` records it as it records a runtime's exit. The run's time
-limit counts the preparation. A stop during the preparation, by any of the run's stop
-signals, asks it to leave with `SIGTERM`, and the runtime never starts; a preparation
-that does not leave within the stop grace is killed as a runtime is.
-`dev.qory.session.started` contains it as `preparation`, as given, with the script as
-`command` and `args`. A run without a wall has no preparation.
+**Setup inside the wall.** With `wall.setup: inside`, a walled session may have setup
+commands, `SessionSpec.Setup`: each a name, such as `install` or `start services`, and
+a program and its arguments. The session runs them inside the enclosure before the
+runtime, one after another, after the runtime's preparation (§The runtime), as the
+runtime's user, in its working directory, with its environment, through the relay and
+the proxy: a command reaches what the policy allows, with the run's placeholders where
+the gateway sets the run's credentials. Forager reads nothing into what a command does.
+The session writes `preparation.sh` into the session's directory and starts the runtime
+through it with `/bin/sh`, so an image for such a run contains `/bin/sh`. For each
+command the script starts the setup runner, `SessionSpec.SetupRunner`, with the
+command's number from 1, `--` and the command's words, each word in single quotes, with
+no input. The runner, `session.RunSetupCommand` in the caller's binary, runs the
+command and sends records of the `setup` source to `QORY_RUN_SOCKET` (§The local
+socket): that it started, each line of its output, and its exit status. The session
+writes the command's `setup` step from them (§The events, Steps): it takes a record in
+order alone, and reports one out of order, or one after the setup ended, and records
+nothing of it. A runner that cannot reach the socket exits `125` and runs nothing; the
+socket does not cross into an engine in a virtual machine, such as a Mac's, so there a
+session with setup commands inside ends with `125`. The script starts the runtime, as
+the runtime prepared it, once every command exits 0. A command that exits otherwise is
+the session's exit status, and neither a later command nor the runtime starts;
+`dev.qory.session.exited` records it as it records a runtime's exit. A process a command
+leaves running, such as a service it starts, keeps running; its output reaches the
+step for one second after the command exits, and has no reader after that, so a
+service started this way writes its output to a file. The run's time limit counts the setup. A
+stop during a command, by any of the run's stop signals, asks it to leave with
+`SIGTERM`, and the runtime never starts; a command that does not leave within the stop
+grace is killed as a runtime is. `dev.qory.session.started` contains the commands'
+names as `setup_commands`, with the script as `command` and `args`. A run without a
+wall has no setup commands inside.
+
+The setup's records come from inside the enclosure, as the runtime's hook records do:
+code in the working folder can write records of the `setup` source to the socket, and
+so forge a setup step's lines or its exit status, as it can forge the runtime's events.
 
 **Nested Docker.** *Experimental.* Under the nested runtime the enclosure has a root,
 and whether that root reaches the mounts the run lists as the machine's root is
