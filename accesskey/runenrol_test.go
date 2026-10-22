@@ -48,14 +48,27 @@ func testRunKey(t *testing.T, signer *accesskey.Key, runID string) string {
 	return s
 }
 
-// runAnswerBody returns a run answer's body with the run's id, its run key and the
-// server keys listed.
+// testInput is the value in testDocuments that no output of a RunAnswer may contain.
+const testInput = "f1xt0re-input-value"
+
+// testDocuments are the run's documents of the tests' run answers: an object in
+// neutral example data, which Forager reads as an object and no further.
+const testDocuments = `{"inputs":{"text":"` + testInput + `"},"note":"an example"}`
+
+// runAnswerBody returns a run answer's body with the run's id, its run key,
+// testDocuments and the server keys listed.
 func runAnswerBody(runID, runKey string, listed ...*accesskey.Key) []byte {
+	return runAnswerWith(runID, runKey, testDocuments, listed...)
+}
+
+// runAnswerWith returns a run answer's body with the run's id, its run key, documents
+// as the JSON of its documents member, and the server keys listed.
+func runAnswerWith(runID, runKey, documents string, listed ...*accesskey.Key) []byte {
 	var keys []string
 	for _, k := range listed {
 		keys = append(keys, `{"alg":"ed25519","public_key":"`+k.PublicKey().String()+`"}`)
 	}
-	return []byte(`{"version":1,"run_id":"` + runID + `","run_key":"` + runKey + `","apiary_public_key":[` + strings.Join(keys, ",") + `]}`)
+	return []byte(`{"version":1,"run_id":"` + runID + `","run_key":"` + runKey + `","documents":` + documents + `,"apiary_public_key":[` + strings.Join(keys, ",") + `]}`)
 }
 
 // runRequest returns a request with a run code whose fingerprint is signer's.
@@ -77,7 +90,8 @@ func created(r *accesskey.EnrolmentRequest, signer *accesskey.Key, body []byte) 
 // TestTheRunEnrolmentKnownAnswer pins the redemption of a run code in
 // through-gateway.json: the fixture access key builds the request byte for byte, its
 // proof is the vector's, the 201's six lines are the vector's and verify under the
-// fixture signing key, and VerifyRunAnswer returns the run's id and run key.
+// fixture signing key, and VerifyRunAnswer returns the run's id, its run key and its
+// documents byte for byte as the answer contains them.
 func TestTheRunEnrolmentKnownAnswer(t *testing.T) {
 	var v struct {
 		RunEnrolment struct {
@@ -116,12 +130,17 @@ func TestTheRunEnrolmentKnownAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var body struct {
-		RunKey string `json:"run_key"`
-	}
+	var body map[string]json.RawMessage
 	load(t, e.Answer, &body)
-	if ans.RunID != testRunID || ans.RunKey != body.RunKey || len(ans.Pin) != 1 || ans.Pin[0].PublicKey != k.SigningKey.PublicKey {
+	var runKey string
+	if json.Unmarshal(body["run_key"], &runKey) != nil {
+		t.Fatalf("%s has no run_key", e.Answer)
+	}
+	if ans.RunID != testRunID || ans.RunKey != runKey || len(ans.Pin) != 1 || ans.Pin[0].PublicKey != k.SigningKey.PublicKey {
 		t.Errorf("verified %s, pin %v", ans, ans.Pin)
+	}
+	if want, ok := body["documents"]; !ok || !bytes.Equal(ans.Documents, want) {
+		t.Errorf("documents are %s; want %s", ans.Documents, want)
 	}
 }
 
@@ -151,8 +170,8 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // TestPostRunRedeemsARunCode posts a run code to a fake server that signs a run answer
-// under a test key: the client returns the run's id and its run key, its pin the test
-// key, and the same request sent again gets the same run key.
+// under a test key: the client returns the run's id, its run key and its documents, its
+// pin the test key, and the same request sent again gets the same run key.
 func TestPostRunRedeemsARunCode(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
@@ -165,8 +184,8 @@ func TestPostRunRedeemsARunCode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ans.RunID != testRunID || ans.RunKey != rk || len(ans.Pin) != 1 || ans.Pin[0].PublicKey != signer.PublicKey().String() {
-			t.Errorf("redeemed %s, pin %v", ans, ans.Pin)
+		if ans.RunID != testRunID || ans.RunKey != rk || string(ans.Documents) != testDocuments || len(ans.Pin) != 1 || ans.Pin[0].PublicKey != signer.PublicKey().String() {
+			t.Errorf("redeemed %s, documents %s, pin %v", ans, ans.Documents, ans.Pin)
 		}
 	}
 	if f.requests != 2 {
@@ -177,7 +196,7 @@ func TestPostRunRedeemsARunCode(t *testing.T) {
 // TestARetryWithAnotherProofGetsTheSameMembers pins a retry by the same key with
 // another request: a timestamp one second later, so another proof. The server signs
 // the same members over each request's proof, and the client returns the same run id,
-// run key and pin for both. The first answer's signature does not verify for the
+// run key, documents and pin for both. The first answer's signature does not verify for the
 // second request, since line 3 of the signed lines is the request's proof.
 func TestARetryWithAnotherProofGetsTheSameMembers(t *testing.T) {
 	signer, key := newKey(t), newKey(t)
@@ -206,7 +225,7 @@ func TestARetryWithAnotherProofGetsTheSameMembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.RunID != b.RunID || a.RunKey != b.RunKey || !slices.Equal(a.ApiaryPublicKey, b.ApiaryPublicKey) || !slices.Equal(a.Pin, b.Pin) {
+	if a.RunID != b.RunID || a.RunKey != b.RunKey || !bytes.Equal(a.Documents, b.Documents) || !slices.Equal(a.ApiaryPublicKey, b.ApiaryPublicKey) || !slices.Equal(a.Pin, b.Pin) {
 		t.Errorf("the retry got %s, pin %v; the first %s, pin %v", b, b.Pin, a, a.Pin)
 	}
 	answer, sig := created(first, signer, runAnswerBody(testRunID, rk, signer))
@@ -273,7 +292,7 @@ func TestRunAnswerFailures(t *testing.T) {
 		{"version 2", 201, bytes.Replace(runAnswerBody(testRunID, rk, signer), []byte(`"version":1`), []byte(`"version":2`), 1), signer,
 			"update Forager to read the enrolment answer: its version is 2, and this Forager reads version 1"},
 		{"a member the schema does not define", 201, bytes.Replace(runAnswerBody(testRunID, rk, signer), []byte(`"version":1,`), []byte(`"version":1,"access_key_id":"ak_f1xt0re000000000",`), 1), signer, accesskey.CodeAnswerUnsigned},
-		{"no run_key", 201, []byte(`{"version":1,"run_id":"` + testRunID + `",` + keys + `}`), signer, "use another run code: the enrolment answer has no run_key"},
+		{"no run_key", 201, []byte(`{"version":1,"run_id":"` + testRunID + `","documents":` + testDocuments + `,` + keys + `}`), signer, "use another run code: the enrolment answer has no run_key"},
 		{"a 401", 401, []byte(`{"error":"unauthorized"}`), nil, accesskey.CodeUnauthorized},
 		{"a signed 409", 409, []byte(`{"error":"key_invalid",` + keys + `}`), signer, accesskey.CodeKeyInvalid},
 		{"a signed 429", 429, []byte(`{"error":"rate_limited",` + keys + `}`), signer, accesskey.CodeRateLimited},
@@ -370,10 +389,15 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 }
 
 // TestARunAnswerShowsItsRunIDAlone pins that a RunAnswer, by value and by pointer,
-// prints its run id and never its run key: under every fmt verb, through slog's text
-// and JSON handlers, through encoding/json, and in an exported field of a struct, in a
-// slice and in a map under the JSON handler. It also pins the one open case: in a
-// struct field that is not exported, fmt and slog's text handler print the run key.
+// prints its run id and never its run key or a byte of its documents: under %v, %+v,
+// %#v, %s, %q, %x and %d, through slog's text and JSON handlers, through
+// encoding/json, and in an exported field of a struct, in a slice and in a map under
+// the JSON handler. It also pins samples of the arguments that the doc of RunAnswer
+// forbids passing to fmt, where fmt calls no method of RunAnswer and prints the run
+// key: a RunAnswer, and a pointer to one, in a struct field that is not exported,
+// under fmt and slog's text handler; %p of a value, an array, an embedding struct and
+// a struct with a RunAnswer field; %s of a slice of pointers to such a struct; and %w
+// of a value, a pointer, a slice and a pointer to such a struct.
 func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	signer := newKey(t)
 	rk := testRunKey(t, signer, testRunID)
@@ -383,10 +407,18 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	secret := rk[len(runkey.Prefix):]
+	// inputBytes is testInput as fmt prints the bytes of a json.RawMessage, in decimal.
+	inputBytes := strings.Trim(fmt.Sprint([]byte(testInput)), "[]")
+	// leaks reports whether s contains the run key or the answer's documents, as text
+	// or as bytes in decimal.
+	leaks := func(s string) bool {
+		return strings.Contains(s, secret) || strings.Contains(s, testInput) || strings.Contains(s, "documents") ||
+			strings.Contains(s, inputBytes)
+	}
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
 		for _, v := range []any{ans, *ans} {
 			got := fmt.Sprintf(verb, v)
-			if strings.Contains(got, secret) || strings.Contains(got, runkey.Prefix) || !strings.Contains(got, testRunID) {
+			if leaks(got) || strings.Contains(got, runkey.Prefix) || !strings.Contains(got, testRunID) {
 				t.Errorf("%s of %T: %s", verb, v, got)
 			}
 		}
@@ -401,7 +433,7 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 	for _, h := range []slog.Handler{slog.NewTextHandler(&b, nil), slog.NewJSONHandler(&b, nil)} {
 		slog.New(h).Info("redeemed", "answer", ans, "value", *ans)
 	}
-	if got := b.String(); strings.Contains(got, secret) || strings.Contains(got, runkey.Prefix) || strings.Count(got, "run_id="+testRunID) != 2 || strings.Count(got, `"run_id":"`+testRunID+`"`) != 2 {
+	if got := b.String(); leaks(got) || strings.Contains(got, runkey.Prefix) || strings.Count(got, "run_id="+testRunID) != 2 || strings.Count(got, `"run_id":"`+testRunID+`"`) != 2 {
 		t.Errorf("slog wrote %s", got)
 	}
 	if v := ans.LogValue(); v.Kind() != slog.KindGroup || len(v.Group()) != 1 || v.Group()[0].Key != "run_id" || v.Group()[0].Value.String() != testRunID {
@@ -429,31 +461,215 @@ func TestARunAnswerShowsItsRunIDAlone(t *testing.T) {
 		if err != nil || string(got) != c.want {
 			t.Errorf("json.Marshal of %T: %s, %v; want %s", c.v, got, err, c.want)
 		}
-		if got := fmt.Sprintf("%+v", c.v); strings.Contains(got, secret) {
+		if got := fmt.Sprintf("%+v", c.v); leaks(got) {
 			t.Errorf("%%+v of %T: %s", c.v, got)
 		}
 	}
-	// The open case, which RunAnswer's doc describes: fmt calls no method of a value it
-	// reaches through a struct field that is not exported, so fmt and slog's text
-	// handler print the run key there, and the JSON handler writes {} for the field. A
-	// change to that behaviour fails here, so the doc is updated with it.
+	// Samples of the arguments that the doc of RunAnswer forbids passing to fmt, where
+	// fmt calls no method of RunAnswer and prints every field. Each case checks for the
+	// run key, as text or in hex under %x. The JSON handler writes {} for a field that
+	// is not exported. sVerb, pVerb and wVerb are variables, so that vet's printf check
+	// accepts the arguments.
+	hasKey := func(s string) bool {
+		return strings.Contains(s, secret) || strings.Contains(s, fmt.Sprintf("%x", secret))
+	}
 	type hidden struct{ a any }
-	if got := fmt.Sprintf("%+v", hidden{*ans}); !strings.Contains(got, secret) {
-		t.Errorf("%%+v of a RunAnswer in a field that is not exported: %s; the doc says it contains the run key", got)
+	type embedding struct{ accesskey.RunAnswer }
+	type field struct{ A accesskey.RunAnswer }
+	sVerb, pVerb, wVerb := "%s", "%p", "%w"
+	for _, c := range []struct{ name, got string }{
+		{"%+v of a RunAnswer in a field that is not exported", fmt.Sprintf("%+v", hidden{*ans})},
+		{"%s of a RunAnswer in a field that is not exported", fmt.Sprintf("%s", hidden{*ans})},
+		{"%q of a RunAnswer in a field that is not exported", fmt.Sprintf("%q", hidden{*ans})},
+		{"%x of a RunAnswer in a field that is not exported", fmt.Sprintf("%x", hidden{*ans})},
+		{"%v of a RunAnswer in a field that is not exported", fmt.Sprintf("%v", hidden{*ans})},
+		{"%s of a *RunAnswer in a field that is not exported", fmt.Sprintf("%s", hidden{ans})},
+		{"%p of a value", fmt.Sprintf(pVerb, *ans)},
+		{"%p of an array", fmt.Sprintf(pVerb, [1]accesskey.RunAnswer{*ans})},
+		{"%p of an embedding struct", fmt.Sprintf(pVerb, embedding{*ans})},
+		{"%p of a struct with a RunAnswer field", fmt.Sprintf(pVerb, field{*ans})},
+		{"fmt.Errorf with %w of a value", fmt.Errorf(wVerb, *ans).Error()},
+		{"fmt.Errorf with %w of a pointer", fmt.Errorf(wVerb, ans).Error()},
+		{"fmt.Errorf with %w of a slice", fmt.Errorf(wVerb, []accesskey.RunAnswer{*ans}).Error()},
+		{"%s of a slice of pointers to a struct with a RunAnswer field", fmt.Sprintf(sVerb, []*field{{*ans}})},
+		{"fmt.Errorf with %w of a pointer to a struct with a RunAnswer field", fmt.Errorf(wVerb, &field{*ans}).Error()},
+	} {
+		if !hasKey(c.got) {
+			t.Errorf("%s: %s; want the run key", c.name, c.got)
+		}
+	}
+	if got := fmt.Sprintf(pVerb, ans); leaks(got) {
+		t.Errorf("%%p of a pointer: %s", got)
 	}
 	b.Reset()
 	slog.New(slog.NewTextHandler(&b, nil)).Info("redeemed", "hidden", hidden{*ans})
-	if got := b.String(); !strings.Contains(got, secret) {
-		t.Errorf("slog's text handler with a RunAnswer in a field that is not exported wrote %s; the doc says it contains the run key", got)
+	if got := b.String(); !hasKey(got) {
+		t.Errorf("slog's text handler with a RunAnswer in a field that is not exported wrote %s; want the run key", got)
 	}
 	b.Reset()
 	slog.New(slog.NewJSONHandler(&b, nil)).Info("redeemed", "hidden", hidden{*ans})
-	if got := b.String(); strings.Contains(got, secret) || !strings.Contains(got, `"hidden":{}`) {
+	if got := b.String(); leaks(got) || !strings.Contains(got, `"hidden":{}`) {
 		t.Errorf("slog's JSON handler with a RunAnswer in a field that is not exported wrote %s", got)
 	}
 	b.Reset()
 	slog.New(slog.NewJSONHandler(&b, nil)).Info("redeemed", "nested", nested{*ans, ans}, "slice", []accesskey.RunAnswer{*ans}, "map", map[string]accesskey.RunAnswer{"a": *ans})
-	if got := b.String(); strings.Contains(got, secret) || strings.Contains(got, runkey.Prefix) || strings.Count(got, `"run_id":"`+testRunID+`"`) != 4 {
+	if got := b.String(); leaks(got) || strings.Contains(got, runkey.Prefix) || strings.Count(got, `"run_id":"`+testRunID+`"`) != 4 {
 		t.Errorf("slog's JSON handler wrote %s", got)
+	}
+}
+
+// TestARunAnswersDocuments pins the documents member of a run answer: VerifyRunAnswer
+// returns it byte for byte as the answer contains it, spaces, member order and escapes
+// included, and reads none of its members, so an empty object passes. The signature
+// covers it: a body with one byte of the documents changed after the signature is
+// answer_unsigned. An answer without documents, or with documents of another JSON type
+// than object, null included, is an error that starts with the fix and contains no
+// byte of the documents.
+func TestARunAnswersDocuments(t *testing.T) {
+	signer := newKey(t)
+	r := runRequest(t, signer)
+	rk := testRunKey(t, signer, testRunID)
+	for _, documents := range []string{
+		`{}`,
+		testDocuments,
+		`{ "z" : [ 1 , 2.50 ] ,` + "\n\t" + `"a" : "\u00e9\/` + testInput + `" , "n" : null }`,
+	} {
+		ans, err := r.VerifyRunAnswer(created(r, signer, runAnswerWith(testRunID, rk, documents, signer)))
+		if err != nil || string(ans.Documents) != documents {
+			t.Errorf("documents %s: %v, %v", documents, ans, err)
+		}
+	}
+	body := runAnswerBody(testRunID, rk, signer)
+	a, sig := created(r, signer, body)
+	a.Body = bytes.Replace(body, []byte(testInput), []byte("f1xt0re-input-valuf"), 1)
+	if ans, err := r.VerifyRunAnswer(a, sig); ans != nil || code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("documents changed after the signature: %v, %v; want answer_unsigned", ans, err)
+	}
+	const notObject = "use another run code: the enrolment answer's documents is not a JSON object"
+	keys := `"apiary_public_key":[{"alg":"ed25519","public_key":"` + signer.PublicKey().String() + `"}]`
+	for _, c := range []struct {
+		name string
+		body []byte
+		want string
+	}{
+		{"no documents", []byte(`{"version":1,"run_id":"` + testRunID + `","run_key":"` + rk + `",` + keys + `}`), "use another run code: the enrolment answer has no documents"},
+		{"null", runAnswerWith(testRunID, rk, `null`, signer), notObject},
+		{"an array", runAnswerWith(testRunID, rk, `[`+testDocuments+`]`, signer), notObject},
+		{"a string", runAnswerWith(testRunID, rk, `"`+testInput+`"`, signer), notObject},
+		{"a number", runAnswerWith(testRunID, rk, `7`, signer), notObject},
+		{"true", runAnswerWith(testRunID, rk, `true`, signer), notObject},
+	} {
+		ans, err := r.VerifyRunAnswer(created(r, signer, c.body))
+		if ans != nil || code(err) != c.want {
+			t.Errorf("%s: %v, %v; want %s", c.name, ans, err, c.want)
+		}
+		if err != nil && strings.Contains(err.Error(), testInput) {
+			t.Errorf("%s: the error contains the documents: %v", c.name, err)
+		}
+	}
+}
+
+// padded returns a run answer of exactly n bytes: its documents testDocuments with a
+// member of x characters.
+func padded(t *testing.T, rk string, signer *accesskey.Key, n int) []byte {
+	t.Helper()
+	docs := func(pad int) string {
+		return strings.Replace(testDocuments, `"note":`, `"pad":"`+strings.Repeat("x", pad)+`","note":`, 1)
+	}
+	short := len(runAnswerWith(testRunID, rk, docs(0), signer))
+	if n < short {
+		t.Fatalf("a run answer of %d bytes is shorter than the %d bytes of its members", n, short)
+	}
+	b := runAnswerWith(testRunID, rk, docs(n-short), signer)
+	if len(b) != n {
+		t.Fatalf("padded to %d bytes; want %d", len(b), n)
+	}
+	return b
+}
+
+// TestARunAnswerUpTo1MiB pins the limits of the answer's body: PostRun reads a signed
+// run answer of 200 KiB, more than an access key's answer may be, and one of exactly
+// MaxRunAnswer, 1 MiB; one byte more is answer_unsigned, from PostRun, from PostRunVia
+// and from VerifyRunAnswer. PostRunVia reads one of exactly MaxRunAnswer through a
+// gateway. Post reads an access key's answer as before: a signed answer of 64 KiB
+// passes, one of MaxAnswer+1 bytes passes too, since the client reads MaxAnswer and
+// one byte more and VerifyAnswer checks no length, and one of 200 KiB is
+// answer_unsigned.
+func TestARunAnswerUpTo1MiB(t *testing.T) {
+	if accesskey.MaxRunAnswer != 1<<20 || accesskey.MaxAnswer != 64<<10 {
+		t.Fatalf("MaxRunAnswer %d, MaxAnswer %d; want 1 MiB and 64 KiB", accesskey.MaxRunAnswer, accesskey.MaxAnswer)
+	}
+	signer := newKey(t)
+	rk := testRunKey(t, signer, testRunID)
+	r := runRequest(t, signer)
+	for _, c := range []struct {
+		n    int
+		want string
+	}{
+		{200 << 10, ""},
+		{accesskey.MaxRunAnswer, ""},
+		{accesskey.MaxRunAnswer + 1, accesskey.CodeAnswerUnsigned},
+	} {
+		body := padded(t, rk, signer, c.n)
+		f := &fakeServer{status: http.StatusCreated, signer: signer, body: func(accesskey.EnrolmentRequest) []byte { return body }}
+		srv := httptest.NewServer(f)
+		ans, err := r.PostRun(context.Background(), nil, srv.URL, "qory/test")
+		srv.Close()
+		if c.want == "" && (err != nil || ans.RunKey != rk || len(ans.Documents) < c.n/2) {
+			t.Errorf("a run answer of %d bytes: %v, %v", c.n, ans, err)
+		}
+		if c.want != "" && (ans != nil || code(err) != c.want) {
+			t.Errorf("a run answer of %d bytes: %v, %v; want %s", c.n, ans, err, c.want)
+		}
+	}
+	if _, err := r.VerifyRunAnswer(created(r, signer, padded(t, rk, signer, accesskey.MaxRunAnswer+1))); code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("VerifyRunAnswer of %d bytes: %v; want answer_unsigned", accesskey.MaxRunAnswer+1, err)
+	}
+	// Through a gateway: the TLS server stands in for the gateway's relay at viaURL.
+	for _, c := range []struct {
+		n    int
+		want string
+	}{
+		{accesskey.MaxRunAnswer, ""},
+		{accesskey.MaxRunAnswer + 1, accesskey.CodeAnswerUnsigned},
+	} {
+		body := padded(t, rk, signer, c.n)
+		f := &fakeServer{status: http.StatusCreated, signer: signer, body: func(accesskey.EnrolmentRequest) []byte { return body }}
+		srv := httptest.NewTLSServer(f)
+		ans, err := r.PostRunVia(context.Background(), srv.Client(), "https://qory.example", srv.URL, "qory/test")
+		srv.Close()
+		if c.want == "" && (err != nil || ans.RunKey != rk || len(ans.Documents) < c.n/2) {
+			t.Errorf("a run answer of %d bytes through a gateway: %v, %v", c.n, ans, err)
+		}
+		if c.want != "" && (ans != nil || code(err) != c.want) {
+			t.Errorf("a run answer of %d bytes through a gateway: %v, %v; want %s", c.n, ans, err, c.want)
+		}
+		if f.requests != 1 {
+			t.Errorf("a run answer of %d bytes through a gateway: %d requests; want 1", c.n, f.requests)
+		}
+	}
+	// An access key's answer, padded with spaces inside its object.
+	key, err := accesskey.NewEnrolmentRequest(newKey(t), "qecn_F1XT0RE0000000000000000000."+signer.Fingerprint(), "build-01", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"node","stored_secrets":false,` +
+		`"apiary_public_key":[{"alg":"ed25519","public_key":"` + signer.PublicKey().String() + `"}]`
+	for _, c := range []struct {
+		n    int
+		want string
+	}{
+		{accesskey.MaxAnswer, ""},
+		{accesskey.MaxAnswer + 1, ""},
+		{200 << 10, accesskey.CodeAnswerUnsigned},
+	} {
+		body := []byte(answer + strings.Repeat(" ", c.n-len(answer)-1) + "}")
+		f := &fakeServer{status: http.StatusCreated, signer: signer, body: func(accesskey.EnrolmentRequest) []byte { return body }}
+		srv := httptest.NewServer(f)
+		ans, err := key.Post(context.Background(), nil, srv.URL, "qory/test")
+		srv.Close()
+		if (c.want == "" && (err != nil || ans.AccessKeyID != "ak_f1xt0re000000000")) || (c.want != "" && (ans != nil || code(err) != c.want)) {
+			t.Errorf("an access key's answer of %d bytes: %v, %v; want %q", c.n, ans, err, c.want)
+		}
 	}
 }

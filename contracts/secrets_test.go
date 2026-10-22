@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"math/big"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/qoryai/forager/contracts"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // The fixtures of the access key: enrolment's schema, and the known answers this
@@ -219,6 +221,77 @@ func TestEnrolmentAnswerNodeKinds(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestRunAnswerFixturesBreakOneRule pins each invalid fixture of a run code's answer to
+// the one rule of $defs/run_answer it breaks: the place in the answer and the keyword
+// that fails there, and no other. An unknown member, access_key_id, fails
+// additionalProperties at the top, and documents of another type than object fails
+// type at /documents.
+func TestRunAnswerFixturesBreakOneRule(t *testing.T) {
+	c, err := contracts.Compiler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Compile(contracts.Base + "/enrolment.schema.json#/$defs/run_answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"access-key-id":     "/ additionalProperties",
+		"no-run-key":        "/ required",
+		"run-id-upper-case": "/run_id pattern",
+		"no-documents":      "/ required",
+		"documents-array":   "/documents type",
+		"documents-null":    "/documents type",
+	}
+	const prefix = "fixtures/invalid/enrolment-run-answer-"
+	seen := map[string]bool{}
+	for _, f := range files(t, "fixtures/invalid") {
+		name, ok := strings.CutPrefix(f, prefix)
+		if !ok {
+			continue
+		}
+		name = strings.TrimSuffix(name, ".json")
+		seen[name] = true
+		rule, ok := want[name]
+		if !ok {
+			t.Errorf("%s: no rule pinned for the fixture", f)
+			continue
+		}
+		doc, err := contracts.Document(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ve *jsonschema.ValidationError
+		if err := s.Validate(doc); !errors.As(err, &ve) {
+			t.Errorf("%s passes $defs/run_answer: %v", f, err)
+			continue
+		}
+		if got := failures(ve); len(got) != 1 || got[0] != rule {
+			t.Errorf("%s fails %q; want %q alone", f, got, rule)
+		}
+	}
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("%s%s.json is missing", prefix, name)
+		}
+	}
+}
+
+// failures returns the leaves of ve, each its place in the document and the last
+// keyword of its keyword path, sorted and each once.
+func failures(ve *jsonschema.ValidationError) []string {
+	if len(ve.Causes) == 0 {
+		kw := ve.ErrorKind.KeywordPath()
+		return []string{"/" + strings.Join(ve.InstanceLocation, "/") + " " + kw[len(kw)-1]}
+	}
+	var out []string
+	for _, c := range ve.Causes {
+		out = append(out, failures(c)...)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // TestEnrolmentCodePrefixes pins the prefixes of the enrolment request's code: qecn_,

@@ -1,10 +1,10 @@
 // Package knownanswers writes the known answers of a run through a gateway, the files
 // of contracts/forager/v1/fixtures/known-answers that through-gateway.json lists: one
 // run key, one registration through a gateway and its answer with the run key, one
-// redemption of a run code and its answer with the run key, one attach and its answer,
-// and one outcome and its answer, each request signed under its
-// fixture access key and each answer under the fixture signing key of the server; and,
-// for a fixed exporter value, one binding of a connection to the gateway and one answer
+// redemption of a run code and its answer with the run key and the run's documents,
+// one attach and its answer, and one outcome and its answer, each request signed under
+// its fixture access key and each answer under the fixture signing key of the server;
+// and, for a fixed exporter value, one binding of a connection to the gateway and one answer
 // of the gateway on its link, each signed under the fixture gateway key.
 //
 // Everything is derived from the published fixture seeds of keys.json, and Ed25519
@@ -103,6 +103,11 @@ func Key() runkey.Key {
 func RunCode() string {
 	return "qecr_F1XT0RE0000000000000000000." + SigningKey().Fingerprint()
 }
+
+// RunDocuments is the run's documents of the run code's answer: a JSON object in
+// neutral example data. Forager checks that it is an object and reads none of its
+// members.
+var RunDocuments = json.RawMessage(`{"example":"f1xt0re"}`)
 
 // Labels and About are what the registration carries, and the attach answer gives back.
 var (
@@ -324,7 +329,8 @@ func Files() (map[string][]byte, error) {
 		RunID           string                `json:"run_id"`
 		RunKey          string                `json:"run_key"`
 		ApiaryPublicKey []accesskey.ServerKey `json:"apiary_public_key"`
-	}{1, RunID, rk, []accesskey.ServerKey{{Alg: "ed25519", PublicKey: signing.PublicKey().String()}}})
+		Documents       json.RawMessage       `json:"documents"`
+	}{1, RunID, rk, []accesskey.ServerKey{{Alg: "ed25519", PublicKey: signing.PublicKey().String()}}, RunDocuments})
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +338,7 @@ func Files() (map[string][]byte, error) {
 	ea := accesskey.Answer{Enrolment: true, Status: 201, RequestSignature: er.Proof, Body: runAnswer}
 	pm, am := er.ProofMessage(), ea.Message()
 	v.RunEnrolment = RunEnrolment{
-		Note:        "The redemption of a run code: the request of enrolment-run-request.json, its proof under the fixture access key secret over the five lines qory-enrol-ed25519-v1, the code, the public key, the name and the timestamp; then the 201 of enrolment-run-answer.json, the run's id and the run key of run-key-payload.json, signed under the fixture signing key with the domain line qory-enrol-answer-ed25519-v1 and the request's proof as line 3.",
+		Note:        "The redemption of a run code: the request of enrolment-run-request.json, its proof under the fixture access key secret over the five lines qory-enrol-ed25519-v1, the code, the public key, the name and the timestamp; then the 201 of enrolment-run-answer.json, the run's id, the run key of run-key-payload.json and the run's documents, signed under the fixture signing key with the domain line qory-enrol-answer-ed25519-v1 and the request's proof as line 3.",
 		Request:     Dir + "/enrolment-run-request.json",
 		ProofLines:  strings.Split(string(pm), "\n"),
 		ProofLength: len(pm),

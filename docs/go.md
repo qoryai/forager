@@ -506,14 +506,17 @@ run, err := session.Open(ctx, session.OpenSpec{
 A machine that a provisioner creates for one run gets a run code, `qecr_`, in its start
 data in place of the run key. The command redeems the code once at boot, through the
 gateway, and passes the run key to the session as `RemoteGateway.RunKey`
-([a run code](../contracts/forager/v1/README.md#the-server)).
+([a run code](../contracts/forager/v1/README.md#the-server)). The answer also contains
+the run's documents, a JSON object that Forager passes to the caller unread, so the
+start data contains only the code.
 
 ```go
 key, err := accesskey.Generate() // in memory: the redemption makes no access key
 req, err := accesskey.NewEnrolmentRequest(key, code, hostname, time.Now())
 tr, err := server.Via{URL: viaURL, CAFile: caFile}.Transport()
 ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, userAgent)
-// ans.RunID is the run, ans.RunKey its run key, ans.Pin the server keys it verified under
+// ans.RunID is the run, ans.RunKey its run key, ans.Pin the server keys it verified under,
+// and ans.Documents the run's documents, the answer's JSON byte for byte
 ```
 
 - `PostRunVia` verifies the answer under the server key that the code's first
@@ -521,14 +524,26 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   whose fingerprint is among the code's and is the run key's `signer`, and checks that
   the run key's `run_id` is the answer's. `PostRun` sends the request to the server
   without a gateway, and `VerifyRunAnswer` reads an answer that the caller sent.
-- `accesskey.RunAnswer` shows its run id and not its run key, except in a struct field
-  that is not exported. It formats as `run <run id>` whatever the verb, a `slog`
-  handler that calls `LogValue` writes `run_id` alone, and `encoding/json` writes
-  `{"run_id": …}` alone, also inside an exported field, a slice or a map. The
-  exception: fmt calls no method of a value reached through a struct field that is not
-  exported, so fmt, and slog's text handler, which prints a struct through fmt, can
-  print the run key there, as `%+v` of `struct{ a accesskey.RunAnswer }` does. Keep a
-  `RunAnswer` out of such a field. No error contains the run key.
+- `RunAnswer.Documents` is the answer's `documents` member, a `json.RawMessage` byte
+  for byte as the answer contains it. `VerifyRunAnswer` checks that it is a JSON object
+  and reads none of its members. Its schema is `documents.schema.json` of
+  `qoryai/integrations`, `https://qory.dev/contracts/run/v1/documents.schema.json`. An
+  answer without `documents` is the error "use another run code: the enrolment answer
+  has no documents", and one whose `documents` is not an object, `null` included, is
+  "use another run code: the enrolment answer's documents is not a JSON object".
+- `PostRunVia` and `PostRun` read at most `accesskey.MaxRunAnswer`, 1 MiB, of the
+  answer's body, and `VerifyRunAnswer` counts a longer body as `answer_unsigned`.
+- `accesskey.RunAnswer` shows its run id and not its run key or its documents where
+  fmt calls `Format`, `log/slog` `LogValue` and `encoding/json` `MarshalJSON`, for a
+  value and a pointer alike. It formats as `run <run id>`, a `slog` handler that calls
+  `LogValue` writes `run_id` alone, and `encoding/json` writes `{"run_id": …}` alone,
+  also inside an exported field, a slice or a map.
+- Pass fmt a `RunAnswer`, a pointer to one, or its `RunID` alone. Never pass a value
+  that contains a `RunAnswer`, and never pass a `RunAnswer` or a pointer to one under
+  `%w`; under `%p`, pass only a pointer. In any other case fmt may call no method of
+  `RunAnswer` and print every field, the run key and the documents included. slog's
+  text handler prints such a value through fmt too. No error that the run methods
+  return contains the run key or a byte of the documents.
 - An error of a verified answer starts with the fix, "use another run code: ",
   because the code is used and a retry by the same key gets the same members: "use
   another run code: the enrolment answer's run key is not valid: its signature does

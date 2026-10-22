@@ -2121,38 +2121,53 @@ makes a key pair in memory and posts the code with a proof under that key, throu
 gateway's relay, to `/.well-known/qory-enrolment`. The request is an enrolment request
 as above, and the redemption makes no access key. A run code is valid for 15 minutes and
 is used once. The `201` is `$defs/run_answer`, signed as the `201` to an access key's
-code is:
+code is, the signature covering the whole body. It contains the run's id, its run key,
+the server's keys and `documents`, the run's documents, and every member is required:
 
 ```json
 {"version": 1, "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "run_key": "qrk_…",
- "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
+ "apiary_public_key": [
+   {"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}],
+ "documents": {…}}
 ```
 
+`documents` is a JSON object, whose schema is `documents.schema.json` of
+`qoryai/integrations`, `https://qory.dev/contracts/run/v1/documents.schema.json`.
+Forager checks that `documents` is an object, reads none of its members, and passes it
+to the caller byte for byte as the answer contains it.
+
+The answer is at most 1 MiB: Forager reads at most 1 MiB of the body of an answer to a
+run code, the most the gateway's relay passes back, and counts a longer body as
+unsigned, `answer_unsigned`.
+
 A retry by the same public key within the 15 minutes gets the same members, the same
-`run_id`, `run_key` and `apiary_public_key`, signed over the retry's proof. A
-redemption by another public key after the first is `401`, as is a code that is used,
+`run_id`, `run_key`, `apiary_public_key` and `documents`, signed over the retry's proof.
+A redemption by another public key after the first is `401`, as is a code that is used,
 has expired or was cancelled; the signed `409` and `429` are those of an access key's
 code. The run key's `issued` is the time of the code's first redemption, not the time
 the code was made, and its `attach_by` is 600 seconds after `issued`. The machine
 checks the answer in this order: it verifies the signature under the listed key whose
 fingerprint is the code's first; it reads the body against `run_answer`; it keeps the
 listed keys whose fingerprints are in the code; it verifies `run_key` as the gateway
-does, under the kept key whose fingerprint is the run key's `signer`; and it checks
-that the run key's `run_id` is `run_id`. A verified `201` of the other kind, an access
-key's answer to a run code or a run's answer to an access key's code, uses the code,
-and the machine installs nothing of it. The machine keeps the run key in memory and
-passes it to the session as `RemoteGateway.RunKey`, and writes it to no file and no
-environment variable. In Go, `EnrolmentRequest.PostRunVia` of package `accesskey`
-sends the request through the gateway, `PostRun` sends it to the server, and
-`VerifyRunAnswer` reads the answer. Each returns an `accesskey.RunAnswer`, which fmt
-writes as `run <run id>`, and slog and encoding/json write as its `run_id` alone,
-except: fmt, and slog's text handler, which prints a struct through fmt, can print the
-run key of a `RunAnswer` in a struct field that is not exported, since fmt calls no
-method there.
+does, under the kept key whose fingerprint is the run key's `signer`; and it checks that
+the run key's `run_id` is `run_id`. A verified `201` of the other kind, an access key's
+answer to a run code or a run's answer to an access key's code, uses the code, and the
+machine installs nothing of it. The machine keeps the run key in memory and passes it to
+the session as `RemoteGateway.RunKey`, and writes it to no file and no environment
+variable. In Go, `EnrolmentRequest.PostRunVia` of package `accesskey` sends the request
+through the gateway, `PostRun` sends it to the server, and `VerifyRunAnswer` reads the
+answer. Each returns an `accesskey.RunAnswer`, whose `Documents` is the answer's
+`documents` as a `json.RawMessage`. Where fmt calls `Format`, slog `LogValue` and
+encoding/json `MarshalJSON`, fmt writes a `RunAnswer` as `run <run id>`, and slog and
+encoding/json write its `run_id` alone. Pass fmt a `RunAnswer`, a pointer to one, or
+its `RunID` alone. Never pass a value that contains a `RunAnswer`, and never pass a
+`RunAnswer` or a pointer to one under `%w`; under `%p`, pass only a pointer. In any
+other case fmt may call no method of `RunAnswer` and print every field, the run key and
+the documents included. slog's text handler prints such a value through fmt too.
 `PostVia`, `Post` and `VerifyAnswer` refuse a run code before they send or read
-anything, and the three run methods refuse an access key's code the same way. The
-known answers are `run_enrolment` in `fixtures/known-answers/through-gateway.json`,
-with `enrolment-run-request.json` and `enrolment-run-answer.json`.
+anything, and the three run methods refuse an access key's code the same way. The known
+answers are `run_enrolment` in `fixtures/known-answers/through-gateway.json`, with
+`enrolment-run-request.json` and `enrolment-run-answer.json`.
 
 **The configuration document.** `configuration.schema.json`. A signed
 `GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery, per

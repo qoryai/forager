@@ -15,17 +15,20 @@ import (
 )
 
 // RunAnswer is the server's 201 to a run code, [CodePrefixRun]: the run's id, its run
-// key and the server's keys. The code's redemption makes no access key.
+// key, the server's keys and the run's documents. The code's redemption makes no
+// access key.
 //
-// A RunAnswer shows its run id and not its run key, except in one case: fmt prints it
-// as String returns it, "run <run id>", whatever the verb; a slog handler that calls
-// LogValue writes run_id alone; and encoding/json writes run_id alone through
-// MarshalJSON, also inside an exported field, a slice or a map, as slog's JSON handler
-// writes them. The exception: fmt calls no method of a value it reaches through a
-// struct field that is not exported, so fmt, and slog's text handler, which prints a
-// struct through fmt, can print the run key of a RunAnswer, or of a *RunAnswer, in
-// such a field, as %+v of struct{ a RunAnswer } does. Keep a RunAnswer out of
-// unexported fields of a value you print or log.
+// A RunAnswer shows its run id and not its run key or its documents where fmt calls
+// Format, log/slog LogValue and encoding/json MarshalJSON, for a RunAnswer and a
+// pointer to one alike: fmt prints "run <run id>", a slog handler that calls LogValue
+// writes run_id alone, and encoding/json writes run_id alone, also inside an exported
+// field, a slice or a map, as slog's JSON handler writes them.
+//
+// Pass fmt a RunAnswer, a pointer to one, or its RunID alone. Never pass a value that
+// contains a RunAnswer, and never pass a RunAnswer or a pointer to one under %w; under
+// %p, pass only a pointer. In any other case fmt may call no method of RunAnswer and
+// print every field, the run key and the documents included. slog's text handler
+// prints such a value through fmt too.
 type RunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -35,10 +38,24 @@ type RunAnswer struct {
 	RunKey string `json:"run_key"`
 	// ApiaryPublicKey are the server's keys as it lists them, current then next.
 	ApiaryPublicKey Pin `json:"apiary_public_key"`
+	// Documents is the run's documents: the answer's documents member, a JSON object,
+	// byte for byte as the answer contains it. VerifyRunAnswer checks that it is an
+	// object and reads none of its members. Its schema is documents.schema.json of
+	// qoryai/integrations, https://qory.dev/contracts/run/v1/documents.schema.json.
+	// The answer's signature covers it as it covers the other members. String,
+	// Format, LogValue and MarshalJSON write no byte of it, because the run's
+	// documents can contain values that must stay out of logs.
+	Documents json.RawMessage `json:"documents"`
 	// Pin are the keys of ApiaryPublicKey whose fingerprints are in the code: the
 	// keys the run key's signature verified under.
 	Pin Pin `json:"-"`
 }
+
+// MaxRunAnswer is the most of the body of an answer to a run code the client reads
+// before it counts the answer as unsigned: a 201 to a run code is at most 1 MiB, the
+// most the gateway's relay passes back. A refusal is at most [MaxAnswer] for either
+// kind of code.
+const MaxRunAnswer = 1 << 20
 
 // String returns "run" and the run's id. It and Format have value receivers, so a
 // RunAnswer printed by value shows the same and no more.
@@ -47,7 +64,9 @@ func (a RunAnswer) String() string { return "run " + a.RunID }
 // GoString returns what String returns.
 func (a RunAnswer) GoString() string { return a.String() }
 
-// Format writes what String returns, whatever the verb.
+// Format writes what String returns, under every verb fmt calls it with. Pass fmt a
+// RunAnswer as the doc of [RunAnswer] describes, so that fmt calls Format, or prints
+// the address under %p.
 func (a RunAnswer) Format(f fmt.State, _ rune) { io.WriteString(f, a.String()) }
 
 // LogValue returns a group with run_id alone, so a slog handler that calls LogValue
@@ -55,8 +74,8 @@ func (a RunAnswer) Format(f fmt.State, _ rune) { io.WriteString(f, a.String()) }
 func (a RunAnswer) LogValue() slog.Value { return slog.GroupValue(slog.String("run_id", a.RunID)) }
 
 // MarshalJSON writes {"run_id": RunID} alone, for a log or a dump that encodes a
-// RunAnswer as JSON: no run key, version or keys. A RunAnswer is read from the wire,
-// never written to it, so no writer needs the other members.
+// RunAnswer as JSON: no run key, version, keys or documents. A RunAnswer is read from
+// the wire, never written to it, so no writer needs the other members.
 func (a RunAnswer) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		RunID string `json:"run_id"`
@@ -78,13 +97,15 @@ const fixRunCode = "use another run code: "
 // [EnrolmentRequest.VerifyAnswer] reads an access key's: the same statuses, the same
 // refusals and the same signature, under EnrolAnswerDomain with the request's proof as
 // the third line and under the listed key whose fingerprint is the code's first.
-// A verified 201 is the run's answer: the run's id, its run key and the server's keys.
-// Its Pin is then the entries whose fingerprints are in the code, and the run key must
-// verify under the key of Pin whose fingerprint is the signer of the run key's payload,
-// as the gateway verifies it, with run_id equal to the answer's run_id. A
-// verified 201 that enrols an access key is a [*KindError]. A request whose code is not
-// a run code is an error, and nothing is read: [EnrolmentRequest.VerifyAnswer] reads
-// its answer. No error contains the run key.
+// A verified 201 is the run's answer: the run's id, its run key, the server's keys and
+// the run's documents, which must be a JSON object; a body over [MaxRunAnswer] is
+// answer_unsigned. Its Pin is then the entries whose fingerprints are in the code, and
+// the run key must verify under the key of Pin whose fingerprint is the signer of the
+// run key's payload, as the gateway verifies it, with run_id equal to the answer's
+// run_id. A verified 201 that enrols an access key is a [*KindError]. A request whose
+// code is not a run code is an error, and nothing is read:
+// [EnrolmentRequest.VerifyAnswer] reads its answer. No error contains the run key or a
+// byte of the documents.
 func (r *EnrolmentRequest) VerifyRunAnswer(a Answer, signature string) (*RunAnswer, error) {
 	if err := r.forRun(); err != nil {
 		return nil, err
@@ -92,6 +113,9 @@ func (r *EnrolmentRequest) VerifyRunAnswer(a Answer, signature string) (*RunAnsw
 	verified, unsigned, err := r.created(&a, signature)
 	if err != nil {
 		return nil, err
+	}
+	if len(a.Body) > MaxRunAnswer {
+		return nil, unsigned
 	}
 	var ans RunAnswer
 	if err := jsonv2.Unmarshal(a.Body, &ans, jsonv2.RejectUnknownMembers(true)); err != nil || !verified(ans.ApiaryPublicKey) {
@@ -117,7 +141,8 @@ func (r *EnrolmentRequest) VerifyRunAnswer(a Answer, signature string) (*RunAnsw
 	return &ans, nil
 }
 
-// check refuses a run answer the schema refuses. No error contains the run key.
+// check refuses a run answer the schema refuses. No error contains the run key or a
+// byte of the documents.
 func (a *RunAnswer) check() error {
 	if a.Version != 1 {
 		return fmt.Errorf("update Forager to read the enrolment answer: its version is %d, and this Forager reads version 1", a.Version)
@@ -136,6 +161,12 @@ func (a *RunAnswer) check() error {
 	}
 	if err := a.ApiaryPublicKey.Check(); err != nil {
 		return fmt.Errorf(fixRunCode+"the enrolment answer: %w", err)
+	}
+	if len(a.Documents) == 0 {
+		return errors.New(fixRunCode + "the enrolment answer has no documents")
+	}
+	if a.Documents[0] != '{' {
+		return errors.New(fixRunCode + "the enrolment answer's documents is not a JSON object")
 	}
 	return nil
 }
@@ -168,13 +199,14 @@ func checkRunKey(runKey string, pin Pin) (string, error) {
 
 // PostRun sends a request with a run code to the server's enrolment endpoint and
 // returns its verified answer, as [EnrolmentRequest.VerifyRunAnswer] reads it, with
-// serverURL, hc and userAgent as [EnrolmentRequest.Post] takes them. A request whose
-// code is not a run code is an error, and nothing is sent.
+// serverURL, hc and userAgent as [EnrolmentRequest.Post] takes them. It reads at most
+// [MaxRunAnswer] of the answer's body. A request whose code is not a run code is an
+// error, and nothing is sent.
 func (r *EnrolmentRequest) PostRun(ctx context.Context, hc *http.Client, serverURL, userAgent string) (*RunAnswer, error) {
 	if err := r.forRun(); err != nil {
 		return nil, err
 	}
-	a, sig, err := r.direct(ctx, hc, serverURL, userAgent)
+	a, sig, err := r.direct(ctx, hc, serverURL, userAgent, MaxRunAnswer)
 	if err != nil {
 		return nil, err
 	}
@@ -184,13 +216,13 @@ func (r *EnrolmentRequest) PostRun(ctx context.Context, hc *http.Client, serverU
 // PostRunVia sends a request with a run code to the server's enrolment endpoint
 // through the gateway at viaURL, as [EnrolmentRequest.PostVia] sends an access key's,
 // and returns its verified answer, as [EnrolmentRequest.VerifyRunAnswer] reads it. hc
-// is required, as for PostVia. A request whose code is not a run code is an error, and
-// nothing is sent.
+// is required, as for PostVia. It reads at most [MaxRunAnswer] of the answer's body. A
+// request whose code is not a run code is an error, and nothing is sent.
 func (r *EnrolmentRequest) PostRunVia(ctx context.Context, hc *http.Client, serverURL, viaURL, userAgent string) (*RunAnswer, error) {
 	if err := r.forRun(); err != nil {
 		return nil, err
 	}
-	a, sig, err := r.via(ctx, hc, serverURL, viaURL, userAgent)
+	a, sig, err := r.via(ctx, hc, serverURL, viaURL, userAgent, MaxRunAnswer)
 	if err != nil {
 		return nil, err
 	}

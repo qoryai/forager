@@ -135,6 +135,24 @@ release may change what an existing document does, and says so under Upgrading.
   `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and the run methods refuse an
   access key's code, before they send anything. The known answers are `run_enrolment`
   in `fixtures/known-answers/through-gateway.json`.
+- `documents` in the `201` to a run code, `$defs/run_answer` of `enrolment.schema.json`:
+  the run's documents, a required JSON object, so the start data contains only the
+  code. Its schema is `documents.schema.json` of `qoryai/integrations`,
+  `https://qory.dev/contracts/run/v1/documents.schema.json`.
+  `VerifyRunAnswer` checks that `documents` is an object, reads none of its members,
+  and returns it as `accesskey.RunAnswer.Documents`, a `json.RawMessage` byte for byte
+  as the answer contains it. An answer without `documents`, or with `documents` that is
+  not an object, is an error that starts with the fix. The signature covers
+  `documents`, and a retry by the same key gets the same `documents`. Where fmt calls
+  `Format`, slog `LogValue` and encoding/json `MarshalJSON`, a `RunAnswer` shows
+  `run_id` alone. Pass fmt a `RunAnswer`, a pointer to one, or its `RunID` alone.
+  Never pass a value that contains a `RunAnswer`, and never pass a `RunAnswer` or a
+  pointer to one under `%w`; under `%p`, pass only a pointer. In any other case fmt may
+  call no method of `RunAnswer` and print every field, the run key and the documents
+  included. slog's text handler prints such a value through fmt too.
+- A run code's answer of up to 1 MiB, `accesskey.MaxRunAnswer`, the most the gateway's
+  relay passes back: `PostRunVia` and `PostRun` read at most 1 MiB of its body, and
+  `VerifyRunAnswer` counts a longer body as `answer_unsigned`.
 - `dev.qory.run.step_started`, `events/run.step_started.schema.json`, and
   `dev.qory.run.step_exited`, `events/run.step_exited.schema.json`: one step of the
   run's host work, such as a fetch or a compose, with a start, an end, an outcome and
