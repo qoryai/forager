@@ -2139,8 +2139,9 @@ The answer is at most 1 MiB: Forager reads at most 1 MiB of the body of an answe
 run code, the most the gateway's relay passes back, and counts a longer body as
 unsigned, `answer_unsigned`.
 
-A retry by the same public key within the 15 minutes gets the same members, the same
-`run_id`, `run_key`, `apiary_public_key` and `documents`, signed over the retry's proof.
+A retry by the same public key within the 15 minutes, while the run's dispatch lives,
+gets the same members, the same `run_id`, `run_key`, `apiary_public_key` and
+`documents`, signed over the retry's proof.
 A redemption by another public key after the first is `401`, as is a code that is used,
 has expired or was cancelled; the signed `409` and `429` are those of an access key's
 code. The run key's `issued` is the time of the code's first redemption, not the time
