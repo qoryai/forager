@@ -4,12 +4,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/runkey/internal/knownanswers"
 )
@@ -260,10 +263,14 @@ func TestParseRefuses(t *testing.T) {
 // host of DNS labels joined by dots or an IPv6 address in brackets, and an optional port
 // from 1 to 65535 with no leading zero, and nothing after them. Sign makes a run key of
 // each accepted URL, which Verify reads back; Sign, Parse and Verify refuse each refused
-// URL.
+// URL, the URL of 301 characters by maxLength. The pattern of run-key.schema.json alone
+// matches each accepted URL and refuses each other refused URL, since a validator need
+// not check the URI format. Here the URI format refuses some of them, and the error
+// then reports no pattern.
 func TestTheGatewayURL(t *testing.T) {
 	signing := knownanswers.SigningKey()
 	pin := pinOf(signing)
+	pattern := gatewayURLPattern(t)
 	for name, u := range map[string]string{
 		"a name":              "https://gateway.example",
 		"a name with a port":  "https://gateway.example:8443",
@@ -274,6 +281,9 @@ func TestTheGatewayURL(t *testing.T) {
 		"a host with no dot":  "https://gateway",
 		"300 characters":      "https://" + longHost(292),
 	} {
+		if !pattern.MatchString(u) {
+			t.Errorf("%s: the pattern refuses it", name)
+		}
 		k := knownanswers.Key()
 		k.GatewayURL = u
 		rk, err := k.Sign(signing)
@@ -305,11 +315,23 @@ func TestTheGatewayURL(t *testing.T) {
 		"301 characters":        "https://" + longHost(293),
 		"http":                  "http://gateway.example",
 		"an IPv6 with no colon": "https://[gateway]",
+		"port 65536":            "https://gateway.example:65536",
+		"a leading hyphen":      "https://-gateway.example",
+		"an IPv6 zone":          "https://[::1%25eth0]",
+		"an IPv6 of 3 groups":   "https://[1:2:3]",
+		"an IPv6 of colons":     "https://[::::]",
+		"an upper-case scheme":  "HTTPS://gateway.example",
 	} {
+		rule := "/gateway_url"
+		if name == "301 characters" {
+			rule = "/gateway_url (maxLength)"
+		} else if pattern.MatchString(u) {
+			t.Errorf("%s: the pattern matches it", name)
+		}
 		k := knownanswers.Key()
 		k.GatewayURL = u
-		if _, err := k.Sign(signing); !errors.Is(err, runkey.ErrInvalid) {
-			t.Errorf("%s: Sign: %v; want ErrInvalid", name, err)
+		if _, err := k.Sign(signing); !errors.Is(err, runkey.ErrInvalid) || !strings.Contains(err.Error(), rule) {
+			t.Errorf("%s: Sign: %v; want ErrInvalid at %s", name, err, rule)
 		}
 		m := payload(t)
 		m["gateway_url"] = u
@@ -318,15 +340,35 @@ func TestTheGatewayURL(t *testing.T) {
 			"Parse":  runkey.Parse,
 			"Verify": func(s string) (runkey.Key, error) { return runkey.Verify(s, pin) },
 		} {
-			if _, err := read(rk); !errors.Is(err, runkey.ErrInvalid) || !strings.Contains(err.Error(), "/gateway_url") {
-				t.Errorf("%s: %s: %v; want ErrInvalid at /gateway_url", name, fn, err)
+			if _, err := read(rk); !errors.Is(err, runkey.ErrInvalid) || !strings.Contains(err.Error(), rule) {
+				t.Errorf("%s: %s: %v; want ErrInvalid at %s", name, fn, err, rule)
 			}
 		}
 	}
 }
 
-// longHost is a host name of n characters, n at least 1: labels of 62 g's and a last,
-// shorter label, joined by dots.
+// gatewayURLPattern is the pattern of gateway_url in run-key.schema.json, compiled.
+func gatewayURLPattern(t *testing.T) *regexp.Regexp {
+	t.Helper()
+	b, err := fs.ReadFile(contracts.FS, runkey.Schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		Properties struct {
+			GatewayURL struct {
+				Pattern string `json:"pattern"`
+			} `json:"gateway_url"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(b, &s); err != nil {
+		t.Fatal(err)
+	}
+	return regexp.MustCompile(s.Properties.GatewayURL.Pattern)
+}
+
+// longHost is a host name of n characters, n at least 1: labels of 62 g's and a last
+// label of 1 to 63 g's, joined by dots.
 func longHost(n int) string {
 	var b strings.Builder
 	for b.Len()+63 < n {
@@ -345,8 +387,9 @@ func gk(t *testing.T, first int) map[string]string {
 // check, and a longer one is refused by Parse and Verify before anything else, though
 // its signature verifies. Only a gateway_url over its 300 characters makes a run key
 // that long, so run-key.schema.json refuses the run key of 2048 characters; the longest
-// run key the schema accepts, with a gateway_url of 300 characters and two gateway keys,
-// is under the cap, and Sign refuses a gateway_url of 1608 characters.
+// run key Sign makes, with a gateway_url of 300 characters, an instance_id of 64
+// characters and two gateway keys, is under the cap, and Sign refuses a gateway_url of
+// 1616 characters.
 func TestTheLengthCap(t *testing.T) {
 	signing := knownanswers.SigningKey()
 	pin := pinOf(signing)
@@ -380,13 +423,14 @@ func TestTheLengthCap(t *testing.T) {
 	}
 	most := knownanswers.Key()
 	most.GatewayURL = "https://" + longHost(292)
+	most.InstanceID = "i" + strings.Repeat("g", 63)
 	most.GatewayKeys = []accesskey.PublicKey{mustKey(t, 65).PublicKey(), mustKey(t, 161).PublicKey()}
 	rk, err := most.Sign(signing)
 	if err != nil {
-		t.Fatalf("Sign of the longest run key the schema accepts: %v", err)
+		t.Fatalf("Sign of the longest run key Sign makes: %v", err)
 	}
 	if len(rk) > runkey.MaxLength {
-		t.Errorf("the longest run key the schema accepts has %d characters, over the cap", len(rk))
+		t.Errorf("the longest run key Sign makes has %d characters, over the cap", len(rk))
 	}
 	if _, err := runkey.Verify(rk, pin); err != nil {
 		t.Errorf("a run key of %d characters: %v", len(rk), err)

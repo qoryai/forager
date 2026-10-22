@@ -102,6 +102,12 @@ release may change what an existing document does, and says so under Upgrading.
   first `dev.qory.session.started`: the run's host work, such as a fetch or a compose.
 - Read `elapsed_seconds` of `dev.qory.run.heartbeat` as seconds since the open's
   discovery of its gateway's link.
+- Set the URL of each gateway that a run key goes to, such as `receiver.Gateway.URL`,
+  to `https://`, a host and an optional port, such as `https://gateway.example:8443`.
+  `runkey.Parse`, `runkey.Verify` and `Key.Sign` refuse a run key whose `gateway_url`
+  has a path, a query, user information, an underscore, a trailing dot or port 0, so
+  Sign makes no run key and a run with such a run key does not start. Before, they
+  accepted an underscore, a trailing dot and port 0.
 
 #### Added
 
