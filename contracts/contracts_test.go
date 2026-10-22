@@ -322,7 +322,7 @@ const beyondLinkSchema = "-beyond-schema-"
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that has passes, a member only a join request has, or whose image has no
 // reference, a link run
-// answer without applied, with a proxy secret too short, whose image has no reference
+// answer without applied, with a proxy secret or a stack proxy secret too short, whose image has no reference
 // or whose credential_hosts entry has a member it does not define, no hosts, no
 // placeholders, a format without an endpoint or an endpoint without a format, a link reload answer with the proxy secret or the certificate
 // authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a

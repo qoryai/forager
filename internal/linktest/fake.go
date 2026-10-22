@@ -25,6 +25,10 @@ const (
 // local link.
 const ProxySecret = "fake-proxy-secret-0123456789abcdef"
 
+// StackProxySecret is the stack proxy secret a fake gateway's default run answer gives
+// on the local link.
+const StackProxySecret = "fake-stack-proxy-secret-0123456789abcdef"
+
 // Reply is one answer of the fake gateway: its status, its body, marshalled as JSON
 // unless it is a []byte, none when nil, and headers of its own beside the digest; and,
 // on a separate gateway, how it is signed.
@@ -254,15 +258,15 @@ func (f *Fake) Proxied() []string {
 
 // RunAnswer is the fake's default answer to a run request on the local link: the
 // request's run id and labels, no policy, with the members of policy_applied of none,
-// the proxy secret ProxySecret, and behind a wall the image the request's default names,
-// none when it names none.
+// the proxy secret ProxySecret, the stack proxy secret StackProxySecret, and behind a
+// wall the image the request's default names, none when it names none.
 func RunAnswer(req server.LinkRunRequest) map[string]any {
 	labels := req.Labels
 	if labels == nil {
 		labels = map[string]string{}
 	}
 	a := RemoteRunAnswer(req)
-	a["labels"], a["proxy_secret"] = labels, ProxySecret
+	a["labels"], a["proxy_secret"], a["stack_proxy_secret"] = labels, ProxySecret, StackProxySecret
 	return a
 }
 

@@ -105,6 +105,7 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `stack_proxy_secret` in `link-run-answer.schema.json`, on the local link.
 - `machine` and `setup` in `dev.qory.run.started`, both optional, so a reader shows
   where the run and its setup ran. `machine` is the adapter that made the run's
   machine, such as `aws-ec2`, or `none`: 1 to 64 of `a-z`, `0-9` and `-`, the first a
@@ -592,6 +593,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `gateway.Config.StackHosts`, `gateway.stack_hosts` in `forager.yaml`, default
+  empty. These are the hosts of a run's stack proxy until the run's first join
+  request, for qory's fetch of the harness definition. The stack proxy runs in enforce
+  mode with no certificate authority and no credential, and the run's policy is not
+  checked. Each decision is a line of `Config.Report`, never a `dev.qory.run.egress`.
+  Start refuses an entry that is not a host name or a `*.` suffix.
+- `QORY-STACK`, `link.StackPreamble`, on a separate gateway's one address. From the
+  run's first join request on, it is refused.
 - A separate gateway reads a renewed certificate and key from `gateway.TLS`'s files
   without a restart. At most once a minute, a handshake checks the files, and the
   gateway reads them again when one has another identity, modification time or size,
@@ -1000,6 +1009,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `Run.StackProxy`, a forwarder for the fetch of the harness definition. It is
+  refused after the run's first `Join` and ends at it.
 - `session.RemoteGateway.TLS`, a `server.RemoteTLS`: how the session trusts the
   certificate of the run key's gateway, on the run's link and on a resend's. With
   `CAFile`, the session checks the chain against the authorities of that PEM file in

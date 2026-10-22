@@ -76,6 +76,9 @@ type Run struct {
 	numbered    int
 	maybeJoined bool
 	lastExit    int
+	// joinAsked says a Join reached its join request: the gateway closed the run's
+	// stack proxy then, and [Run.StackProxy] starts none from then on.
+	joinAsked bool
 	// keptBy is the number of the session whose wall's removal failed, 0 for none:
 	// its entry among the walled runs still going stays, and no session joins after it.
 	keptBy         int
@@ -378,12 +381,15 @@ func (r *Run) start(ctx context.Context) (err error) {
 		}
 	}
 	// On one machine the proxy secret opens every connection to the gateway's proxy,
-	// written by a forwarder or by the wall's relay: one no preamble contains is no run.
-	// Behind a separate gateway the run key opens them, and the answer has no proxy
-	// secret.
+	// written by a forwarder or by the wall's relay, and the stack proxy secret every
+	// connection of the stack proxy's forwarder: one no preamble contains is no run.
+	// Behind a separate gateway the run key opens them, and the answer has neither.
 	if r.remote == nil {
 		if err := link.CheckSecret(answer.ProxySecret); err != nil {
 			return fail2(fmt.Errorf("the gateway's proxy secret: %w", err))
+		}
+		if err := link.CheckSecret(answer.StackProxySecret); err != nil {
+			return fail2(fmt.Errorf("the gateway's stack proxy secret: %w", err))
 		}
 	}
 	// Behind a wall, the run's wall is built as the run opens: its networks, the run's

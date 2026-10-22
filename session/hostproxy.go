@@ -13,7 +13,8 @@ import (
 // through it reaches the run's proxy, under the run's policy, and gets the run's
 // credentials there. [Run.HostProxy] starts it, for every run, walled or not. It ends
 // at [HostProxy.Close], at the next [Run.Join] or at [Run.Close]; from then on its port
-// takes no connection.
+// takes no connection. [Run.StackProxy] starts one that reaches the run's stack proxy
+// instead, with no policy of the run's and no credential.
 //
 // Its proxy URL has a password, 32 random bytes in base64url made for this forwarder
 // alone, which every request must carry in its Proxy-Authorization, as the password of
@@ -124,3 +125,51 @@ func (r *Run) HostProxy() (HostProxy, error) {
 		close:    func() error { return r.hosts.close(fwd) },
 	}, nil
 }
+
+// StackProxy starts a forwarder on loopback with a fresh password for the fetch of the
+// run's harness definition. Every request through it reaches the run's stack proxy,
+// which passes the hosts of gateway.stack_hosts alone: the run's policy does not apply,
+// no credential is set, no dev.qory.run.egress is written, and CABundle is empty. It
+// ends at HostProxy.Close, at the run's first Join and at Run.Close. An error means no
+// stack proxy started.
+//
+// On one machine it opens each connection to the gateway's proxy with the relay's
+// preamble and the run answer's stack_proxy_secret, and behind a separate gateway it
+// dials the gateway's one address with [link.StackPreamble] and the run key
+// ([server.Link.DialStack]). The password is checked as the host proxy's is, and the
+// run's masker gets it before the forwarder starts.
+func (r *Run) StackProxy() (HostProxy, error) {
+	if !r.joining.TryLock() {
+		return HostProxy{}, errStackAfterJoin
+	}
+	defer r.joining.Unlock()
+	if r.closed {
+		return HostProxy{}, errors.New("Open another run: this run is closed.")
+	}
+	if r.joinAsked {
+		return HostProxy{}, errStackAfterJoin
+	}
+	password, err := newForwarderSecret()
+	if err != nil {
+		return HostProxy{}, err
+	}
+	r.masker.AddProxy(proxyUser, password)
+	var fwd *forwarder
+	if r.remote == nil {
+		fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.StackProxySecret, password)
+	} else {
+		fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialStack, password: password})
+	}
+	if err != nil {
+		return HostProxy{}, err
+	}
+	r.hosts.add(fwd)
+	return HostProxy{
+		Env:      fwd.Env(),
+		ProxyURL: fwd.URL(),
+		close:    func() error { return r.hosts.close(fwd) },
+	}, nil
+}
+
+// errStackAfterJoin refuses a stack proxy once a Join of the run has started.
+var errStackAfterJoin = errors.New("Call StackProxy before the run's first Join: the gateway closes the stack proxy at the first join request.")

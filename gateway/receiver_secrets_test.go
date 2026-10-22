@@ -360,6 +360,12 @@ func sealedReachesTheOrigin(t *testing.T, wall bool) {
 // connection binds to the one address as an edge does, checks the gateway's line under
 // its key, then opens with the relay's preamble and the run key.
 func (r *remote) relay(t *testing.T, runKey string) *http.Client {
+	return r.through(link.RelayLine(runKey))
+}
+
+// through is an HTTP client of the one address whose every connection binds as an edge
+// does, checks the gateway's line under its key, then opens with line.
+func (r *remote) through(line string) *http.Client {
 	return &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{
 		Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: "gateway.example:8443"}),
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -377,7 +383,7 @@ func (r *remote) relay(t *testing.T, runKey string) *http.Client {
 				err = readBound(br, ekm, gatewayKeys())
 			}
 			if err == nil {
-				_, err = io.WriteString(tc, link.RelayLine(runKey))
+				_, err = io.WriteString(tc, line)
 			}
 			if err != nil {
 				tc.Close()

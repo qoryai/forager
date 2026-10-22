@@ -167,10 +167,12 @@ func (g *Gateway) heldRun(w http.ResponseWriter, runID string) *linkRun {
 
 // relayRun hands a bound connection that opened with the relay's preamble and a run
 // key to the proxy of that run, live at the gateway, as the shared proxy does a local
-// connection with a run's proxy secret, admit called first. A run key
-// [Gateway.admitRunKey] refuses, or one of no live run here, closes the connection
+// connection with a run's proxy secret, admit called first; with stack, one that
+// opened with [link.StackPreamble] to that run's stack proxy, until the run's first
+// join request. A run key [Gateway.admitRunKey] refuses, one of no live run here, or,
+// with stack, one of a run whose stack proxy is closed, closes the connection
 // unanswered. It reports whether c was handed on.
-func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func()) bool {
+func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func(), stack bool) bool {
 	k, ref := g.admitRunKey(value, b64token.MatchString(value))
 	if ref != nil {
 		return false
@@ -184,9 +186,15 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func
 	if _, ended := lr.gone(); ended {
 		return false
 	}
+	px := lr.px
+	if stack {
+		if px = lr.stackProxy(); px == nil {
+			return false
+		}
+	}
 	c.SetDeadline(time.Time{})
 	admit()
-	lr.px.ServeConn(&linkConn{Conn: c, r: r})
+	px.ServeConn(&linkConn{Conn: c, r: r})
 	return true
 }
 

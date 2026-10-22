@@ -1102,7 +1102,7 @@ func TestARunThroughTheGateway(t *testing.T) {
 	validDocument(t, "link-run-answer.schema.json", a.body)
 	var members map[string]json.RawMessage
 	json.Unmarshal(a.body, &members)
-	for _, m := range []string{"labels", "proxy_secret", "run_secret"} {
+	for _, m := range []string{"labels", "proxy_secret", "stack_proxy_secret", "run_secret"} {
 		if _, ok := members[m]; ok {
 			t.Errorf("the run answer holds %s: %s", m, a.body)
 		}

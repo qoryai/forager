@@ -307,14 +307,32 @@ func (k *Link) DialProxy(ctx context.Context) (net.Conn, error) {
 	if k.remote == nil {
 		return nil, errors.New("the gateway's local link has no proxy over TLS")
 	}
+	return k.dialOpened(ctx, "proxy", link.RelayLine(k.remote.runKey))
+}
+
+// DialStack opens one connection to the run's stack proxy on a separate gateway, its one
+// address, as [Link.DialProxy] opens one to its proxy, with [link.StackLine] and the run
+// key in place of the relay's preamble. The gateway closes such a connection unanswered
+// from the run's first join request on. The local link has no such way: the run answer's
+// stack_proxy_secret opens its stack proxy on loopback.
+func (k *Link) DialStack(ctx context.Context) (net.Conn, error) {
+	if k.remote == nil {
+		return nil, errors.New("the gateway's local link has no stack proxy over TLS")
+	}
+	return k.dialOpened(ctx, "stack proxy", link.StackLine(k.remote.runKey))
+}
+
+// dialOpened opens one bound connection to a separate gateway's one address and writes
+// line first; what is the proxy's name in its errors.
+func (k *Link) dialOpened(ctx context.Context, what, line string) (net.Conn, error) {
 	c, err := k.remote.dial(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("the gateway's proxy %s: %w", accesskey.ShownValue(k.remote.address, false), accesskey.ShownError(err))
+		return nil, fmt.Errorf("the gateway's %s %s: %w", what, accesskey.ShownValue(k.remote.address, false), accesskey.ShownError(err))
 	}
 	c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
-	if _, err := io.WriteString(c, link.RelayLine(k.remote.runKey)); err != nil {
+	if _, err := io.WriteString(c, line); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("the gateway's proxy %s: the preamble: %w", accesskey.ShownValue(k.remote.address, false), accesskey.ShownError(err))
+		return nil, fmt.Errorf("the gateway's %s %s: the preamble: %w", what, accesskey.ShownValue(k.remote.address, false), accesskey.ShownError(err))
 	}
 	c.SetWriteDeadline(time.Time{})
 	return c, nil

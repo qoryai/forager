@@ -185,6 +185,9 @@ type Proxy struct {
 	panics atomic.Pointer[func(string)]
 	// limits, when set, are the run's limits and counters ([Proxy.SetLimits]).
 	limits atomic.Pointer[limiter]
+	// unlisted, when set, is the body of the 403 of a host no allow entry matches under
+	// enforce ([Proxy.Unlisted]).
+	unlisted atomic.Pointer[func(host string, port int) string]
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
@@ -510,6 +513,11 @@ func (p *Proxy) AllowFirst(entries []string) {
 	r.first = entries
 	p.rules.Store(&r)
 }
+
+// Unlisted sets the body of the 403 that refuses a host no allow entry matches under
+// enforce: body's text for the host and the port, in place of the line that names the
+// policy's mode. Every other refusal keeps its body.
+func (p *Proxy) Unlisted(body func(host string, port int) string) { p.unlisted.Store(&body) }
 
 // Guarded reports whether [Proxy.Guard] was called.
 func (p *Proxy) Guarded() bool { return p.guarded.Load() }
@@ -961,7 +969,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d.Allowed, d.Rule, d.Outcome = false, PlainRequest, Refused
 		d.RequestMethod, d.Path = r.Method, clean
 		p.observe(d)
-		deny(w, d)
+		p.deny(w, d)
 		return
 	}
 	// The path is decided under the mode the host was decided under, which the answer
@@ -989,7 +997,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Only a request the policy allows is a connection in flight.
 	if !d.Allowed {
 		p.observe(d)
-		deny(w, d)
+		p.deny(w, d)
 		return
 	}
 	if !p.hold() {
@@ -1024,7 +1032,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d = failed(d, err)
 		p.observe(d)
 		if !d.Allowed {
-			deny(w, d)
+			p.deny(w, d)
 			return
 		}
 		http.Error(w, "upstream: "+accesskey.ShownError(err).Error(), http.StatusBadGateway)
@@ -1078,7 +1086,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	if !d.Allowed {
 		p.observe(d)
-		deny(w, d)
+		p.deny(w, d)
 		return
 	}
 	// The tunnel is one of the run's connections until it closes, blind or terminated.
@@ -1128,7 +1136,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		d = failed(d, err)
 		p.observe(d)
 		if !d.Allowed {
-			deny(w, d)
+			p.deny(w, d)
 			return
 		}
 		http.Error(w, "upstream: "+accesskey.ShownError(err).Error(), http.StatusBadGateway)
@@ -1325,6 +1333,18 @@ func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 		return context.WithValue(ctx, namedKey{}, d.Host)
 	}
 	return ctx
+}
+
+// deny answers a refused connection as [deny] does, with the body [Proxy.Unlisted] set
+// for a host no allow entry matches under enforce.
+func (p *Proxy) deny(w http.ResponseWriter, d Decision) {
+	if body := p.unlisted.Load(); body != nil && d.Rule == "" && !d.Allowed && d.Mode == policy.Enforce {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		io.WriteString(w, (*body)(d.Host, d.Port))
+		return
+	}
+	deny(w, d)
 }
 
 // deny answers a refused connection: 403 with one line naming the host and the mode,

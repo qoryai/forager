@@ -65,6 +65,14 @@ type Config struct {
 	// RunLimits are the limits of each run on the gateway, the same for every run, so
 	// that one run cannot slow the others down. A field of zero is its default.
 	RunLimits RunLimits
+	// StackHosts are the hosts of a run's stack proxy, gateway.stack_hosts of qory's
+	// configuration: each a lower-case host name or a *. suffix, in the form of a policy's
+	// allow entry. Until the run's first join request the stack proxy passes a CONNECT to
+	// one of them and refuses every other, in enforce mode, with no certificate authority
+	// and no credential; the run's policy is not checked. Behind a wall or a separate
+	// gateway it is guarded as the run's proxy is. Each decision is a line of Report, never
+	// a dev.qory.run.egress. Empty means every host is refused.
+	StackHosts []string
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the
 	// system's choosing: the link for the sessions of other machines, the proxy for
 	// their agents, and the relay of their starters' and keyed machines' requests to the
