@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,8 +24,8 @@ import (
 
 // setupWall is a targetWall whose enclosure starts a setup container, as the Docker
 // adapter's does: StartSetup notes its launch, and ExecSetup notes each command, writes
-// out <words> to stdout and err <words> to stderr, and exits with the code codes gives
-// the command's first word, 0 for none. startErr and execErr, when set, are the
+// out <words> to stdout and err <words> to stderr, and exits with the code that codes maps
+// the command's first word to, 0 for none. startErr and execErr, when set, are the
 // errors of StartSetup and ExecSetup.
 type setupWall struct {
 	targetWall
@@ -91,8 +92,8 @@ func streamsOf(evs []map[string]any, step int) []string {
 // follow the run's last step, each command's stdout and stderr are its step's lines with
 // no session, and the join's steps come after. The setup container gets the working
 // folder as its one mount, the run's forwarder and proxy secret, the caller's variables
-// without the reserved ones and no proxy variable, and the agent's container reaches
-// the same forwarder.
+// without the reserved ones and no proxy variable, and SetupSpec.Limits, and the agent's
+// container reaches the same forwarder.
 func TestTheSetupRunsInTheSetupContainer(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0")
 	w := &setupWall{}
@@ -104,7 +105,8 @@ func TestTheSetupRunsInTheSetupContainer(t *testing.T) {
 	}
 	hostStep(t, r, event.StepFetch, "fetch github.com/example-org/app", "Cloning into 'app'...\n")
 	env := []string{"APP_ENV=test", "QORY_ACCESS_KEY_SECRET=forged", "QORY_RUN_KEY=forged"}
-	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Env: env, Commands: twoCommands}); err != nil {
+	limits := wall.Limits{CPUs: "2", Memory: "4g", PIDs: 512, ShmSize: "1g"}
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Env: env, Commands: twoCommands, Limits: limits}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
@@ -112,6 +114,9 @@ func TestTheSetupRunsInTheSetupContainer(t *testing.T) {
 	}
 	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
 		t.Fatal(err)
+	}
+	if w.setup.Limits != limits {
+		t.Errorf("the setup container's limits %+v, want %+v", w.setup.Limits, limits)
 	}
 	want := []string{
 		"step 1 fetch fetch github.com/example-org/app", "log <nil> 1 Cloning into 'app'...", "step 1 succeeded 0",
@@ -362,7 +367,7 @@ func TestASetupThatCannotStartWritesNothing(t *testing.T) {
 }
 
 // TestASetupFolderOfForagersFilesIsNoSetup pins that the setup's working folder gets a
-// join's checks of its places: a folder that holds the run directories is refused with
+// join's checks of its places: a folder that contains the run directories is refused with
 // mount_contains_forager_files, before any step, and the setup container never starts.
 func TestASetupFolderOfForagersFilesIsNoSetup(t *testing.T) {
 	sp := spec(t, "FAKE_EXIT=0")
@@ -413,5 +418,166 @@ func TestASetupWhileASessionRunsIsRefused(t *testing.T) {
 	}
 	if got := stepOrder(events(t, &session.Result{Dir: r.Dir()})); slices.Contains(got, "step 3 wall start the setup container") || len(got) == 0 {
 		t.Errorf("the steps %q", got)
+	}
+}
+
+// TestASetupFolderThatContainsForagersFilesIsNoSetup pins SetupSpec.ForagerFiles: a
+// working folder that contains one of them is refused with mount_contains_forager_files,
+// before any step, and the setup container never starts.
+func TestASetupFolderThatContainsForagersFilesIsNoSetup(t *testing.T) {
+	sp := spec(t, "FAKE_EXIT=0")
+	w := &setupWall{}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	config := mkdirs(t, filepath.Join(sp.Dir, "config"))
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+	err = r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands, ForagerFiles: []string{config}})
+	var ref *session.Refusal
+	if !errors.As(err, &ref) || ref.Code != "mount_contains_forager_files" {
+		t.Fatalf("the setup: %v", err)
+	}
+	if w.starts != 0 || len(ofType(events(t, &session.Result{Dir: r.Dir()}), event.StepStarted)) != 0 {
+		t.Errorf("started %d times, with steps", w.starts)
+	}
+}
+
+// TestASetupFolderThroughALinkInAWrittenPlaceIsNoSetup pins SetupSpec.Written: a
+// working folder whose path goes through a link inside a written place, and does not
+// resolve into it, is refused with mount_through_link, before any step, and the setup
+// container never starts.
+func TestASetupFolderThroughALinkInAWrittenPlaceIsNoSetup(t *testing.T) {
+	repo, secret := t.TempDir(), t.TempDir()
+	trees := mkdirs(t, filepath.Join(repo, ".claude", "worktrees"))
+	wt := filepath.Join(trees, "wt")
+	symlink(t, secret, wt)
+	sp := spec(t, "FAKE_EXIT=0")
+	w := &setupWall{}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+	err = r.Setup(ctx, session.SetupSpec{Dir: wt, Commands: twoCommands, Written: []string{repo}})
+	throughLink(t, err, wt, wt, repo)
+	if w.starts != 0 || len(ofType(events(t, &session.Result{Dir: r.Dir()}), event.StepStarted)) != 0 {
+		t.Errorf("started %d times, with steps", w.starts)
+	}
+}
+
+// TestASetupVariableWithTheEngineProxysPasswordIsRefused pins a value of SetupSpec.Env
+// that contains the password of OpenSpec.EngineProxy, in a run whose image no step
+// fetched yet, so the run's masker does not have it: the password as it is, in a proxy
+// URL, and as the base64 of qory:<password> are each refused before the image step,
+// with the line of a host proxy's URL, and nothing is pulled or started.
+func TestASetupVariableWithTheEngineProxysPasswordIsRefused(t *testing.T) {
+	basic := base64.StdEncoding.EncodeToString([]byte("qory:" + enginePassword))
+	for name, value := range map[string]string{
+		"as it is":  enginePassword,
+		"in a URL":  "http://qory:" + enginePassword + "@" + engineProxyAddr,
+		"in base64": "Basic " + basic,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sp, g := specGateway(t, "FAKE_EXIT=0")
+			byReference(g)
+			w := &setupWall{}
+			sp.Wall, sp.Image, sp.ImagesAllow = w, "example.com/agent:1", []string{"registry.example/"}
+			sp.EngineProxy = &session.EngineProxy{Addr: engineProxyAddr, Password: enginePassword}
+			ctx := context.Background()
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+			err = r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Env: []string{"APP_PROXY=" + value}, Commands: twoCommands})
+			want := "Leave the host proxy's URL out of the setup's variables: APP_PROXY contains its password, which the setup container never gets."
+			if err == nil || err.Error() != want {
+				t.Errorf("got %v\nwant %s", err, want)
+			}
+			if w.starts != 0 || len(w.pulls) != 0 || len(ofType(events(t, &session.Result{Dir: r.Dir()}), event.StepStarted)) != 0 {
+				t.Errorf("started %d times, pulled %d times, with steps", w.starts, len(w.pulls))
+			}
+		})
+	}
+}
+
+// heldSetupWall is a holdingWall whose enclosure starts a setup container that runs
+// every command with 0, so the Wrap of a session of a run with setup returns only once
+// the test releases it.
+type heldSetupWall struct{ *holdingWall }
+
+func (w heldSetupWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	if _, err := w.holdingWall.Prepare(ctx, req); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+func (heldSetupWall) StartSetup(context.Context, wall.Launch) error { return nil }
+
+func (heldSetupWall) ExecSetup(context.Context, []string, io.Writer, io.Writer) (int, error) {
+	return 0, nil
+}
+
+// TestTheRunsEntryListsTheSetupFolderDuringASession pins the run's entry among the walled
+// runs still going while a session runs after Setup: it lists the setup container's
+// working folder, apart from the session's workspace, after Setup, after the join's
+// check, after its wall step and after the session, so no other walled run binds a
+// place inside it. The run's checks against the registry are its open's, two of
+// Setup's and then the join's two: at the fifth, the entry is the join check's.
+func TestTheRunsEntryListsTheSetupFolderDuringASession(t *testing.T) {
+	var joined []byte
+	calls := 0
+	session.SetRegisterPause(func(runID string) {
+		if calls++; calls == 5 {
+			joined, _ = os.ReadFile(filepath.Join(registry(t), runID))
+		}
+	})
+	t.Cleanup(func() { session.SetRegisterPause(nil) })
+	w := heldSetupWall{newHoldingWall()}
+	sp := walledSpec(t, w)
+	other := t.TempDir()
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Setup(ctx, session.SetupSpec{Dir: other, Commands: twoCommands}); err != nil {
+		t.Fatal(err)
+	}
+	entry := filepath.Join(registry(t), w.id)
+	lists := func(when string) {
+		t.Helper()
+		b, err := os.ReadFile(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), other) {
+			t.Errorf("%s, the run's entry does not list the setup folder %s:\n%s", when, other, b)
+		}
+	}
+	lists("after Setup")
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Join(ctx, sp.SessionSpec)
+		done <- err
+	}()
+	<-w.reached
+	if !strings.Contains(string(joined), other) {
+		t.Errorf("after the join's check, the run's entry does not list the setup folder %s:\n%s", other, joined)
+	}
+	lists("after the wall step")
+	close(w.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	lists("after the session")
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -842,6 +842,9 @@ err = run.Setup(ctx, session.SetupSpec{
 		{Name: "install", Args: []string{"make", "deps"}},
 		{Name: "start services", Args: []string{"sh", "-c", "pg_ctl start >/tmp/pg.log 2>&1"}},
 	},
+	ForagerFiles: []string{configDir},            // as for the join: no working folder may contain them
+	Written:      written,                        // the places walled runs could write, as for the join
+	Limits:       wall.Limits{Memory: "4g"},      // the setup container's limits, as the agent's
 })
 var failed *session.SetupError // a command exited otherwise than 0: no session joins the run
 ```

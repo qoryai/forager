@@ -6,7 +6,7 @@
 // than succeed unseen. An adapter wraps the launch and nothing else: the session
 // prepares the [Enclosure] as the run opens and reads from it where the gateway must
 // listen, starts each session's wrapped command on the pseudo-terminal or the pipes it
-// already owns, and closes the enclosure as the run closes.
+// already has, and closes the enclosure as the run closes.
 //
 // What every wall guarantees is one list, contracts/forager/v1/README.md §The wall, the
 // same for every adapter, and the conformance suite in package e2e checks it from

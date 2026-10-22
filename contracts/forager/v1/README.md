@@ -1494,8 +1494,10 @@ join or between two joins (`(*session.Run).StartStep`), the image's, `image`
    succeeded finds the image by its digest and writes none.
 3. **The wall step**, `wall`, with the name `start the wall`, behind every wall. It spans the
    rest of the session's start: the session's hook socket, the second check of the
-   session's places and the launch's wrapping, which for `docker` starts the agent's
-   container, up to the launch's start. The wall's networks, the run's forwarder and the
+   session's places and the launch's wrapping, which for `docker` writes the `docker run`
+   of the agent's container, up to the launch's start. The agent's container starts with
+   the launch, after the wall step: a `docker run` that fails ends the session with
+   docker's exit status as the runtime's. The wall's networks, the run's forwarder and the
    relay start as the run opens, and go when it closes (§The wall).
 4. **The setup steps**, `setup`, one for each command of `SessionSpec.Setup`, with the
    command's name, such as `install`, behind a wall, after the wall step, one after
@@ -4326,15 +4328,17 @@ and a `setup` step for each command, with the command's name, its standard outpu
 standard error as the step's lines, with no `session`, and its exit status as the
 step's `exit_code`. The setup container runs as the agent's container does without
 nested Docker: as the wall's user, with no capability and none to gain, under `--init`,
-with no health check of the image's and no IPv6 address but loopback's. It gets the
-working folder, writable, at `/workspace` for an image by reference (§Images), with a
+with no health check of the image's and no IPv6 address but loopback's, and with the
+limit flags the agent's container gets, for `SetupSpec.Limits`. It gets the working
+folder, writable, at `/workspace` for an image by reference (§Images), with a
 join's checks of its places, and the helper at `/qory/qory` and, with an authority, the
 bundle at `/qory/ca-bundle.pem`, both read-only: no home, run directory, hook socket or
 container runtime's socket. It reaches only the relay, at `qory-proxy:3128`. Its
 environment is the relay's proxy variables, the bundle's variables, the run's
 placeholders, then the caller's variables without the reserved names, the access key's
 variables and `QORY_RUN_KEY`; a value that contains the password of one of the run's
-forwarders, such as a host proxy's URL, is refused. The helper keeps the container
+forwarders or of the engine proxy, as it is, in a proxy URL or as the base64 of
+`qory:<password>`, is refused. The helper keeps the container
 running (`Docker.HoldArgs`), and each command runs in it through `docker exec`, as the
 wall's user, in the working folder, with no input. The container runs until the run
 closes, so a service a setup command starts is reachable from the agent's container by

@@ -58,6 +58,7 @@ type Run struct {
 	listed      *registration
 	wallOwn     []bindSource
 	openBinds   []bindSource
+	setupBinds  []bindSource
 	files       *sink.File
 	posts       *sink.Server
 	reload      *reloader
@@ -386,7 +387,7 @@ func (r *Run) start(ctx context.Context) (err error) {
 		}
 	}
 	// Behind a wall, the run's wall is built as the run opens: its networks, the run's
-	// forwarder where the enclosure says, and the relay towards that forwarder. Each
+	// forwarder at the enclosure's ProxyAddr, and the relay towards that forwarder. Each
 	// session then starts the agent's container alone, and the close removes the rest.
 	if spec.Wall != nil {
 		undo = append(undo, func() { r.closeWall(context.WithoutCancel(ctx)) })

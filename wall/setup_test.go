@@ -152,3 +152,54 @@ func TestASetupCommandsExitStatusIsItsOwn(t *testing.T) {
 		})
 	}
 }
+
+// TestTheSetupContainerGetsTheLaunchsLimits pins that the launch's limits reach the setup
+// container's docker run with the flags the agent's container gets, and that the zero
+// Limits adds no limit flag.
+func TestTheSetupContainerGetsTheLaunchsLimits(t *testing.T) {
+	flags := []string{"--cpus", "--memory", "--shm-size", "--pids-limit"}
+	for _, c := range []struct {
+		name   string
+		limits Limits
+		want   string
+	}{
+		{"set", Limits{CPUs: "1.5", Memory: "8g", PIDs: 4096, ShmSize: "2g"}, "--cpus 1.5 --memory 8g --shm-size 2g --pids-limit 4096"},
+		{"zero", Limits{}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, HoldArgs: []string{"run", "hold"}, sys: rec}
+			enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := enc.(*dockerEnclosure)
+			defer e.Close(context.Background())
+			l := setupLaunch()
+			l.Proxy = "172.30.0.1:50123"
+			l.Limits = c.limits
+			if err := e.StartSetup(context.Background(), l); err != nil {
+				t.Fatal(err)
+			}
+			var run string
+			for _, line := range rec.lines {
+				if strings.Contains(line, " run --detach --name qory-"+runID+"-setup ") {
+					run = line
+				}
+			}
+			if run == "" {
+				t.Fatalf("no docker run of the setup container:\n%s", strings.Join(rec.lines, "\n"))
+			}
+			if c.want != "" && !strings.Contains(run, c.want) {
+				t.Errorf("the setup container's docker run has no %s: %s", c.want, run)
+			}
+			if c.want == "" {
+				for _, f := range flags {
+					if strings.Contains(run, " "+f+" ") {
+						t.Errorf("the zero Limits added %s: %s", f, run)
+					}
+				}
+			}
+		})
+	}
+}

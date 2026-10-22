@@ -12,15 +12,30 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/wall"
 )
 
 // SetupSpec is what [Run.Setup] is given: the working folder, the setup container's
-// variables and the setup commands.
+// variables, the setup commands, the paths the working folder is checked against and
+// the setup container's limits.
 type SetupSpec struct {
 	Dir      string         // the working folder
 	Env      []string       // NAME=value
 	Commands []SetupCommand // one setup step each
+	// ForagerFiles are the absolute paths of the caller's files that are Forager's,
+	// as in SessionSpec.ForagerFiles. Setup refuses a Dir that is, contains or lies
+	// inside one of them, one of the gateway's files, or one of the paths Forager
+	// knows, RunsDir among them, mount_contains_forager_files: see [Overlap].
+	ForagerFiles []string
+	// Written are the places of this machine, directories, that the caller records as
+	// writable by a walled run, as in SessionSpec.Written. Setup refuses a Dir whose
+	// path goes through a link inside one of them and does not resolve into it,
+	// mount_through_link. A relative path is taken from the working directory.
+	Written []string
+	// Limits are the resources the setup container may use, as SessionSpec.Limits
+	// are the runtime's.
+	Limits wall.Limits
 }
 
 // SetupError is the error of [Run.Setup] when a setup command exits otherwise than 0:
@@ -59,7 +74,7 @@ type setupContainer interface {
 }
 
 // openWall builds the run's wall as the run opens: the wall's preparation, the run's
-// forwarder where the enclosure says it must listen, and, for an enclosure that starts
+// forwarder at the address the enclosure's ProxyAddr returns, and, for an enclosure that starts
 // its relay apart from Wrap, the relay. On one machine the relay opens every connection
 // with the run's proxy secret, and the forwarder passes on what arrives as it is.
 // Behind a separate gateway the relay opens each with the run's hop token, which the
@@ -124,17 +139,20 @@ func (r *Run) closeWall(ctx context.Context) {
 // the command's Name as its name, its output as its lines, on stdout and stderr, and its
 // exit status. The commands run one after another, as the wall's user, with no input,
 // in Dir as the setup container sees it: at /workspace for an image by reference. Dir
-// gets a join's checks of its workspace, with SessionSpec.ForagerFiles and
-// SessionSpec.Written empty, since SetupSpec has neither.
+// gets a join's checks of its workspace, with ForagerFiles and Written in place of the
+// join's SessionSpec.ForagerFiles and SessionSpec.Written.
 //
 // The setup container runs with the flags of the agent's container without nested
-// Docker and no limits of the run's. It gets Dir, writable, and the helper and, for a run
+// Docker, and with the flags of Limits that the agent's container gets for
+// SessionSpec.Limits. It gets Dir, writable, and the helper and, for a run
 // with an authority, the bundle, read-only: no harness home, run directory, hook socket
 // or engine socket. Its environment is the relay's proxy variables, the bundle's
 // variables, the run's placeholders, and then Env without the names the machine's
 // credentials are read from, the access key's variables and QORY_RUN_KEY. It gets no
-// host proxy's URL or password, and a value of Env that contains the password of one of
-// the run's forwarders is refused. The setup container has no Docker daemon: a command
+// host proxy's URL or password. A value of Env is refused when it contains the password
+// of one of the run's forwarders or of OpenSpec.EngineProxy: as it is, as in a proxy URL
+// such as http://qory:<password>@host, or as the base64 of qory:<password> that
+// Proxy-Authorization: Basic has. The setup container has no Docker daemon: a command
 // that calls docker fails with Docker's error, in its step's lines.
 //
 // An error before the steps means nothing is written: the run has no wall, a session of
@@ -185,7 +203,7 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) error {
 	if spec.Dir == "" {
 		spec.Dir, _ = os.Getwd()
 	}
-	ws := runSpec{OpenSpec: r.open, SessionSpec: SessionSpec{Dir: spec.Dir}}
+	ws := runSpec{OpenSpec: r.open, SessionSpec: SessionSpec{Dir: spec.Dir, ForagerFiles: spec.ForagerFiles, Written: spec.Written}}
 	plan, err := checkMounts(ws, r.dir, "")
 	if err != nil {
 		return err
@@ -263,13 +281,14 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) error {
 		if err := r.listed.update(all); err != nil {
 			return fail(err)
 		}
-		// The setup container runs until the run closes: each session's end rewrites the
-		// run's entry with its binds too.
+		// The setup container runs until the run closes: each join lists its binds with
+		// the session's, and each session's end rewrites the run's entry with them.
 		r.openBinds = all
+		r.setupBinds = slices.Concat(again.sources, binds)
 	}
 	err = container.StartSetup(ctx, wall.Launch{
 		Dir: shown.Dir, Env: env, CA: r.authority, Mounts: shown.Mounts,
-		Proxy: r.wallFwd.Addr(), ProxyToken: r.relayToken,
+		Limits: spec.Limits, Proxy: r.wallFwd.Addr(), ProxyToken: r.relayToken,
 	})
 	if err != nil {
 		return fail(accesskey.ShownError(err))
@@ -298,15 +317,21 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) error {
 	return nil
 }
 
-// setupEnv is the setup container's environment besides the wall's own variables: the
-// run's placeholders, then env without the names the machine's credentials are read
-// from, the access key's variables and QORY_RUN_KEY. A value that contains the password
-// of one of the run's forwarders, such as a host proxy's URL, is refused.
+// setupEnv is the part of the setup container's environment that comes after the
+// wall's variables: the run's placeholders, then env without the names the machine's
+// credentials are read from, the access key's variables and QORY_RUN_KEY. A value is
+// refused when it contains, in a form the run's masker replaces, the password of one of
+// the run's forwarders or of OpenSpec.EngineProxy: the run's masker gets the engine
+// proxy's password only in the image step, which comes after this check.
 func (r *Run) setupEnv(env []string) ([]string, error) {
 	kept := accesskey.WithoutVariables(withoutNames(env, r.reserved))
+	var engine *mask.Masker
+	if p := r.open.EngineProxy; p != nil {
+		engine = mask.Proxy(proxyUser, p.Password)
+	}
 	for _, kv := range kept {
 		name, value, _ := strings.Cut(kv, "=")
-		if r.masker.Replace(value) != value {
+		if r.masker.Replace(value) != value || engine.Replace(value) != value {
 			return nil, fmt.Errorf("Leave the host proxy's URL out of the setup's variables: %s contains its password, which the setup container never gets.", accesskey.ShownName(name, false))
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -43,8 +44,9 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // the session's places, prepares the runtime, resolves the variables, writes
 // dev.qory.session.started and the session's dev.qory.run.policy_applied, behind a
 // wall wraps the launch in the wall that [Open] built, and starts the runtime. Behind
-// the Docker wall the wrap starts the agent's container, and the session's end removes
-// it; the rest of the wall stays until [Run.Close]. Sessions of one run join one after
+// the Docker wall the wrap writes the docker run of the agent's container, which
+// starts with the launch, after the wall step, and the session's end removes it; the
+// rest of the wall stays until [Run.Close]. Sessions of one run join one after
 // another.
 //
 // An error means the session did not start. An error before the join request, of a
@@ -53,11 +55,13 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // writes dev.qory.session.exited, failed with -1, the refusal's code as its reason when
 // the session decides that code, and duration_ms 0; a refusal with a code is a
 // [*Refusal]. A failure in the image or the wall step, such as an image that runs as
-// root, an image that cannot be fetched or an agent's container that does not start,
-// writes dev.qory.session.started, then dev.qory.session.exited, failed with -1, with
-// the refusal's code as its reason when the wall refused with a code the session
-// decides, and no reason otherwise; a failure with no reason has its text as a
-// dev.qory.run.log chunk of the session on stderr before that dev.qory.session.exited.
+// root, an image that cannot be fetched or a launch the wall cannot wrap, writes
+// dev.qory.session.started, then dev.qory.session.exited, failed with -1, with the
+// refusal's code as its reason when the wall refused with a code the session decides,
+// and no reason otherwise; a failure with no reason has its text as a dev.qory.run.log
+// chunk of the session on stderr before that dev.qory.session.exited. A docker run of
+// the agent's container that fails ends the session with docker's exit status as the
+// runtime's.
 // The run stays open: what follows is the caller's.
 //
 // Every dev.qory.run.log, dev.qory.run.resized and dev.qory.runtime.* event of the
@@ -323,7 +327,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(err)
 	}
 	if r.listed != nil {
-		if err := r.listed.update(append(plan.sources, r.wallOwn...)); err != nil {
+		if err := r.listed.update(slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 		defer func() {
@@ -456,7 +460,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		masker = nil
 	}
 	// Behind a wall the run's wall, its forwarder and its relay started as the run
-	// opened, and the session starts the agent's container alone. The session starts
+	// opened, and the session's launch starts the agent's container alone. The session starts
 	// before the wall step: dev.qory.session.started and the session's policy_applied
 	// come first, then the image and wall steps, so a failure of the wall follows the
 	// session's dev.qory.session.started.
@@ -605,7 +609,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return fail(err)
 		}
 		r.listed.askID(runCtx, spec.Wall)
-		if err := r.listed.update(append(append(again.sources, binds...), r.wallOwn...)); err != nil {
+		if err := r.listed.update(slices.Concat(again.sources, binds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)

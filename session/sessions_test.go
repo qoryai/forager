@@ -129,7 +129,7 @@ func chunks(t *testing.T, dir string) ([]byte, map[int][]byte) {
 // sessions whose dev.qory.session.started is written. A join the gateway refuses, a
 // join whose checks refuse a mount, before the directory is made, and a join whose
 // runtime's preparation fails, after it is made, leave none. A join whose wall fails to
-// start the agent's container is started, and keeps sessions/4/ with its settings.json
+// wrap the launch is started, and keeps sessions/4/ with its settings.json
 // and its output.log. Session 5 then starts in sessions/5/.
 func TestASessionHasADirectoryOnceItStarts(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -195,9 +195,9 @@ func TestASessionHasADirectoryOnceItStarts(t *testing.T) {
 	}
 }
 
-// switchWall is an open wall whose Wrap fails while refuse is set, as a wall whose
-// agent's container does not start: after the runtime's preparation wrote the
-// session's settings.
+// switchWall is an open wall whose Wrap fails while refuse is set, as a wall that
+// cannot wrap the launch: after the runtime's preparation wrote the session's
+// settings.
 type switchWall struct {
 	openWall
 	refuse bool
@@ -210,7 +210,7 @@ func (w *switchWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclos
 
 func (w *switchWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, error) {
 	if w.refuse {
-		return wall.Launch{}, errors.New("wall open: start the agent's container: exit status 125")
+		return wall.Launch{}, errors.New("wall open: the launch cannot be wrapped")
 	}
 	return w.openWall.Wrap(ctx, l)
 }

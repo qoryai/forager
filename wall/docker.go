@@ -442,12 +442,12 @@ type dockerEnclosure struct {
 	// env is the engine's selection every command of the run's runs with, nil for
 	// Forager's own environment.
 	env []string
-	// created says the never-started container of the run's image exists, which the
-	// image's files are read out of.
+	// created is true once the never-started container of the run's image exists, which
+	// the image's files are read out of.
 	created bool
-	// relayed says the relay listens. used says the run's first use of the enclosure
-	// ran, [dockerEnclosure.firstUse], and bundleMount is then the bundle's --mount,
-	// empty for a run without an authority.
+	// relayed is true once the relay listens. used is true once the run's first use of
+	// the enclosure ran, [dockerEnclosure.firstUse], and bundleMount is then the
+	// bundle's --mount, empty for a run without an authority.
 	relayed     bool
 	used        bool
 	bundleMount string
@@ -951,13 +951,12 @@ func (e *dockerEnclosure) firstUse(ctx context.Context, ca []byte) (string, erro
 }
 
 // Wrap returns the docker run that starts the launch in the agent's container: on the
-// internal network only, the launch's mounts at their own paths or their Targets, the
-// workspace as the working directory inside one of them, the helper read-only, the
-// socket's directory, and the launch's environment through a file, so no value is on a
-// command line. It starts the relay first when it has not started,
-// [dockerEnclosure.StartRelay], and
-// runs the run's first use of the enclosure when no container of the run's image ran
-// it. The session calls it once for each session.
+// internal network only, the launch's mounts at the paths they have on this machine or
+// at their Targets, the workspace as the working directory inside one of them, the
+// helper read-only, the socket's directory, and the launch's environment through a
+// file, so no value is on a command line. It starts the relay first when it has not
+// started, [dockerEnclosure.StartRelay], and runs the run's first use of the enclosure
+// when no container of the run's image ran it. The session calls it once for each session.
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	mounts, dir, err := e.mounts(l)
 	if err != nil {
@@ -1169,7 +1168,7 @@ func (e *dockerEnclosure) ExecSetup(ctx context.Context, args []string, stdout, 
 		return -1, fmt.Errorf("wall docker: docker exec: %w", accesskey.ShownError(err))
 	case code != 0:
 		// docker exec exits otherwise than 0 too when the setup container stopped: the
-		// container's state tells the two apart.
+		// inspect of the container's state sets the two apart.
 		if err := e.setupRuns(ctx); err != nil {
 			return -1, err
 		}

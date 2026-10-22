@@ -71,8 +71,8 @@ type recorder struct {
 	onPull func()
 	onCopy func()
 	// execCode is the exit status of each docker exec, and execOut and execErr what it
-	// writes on its standard output and standard error; setupStopped has the inspect of
-	// the setup container's state say it does not run.
+	// writes on its standard output and standard error; setupStopped makes the inspect of
+	// the setup container's state return false.
 	execCode     int
 	execOut      string
 	execErr      string

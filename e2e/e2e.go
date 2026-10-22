@@ -167,7 +167,7 @@ const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 
 // Main makes the test binary the helper when it was started as one: the relay, the hook
 // forwarder, the setup runner, the run's setup command, the probe, the start of a Docker
-// of the agent's own, the probe in a container the agent started, the search for
+// daemon inside the agent's container, the probe in a container the agent started, the search for
 // neighbours in one, a recorder, the probe of a sealed credential, the hold of the setup
 // container or the service a setup command starts in it. It returns at once otherwise.
 func Main() {
@@ -296,8 +296,9 @@ type Options struct {
 	// from, as the engine reports it while the run goes; the case of the relay's image
 	// asks it. Nil skips that case.
 	RelayImage func(runID string) (string, error)
-	// Setup says the adapter starts a setup container for (*session.Run).Setup: the cases
-	// of setup outside run in it. Without Setup they are skipped, and said so.
+	// Setup is true when the adapter starts a setup container for (*session.Run).Setup:
+	// the cases of setup outside run in it. Without Setup they are skipped, and the skip
+	// line states why.
 	Setup bool
 	// Recorders are three recorders: the first acts as the host of a runtime's API key,
 	// the second as the host of its OAuth credential, the third as a host the policy

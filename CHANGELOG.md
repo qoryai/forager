@@ -912,6 +912,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Wall
 
+#### Upgrading
+
+- A wall outside Forager: the session calls `Prepare` in `session.Open`, once per run,
+  and `Wrap` once per session on the one enclosure `Prepare` returned, with `Unwrap`,
+  when the enclosure has it, at the session's end.
+
 #### Added
 
 - `wall.Request.Pull` and `wall.Puller`: `(*wall.Docker).Pull` pulls a run's image by
@@ -1017,7 +1023,9 @@ release may change what an existing document does, and says so under Upgrading.
   for a registry.
 - `(*session.Run).Setup`: runs setup commands in a separate container of the run's
   image, on the wall's internal network, one `setup` step each; the container runs until
-  the run closes.
+  the run closes. `SetupSpec.ForagerFiles` and `SetupSpec.Written` are checked against
+  the working folder as a join's, and with `SetupSpec.Limits` the setup container gets
+  the limit flags the agent's container gets.
 - `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
