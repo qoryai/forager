@@ -102,6 +102,12 @@ release may change what an existing document does, and says so under Upgrading.
   first `dev.qory.session.started`: the run's host work, such as a fetch or a compose.
 - Read `elapsed_seconds` of `dev.qory.run.heartbeat` as seconds since the open's
   discovery of its gateway's link.
+- Set the URL of each gateway that a run key goes to, such as `receiver.Gateway.URL`,
+  to `https://`, a host and an optional port, such as `https://gateway.example:8443`.
+  `runkey.Parse`, `runkey.Verify` and `Key.Sign` refuse a run key whose `gateway_url`
+  has a path, a query, user information, an underscore, a trailing dot or port 0, so
+  Sign makes no run key and a run with such a run key does not start. Before, they
+  accepted an underscore, a trailing dot and port 0.
 
 #### Added
 
@@ -122,9 +128,10 @@ release may change what an existing document does, and says so under Upgrading.
   the gateway's relay, at `POST /.well-known/qory-enrolment`. The signed `201` is
   `$defs/run_answer` of `enrolment.schema.json`: `version`, `run_id`, `run_key` and
   `apiary_public_key`. The code is valid for 15 minutes and is used once; a retry by
-  the same public key gets the same members, the same run key included, and another
-  key gets `401`. The run key's `issued` is the time of the first redemption, and its
-  `attach_by` 600 seconds after it. `accesskey.EnrolmentRequest.PostRunVia`, `PostRun`
+  the same public key within the 15 minutes, while the run's dispatch lives, gets the
+  same members, the same run key included, and another key gets `401`. The run key's
+  `issued` is the time of the first redemption, and its `attach_by` 600 seconds after
+  it. `accesskey.EnrolmentRequest.PostRunVia`, `PostRun`
   and `VerifyRunAnswer` return an `accesskey.RunAnswer`, after they verify the answer
   under the server key the code selects and the run key as the gateway does, for the
   answer's `run_id`. fmt writes a `RunAnswer` as `run <run id>`, and slog and
@@ -143,7 +150,8 @@ release may change what an existing document does, and says so under Upgrading.
   and returns it as `accesskey.RunAnswer.Documents`, a `json.RawMessage` byte for byte
   as the answer contains it. An answer without `documents`, or with `documents` that is
   not an object, is an error that starts with the fix. The signature covers
-  `documents`, and a retry by the same key gets the same `documents`. Where fmt calls
+  `documents`, and a retry by the same key within the 15 minutes, while the run's
+  dispatch lives, gets the same `documents`. Where fmt calls
   `Format`, slog `LogValue` and encoding/json `MarshalJSON`, a `RunAnswer` shows
   `run_id` alone. Pass fmt a `RunAnswer`, a pointer to one, or its `RunID` alone.
   Never pass a value that contains a `RunAnswer`, and never pass a `RunAnswer` or a
@@ -525,6 +533,11 @@ release may change what an existing document does, and says so under Upgrading.
   plain request to a host that gets a credential and that the policy allows, denied in
   either mode. The contract's §Credentials has The answer: what the proxy replaces in
   an answer from a host that gets a credential, and what it does not.
+- A run key's `gateway_url` is at most 300 characters: `https://`, a host of DNS
+  labels joined by dots or an IPv6 address in brackets, and an optional port from 1 to
+  65535 with no leading zero. `runkey.Parse`, `runkey.Verify` and `Key.Sign` refuse
+  any other URL, such as `https://:443`, `https://host:`, port 0 or a host with an
+  underscore or a trailing dot, which they accepted before.
 
 #### Fixed
 
