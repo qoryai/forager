@@ -246,7 +246,7 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 	case got.event == setupLine && running:
 		// The record has the line once, through the sink, and the terminal has it once,
 		// masked the same way. A line about the runner's failure has the placeholders of
-		// a run with a run key in the record; the terminal has it as it is. With a hidden
+		// a run with a run key in the record; the terminal has it without them. With a hidden
 		// harness, the command's lines go through the stream's harness writer; a runner's
 		// line ends that writer's stream, follows what it kept back, and is masked by itself.
 		masked := s.r.masker.Replace(string(got.bytes))
