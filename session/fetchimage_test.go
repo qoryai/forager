@@ -89,7 +89,7 @@ func TestTheImageIsFetchedThroughTheEngineProxy(t *testing.T) {
 			if separate {
 				g = startRemote(t)
 				g.SetInterval(30)
-				sp.Gateway = session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())}
+				sp.Gateway = session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID()), TLS: server.RemoteTLS{CAFile: g.CAFile()}}
 			}
 			imageWithCredentials(g)
 			// A runtime with no model keys: the run's one credential is the registry's.
