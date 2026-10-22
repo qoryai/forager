@@ -525,6 +525,11 @@ release may change what an existing document does, and says so under Upgrading.
   plain request to a host that gets a credential and that the policy allows, denied in
   either mode. The contract's §Credentials has The answer: what the proxy replaces in
   an answer from a host that gets a credential, and what it does not.
+- A run key's `gateway_url` is at most 300 characters: `https://`, a host of DNS
+  labels joined by dots or an IPv6 address in brackets, and an optional port from 1 to
+  65535 with no leading zero. `runkey.Parse`, `runkey.Verify` and `Key.Sign` refuse
+  any other URL, such as `https://:443`, `https://host:`, port 0 or a host with an
+  underscore or a trailing dot, which they accepted before.
 
 #### Fixed
 
