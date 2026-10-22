@@ -730,9 +730,9 @@ release may change what an existing document does, and says so under Upgrading.
   `X-Qory-Signature-Ed25519` and `X-Qory-Timestamp` that the machine sent, sets
   `X-Qory-Access-Key-Id` and `X-Qory-Instance-Id` to the gateway's, and signs the
   request as a `POST` over the body byte for byte as it came. The server redeems a run
-  code, `qecr_`, only with that signature, under a key of the gateway the code is bound
-  to. If the signing fails, the relay answers `500` with no body, and the gateway
-  reports a line that starts with the fix. The relay passes every other request's
+  code, `qecr_`, only with that signature, under a live access key of the gateway the
+  code is bound to. If the signing fails, the relay answers `500` with no body, and the
+  gateway reports a line that starts with the fix. The relay passes every other request's
   signature on unchanged. The known answer is `run_enrolment.relay` in
   `fixtures/known-answers/through-gateway.json`. Before, the relay passed the
   enrolment on as it came.

@@ -656,8 +656,8 @@ ans, err := req.PostRunVia(ctx, &http.Client{Transport: tr}, serverURL, viaURL, 
   enrolment answer's run key is not valid: its signature does not verify", say.
   A `401` is an `*accesskey.Refusal` with the code `unauthorized`: the code is used, has
   expired or was cancelled, another key redeemed it first, or the request did not come
-  through the relay of the gateway the code is bound to, signed under that gateway's
-  access key.
+  through the relay of the gateway the code is bound to, signed under a live access
+  key of that gateway.
 - `PostVia`, `Post` and `VerifyAnswer` refuse a run code, and `PostRunVia` and
   `VerifyRunAnswer` refuse an access key's code, before they send or read anything:
   "redeem a run code with PostRunVia or VerifyRunAnswer: …". A verified answer
