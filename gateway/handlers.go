@@ -696,13 +696,13 @@ func (lr *linkRun) joined(ev event.Event) {
 	j.startedAt, _ = time.Parse(time.RFC3339Nano, ev.Time)
 }
 
-// shownStarted phrases each dev.qory.run.started and dev.qory.session.started in evs, a batch [linkRun.check]
-// accepted, as a session phrases one, so a session that sends a value as it is passes
-// no value that contains qak_, qrk_ or qecr_ in any case through the gateway: the members of
-// startedNames as [accesskey.ShownName] shows them, those of startedValues and each
-// entry of startedLists as [accesskey.ShownValue] does, the labels as
-// [server.ShownLabels] gives them and about as [server.ShownAbout] does. Data with no
-// such value is left byte for byte.
+// shownStarted phrases each dev.qory.run.started and dev.qory.session.started in evs, a
+// batch [linkRun.check] accepted, as a session phrases one, so a session that sends a
+// value as it is passes no value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or
+// qeci_ in any case through the gateway: the members of startedNames as
+// [accesskey.ShownName] shows them, those of startedValues and each entry of startedLists
+// as [accesskey.ShownValue] does, the labels as [server.ShownLabels] returns them and
+// about as [server.ShownAbout] does. Data with no such value is left byte for byte.
 func shownStarted(evs []event.Event) {
 	for i, ev := range evs {
 		if ev.Type != event.RunStarted && ev.Type != event.SessionStarted {

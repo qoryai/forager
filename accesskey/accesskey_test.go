@@ -772,7 +772,7 @@ func TestNormaliseCode(t *testing.T) {
 		"qecn_F1XT0RE0000000000000000000",
 	} {
 		_, err := accesskey.NormaliseCode(in)
-		if want := "an enrolment code is qecn_, qecp_, qecg_, qeci_ or a run code's prefix, 26 characters, then a dot and a fingerprint"; err == nil || err.Error() != want {
+		if want := "use an enrolment code of the form qec[npgir]_ and 26 characters, then a dot and a fingerprint"; err == nil || err.Error() != want {
 			t.Errorf("%s: %v; want %q", in, err, want)
 		}
 	}
@@ -1414,11 +1414,13 @@ func TestWithoutVariablesTakesOutForagersOwn(t *testing.T) {
 }
 
 // TestContainsSecretCatchesEachKind pins the check for each kind of secret, an access
-// key secret, qak_, a run key, qrk_, and a run code, qecr_, in lower and upper case:
-// ContainsSecret and DocumentContainsSecret report each, SecretInDocument returns the
-// kind's error, and ErrRunCodeInDocument starts with the fix, quotes nothing and is an
-// ErrSecretInDocument. A value with more than one kind gets the first kind's error in
-// the order qak_, qrk_, qecr_, and a near miss is no secret.
+// key secret, qak_, a run key, qrk_, a run code, qecr_, and an enrolment code, qecn_,
+// qecp_, qecg_ and qeci_, in lower, upper and mixed case: ContainsSecret and
+// DocumentContainsSecret report each, SecretInDocument returns the kind's error, and
+// ErrRunCodeInDocument and ErrEnrolmentCodeInDocument start with the fix, quote nothing
+// and are an ErrSecretInDocument. A value with more than one kind gets the first kind's
+// error in the order qak_, qrk_, qecr_, then the enrolment code's, and a near miss is no
+// secret.
 func TestContainsSecretCatchesEachKind(t *testing.T) {
 	for _, c := range []struct {
 		value string
@@ -1429,7 +1431,14 @@ func TestContainsSecretCatchesEachKind(t *testing.T) {
 		{"x qecr_y", accesskey.ErrRunCodeInDocument}, {"x QECR_Y", accesskey.ErrRunCodeInDocument},
 		{"x qEcR_y", accesskey.ErrRunCodeInDocument},
 		{"qecr_x qrk_y", accesskey.ErrRunKeyInDocument}, {"QECR_x QAK_y", accesskey.ErrSecretInDocument},
-		{"qecn_x", nil}, {"qec_r", nil}, {"qecr-x", nil}, {"qecrx", nil}, {"run code", nil},
+		{"x qecn_y", accesskey.ErrEnrolmentCodeInDocument}, {"x QeCn_Y", accesskey.ErrEnrolmentCodeInDocument},
+		{"x qecp_y", accesskey.ErrEnrolmentCodeInDocument}, {"x qECP_Y", accesskey.ErrEnrolmentCodeInDocument},
+		{"x qecg_y", accesskey.ErrEnrolmentCodeInDocument}, {"x QecG_Y", accesskey.ErrEnrolmentCodeInDocument},
+		{"x qeci_y", accesskey.ErrEnrolmentCodeInDocument}, {"x QEcI_Y", accesskey.ErrEnrolmentCodeInDocument},
+		{"qecn_x qecr_y", accesskey.ErrRunCodeInDocument}, {"QECP_x QRK_y", accesskey.ErrRunKeyInDocument},
+		{"qeci_x qak_y", accesskey.ErrSecretInDocument},
+		{"qec_r", nil}, {"qecr-x", nil}, {"qecrx", nil}, {"run code", nil},
+		{"qecx_y", nil}, {"qecn-y", nil}, {"qecny", nil}, {"enrolment code", nil},
 	} {
 		secret := c.want != nil
 		if got := accesskey.ContainsSecret(c.value); got != secret {
@@ -1453,6 +1462,53 @@ func TestContainsSecretCatchesEachKind(t *testing.T) {
 	}
 	if len(err.Error()) > 100 || strings.Contains(strings.ToLower(err.Error()), "qecr_") {
 		t.Errorf("ErrRunCodeInDocument is over 100 characters or contains the prefix: %q", err)
+	}
+	err = accesskey.ErrEnrolmentCodeInDocument
+	if want := "remove the enrolment code from the document: an enrolment code belongs in an enrolment request only"; err.Error() != want {
+		t.Errorf("ErrEnrolmentCodeInDocument = %q, want %q", err, want)
+	}
+	if !errors.Is(err, accesskey.ErrSecretInDocument) || errors.Is(err, accesskey.ErrRunKeyInDocument) || errors.Is(err, accesskey.ErrRunCodeInDocument) ||
+		errors.Is(accesskey.ErrRunCodeInDocument, err) {
+		t.Error("ErrEnrolmentCodeInDocument is not an ErrSecretInDocument alone")
+	}
+	if len(err.Error()) > 100 || accesskey.ContainsSecret(err.Error()) {
+		t.Errorf("ErrEnrolmentCodeInDocument is over 100 characters or contains a prefix: %q", err)
+	}
+}
+
+// TestAnEnrolmentCodeIsRefusedAndPhrased pins an enrolment code, qecn_, qecp_, qecg_ or
+// qeci_ in any case, where a secret does not belong: a pin, a name, an instance id and
+// a server URL that contain one are refused, and no error quotes the code; a name's and
+// a value's phrase is the enrolment code's, and IsNamePhrase reports it. The code still
+// makes an enrolment request, whose body contains it as it is.
+func TestAnEnrolmentCodeIsRefusedAndPhrased(t *testing.T) {
+	for _, prefix := range []string{"qecn_", "QECP_", "qEcG_", "qeci_"} {
+		code := prefix + "F1XT0RE0000000000000000000." + keys(t).SigningKey.Fingerprint
+		if _, err := accesskey.ParsePin([]byte(`[{"alg":"` + code + `","public_key":"` + keys(t).SigningKey.PublicKey + `"}]`)); err != accesskey.ErrEnrolmentCodeInDocument {
+			t.Errorf("a pin with %s: %v; want ErrEnrolmentCodeInDocument", prefix, err)
+		}
+		r, err := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), code, "build-01", time.Now())
+		if err != nil {
+			t.Fatalf("%s: %v", prefix, err)
+		}
+		if body, _ := json.Marshal(r); !strings.Contains(string(body), strings.ToLower(prefix)+"F1XT0RE0000000000000000000.") {
+			t.Errorf("%s: the request's body %s does not contain the code", prefix, body)
+		}
+		_, post := r.Post(context.Background(), nil, "https://qory.example/?c="+code, "test")
+		for i, err := range []error{post, accesskey.CheckName("x" + code[:12]), accesskey.CheckName(strings.ToUpper(code[:12])), accesskey.CheckInstanceID(code[:20])} {
+			if err == nil || accesskey.ContainsSecret(err.Error()) || strings.Contains(err.Error(), "F1XT0RE") {
+				t.Errorf("%s, %d: %v", prefix, i, err)
+			}
+		}
+		if post == nil || post.Error() != "remove the enrolment code from the server URL: the URL is a scheme, a host and an optional port" {
+			t.Errorf("a server URL with %s: %v", prefix, post)
+		}
+		if got := accesskey.ShownName(prefix+"x", true); got != "(a name that contains an enrolment code)" || !accesskey.IsNamePhrase(got) {
+			t.Errorf("ShownName(%s) = %s, IsNamePhrase %t", prefix, got, accesskey.IsNamePhrase(got))
+		}
+		if got := accesskey.ShownValue("x: "+prefix+"y", true); got != "(a value that contains an enrolment code)" {
+			t.Errorf("ShownValue(%s) = %s", prefix, got)
+		}
 	}
 }
 
@@ -1485,9 +1541,9 @@ func TestARunCodeIsRefusedAndPhrased(t *testing.T) {
 
 // TestFixedSecretErrorsPassShownError pins the fixed texts that speak of a secret: the
 // error of a code of no known shape, an access key's enrolment method given a run code,
-// and a server URL that contains an access key secret, a run key or a run code. None
-// contains qak_, qrk_ or qecr_, so ShownError returns each error itself and its text
-// reaches the reader.
+// and a server URL that contains an access key secret, a run key, a run code or an
+// enrolment code. None contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_, so
+// ShownError returns each error itself and its text reaches the reader.
 func TestFixedSecretErrorsPassShownError(t *testing.T) {
 	_, shape := accesskey.NormaliseCode("qecx_F1XT0RE0000000000000000000.x")
 	run, err := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qecr_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "run-01", time.Now())
@@ -1500,17 +1556,18 @@ func TestFixedSecretErrorsPassShownError(t *testing.T) {
 		return err
 	}
 	for want, err := range map[string]error{
-		"an enrolment code is qecn_, qecp_, qecg_, qeci_ or a run code's prefix, 26 characters, then a dot and a fingerprint":                            shape,
+		"use an enrolment code of the form qec[npgir]_ and 26 characters, then a dot and a fingerprint":                                                  shape,
 		"redeem a run code with PostRunVia or VerifyRunAnswer: the request's code is a run code, and PostVia, Post and VerifyAnswer enrol an access key": forKey,
 		"remove the access key secret from the server URL: the URL is a scheme, a host and an optional port":                                             viaURL("https://qory.example/QAK_x"),
 		"remove the run key from the server URL: the URL is a scheme, a host and an optional port":                                                       viaURL("https://qory.example/qrk_x"),
 		"remove the run code from the server URL: the URL is a scheme, a host and an optional port":                                                      viaURL("https://qory.example/qecr_x"),
+		"remove the enrolment code from the server URL: the URL is a scheme, a host and an optional port":                                                viaURL("https://qory.example/QeCg_x"),
 	} {
 		if err == nil || err.Error() != want {
 			t.Errorf("got %v, want %s", err, want)
 			continue
 		}
-		if strings.Contains(want, "server URL") && len(want) > 100 {
+		if (strings.Contains(want, "server URL") || strings.HasPrefix(want, "use an enrolment code")) && len(want) > 100 {
 			t.Errorf("%q is over 100 characters", want)
 		}
 		if got := accesskey.ShownError(err); got != err {
@@ -1519,10 +1576,12 @@ func TestFixedSecretErrorsPassShownError(t *testing.T) {
 	}
 }
 
-// TestShownName pins the phrase a name that contains qak_ or qrk_ in any case is shown
-// as, the access key secret's when it contains both, and a clean name quoted or bare.
+// TestShownName pins the phrase a name that contains qak_, qrk_, qecr_, qecn_, qecp_,
+// qecg_ or qeci_ in any case is shown as, the first kind's in that order when it
+// contains more than one, and a clean name quoted or bare.
 func TestShownName(t *testing.T) {
 	const ak, rk, rc = "(a name that contains an access key secret)", "(a name that contains a run key)", "(a name that contains a run code)"
+	const ec = "(a name that contains an enrolment code)"
 	for _, c := range []struct {
 		name  string
 		quote bool
@@ -1533,7 +1592,10 @@ func TestShownName(t *testing.T) {
 		{"qrk_x.qak_y", true, ak}, {"QRK_x.QAK_y", false, ak},
 		{"qecr_x", false, rc}, {"QECR_x", true, rc}, {"x.qEcR_y", false, rc},
 		{"qecr_x.qrk_y", true, rk}, {"QECR_x.QAK_y", false, ak},
-		{"model", true, `"model"`}, {"model", false, "model"}, {"qak-x", false, "qak-x"},
+		{"qecn_x", false, ec}, {"QeCn_x", true, ec}, {"qecp_x", true, ec}, {"x.qECP_y", false, ec},
+		{"qecg_x", false, ec}, {"QECG_x", true, ec}, {"qeci_x", true, ec}, {"x.QecI_y", false, ec},
+		{"qecn_x.qecr_y", true, rc}, {"QECP_x.QRK_y", false, rk}, {"qecg_x.qak_y", true, ak},
+		{"model", true, `"model"`}, {"model", false, "model"}, {"qak-x", false, "qak-x"}, {"qecx_y", false, "qecx_y"},
 	} {
 		if got := accesskey.ShownName(c.name, c.quote); got != c.want {
 			t.Errorf("ShownName(%q, %t) = %s, want %s", c.name, c.quote, got, c.want)
@@ -1541,10 +1603,12 @@ func TestShownName(t *testing.T) {
 	}
 }
 
-// TestShownValue pins the phrase a value that contains qak_ or qrk_ in any case is shown
-// as, the access key secret's when it contains both, and a clean value quoted or bare.
+// TestShownValue pins the phrase a value that contains qak_, qrk_, qecr_, qecn_, qecp_,
+// qecg_ or qeci_ in any case is shown as, the first kind's in that order when it
+// contains more than one, and a clean value quoted or bare.
 func TestShownValue(t *testing.T) {
 	const ak, rk, rc = "(a value that contains an access key secret)", "(a value that contains a run key)", "(a value that contains a run code)"
+	const ec = "(a value that contains an enrolment code)"
 	for _, c := range []struct {
 		value string
 		quote bool
@@ -1555,6 +1619,10 @@ func TestShownValue(t *testing.T) {
 		{"qrk_x qak_y", true, ak}, {"QRK_x QAK_y", false, ak},
 		{"qecr_x", false, rc}, {"QECR_x", true, rc}, {"x: qEcR_y", false, rc},
 		{"qecr_x qrk_y", true, rk}, {"QECR_x QAK_y", false, ak},
+		{"qecn_x", false, ec}, {"QeCn_x", true, ec}, {"qecp_x", true, ec}, {"x: qECP_y", false, ec},
+		{"qecg_x", false, ec}, {"QECG_x", true, ec}, {"qeci_x", true, ec}, {"x: QecI_y", false, ec},
+		{"qecn_x qecr_y", true, rc}, {"QECP_x QRK_y", false, rk}, {"qecg_x qak_y", true, ak},
+		{"qecx_y", false, "qecx_y"},
 		{"exit status 3", true, `"exit status 3"`}, {"exit status 3", false, "exit status 3"}, {"qak-x", false, "qak-x"},
 	} {
 		if got := accesskey.ShownValue(c.value, c.quote); got != c.want {
@@ -1594,6 +1662,11 @@ func TestShownError(t *testing.T) {
 		"qrk_x QaK_y":                  "(a value that contains an access key secret)",
 		"open /x/qecr_y: no such file": "(a value that contains a run code)",
 		"QECR_x":                       "(a value that contains a run code)",
+		"open /x/qecn_y: no such file": "(a value that contains an enrolment code)",
+		"QECP_x":                       "(a value that contains an enrolment code)",
+		"x qEcG_y":                     "(a value that contains an enrolment code)",
+		"qeci_x":                       "(a value that contains an enrolment code)",
+		"qeci_x qecr_y":                "(a value that contains a run code)",
 	} {
 		err := fmt.Errorf("wrapped: %w", errors.New(text))
 		got := accesskey.ShownError(err)
@@ -1634,6 +1707,8 @@ func TestAnEnrolmentsDialErrorPrintsAPhraseForASecret(t *testing.T) {
 		"http://QRK_FAKE.example:1":  "(a value that contains a run key)",
 		"http://qecr_fake.example:1": "(a value that contains a run code)",
 		"http://QECR_FAKE.example:1": "(a value that contains a run code)",
+		"http://qecn_fake.example:1": "(a value that contains an enrolment code)",
+		"http://QeCi_FAKE.example:1": "(a value that contains an enrolment code)",
 	} {
 		p, _ := url.Parse(proxy)
 		hc := &http.Client{Transport: &http.Transport{

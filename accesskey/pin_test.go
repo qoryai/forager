@@ -190,7 +190,11 @@ func TestSecretInPinEntry(t *testing.T) {
 		{"a key with qak_", "ed25519", qak, nil},
 		{"a key with QRK_", "ed25519", qrk, nil},
 		{"a key with qecr_", "ed25519", qecr, nil},
+		{"a key with qecn_", "ed25519", keyWith(t, "qecn_", true), nil},
+		{"a key with QeCi_", "ed25519", keyWith(t, "QeCi_", true), nil},
 		{"a run code in alg", "QECR_F1XT0RE0000000000000000000.x", qak, accesskey.ErrRunCodeInDocument},
+		{"an enrolment code in alg", "qEcP_F1XT0RE0000000000000000000.x", qak, accesskey.ErrEnrolmentCodeInDocument},
+		{"an enrolment code as the key", "ed25519", "qecg_F1XT0RE0000000000000000000.x", accesskey.ErrEnrolmentCodeInDocument},
 		{"a secret in alg", fakeSecret, qak, accesskey.ErrSecretInDocument},
 		{"a run key in alg", fakeRunKey, qak, accesskey.ErrRunKeyInDocument},
 		{"a key a character short", "ed25519", qak[:42], accesskey.ErrSecretInDocument},
@@ -205,8 +209,9 @@ func TestSecretInPinEntry(t *testing.T) {
 }
 
 // TestAKeyThatStartsWithASecretPrefixIsChecked pins that a valid key that starts with
-// qak_, qrk_ or qecr_, in any case, is not left out, since a secret cut to 43
-// characters can read as a key, and that a valid key with qak_ further in still is.
+// qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_, in any case, is not left out, since a
+// secret cut to 43 characters can read as a key, and that a valid key with qak_ further in
+// still is.
 func TestAKeyThatStartsWithASecretPrefixIsChecked(t *testing.T) {
 	for prefix, want := range map[string]error{
 		"qak_":  accesskey.ErrSecretInDocument,
@@ -215,6 +220,10 @@ func TestAKeyThatStartsWithASecretPrefixIsChecked(t *testing.T) {
 		"QrK_":  accesskey.ErrRunKeyInDocument,
 		"qecr_": accesskey.ErrRunCodeInDocument,
 		"QECR_": accesskey.ErrRunCodeInDocument,
+		"qecn_": accesskey.ErrEnrolmentCodeInDocument,
+		"QECP_": accesskey.ErrEnrolmentCodeInDocument,
+		"qEcG_": accesskey.ErrEnrolmentCodeInDocument,
+		"QeCi_": accesskey.ErrEnrolmentCodeInDocument,
 	} {
 		k := keyAt(t, 0, prefix, true)
 		if _, err := accesskey.ParsePin([]byte("[" + entry("ed25519", k) + "]")); err != want {

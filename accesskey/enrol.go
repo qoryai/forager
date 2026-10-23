@@ -54,17 +54,15 @@ var codeKinds = []struct{ prefix, kind string }{
 }
 
 // errCodeShape is the error of a code without one of the prefixes or without a dot,
-// the prefixes of access keys' codes listed from codeKinds. The run code's prefix is
-// "a run code's prefix" in the text, which contains no qecr_, so ShownError keeps it.
+// the prefixes written as qec, a class of the letters of codeKinds, and _. The text
+// contains none of the prefixes, so ShownError keeps it.
 var errCodeShape = func() error {
-	var list []string
+	var letters strings.Builder
 	for _, k := range codeKinds {
-		if k.kind != kindRun {
-			list = append(list, k.prefix)
-		}
+		letters.WriteString(k.prefix[len("qec") : len(k.prefix)-1])
 	}
-	return fmt.Errorf("an enrolment code is %s or a run code's prefix, 26 characters, then a dot and a fingerprint",
-		strings.Join(list, ", "))
+	return fmt.Errorf("use an enrolment code of the form qec[%s]_ and 26 characters, then a dot and a fingerprint",
+		letters.String())
 }()
 
 // codePrefix returns the prefix of codeKinds that starts head in any case, and the
@@ -550,6 +548,9 @@ func checkOrigin(s string) error {
 	}
 	if containsRunCode(s) {
 		return errors.New("remove the run code from the server URL: the URL is a scheme, a host and an optional port")
+	}
+	if containsEnrolmentCode(s) {
+		return errors.New("remove the enrolment code from the server URL: the URL is a scheme, a host and an optional port")
 	}
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {

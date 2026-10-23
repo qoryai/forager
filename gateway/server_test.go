@@ -1138,7 +1138,7 @@ func TestAReloadOfARunURLWithASecretSaysWhy(t *testing.T) {
 		return h.reported("the reload failed: ")
 	})
 	got := h.reportsWith("the reload failed")
-	if len(got) == 0 || !strings.Contains(got[0], "run.url contains the start of an access key secret, a run key or a run code") {
+	if len(got) == 0 || !strings.Contains(got[0], "remove the secret from run.url: run.policy_applied would send run.url as it is") {
 		t.Errorf("reports %q", got)
 	}
 	for _, r := range got {

@@ -592,13 +592,13 @@ func replacePaths(s string, pairs []pathPair, rule pathRule) string {
 // wall, the places the run lists that it cannot bind as they are, and returns what the
 // enclosure binds. The places are the run's own, SessionSpec.Mounts and the workspace; the
 // session's directory in the run directory, sessionDir, read-only, unless sessionDir is
-// empty, as for the setup container, which has none, and the hook socket's
-// directory are Forager's, which it keeps apart from every caller's place: the runs
-// directory is one of Forager's files, and so is where the sockets are made. A
-// refusal's first name is always one of
-// the places exactly as the caller passed it, or [accesskey.ShownName]'s phrase in its
-// place when it contains qak_, qrk_ or qecr_ in any case. Detail prints such a path as
-// [accesskey.ShownValue]'s phrase, and the names list each phrase once:
+// empty, as for the setup container, which has none, and the hook socket's directory are
+// Forager's, which it keeps apart from every caller's place: the runs directory is one of
+// Forager's files, and so is where the sockets are made. A refusal's first name is always
+// one of the places exactly as the caller passed it, or [accesskey.ShownName]'s phrase in
+// its place when it contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case.
+// Detail prints such a path as [accesskey.ShownValue]'s phrase, and the names list each
+// phrase once:
 //
 //   - mount_contains_forager_files: a place that is, contains or lies inside one of
 //     Forager's files, or a writable place that contains a directory a name on the way
@@ -904,12 +904,12 @@ func paths(ms []wall.Mount) []string {
 }
 
 // pathShown is a path as a message prints it, bare: [accesskey.ShownValue]'s phrase in
-// its place when it contains qak_, qrk_ or qecr_ in any case.
+// its place when it contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case.
 func pathShown(p string) string { return accesskey.ShownValue(p, false) }
 
 // pathsShown are paths as a refusal's Names lists them: as [accesskey.ShownNames] lists
-// them, a name's phrase in place of a path that contains qak_, qrk_ or qecr_ in any case, as
-// run.refused's names are, each phrase once.
+// them, a name's phrase in place of a path that contains qak_, qrk_, qecr_, qecn_, qecp_,
+// qecg_ or qeci_ in any case, as run.refused's names are, each phrase once.
 func pathsShown(ps ...string) []string { return accesskey.ShownNames(ps) }
 
 // eachShown is each of the paths as [pathShown] prints it, in order, every one kept:

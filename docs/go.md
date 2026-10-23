@@ -313,8 +313,9 @@ failed and its lines:
   run's next step number, shared with each join's steps, and returns a `*session.Step`.
   `kind` is `event.StepFetch`, `event.StepCompose` or `event.StepBuild`. The run's
   masker replaces each forwarder's password in `name`, and a `name` that contains
-  `qak_`, `qrk_` or `qecr_` is a phrase in its place. Pass a `name` with no URL userinfo, token
-  or other credential: `StartStep` writes any other secret in `name` as given.
+  `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` is a phrase in its
+  place. Pass a `name` with no URL userinfo, token or other credential: `StartStep`
+  writes any other secret in `name` as given.
 - `(*session.Step).Log(b)` writes the step's lines, such as what the fetch or the
   compose prints: each line is a `dev.qory.run.log` with `stream` `stderr`, the step's
   number as `step` and no `session`, cut at 4096 bytes as a session's lines on pipes
@@ -322,7 +323,7 @@ failed and its lines:
   the lines, the host proxy's included, within one call: pass whole lines, because a
   password split across two calls stays as written. Pass an error's text through
   `accesskey.ShownError`, which replaces a text that contains an access key secret, a
-  run key or a run code.
+  run key, a run code or an enrolment code.
 - `(*session.Step).Exit(state, exitCode)` writes `dev.qory.run.step_exited` with
   `state`, `succeeded`, `failed` or `cancelled`, `exitCode`, the exit status of the
   step's process or `-1` when it has none, and `duration_ms`, which Forager measures
@@ -361,15 +362,16 @@ write its result with `(*session.Run).Built(b)`. `Built` writes `dev.qory.run.bu
 with the members of `session.Built`:
 
 - `Image` as `image`: the image by its digest, `NAME@sha256:` and 64 lower-case
-  hexadecimal digits, with no tag and with no `qak_`, `qrk_` or `qecr_` in any case.
+  hexadecimal digits, with no tag and with no `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`,
+  `qecg_` or `qeci_` in any case.
 - `Size` as `size`: the image's size in bytes, 1 or more.
 - `Commit` as `commit`: the full commit id the image was built from, 40 or 64
   hexadecimal characters in lower case.
-- `EnvironmentRef` as `environment_ref`: your reference to the environment the image
-  is for, not empty. The run's masker replaces each forwarder's password in it, and a
-  reference that contains `qak_`, `qrk_` or `qecr_` is a phrase in its place, as in a step's
-  `name`. Pass no other credential in it: `Built` writes any other secret as you pass
-  it.
+- `EnvironmentRef` as `environment_ref`: your reference to the environment the image is
+  for, not empty. The run's masker replaces each forwarder's password in it, and a
+  reference that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_`
+  is a phrase in its place, as in a step's `name`. Pass no other credential in it:
+  `Built` writes any other secret as you pass it.
 - `EnvironmentImage` as `environment_image`: the environment image the build pushed,
   or the one it started from, of the form of `Image`. Leave it empty if you do not
   report it: `Built` then writes no `environment_image`.
@@ -381,11 +383,11 @@ Call `Built` once per run, with no host step open, before the first `Join` or af
 
 | When | Error |
 |---|---|
-| an image that contains `qak_`, `qrk_` or `qecr_` | `set the built image to a reference without qak_, qrk_ or qecr_: each starts a secret` |
+| an image that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` | `set the built image to a reference without qak_, qrk_ or qec[npgir]_: each starts a secret` |
 | an image with a tag, in upper case or without a digest | `set the built image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
-| an `EnvironmentImage` that contains `qak_`, `qrk_` or `qecr_` | `set the environment image to a reference without qak_, qrk_ or qecr_: each starts a secret` |
+| an `EnvironmentImage` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` | `set the environment image to a reference without qak_, qrk_ or qec[npgir]_: each starts a secret` |
 | an `EnvironmentImage` with a tag, in upper case or without a digest | `set the environment image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
-| a `Base` that contains `qak_`, `qrk_` or `qecr_` | `set the base image to a reference without qak_, qrk_ or qecr_: each starts a secret` |
+| a `Base` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` | `set the base image to a reference without qak_, qrk_ or qec[npgir]_: each starts a secret` |
 | a `Base` with a tag, in upper case or without a digest | `set the base image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
 | a size of 0 | `set the built image's size to its size in bytes, 1 or more, not 0` |
 | a commit that is not a full commit id | `set the commit of the build to a full commit id, 40 or 64 hexadecimal characters in lower case` |
@@ -892,14 +894,16 @@ default, masks no harness text. See [`mask.Harness`](../mask/harness.go) for the
 matching.
 
 `session.SessionSpec` has each session's: the runtime and its command, the variables,
-the mounts, the setup commands and the rest below. `Harness` lists the harness's sources,
-each a `source` and a full `commit`; `dev.qory.session.started` records them, a source
-that contains `qak_`, `qrk_` or `qecr_` as the value's phrase in its place. `ModelCredential` is
-the credential the join request asks the gateway for, for this session.
+the mounts, the setup commands and the rest below. `Harness` lists the harness's
+sources, each a `source` and a full `commit`; `dev.qory.session.started` records them, a
+source that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` as
+the value's phrase in its place. `ModelCredential` is the credential the join request
+asks the gateway for, for this session.
 
 - `Declared` is the egress the harness declared. The record reports it as
-  `harness_hosts`, a host that contains `qak_`, `qrk_` or `qecr_` as the value's phrase in its
-  place, and it decides nothing. `nil` means no declaration.
+  `harness_hosts`, a host that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`,
+  `qecg_` or `qeci_` as the value's phrase in its place, and it decides nothing. `nil`
+  means no declaration.
 - `Interactive` runs the session on a pseudo-terminal.
   - The exception: an argument the runtime's descriptor lists as headless is among
     `Args`, such as `-p` for Claude Code. Then the session runs on pipes.

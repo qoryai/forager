@@ -18,12 +18,14 @@ const (
 	accessKeyValue = "(a value that contains an access key secret)"
 	runKeyValue    = "(a value that contains a run key)"
 	runCodeName    = "(a name that contains a run code)"
+	enrolmentName  = "(a name that contains an enrolment code)"
 )
 
-// noSecretPrefix fails when text contains qak_, qrk_ or qecr_ in any case.
+// noSecretPrefix fails when text contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_
+// in any case.
 func noSecretPrefix(t *testing.T, what, text string) {
 	t.Helper()
-	if low := strings.ToLower(text); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") {
+	if low := strings.ToLower(text); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") {
 		t.Errorf("%s: %s contains a secret's prefix", what, text)
 	}
 }
@@ -74,6 +76,37 @@ func TestARunCodeInALabelIsTheRunCodesPhrase(t *testing.T) {
 	doc, _ := contracts.Decode("r.json", b)
 	if err := schema.Validate(doc); err != nil {
 		t.Errorf("the schema refuses %s: %v", b, err)
+	}
+}
+
+// TestAnEnrolmentCodeInALabelIsTheEnrolmentCodesPhrase pins an enrolment code, qecn_,
+// qecp_, qecg_ or qeci_ in lower or mixed case, in the labels Forager sends to Qory
+// Apiary: a key or a value that contains one is the enrolment code's phrase, CheckLabels
+// accepts it, and the registration through a gateway contains none of the prefixes and
+// is a body the schema accepts.
+func TestAnEnrolmentCodeInALabelIsTheEnrolmentCodesPhrase(t *testing.T) {
+	schema, err := contracts.Compile("run-registration.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range [][2]string{{"qecn_", "QeCn_"}, {"qecp_", "qECP_"}, {"qecg_", "QecG_"}, {"qeci_", "QEcI_"}} {
+		labels := map[string]string{c[0] + "k": "v", "repository": "acme/" + c[1] + "x"}
+		got := server.ShownLabels(labels)
+		if want := map[string]string{enrolmentName: "v", "repository": enrolmentName}; !maps.Equal(got, want) {
+			t.Errorf("ShownLabels(%v) = %v, want %v", labels, got, want)
+		}
+		if err := server.CheckLabels(got); err != nil {
+			t.Errorf("CheckLabels refuses the phrased labels: %v", err)
+		}
+		b, err := server.GatewayRegistration{RunID: gatewayRunID, Labels: labels, Time: "2026-10-11T12:00:00Z"}.Body()
+		if err != nil {
+			t.Fatal(err)
+		}
+		noSecretPrefix(t, "the registration", string(b))
+		doc, _ := contracts.Decode("r.json", b)
+		if err := schema.Validate(doc); err != nil {
+			t.Errorf("the schema refuses %s: %v", b, err)
+		}
 	}
 }
 

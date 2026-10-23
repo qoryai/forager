@@ -156,7 +156,7 @@ The close ends a host step still open `cancelled` with -1, before
 no `dev.qory.run.step_exited` for that step; the session writes that step's
 `dev.qory.run.step_exited` in `session.jsonl` alone, with the step's outcome. A step's `name` has `qory-proxy-password` in place
 of a forwarder's password, and a phrase in place of a name that contains `qak_`,
-`qrk_` or `qecr_`.
+`qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_`.
 
 `dev.qory.session.started` contains `harness` when the caller passes it: one entry per
 harness source the session's compose used, each with `source`, the source as it is

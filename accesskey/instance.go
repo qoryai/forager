@@ -43,7 +43,8 @@ func instanceID(b []byte) string {
 
 // CheckInstanceID refuses an instance id outside ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$,
 // which the server answers with a signed 400 bad_request, and one that contains an
-// access key secret, a run key or a run code, since the id travels in clear.
+// access key secret, a run key, a run code or an enrolment code, since the id travels
+// in clear.
 func CheckInstanceID(id string) error {
 	if !nameShape.MatchString(id) || ContainsSecret(id) {
 		return fmt.Errorf("the instance id %s is not 1 to 64 of A-Z, a-z, 0-9, dot, underscore and dash, starting with a letter or digit", shown(id))

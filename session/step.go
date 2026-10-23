@@ -23,11 +23,11 @@ type Step struct {
 	exited bool
 }
 
-// StartStep starts a step of the run's host work and writes its
-// dev.qory.run.step_started, with the run's next step number as step, name as name and
-// kind as kind: event.StepFetch, event.StepCompose or event.StepBuild. Join numbers its
-// steps from the same counter. The run's masker replaces each forwarder's password in
-// name, and a name that contains qak_, qrk_ or qecr_ in any case is a phrase in its place, as
+// StartStep starts a step of the run's host work and writes its dev.qory.run.step_started,
+// with the run's next step number as step, name as name and kind as kind: event.StepFetch,
+// event.StepCompose or event.StepBuild. Join numbers its steps from the same counter. The
+// run's masker replaces each forwarder's password in name, and a name that contains qak_,
+// qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case is a phrase in its place, as
 // accesskey.ShownValue gives it. Write the step's lines with [Step.Log], and end it with
 // [Step.Exit].
 //
@@ -36,9 +36,10 @@ type Step struct {
 // closed. Host steps go before the first join and between joins, never during one: Join
 // returns an error and writes nothing while a host step is open.
 //
-// The name must contain no URL userinfo, token or other credential. The masker
-// replaces only the forwarders' passwords, and accesskey.ShownValue replaces only a
-// name that contains qak_, qrk_ or qecr_; any other secret in name is written as given.
+// The name must contain no URL userinfo, token or other credential. The masker replaces
+// only the forwarders' passwords, and accesskey.ShownValue replaces only a name that
+// contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_; any other secret in name is
+// written as given.
 func (r *Run) StartStep(kind, name string) (*Step, error) {
 	if kind != event.StepFetch && kind != event.StepCompose && kind != event.StepBuild {
 		return nil, fmt.Errorf("start a host step of kind fetch, compose or build, not %s: Join writes the join, image and wall steps", accesskey.ShownValue(kind, true))
@@ -139,9 +140,9 @@ func (s *Step) end(state string, exitCode int) {
 	s.r.post(event.StepExited, map[string]any{"step": s.n, "state": state, "exit_code": exitCode, "duration_ms": time.Since(s.start).Milliseconds()})
 }
 
-// stepName is name as a step's dev.qory.run.step_started has it: the run's masker
-// replaces each forwarder's password in it, then a name that contains qak_, qrk_ or qecr_ in
-// any case is accesskey.ShownValue's phrase in its place.
+// stepName is name as a step's dev.qory.run.step_started has it: the run's masker replaces
+// each forwarder's password in it, then a name that contains qak_, qrk_, qecr_, qecn_,
+// qecp_, qecg_ or qeci_ in any case is accesskey.ShownValue's phrase in its place.
 func (r *Run) stepName(name string) string {
 	return accesskey.ShownValue(r.masker.Replace(name), false)
 }
