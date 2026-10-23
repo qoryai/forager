@@ -801,14 +801,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 }
 
 // sessionStarted is the data of the session's dev.qory.session.started. A value of the
-// session's that contains qak_, qrk_ or qecr_ in any case is sent as a phrase in its place:
-// accesskey.ShownName's for the runtime, the image, its name and its container
-// runtime; accesskey.ShownValue's for the directory, the command, each argument, the
-// runtime's version, the name of each setup command and each harness source. In a run
-// with a run key, dir is /workspace, the command and the arguments have <run>, <home>
-// and <inputs> in place of the run directory, the harness home and the inputs
-// directory (neutralPaths), and harness is left out: launchLine reports the values of
-// this machine.
+// session's that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case is
+// sent as a phrase in its place: accesskey.ShownName's for the runtime, the image, its
+// name and its container runtime; accesskey.ShownValue's for the directory, the command,
+// each argument, the runtime's version, the name of each setup command and each harness
+// source. In a run with a run key, dir is /workspace, the command and the arguments have
+// <run>, <home> and <inputs> in place of the run directory, the harness home and the
+// inputs directory (neutralPaths), and harness is left out: launchLine reports the values
+// of this machine.
 func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, neutral func(string) string, interactive bool, cols, rows int) map[string]any {
 	command, args, dir := prepared.Command, prepared.Args, spec.Dir
 	if r.byReference {
@@ -924,12 +924,12 @@ func neutralRoot(placeholder string) string {
 
 // launchLine is the line a run with a run key reports for session n, in place of the
 // values its dev.qory.session.started leaves out: the host name, and the working
-// directory, the harness home and the inputs directory on this machine; the command
-// and the arguments as the session starts them, which in a run whose policy has its
-// image by reference are the paths inside, under /workspace; and each harness source
-// with its commit. A value that
-// contains qak_, qrk_ or qecr_ is the phrase in its place, and the run's masker replaces each
-// forwarder's password in the line.
+// directory, the harness home and the inputs directory on this machine; the command and
+// the arguments as the session starts them, which in a run whose policy has its image by
+// reference are the paths inside, under /workspace; and each harness source with its
+// commit. A value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ is the
+// phrase in its place, and the run's masker replaces each forwarder's password in the
+// line.
 func (r *Run) launchLine(spec runSpec, n int, prepared runtimes.Launch) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "session %d starts on this machine:", n)

@@ -9,8 +9,8 @@ import (
 // TestTheNameFieldsAcceptEachPhrase pins the event fields whose schema lists the name
 // phrases: session.started's image_name, run.policy_applied's image and the name of a
 // variable and of a credential variable, and run.started's label keys. Each accepts the
-// phrase of an access key secret, of a run key and of a run code, and refuses any other
-// phrase.
+// phrase of an access key secret, of a run key, of a run code and of an enrolment code,
+// and refuses any other phrase.
 func TestTheNameFieldsAcceptEachPhrase(t *testing.T) {
 	for _, field := range []string{
 		"events/session.started.schema.json#/properties/image_name",
@@ -27,6 +27,7 @@ func TestTheNameFieldsAcceptEachPhrase(t *testing.T) {
 			"(a name that contains an access key secret)",
 			"(a name that contains a run key)",
 			"(a name that contains a run code)",
+			"(a name that contains an enrolment code)",
 		} {
 			if err := schema.Validate(phrase); err != nil {
 				t.Errorf("%s refuses %s: %v", field, phrase, err)

@@ -551,8 +551,8 @@ func orList(items []string, sep, last string) string {
 
 // credentialVariables is the record's credential_variables: one entry per credential
 // and placeholder, in order; nil when there is none. A credential's name or a
-// placeholder that contains an access key secret, a run key or a run code is
-// [accesskey.ShownName]'s phrase in its place, so the record never carries one.
+// placeholder that contains an access key secret, a run key, a run code or an enrolment
+// code is [accesskey.ShownName]'s phrase in its place, so the record contains none.
 func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]string {
 	var out []map[string]string
 	for _, c := range credentials {

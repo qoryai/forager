@@ -110,8 +110,8 @@ func (g *Gateway) admitRunKey(value string, ok bool) (runkey.Key, *accesskey.Ref
 	if err != nil {
 		return runkey.Key{}, runKeyInvalid()
 	}
-	// The instance id goes into run.registered as it is, so one that contains qak_, qrk_
-	// or qecr_ in any case is refused, as a registration's is
+	// The instance id goes into run.registered as it is, so one that contains qak_, qrk_,
+	// qecr_, qecn_, qecp_, qecg_ or qeci_ in any case is refused, as a registration's is
 	// ([accesskey.CheckInstanceID]).
 	if accesskey.CheckInstanceID(k.InstanceID) != nil {
 		return runkey.Key{}, runKeyInvalid()

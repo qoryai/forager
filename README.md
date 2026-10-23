@@ -139,9 +139,10 @@ Every event goes to files. With a server, the events it selects go there too:
   Ed25519 key, and every answer is verified under the server's key the machine pins.
 - The server can return the run's policy and variables, chosen by the run's labels. It
   can change the policy while the run goes.
-- A name or a value that contains `qak_`, `qrk_` or `qecr_`, the start of an access key
-  secret, a run key or a run code, is sent and printed as a phrase in its place, such as
-  `(a name that contains a run key)`. [docs/server.md](docs/server.md) lists where.
+- A name or a value that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or
+  `qeci_`, the start of an access key secret, a run key, a run code or an enrolment
+  code, is sent and printed as a phrase in its place, such as `(a name that contains a
+  run key)`. [docs/server.md](docs/server.md) lists where.
 
 A server is your control plane, or your receiver. The package `receiver` is a worked
 example.

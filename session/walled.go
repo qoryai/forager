@@ -381,20 +381,20 @@ type WalledRun struct {
 // overlap /a/b.
 //
 // A run is still going while its session holds its entry's lock, or else while the
-// container engine its entry records holds a container labelled with its run id, in
-// any state, a stopped one included; an entry with neither is removed, as a run that
-// starts removes it. The engine of an entry whose lock is free is asked only when a
-// writable bind of it overlaps p, or one cannot be resolved now: an entry none of whose
-// writable binds overlaps p is not returned, whatever its engine, and stays. When the
-// engine of such an entry cannot be asked, or the entry records no engine, or an entry
-// whose lock is free cannot be read, the error is a *[Refusal] with the code
-// engine_unreachable, whose Names are the run's id and the path of its entry, a path
-// that contains qak_, qrk_ or qecr_ in any case printed as [accesskey.ShownName]'s phrase,
-// and whose Detail says the run counts as still going; its EntryUnreadable is set for an
-// entry that cannot be read, and for no other. An entry whose lock is held and that
-// cannot be read, and a writable bind of a run still going that cannot be resolved now,
-// are plain errors, in the sentences a run that starts gets, which say nothing of
-// starting. A relative p, or one that cannot be resolved, is an error.
+// container engine its entry records holds a container labelled with its run id, in any
+// state, a stopped one included; an entry with neither is removed, as a run that starts
+// removes it. The engine of an entry whose lock is free is asked only when a writable bind
+// of it overlaps p, or one cannot be resolved now: an entry none of whose writable binds
+// overlaps p is not returned, whatever its engine, and stays. When the engine of such an
+// entry cannot be asked, or the entry records no engine, or an entry whose lock is free
+// cannot be read, the error is a *[Refusal] with the code engine_unreachable, whose Names
+// are the run's id and the path of its entry, a path that contains qak_, qrk_, qecr_,
+// qecn_, qecp_, qecg_ or qeci_ in any case printed as [accesskey.ShownName]'s phrase, and
+// whose Detail shows that the run counts as still going; its EntryUnreadable is set for an
+// entry that cannot be read, and for no other. An entry whose lock is held and that cannot
+// be read, and a writable bind of a run still going that cannot be resolved now, are plain
+// errors, in the sentences a run that starts gets, which contain nothing about starting. A
+// relative p, or one that cannot be resolved, is an error.
 //
 // The registry's lock is held for the whole read, and the answer holds when
 // RunsBinding returns: a run may start and bind p right after. A caller that removes or
@@ -742,14 +742,15 @@ func writtenEntry(file string) (walledEntry, bool, error) {
 	return entry, true, nil
 }
 
-// engineUnreachable is the refusal of a read of the registry that cannot ask the
-// container engine whether an earlier walled run, whose session is gone, still has
-// containers: nothing is bound while one may, and such a run counts as still going. so
-// is what follows from it, [startsNot] for a run that starts. Its names are the earlier
-// run's id and file, the path of its entry, which the registry's directory makes
-// absolute, so the entry can be found and looked at. A path that contains qak_, qrk_ or qecr_,
-// in any case, is [accesskey.ShownName]'s phrase in its place in the names, and Detail
-// prints [accesskey.ShownValue]'s phrase in place of an error that contains one.
+// engineUnreachable is the refusal of a read of the registry that cannot ask the container
+// engine whether an earlier walled run, whose session is gone, still has containers:
+// nothing is bound while one may, and such a run counts as still going. The argument so is
+// what follows from it, [startsNot] for a run that starts. Its names are the earlier run's
+// id and file, the path of its entry, which the registry's directory makes absolute, so
+// the entry can be found and looked at. A path that contains qak_, qrk_, qecr_, qecn_,
+// qecp_, qecg_ or qeci_, in any case, is [accesskey.ShownName]'s phrase in its place in
+// the names, and Detail prints [accesskey.ShownValue]'s phrase in place of an error that
+// contains one.
 func engineUnreachable(runID, file, so string, err error) *Refusal {
 	return &Refusal{
 		Code:  refusal.EngineUnreachable,

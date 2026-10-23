@@ -114,10 +114,11 @@ func New(code string, names []string, format string, a ...any) *accesskey.Refusa
 	return &accesskey.Refusal{Code: code, Names: sorted, Detail: fmt.Sprintf(format, a...)}
 }
 
-// Shown are names as a refusal lists them: each that contains an access key secret, a
-// run key or a run code, [accesskey.ContainsSecret], is its phrase, [accesskey.ShownName]
-// unquoted, since a refusal's names reach its text and the answer that carries it.
-// [New] lists a phrase two names give once. Nil when names is empty.
+// Shown are names as a refusal lists them: each that contains an access key secret, a run
+// key, a run code or an enrolment code, [accesskey.ContainsSecret], is its phrase,
+// [accesskey.ShownName] unquoted, since a refusal's names reach its text and the answer
+// that contains it. [New] lists a phrase once, even when two names become that phrase.
+// Nil when names is empty.
 func Shown(names ...string) []string {
 	var out []string
 	for _, n := range names {

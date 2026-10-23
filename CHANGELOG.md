@@ -18,6 +18,17 @@ release may change what an existing document does, and says so under Upgrading.
   `accesskey.ErrRunCodeInDocument` for a document that contains a run code and neither
   of the others; `errors.Is` reports it as `accesskey.ErrSecretInDocument`. The event
   schemas accept both phrases. Before, a run code passed as any other value.
+- `accesskey.ContainsSecret` catches an enrolment code, `qecn_`, `qecp_`, `qecg_` or
+  `qeci_` in any case, as it catches `qak_`, `qrk_` and `qecr_`. Forager refuses an
+  enrolment code where it refuses the other three, such as in a pin, a name or a built
+  image, and sends and prints `(a name that contains an enrolment code)` or `(a value
+  that contains an enrolment code)` in place of a name or a value that contains one.
+  `accesskey.SecretInDocument` returns `accesskey.ErrEnrolmentCodeInDocument` for a
+  document that contains an enrolment code and none of the others; `errors.Is` reports
+  it as `accesskey.ErrSecretInDocument`. The event schemas accept both phrases. The
+  errors of a malformed enrolment code and of a `run.url` with a secret start with
+  their fix, and the error of a built image with a secret's prefix lists `qak_, qrk_ or
+  qec[npgir]_`. Before, an enrolment code passed as any other value.
 - A configuration document whose `run.url` contains `qak_` or `qrk_` in any case is
   refused: `server.Client.Discover` returns a `*server.DocumentError`, and no run
   starts. Before, the document was read and `run.policy_applied` sent `run.url` as it

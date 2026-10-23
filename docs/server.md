@@ -61,17 +61,20 @@ server decides which labels identify what the run works on.
 ### Names and values that contain a key's prefix
 
 `qak_` starts every access key secret, `qrk_` every run key and `qecr_` every run code.
-Forager sends and prints a phrase in place of a name or a value that contains any of
-them, in any case:
+`qecn_`, `qecp_`, `qecg_` and `qeci_` start the enrolment code of a node's, a node
+pool's, a gateway's and an adapter's access key. Forager sends and prints a phrase in
+place of a name or a value that contains any of them, in any case:
 
 - A name, such as a credential's, a tool's, a variable's, an image or a label's key or
   value, is `(a name that contains an access key secret)` when it contains `qak_`,
-  `(a name that contains a run key)` when it contains `qrk_` and no `qak_`, and `(a
-  name that contains a run code)` when it contains `qecr_` and neither of the others.
+  `(a name that contains a run key)` when it contains `qrk_` and no `qak_`, `(a name
+  that contains a run code)` when it contains `qecr_` and neither of the others, and
+  `(a name that contains an enrolment code)` when it contains `qecn_`, `qecp_`, `qecg_`
+  or `qeci_` and none of the others.
 - A value of free text, such as a path, a command, an argument, a URL, a program's
   output or an error's text, is `(a value that contains an access key secret)`, `(a
-  value that contains a run key)` or `(a value that contains a run code)` the same
-  way. `run.started`'s `dir` is a path.
+  value that contains a run key)`, `(a value that contains a run code)` or `(a value
+  that contains an enrolment code)` the same way. `run.started`'s `dir` is a path.
 - In a `run.refused`'s `names`, every entry is the name's phrase, a path among them;
   the refusal's `detail` prints a path as the value's phrase.
 
@@ -254,13 +257,15 @@ The record lists every variable by name, never a value: `dev.qory.run.policy_app
 that lost with its source and why: `overridden`, `denied`, `fixed`, `unwalled`,
 `endpoint_uncovered` or `endpoint_unreadable`; behind a wall, the entry of the runtime's
 model endpoint variable has `kept`, with the model credential's name, when the value
-that applies is one the endpoint rule kept. A name
-that contains `qak_`, `qrk_` or `qecr_` in any case is sent as `(a name that contains an
-access key secret)`, `(a name that contains a run key)` when it contains `qrk_` and no
-`qak_`, or `(a name that contains a run code)` when it contains `qecr_` and neither of
-the others. A fixed name, and a name the run inherits, is listed only beside a value of the
-server, the run, the machine or the harness's defaults. `SessionSpec.OnVariables` receives the
-same list, as `session.Applied`, with each name as it is.
+that applies is one the endpoint rule kept. A name that contains `qak_`, `qrk_`,
+`qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` in any case is sent as `(a name that
+contains an access key secret)`, `(a name that contains a run key)` when it contains
+`qrk_` and no `qak_`, `(a name that contains a run code)` when it contains `qecr_` and
+neither of the others, or `(a name that contains an enrolment code)` when it contains
+`qecn_`, `qecp_`, `qecg_` or `qeci_` and none of the others. A fixed name, and a name
+the run inherits, is listed only beside a value of the server, the run, the machine or
+the harness's defaults. `SessionSpec.OnVariables` receives the same list, as
+`session.Applied`, with each name as it is.
 
 ## A control plane
 

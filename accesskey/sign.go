@@ -177,9 +177,10 @@ type Pin []ServerKey
 // [{"alg": "ed25519", "public_key": "<32 bytes, base64url>"}]. A member it does not
 // define is refused, and so is a member twice. It then runs [Pin.Check]. A pin that
 // contains an access key secret is [ErrSecretInDocument], one that contains a run key
-// [ErrRunKeyInDocument], and one that contains a run code [ErrRunCodeInDocument], whose
-// messages quote nothing; a key the pin lists is left out of that check as
-// [SecretInPinDocument] leaves it out.
+// [ErrRunKeyInDocument], one that contains a run code [ErrRunCodeInDocument], and one
+// that contains an enrolment code [ErrEnrolmentCodeInDocument], whose messages quote
+// nothing; a key the pin lists is left out of that check as [SecretInPinDocument]
+// leaves it out.
 func ParsePin(b []byte) (Pin, error) {
 	if err := SecretInPinDocument(string(b), ""); err != nil {
 		return nil, err
@@ -306,6 +307,22 @@ func (runCodeInDocument) Error() string {
 
 // Is reports [ErrSecretInDocument] as the error's kind.
 func (runCodeInDocument) Is(target error) bool { return target == ErrSecretInDocument }
+
+// ErrEnrolmentCodeInDocument is the error of a document that contains an enrolment code
+// of an access key, qecn_, qecp_, qecg_ or qeci_, and no access key secret, no run key
+// and no run code, where none belongs: a fixed message, so the enrolment code appears
+// in no error. errors.Is reports it as [ErrSecretInDocument] as well.
+var ErrEnrolmentCodeInDocument error = enrolmentCodeInDocument{}
+
+// enrolmentCodeInDocument is [ErrEnrolmentCodeInDocument].
+type enrolmentCodeInDocument struct{}
+
+func (enrolmentCodeInDocument) Error() string {
+	return "remove the enrolment code from the document: an enrolment code belongs in an enrolment request only"
+}
+
+// Is reports [ErrSecretInDocument] as the error's kind.
+func (enrolmentCodeInDocument) Is(target error) bool { return target == ErrSecretInDocument }
 
 // encodeSignature writes a signature in base64url without padding.
 func encodeSignature(sig []byte) string { return base64.RawURLEncoding.EncodeToString(sig) }
