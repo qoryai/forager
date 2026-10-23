@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,8 +52,18 @@ type linkRun struct {
 	// every request of the run; it has no proxy secret.
 	remote bool
 
+	// stack is the run's stack proxy, and stackSecret its secret on the local link, held
+	// so that no print of the run shows it; both nil from the run's first join request
+	// on, under mu ([linkRun.closeStack]).
+	stack       *proxy.Proxy
+	stackSecret secretValue
+
 	// batch takes one batch of the session's at a time.
 	batch sync.Mutex
+	// joining takes one join, or one reload's decision and commit, at a time, so a
+	// join's passes are checked against the placeholders of the policy in force and a
+	// reload against the passes of every open join.
+	joining sync.Mutex
 
 	mu sync.Mutex
 	// opened says the run answer is made.
@@ -66,6 +78,9 @@ type linkRun struct {
 	startedID string
 	startedAt time.Time
 	final     bool
+	// joins are the run's joins the gateway answered 200 or 403, by their session
+	// numbers, from 1, in the order they arrived.
+	joins []*join
 	// given are the members of dev.qory.run.policy_applied the gateway decides, for each
 	// policy it put in force for the run, as the answers carry them.
 	given []map[string]any
@@ -73,8 +88,8 @@ type linkRun struct {
 	// X-Qory-Run-Configuration of every answer for the run.
 	reloadBody   []byte
 	reloadDigest string
-	// answer is the run answer, given once; it holds the proxy secret, so no print of
-	// the run shows it.
+	// answer is the run answer, made once; it contains the proxy secret and the stack
+	// proxy secret, so no print of the run shows it.
 	answer secretValue
 	// last is when the session last asked anything of the run; timer ends the run when
 	// it asks nothing for the gateway's quiet time.
@@ -414,7 +429,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	}
 	r, err := run.Decide(run.Config{
 		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
-		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: run.Passing(req.Passes), Report: g.report,
+		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: lr.passing, Report: g.report,
 		Narrowing: narrowing, Secrets: secrets,
 	})
 	if err != nil {
@@ -469,6 +484,10 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
 		authority = ca.PEM()
 	}
+	if held := r.Held(); held != nil && held.Start != "" {
+		// Before any session joins, and between sessions, the proxy sets the start key.
+		lr.px.SetModelKey(held.Start)
+	}
 	if !remote {
 		// On the one address the run key opens the run's proxy, bound to its connection.
 		secret, err := proxy.NewSecret()
@@ -479,6 +498,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		if err := g.proxies.Register(secret, lr.px); err != nil {
 			return fail(err)
 		}
+	}
+	if err := lr.openStack(req.Wall || remote); err != nil {
+		return fail(err)
 	}
 	lr.mu.Lock()
 	lr.refresh()
@@ -566,11 +588,13 @@ func (lr *linkRun) arm() {
 // end, or one after the run ended otherwise, is ignored. It never blocks.
 func (lr *linkRun) serverEnd(end server.ServerEnd) { lr.end(stoppedBy(end)) }
 
-// release lets go of what the run holds on the gateway's side: its secret and proxy
-// first, so an ended run's secret is refused at once, even while a reload in flight
-// winds down; then its reload, its tools and its credentials. Each may be absent.
+// release lets go of what the run holds on the gateway's side: its stack proxy, its
+// secret and proxy first, so an ended run's secrets are refused at once, even while a
+// reload in flight winds down; then its reload, its tools and its credentials. Each may
+// be absent.
 func (lr *linkRun) release() {
 	lr.cancel()
+	lr.closeStack()
 	if lr.secret != nil {
 		lr.g.proxies.Unregister(lr.secret.reveal())
 	}
@@ -589,6 +613,118 @@ func (lr *linkRun) release() {
 // observe numbers one decision of the run's proxy as dev.qory.run.egress; the stream
 // holds it until run.started is numbered.
 func (lr *linkRun) observe(d proxy.Decision) { lr.st.Emit(event.RunEgress, run.Egress(d)) }
+
+// openStack makes the run's stack proxy, for qory's fetch of the harness definition
+// before the run's first session: in enforce mode, allowing the hosts of
+// [Config.StackHosts] alone, with no certificate authority, no credential and no model
+// key, at the run's limits with counters apart from the run's proxy. When guarded is
+// true it is guarded as the run's proxy is: this machine's addresses and the private
+// network addresses are reached only for a host that the node's policy's allow list
+// and StackHosts both list by name, not by a *. pattern, and a link-local or cloud
+// metadata address for none. The run's policy is not read. Each decision is a
+// line of the gateway's report ([stackLine]). On the local link it is registered under
+// a fresh secret, the run answer's stack_proxy_secret, which no other proxy has; on
+// the one address the run key opens it, after [link.StackPreamble].
+func (lr *linkRun) openStack(guarded bool) error {
+	report := routine.ForRun(lr.g.report, lr.id)
+	px, err := proxy.New(policy.Enforce, slices.Clone(lr.g.cfg.StackHosts), nil, func(d proxy.Decision) { report(stackLine(d)) })
+	if err != nil {
+		return err
+	}
+	px.ReportPanics(report)
+	px.SetLimits(proxy.Limits{Connections: lr.g.cfg.RunLimits.Connections, RequestsPerSecond: lr.g.cfg.RunLimits.RequestsPerSecond, Burst: lr.g.cfg.RunLimits.Burst, Stack: true})
+	px.Unlisted(stackRefused)
+	if guarded {
+		// The names are the node's policy's allow entries that StackHosts lists exactly,
+		// so a *. entry of StackHosts opens nothing: both lists name the host itself.
+		var names []string
+		if node := lr.g.cfg.Policy; node != nil {
+			for _, entry := range node.Egress.Allow {
+				if _, ok := policy.Exact(lr.g.cfg.StackHosts, entry); ok {
+					names = append(names, entry)
+				}
+			}
+		}
+		px.Guard(names)
+		px.GuardRefused(stackGuarded)
+	}
+	lr.mu.Lock()
+	lr.stack = px
+	lr.mu.Unlock()
+	if lr.remote {
+		return nil
+	}
+	secret, err := proxy.NewSecret()
+	if err != nil {
+		return err
+	}
+	lr.mu.Lock()
+	lr.stackSecret = newSecretValue(secret)
+	lr.mu.Unlock()
+	return lr.g.proxies.Register(secret, px)
+}
+
+// stackProxy is the run's stack proxy, nil from the run's first join request on.
+func (lr *linkRun) stackProxy() *proxy.Proxy {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.stack
+}
+
+// closeStack closes the run's stack proxy, once, at the run's first join request and as
+// the run lets go of what it holds: its secret is refused from then on, and every
+// connection through it closes, one opened before the call among them.
+func (lr *linkRun) closeStack() {
+	lr.mu.Lock()
+	px, secret := lr.stack, lr.stackSecret
+	lr.stack, lr.stackSecret = nil, nil
+	lr.mu.Unlock()
+	if secret != nil {
+		lr.g.proxies.Unregister(secret.reveal())
+	}
+	if px != nil {
+		px.Close()
+	}
+}
+
+// stackLine is the gateway's report of one decision of a run's stack proxy, after
+// "run <run id>: ".
+func stackLine(d proxy.Decision) string {
+	host := accesskey.ShownValue(d.Host, false)
+	if d.Rule == proxy.HostForm && !accesskey.ContainsSecret(d.Host) {
+		host = strconv.QuoteToASCII(d.Host)
+	}
+	to := fmt.Sprintf("stack fetch to %s:%d", host, d.Port)
+	switch {
+	case d.Allowed && d.Outcome == proxy.DialFailed:
+		return fmt.Sprintf("%s allowed by gateway.stack_hosts entry %s; the dial failed", to, d.Rule)
+	case d.Allowed:
+		return fmt.Sprintf("%s allowed by gateway.stack_hosts entry %s", to, d.Rule)
+	case d.Rule == "":
+		return to + " denied: the host is not in gateway.stack_hosts"
+	}
+	return fmt.Sprintf("%s denied by the gateway's rule %s", to, d.Rule)
+}
+
+// stackRefused is the body of the 403 a run's stack proxy answers for a host that is
+// not in [Config.StackHosts].
+func stackRefused(host string, port int) string {
+	return fmt.Sprintf("qory: add %s to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.\n"+
+		"qory: egress to %s:%d denied by the gateway: the host is not in gateway.stack_hosts\n", host, host, port)
+}
+
+// stackGuarded is the body of the 403 a run's guarded stack proxy answers for a host
+// the guard refuses, by number or at dial time: never for a link-local or cloud
+// metadata address, which no entry opens, and otherwise this machine's address or a
+// private network address.
+func stackGuarded(host string, port int, never bool) string {
+	if never {
+		return fmt.Sprintf("qory: fetch the harness definition from another host: the gateway never reaches a link-local or cloud metadata address, and %s is one or resolves to one.\n"+
+			"qory: egress to %s:%d denied by the gateway: no entry of gateway.stack_hosts or of the node's policy opens a link-local or cloud metadata address\n", host, host, port)
+	}
+	return fmt.Sprintf("qory: to fetch the harness definition from the gateway's machine or a private network address, list %s by name, not a *. pattern, in the allow list of the node's policy and in gateway.stack_hosts in forager.yaml.\n"+
+		"qory: egress to %s:%d denied by the gateway: the stack proxy reaches such an address only for a host listed by name in both, and never a link-local or cloud metadata address\n", host, host, port)
+}
 
 // touch says the session asked something of the run now.
 func (lr *linkRun) touch() {
@@ -658,16 +794,24 @@ func (lr *linkRun) end(e ending) {
 			return
 		}
 		if e.state != "" && lr.st.Started() {
-			var ran int64
-			if !startedAt.IsZero() {
-				ran = max(time.Since(startedAt).Milliseconds(), 0)
+			// A join still open with its session.started: its session's end comes first,
+			// with the run's state and reason, as each session.exited follows its
+			// session.started. An open join with no session.started gets no event. No batch
+			// and no join is numbered from here on, the run having ended.
+			lr.batch.Lock()
+			lr.mu.Lock()
+			var open *join
+			if j := lr.openJoin(); j != nil && j.started {
+				c := *j
+				open = &c
 			}
-			// A session's run: the gateway holds no exit status of its runtime.
-			data := map[string]any{"state": e.state, "duration_ms": ran, "exit_code": -1}
-			if e.reason != "" {
-				data["reason"] = e.reason
+			lr.mu.Unlock()
+			lr.batch.Unlock()
+			if open != nil {
+				lr.st.Emit(event.SessionExited, ended(e, open.session, open.startedAt))
 			}
-			lr.st.Emit(event.RunExited, data)
+			// The gateway holds no exit status of a session's runtime.
+			lr.st.Emit(event.RunExited, ended(e, 0, startedAt))
 		}
 		lr.result, lr.err = lr.st.Close(lr.g.base)
 		lr.cancel()
@@ -678,9 +822,27 @@ func (lr *linkRun) end(e ending) {
 	})
 }
 
+// ended is the data of the gateway's dev.qory.run.exited of the ending e, or with a
+// session of 1 or more that of the session's dev.qory.session.exited: the ending's
+// state and reason, exit_code -1, and the milliseconds since from, 0 when from is zero.
+func ended(e ending, session int, from time.Time) map[string]any {
+	var ran int64
+	if !from.IsZero() {
+		ran = max(time.Since(from).Milliseconds(), 0)
+	}
+	data := map[string]any{"state": e.state, "duration_ms": ran, "exit_code": -1}
+	if session > 0 {
+		data["session"] = session
+	}
+	if e.reason != "" {
+		data["reason"] = e.reason
+	}
+	return data
+}
+
 // runAnswerDoc is the run answer as the gateway writes it,
 // contracts/forager/v1/link-run-answer.schema.json: on the one address without the
-// labels and the proxy secret.
+// labels, the proxy secret and the stack proxy secret.
 type runAnswerDoc struct {
 	Version              int                          `json:"version"`
 	RunID                string                       `json:"run_id"`
@@ -689,6 +851,7 @@ type runAnswerDoc struct {
 	Digest               string                       `json:"digest,omitempty"`
 	Variables            map[string]server.Variable   `json:"variables,omitempty"`
 	ProxySecret          string                       `json:"proxy_secret,omitempty"`
+	StackProxySecret     string                       `json:"stack_proxy_secret,omitempty"`
 	CertificateAuthority string                       `json:"certificate_authority,omitempty"`
 	Placeholders         []string                     `json:"placeholders,omitempty"`
 	Reserved             []string                     `json:"reserved,omitempty"`
@@ -735,7 +898,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	doc, digest := policyDocument(pol)
 	a := runAnswerDoc{
 		Version: 1, RunID: lr.id, Labels: lr.labels, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
-		ProxySecret: lr.secret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
+		ProxySecret: lr.secret.reveal(), StackProxySecret: lr.stackSecret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
 		CredentialHosts: credentialHosts(lr.r.Held()), Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	}
 	if held := lr.r.Held(); held != nil {
@@ -840,7 +1003,7 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 		a["digest"] = pol.Digest
 	}
 	if pol.URL != "" {
-		// server.Client.Discover refuses a run.url that contains qak_ or qrk_, which no
+		// server.Client.Discover refuses a run.url that contains qak_, qrk_ or qecr_, which no
 		// phrase can stand in for: the schema's url is a URI.
 		a["url"], a["run_configuration"] = pol.URL, pol.RunConfiguration
 	}
@@ -864,10 +1027,10 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 	if held != nil && len(held.Uses) > 0 {
 		uses := make([]map[string]any, len(held.Uses))
 		for i, u := range held.Uses {
-			// A name or an argument that contains qak_ or qrk_ in any case is sent as
+			// A name or an argument that contains qak_, qrk_ or qecr_ in any case is sent as
 			// accesskey.ShownName's phrase in its place.
 			// A host or a path is accesskey.ShownValue's phrase in place of one that
-			// contains either.
+			// contains any of them.
 			uses[i] = map[string]any{"name": accesskey.ShownName(u.Name, false), "hosts": shownValues(u.Hosts), "scheme": u.Scheme}
 			if u.Argument != "" {
 				uses[i]["argument"] = accesskey.ShownName(u.Argument, false)
@@ -928,6 +1091,10 @@ func shownPaths(paths map[string][]string) map[string][]string {
 // after the switch, are recorded right after it, today's order, or before the run's
 // final event when it never comes.
 func (lr *linkRun) apply(next *policy.Loaded) error {
+	// The open joins' passes stay as they are while the reload is decided and put in
+	// force: a join waits for it.
+	lr.joining.Lock()
+	defer lr.joining.Unlock()
 	d, err := lr.r.Reload(lr.ctx, next)
 	if err != nil {
 		return err

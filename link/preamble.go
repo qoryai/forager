@@ -42,6 +42,10 @@ func CheckSecret(secret string) error { return checkSecret(secret) }
 // secret: [RelayPreamble], a space, the secret and a newline.
 func RelayLine(secret string) string { return RelayPreamble + " " + secret + "\n" }
 
+// StackLine is the line that opens a connection to a run's stack proxy on a separate
+// gateway's one address: [StackPreamble], a space, the run key and a newline.
+func StackLine(runKey string) string { return StackPreamble + " " + runKey + "\n" }
+
 // ReadRelayPreamble reads the relay's preamble, [RelayPreamble], a space, the secret
 // and a newline, from the start of a connection and reports whether it carries the
 // secret, compared in constant time. It reads exactly the preamble's length and no

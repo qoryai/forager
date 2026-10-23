@@ -23,7 +23,16 @@
 // an enrolment code in its normalised form and a proof of possession under the new
 // key, and [EnrolmentRequest.Post] sends it and verifies the answer under the server
 // key the code's fingerprint selects; [EnrolmentRequest.PostVia] sends it through a
-// gateway that relays it to the server, and verifies the answer the same way.
+// gateway that relays it to the server, and verifies the answer the same way. A run
+// code, [CodePrefixRun], enrols no key: [EnrolmentRequest.PostRunVia] redeems it
+// through a gateway for a run's run key, verified as package runkey verifies one, and
+// the run's documents, and returns a [RunAnswer], which shows its run id and not its
+// run key or documents wherever fmt, log/slog and encoding/json call its methods.
+// Pass fmt a RunAnswer, a pointer to one, or its RunID alone. Never pass a
+// value that contains a RunAnswer, and never pass a RunAnswer or a pointer to one under
+// %w; under %p, pass only a pointer. In any other case fmt may call no method of
+// RunAnswer and print every field, the run key and the documents included. slog's
+// text handler prints such a value through fmt too.
 //
 // An instance is one running copy of qory with the access key. [NewInstanceID] makes
 // its id, and [InstanceFile] and [ReadInstanceFile] are the two lines qory keeps it in,

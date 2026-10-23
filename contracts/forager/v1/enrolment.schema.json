@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/enrolment.schema.json",
   "title": "Enrolment",
-  "description": "The POST to <url>/.well-known/qory-enrolment, which assigns a new access key its id, its 201 answer and its signed refusals: the request's body is $defs/request, the answer's $defs/answer, a signed 409's or 429's $defs/refusal, and a document is one of the three. The request carries no access key id and no request signature; the code and the proof authenticate it. The answer and every signed refusal are signed under the server's key, the first line of the signed answer being the enrolment answers' domain line, qory-enrol-answer-ed25519-v1, and line 3 the request's proof exactly as sent. The server checks the key and verifies the proof under it before it signs anything. The answer and every signed refusal list the server's keys, so a machine without a pin verifies either under the key its code's first fingerprint names. A member the schema does not define is refused, and so is a member name twice in one object. Every binary value is base64url without padding.",
+  "description": "The POST to <url>/.well-known/qory-enrolment, which assigns a new access key its id, or redeems a run code for a run's run key and the run's documents, its 201 answers and its signed refusals: the request's body is $defs/request, the 201 to an access key's code $defs/answer, the 201 to a run code $defs/run_answer, a signed 409's or 429's body $defs/refusal, and a document is one of the four. The request a machine sends contains no access key id and no request signature; the code and the proof authenticate it. A gateway's relay adds the gateway's access key id, instance id and request signature, over the body byte for byte as it came. Each 201 and every signed refusal are signed under the server's key, the first line of the signed answer being the enrolment answers' domain line, qory-enrol-answer-ed25519-v1, and line 3 the request's proof exactly as sent. The server checks the key and verifies the proof under it before it signs anything. Each 201 and every signed refusal list the server's keys, so a machine without a pin verifies either under the key its code's first fingerprint names. A member the schema does not define is refused, and so is a member name twice in one object. Every binary value is base64url without padding.",
   "oneOf": [
     {"$ref": "#/$defs/request"},
     {"$ref": "#/$defs/answer"},
+    {"$ref": "#/$defs/run_answer"},
     {"$ref": "#/$defs/refusal"}
   ],
   "$defs": {
@@ -42,9 +43,9 @@
           "const": 1
         },
         "code": {
-          "description": "The enrolment code in its normalised form: a prefix in lower case and 26 Crockford base32 characters in upper case, then a dot and the fingerprint of the server's public key, and during a rotation of the server's key a second dot and the next key's fingerprint. A fingerprint is base64url(SHA-256(raw public key)[:16]). The prefix names the kind of key the code enrols: qecn_ a node's, qecp_ a node pool's, qecg_ a gateway's and qeci_ an integration's (node_kind adapter), and the 201's node_kind is the prefix's kind. A code whose prefix names another kind than its node's is unknown to the server, which answers it 401 as any unknown code; a code with any other prefix is malformed, and the server refuses it as an invalid request, 400.",
+          "description": "The enrolment code in its normalised form: a prefix in lower case and 26 Crockford base32 characters in upper case, then a dot and the fingerprint of the server's public key, and during a rotation of the server's key a second dot and the next key's fingerprint. A fingerprint is base64url(SHA-256(raw public key)[:16]). The prefix names the kind of key the code enrols: qecn_ a node's, qecp_ a node pool's, qecg_ a gateway's and qeci_ an integration's (node_kind adapter), and the 201's node_kind is the prefix's kind. qecr_ is a run code: it enrols no access key and redeems a run's run key, and its 201 is $defs/run_answer. A code whose prefix names another kind than its node's is unknown to the server, which answers it 401 as any unknown code; a code with any other prefix is malformed, and the server refuses it as an invalid request, 400.",
           "type": "string",
-          "pattern": "^qec[npgi]_[0-9A-HJKMNP-TV-Z]{26}(\\.[A-Za-z0-9_-]{22}){1,2}$"
+          "pattern": "^qec[npgir]_[0-9A-HJKMNP-TV-Z]{26}(\\.[A-Za-z0-9_-]{22}){1,2}$"
         },
         "name": {
           "description": "The access key's name for people, by default the host name of the machine that enrols it.",
@@ -118,6 +119,35 @@
           "then": {"properties": {"node_id": {"pattern": "^na_"}}}
         }
       ]
+    },
+    "run_answer": {
+      "title": "Run code answer",
+      "description": "The 201 to a run code, qecr_: the run's id, its run key, the server's public keys and the run's documents. Every member is required. The redemption makes no access key. A run code is valid for 15 minutes and is used once: a redemption by another public key after the first is 401, and a retry by the same public key within the 15 minutes, while the run's dispatch lives, gets the same members, the same run_id, run_key, apiary_public_key and documents, signed over the retry's proof. The run key's issued is the time of the code's first redemption, not the time the code was made, and its attach_by is 600 seconds after issued. The answer is at most 1 MiB: Forager reads at most 1 MiB of the body of an answer to a run code, and counts a longer body as unsigned, answer_unsigned. The answer is signed as the 201 to an access key's code is, and the signature covers the whole body, documents included. The machine verifies it under the listed key whose fingerprint is the code's first, then verifies run_key as the gateway does, under the listed key whose fingerprint is in the code and is the run key's signer, and checks that the run key's run_id is run_id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "run_id", "run_key", "apiary_public_key", "documents"],
+      "properties": {
+        "version": {
+          "description": "The document format. For a version it does not read, Forager returns an error.",
+          "const": 1
+        },
+        "run_id": {
+          "description": "The run's id, a UUID in the canonical lower-case form: the run_id of the run key's payload.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "run_key": {
+          "description": "The run's run key, run-key.schema.json: qrk_, the payload in base64url without padding, a dot and the signature. The machine keeps it in memory and passes it to the session as RemoteGateway.RunKey, and writes it to no file and no environment variable.",
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^qrk_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+        },
+        "apiary_public_key": {"$ref": "#/$defs/server_keys"},
+        "documents": {
+          "description": "The run's documents: a JSON object, whose schema is documents.schema.json of qoryai/integrations, https://qory.dev/contracts/run/v1/documents.schema.json. Forager checks that documents is an object, reads none of its members, and passes it to the caller byte for byte as the answer contains it. A documents member that is not an object, null included, is refused.",
+          "type": "object"
+        }
+      }
     },
     "refusal": {
       "title": "Enrolment refusal",

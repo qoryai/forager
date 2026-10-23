@@ -205,7 +205,8 @@ func (r *remote) handle(raw net.Conn) {
 	r.bound++
 	r.mu.Unlock()
 	tc.SetDeadline(time.Time{})
-	if head, err := br.Peek(len(link.RelayPreamble) + 1); err == nil && string(head) == link.RelayPreamble+" " {
+	// The relay's preamble and the stack proxy's have the same length.
+	if head, err := br.Peek(len(link.RelayPreamble) + 1); err == nil && (string(head) == link.RelayPreamble+" " || string(head) == link.StackPreamble+" ") {
 		defer tc.Close()
 		line, err := br.ReadString('\n')
 		if err != nil {
@@ -214,7 +215,7 @@ func (r *remote) handle(raw net.Conn) {
 		r.f.mu.Lock()
 		r.f.preambles = append(r.f.preambles, strings.TrimSuffix(line, "\n"))
 		r.f.mu.Unlock()
-		if !r.bearer([]string{"Bearer " + strings.TrimSuffix(strings.TrimPrefix(line, link.RelayPreamble+" "), "\n")}) {
+		if !r.bearer([]string{"Bearer " + strings.TrimSuffix(line[len(head):], "\n")}) {
 			return
 		}
 		r.f.answerProxied(tc, br)

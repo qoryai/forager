@@ -37,6 +37,10 @@ const (
 	// the wall reads it from the image after it fetches it, or finds the engine holds it
 	// by that digest: its name is the reference.
 	ImageUserRoot = "image_user_root"
+	// ImageMissing is an image that a policy sets by reference that its registry does not
+	// have, as the engine's pull reports it: no manifest of that digest, or no
+	// repository of that name. Its name is the reference.
+	ImageMissing = "image_missing"
 	// VariableReserved is a walled run whose environment passes a QORY_ variable, or a
 	// variable a machine value is read from, into the enclosure.
 	VariableReserved = "variable_reserved"
@@ -77,7 +81,7 @@ const (
 // refusal of the run's own configuration rather than of an answer of the server's.
 func Decides(code string) bool {
 	switch code {
-	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot,
+	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot, ImageMissing,
 		VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable:
 		return true
@@ -110,10 +114,10 @@ func New(code string, names []string, format string, a ...any) *accesskey.Refusa
 	return &accesskey.Refusal{Code: code, Names: sorted, Detail: fmt.Sprintf(format, a...)}
 }
 
-// Shown are names as a refusal lists them: each that contains an access key secret or
-// a run key, [accesskey.ContainsSecret], is its phrase, [accesskey.ShownName] unquoted,
-// since a refusal's names reach its text and the answer that carries it. [New] lists a
-// phrase two names give once. Nil when names is empty.
+// Shown are names as a refusal lists them: each that contains an access key secret, a
+// run key or a run code, [accesskey.ContainsSecret], is its phrase, [accesskey.ShownName]
+// unquoted, since a refusal's names reach its text and the answer that carries it.
+// [New] lists a phrase two names give once. Nil when names is empty.
 func Shown(names ...string) []string {
 	var out []string
 	for _, n := range names {

@@ -3,7 +3,7 @@ version: 1
 runtime: amp
 runtime_version: "1"
 sources: {output: {format: jsonl}}
-rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]
+rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]
 model:
   model: {flag: --model}
   endpoint: {variable: AMP_BASE_URL}

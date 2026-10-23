@@ -178,7 +178,7 @@ func TestARefusalOfAnImageWithASecretPrefixListsAPhrase(t *testing.T) {
 	} {
 		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: c.user}
 		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
-		_, err := d.Prepare(context.Background(), Request{RunID: runID, Image: c.image, RelayImage: "example.com/agent:1", Pull: true})
+		err := d.Pull(context.Background(), Request{RunID: runID, Image: c.image, RelayImage: "example.com/agent:1", Pull: true}, nil, nil)
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.ImageUserRoot {
 			t.Errorf("image %s, user %s: %v, want image_user_root", c.image, c.user, err)
@@ -202,7 +202,12 @@ func TestAnErrorThatQuotesASecretIsAPhrase(t *testing.T) {
 
 	inspect := func(err error) error {
 		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: quoting{&recorder{t: t, uid: 1000}, err, false}}
-		_, got := d.Prepare(ctx, Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
+		e, got := d.Prepare(ctx, Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
+		if got != nil {
+			return got
+		}
+		defer e.Close(ctx)
+		_, got = e.Wrap(ctx, launch())
 		return got
 	}
 	if got, want := inspect(quoted), "wall docker: image inspect "+byReference+": "+valueWithSecret; got == nil || got.Error() != want || !errors.Is(got, quoted) {
@@ -286,7 +291,11 @@ func TestProgramOutputWithASecretIsAPhrase(t *testing.T) {
 
 	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, stderr: "Error: qrk_y denied"}
 	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
-	_, err := d.Prepare(ctx, Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
+	enc, err := d.Prepare(ctx, Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
+	if err == nil {
+		_, err = enc.Wrap(ctx, launch())
+		enc.Close(ctx)
+	}
 	if err == nil || !strings.HasSuffix(err.Error(), ": "+valueWithRunKey) {
 		t.Errorf("image inspect's error output: %v", err)
 	} else {

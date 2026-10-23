@@ -64,9 +64,13 @@ them under its state directory and prints the path:
 - `events.jsonl`: one CloudEvent per line, in order.
 - `output.log`: the session's bytes.
 
+In a run with no wall, `qory-proxy-password` replaces the password of the agent's proxy
+URL in the session's bytes and in the events made from the runtime's output and hook
+records.
+
 Forager writes its events: the start, the policy, each connection, each chunk of output,
 a heartbeat every 30 seconds, and the exit. The agent's hooks and output add the
-session's events: prompts, tool calls, subagents, turns, as the runtime reports them
+runtime's events: prompts, tool calls, subagents, turns, as the runtime reports them
 from inside, which an image a repository built can change. A **descriptor** maps them.
 Forager ships one for Claude Code.
 
@@ -108,6 +112,7 @@ The proxy sees only programs that honour it. A **wall** makes the rest fail:
 
 - The agent starts in a container, on a network with no route out.
 - A relay leads to the proxy, and nowhere else.
+- Setup runs in a separate container on the same network, so it reaches only the relay too.
 - The session, the gateway, the policy and the access key secret stay outside. The
   record is written from outside.
 
@@ -134,9 +139,9 @@ Every event goes to files. With a server, the events it selects go there too:
   Ed25519 key, and every answer is verified under the server's key the machine pins.
 - The server can return the run's policy and variables, chosen by the run's labels. It
   can change the policy while the run goes.
-- A name or a value that contains `qak_` or `qrk_`, the start of an access key secret
-  or a run key, is sent and printed as a phrase in its place, such as `(a name that
-  contains a run key)`. [docs/server.md](docs/server.md) lists where.
+- A name or a value that contains `qak_`, `qrk_` or `qecr_`, the start of an access key
+  secret, a run key or a run code, is sent and printed as a phrase in its place, such as
+  `(a name that contains a run key)`. [docs/server.md](docs/server.md) lists where.
 
 A server is your control plane, or your receiver. The package `receiver` is a worked
 example.
@@ -146,15 +151,16 @@ More: [docs/server.md](docs/server.md).
 ## Embed it in Go
 
 Forager is a Go module, and `qory` is one program built on it. Build it into your
-program to run an agent inside the same boundary. It needs Go 1.27.1 or above:
+program to run an agent inside the same boundary. It needs Go 1.27.3 or above:
 
 ```sh
 go get github.com/qoryai/forager
 ```
 
-A gateway, `gateway.Start`, holds the policy, the credentials and the server. One call,
-`session.Run`, runs one session against it: you pass the program to start and the
-gateway's local link. You get back the exit status and the directory of the record:
+A gateway, `gateway.Start`, holds the policy, the credentials and the server.
+`session.Open` opens a run at the gateway's local link. `Run.Join` runs one session in
+the run: you pass the program to start, and you get back the exit status. `Run.Close`
+ends the run with the outcome you give and returns the directory of the record:
 
 ```go
 g, err := gateway.Start(ctx, gateway.Config{
@@ -168,18 +174,32 @@ rt, err := catalog.Lookup("claude", "")         // the runtime, by its name
 if err != nil {
 	return err
 }
-res, err := session.Run(ctx, session.Spec{
+run, err := session.Open(ctx, session.OpenSpec{
+	Gateway: session.LocalGateway(g.LocalLink()), // the session speaks to the gateway alone
+})
+if err != nil {                                   // the run did not open
+	return err
+}
+res, err := run.Join(ctx, session.SessionSpec{
 	Runtime:   rt,
 	Command:   "claude",
 	Args:      []string{"-p", "Reply pong."},
-	Gateway:   session.LocalGateway(g.LocalLink()), // the session speaks to the gateway alone
 	Forwarder: []string{exe, "forward"},          // the hook command; it calls session.Forward
 })
+out := session.Outcome{State: "failed", ExitCode: -1} // the session did not start
+if err == nil {
+	out = session.Outcome{State: res.State, ExitCode: res.ExitCode}
+}
+closed, cerr := run.Close(ctx, out)               // writes dev.qory.run.exited
 g.Close(ctx)                                      // delivers the runs' last events, before the exit
-if err != nil {                                   // the run did not start
+if err != nil {
 	return err
 }
-os.Exit(res.ExitCode)                             // the runtime's status; res.Dir is the record
+if cerr != nil {
+	return cerr
+}
+fmt.Println("recorded in", closed.Dir)
+os.Exit(res.ExitCode)                             // the runtime's status
 ```
 
 `qory` imports Forager, and Forager imports nothing of `qory`. What Forager reads

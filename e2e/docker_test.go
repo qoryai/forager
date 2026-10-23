@@ -3,20 +3,25 @@ package e2e_test
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/e2e"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -132,7 +137,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	// The engine is recorded first, as a session records it, so every command of the
 	// adapter's runs with the recorded selection.
 	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs,
-		NestArgs: e2e.NestArgs}
+		NestArgs: e2e.NestArgs, HoldArgs: e2e.HoldArgs}
 	if e := w.Engine(context.Background()); e.ID != strings.TrimSpace(string(engine)) {
 		t.Fatalf("the engine recorded: %+v", e)
 	}
@@ -154,6 +159,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		RelayImage:    relayImage,
 		Origin:        "http://" + strings.TrimSpace(string(ip)) + ":8080/",
 		Wall:          w,
+		Setup:         true,
 		Image:         image,
 		Runtime:       rt,
 		Docker:        docker,
@@ -189,6 +195,8 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	} else {
 		t.Run("no IPv6 inside but loopback's", func(t *testing.T) { insideHasNoIPv6(t, command, helper, image) })
 		t.Run("an image held by its digest starts with its registry gone", func(t *testing.T) { heldStartsWithoutRegistry(t, command, helper, image) })
+		t.Run("Pull fetches an image by reference and its first container finds it", func(t *testing.T) { pullThenPrepare(t, command, helper, image) })
+		t.Run("Pull refuses an image its registry does not have", func(t *testing.T) { pullMissing(t, command, helper, image) })
 	}
 }
 
@@ -197,7 +205,8 @@ func conform(t *testing.T, image, rt string, docker bool) {
 // name's digest, the way a workflow pulls a private image before a run, and then removes
 // the registry. A run in the image by the name it was pulled by starts and runs, with no
 // registry to ask; the same content by the other name, which the engine does not hold by
-// that name, is fetched, and fails with no registry to fetch it from.
+// that name, is refused at the wrap that would start its first container, and its Pull
+// fails with no registry to fetch it from.
 func heldStartsWithoutRegistry(t *testing.T, command, helper, base string) {
 	name := fmt.Sprintf("qory-walltest-held-registry-%d", os.Getpid())
 	if out, err := exec.Command(command, "run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5000",
@@ -265,13 +274,161 @@ func heldStartsWithoutRegistry(t *testing.T, command, helper, base string) {
 	}
 
 	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs}
-	e, err := w.Prepare(context.Background(), wall.Request{RunID: fmt.Sprintf("walltest-held-%d-%d", os.Getpid(), time.Now().UnixNano()),
-		Image: notHeld, RelayImage: base, Pull: true})
-	if err == nil {
-		e.Close(context.Background())
-		t.Errorf("a run in %s, the same content by a name the engine does not hold, started with no registry to fetch it from", notHeld)
+	req := wall.Request{RunID: fmt.Sprintf("walltest-held-%d-%d", os.Getpid(), time.Now().UnixNano()), Image: notHeld, RelayImage: base, Pull: true}
+	unheldWrapIsRefused(t, w, req)
+	if err := w.Pull(context.Background(), req, nil, nil); err == nil {
+		t.Errorf("%s, the same content by a name the engine does not hold, was pulled with no registry to fetch it from", notHeld)
 	} else if !strings.Contains(err.Error(), " pull") {
-		t.Errorf("a run in %s failed other than in its pull: %v", notHeld, err)
+		t.Errorf("the pull of %s failed other than in docker pull: %v", notHeld, err)
+	}
+}
+
+// pullThenPrepare pushes one image, whose user is 1000:1000, to a registry of the
+// test's, and removes it from the engine by every name. The wrap that would start the
+// first container of the image, which the engine does not hold, is refused; Pull, given
+// a certificate and a host, fetches it from the
+// registry with the engine's pull, leaves no certificate in CertsDir, and the engine
+// then holds it by its digest; and a run in it starts, with no further pull. The engine
+// pulls over the machine's network: this machine's daemon has no proxy of the run's.
+func pullThenPrepare(t *testing.T, command, helper, base string) {
+	name := fmt.Sprintf("qory-walltest-pull-registry-%d", os.Getpid())
+	if out, err := exec.Command(command, "run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5000",
+		"--mount", "type=tmpfs,dst=/var/lib/registry", registry).CombinedOutput(); err != nil {
+		t.Fatalf("the registry: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "rm", "--force", name).Run() })
+	out, err := exec.Command(command, "port", name, "5000/tcp").Output()
+	if err != nil {
+		t.Fatalf("the registry's port: %v", err)
+	}
+	_, port, ok := strings.Cut(strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0]), "127.0.0.1:")
+	if !ok {
+		t.Fatalf("the registry's port: %q", out)
+	}
+	tagged := fmt.Sprintf("localhost:%s/walltest-pull/app:%d", port, os.Getpid())
+	build := exec.Command(command, "build", "--quiet", "--tag", tagged, "-")
+	build.Stdin = strings.NewReader("FROM " + base + "\nUSER 1000:1000\n")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("the image: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "image", "rm", tagged).Run() })
+	var pushed []byte
+	for range 50 {
+		if pushed, err = exec.Command(command, "push", tagged).CombinedOutput(); err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	m := pushedDigest.FindSubmatch(pushed)
+	if err != nil || m == nil {
+		t.Fatalf("the push of %s: %v: %s", tagged, err, pushed)
+	}
+	ref := fmt.Sprintf("localhost:%s/walltest-pull/app@%s", port, m[1])
+	t.Cleanup(func() { exec.Command(command, "image", "rm", ref).Run() })
+	exec.Command(command, "image", "rm", tagged, ref).Run()
+	// digests are the engine's repository digests of ref, empty when it has no such image.
+	digests := func() string {
+		out, _ := exec.Command(command, "image", "inspect", "--format", "{{json .RepoDigests}}", ref).Output()
+		return string(out)
+	}
+	if got := digests(); strings.Contains(got, ref) {
+		t.Fatalf("the engine holds %s after its removal: %s", ref, got)
+	}
+
+	certs := t.TempDir()
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs, CertsDir: certs}
+	req := wall.Request{RunID: fmt.Sprintf("walltest-pull-%d-%d", os.Getpid(), time.Now().UnixNano()), Image: ref, RelayImage: base, Pull: true}
+	unheldWrapIsRefused(t, w, req)
+	ca := []byte("-----BEGIN CERTIFICATE-----\nMIIBwalltestRUN\n-----END CERTIFICATE-----\n")
+	if err := w.Pull(context.Background(), req, ca, []string{"auth.registry.example"}); err != nil {
+		t.Fatalf("the pull of %s: %v", ref, err)
+	}
+	if left, err := os.ReadDir(certs); err != nil || len(left) != 0 {
+		t.Errorf("CertsDir after the pull has %v (%v)", left, err)
+	}
+	if got := digests(); !strings.Contains(got, ref) {
+		t.Errorf("the engine does not hold %s by its digest after the pull: %s", ref, got)
+	}
+	r := startEnclosure(t, command, helper, req, "-c", "echo started")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if got := strings.TrimSpace(r.start(ctx, t)()); got != "started" {
+		t.Errorf("the run in %s after its pull: %q", ref, got)
+	}
+}
+
+// pullMissing pushes one image, whose user is 1000:1000, to a registry of the test's
+// that allows deletes, removes it from the engine, and deletes its manifest from the
+// registry. Pull refuses with image_missing a digest the repository does not have, a
+// repository the registry does not have and the deleted digest, each with the
+// reference as its name; a registry address with no listener is the pull's error, with
+// no code.
+func pullMissing(t *testing.T, command, helper, base string) {
+	name := fmt.Sprintf("qory-walltest-missing-registry-%d", os.Getpid())
+	if out, err := exec.Command(command, "run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5000",
+		"--env", "REGISTRY_STORAGE_DELETE_ENABLED=true", "--mount", "type=tmpfs,dst=/var/lib/registry", registry).CombinedOutput(); err != nil {
+		t.Fatalf("the registry: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "rm", "--force", name).Run() })
+	out, err := exec.Command(command, "port", name, "5000/tcp").Output()
+	if err != nil {
+		t.Fatalf("the registry's port: %v", err)
+	}
+	_, port, ok := strings.Cut(strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0]), "127.0.0.1:")
+	if !ok {
+		t.Fatalf("the registry's port: %q", out)
+	}
+	host := "localhost:" + port
+	tagged := fmt.Sprintf("%s/walltest-missing/app:%d", host, os.Getpid())
+	build := exec.Command(command, "build", "--quiet", "--tag", tagged, "-")
+	build.Stdin = strings.NewReader("FROM " + base + "\nUSER 1000:1000\n")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("the image: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "image", "rm", tagged).Run() })
+	var pushed []byte
+	for range 50 {
+		if pushed, err = exec.Command(command, "push", tagged).CombinedOutput(); err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	m := pushedDigest.FindSubmatch(pushed)
+	if err != nil || m == nil {
+		t.Fatalf("the push of %s: %v: %s", tagged, err, pushed)
+	}
+	deleted := host + "/walltest-missing/app@" + string(m[1])
+	exec.Command(command, "image", "rm", tagged, deleted).Run()
+	del, err := http.NewRequest(http.MethodDelete, "http://"+host+"/v2/walltest-missing/app/manifests/"+string(m[1]), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(del)
+	if err != nil {
+		t.Fatalf("the delete of %s: %v", deleted, err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("the delete of %s: %s", deleted, resp.Status)
+	}
+
+	zero := "@sha256:" + strings.Repeat("0", 64)
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs}
+	pull := func(ref string) error {
+		req := wall.Request{RunID: fmt.Sprintf("walltest-missing-%d-%d", os.Getpid(), time.Now().UnixNano()), Image: ref, RelayImage: base, Pull: true}
+		return w.Pull(context.Background(), req, nil, nil)
+	}
+	for _, ref := range []string{host + "/walltest-missing/app" + zero, host + "/walltest-missing/none" + zero, deleted} {
+		err := pull(ref)
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.ImageMissing || !slices.Equal(r.Names, []string{ref}) {
+			t.Errorf("the pull of %s: %v, want image_missing", ref, err)
+		}
+	}
+	unreachable := "localhost:1/walltest-missing/app" + zero
+	var r *accesskey.Refusal
+	if err := pull(unreachable); err == nil || errors.As(err, &r) {
+		t.Errorf("the pull of %s, a registry address with no listener: %v, want the pull's error", unreachable, err)
 	}
 }
 
@@ -399,6 +556,32 @@ func startEnclosure(t *testing.T, command, helper string, req wall.Request, args
 	}
 	return relayRun{relay: "qory-" + runID + "-relay", inside: "qory-" + runID + "-in", outside: "qory-" + runID + "-out",
 		container: "qory-" + runID + "-agent", proxy: proxy, agent: agent}
+}
+
+// unheldWrapIsRefused prepares an enclosure of w for req, whose image the engine does not
+// hold by its digest, and requires that the wrap of a launch, which would start the
+// first container of the image, is refused for want of a pull. The enclosure is closed.
+func unheldWrapIsRefused(t *testing.T, w *wall.Docker, req wall.Request) {
+	t.Helper()
+	ctx := context.Background()
+	e, err := w.Prepare(ctx, req)
+	if err != nil {
+		t.Fatalf("Prepare for %s: %v", req.Image, err)
+	}
+	defer e.Close(ctx)
+	proxy, err := net.Listen("tcp", e.ProxyAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	dir := t.TempDir()
+	_, err = e.Wrap(ctx, wall.Launch{Command: "sh", Args: []string{"-c", "true"}, Dir: dir, Mounts: []wall.Mount{{Path: dir}},
+		Proxy: proxy.Addr().String(), ProxyToken: relaySecret})
+	if err == nil {
+		t.Errorf("a launch in %s, which the engine does not hold by its digest, was wrapped", req.Image)
+	} else if !strings.Contains(err.Error(), "with Pull before its first container starts") {
+		t.Errorf("the wrap of a launch in %s failed other than for want of a pull: %v", req.Image, err)
+	}
 }
 
 // start starts the agent's container and returns what it printed when it ends, or

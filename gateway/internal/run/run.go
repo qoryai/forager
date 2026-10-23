@@ -75,11 +75,11 @@ type Config struct {
 	// alone; nil means none. It narrows the start's policy and every policy a reload
 	// puts in force.
 	Narrowing *Narrowing
-	// Passes, when not nil, reports whether the run passes a value of its own for the
+	// Passes, when not nil, reports whether a session of the run passes a value for the
 	// variable: a placeholder it passes a value for is then placeholder_conflict, at
-	// the start and at every reload, as the session refuses it. [Passing] makes one of
-	// the names the run passes. Nil passes none, and the placeholders are the caller's
-	// to check, with [Run.Conflict].
+	// the start and at every reload. The gateway gives the names the open joins pass,
+	// none at the start; [Passing] makes one of a list of names. Nil passes none, and
+	// the placeholders are the caller's to check, with [Run.Conflict], as a join's are.
 	Passes func(name string) bool
 	// Report receives one line per thing the run reports to its user: a credential's
 	// renewal that failed, a tool's standard error, and an entry of the gateway's
@@ -990,12 +990,12 @@ func (r *Run) choose(held *credential.Held) ([]tool.Chosen, error) {
 
 func credentialConflict(name string) error {
 	shown := accesskey.ShownName(name, false)
-	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", shown)
+	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the session passes a value for it inside", shown)
 }
 
 func toolConflict(name string) error {
 	shown := accesskey.ShownName(name, false)
-	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside", shown)
+	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the session passes a value for it inside", shown)
 }
 
 // inForce is the policy a run configuration puts in force. Without a security_policy it
@@ -1106,18 +1106,16 @@ func sameSelection(a, b []policy.Selected) bool {
 	return slices.Equal(order(a), order(b))
 }
 
-// ProxyUses are held credentials as the proxy sets them. Of the model keys, the start
-// key alone, [credential.Held.Start], is among them, with its placeholder's value: the
-// gateway holds the others and sets none of them.
+// ProxyUses are held credentials as the proxy sets them, every model key among them
+// with its placeholder's value. The proxy sets one model key at a time, the one the
+// gateway names with [proxy.Proxy.SetModelKey]: the start key, [credential.Held.Start],
+// or the key a session joined with.
 func ProxyUses(held *credential.Held) []proxy.Credential {
 	if held == nil {
 		return nil
 	}
 	uses := make([]proxy.Credential, 0, len(held.Uses))
 	for _, u := range held.Uses {
-		if u.Format != "" && u.Name != held.Start {
-			continue
-		}
 		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths}
 		if u.Format != "" {
 			c.Placeholder = link.KeyPlaceholder(u.Name)
@@ -1149,13 +1147,13 @@ func Egress(d proxy.Decision) map[string]any {
 		decision = "allowed"
 	}
 	// The host, the path, its rule and the request's method are as the run sent them or
-	// the policy gives them: a value that contains qak_ or qrk_ in any case is
+	// the policy gives them: a value that contains qak_, qrk_ or qecr_ in any case is
 	// accesskey.ShownValue's phrase in its place.
 	data := map[string]any{"host": accesskey.ShownValue(d.Host, false), "port": d.Port, "method": d.Method, "decision": decision, "mode": string(d.Mode), "rule": d.Rule, "outcome": d.Outcome}
 	if d.Path != "" {
 		data["request_method"], data["path"], data["path_rule"] = accesskey.ShownValue(d.RequestMethod, false), accesskey.ShownValue(d.Path, false), accesskey.ShownValue(d.PathRule, false)
 	}
-	// A credential's or a tool's name that contains qak_ or qrk_ in any case is sent as
+	// A credential's or a tool's name that contains qak_, qrk_ or qecr_ in any case is sent as
 	// accesskey.ShownName's phrase in its place.
 	if d.Credential != "" {
 		data["credential"] = accesskey.ShownName(d.Credential, false)

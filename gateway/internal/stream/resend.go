@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -97,7 +98,7 @@ type ResendResult struct {
 // left as it is. dev.qory.run.registered is never sent.
 func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	// The record directory's path, which the caller passed, is in the text of a file's
-	// error: the phrase stands in for one that contains qak_ or qrk_ in any case.
+	// error: the phrase stands in for one that contains qak_, qrk_ or qecr_ in any case.
 	res, err := resend(ctx, cfg)
 	return res, accesskey.ShownError(err)
 }
@@ -211,8 +212,20 @@ type recorded struct {
 	Type     string `json:"type"`
 	Sequence string `json:"sequence"`
 	Time     string `json:"time"`
-	line     []byte
-	seq      uint64
+	// Data is the event's data, of which Resend reads the session number of a
+	// dev.qory.session.started or dev.qory.session.exited ([recorded.session]).
+	Data json.RawMessage `json:"data"`
+	line []byte
+	seq  uint64
+}
+
+// session is the session number of the event's data, 0 for none.
+func (l recorded) session() int {
+	var data struct {
+		Session int `json:"session"`
+	}
+	json.Unmarshal(l.Data, &data)
+	return data.Session
 }
 
 // recordFile is what Resend reads of events.jsonl.
@@ -411,7 +424,9 @@ func highest(accepted map[string]bool) uint64 {
 	return top
 }
 
-// closeRecord appends run.exited to the record of a started run that has none, numbered
+// closeRecord appends run.exited to the record of a started run that has none, after
+// the dev.qory.session.exited of a session whose dev.qory.session.started has none,
+// both with gateway_lost and exit_code -1, numbered
 // on from the highest sequence of its whole events or of delivered, the highest the
 // server accepted, and reports whether it did: an event whose line in the record the
 // gateway did not finish may have reached the server whole. Its duration runs from
@@ -423,6 +438,8 @@ func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func
 	var started time.Time
 	begun := false
 	last := rec.lines[0]
+	// The session started and not exited, by its number, and when it started.
+	open := map[int]time.Time{}
 	for _, l := range rec.lines {
 		switch l.Type {
 		case event.RunExited:
@@ -430,6 +447,10 @@ func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func
 		case event.RunStarted:
 			begun = true
 			started, _ = time.Parse(time.RFC3339Nano, l.Time)
+		case event.SessionStarted:
+			open[l.session()], _ = time.Parse(time.RFC3339Nano, l.Time)
+		case event.SessionExited:
+			delete(open, l.session())
 		}
 		if l.seq > last.seq {
 			last = l
@@ -440,23 +461,35 @@ func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func
 		// started, and has no exit to record.
 		return false, nil
 	}
-	var ran int64
-	if end, err := time.Parse(time.RFC3339Nano, last.Time); err == nil && !started.IsZero() && end.After(started) {
-		ran = end.Sub(started).Milliseconds()
+	end, endErr := time.Parse(time.RFC3339Nano, last.Time)
+	ran := func(from time.Time) int64 {
+		if endErr == nil && !from.IsZero() && end.After(from) {
+			return end.Sub(from).Milliseconds()
+		}
+		return 0
 	}
-	// No exit status was recorded.
-	data := map[string]any{"state": "failed", "reason": event.ReasonGatewayLost, "duration_ms": ran, "exit_code": -1}
-	ev := event.NewEmitterAfter(runID, max(last.seq, delivered), now).Make(event.RunExited, data)
-	line, err := ev.JSON()
-	if err != nil {
-		return false, err
+	emit := event.NewEmitterAfter(runID, max(last.seq, delivered), now)
+	var evs []*event.Event
+	for _, n := range slices.Sorted(maps.Keys(open)) {
+		// No exit status was recorded.
+		evs = append(evs, emit.Make(event.SessionExited, map[string]any{"session": n, "state": "failed", "reason": event.ReasonGatewayLost, "duration_ms": ran(open[n]), "exit_code": -1}))
+	}
+	evs = append(evs, emit.Make(event.RunExited, map[string]any{"state": "failed", "reason": event.ReasonGatewayLost, "duration_ms": ran(started), "exit_code": -1}))
+	var write []byte
+	lines := make([][]byte, len(evs))
+	for i, ev := range evs {
+		line, err := ev.JSON()
+		if err != nil {
+			return false, err
+		}
+		lines[i] = line
+		write = append(append(write, line...), '\n')
 	}
 	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		return false, err
 	}
 	defer f.Close()
-	write := append(line, '\n')
 	if rec.size > rec.whole {
 		if rec.tailKept {
 			write = append([]byte{'\n'}, write...)
@@ -467,6 +500,8 @@ func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func
 	if _, err := f.Write(write); err != nil {
 		return false, err
 	}
-	rec.lines = append(rec.lines, recorded{Type: ev.Type, Sequence: ev.Sequence, Time: ev.Time, line: line})
+	for i, ev := range evs {
+		rec.lines = append(rec.lines, recorded{Type: ev.Type, Sequence: ev.Sequence, Time: ev.Time, line: lines[i]})
+	}
 	return true, f.Sync()
 }

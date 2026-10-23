@@ -1,9 +1,11 @@
 // Package knownanswers writes the known answers of a run through a gateway, the files
 // of contracts/forager/v1/fixtures/known-answers that through-gateway.json lists: one
-// run key, one registration through a gateway and its answer carrying the run key, one
-// attach and its answer, and one outcome and its answer, each request signed under its
-// fixture access key and each answer under the fixture signing key of the server; and,
-// for a fixed exporter value, one binding of a connection to the gateway and one answer
+// run key, one registration through a gateway and its answer with the run key, one
+// redemption of a run code and its answer with the run key and the run's documents,
+// that redemption as the gateway's relay signs it,
+// one attach and its answer, and one outcome and its answer, each request signed under
+// its fixture access key and each answer under the fixture signing key of the server;
+// and, for a fixed exporter value, one binding of a connection to the gateway and one answer
 // of the gateway on its link, each signed under the fixture gateway key.
 //
 // Everything is derived from the published fixture seeds of keys.json, and Ed25519
@@ -97,6 +99,17 @@ func Key() runkey.Key {
 	}
 }
 
+// RunCode is the fixture run code: qecr_, the fixture characters and the fingerprint of
+// the fixture signing key of the server.
+func RunCode() string {
+	return "qecr_F1XT0RE0000000000000000000." + SigningKey().Fingerprint()
+}
+
+// RunDocuments is the run's documents of the run code's answer: a JSON object in
+// neutral example data. Forager checks that it is an object and reads none of its
+// members.
+var RunDocuments = json.RawMessage(`{"example":"f1xt0re"}`)
+
 // Labels and About are what the registration carries, and the attach answer gives back.
 var (
 	Labels = map[string]string{"repository": "acme/shop"}
@@ -136,6 +149,24 @@ type Answer struct {
 	Signature  string   `json:"signature"`
 }
 
+// RunEnrolment is the known answer of a run code's redemption: the request's file, the
+// five lines its proof signs and the proof under the fixture access key, then the
+// 201's file, its six lines and its signature under the fixture signing key; and Relay,
+// the request as the gateway's relay passes it on, signed under the fixture gateway key.
+type RunEnrolment struct {
+	Note        string   `json:"note"`
+	Request     string   `json:"request"`
+	ProofLines  []string `json:"proof_lines"`
+	ProofLength int      `json:"proof_length"`
+	Proof       string   `json:"proof"`
+	Answer      string   `json:"answer"`
+	BodyLength  int      `json:"body_length"`
+	Lines       []string `json:"lines"`
+	Length      int      `json:"length"`
+	Signature   string   `json:"signature"`
+	Relay       Request  `json:"relay"`
+}
+
 // Binding is the binding's known answer: the exporter value in lower-case hex, the
 // exporter's label, the fixture gateway key's fingerprint, the three lines the gateway
 // signs, its signature under that key and the line it answers QORY-BIND with, its
@@ -172,12 +203,13 @@ type LinkAnswer struct {
 
 // Vectors is through-gateway.json.
 type Vectors struct {
-	Note       string       `json:"note"`
-	RunKey     RunKeyVector `json:"run_key"`
-	Requests   []Request    `json:"requests"`
-	Answers    []Answer     `json:"answers"`
-	Binding    Binding      `json:"binding"`
-	LinkAnswer LinkAnswer   `json:"link_answer"`
+	Note         string       `json:"note"`
+	RunKey       RunKeyVector `json:"run_key"`
+	Requests     []Request    `json:"requests"`
+	Answers      []Answer     `json:"answers"`
+	RunEnrolment RunEnrolment `json:"run_enrolment"`
+	Binding      Binding      `json:"binding"`
+	LinkAnswer   LinkAnswer   `json:"link_answer"`
 }
 
 // LinkBatch is the file of the link answer's request body, a batch of the run, and
@@ -225,7 +257,7 @@ func Files() (map[string][]byte, error) {
 	files["run-key-payload.json"] = payload
 	sig := rk[strings.LastIndexByte(rk, '.')+1:]
 	v := Vectors{
-		Note: "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, an attach and its answer, an outcome and its answer, a binding of a connection to the gateway, and an answer of the gateway on its link. go generate ./runkey writes them from the fixture keys of keys.json.",
+		Note: "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, a run code's redemption and its answer, that redemption as the gateway's relay signs it, an attach and its answer, an outcome and its answer, a binding of a connection to the gateway, and an answer of the gateway on its link. go generate ./runkey writes them from the fixture keys of keys.json.",
 		RunKey: RunKeyVector{
 			Note:          "The run key of run-key-payload.json, signed under the fixture signing key of the server: the signed message is the domain line, a line feed, then the payload bytes; the run key is qrk_, the payload in base64url without padding, a dot, and the signature in base64url without padding.",
 			Payload:       Dir + "/run-key-payload.json",
@@ -284,6 +316,62 @@ func Files() (map[string][]byte, error) {
 	}
 	answer("200 to the registration through a gateway above, signed under the fixture signing key: the run's id and its run key, with the X-Qory-Configuration of the fixture discovery and no run-configuration digest.",
 		"registration-gateway-answer.json", accesskey.Answer{Status: 200, RequestSignature: regSig, Body: regAnswer, Configuration: configuration})
+
+	// The run code's redemption, and its answer with the run key.
+	er, err := accesskey.NewEnrolmentRequest(access, RunCode(), "run-01", Issued)
+	if err != nil {
+		return nil, err
+	}
+	erBody, err := json.MarshalIndent(er, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	erFile := append(erBody, '\n')
+	files["enrolment-run-request.json"] = erFile
+	// The relay signs the request under the gateway's access key, over the body byte for
+	// byte as it came: the file's bytes, its white space and trailing line feed included.
+	relayed := accesskey.Request{AccessKeyID: GatewayAccessKeyID, InstanceID: InstanceID, Method: "POST", Target: accesskey.EnrolmentPath, Body: erFile}
+	rm, err := relayed.Message()
+	if err != nil {
+		return nil, err
+	}
+	rs, err := gateway.SignRequest(relayed)
+	if err != nil {
+		return nil, err
+	}
+	runAnswer, err := json.Marshal(struct {
+		Version         int                   `json:"version"`
+		RunID           string                `json:"run_id"`
+		RunKey          string                `json:"run_key"`
+		ApiaryPublicKey []accesskey.ServerKey `json:"apiary_public_key"`
+		Documents       json.RawMessage       `json:"documents"`
+	}{1, RunID, rk, []accesskey.ServerKey{{Alg: "ed25519", PublicKey: signing.PublicKey().String()}}, RunDocuments})
+	if err != nil {
+		return nil, err
+	}
+	files["enrolment-run-answer.json"] = runAnswer
+	ea := accesskey.Answer{Enrolment: true, Status: 201, RequestSignature: er.Proof, Body: runAnswer}
+	pm, am := er.ProofMessage(), ea.Message()
+	v.RunEnrolment = RunEnrolment{
+		Note:        "The redemption of a run code: the request of enrolment-run-request.json, its proof under the fixture access key secret over the five lines qory-enrol-ed25519-v1, the code, the public key, the name and the timestamp; then the 201 of enrolment-run-answer.json, the run's id, the run key of run-key-payload.json and the run's documents, signed under the fixture signing key with the domain line qory-enrol-answer-ed25519-v1 and the request's proof as line 3.",
+		Request:     Dir + "/enrolment-run-request.json",
+		ProofLines:  strings.Split(string(pm), "\n"),
+		ProofLength: len(pm),
+		Proof:       er.Proof,
+		Answer:      Dir + "/enrolment-run-answer.json",
+		BodyLength:  len(runAnswer),
+		Lines:       strings.Split(string(am), "\n"),
+		Length:      len(am),
+		Signature:   signing.SignAnswer(ea),
+		Relay: Request{
+			Note:        "The request of enrolment-run-request.json as the gateway's relay passes it to the server: a POST to /.well-known/qory-enrolment, signed under the fixture gateway key secret as the gateway's access key with the gateway's instance id; the last line is the raw body, the file's bytes, its white space and its trailing line feed included. The relay deletes every X-Qory-Access-Key-Id, X-Qory-Instance-Id, X-Qory-Instance-Name, X-Qory-Signature-Ed25519 and X-Qory-Timestamp the machine sent, and sends access_key_id as X-Qory-Access-Key-Id, line 3 as X-Qory-Instance-Id and signature as X-Qory-Signature-Ed25519.",
+			AccessKeyID: GatewayAccessKeyID,
+			Body:        Dir + "/enrolment-run-request.json",
+			Lines:       strings.SplitN(string(rm), "\n", 6),
+			Length:      len(rm),
+			Signature:   rs,
+		},
+	}
 
 	// The attach, and its answer with the run configuration, the labels and about.
 	att, err := server.Attach{RunKey: rk, IntervalSeconds: 30, Events: []string{"*"}, ForagerVersion: "v0.7.0-dev", ContractVersion: 1, Time: server.RegistrationTime(AttachTime)}.Body()

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.message.schema.json",
+  "title": "dev.qory.runtime.message",
+  "description": "A message of a subagent between its start and its end, as the runtime printed it on its standard output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "agent_id", "role", "text"],
+  "properties": {
+    "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
+    "session": {"description": "The number of the session whose runtime wrote the record, from 1: the session of its dev.qory.session.started.", "type": "integer", "minimum": 1},
+    "agent_id": {"description": "The subagent the message belongs to.", "type": "string", "minLength": 1},
+    "role": {"description": "Who wrote the message, in the runtime's words: assistant, user.", "type": "string", "minLength": 1},
+    "text": {"description": "The message's text, unchanged.", "type": "string"},
+    "kind": {"description": "text for a reply, thinking for the model's reasoning, in the runtime's words.", "type": "string", "minLength": 1}
+  }
+}

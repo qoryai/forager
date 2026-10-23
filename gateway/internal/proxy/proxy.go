@@ -119,6 +119,9 @@ type Decision struct {
 	// zero when nothing answered.
 	RequestID string
 	Status    int
+	// Never is true when the guard refused a link-local or cloud metadata address, by
+	// its number or at dial time: no name opens one.
+	Never bool
 }
 
 // rules is what the proxy decides by: the policy's mode, allow_first list, allow list
@@ -160,6 +163,9 @@ type Proxy struct {
 	refused func()
 	// term, when set, says which hosts the proxy terminates TLS for.
 	term atomic.Pointer[terminator]
+	// model is the name of the model key the proxy sets, [Proxy.SetModelKey]; nil sets
+	// whichever model key a request's credential is.
+	model atomic.Pointer[string]
 	// node are the sides of path rules beside the policy's, set before term and fixed
 	// for the run.
 	node        []map[string][]string
@@ -182,6 +188,12 @@ type Proxy struct {
 	panics atomic.Pointer[func(string)]
 	// limits, when set, are the run's limits and counters ([Proxy.SetLimits]).
 	limits atomic.Pointer[limiter]
+	// unlisted, when set, is the body of the 403 of a host no allow entry matches under
+	// enforce ([Proxy.Unlisted]).
+	unlisted atomic.Pointer[func(host string, port int) string]
+	// guardBody, when set, is the body of the 403 of a host the guard refuses
+	// ([Proxy.GuardRefused]).
+	guardBody atomic.Pointer[func(host string, port int, never bool) string]
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
@@ -213,8 +225,12 @@ const HostForm = "wall:host-form"
 const PlainRequest = "wall:plain-request"
 
 // guardError is the guard's refusal at dial time, of a name that resolved to an
-// address the guard does not dial.
-type guardError struct{ msg string }
+// address the guard does not dial. never is true for a link-local or cloud metadata
+// address, which no name opens.
+type guardError struct {
+	msg   string
+	never bool
+}
 
 func (e *guardError) Error() string { return e.msg }
 
@@ -286,11 +302,11 @@ func (p *Proxy) guard(ctx context.Context, address string) error {
 	}
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
-		return &guardError{address + " does not read as an address; the gateway refuses it"}
+		return &guardError{msg: address + " does not read as an address; the gateway refuses it"}
 	}
 	ip := unzoned(host)
 	if ip == nil {
-		return &guardError{host + " does not read as an address; the gateway refuses it"}
+		return &guardError{msg: host + " does not read as an address; the gateway refuses it"}
 	}
 	if err := judge(ctx, host, ip); err != nil {
 		return err
@@ -322,11 +338,11 @@ func (p *Proxy) guard(ctx context.Context, address string) error {
 func judge(ctx context.Context, host string, ip net.IP) error {
 	switch {
 	case linkLocal(ip):
-		return &guardError{host + " is a link-local address; the gateway refuses it"}
+		return &guardError{msg: host + " is a link-local address; the gateway refuses it", never: true}
 	case metadata(ip):
-		return &guardError{"Use another host: the gateway refuses the cloud metadata address " + host}
+		return &guardError{msg: "Use another host: the gateway refuses the cloud metadata address " + host, never: true}
 	case own(ip) && ctx.Value(namedKey{}) == nil:
-		return &guardError{host + " is this machine's address and no allow entry lists the host by name; the gateway refuses it"}
+		return &guardError{msg: host + " is this machine's address and no allow entry lists the host by name; the gateway refuses it"}
 	case private(ip) && ctx.Value(namedKey{}) == nil:
 		return privateAddr(host)
 	}
@@ -335,7 +351,7 @@ func judge(ctx context.Context, host string, ip net.IP) error {
 
 // privateAddr is the guard's refusal of a private network address, written as host.
 func privateAddr(host string) error {
-	return &guardError{"List the host by name in the allow list of the node's policy: " + host + " is a private network address, and the gateway dials one only for a host listed there by name"}
+	return &guardError{msg: "List the host by name in the allow list of the node's policy: " + host + " is a private network address, and the gateway dials one only for a host listed there by name"}
 }
 
 // carriers are the IPv6 ranges whose addresses the guard also judges by an IPv4 address
@@ -508,6 +524,19 @@ func (p *Proxy) AllowFirst(entries []string) {
 	p.rules.Store(&r)
 }
 
+// Unlisted sets the body of the 403 that refuses a host no allow entry matches under
+// enforce: body's text for the host and the port, in place of the line with the
+// policy's mode. Every other refusal keeps its body.
+func (p *Proxy) Unlisted(body func(host string, port int) string) { p.unlisted.Store(&body) }
+
+// GuardRefused sets the body of the 403 that refuses a host by the guard's rule
+// ([GuardRule]), when the connection is decided and when its dial is: body's text for
+// the host, the port and [Decision.Never], in place of the guard's line. Every other
+// refusal keeps its body.
+func (p *Proxy) GuardRefused(body func(host string, port int, never bool) string) {
+	p.guardBody.Store(&body)
+}
+
 // Guarded reports whether [Proxy.Guard] was called.
 func (p *Proxy) Guarded() bool { return p.guarded.Load() }
 
@@ -624,14 +653,14 @@ func (p *Proxy) SetPolicyOpening(mode policy.Mode, first, allow, deny, names []s
 // outdated reports whether a reload from the terminator before and the rules old to
 // the terminator after and the rules r closes t, and returns the host's decision under
 // the policy in force. The reload closes a tunnel to a host that policy denies, a
-// terminated tunnel whose credential is another one now, or none, a tunnel the proxy
+// terminated tunnel whose credentials after are other ones, or none, a tunnel the proxy
 // passes TLS through to a host after terminates, a tunnel to a host whose path rules
 // are other ones now, and a tunnel to a host r no longer opens.
 func (p *Proxy) outdated(t *tunnel, before, after *terminator, old, r *rules) (Decision, bool) {
 	d := p.decide(t.d.Method, t.d.Host, t.d.Port)
 	switch {
 	case !d.Allowed:
-	case t.terminated && before.credentialName(t.d.Host) != after.credentialName(t.d.Host):
+	case t.terminated && !slices.Equal(before.credentialNames(t.d.Host), after.credentialNames(t.d.Host)):
 	case !t.terminated && after.covers(t.d.Host):
 	case !before.samePaths(after, t.d.Host):
 	case old.opens(t.d.Host) && !r.opens(t.d.Host):
@@ -876,8 +905,8 @@ func (p *Proxy) decide(method, host string, port int) Decision {
 	if p.guarded.Load() {
 		ip := net.ParseIP(host)
 		local := strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || own(ip) || private(ip)
-		if linkLocal(ip) || metadata(ip) || (local && !p.named(host, ok)) {
-			d.Rule, d.Outcome = GuardRule, Refused
+		if never := linkLocal(ip) || metadata(ip); never || (local && !p.named(host, ok)) {
+			d.Rule, d.Outcome, d.Never = GuardRule, Refused, never
 			return d
 		}
 	}
@@ -900,7 +929,7 @@ func failed(d Decision, err error) Decision {
 	var op *net.OpError
 	switch {
 	case errors.As(err, &ge):
-		d.Allowed, d.Rule, d.Outcome = false, GuardRule, Refused
+		d.Allowed, d.Rule, d.Outcome, d.Never = false, GuardRule, Refused, ge.never
 	case errors.As(err, &op) && op.Op == "dial":
 		d.Outcome = DialFailed
 	default:
@@ -950,7 +979,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	term := p.term.Load()
 	// A plain request to a host that gets a credential is refused before its path is
 	// read, in either mode; one past the rate limit gets its 429 below.
-	if rated == nil && d.Allowed && term.credentialName(d.Host) != "" {
+	if rated == nil && d.Allowed && len(term.credentials(d.Host)) > 0 {
 		clean, ok := policy.CleanPath(r.URL.EscapedPath())
 		if !ok {
 			clean = r.URL.EscapedPath()
@@ -958,7 +987,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d.Allowed, d.Rule, d.Outcome = false, PlainRequest, Refused
 		d.RequestMethod, d.Path = r.Method, clean
 		p.observe(d)
-		deny(w, d)
+		p.deny(w, d)
 		return
 	}
 	// The path is decided under the mode the host was decided under, which the answer
@@ -986,7 +1015,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Only a request the policy allows is a connection in flight.
 	if !d.Allowed {
 		p.observe(d)
-		deny(w, d)
+		p.deny(w, d)
 		return
 	}
 	if !p.hold() {
@@ -1021,7 +1050,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d = failed(d, err)
 		p.observe(d)
 		if !d.Allowed {
-			deny(w, d)
+			p.deny(w, d)
 			return
 		}
 		http.Error(w, "upstream: "+accesskey.ShownError(err).Error(), http.StatusBadGateway)
@@ -1075,7 +1104,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	if !d.Allowed {
 		p.observe(d)
-		deny(w, d)
+		p.deny(w, d)
 		return
 	}
 	// The tunnel is one of the run's connections until it closes, blind or terminated.
@@ -1125,7 +1154,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		d = failed(d, err)
 		p.observe(d)
 		if !d.Allowed {
-			deny(w, d)
+			p.deny(w, d)
 			return
 		}
 		http.Error(w, "upstream: "+accesskey.ShownError(err).Error(), http.StatusBadGateway)
@@ -1322,6 +1351,26 @@ func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 		return context.WithValue(ctx, namedKey{}, d.Host)
 	}
 	return ctx
+}
+
+// deny answers a refused connection as [deny] does, with the body [Proxy.Unlisted] set
+// for a host no allow entry matches under enforce, and the body [Proxy.GuardRefused]
+// set for a host the guard refuses.
+func (p *Proxy) deny(w http.ResponseWriter, d Decision) {
+	text := ""
+	if body := p.unlisted.Load(); body != nil && d.Rule == "" && !d.Allowed && d.Mode == policy.Enforce {
+		text = (*body)(d.Host, d.Port)
+	}
+	if body := p.guardBody.Load(); body != nil && d.Rule == GuardRule {
+		text = (*body)(d.Host, d.Port, d.Never)
+	}
+	if text == "" {
+		deny(w, d)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	io.WriteString(w, text)
 }
 
 // deny answers a refused connection: 403 with one line naming the host and the mode,

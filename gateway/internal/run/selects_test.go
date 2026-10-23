@@ -216,10 +216,10 @@ const (
 	runKeyValuePhrase    = "(a value that contains a run key)"
 )
 
-// noSecretPrefix fails the test when text contains qak_ or qrk_ in any case.
+// noSecretPrefix fails the test when text contains qak_, qrk_ or qecr_ in any case.
 func noSecretPrefix(t *testing.T, what, text string) {
 	t.Helper()
-	if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+	if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") {
 		t.Errorf("%s: a secret's prefix in %s", what, text)
 	}
 }
@@ -331,12 +331,12 @@ func TestAPlaceholderConflictPrintsAPhraseForASecret(t *testing.T) {
 				cfg := modelConfig()
 				cfg.Credentials[0].Placeholders = []string{name}
 				return cfg
-			}, " is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside"},
+			}, " is a placeholder of a credential the gateway holds outside the enclosure, and the session passes a value for it inside"},
 			"a tool": {func() run.Config {
 				cfg := toolConfig()
 				cfg.Tools[0].Placeholders = []string{name}
 				return cfg
-			}, " is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside"},
+			}, " is a placeholder of a tool the gateway starts outside the enclosure, and the session passes a value for it inside"},
 		} {
 			cfg := c.cfg()
 			cfg.Passes = func(n string) bool { return n == name }

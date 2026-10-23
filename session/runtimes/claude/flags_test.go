@@ -45,7 +45,7 @@ func walled(t *testing.T, f *fakeWritten, args []string) (runtimes.Launch, strin
 	t.Helper()
 	run := t.TempDir()
 	got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-		Launch: runtimes.Launch{Command: "claude", Args: args}, RunDir: run, Forwarder: []string{"q"},
+		Launch: runtimes.Launch{Command: "claude", Args: args}, SessionDir: run, Forwarder: []string{"q"},
 		Walled: true, Readable: f.readable,
 	})
 	return got, run, err
@@ -120,7 +120,7 @@ func TestAWalledLaunchsFileReachedThroughAWrittenPlaceIsRefused(t *testing.T) {
 		return "", &runtimes.WrittenError{How: "is reached through", Place: "/work"}
 	}
 	_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-		Launch: runtimes.Launch{Args: []string{"--mcp-config", file}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+		Launch: runtimes.Launch{Args: []string{"--mcp-config", file}}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 		Walled: true, Readable: through,
 	})
 	want := "Move " + file + " to a directory no walled run can write, or pass the servers as a JSON string. " +
@@ -256,7 +256,7 @@ func TestAWalledLaunchsFilesAreCopied(t *testing.T) {
 		f := &fakeWritten{written: dir}
 		args := []string{"--mcp-config", one, "--agents", agents, "--plugin-dir", "rel", "--add-dir", "~/x"}
 		got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-			Launch: runtimes.Launch{Args: args}, RunDir: t.TempDir(), Forwarder: []string{"q"}, Readable: f.readable,
+			Launch: runtimes.Launch{Args: args}, SessionDir: t.TempDir(), Forwarder: []string{"q"}, Readable: f.readable,
 		})
 		if err != nil || !slices.Equal(got.Args[:len(args)], args) || len(f.asked) > 0 {
 			t.Errorf("launch %q, %v, Readable asked of %q", got.Args, err, f.asked)
@@ -274,7 +274,7 @@ func TestAWalledLaunchsCopiesNameTheWorkspaceInside(t *testing.T) {
 	run := t.TempDir()
 	inside := func(s string) string { return strings.ReplaceAll(s, "/home/ws", "/workspace") }
 	got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-		Launch: runtimes.Launch{Args: []string{"--mcp-config", mcp, "--agents", broken}}, RunDir: run, Forwarder: []string{"q"},
+		Launch: runtimes.Launch{Args: []string{"--mcp-config", mcp, "--agents", broken}}, SessionDir: run, Forwarder: []string{"q"},
 		Walled: true, Inside: inside,
 	})
 	if err != nil {
@@ -337,7 +337,7 @@ func TestAWalledLaunchsPromptFileInAWrittenPlaceIsRefused(t *testing.T) {
 				return "", &runtimes.WrittenError{How: "is reached through", Place: "/work"}
 			}
 			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-				Launch: runtimes.Launch{Args: []string{flag, bad}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+				Launch: runtimes.Launch{Args: []string{flag, bad}}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 				Walled: true, Readable: through,
 			})
 			if want := refusal(flag, "is reached through", "/work"); err == nil || err.Error() != want {
@@ -361,7 +361,7 @@ func TestAWalledLaunchsPromptFilesAreCopiedUnchanged(t *testing.T) {
 			run := t.TempDir()
 			f := &fakeWritten{written: t.TempDir()}
 			got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-				Launch: runtimes.Launch{Args: []string{flag, one, "-p", "hi", flag + "=" + two}}, RunDir: run,
+				Launch: runtimes.Launch{Args: []string{flag, one, "-p", "hi", flag + "=" + two}}, SessionDir: run,
 				Forwarder: []string{"q"}, Walled: true, Readable: f.readable, Inside: inside,
 			})
 			if err != nil {
@@ -389,7 +389,7 @@ func TestAWalledLaunchsPromptFilesAreCopiedUnchanged(t *testing.T) {
 		args := []string{"--system-prompt-file", one, "--append-system-prompt-file=rel.md",
 			"--append-subagent-system-prompt-file", "~/p.md", "--project-config-root", dir}
 		got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-			Launch: runtimes.Launch{Args: args}, RunDir: t.TempDir(), Forwarder: []string{"q"}, Readable: f.readable,
+			Launch: runtimes.Launch{Args: args}, SessionDir: t.TempDir(), Forwarder: []string{"q"}, Readable: f.readable,
 		})
 		if err != nil || !slices.Equal(got.Args[:len(args)], args) || len(f.asked) > 0 {
 			t.Errorf("launch %q, %v, Readable asked of %q", got.Args, err, f.asked)
@@ -503,7 +503,7 @@ func TestAWalledLaunchsFileIsReadAsTheSettingsAre(t *testing.T) {
 		} {
 			t.Run(flag+" "+c.name, func(t *testing.T) {
 				_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-					Launch: runtimes.Launch{Args: []string{flag, c.file}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+					Launch: runtimes.Launch{Args: []string{flag, c.file}}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 					Walled: true, Readable: c.readable,
 				})
 				want := c.fix + " This launch passes " + flag + " " + c.file + ", and that file " + c.reason + ", so the run does not start."
@@ -515,7 +515,7 @@ func TestAWalledLaunchsFileIsReadAsTheSettingsAre(t *testing.T) {
 		t.Run(flag+" a file that does not exist", func(t *testing.T) {
 			absent := filepath.Join(dir, "absent.json")
 			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-				Launch: runtimes.Launch{Args: []string{flag, absent}}, RunDir: t.TempDir(), Forwarder: []string{"q"}, Walled: true,
+				Launch: runtimes.Launch{Args: []string{flag, absent}}, SessionDir: t.TempDir(), Forwarder: []string{"q"}, Walled: true,
 			})
 			prefix := "Pass a " + flag + " path that exists on this machine. The check of " + flag + " " + absent + " failed: "
 			if err == nil || !strings.HasPrefix(err.Error(), prefix) || !errors.Is(err, os.ErrNotExist) {
@@ -545,7 +545,7 @@ func TestAWalledLaunchsOtherReasonsComeWithAFix(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 		_, err = claude.Settings([]string{"Stop"}, runtimes.Attach{
-			Launch: runtimes.Launch{Args: []string{"--mcp-config", f}}, RunDir: t.TempDir(), Forwarder: []string{"q"}, Walled: true,
+			Launch: runtimes.Launch{Args: []string{"--mcp-config", f}}, SessionDir: t.TempDir(), Forwarder: []string{"q"}, Walled: true,
 		})
 		prefix := "Give the user that runs Forager access to " + f + ", or pass another --mcp-config path. " +
 			"The check of --mcp-config " + f + " failed: "
@@ -557,7 +557,7 @@ func TestAWalledLaunchsOtherReasonsComeWithAFix(t *testing.T) {
 		f := writeFile(t, filepath.Join(t.TempDir(), "mcp.json"), "{}")
 		failed := errors.New("the registry could not be read")
 		_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-			Launch: runtimes.Launch{Args: []string{"--mcp-config", f}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+			Launch: runtimes.Launch{Args: []string{"--mcp-config", f}}, SessionDir: t.TempDir(), Forwarder: []string{"q"},
 			Walled: true, Readable: func(string) (string, error) { return "", failed },
 		})
 		want := "Fix the error at the end of this message, or pass another --mcp-config path. " +

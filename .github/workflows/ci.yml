@@ -16,6 +16,10 @@ jobs:
       matrix:
         part: [core, gateway, wall, session, e2e]
     runs-on: ubuntu-latest
+    env:
+      # The image's Go is older than go.mod's 1.27.3 and sets GOTOOLCHAIN=local; remove
+      # this line once the digest below is of a go1.27.3 image.
+      GOTOOLCHAIN: go1.27.3
     container:
       # Docker Hub's official golang:1.27, copied by digest to qoryai's public package,
       # and pulled with the job's token.
@@ -131,14 +135,15 @@ jobs:
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
         # cannot pass by proving nothing. The suite with a Docker inside is the next job's.
-        # TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy needs no Docker, but it
-        # skips on a machine with none of the CA bundles, and in the part job a skip
-        # passes. Its name is in this -run, so that a missing bundle fails here: a step
-        # in the part job with QORY_WALL_REQUIRE would run the test twice in that job.
+        # TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy and
+        # TestTheGatewaySetsTheCredentialOnAHostProxyRequest need no Docker, but they
+        # skip on a machine with none of the CA bundles, and in the part job a skip
+        # passes. Their names are in this -run, so that a missing bundle fails here: a
+        # step in the part job with QORY_WALL_REQUIRE would run them twice in that job.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest)$'
 
   e2e-docker:
     name: Wall conformance, nested Docker

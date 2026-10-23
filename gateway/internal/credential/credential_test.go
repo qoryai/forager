@@ -130,6 +130,60 @@ func TestWhatCannotHoldIsNoRun(t *testing.T) {
 	}
 }
 
+// TestCredentialsWithPathsThatDoNotOverlapShareAHost pins decision 886 (a): two
+// credentials may claim one host when each has paths and no path of one overlaps a path
+// of the other. Paths that one request path can match both of are refused, and so is a
+// credential without paths beside another on its host.
+func TestCredentialsWithPathsThatDoNotOverlapShareAHost(t *testing.T) {
+	t.Setenv("PRODUCT_TOKEN", "token-product-0001")
+	t.Setenv("HARNESS_TOKEN", "token-harness-0001")
+	def := func(name, env string, hosts []string, paths ...string) Definition {
+		return Definition{Name: name, Env: env, Hosts: hosts, Scheme: "bearer", Paths: paths}
+	}
+	github := []string{"github.com"}
+	sel := []policy.Selected{{Name: "product"}, {Name: "harness"}}
+	resolve := func(defs ...Definition) (*Held, error) {
+		return Resolve(context.Background(), defs, sel, policy.Enforce, []string{"github.com", "*.github.com"}, func(l string) { t.Log(l) })
+	}
+	for what, defs := range map[string][]Definition{
+		"two organizations on github.com": {def("product", "PRODUCT_TOKEN", github, "/example-org/product.git/*"), def("harness", "HARNESS_TOKEN", github, "/operator-org/harness.git/*")},
+		"a host pattern above the host":   {def("product", "PRODUCT_TOKEN", []string{"*.github.com"}, "/example-org/*"), def("harness", "HARNESS_TOKEN", []string{"api.github.com"}, "/operator-org/*")},
+		"an exact path beside a prefix":   {def("product", "PRODUCT_TOKEN", github, "/example-org"), def("harness", "HARNESS_TOKEN", github, "/example-org/harness.git/*")},
+	} {
+		held, err := resolve(defs...)
+		if err != nil {
+			t.Errorf("%s: %v", what, err)
+			continue
+		}
+		if len(held.Uses) != 2 || held.Uses[0].Token() != "token-product-0001" || held.Uses[1].Token() != "token-harness-0001" {
+			t.Errorf("%s: uses %+v", what, held.Uses)
+		}
+		held.Close()
+	}
+	alone := "claim github.com in only one of the credentials product and harness; both claim it, and a credential without paths is alone on its hosts"
+	for what, c := range map[string]struct {
+		defs []Definition
+		want string
+	}{
+		"a prefix above a prefix": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/example-org/*"), def("harness", "HARNESS_TOKEN", github, "/example-org/harness.git/*")},
+			"give the credentials product and harness paths that do not overlap on github.com, or claim it in only one of them: their paths /example-org/* and /example-org/harness.git/* overlap"},
+		"an exact path under a prefix": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/x/*", "/example-org/harness.git/info/refs"), def("harness", "HARNESS_TOKEN", github, "/example-org/harness.git/*")},
+			"give the credentials product and harness paths that do not overlap on github.com, or claim it in only one of them: their paths /example-org/harness.git/info/refs and /example-org/harness.git/* overlap"},
+		"one exact path in both": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/graphql"), def("harness", "HARNESS_TOKEN", github, "/graphql")},
+			"give the credentials product and harness paths that do not overlap on github.com, or claim it in only one of them: their paths /graphql and /graphql overlap"},
+		"the second without paths": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/example-org/*"), def("harness", "HARNESS_TOKEN", github)}, alone},
+		"the first without paths":  {[]Definition{def("product", "PRODUCT_TOKEN", github), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")}, alone},
+	} {
+		held, err := resolve(c.defs...)
+		if err == nil {
+			held.Close()
+			t.Errorf("%s: the credentials resolved", what)
+		} else if err.Error() != c.want {
+			t.Errorf("%s:\n got %v\nwant %s", what, err, c.want)
+		}
+	}
+}
+
 func TestAFileIsReadWhenItIsUsed(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "token")
 	os.WriteFile(file, []byte("first\n"), 0o600)
@@ -266,11 +320,12 @@ var nameMessages = map[string]struct {
 	},
 }
 
-// noSecretPrefix fails the test when the error contains qak_ or qrk_ in any case.
+// noSecretPrefix fails the test when the error contains qak_, qrk_ or qecr_ in any
+// case.
 func noSecretPrefix(t *testing.T, what string, err error) {
 	t.Helper()
 	lower := strings.ToLower(err.Error())
-	if strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+	if strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") {
 		t.Errorf("%s: the error contains a secret's prefix: %v", what, err)
 	}
 }
@@ -381,7 +436,7 @@ var phraseMessages = map[string]struct {
 			return resolveError(t, []Definition{envDefinition(v), envDefinition("other")}, []policy.Selected{{Name: v}, {Name: "other"}}, []string{"api.model.example"})
 		},
 		want: func(p string) string {
-			return "claim api.model.example in only one of the credentials " + p + " and other; both claim it, and a host has one"
+			return "claim api.model.example in only one of the credentials " + p + " and other; both claim it, and a credential without paths is alone on its hosts"
 		},
 		clean: "model",
 	},
@@ -390,7 +445,18 @@ var phraseMessages = map[string]struct {
 			return resolveError(t, []Definition{envDefinition("other"), envDefinition(v)}, []policy.Selected{{Name: "other"}, {Name: v}}, []string{"api.model.example"})
 		},
 		want: func(p string) string {
-			return "claim api.model.example in only one of the credentials other and " + p + "; both claim it, and a host has one"
+			return "claim api.model.example in only one of the credentials other and " + p + "; both claim it, and a credential without paths is alone on its hosts"
+		},
+		clean: "model",
+	},
+	"the second of two credentials whose paths overlap on one host": {
+		err: func(t *testing.T, v string) error {
+			first, second := envDefinition("other"), envDefinition(v)
+			first.Paths, second.Paths = []string{"/example-org/*"}, []string{"/example-org/harness.git/*"}
+			return resolveError(t, []Definition{first, second}, []policy.Selected{{Name: "other"}, {Name: v}}, []string{"api.model.example"})
+		},
+		want: func(p string) string {
+			return "give the credentials other and " + p + " paths that do not overlap on api.model.example, or claim it in only one of them: their paths /example-org/* and /example-org/harness.git/* overlap"
 		},
 		clean: "model",
 	},
@@ -573,7 +639,7 @@ func TestARenewalReportPrintsAPhraseForASecretInAName(t *testing.T) {
 	for name, phrase := range map[string]string{"qak_x": accessKeyPhrase, "a.qrk_b": runKeyPhrase, "qrk_x.qak_y": accessKeyPhrase, "model": "model"} {
 		if l := renewReport(t, name, fails, ""); !strings.HasPrefix(l, "credential "+phrase+" was not renewed: the adapter ") || !strings.HasSuffix(l, ": exit status 3: no installation") {
 			t.Errorf("a renewal of %s that fails: %s", name, l)
-		} else if lower := strings.ToLower(l); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+		} else if lower := strings.ToLower(l); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") {
 			t.Errorf("a renewal of %s that fails: a secret's prefix in %s", name, l)
 		}
 		want := "credential " + phrase + " was not renewed: the adapter answered with other hosts, schemes or paths than when the run started"

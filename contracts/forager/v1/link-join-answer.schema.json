@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/link-join-answer.schema.json",
+  "title": "Link join answer",
+  "description": "What a gateway returns on its link to a join request it accepts, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key listed in the run key's gateway_public_key, over the connection and the request (README §The gateway's link). The session's number in the run and the model key the session starts with. A member Forager does not recognise is ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version", "session"],
+  "properties": {
+    "version": {
+      "description": "The document format. Forager reads version 1 alone.",
+      "const": 1
+    },
+    "session": {
+      "description": "The session's number in the run, from 1: the gateway numbers the run's join requests it answers 200 or 403 in the order they arrive. The session's dev.qory.session.started and dev.qory.session.exited contain it.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "model_credential": {
+      "description": "The name of the model key the session starts with, an entry of the run answer's credential_hosts with format: the join request's model_credential, or the run's start key when the request has none. The session gives the runtime the variable and the endpoint of this one alone. Absent when the gateway holds no model key for the run.",
+      "$ref": "policy.schema.json#/properties/credentials/items/properties/name"
+    }
+  }
+}

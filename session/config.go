@@ -15,21 +15,21 @@ import (
 //
 // For each name the highest source that sets it wins: the run's fixed names, those
 // Forager, the wall, the runtime's preparation and the placeholders set and
-// [Spec.LaunchFixed]; the server's variables, which it resolved among its own levels;
-// Run; Machine; [Spec.LaunchDefaults]; [Spec.Env]. A walled run refuses first what
+// [SessionSpec.LaunchFixed]; the server's variables, which it resolved among its own levels;
+// Run; Machine; [SessionSpec.LaunchDefaults]; [SessionSpec.Env]. A walled run refuses first what
 // must stay outside the enclosure: a QORY_ name other than QORY_RUN_ID and
 // QORY_RUN_SOCKET, or a variable a machine value is read from, from any of them,
 // variable_reserved; any run refuses a value for a placeholder, placeholder_conflict.
 // The deny list, the contract's denied-variables.json, the runtime's denies and Deny,
 // then leaves out a value of the server, Run, Machine or LaunchDefaults; the built-in
 // list alone leaves out one of LaunchFixed. The server's values of QORY_RUN_SYSTEM and
-// QORY_RUN_REPOSITORIES, the system and the repositories a run's preparation may use,
-// as the server sets them, are the two QORY_ names it leaves in, by these names
-// exactly: the runtime's denies and Deny still apply to them, and a value of any other
-// source is held to the rules of any QORY_ name. The server's are left out of a run
+// QORY_RUN_REPOSITORIES, the system and the repositories a session's setup commands
+// may use, as the server sets them, are the two QORY_ names it leaves in, by these
+// names exactly: the runtime's denies and Deny still apply to them, and a value of
+// any other source is held to the rules of any QORY_ name. The server's are left out of a run
 // without a wall unless Unwalled is [UnwalledAccept]. A value that loses is left out
 // and the run starts; dev.qory.run.policy_applied records each name, its source and
-// what lost, never a value, and [Spec.OnVariables] receives the same.
+// what lost, never a value, and [SessionSpec.OnVariables] receives the same.
 type Variables struct {
 	// Run are the run's own variables, NAME=value: for qory, --env. They apply with or
 	// without a wall.
@@ -38,7 +38,7 @@ type Variables struct {
 	Machine []string
 	// Deny are names and patterns, in which * matches any run of characters, of
 	// variables the run leaves out of the server's, Run, Machine and
-	// [Spec.LaunchDefaults], matched regardless of case. qory sets none.
+	// [SessionSpec.LaunchDefaults], matched regardless of case. qory sets none.
 	Deny []string
 	// Unwalled is how a run without a Wall takes the server's variables:
 	// [UnwalledAccept] applies them as a walled run does, after the deny list;
@@ -94,7 +94,7 @@ const (
 	KeptEndpointCovered   = variables.KeptEndpointCovered
 )
 
-// applied is the record of a resolution as [Spec.OnVariables] receives it.
+// applied is the record of a resolution as [SessionSpec.OnVariables] receives it.
 func applied(entries []variables.Entry) Applied {
 	out := make(Applied, len(entries))
 	for i, e := range entries {
@@ -116,12 +116,12 @@ const (
 	UnwalledIgnore = variables.Ignore
 )
 
-// Image is one image as the machine defines it, [Spec.Images]: what an agent's
+// Image is one image as the machine defines it, [OpenSpec.Images]: what an agent's
 // enclosure is started from, and how. A run's policy selects one by name, or names one
-// by its reference pinned by digest under one of [Spec.ImagesAllow], so a repository
+// by its reference pinned by digest under one of [OpenSpec.ImagesAllow], so a repository
 // chooses what it runs under only among what the machine allows.
 type Image struct {
-	// Name is what a policy, or [Spec.Image], selects it by.
+	// Name is what a policy, or [OpenSpec.Image], selects it by.
 	Name string
 	// Ref is the image's reference, pinned by digest where the machine wants the same
 	// image every time.
@@ -158,7 +158,7 @@ var imageNameShape = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 // one, an empty one, *, or one that is not the start of a reference in lower case, and
 // an ImagesAllow without a default Image. The gateway resolves the policy's selection
 // against the table; these checks have no code.
-func checkImages(spec Spec) error {
+func checkImages(spec OpenSpec) error {
 	for _, d := range spec.Images {
 		if err := d.Check(); err != nil {
 			return err

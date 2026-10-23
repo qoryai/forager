@@ -1,0 +1,89 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-600000000001",
+    "source": "urn:qory:run:0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "type": "dev.qory.run.started",
+    "subject": "0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "time": "2026-10-21T09:00:00.000Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
+    "data": {
+      "opened_by": "run",
+      "forager_version": "0.7.0",
+      "host": "dev-laptop"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-600000000002",
+    "source": "urn:qory:run:0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "type": "dev.qory.run.policy_applied",
+    "subject": "0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "time": "2026-10-21T09:00:00.005Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.policy_applied.schema.json",
+    "data": {
+      "mode": "observe",
+      "allow": [],
+      "source": "none",
+      "variables": []
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-600000000003",
+    "source": "urn:qory:run:0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "type": "dev.qory.run.step_started",
+    "subject": "0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "time": "2026-10-21T09:00:00.100Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.step_started.schema.json",
+    "data": {
+      "step": 1,
+      "name": "fetch git.example/example-org/app",
+      "kind": "fetch"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-600000000004",
+    "source": "urn:qory:run:0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "type": "dev.qory.run.log",
+    "subject": "0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "time": "2026-10-21T09:00:03.800Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.log.schema.json",
+    "data": {
+      "stream": "stderr",
+      "bytes": "ZmF0YWw6IGNvdWxkIG5vdCByZWFkIGZyb20gZ2l0LmV4YW1wbGUvZXhhbXBsZS1vcmcvYXBwOiBIVFRQIDQwMwo=",
+      "step": 1
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-600000000005",
+    "source": "urn:qory:run:0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "type": "dev.qory.run.step_exited",
+    "subject": "0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "time": "2026-10-21T09:00:03.850Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.step_exited.schema.json",
+    "data": {
+      "step": 1,
+      "state": "failed",
+      "exit_code": 128,
+      "duration_ms": 3750
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-600000000006",
+    "source": "urn:qory:run:0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "type": "dev.qory.run.exited",
+    "subject": "0196e4f5-b061-7273-8e4f-9a0b1c2d3e4f",
+    "time": "2026-10-21T09:00:04.000Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.exited.schema.json",
+    "data": {
+      "state": "failed",
+      "exit_code": -1,
+      "reason": "no_session",
+      "duration_ms": 4000
+    }
+  }
+]

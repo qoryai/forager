@@ -14,7 +14,8 @@ import (
 )
 
 // TestEventsValidateAgainstTheContract pins that what the emitter makes is what the
-// envelope schema accepts, for a run type and for a session type.
+// envelope schema accepts, for a run type, for the two step types, for run.built and
+// for a runtime type.
 func TestEventsValidateAgainstTheContract(t *testing.T) {
 	schema, err := contracts.Compile("event.schema.json")
 	if err != nil {
@@ -23,7 +24,11 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 	e := event.NewEmitter(event.NewRunID(), func() time.Time { return time.Unix(1_800_000_000, 5_000_000) })
 	for _, ev := range []*event.Event{
 		e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}),
-		e.Make("dev.qory.session.ended", map[string]any{"session_id": "s1", "reason": "other"}),
+		e.Make(event.StepStarted, map[string]any{"step": 1, "name": "fetch github.com/example-org/app", "kind": event.StepFetch}),
+		e.Make(event.StepExited, map[string]any{"step": 1, "state": event.StateSucceeded, "exit_code": 0, "duration_ms": 1840}),
+		e.Make(event.RunBuilt, map[string]any{"image": "example.registry/example-org/env@sha256:" + strings.Repeat("3f", 32), "size": int64(734003200),
+			"commit": strings.Repeat("9b", 20), "environment_ref": "env-example-01"}),
+		e.Make("dev.qory.runtime.ended", map[string]any{"session_id": "s1", "reason": "other"}),
 	} {
 		b, err := ev.JSON()
 		if err != nil {
@@ -37,8 +42,8 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 			t.Errorf("%s: %v\n%s", ev.Type, err, b)
 		}
 	}
-	if e.Sequence() != 2 {
-		t.Errorf("sequence %d, want 2", e.Sequence())
+	if e.Sequence() != 5 {
+		t.Errorf("sequence %d, want 5", e.Sequence())
 	}
 }
 
@@ -51,7 +56,7 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 		schema, member string
 		want           []string
 	}{
-		{"events/run.started.schema.json", "opened_by", []string{event.OpenedBySession}},
+		{"events/run.started.schema.json", "opened_by", []string{event.OpenedByRun}},
 	} {
 		doc, err := contracts.Document(c.schema)
 		if err != nil {
@@ -73,7 +78,7 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	pattern := regexp.MustCompile(reason["pattern"].(string))
 	description := reason["description"].(string)
 	for _, code := range []string{event.ReasonTimeout, event.ReasonInterrupted, event.ReasonRunClosed, event.ReasonGatewayLost,
-		event.ReasonSessionLost, event.ReasonStopped, event.ReasonBatchRefused,
+		event.ReasonSessionLost, event.ReasonStopped, event.ReasonBatchRefused, event.ReasonNoSession,
 		"quiet", "credential_expired", "credential_check_unreachable", "credential_check_invalid",
 		"run_ended_at_issuer", "issuer_unreachable", "issuer_answer_invalid"} {
 		if !pattern.MatchString(code) {
@@ -86,6 +91,27 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	state := doc.(map[string]any)["properties"].(map[string]any)["state"].(map[string]any)
 	if got, want := fmt.Sprint(state["enum"]), fmt.Sprint([]string{event.StateSucceeded, event.StateFailed, event.StateCancelled}); got != want {
 		t.Errorf("run.exited's state enum is %s; the constants are %s", got, want)
+	}
+}
+
+// TestStepKindsAndStatesAreTheContracts pins the step kind constants to the kind enum of
+// run.step_started, in order, and the states to the state enum of run.step_exited.
+func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
+	for _, c := range []struct {
+		schema, member string
+		want           []string
+	}{
+		{"events/run.step_started.schema.json", "kind", []string{event.StepFetch, event.StepCompose, event.StepImage, event.StepSetup, event.StepJoin, event.StepWall, event.StepBuild}},
+		{"events/run.step_exited.schema.json", "state", []string{event.StateSucceeded, event.StateFailed, event.StateCancelled}},
+	} {
+		doc, err := contracts.Document(c.schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		member := doc.(map[string]any)["properties"].(map[string]any)[c.member].(map[string]any)
+		if got, want := fmt.Sprint(member["enum"]), fmt.Sprint(c.want); got != want {
+			t.Errorf("%s %s: the schema's enum is %s; the constants are %s", c.schema, c.member, got, want)
+		}
 	}
 }
 
@@ -106,7 +132,7 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]+_[a-z0-9_]+|\btimeout\b|\binterrupted\b|\bquiet\b|\bstopped\b`).FindAllString(listed, -1) {
 		want = append(want, w)
 	}
-	if len(want) != 14 {
+	if len(want) != 15 {
 		t.Fatalf("the description names %d reserved codes: %v", len(want), want)
 	}
 	for _, code := range want {
@@ -124,8 +150,8 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 			t.Errorf("%q is reserved", code)
 		}
 	}
-	// A session's batch may carry timeout and interrupted, its own.
-	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted}} {
+	// A session's batch may carry timeout, interrupted and no_session, the close's.
+	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted, event.ReasonNoSession}} {
 		doc, err := contracts.Document(name)
 		if err != nil {
 			t.Fatal(err)
@@ -168,7 +194,7 @@ func TestNumberSharesTheSequenceWithMake(t *testing.T) {
 	first := e.Make(event.RunStarted, nil)
 	id := held.ID
 	e.Number(held)
-	other := &event.Event{ID: "x", Type: "dev.qory.session.started"}
+	other := &event.Event{ID: "x", Type: "dev.qory.runtime.started"}
 	e.Number(other)
 	if first.Sequence != "0000000001" || held.Sequence != "0000000002" || other.Sequence != "0000000003" || held.ID != id {
 		t.Errorf("sequences %s %s %s", first.Sequence, held.Sequence, other.Sequence)

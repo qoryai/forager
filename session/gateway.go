@@ -17,7 +17,7 @@ import (
 // policy, its credentials and its tools, and is the node toward the server. The session
 // is its client, over its link (contracts/forager/v1/README.md §The gateway's link).
 // [LocalGateway] makes one on this machine; a [RemoteGateway] is a separate gateway, on
-// a machine of its own. A nil Gateway is none, and no run.
+// another machine. A nil Gateway is none, and no run.
 //
 // A Gateway never prints the run key: fmt and log/slog show it by its socket or its
 // URL.
@@ -57,15 +57,15 @@ func (g localGateway) GoString() string { return g.String() }
 // LogValue is g as log/slog logs it.
 func (g localGateway) LogValue() slog.Value { return slog.StringValue(g.String()) }
 
-// RemoteGateway is a separate gateway, on a machine of its own, which the run reaches
-// over TLS 1.3 on the gateway's one address (contracts/forager/v1/README.md §The
-// gateway's link), as the run key names it. The session reads the run key as a runner
-// does, unverified, [runkey.Parse], and takes of it the run's id, the gateway's URL,
-// the one address the run key is ever sent to, and the gateway's keys. It checks the
-// certificate chain of the gateway for the host name of that URL against the system's
-// roots, and every connection is bound to a key the run key names before the run key
-// is sent; every answer of the gateway must be signed under one. It holds no access key:
-// the gateway's signs toward the server.
+// RemoteGateway is a separate gateway, on another machine, which the run reaches over
+// TLS 1.3 on the gateway's one address (contracts/forager/v1/README.md §The gateway's
+// link), as the run key names it. The session reads the run key as a runner does,
+// unverified, [runkey.Parse], and takes of it the run's id, the gateway's URL, the one
+// address the run key is ever sent to, and the gateway's keys. It checks the certificate
+// chain of the gateway for the host name of that URL with the trust in TLS, and every
+// connection is bound to a key the run key names before the run key is sent; every
+// answer of the gateway must be signed under one. It has no access key: the gateway's
+// signs toward the server.
 //
 // The session reads no environment: the caller passes the run key, from [EnvRunKey].
 // It is never written to a file, set in an agent's environment or printed: fmt and
@@ -75,6 +75,14 @@ type RemoteGateway struct {
 	// RunKey is the run key Qory Apiary answered the run's registration with: qrk_,
 	// its payload and its signature.
 	RunKey string
+	// TLS is how the session trusts the certificate of the run key's gateway, on the
+	// run's link and on a resend's, as for [server.Via]: with the zero RemoteTLS the
+	// session checks the chain against the system's roots; with CAFile, against the
+	// authorities of that PEM file in their place; with CertificateSHA256, it also
+	// accepts only a certificate with that public key. A CA file Forager cannot read,
+	// or a pin of another form, stops the run, and a resend that sends events, before
+	// any connection, with an error that starts with the fix.
+	TLS server.RemoteTLS
 }
 
 func (RemoteGateway) gateway() {}
@@ -98,19 +106,39 @@ func (g *RemoteGateway) key() (runkey.Key, error) {
 	return k, nil
 }
 
-// remoteTrust is how the session checks the certificate chain of the separate gateway
-// at a URL: the system's roots, the zero RemoteTLS. A test sets another.
-var remoteTrust = func(string) server.RemoteTLS { return server.RemoteTLS{} }
-
 // link is the client of the gateway's link a run and a resend speak to it through:
-// TLS 1.3 to its one address, bound to a key the run key names. version is Forager's,
-// in the User-Agent; digests is as [server.NewRemoteLink] takes it.
+// TLS 1.3 to its one address with g.TLS, bound to a key the run key names. version is
+// Forager's, in the User-Agent; digests is as [server.NewRemoteLink] takes it.
 func (g *RemoteGateway) link(version string, digests func(server.Digests)) (*server.Link, error) {
-	k, err := g.key()
-	if err != nil {
+	if _, err := g.key(); err != nil {
 		return nil, err
 	}
-	return server.NewRemoteLink(g.RunKey, remoteTrust(k.GatewayURL), accesskey.UserAgent(version), digests)
+	if err := g.checkTLS(); err != nil {
+		return nil, err
+	}
+	return server.NewRemoteLink(g.RunKey, g.TLS, accesskey.UserAgent(version), digests)
+}
+
+// checkTLS refuses a TLS the link cannot use, with an error that starts with the fix:
+// a CA file that cannot be read or has no PEM certificate, and a pin of another form.
+// [server.RemoteTLS.Check] checks each; of its error, the text after the fix is the
+// cause the fix does not state: the read error, or that the file has no PEM
+// certificate.
+func (g *RemoteGateway) checkTLS() error {
+	if f := g.TLS.CAFile; f != "" {
+		if err := (server.RemoteTLS{CAFile: f}).Check(); err != nil {
+			if cause := errors.Unwrap(err); cause != nil {
+				err = cause
+			}
+			return fmt.Errorf("set the gateway's CA file to a PEM file of its certificate authorities that Forager can read: %w", err)
+		}
+	}
+	if p := g.TLS.CertificateSHA256; p != "" {
+		if (server.RemoteTLS{CertificateSHA256: p}).Check() != nil {
+			return errors.New("set the gateway's certificate pin to the SHA-256 of its public key: 44 characters of standard base64 ending in =")
+		}
+	}
+	return nil
 }
 
 // String names the gateway by the URL its run key names, never the run key: "(no run

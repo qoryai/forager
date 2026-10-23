@@ -12,7 +12,7 @@ import (
 // gateway's, and a gateway decides its own and none of Forager's.
 func TestDeciders(t *testing.T) {
 	forager := []string{
-		RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot,
+		RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot, ImageMissing,
 		VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable,
 	}
@@ -62,8 +62,10 @@ func TestNeedsWallSaysWhatARunAlwaysSaid(t *testing.T) {
 		"tools,image=base": selects,
 		"image=base":       `the policy selects the image "base", which needs a wall: without one the runtime is this machine's process`,
 		// A name the gateway's link sends as its phrase prints as the image's phrase does.
-		"image=qrk_FAKE":                         `the policy selects the image (a name that contains a run key), which needs a wall: without one the runtime is this machine's process`,
-		"image=(a name that contains a run key)": `the policy selects the image (a name that contains a run key), which needs a wall: without one the runtime is this machine's process`,
+		"image=qrk_FAKE":                          `the policy selects the image (a name that contains a run key), which needs a wall: without one the runtime is this machine's process`,
+		"image=(a name that contains a run key)":  `the policy selects the image (a name that contains a run key), which needs a wall: without one the runtime is this machine's process`,
+		"image=QECR_FAKE":                         `the policy selects the image (a name that contains a run code), which needs a wall: without one the runtime is this machine's process`,
+		"image=(a name that contains a run code)": `the policy selects the image (a name that contains a run code), which needs a wall: without one the runtime is this machine's process`,
 	} {
 		if got := (&NeedsWall{Names: strings.Split(names, ",")}).Error(); got != want {
 			t.Errorf("%s: %s", names, got)
@@ -71,12 +73,12 @@ func TestNeedsWallSaysWhatARunAlwaysSaid(t *testing.T) {
 	}
 }
 
-// TestShownListsAPhraseForASecret pins Shown: a name that contains qak_ or qrk_ in any
-// case is its phrase, a clean name is as it is, and New lists a phrase two names give
-// once.
+// TestShownListsAPhraseForASecret pins Shown: a name that contains qak_, qrk_ or qecr_
+// in any case is its phrase, a clean name is as it is, and New lists a phrase two
+// names give once.
 func TestShownListsAPhraseForASecret(t *testing.T) {
-	got := New(RunConfigurationInvalid, Shown("x-qak_one", "model", "QAK_two", "qrk_three"), "refused").Names
-	want := []string{"(a name that contains a run key)", "(a name that contains an access key secret)", "model"}
+	got := New(RunConfigurationInvalid, Shown("x-qak_one", "model", "QAK_two", "qrk_three", "QECR_four", "qecr_five"), "refused").Names
+	want := []string{"(a name that contains a run code)", "(a name that contains a run key)", "(a name that contains an access key secret)", "model"}
 	if !slices.Equal(got, want) {
 		t.Errorf("names %q, want %q", got, want)
 	}

@@ -1,0 +1,17 @@
+{
+  "specversion": "1.0",
+  "id": "7e1c0000-0000-7000-8000-300000000004",
+  "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+  "type": "dev.qory.session.exited",
+  "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+  "time": "2026-10-09T10:00:00.100Z",
+  "sequence": "0000000004",
+  "dataschema": "https://qory.dev/contracts/forager/v1/events/session.exited.schema.json",
+  "data": {
+    "session": 1,
+    "state": "failed",
+    "exit_code": 1,
+    "reason": "mount_mode_conflict",
+    "duration_ms": 0
+  }
+}

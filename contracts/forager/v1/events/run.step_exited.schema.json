@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/run.step_exited.schema.json",
+  "title": "dev.qory.run.step_exited",
+  "description": "A step of the run ended. One per step, after the step's dev.qory.run.step_started and after every dev.qory.run.log of the step, and before dev.qory.run.exited. A run the gateway ends during a step has none for it in the run's stream: the gateway writes the open session's dev.qory.session.exited and the run's dev.qory.run.exited alone, and the session writes the step's dev.qory.run.step_exited in session.jsonl alone, with the step's outcome.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["step", "state", "exit_code", "duration_ms"],
+  "properties": {
+    "step": {"description": "The number of the step in the run, from 1: the step of its dev.qory.run.step_started.", "type": "integer", "minimum": 1},
+    "state": {"description": "How the step ended, with the values of dev.qory.run.exited's state. succeeded: the step ended well; failed: it ended badly; cancelled: it was stopped before it ended.", "type": "string", "enum": ["succeeded", "failed", "cancelled"]},
+    "exit_code": {"description": "The exit status of the step's process, as exit_code of dev.qory.run.exited is: -1 when no process exit status exists, such as for a step that runs no process.", "type": "integer", "minimum": -1},
+    "duration_ms": {"description": "Milliseconds from the step's dev.qory.run.step_started to its end.", "type": "integer", "minimum": 0}
+  }
+}

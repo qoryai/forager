@@ -43,9 +43,9 @@ type side struct {
 var localSide = &side{}
 
 // checkService refuses a config whose one address cannot be served, before anything
-// starts, and returns the certificate it serves, nil for none. It never reads the key's
-// content into an error.
-func checkService(cfg *Config) (*tls.Certificate, error) {
+// starts, and returns the certificate and key files it serves, nil for none. It never
+// reads the key's content into an error.
+func checkService(cfg *Config) (*certFiles, error) {
 	if cfg.Listen == "" {
 		if cfg.TLS != nil {
 			return nil, errors.New("the gateway has a certificate and no address to serve it on")
@@ -68,11 +68,15 @@ func checkService(cfg *Config) (*tls.Certificate, error) {
 	if cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "" {
 		return nil, errors.New("the gateway's TLS needs a certificate file and a key file")
 	}
-	cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("the gateway's certificate %s and key %s: %w", accesskey.ShownValue(cfg.TLS.CertFile, false), accesskey.ShownValue(cfg.TLS.KeyFile, false), accesskey.ShownError(err))
+	every := certCheck
+	if cfg.certCheck != 0 {
+		every = cfg.certCheck
 	}
-	return &cert, nil
+	certs, err := newCertFiles(cfg.TLS.CertFile, cfg.TLS.KeyFile, every)
+	if err != nil {
+		return nil, fmt.Errorf("the gateway's certificate %s and key %s: %w", accesskey.ShownValue(cfg.TLS.CertFile, false), accesskey.ShownValue(cfg.TLS.KeyFile, false), err)
+	}
+	return certs, nil
 }
 
 // maxRelayRunKey is the longest relay preamble with a run key, its newline included:
@@ -138,15 +142,17 @@ type service struct {
 	wg      sync.WaitGroup
 }
 
-// startService listens on the config's address with cert and serves it.
-func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
+// startService listens on the config's address and serves the pair of certs, read again
+// when its files change.
+func (g *Gateway) startService(certs *certFiles) (*service, error) {
 	ln, err := net.Listen("tcp", g.cfg.Listen)
 	if err != nil {
 		return nil, accesskey.ShownError(err)
 	}
 	s := &service{g: g, ln: ln, side: &side{remote: true, scheme: "https"}, edgeQ: newConnQueue(ln.Addr()), pending: map[net.Conn]struct{}{},
 		conns: newConnLimit(maxConns, maxSourceConns, maxBlockConns)}
-	s.tls = &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{*cert}, NextProtos: []string{"http/1.1"}}
+	certs.report = g.report
+	s.tls = &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, GetCertificate: certs.get, NextProtos: []string{"http/1.1"}}
 	// OPTIONS * goes to the handler too, which refuses it for its run key: no request
 	// without one keeps a connection open.
 	s.edge = &http.Server{Handler: routine.Handler(g.report, g.edgeHandler(s.side)), ReadHeaderTimeout: link.PreambleWait, ReadTimeout: edgeReadWait, MaxHeaderBytes: edgeMaxHeader,
@@ -248,10 +254,12 @@ func (s *service) route(raw net.Conn) {
 // bind binds an edge's connection, whose [link.BindWord] line r has read: the gateway
 // writes its [link.BoundWord] line, signed under its access key over the connection's
 // exporter value, then reads the connection's next line within the same deadline. The
-// relay's preamble with a run key goes to that run's proxy ([Gateway.relayRun]); any
-// other line is the link's HTTP/1.1. admit lets go of c's count among the connections
-// whose run keys are not admitted, once its run key is; vouch keeps c from being closed
-// for a newer one, once a run key on it passed. It reports whether c was handed on.
+// relay's preamble with a run key goes to that run's proxy ([Gateway.relayRun]), and
+// [link.StackPreamble] with a run key to that run's stack proxy until the run's first
+// join request; any other line is the link's HTTP/1.1. admit lets go of c's count
+// among the connections whose run keys are not admitted, once its run key is; vouch
+// keeps c from being closed for a newer one, once a run key on it passed. It reports
+// whether c was handed on.
 func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch func()) bool {
 	cs := c.ConnectionState()
 	if cs.Version != tls.VersionTLS13 {
@@ -268,25 +276,29 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch func()) bool {
 	if !ok {
 		return false
 	}
-	if bytes.HasPrefix(line, []byte(link.RelayPreamble+" ")) {
-		value, ok := relayRunKey(line)
+	for _, word := range []string{link.RelayPreamble, link.StackPreamble} {
+		if !bytes.HasPrefix(line, []byte(word+" ")) {
+			continue
+		}
+		value, ok := relayRunKey(line, word)
 		if !ok {
 			return false
 		}
 		r.Discard(len(line))
-		return s.g.relayRun(c, r, value, admit)
+		return s.g.relayRun(c, r, value, admit, word == link.StackPreamble)
 	}
 	c.SetDeadline(time.Time{})
 	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit, vouch: vouch})
 }
 
-// relayRunKey is the run key of a line of the relay's preamble, its newline included,
-// and whether the line is within [maxRelayRunKey]: a longer one holds no run key.
-func relayRunKey(line []byte) (string, bool) {
+// relayRunKey is the run key of a line of the relay's preamble, or of
+// [link.StackPreamble], word, its newline included, and whether the line is within
+// [maxRelayRunKey]: a longer one has no run key. Both words have the same length.
+func relayRunKey(line []byte, word string) (string, bool) {
 	if len(line) > maxRelayRunKey {
 		return "", false
 	}
-	return strings.TrimSuffix(strings.TrimPrefix(string(line), link.RelayPreamble+" "), "\n"), true
+	return strings.TrimSuffix(strings.TrimPrefix(string(line), word+" "), "\n"), true
 }
 
 // boundLine is the gateway's answer to [link.BindWord] on the connection whose
@@ -436,13 +448,15 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 }
 
 // forLiveRun reports whether r is a request of the link a 2xx answers for a live run
-// only: the run request, a reload or a batch. Once one is answered 2xx, its connection
+// only: the run request, a reload, a join or a batch. Once one is answered 2xx, its connection
 // is admitted.
 func forLiveRun(r *http.Request) bool {
 	switch {
 	case r.Method == http.MethodPost && (r.URL.Path == remoteRunPath || r.URL.Path == remoteEventsPath):
 		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, remoteRunPath+"/"):
+		return true
+	case r.Method == http.MethodPost && isJoin(r.URL.Path, remoteRunPath):
 		return true
 	}
 	return false

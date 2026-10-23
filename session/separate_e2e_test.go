@@ -201,7 +201,7 @@ func separateCertificate(t *testing.T) (certFile, keyFile, caFile string) {
 // server and writes its record's first line with the labels the attach gave back; the
 // session's batches are numbered and reach the server; the server changes the run's
 // configuration during the run, and the session fetches the reload and records it in a
-// second policy_applied, which the gateway numbers and the server receives.
+// third policy_applied, after the open's and the join's, which the gateway numbers and the server receives.
 func TestARunThroughARealSeparateGateway(t *testing.T) {
 	a := newApiary(t)
 	certFile, keyFile, caFile := separateCertificate(t)
@@ -221,13 +221,12 @@ func TestARunThroughARealSeparateGateway(t *testing.T) {
 		g.Close(ctx)
 	})
 	url := "https://" + g.Addr()
-	t.Cleanup(session.TrustRemote(url, caFile))
 
 	sp := spec(t)
 	sleeps(&sp, 30*time.Second)
 	sp.Timeout = 20 * time.Second
 	sp.RunID = event.NewRunID()
-	sp.Gateway = session.RemoteGateway{RunKey: a.runKey(t, sp.RunID, url, a.key)}
+	sp.Gateway = session.RemoteGateway{RunKey: a.runKey(t, sp.RunID, url, a.key), TLS: server.RemoteTLS{CAFile: caFile}}
 	own := filepath.Join(sp.RunsDir, sp.RunID)
 	applied := func() []map[string]any {
 		return ofType(events(t, &session.Result{Dir: own}), "dev.qory.run.policy_applied")
@@ -235,29 +234,31 @@ func TestARunThroughARealSeparateGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan *session.Result, 1)
+	var closed *session.Closed
 	go func() {
-		res, err := session.Run(ctx, sp)
+		res, c, err := runClosed(ctx, sp)
 		if err != nil {
 			t.Error(err)
 		}
+		closed = c
 		done <- res
 	}()
 	waitFor(t, func() bool {
 		_, err := os.Stat(filepath.Join(own, "session.jsonl"))
-		return err == nil && len(applied()) == 1
+		return err == nil && len(applied()) == 2
 	})
 	a.serve(`{"version":1,"egress":{"mode":"enforce","allow":["b.example"]}}`, 'b')
-	waitFor(t, func() bool { return len(applied()) == 2 })
+	waitFor(t, func() bool { return len(applied()) == 3 })
 	pa := applied()
-	if fmt.Sprint(data(pa[0])["allow"]) != "[a.example]" || fmt.Sprint(data(pa[1])["allow"]) != "[b.example]" || data(pa[1])["run_configuration"] != "sha256="+strings.Repeat("b", 64) {
-		t.Errorf("policy_applied %v then %v", data(pa[0]), data(pa[1]))
+	if fmt.Sprint(data(pa[1])["allow"]) != "[a.example]" || fmt.Sprint(data(pa[2])["allow"]) != "[b.example]" || data(pa[2])["run_configuration"] != "sha256="+strings.Repeat("b", 64) {
+		t.Errorf("policy_applied %v then %v", data(pa[1]), data(pa[2]))
 	}
 	cancel()
 	res := <-done
 	if res == nil {
 		t.FailNow()
 	}
-	if filepath.Base(res.Dir) != sp.RunID || res.Undelivered != 0 {
+	if filepath.Base(res.Dir) != sp.RunID || closed == nil || closed.Undelivered != 0 {
 		t.Errorf("result %+v", res)
 	}
 	waitFor(t, func() bool {
@@ -271,10 +272,10 @@ func TestARunThroughARealSeparateGateway(t *testing.T) {
 	if l, _ := data(numbered[0])["labels"].(map[string]any); l["repository"] != "example-namespace/project" || data(numbered[0])["workspace"] != sepWorkspace {
 		t.Errorf("run.registered %v", data(numbered[0]))
 	}
-	if got := ofType(numbered, "dev.qory.run.policy_applied"); len(got) != 2 {
+	if got := ofType(numbered, "dev.qory.run.policy_applied"); len(got) != 3 {
 		t.Errorf("the gateway numbered %d policy_applied", len(got))
 	}
-	if got := a.receivedTypes(); len(ofTypesIn(got, "dev.qory.run.policy_applied")) != 2 || got[0] != "dev.qory.run.started" {
+	if got := a.receivedTypes(); len(ofTypesIn(got, "dev.qory.run.policy_applied")) != 3 || got[0] != "dev.qory.run.started" {
 		t.Errorf("the server received %v", got)
 	}
 	a.mu.Lock()

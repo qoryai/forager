@@ -61,7 +61,8 @@ func askContainers(
 }
 
 // registerPause, when not nil, is called between a run's check and the writing of its
-// entry, under the registry's lock: a test holds a run there.
+// entry, under the registry's lock, at the open and at each join: a test holds a run
+// there.
 var registerPause func(runID string)
 
 // walledEntry is what a walled run's file in the registry holds.
@@ -227,6 +228,20 @@ func (r *registration) update(binds []bindSource) error {
 	if err := checkShared(r.docker, r.dir, r.runID, binds); err != nil {
 		return err
 	}
+	if registerPause != nil {
+		registerPause(r.runID)
+	}
+	return r.write(binds)
+}
+
+// rewrite puts binds in the run's entry, under the registry's lock, with no check:
+// what the run's entry lists once a session's places are no longer bound.
+func (r *registration) rewrite(binds []bindSource) error {
+	unlock, err := lockRegistry(r.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return r.write(binds)
 }
 
@@ -374,7 +389,7 @@ type WalledRun struct {
 // engine of such an entry cannot be asked, or the entry records no engine, or an entry
 // whose lock is free cannot be read, the error is a *[Refusal] with the code
 // engine_unreachable, whose Names are the run's id and the path of its entry, a path
-// that contains qak_ or qrk_ in any case printed as [accesskey.ShownName]'s phrase,
+// that contains qak_, qrk_ or qecr_ in any case printed as [accesskey.ShownName]'s phrase,
 // and whose Detail says the run counts as still going; its EntryUnreadable is set for an
 // entry that cannot be read, and for no other. An entry whose lock is held and that
 // cannot be read, and a writable bind of a run still going that cannot be resolved now,
@@ -732,7 +747,7 @@ func writtenEntry(file string) (walledEntry, bool, error) {
 // containers: nothing is bound while one may, and such a run counts as still going. so
 // is what follows from it, [startsNot] for a run that starts. Its names are the earlier
 // run's id and file, the path of its entry, which the registry's directory makes
-// absolute, so the entry can be found and looked at. A path that contains qak_ or qrk_,
+// absolute, so the entry can be found and looked at. A path that contains qak_, qrk_ or qecr_,
 // in any case, is [accesskey.ShownName]'s phrase in its place in the names, and Detail
 // prints [accesskey.ShownValue]'s phrase in place of an error that contains one.
 func engineUnreachable(runID, file, so string, err error) *Refusal {

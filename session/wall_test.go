@@ -123,7 +123,7 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 	if w.got.ProxyToken != linktest.ProxySecret {
 		t.Errorf("the wall's relay got %q as the proxy secret", w.got.ProxyToken)
 	}
-	if want := []wall.Mount{{Path: sp.Dir}, {Path: res.Dir, ReadOnly: true}}; !slices.Equal(w.got.Mounts, want) {
+	if want := []wall.Mount{{Path: sp.Dir}, {Path: res.SessionDir, ReadOnly: true}}; !slices.Equal(w.got.Mounts, want) {
 		t.Errorf("mounts %v, want %v", w.got.Mounts, want)
 	}
 	env := strings.Join(w.got.Env, "\n")
@@ -131,10 +131,13 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 		t.Errorf("the enclosure's environment:\n%s", env)
 	}
 	evs := events(t, res)
-	if d := data(evs[0]); d["wall"] != "open" || d["image"] != "example.com/agent:1" {
+	if d := data(evs[0]); d["wall"] != "open" {
 		t.Errorf("run.started %v", d)
 	}
-	if len(ofType(evs, "dev.qory.session.ended")) != 1 {
+	if d := sessionStarted(t, evs); d["image"] != "example.com/agent:1" {
+		t.Errorf("session.started %v", d)
+	}
+	if len(ofType(evs, "dev.qory.runtime.ended")) != 1 {
 		t.Errorf("the hook did not cross: %v", types(evs))
 	}
 
@@ -142,7 +145,7 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 	sp = spec(t)
 	sp.Wall, sp.Image, sp.Env = w, "i", nil
 	sp.Command, sp.Args = "/bin/sh", []string{"-c", `test -z "$QORY_TEST_HOST_ONLY"`}
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("a nil environment under a wall carried the process's own: %v %+v", err, res)
 	}
 }
@@ -163,7 +166,7 @@ func TestTheForwarderCarriesTheProxySecret(t *testing.T) {
 			if walled {
 				sp.Wall, sp.Image = &relayWall{}, "example.com/agent:1"
 			}
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -199,7 +202,7 @@ func TestTheUnwalledForwarderTakesOnlyTheAgentsPassword(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "env")
 	sp.Forwarder = nil
 	sp.Command, sp.Args = "/bin/sh", []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +302,7 @@ func TestAnUnwalledRunIsBrokered(t *testing.T) {
 			sp.CAEnv = names
 			out := dumpsEnv(t, &sp)
 			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -332,7 +335,7 @@ func TestAnUnwalledRunWithoutABundleDoesNotStart(t *testing.T) {
 	defer session.SetMachineBundles([]string{filepath.Join(t.TempDir(), "none.pem"), t.TempDir()})()
 	sp, g := specGateway(t, "FAKE_EXIT=0")
 	credentialAnswer(g)
-	_, err := session.Run(context.Background(), sp)
+	_, err := run(context.Background(), sp)
 	const want = "install a CA bundle at /etc/ssl/cert.pem or /etc/ssl/certs/ca-certificates.crt: the run's tools trust the gateway for the credentials' hosts only through a bundle, and this machine has none of the files Forager reads"
 	if err == nil || err.Error() != want {
 		t.Errorf("%v, want %q", err, want)
@@ -362,7 +365,7 @@ func TestTheBundleReplacesALinkAtItsPath(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(dir, session.BundleFile)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	if b, err := os.ReadFile(target); err != nil || string(b) != "the target's content" {
@@ -410,7 +413,7 @@ func TestPrepareIsGivenTheStandInsOfAWalledRun(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []string{"MODEL_TOKEN", "FILES_KEY"}
-		if !slices.Equal(rt.got.Placeholders, want) || rt.got.RunDir == "" || rt.got.Walled != walled {
+		if !slices.Equal(rt.got.Placeholders, want) || rt.got.SessionDir == "" || rt.got.Walled != walled {
 			t.Errorf("walled %v: Prepare received %v, want %v", walled, rt.got.Placeholders, want)
 		}
 	}

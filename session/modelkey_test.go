@@ -95,7 +95,7 @@ func answeringStart(g *linktest.Fake, hosts []map[string]any, placeholders []str
 // as credential=name lines; nil when the record has none.
 func credentialVariables(t *testing.T, res *session.Result) []string {
 	t.Helper()
-	pa := ofType(events(t, res), "dev.qory.run.policy_applied")
+	pa := joinApplied(events(t, res))
 	if len(pa) != 1 {
 		t.Fatalf("policy_applied events: %v", pa)
 	}
@@ -109,6 +109,25 @@ func credentialVariables(t *testing.T, res *session.Result) []string {
 		out = append(out, e["credential"].(string)+"="+e["name"].(string))
 	}
 	return out
+}
+
+// joinRefusedOnLink fails the test unless every dev.qory.session.exited the link got,
+// one at least, is failed with -1 and code as its reason, and the link got no
+// dev.qory.session.started.
+func joinRefusedOnLink(t *testing.T, g *linktest.Fake, code string) {
+	t.Helper()
+	exited := ofType(g.Events(), "dev.qory.session.exited")
+	if len(exited) == 0 {
+		t.Errorf("the link got no session.exited; want one, failed, -1, %s", code)
+	}
+	for _, e := range exited {
+		if data(e)["reason"] != code || data(e)["state"] != "failed" || data(e)["exit_code"] != float64(-1) {
+			t.Errorf("the link got %v; want session.exited, failed, -1, %s", e, code)
+		}
+	}
+	if started := ofType(g.Events(), "dev.qory.session.started"); len(started) != 0 {
+		t.Errorf("the link got %v; want no session.started", started)
+	}
 }
 
 // refusedWith fails the test unless err is a refusal of code with names and detail.
@@ -152,7 +171,7 @@ func TestTheStartKeyChoosesTheVariable(t *testing.T) {
 			}
 			sp.Variables.Run = []string{endpointVariable + "=https://evil.example"}
 			answeringWith(g, []map[string]any{apiKey("model", "anthropic-messages", modelEndpoint, tc.auth)}, nil)
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -207,7 +226,7 @@ func TestTheKeysEndpointTakesThePlaceOfEveryOther(t *testing.T) {
 				sp.LaunchFixed = passed
 			}
 			answering(g, []map[string]any{model()}, vars)
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -256,11 +275,9 @@ func TestAStartKeyTheRuntimeDoesNotReadIsRefused(t *testing.T) {
 				sp.Runtime = runtimes.Bare("codex")
 			}
 			answeringWith(g, []map[string]any{apiKey("model", tc.format, modelEndpoint, tc.auth)}, nil)
-			_, err := session.Run(context.Background(), sp)
+			_, err := run(context.Background(), sp)
 			refusedWith(t, err, "run_configuration_invalid", []string{"model"}, tc.detail)
-			if refusals := ofType(g.Events(), "dev.qory.run.refused"); len(refusals) != 1 {
-				t.Errorf("the link got %v; want one run.refused", refusals)
-			}
+			joinRefusedOnLink(t, g, "run_configuration_invalid")
 		})
 	}
 }
@@ -283,7 +300,7 @@ func TestModelCredentialChoosesTheStartKey(t *testing.T) {
 				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			}
 			answeringStart(g, keys, nil, "backup")
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -313,7 +330,7 @@ func TestModelCredentialChoosesTheStartKey(t *testing.T) {
 			sp, g := specGateway(t)
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			answeringStart(g, append(slices.Clone(keys), sealed("forge", "api.github.com", "GITHUB_TOKEN")), []string{"GITHUB_TOKEN"}, tc.start)
-			_, err := session.Run(context.Background(), sp)
+			_, err := run(context.Background(), sp)
 			refusedWith(t, err, "run_configuration_invalid", tc.names, tc.detail)
 		})
 	}
@@ -368,7 +385,7 @@ func TestAPlaceholderGoesOnlyIntoACredentialsVariable(t *testing.T) {
 				sp.Runtime = tc.runtime(sp.Runtime)
 			}
 			answeringWith(g, tc.hosts, tc.placeholders)
-			_, err := session.Run(context.Background(), sp)
+			_, err := run(context.Background(), sp)
 			refusedWith(t, err, "run_configuration_invalid", tc.names, tc.detail)
 		})
 	}
@@ -377,7 +394,7 @@ func TestAPlaceholderGoesOnlyIntoACredentialsVariable(t *testing.T) {
 		out := dumpsEnv(t, &sp)
 		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 		answeringWith(g, []map[string]any{model(), sealed("forge", "api.github.com", "GITHUB_TOKEN")}, []string{"GITHUB_TOKEN"})
-		res, err := session.Run(context.Background(), sp)
+		res, err := run(context.Background(), sp)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -434,7 +451,7 @@ func TestTheChosenVariableIsAPlaceholder(t *testing.T) {
 				sp.Variables.Machine = passed
 			}
 			answeringWith(g, []map[string]any{model()}, nil)
-			_, err := session.Run(context.Background(), sp)
+			_, err := run(context.Background(), sp)
 			var r *session.Refusal
 			if !errors.As(err, &r) || r.Code != "placeholder_conflict" || !slices.Equal(r.Names, []string{apiKeyVariable}) {
 				t.Fatalf("%v, want placeholder_conflict for %s", err, apiKeyVariable)
@@ -447,7 +464,7 @@ func TestTheChosenVariableIsAPlaceholder(t *testing.T) {
 		sp.Runtime = rec
 		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 		answeringWith(g, []map[string]any{model()}, nil)
-		if _, err := session.Run(context.Background(), sp); err != nil {
+		if _, err := run(context.Background(), sp); err != nil {
 			t.Fatal(err)
 		}
 		if !slices.Contains(rec.got.Placeholders, apiKeyVariable) {
@@ -488,14 +505,14 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 		what    string
 		walled  bool
 		hosts   []map[string]any
-		edit    func(*session.Spec)
+		edit    func(*runSpec)
 		refused bool
 	}{
 		{"walled, no model key", true, []map[string]any{forge}, nil, true},
-		{"walled, a key the harness sets to empty", true, []map[string]any{forge}, func(sp *session.Spec) {
+		{"walled, a key the harness sets to empty", true, []map[string]any{forge}, func(sp *runSpec) {
 			sp.LaunchFixed = append(sp.LaunchFixed, authTokenVariable+"=")
 		}, true},
-		{"walled, a key the preparation sets to empty", true, []map[string]any{forge}, func(sp *session.Spec) {
+		{"walled, a key the preparation sets to empty", true, []map[string]any{forge}, func(sp *runSpec) {
 			sp.Runtime = &preparesEmpty{Runtime: sp.Runtime}
 		}, true},
 		{"unwalled, only a forge credential", false, []map[string]any{forge}, nil, false},
@@ -503,10 +520,10 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 		{"unwalled, an API credential", false, []map[string]any{forge, model()}, nil, false},
 		{"walled, no credential_hosts", true, nil, nil, false},
 		{"walled, an API credential", true, []map[string]any{forge, model()}, nil, false},
-		{"walled, a value from the machine", true, []map[string]any{forge}, func(sp *session.Spec) {
+		{"walled, a value from the machine", true, []map[string]any{forge}, func(sp *runSpec) {
 			sp.Variables.Machine = []string{apiKeyVariable + "=sk-ant-a-key-of-the-test"}
 		}, false},
-		{"walled, a value from the run", true, []map[string]any{forge}, func(sp *session.Spec) {
+		{"walled, a value from the run", true, []map[string]any{forge}, func(sp *runSpec) {
 			sp.Variables.Run = []string{oauthVariable + "=sk-ant-oat-a-key-of-the-test"}
 		}, false},
 	} {
@@ -523,7 +540,7 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 			} else {
 				answeringWith(g, tc.hosts, []string{"GITHUB_TOKEN"})
 			}
-			_, err := session.Run(context.Background(), sp)
+			_, err := run(context.Background(), sp)
 			if !tc.refused {
 				if err != nil {
 					t.Fatalf("%v, want the run", err)
@@ -535,10 +552,7 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 			if strings.Contains(err.Error(), "sk-ant") {
 				t.Errorf("the refusal quotes a value: %v", err)
 			}
-			refusals := ofType(g.Events(), "dev.qory.run.refused")
-			if len(refusals) != 1 || data(refusals[0])["code"] != "model_key_missing" {
-				t.Errorf("the link got %v; want one run.refused, model_key_missing", refusals)
-			}
+			joinRefusedOnLink(t, g, "model_key_missing")
 		})
 	}
 }
@@ -572,7 +586,7 @@ func TestTheRecordOfCredentialVariablesHoldsNoSecret(t *testing.T) {
 		sealed("helper", "helper.example", secret),
 		sealed("qrk_forge", "api.github.com", "GITHUB_TOKEN"),
 	}, []string{secret, "GITHUB_TOKEN"})
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +603,7 @@ func TestAnInheritedKeyAndEndpointGiveWayToTheStartKey(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0", apiKeyVariable+"=sk-fake-inherited", endpointVariable+"=https://other.example")
 	out := dumpsEnv(t, &sp)
 	answeringWith(g, []map[string]any{model(), sealed("forge", "api.github.com", "GITHUB_TOKEN")}, []string{"GITHUB_TOKEN"})
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	env := envOf(t, out)
@@ -602,7 +616,7 @@ func TestAnInheritedKeyAndEndpointGiveWayToTheStartKey(t *testing.T) {
 // the record lists none.
 func variableEntry(t *testing.T, res *session.Result, name string) map[string]any {
 	t.Helper()
-	pa := ofType(events(t, res), "dev.qory.run.policy_applied")
+	pa := joinApplied(events(t, res))
 	if len(pa) != 1 {
 		t.Fatalf("policy_applied events: %v", pa)
 	}
@@ -674,7 +688,7 @@ func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 						sp.LaunchFixed = withValue()
 					}
 					answering(g, []map[string]any{apiKey("model", "anthropic-messages", modelEndpoint, start.auth)}, vars)
-					res, err := session.Run(context.Background(), sp)
+					res, err := run(context.Background(), sp)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -723,7 +737,7 @@ func TestAPreparationsOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 				sp.Wall, sp.Image = w, "example.com/agent:1"
 			}
 			answering(g, []map[string]any{model()}, nil)
-			if _, err := session.Run(context.Background(), sp); err != nil {
+			if _, err := run(context.Background(), sp); err != nil {
 				t.Fatal(err)
 			}
 			got := envOf(t, out)
@@ -801,11 +815,11 @@ func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 			}
 			sp.Args = []string{"--settings", passed}
 			answering(g, c.hosts, nil)
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, _ = os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+			b, _ = os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 			var doc struct {
 				Env         map[string]any `json:"env"`
 				Permissions map[string]any `json:"permissions"`
@@ -857,11 +871,11 @@ func TestTheSettingsCopyKeepsNoCredentialHelper(t *testing.T) {
 			}
 			sp.Args = []string{"--settings", passed}
 			answering(g, c.hosts, nil)
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, _ := os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+			b, _ := os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 			var got map[string]any
 			if err := json.Unmarshal(b, &got); err != nil {
 				t.Fatal(err)
@@ -913,11 +927,11 @@ func TestTheSettingsEnvSetsNoDeniedVariable(t *testing.T) {
 			}
 			sp.Args = []string{"--settings", passed}
 			answering(g, nil, nil)
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, _ := os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+			b, _ := os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 			var doc struct {
 				Env map[string]any `json:"env"`
 			}

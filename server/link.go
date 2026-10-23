@@ -116,14 +116,34 @@ type LinkRunRequest struct {
 	// Narrowing is the session's narrowing of the policy, behind a separate gateway
 	// alone: the local link refuses one, and [Link.OpenRun] sends none on it.
 	Narrowing *LinkNarrowing `json:"narrowing,omitempty"`
-	// Passes are the names of the variables the run passes a value for, in what it
-	// inherits, what the harness sets and its variables: names alone, never a value.
-	// The gateway refuses a credential's or a tool's placeholder the run passes, as the
-	// session does.
-	Passes []string `json:"passes,omitempty"`
 	// Images are the images the session resolves a policy's selection against, so the
 	// gateway decides the run's image as the session does.
 	Images *LinkImages `json:"images,omitempty"`
+}
+
+// LinkJoinRequest is the body of the session's POST to <run URL>/<run_id>/sessions on
+// the link, contracts/forager/v1/link-join-request.schema.json, which joins a session
+// to the open run.
+type LinkJoinRequest struct {
+	Version int `json:"version"`
+	// Passes are the names of the variables the session passes a value for, in what it
+	// inherits, what the harness sets and its variables: names alone, never a value.
+	// The gateway answers 403 placeholder_conflict to a join whose Passes contain a
+	// placeholder of a credential or a tool it holds for the run.
+	Passes []string `json:"passes"`
+	// ModelCredential is the name of the model key the session starts with, one the
+	// gateway holds for the run; empty for the run's start key.
+	ModelCredential string `json:"model_credential,omitempty"`
+}
+
+// LinkJoinAnswer is what the gateway answers a join request it accepts,
+// contracts/forager/v1/link-join-answer.schema.json: the session's number in the run,
+// from 1, and the model key the session starts with, empty when the gateway holds no
+// model key for the run. A member Forager does not know is ignored.
+type LinkJoinAnswer struct {
+	Version         int    `json:"version"`
+	Session         int    `json:"session"`
+	ModelCredential string `json:"model_credential,omitempty"`
 }
 
 // LinkNarrowing is a session's narrowing of the policy the gateway holds for its run.
@@ -181,8 +201,8 @@ type LinkCredentialHosts struct {
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,
 // contracts/forager/v1/link-run-answer.schema.json. A member Forager does not know is
-// ignored. Its ProxySecret is never printed: fmt, log/slog and encoding/json show it as
-// [redacted].
+// ignored. Its ProxySecret and StackProxySecret are never printed: fmt, log/slog and
+// encoding/json show each as [redacted].
 type LinkRunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -197,6 +217,11 @@ type LinkRunAnswer struct {
 	// connection to the gateway's proxy after the relay's preamble. A separate gateway
 	// gives none: the run key opens its proxy connections.
 	ProxySecret string `json:"proxy_secret,omitempty"`
+	// StackProxySecret is the run's stack proxy secret on the local link, which opens a
+	// connection to the run's stack proxy after the relay's preamble, until the run's
+	// first join request. A separate gateway gives none: [link.StackPreamble] and the
+	// run key open those connections.
+	StackProxySecret string `json:"stack_proxy_secret,omitempty"`
 	// CertificateAuthority is the run's certificate authority, PEM, when the gateway
 	// reads inside HTTPS for the run, with or without a wall.
 	CertificateAuthority string `json:"certificate_authority,omitempty"`
@@ -244,7 +269,10 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	if s.ProxySecret != "" {
 		s.ProxySecret = redactedSecret
 	}
-	// A name or a value that contains qak_ or qrk_ in any case prints its phrase.
+	if s.StackProxySecret != "" {
+		s.StackProxySecret = redactedSecret
+	}
+	// A name or a value that contains qak_, qrk_ or qecr_ in any case prints its phrase.
 	s.Labels = ShownLabels(a.Labels)
 	if a.Variables != nil {
 		s.Variables = make(map[string]Variable, len(a.Variables))
@@ -286,8 +314,8 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 }
 
 // shownDocument is a document as it prints: the value's phrase, as a JSON string, in
-// place of all of it when a string or member name in it, as it decodes, contains qak_
-// or qrk_ in any case.
+// place of all of it when a string or member name in it, as it decodes, contains qak_,
+// qrk_ or qecr_ in any case.
 func shownDocument(d json.RawMessage) json.RawMessage {
 	secrets := jsonSecrets(d)
 	if secrets == "" {
@@ -298,7 +326,7 @@ func shownDocument(d json.RawMessage) json.RawMessage {
 }
 
 // Format prints a as fmt prints a struct, under every verb and flag, with its
-// ProxySecret redacted.
+// ProxySecret and StackProxySecret redacted.
 func (a LinkRunAnswer) Format(f fmt.State, verb rune) {
 	out := fmt.Sprintf(fmt.FormatString(f, verb), a.shown())
 	if verb == 'v' && f.Flag('#') {
@@ -307,14 +335,15 @@ func (a LinkRunAnswer) Format(f fmt.State, verb rune) {
 	io.WriteString(f, out)
 }
 
-// String is a as %v prints it, its ProxySecret redacted.
+// String is a as %v prints it, its ProxySecret and StackProxySecret redacted.
 func (a LinkRunAnswer) String() string { return fmt.Sprintf("%v", a) }
 
-// GoString is a as %#v prints it, its ProxySecret redacted.
+// GoString is a as %#v prints it, its ProxySecret and StackProxySecret redacted.
 func (a LinkRunAnswer) GoString() string { return fmt.Sprintf("%#v", a) }
 
 // LogValue is a as log/slog logs it: its run id, digest and the names it carries,
-// never a variable's value, the proxy secret or the certificate.
+// never a variable's value, the proxy secret, the stack proxy secret or the
+// certificate.
 func (a LinkRunAnswer) LogValue() slog.Value {
 	names := slices.Sorted(maps.Keys(a.Variables))
 	return slog.GroupValue(
@@ -322,21 +351,23 @@ func (a LinkRunAnswer) LogValue() slog.Value {
 		slog.String("digest", a.Digest),
 		slog.Any("variables", accesskey.ShownNames(names)),
 		slog.String("proxy_secret", a.shown().ProxySecret),
+		slog.String("stack_proxy_secret", a.shown().StackProxySecret),
 		slog.Any("placeholders", accesskey.ShownNames(a.Placeholders)),
 		slog.Any("reserved", accesskey.ShownNames(a.Reserved)),
 	)
 }
 
-// MarshalJSON is a as encoding/json writes a struct, with its ProxySecret redacted,
-// for a log or a dump that writes it so. The gateway writes the run answer from its
-// own struct; reading one back is as encoding/json reads a struct.
+// MarshalJSON is a as encoding/json writes a struct, with its ProxySecret and
+// StackProxySecret redacted, for a log or a dump that writes it so. The gateway writes
+// the run answer from a struct in package gateway, not through this method; reading
+// one back is as encoding/json reads a struct.
 func (a LinkRunAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
 
 // LinkReloadAnswer is what the gateway answers a reload with,
 // contracts/forager/v1/link-reload-answer.schema.json: the policy in force for the run
 // now, its digest and the run's variables, placeholders, reserved names, image and the
-// members of policy_applied the gateway decides. It never holds the proxy secret or the
-// certificate authority.
+// members of policy_applied the gateway decides. It never has the proxy secret, the
+// stack proxy secret or the certificate authority.
 type LinkReloadAnswer struct {
 	Version      int                 `json:"version"`
 	Policy       json.RawMessage     `json:"policy,omitzero"`
@@ -950,6 +981,35 @@ func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAns
 	}
 	if err := checkRunMembers(a.Variables, a.Placeholders, a.Reserved, a.Image); err != nil {
 		return nil, &DocumentError{"the reload answer", k.at(u), err}
+	}
+	return &a, nil
+}
+
+// Join joins a session to the open run, a POST of req to <runURL>/<runID>/sessions,
+// and returns the join answer: the session's number and the model key it starts with.
+// A 410 is the end of the run, [Ended]; a coded refusal, placeholder_conflict among
+// them, is an [*accesskey.Refusal].
+func (k *Link) Join(ctx context.Context, runURL, runID string, req LinkJoinRequest) (*LinkJoinAnswer, error) {
+	if err := k.onLink("the run URL", runURL); err != nil {
+		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
+	}
+	if !runIDShape.MatchString(runID) {
+		return nil, errors.New("the join request: the run id is not a UUID in the canonical lower-case form")
+	}
+	if req.Version == 0 {
+		req.Version = 1
+	}
+	if req.Passes == nil {
+		req.Passes = []string{}
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("the join request: %w", err)
+	}
+	u := strings.TrimSuffix(runURL, "/") + "/" + runID + "/sessions"
+	var a LinkJoinAnswer
+	if err := k.fetch(ctx, "the join request", http.MethodPost, u, body, func(h http.Header) { h.Set("Content-Type", LinkContentType) }, "link-join-answer.schema.json", &a); err != nil {
+		return nil, err
 	}
 	return &a, nil
 }

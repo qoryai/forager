@@ -466,13 +466,13 @@ func modelKeysDoc(start, allow string) string {
 		`"credentials":[{"name":"first"},{"name":"second"},{"name":"git"}]},"model_credential":"` + start + `"}`
 }
 
-// TestOnlyTheStartModelKeyReachesTheProxy pins ProxyUses for a run with two model keys
-// of the machine's and a host credential: the proxy gets the model key that
-// model_credential names, with its placeholder's value, link.KeyPlaceholder of its
-// name, and the host credential with none; the gateway holds the other model key and
-// the proxy never gets it. A reload with the same model_credential is put in force, and
-// one that names the other model key is refused with the policy in force staying.
-func TestOnlyTheStartModelKeyReachesTheProxy(t *testing.T) {
+// TestEveryModelKeyReachesTheProxy pins ProxyUses for a run with two model keys of the
+// machine's and a host credential: the proxy gets both model keys, each with its
+// placeholder's value, link.KeyPlaceholder of its name, and the host credential with
+// none; the gateway names the one the proxy sets (proxy.Proxy.SetModelKey). A reload
+// with the same model_credential is put in force, and one that names the other model
+// key is refused with the policy in force staying.
+func TestEveryModelKeyReachesTheProxy(t *testing.T) {
 	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
 	cfg := run.Config{
 		RunID: runID, Wall: true, Server: true,
@@ -495,14 +495,14 @@ func TestOnlyTheStartModelKeyReachesTheProxy(t *testing.T) {
 		}
 		return out
 	}
-	want := []use{{"second", link.KeyPlaceholder("second"), "bearer"}, {"git", "", "bearer"}}
+	want := []use{{"first", link.KeyPlaceholder("first"), "header"}, {"second", link.KeyPlaceholder("second"), "bearer"}, {"git", "", "bearer"}}
 	if got := shown(r.Uses()); !slices.Equal(got, want) {
 		t.Errorf("the proxy's uses %+v, want %+v", got, want)
 	}
 	if got := shown(run.ProxyUses(r.Held())); !slices.Equal(got, want) {
 		t.Errorf("ProxyUses %+v, want %+v", got, want)
 	}
-	if u := r.Uses()[0]; !slices.Equal(u.Hosts, []string{"api.other-model.example"}) || u.Token() != "sk-ant-fake-value" {
+	if u := r.Uses()[1]; !slices.Equal(u.Hosts, []string{"api.other-model.example"}) || u.Token() != "sk-ant-fake-value" {
 		t.Errorf("the start key's use %+v", u)
 	}
 	d, err := reload(t, r, document(t, modelKeysDoc("second", `,"b.example"`), digest('2')))

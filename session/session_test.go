@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 	"github.com/creack/pty"
 
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
@@ -50,18 +52,26 @@ func must[T any](v T, err error) T {
 	return v
 }
 
-// TestMain lets the test binary stand in for a runtime, for the hook forwarder and for
-// a run's preparation, so no real runtime and no shell script are needed: with
-// FAKE_RUNTIME set it acts as a runtime, with QORY_TEST_FORWARD set as the forwarder,
-// and with FAKE_PREPARATION set as a preparation.
+// TestMain lets the test binary stand in for a runtime, for the hook forwarder, for the
+// setup runner and for a setup command, so no real runtime and no shell script are
+// needed: with FAKE_RUNTIME set it acts as a runtime, with QORY_TEST_FORWARD set as the
+// forwarder, with setup-command as its first argument as the runner, with
+// FAKE_PREPARATION set as a setup command, and with FAKE_SETUP_RECORDS set as a setup
+// command that writes records of the setup source itself.
 func TestMain(m *testing.M) {
-	// The helper's exec, as the caller's binary runs it in its exec mode.
+	// The helper's exec and setup runner, as the caller's binary runs them in their
+	// modes.
 	if len(os.Args) > 1 && os.Args[1] == "exec" {
 		os.Exit(session.Exec(os.Args[2:], os.Stderr))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-command" {
+		os.Exit(session.RunSetupCommand(os.Args[2:], os.Stderr))
 	}
 	switch {
 	case os.Getenv("FAKE_PREPARATION") != "":
 		os.Exit(fakePreparation())
+	case os.Getenv("FAKE_SETUP_RECORDS") != "":
+		os.Exit(fakeSetupRecords())
 	case os.Getenv("QORY_TEST_FORWARD") != "":
 		if err := socket.Forward(context.Background(), os.Getenv(session.EnvSocket), os.Stdin); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -71,6 +81,9 @@ func TestMain(m *testing.M) {
 	case os.Getenv("FAKE_RUNTIME") != "":
 		os.Exit(fakeRuntime())
 	}
+	// A fake gateway that does not accept a batch holds a join and a close for 3 s,
+	// not 15 s.
+	session.SetCloseWait(3 * time.Second)
 	// The registry of walled runs is the tests' own, not this user's.
 	state, err := os.MkdirTemp("", "session-state-")
 	if err != nil {
@@ -123,17 +136,34 @@ func fakeRuntime() int {
 			fmt.Fprintln(os.Stderr, "no SessionEnd hook installed:", err)
 			return 90
 		}
-		// Every group's every hook runs, as the runtime runs them: the launch's own and
-		// the session's forwarder.
-		for _, group := range s.Hooks["SessionEnd"] {
-			for _, h := range group.Hooks {
-				cmd := shell(h.Command)
-				cmd.Stdin = strings.NewReader(`{"session_id":"fake","hook_event_name":"SessionEnd","reason":"other","cwd":"/"}`)
-				cmd.Stderr = os.Stderr
-				if err := cmd.Run(); err != nil {
-					fmt.Fprintln(os.Stderr, "hook:", err)
-					return 91
+		// FAKE_HOOKS is hook inputs to call before SessionEnd, one JSON object a
+		// line, each for the hooks of its hook_event_name; FAKE_LINES is lines to
+		// print after them.
+		inputs := slices.DeleteFunc(strings.Split(os.Getenv("FAKE_HOOKS"), "\n"), func(l string) bool { return l == "" })
+		inputs = append(inputs, `{"session_id":"fake","hook_event_name":"SessionEnd","reason":"other","cwd":"/"}`)
+		for _, input := range inputs {
+			var in struct {
+				Event string `json:"hook_event_name"`
+			}
+			json.Unmarshal([]byte(input), &in)
+			// Every group's every hook runs, as the runtime runs them: the hooks the
+			// launch passed and the session's forwarder.
+			for _, group := range s.Hooks[in.Event] {
+				for _, h := range group.Hooks {
+					cmd := shell(h.Command)
+					cmd.Stdin = strings.NewReader(input)
+					cmd.Stderr = os.Stderr
+					if err := cmd.Run(); err != nil {
+						fmt.Fprintln(os.Stderr, "hook:", err)
+						return 91
+					}
 				}
+			}
+			if in.Event != "SessionEnd" {
+				continue
+			}
+			if lines := os.Getenv("FAKE_LINES"); lines != "" {
+				fmt.Println(lines)
 			}
 		}
 	}
@@ -175,14 +205,14 @@ func stray(addr string) string {
 // spec returns a spec running the fake runtime with the given environment, in a fresh
 // checkout directory, with its run directories beside it, speaking to a fake gateway
 // of its own.
-func spec(t *testing.T, env ...string) session.Spec {
+func spec(t *testing.T, env ...string) runSpec {
 	t.Helper()
 	sp, _ := specGateway(t, env...)
 	return sp
 }
 
 // specGateway is spec and the fake gateway it speaks to.
-func specGateway(t *testing.T, env ...string) (session.Spec, *linktest.Fake) {
+func specGateway(t *testing.T, env ...string) (runSpec, *linktest.Fake) {
 	t.Helper()
 	dir := t.TempDir()
 	var out, errs bytes.Buffer
@@ -193,21 +223,24 @@ func specGateway(t *testing.T, env ...string) (session.Spec, *linktest.Fake) {
 	})
 	g := linktest.StartFake(t)
 	g.SetInterval(30)
-	return session.Spec{
-		Runtime:        claudeCode(t),
-		Command:        os.Args[0],
-		Args:           []string{"--settings", writeSettings(t, t.TempDir())},
-		Env:            append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
-		Dir:            dir,
+	return runSpec{OpenSpec: session.OpenSpec{
 		RunsDir:        filepath.Join(t.TempDir(), "runs"),
-		Stdin:          strings.NewReader(""),
-		Stdout:         &out,
-		Stderr:         &errs,
 		Gateway:        session.LocalGateway(g.Local()),
-		Forwarder:      []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
-		Exec:           []string{os.Args[0], "exec"},
 		ForagerVersion: "test",
 		Report:         func(l string) { t.Log("report:", l) },
+	},
+		SessionSpec: session.SessionSpec{
+			Runtime:   claudeCode(t),
+			Command:   os.Args[0],
+			Args:      []string{"--settings", writeSettings(t, t.TempDir())},
+			Env:       append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
+			Dir:       dir,
+			Stdin:     strings.NewReader(""),
+			Stdout:    &out,
+			Stderr:    &errs,
+			Forwarder: []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
+			Exec:      []string{os.Args[0], "exec"},
+		},
 	}, g
 }
 
@@ -279,11 +312,33 @@ func ofType(evs []map[string]any, typ string) []map[string]any {
 
 func data(e map[string]any) map[string]any { return e["data"].(map[string]any) }
 
+// sessionStarted is the data of the first dev.qory.session.started of evs; the test
+// fails without one.
+func sessionStarted(t *testing.T, evs []map[string]any) map[string]any {
+	t.Helper()
+	started := ofType(evs, "dev.qory.session.started")
+	if len(started) == 0 {
+		t.Fatalf("no session.started: %v", types(evs))
+	}
+	return data(started[0])
+}
+
+// joinApplied are the dev.qory.run.policy_applied events after the first
+// dev.qory.session.started: those of the session's join, and of reloads after it.
+func joinApplied(evs []map[string]any) []map[string]any {
+	for i, e := range evs {
+		if e["type"] == "dev.qory.session.started" {
+			return ofType(evs[i+1:], "dev.qory.run.policy_applied")
+		}
+	}
+	return nil
+}
+
 // TestRunRecordsAndExitsWithTheRuntimesStatus is the run end to end on pipes: the
 // members of policy_applied the gateway decides are recorded as its run answer gives
 // them, beside the harness's hosts, both requests go to the gateway's proxy through the
-// forwarder, the runtime's output is logged per stream and mapped to session.result,
-// the installed hook reaches the socket and becomes session.ended, and the exit status
+// forwarder, the runtime's output is logged per stream and mapped to runtime.result,
+// the installed hook reaches the socket and becomes runtime.ended, and the exit status
 // is the runtime's.
 func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_ALLOWED_URL=http://api.example/allowed", "FAKE_DENIED_URL=http://tracker.example/denied", "FAKE_EXIT=3")
@@ -306,10 +361,19 @@ func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	if len(evs) < 6 || evs[0]["type"] != "dev.qory.run.started" || evs[1]["type"] != "dev.qory.run.policy_applied" || evs[len(evs)-1]["type"] != "dev.qory.run.exited" {
 		t.Fatalf("event order: %v", types(evs))
 	}
-	if started := data(evs[0]); started["opened_by"] != "session" {
-		t.Errorf("run.started opened_by %v; want session", started["opened_by"])
+	if started := data(evs[0]); started["opened_by"] != "run" || started["command"] != nil {
+		t.Errorf("run.started %v; want opened_by run and no runtime members", started)
 	}
-	applied := data(evs[1])
+	// The open's policy_applied has the gateway's members and no variables; the join's
+	// has the session's variables and the harness's hosts beside them.
+	if opened := data(evs[1]); opened["mode"] != "enforce" || fmt.Sprint(opened["variables"]) != "[]" || opened["harness_hosts"] != nil || len(opened) != 6 {
+		t.Errorf("the open's policy_applied %v", opened)
+	}
+	joined := joinApplied(evs)
+	if len(joined) != 1 {
+		t.Fatalf("the join's policy_applied %v", joined)
+	}
+	applied := data(joined[0])
 	if applied["mode"] != "enforce" || applied["source"] != "config" || fmt.Sprint(applied["allow"]) != "[api.example]" || fmt.Sprint(applied["harness_hosts"]) != "[api.example registry.example]" || fmt.Sprint(applied["deny"]) != "[tracker.example]" || applied["digest"] != strings.Repeat("d", 64) || applied["variables"] == nil || len(applied) != 7 {
 		t.Errorf("policy_applied %v", applied)
 	}
@@ -323,11 +387,11 @@ func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	if !streams["stdout"] || !streams["stderr"] {
 		t.Errorf("log streams %v", streams)
 	}
-	if r := ofType(evs, "dev.qory.session.result"); len(r) != 1 || data(r[0])["outcome"] != "success" || data(r[0])["result"] != "done" {
-		t.Errorf("session.result %v", r)
+	if r := ofType(evs, "dev.qory.runtime.result"); len(r) != 1 || data(r[0])["outcome"] != "success" || data(r[0])["result"] != "done" {
+		t.Errorf("runtime.result %v", r)
 	}
-	if e := ofType(evs, "dev.qory.session.ended"); len(e) != 1 || data(e[0])["reason"] != "other" {
-		t.Errorf("session.ended %v", e)
+	if e := ofType(evs, "dev.qory.runtime.ended"); len(e) != 1 || data(e[0])["reason"] != "other" {
+		t.Errorf("runtime.ended %v", e)
 	}
 	exited := data(evs[len(evs)-1])
 	if exited["state"] != "failed" || exited["exit_code"] != 3.0 || exited["reason"] != nil {
@@ -337,7 +401,7 @@ func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	if !strings.Contains(string(out), `"type":"result"`) || !strings.Contains(string(out), "fake runtime: starting") {
 		t.Errorf("output.log %q", out)
 	}
-	settings, _ := os.ReadFile(filepath.Join(res.Dir, "settings.json"))
+	settings, _ := os.ReadFile(filepath.Join(res.SessionDir, "settings.json"))
 	if !strings.Contains(string(settings), `"echo existing"`) || !strings.Contains(string(settings), `"permissions"`) || strings.Count(string(settings), os.Args[0]) != 11 {
 		t.Errorf("settings.json:\n%s", settings)
 	}
@@ -364,11 +428,18 @@ func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 // runWithSettingsEnv runs the spec with FAKE_SETTINGS pointing at the settings file
 // the session writes, which is only known once the run directory exists: the run id is
 // fixed in advance so the path is known.
-func runWithSettingsEnv(t *testing.T, sp session.Spec) (*session.Result, error) {
+func runWithSettingsEnv(t *testing.T, sp runSpec) (*session.Result, error) {
+	t.Helper()
+	res, _, err := runWithSettingsEnvClosed(t, sp)
+	return res, err
+}
+
+// runWithSettingsEnvClosed is runWithSettingsEnv with the close's result too.
+func runWithSettingsEnvClosed(t *testing.T, sp runSpec) (*session.Result, *session.Closed, error) {
 	t.Helper()
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
-	sp.Env = append(sp.Env, "FAKE_SETTINGS="+filepath.Join(sp.RunsDir, sp.RunID, "settings.json"))
-	return session.Run(context.Background(), sp)
+	sp.Env = append(sp.Env, "FAKE_SETTINGS="+filepath.Join(sp.RunsDir, sp.RunID, session.SessionsDir, "1", "settings.json"))
+	return runClosed(context.Background(), sp)
 }
 
 func types(evs []map[string]any) []string {
@@ -390,6 +461,54 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 }
 
+// TestASubagentsParentIsSetAndAWaitingStartComesBeforeTheExit pins the session's
+// mapper end to end on pipes: after the runtime's first JSON line, a subagent's start
+// waits for the line that links it to its call; a nested subagent's start gets its
+// parent; each subagent's thinking and text block is a runtime.message, in order; a start whose link never
+// comes is written, without a parent, in its order before the session's exit.
+func TestASubagentsParentIsSetAndAWaitingStartComesBeforeTheExit(t *testing.T) {
+	hooks := strings.Join([]string{
+		`{"session_id":"fake","hook_event_name":"PreToolUse","tool_name":"Agent","tool_use_id":"toolu_A","tool_input":{}}`,
+		`{"session_id":"fake","hook_event_name":"SubagentStart","agent_id":"a1","agent_type":"Explore"}`,
+		`{"session_id":"fake","hook_event_name":"PreToolUse","tool_name":"Agent","tool_use_id":"toolu_B","tool_input":{},"agent_id":"a1"}`,
+		`{"session_id":"fake","hook_event_name":"SubagentStart","agent_id":"a2","agent_type":"Explore"}`,
+		`{"session_id":"fake","hook_event_name":"PreToolUse","tool_name":"Agent","tool_use_id":"toolu_C","tool_input":{},"agent_id":"a2"}`,
+		`{"session_id":"fake","hook_event_name":"SubagentStart","agent_id":"a3","agent_type":"Explore"}`,
+	}, "\n")
+	lines := strings.Join([]string{
+		`{"type":"user","session_id":"fake","agent_id":"a1","parent_tool_use_id":"toolu_A","message":{"role":"user","content":[{"type":"text","text":"look"}]}}`,
+		`{"type":"assistant","session_id":"fake","agent_id":"a2","parent_tool_use_id":"toolu_B","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm","signature":"s"},{"type":"text","text":"found it"}]}}`,
+	}, "\n")
+	res, err := runWithSettingsEnv(t, spec(t, "FAKE_HOOKS="+hooks, "FAKE_LINES="+lines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, res)
+	var got []string
+	for _, e := range evs {
+		typ := e["type"].(string)
+		d := data(e)
+		switch typ {
+		case "dev.qory.runtime.subagent_started":
+			got = append(got, fmt.Sprintf("start %v:%v", d["agent_id"], d["parent_agent_id"]))
+		case "dev.qory.runtime.message":
+			got = append(got, fmt.Sprintf("message %v %v %v", d["agent_id"], d["role"], d["text"]))
+		case "dev.qory.runtime.ended", "dev.qory.session.exited":
+			got = append(got, typ)
+		}
+	}
+	want := []string{"start a1:<nil>", "message a1 user look", "start a2:a1", "message a2 assistant hm", "message a2 assistant found it", "start a3:<nil>", "dev.qory.runtime.ended", "dev.qory.session.exited"}
+	// The two message lines are read beside the hooks: a1's line may be read before a2's
+	// start, and a3's start waits until the exit in either case.
+	if !slices.Contains(got, "start a2:a1") || !slices.Contains(got, "message a2 assistant hm") || !slices.Contains(got, "message a2 assistant found it") || !slices.Contains(got, "message a1 user look") || len(got) != len(want) {
+		t.Fatalf("events %q, want %q in some order of the lines", got, want)
+	}
+	order := func(a, b string) bool { return slices.Index(got, a) < slices.Index(got, b) }
+	if !order("message a2 assistant hm", "message a2 assistant found it") || !order("start a1:<nil>", "start a2:a1") || !order("start a2:a1", "start a3:<nil>") || !order("start a3:<nil>", "dev.qory.runtime.ended") || got[len(got)-1] != "dev.qory.session.exited" {
+		t.Errorf("events %q: the starts and the hook events after them are not in their order before the exit", got)
+	}
+}
+
 // TestInteractiveRunsOnAPseudoTerminal pins the PTY path: the output is one terminal
 // stream with the terminal's line endings, and the exit status is the program's.
 func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
@@ -398,7 +517,7 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 	sp.Interactive = true
 	sp.Command = "sh"
 	sp.Args = []string{"-c", "echo hello; exit 4"}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,8 +531,8 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 	if l := ofType(events(t, res), "dev.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
 		t.Errorf("log %v", l)
 	}
-	if size := data(events(t, res)[0])["terminal"]; fmt.Sprint(size) != "map[cols:80 rows:24]" {
-		t.Errorf("run.started terminal %v; want the default when stdin is not a terminal", size)
+	if size := sessionStarted(t, events(t, res))["terminal"]; fmt.Sprint(size) != "map[cols:80 rows:24]" {
+		t.Errorf("session.started terminal %v; want the default when stdin is not a terminal", size)
 	}
 }
 
@@ -427,20 +546,20 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 		sp := spec(t)
 		sp.Interactive = true
 		sp.Args = append(sp.Args, "-p", "Reply pong")
-		res, err := session.Run(context.Background(), sp)
+		res, err := run(context.Background(), sp)
 		if err != nil {
 			t.Fatal(err)
 		}
 		evs := events(t, res)
-		started := data(evs[0])
+		started := sessionStarted(t, evs)
 		if started["interactive"] != false || started["terminal"] != nil {
-			t.Errorf("run.started %v; want not interactive and no terminal size", started)
+			t.Errorf("session.started %v; want not interactive and no terminal size", started)
 		}
 		if l := ofType(evs, "dev.qory.run.log"); len(l) == 0 || data(l[0])["stream"] == "terminal" {
 			t.Errorf("log %v; want the streams of pipes", l)
 		}
-		if r := ofType(evs, "dev.qory.session.result"); len(r) != 1 || data(r[0])["result"] != "done" {
-			t.Errorf("session.result %v; want the output read", r)
+		if r := ofType(evs, "dev.qory.runtime.result"); len(r) != 1 || data(r[0])["result"] != "done" {
+			t.Errorf("runtime.result %v; want the output read", r)
 		}
 	})
 	t.Run("the runtime names none", func(t *testing.T) {
@@ -450,13 +569,13 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 		sp.Runtime = runtimes.Bare("other-agent")
 		sp.Command = "sh"
 		sp.Args = []string{"-c", "echo hello", "sh", "-p"}
-		res, err := session.Run(context.Background(), sp)
+		res, err := run(context.Background(), sp)
 		if err != nil {
 			t.Fatal(err)
 		}
 		evs := events(t, res)
-		if started := data(evs[0]); started["interactive"] != true || started["terminal"] == nil {
-			t.Errorf("run.started %v; want the caller's terminal kept", started)
+		if started := sessionStarted(t, evs); started["interactive"] != true || started["terminal"] == nil {
+			t.Errorf("session.started %v; want the caller's terminal kept", started)
 		}
 		if l := ofType(evs, "dev.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
 			t.Errorf("log %v", l)
@@ -465,7 +584,7 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 }
 
 // TestInteractiveRunFollowsTheTerminalSize pins the size in the record: the
-// pseudo-terminal starts at the size of the terminal stdin is, reported in run.started,
+// pseudo-terminal starts at the size of the terminal stdin is, reported in session.started,
 // and when that terminal is resized the pseudo-terminal follows and run.resized says so
 // at the sequence where it did, before the output drawn on the new size.
 func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
@@ -490,7 +609,7 @@ func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
 	sp.Args = []string{"-c", "stty size; read line; stty size"}
 	done := make(chan *session.Result, 1)
 	go func() {
-		res, err := session.Run(context.Background(), sp)
+		res, err := run(context.Background(), sp)
 		if err != nil {
 			t.Error(err)
 		}
@@ -512,11 +631,11 @@ func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
 		t.FailNow()
 	}
 	evs := events(t, res)
-	if size := data(evs[0])["terminal"]; fmt.Sprint(size) != "map[cols:100 rows:40]" {
-		t.Errorf("run.started terminal %v", size)
+	if size := sessionStarted(t, evs)["terminal"]; fmt.Sprint(size) != "map[cols:100 rows:40]" {
+		t.Errorf("session.started terminal %v", size)
 	}
 	resized := ofType(evs, "dev.qory.run.resized")
-	if len(resized) != 1 || fmt.Sprint(data(resized[0])) != "map[cols:120 rows:50]" {
+	if len(resized) != 1 || fmt.Sprint(data(resized[0])) != "map[cols:120 rows:50 session:1]" {
 		t.Fatalf("run.resized %v", resized)
 	}
 	// The sequence: what was drawn before the resize is logged before it, what was
@@ -570,7 +689,7 @@ func TestContextEndStopsTheRuntime(t *testing.T) {
 	sp.Args = []string{"-c", "sleep 30"}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	res, err := session.Run(ctx, sp)
+	res, err := run(ctx, sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +704,7 @@ func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
 	sp.Command = "sh"
 	sp.Args = []string{"-c", "sleep 30"}
 	sp.Timeout = 300 * time.Millisecond
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,23 +746,31 @@ func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
 	for i := range session.MaxLabels + 1 {
 		many[fmt.Sprint("k", i)] = "v"
 	}
-	for name, change := range map[string]func(*session.Spec){
-		"a path as the run id":  func(s *session.Spec) { s.RunID = "../../elsewhere" },
-		"an upper-case run id":  func(s *session.Spec) { s.RunID = strings.ToUpper(id) },
-		"an upper-case key":     func(s *session.Spec) { s.Labels = map[string]string{"Repo": "x"} },
-		"an empty key":          func(s *session.Spec) { s.Labels = map[string]string{"": "x"} },
-		"a long value":          func(s *session.Spec) { s.Labels = map[string]string{"k": strings.Repeat("v", 257)} },
-		"too many labels":       func(s *session.Spec) { s.Labels = many },
-		"a negative time limit": func(s *session.Spec) { s.Timeout = -time.Second },
+	for name, change := range map[string]func(*runSpec){
+		"a path as the run id": func(s *runSpec) { s.RunID = "../../elsewhere" },
+		"an upper-case run id": func(s *runSpec) { s.RunID = strings.ToUpper(id) },
+		"an upper-case key":    func(s *runSpec) { s.Labels = map[string]string{"Repo": "x"} },
+		"an empty key":         func(s *runSpec) { s.Labels = map[string]string{"": "x"} },
+		"a long value":         func(s *runSpec) { s.Labels = map[string]string{"k": strings.Repeat("v", 257)} },
+		"too many labels":      func(s *runSpec) { s.Labels = many },
 	} {
 		sp := spec(t)
 		change(&sp)
-		if _, err := session.Run(context.Background(), sp); err == nil {
+		if _, err := run(context.Background(), sp); err == nil {
 			t.Errorf("%s: the run started", name)
 		}
 		if entries, _ := os.ReadDir(sp.RunsDir); len(entries) > 0 {
 			t.Errorf("%s: a run directory was made: %v", name, entries)
 		}
+	}
+	// A negative time limit is the session's: the join refuses it before its request.
+	sp, g := specGateway(t)
+	sp.Timeout = -time.Second
+	if _, err := run(context.Background(), sp); err == nil {
+		t.Error("a negative time limit: the session started")
+	}
+	if len(g.Joins()) > 0 {
+		t.Error("a negative time limit: the gateway got a join request")
 	}
 }
 
@@ -656,7 +783,7 @@ func TestAboutIsInRunStartedAlone(t *testing.T) {
 	sp.Forwarder = nil
 	sp.About = &session.About{Title: "Example",
 		Subjects: []session.Subject{{Type: "example"}}}
-	_, err := session.Run(context.Background(), sp)
+	_, err := run(context.Background(), sp)
 	var ae *session.AboutError
 	if !errors.As(err, &ae) || err.Error() != "about.subjects[0].ref is empty" {
 		t.Errorf("an About without a ref: %v", err)
@@ -681,7 +808,7 @@ func TestAboutIsInRunStartedAlone(t *testing.T) {
 		},
 		Details: json.RawMessage(`{ "example-key" : [ 1, { "b" : { "c" : true } } ] }`),
 	}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -725,13 +852,77 @@ func TestAboutIsInRunStartedAlone(t *testing.T) {
 	sp = spec(t)
 	sp.Forwarder = nil
 	sp.About = &session.About{Details: json.RawMessage(" { } ")}
-	if res, err = session.Run(context.Background(), sp); err != nil {
+	if res, err = run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	if st := ofType(events(t, res), "dev.qory.run.started"); len(st) != 1 {
 		t.Errorf("run.started events %v", st)
 	} else if about, ok := data(st[0])["about"]; ok {
 		t.Errorf("an empty About is in run.started as %v", about)
+	}
+}
+
+// TestMachineAndSetupAreInRunStarted pins OpenSpec.Machine and OpenSpec.Setup: each is
+// in run.started as the caller set it, and the event validates against its schema;
+// empty ones leave both members out; a value the schema refuses is no run, with the
+// error word for word, before the gateway sees a connection or a run directory is
+// made, and a value that contains qak_ is shown as the value's phrase.
+func TestMachineAndSetupAreInRunStarted(t *testing.T) {
+	schema, err := contracts.Compile("events/run.started.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ machine, setup string }{
+		{"aws-ec2", event.SetupOutside},
+		{event.MachineNone, event.SetupInside},
+		{"", ""},
+	} {
+		sp := spec(t)
+		sp.Forwarder = nil
+		sp.Machine, sp.OpenSpec.Setup = c.machine, c.setup
+		res, err := run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := ofType(events(t, res), "dev.qory.run.started")
+		if len(st) != 1 {
+			t.Fatalf("run.started events %v", st)
+		}
+		d := data(st[0])
+		if err := schema.Validate(d); err != nil {
+			t.Errorf("%+v: run.started does not validate: %v", c, err)
+		}
+		for member, want := range map[string]string{"machine": c.machine, "setup": c.setup} {
+			got, ok := d[member]
+			switch {
+			case want == "" && ok:
+				t.Errorf("an empty %s is in run.started as %v", member, got)
+			case want != "" && got != want:
+				t.Errorf("run.started %s %v, want %s", member, got, want)
+			}
+		}
+	}
+
+	for _, c := range []struct{ machine, setup, want string }{
+		{"AWS-EC2", "", `set OpenSpec.Machine to none or to 1 to 64 of a-z, 0-9 and -, the first a letter: "AWS-EC2"`},
+		{"1-node", "", `set OpenSpec.Machine to none or to 1 to 64 of a-z, 0-9 and -, the first a letter: "1-node"`},
+		{"a" + strings.Repeat("b", 64), "", `set OpenSpec.Machine to none or to 1 to 64 of a-z, 0-9 and -, the first a letter: "a` + strings.Repeat("b", 64) + `"`},
+		{"qak_x", "", "set OpenSpec.Machine to none or to 1 to 64 of a-z, 0-9 and -, the first a letter: (a value that contains an access key secret)"},
+		{"aws-ec2", "elsewhere", `set OpenSpec.Setup to outside or inside, or leave it empty: "elsewhere"`},
+		{"", "Outside", `set OpenSpec.Setup to outside or inside, or leave it empty: "Outside"`},
+	} {
+		sp, g := specGateway(t)
+		sp.Forwarder = nil
+		sp.Machine, sp.OpenSpec.Setup = c.machine, c.setup
+		if _, err := run(context.Background(), sp); err == nil || err.Error() != c.want {
+			t.Errorf("machine %q, setup %q: %v, want %s", c.machine, c.setup, err, c.want)
+		}
+		if n := g.Accepted.Load(); n != 0 {
+			t.Errorf("machine %q, setup %q: the gateway saw %d connections of a refused run", c.machine, c.setup, n)
+		}
+		if entries, _ := os.ReadDir(sp.RunsDir); len(entries) > 0 {
+			t.Errorf("machine %q, setup %q: a run directory was made: %v", c.machine, c.setup, entries)
+		}
 	}
 }
 
@@ -743,7 +934,7 @@ func TestStopGraceIsHowLongTheRuntimeHasToLeave(t *testing.T) {
 	sp.Timeout = 200 * time.Millisecond
 	sp.StopGrace = 300 * time.Millisecond
 	start := time.Now()
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +953,7 @@ func TestStopSignalIsTheOneTheRunNames(t *testing.T) {
 	sp.Args = []string{"-c", "trap 'exit 7' INT; trap '' TERM; sleep 30 & wait"}
 	sp.Timeout = 300 * time.Millisecond
 	sp.StopSignal = "SIGINT"
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -772,7 +963,7 @@ func TestStopSignalIsTheOneTheRunNames(t *testing.T) {
 	for _, name := range []string{"SIGKILL", "INT", "sigint", "9"} {
 		sp := spec(t)
 		sp.StopSignal = name
-		if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "stop signal") {
+		if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "stop signal") {
 			t.Errorf("stop signal %q: %v", name, err)
 		}
 	}
@@ -808,25 +999,25 @@ func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T)
 			sp.Command, sp.Args = "sh", []string{"-c", script}
 			sp.Timeout = 300 * time.Millisecond
 			sp.StopSignal = c.named
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !res.TimedOut || res.ExitCode != c.code {
 				t.Errorf("result %+v", res)
 			}
-			if got.RunDir != res.Dir || got.Launch.Command != "sh" || len(got.Forwarder) == 0 {
+			if got.SessionDir != res.SessionDir || got.Launch.Command != "sh" || len(got.Forwarder) == 0 {
 				t.Errorf("Prepare was given %+v", got)
 			}
-			started := ofType(events(t, res), "dev.qory.run.started")
+			started := ofType(events(t, res), "dev.qory.session.started")
 			if len(started) != 1 || data(started[0])["runtime"] != "other-agent" {
-				t.Errorf("run.started %v", started)
+				t.Errorf("session.started %v", started)
 			}
 		})
 	}
 	sp := spec(t)
 	sp.Runtime = leaves{Runtime: runtimes.Bare("other-agent"), stop: runtimes.Stop{Signal: "SIGKILL"}, prepared: new(runtimes.Attach)}
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "runtime other-agent") {
+	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "runtime other-agent") {
 		t.Errorf("a runtime that names SIGKILL: %v", err)
 	}
 }
@@ -835,15 +1026,15 @@ func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
 	sp := spec(t)
 	sp.Runtime = nil
 	sp.Command, sp.Args = "sh", []string{"-c", "exit 3"}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := ofType(events(t, res), "dev.qory.run.started")
+	started := ofType(events(t, res), "dev.qory.session.started")
 	if res.ExitCode != 3 || len(started) != 1 || data(started[0])["runtime"] != "sh" {
 		t.Errorf("%+v %v", res, started)
 	}
-	if _, err := os.Stat(filepath.Join(res.Dir, "settings.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(res.SessionDir, "settings.json")); !os.IsNotExist(err) {
 		t.Error("something was prepared for a runtime Forager does not know")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,5 +146,33 @@ func TestZeroGraceDrainsFor200ms(t *testing.T) {
 func TestAShortGraceClosesSooner(t *testing.T) {
 	if d := drain(t, 10*time.Millisecond); d < 10*time.Millisecond || d >= socket.Grace {
 		t.Errorf("a 10 ms grace drained for %s", d)
+	}
+}
+
+// TestCloseReturnsAfterTheLastRecord pins that Close returns after Serve's last call of
+// handle, even one that takes longer than the drain's wait of the grace and
+// [socket.Patience]: a record is never handled after Close.
+func TestCloseReturnsAfterTheLastRecord(t *testing.T) {
+	l, err := socket.Listen(10 * time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	var handled atomic.Bool
+	go l.Serve(func(descriptor.Record) {
+		close(started)
+		time.Sleep(socket.Patience + time.Second)
+		handled.Store(true)
+	}, nil)
+	conn, err := net.Dial("unix", l.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Write([]byte(`{"source":"output","record":{"type":"result"}}` + "\n"))
+	conn.Close()
+	<-started
+	l.Close()
+	if !handled.Load() {
+		t.Error("Close returned while handle ran")
 	}
 }

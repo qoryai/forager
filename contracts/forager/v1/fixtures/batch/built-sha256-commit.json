@@ -1,0 +1,18 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000511",
+    "source": "urn:qory:run:0197f5a6-c172-7384-9f5a-0b1c2d3e4f5a",
+    "type": "dev.qory.run.built",
+    "subject": "0197f5a6-c172-7384-9f5a-0b1c2d3e4f5a",
+    "time": "2026-10-22T09:04:10.200Z",
+    "sequence": "0000000005",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.built.schema.json",
+    "data": {
+      "image": "example.registry/example-org/env@sha256:3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f",
+      "size": 734003200,
+      "commit": "4e1c9b0a7d2f5e8b1c4a7d0e3f6b9c2a5d8e1f4b7c0a3d6e9f2b5c8a1d4e7f0b",
+      "environment_ref": "env-example-01"
+    }
+  }
+]

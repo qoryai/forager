@@ -48,17 +48,23 @@
             "dev.qory.run.exited",
             "dev.qory.run.refused",
             "dev.qory.session.started",
-            "dev.qory.session.prompt_submitted",
-            "dev.qory.session.tool_started",
-            "dev.qory.session.tool_finished",
-            "dev.qory.session.tool_failed",
-            "dev.qory.session.turn_finished",
-            "dev.qory.session.turn_failed",
-            "dev.qory.session.subagent_started",
-            "dev.qory.session.subagent_finished",
-            "dev.qory.session.notification",
-            "dev.qory.session.ended",
-            "dev.qory.session.result"
+            "dev.qory.session.exited",
+            "dev.qory.run.step_started",
+            "dev.qory.run.step_exited",
+            "dev.qory.run.built",
+            "dev.qory.runtime.started",
+            "dev.qory.runtime.prompt_submitted",
+            "dev.qory.runtime.tool_started",
+            "dev.qory.runtime.tool_finished",
+            "dev.qory.runtime.tool_failed",
+            "dev.qory.runtime.turn_finished",
+            "dev.qory.runtime.turn_failed",
+            "dev.qory.runtime.subagent_started",
+            "dev.qory.runtime.subagent_finished",
+            "dev.qory.runtime.message",
+            "dev.qory.runtime.notification",
+            "dev.qory.runtime.ended",
+            "dev.qory.runtime.result"
           ]
         },
         "subject": {
@@ -226,143 +232,221 @@
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.prompt_submitted"
+              "const": "dev.qory.session.exited"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.prompt_submitted.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/session.exited.schema.json"
             },
             "data": {
-              "$ref": "events/session.prompt_submitted.schema.json"
+              "$ref": "events/session.exited.schema.json"
             }
           }
         },
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.tool_started"
+              "const": "dev.qory.run.step_started"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.tool_started.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/run.step_started.schema.json"
             },
             "data": {
-              "$ref": "events/session.tool_started.schema.json"
+              "$ref": "events/run.step_started.schema.json"
             }
           }
         },
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.tool_finished"
+              "const": "dev.qory.run.step_exited"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.tool_finished.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/run.step_exited.schema.json"
             },
             "data": {
-              "$ref": "events/session.tool_finished.schema.json"
+              "$ref": "events/run.step_exited.schema.json"
             }
           }
         },
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.tool_failed"
+              "const": "dev.qory.run.built"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.tool_failed.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/run.built.schema.json"
             },
             "data": {
-              "$ref": "events/session.tool_failed.schema.json"
+              "$ref": "events/run.built.schema.json"
             }
           }
         },
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.turn_finished"
+              "const": "dev.qory.runtime.started"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.turn_finished.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.started.schema.json"
             },
             "data": {
-              "$ref": "events/session.turn_finished.schema.json"
+              "$ref": "events/runtime.started.schema.json"
             }
           }
         },
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.turn_failed"
+              "const": "dev.qory.runtime.prompt_submitted"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.turn_failed.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.prompt_submitted.schema.json"
             },
             "data": {
-              "$ref": "events/session.turn_failed.schema.json"
+              "$ref": "events/runtime.prompt_submitted.schema.json"
             }
           }
         },
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.subagent_started"
+              "const": "dev.qory.runtime.tool_started"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.subagent_started.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.tool_started.schema.json"
             },
             "data": {
-              "$ref": "events/session.subagent_started.schema.json"
+              "$ref": "events/runtime.tool_started.schema.json"
             }
           }
         },
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.subagent_finished"
+              "const": "dev.qory.runtime.tool_finished"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.subagent_finished.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.tool_finished.schema.json"
             },
             "data": {
-              "$ref": "events/session.subagent_finished.schema.json"
+              "$ref": "events/runtime.tool_finished.schema.json"
             }
           }
         },
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.notification"
+              "const": "dev.qory.runtime.tool_failed"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.notification.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.tool_failed.schema.json"
             },
             "data": {
-              "$ref": "events/session.notification.schema.json"
+              "$ref": "events/runtime.tool_failed.schema.json"
             }
           }
         },
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.ended"
+              "const": "dev.qory.runtime.turn_finished"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.ended.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.turn_finished.schema.json"
             },
             "data": {
-              "$ref": "events/session.ended.schema.json"
+              "$ref": "events/runtime.turn_finished.schema.json"
             }
           }
         },
         {
           "properties": {
             "type": {
-              "const": "dev.qory.session.result"
+              "const": "dev.qory.runtime.turn_failed"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/session.result.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.turn_failed.schema.json"
             },
             "data": {
-              "$ref": "events/session.result.schema.json"
+              "$ref": "events/runtime.turn_failed.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.runtime.subagent_started"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.subagent_started.schema.json"
+            },
+            "data": {
+              "$ref": "events/runtime.subagent_started.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.runtime.subagent_finished"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.subagent_finished.schema.json"
+            },
+            "data": {
+              "$ref": "events/runtime.subagent_finished.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.runtime.message"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.message.schema.json"
+            },
+            "data": {
+              "$ref": "events/runtime.message.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.runtime.notification"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.notification.schema.json"
+            },
+            "data": {
+              "$ref": "events/runtime.notification.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.runtime.ended"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.ended.schema.json"
+            },
+            "data": {
+              "$ref": "events/runtime.ended.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.runtime.result"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/runtime.result.schema.json"
+            },
+            "data": {
+              "$ref": "events/runtime.result.schema.json"
             }
           }
         }

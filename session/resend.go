@@ -282,13 +282,14 @@ type recordedLine struct {
 
 // posted reports whether the line is one the session may have posted on the link: not
 // a run.refused of a code the session does not decide or with a status, which the
-// session records in its own record alone, nor a run.exited whose reason is the code of
-// a gateway's 410, one of [server.EndCodes], which only the session's own record of a
-// 410 holds. Its own record of a 410 with the starter's reason, or none, reads as a
-// posted one does: delivered.log's stopped tells it apart ([owedOf]).
+// session writes to session.jsonl alone, nor a run.exited or a session.exited whose
+// reason is the code of a gateway's 410, one of [server.EndCodes], which only
+// session.jsonl's line of a 410 has. session.jsonl's line of a 410 with the starter's
+// reason, or none, reads as a posted one does: delivered.log's stopped tells it apart
+// ([owedOf]).
 func (l recordedLine) posted() bool {
 	switch l.Type {
-	case event.RunExited:
+	case event.RunExited, event.SessionExited:
 		return !slices.Contains(server.EndCodes, l.Data.Reason)
 	case event.RunRefused:
 		return refusal.Decides(l.Data.Code) && l.Data.Status == nil
@@ -348,15 +349,15 @@ func owes(dir string, target sink.Target) bool {
 }
 
 // owedOf is what of the record the gateway is still owed, as delivered.log says: every
-// line the session posts that no accepted batch contained, but a run.exited once
-// delivered.log says stopped. The gateway's answer that ended the run, a 410 to a batch
-// or to a reload, is the one word stopped, written before the session records its own
-// run.exited in its record alone; the gateway, which ended that run, wrote its
-// run.exited itself.
+// line the session posts that no accepted batch contained, but a run.exited or a
+// session.exited once delivered.log says stopped. The gateway's answer that ended the
+// run, a 410 to a batch or to a reload, is the one word stopped, written before the
+// session writes its session.exited and run.exited to session.jsonl alone; the
+// gateway, which ended that run, wrote both itself.
 func owedOf(lines []recordedLine, accepted map[string]bool, stopped bool) []recordedLine {
 	var owed []recordedLine
 	for _, l := range lines {
-		if !accepted[l.Sequence] && l.posted() && (!stopped || l.Type != event.RunExited) {
+		if !accepted[l.Sequence] && l.posted() && (!stopped || (l.Type != event.RunExited && l.Type != event.SessionExited)) {
 			owed = append(owed, l)
 		}
 	}

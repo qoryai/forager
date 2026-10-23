@@ -2,31 +2,14 @@ package session
 
 import (
 	"context"
-	"sync"
+	"time"
 
-	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/wall"
 )
 
-// trusted are the authorities' files of the separate gateways a test trusts, by URL.
-var trusted sync.Map
-
-func init() {
-	remoteTrust = func(u string) server.RemoteTLS {
-		if f, ok := trusted.Load(u); ok {
-			return server.RemoteTLS{CAFile: f.(string)}
-		}
-		return server.RemoteTLS{}
-	}
-}
-
-// TrustRemote trusts the certificate chain of the separate gateway at url to the
-// authorities of caFile, until untrust is called; any other gateway's to the system's
-// roots.
-func TrustRemote(url, caFile string) (untrust func()) {
-	trusted.Store(url, caFile)
-	return func() { trusted.Delete(url) }
-}
+// SetCloseWait sets how long the sinks get to flush at the end of a join and at the
+// close.
+func SetCloseWait(d time.Duration) { closeWait = d }
 
 // SetRegisterPause sets what a run calls between its check against the registry of
 // walled runs and the writing of its entry, under the registry's lock; nil for nothing.
@@ -95,8 +78,23 @@ func SetMachineBundles(paths []string) (restore func()) {
 	return func() { machineBundles = old }
 }
 
+// SetEngineCertsDir sets where Run.EngineProxy writes the run's certificate, until
+// restore is called.
+func SetEngineCertsDir(dir string) (restore func()) {
+	old := engineCertsDir
+	engineCertsDir = dir
+	return func() { engineCertsDir = old }
+}
+
 // ReadableDir is what a runtime is given to ask of a directory before it passes it to
 // the program, for the places a walled run could have written.
 func ReadableDir(places []string) func(string) (string, error) {
 	return readableDir(func() ([]string, error) { return places, nil })
+}
+
+// HoldJoining takes the run's joining lock, as Join and the host steps take it, and
+// returns the call that gives it back.
+func HoldJoining(r *Run) func() {
+	r.joining.Lock()
+	return r.joining.Unlock
 }

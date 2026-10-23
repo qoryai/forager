@@ -19,7 +19,7 @@ import (
 )
 
 // shellSpec is a spec whose runtime is the shell script given, on the local link.
-func shellSpec(t *testing.T, script string) session.Spec {
+func shellSpec(t *testing.T, script string) runSpec {
 	t.Helper()
 	sp := spec(t)
 	sp.Forwarder = nil
@@ -46,42 +46,43 @@ func pidOf(t *testing.T, file string) int {
 	return 0
 }
 
-// ended is the state and the exit code of the record's run.exited, which has no member
-// of Cancelled's own.
+// ended is the state and the exit code of the record's session.exited, which has no
+// member of Cancelled's.
 func ended(t *testing.T, res *session.Result) (string, int) {
 	t.Helper()
 	state, _, code := endedWith(t, res)
 	return state, code
 }
 
-// endedWith is the state, the reason and the exit code of the record's run.exited,
-// which has no member of Cancelled's own.
+// endedWith is the state, the reason and the exit code of the record's session.exited,
+// which has no member of Cancelled's; its signal is the result's, but in a run the
+// gateway closed, whose session.exited has none.
 func endedWith(t *testing.T, res *session.Result) (string, string, int) {
 	t.Helper()
-	exited := ofType(events(t, res), "dev.qory.run.exited")
+	exited := ofType(events(t, res), "dev.qory.session.exited")
 	if len(exited) != 1 {
-		t.Fatalf("run.exited %v", exited)
+		t.Fatalf("session.exited %v", exited)
 	}
 	d := data(exited[0])
 	if _, ok := d["cancelled"]; ok {
-		t.Errorf("run.exited says %v", d)
+		t.Errorf("session.exited says %v", d)
 	}
 	code, _ := d["exit_code"].(float64)
 	state, _ := d["state"].(string)
 	reason, _ := d["reason"].(string)
-	if signal, _ := d["signal"].(string); signal != res.Signal {
-		t.Errorf("run.exited's signal %q, the result's %q", signal, res.Signal)
+	if signal, _ := d["signal"].(string); signal != res.Signal && !res.RunClosed {
+		t.Errorf("session.exited's signal %q, the result's %q", signal, res.Signal)
 	}
 	return state, reason, int(code)
 }
 
 // TestTheContextsEndWhileTheRuntimeRunsIsACancel pins Cancelled for a context that ends
-// once the runtime runs, which the session stops: on its own, and in a wall. run.exited
-// is cancelled with interrupted, with the signal that killed the runtime.
+// once the runtime runs, which the session stops: on its own, and in a wall.
+// session.exited is cancelled with interrupted, with the signal that killed the runtime.
 func TestTheContextsEndWhileTheRuntimeRunsIsACancel(t *testing.T) {
-	for name, sp := range map[string]func(t *testing.T, script string) session.Spec{
+	for name, sp := range map[string]func(t *testing.T, script string) runSpec{
 		"unwalled": shellSpec,
-		"walled": func(t *testing.T, script string) session.Spec {
+		"walled": func(t *testing.T, script string) runSpec {
 			root := t.TempDir()
 			sp := walledSpec(t, &openWall{})
 			sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
@@ -97,7 +98,7 @@ func TestTheContextsEndWhileTheRuntimeRunsIsACancel(t *testing.T) {
 				pidOf(t, file)
 				cancel()
 			}()
-			res, err := session.Run(ctx, sp(t, fmt.Sprintf(`echo $$ > %q; exec sleep 30`, file)))
+			res, err := run(ctx, sp(t, fmt.Sprintf(`echo $$ > %q; exec sleep 30`, file)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -105,7 +106,7 @@ func TestTheContextsEndWhileTheRuntimeRunsIsACancel(t *testing.T) {
 				t.Errorf("result %+v", res)
 			}
 			if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "interrupted" || code != -1 {
-				t.Errorf("run.exited %s %s %d", state, reason, code)
+				t.Errorf("session.exited %s %s %d", state, reason, code)
 			}
 			if res.State != "cancelled" || res.Reason != "interrupted" {
 				t.Errorf("result %+v", res)
@@ -130,7 +131,7 @@ func TestARuntimeThatLeavesAtItsOwnInterruptIsCancelled(t *testing.T) {
 		}
 		cancel()
 	}()
-	res, err := session.Run(ctx, sp)
+	res, err := run(ctx, sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,14 +139,14 @@ func TestARuntimeThatLeavesAtItsOwnInterruptIsCancelled(t *testing.T) {
 		t.Errorf("result %+v", res)
 	}
 	if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "interrupted" || code != 130 {
-		t.Errorf("run.exited %s %s %d", state, reason, code)
+		t.Errorf("session.exited %s %s %d", state, reason, code)
 	}
 }
 
 // TestAContextThatEndsAfterTheExitIsNoCancel pins a runtime that exits by itself
 // behind a separate gateway, and a context that ends after its exit was observed,
 // while the sinks close. The run is not
-// cancelled, and the result's state and exit code are run.exited's.
+// cancelled, and the result's state and exit code are session.exited's.
 func TestAContextThatEndsAfterTheExitIsNoCancel(t *testing.T) {
 	for name, c := range map[string]func(g *linktest.Fake, cancel context.CancelFunc){
 		"the sink close": func(g *linktest.Fake, cancel context.CancelFunc) {
@@ -163,7 +164,7 @@ func TestAContextThatEndsAfterTheExitIsNoCancel(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			c(g, cancel)
-			res, err := session.Run(ctx, sp)
+			res, err := run(ctx, sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -174,7 +175,7 @@ func TestAContextThatEndsAfterTheExitIsNoCancel(t *testing.T) {
 				t.Errorf("result %+v", res)
 			}
 			if state, code := ended(t, res); state != res.State || code != res.ExitCode {
-				t.Errorf("run.exited %s %d, the result %+v", state, code, res)
+				t.Errorf("session.exited %s %d, the result %+v", state, code, res)
 			}
 		})
 	}
@@ -185,7 +186,7 @@ func TestAContextThatEndsAfterTheExitIsNoCancel(t *testing.T) {
 func TestTheTimeLimitIsNoCancel(t *testing.T) {
 	sp := shellSpec(t, "sleep 30")
 	sp.Timeout = 300 * time.Millisecond
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestTheTimeLimitIsNoCancel(t *testing.T) {
 		time.Sleep(600 * time.Millisecond)
 		cancel()
 	}()
-	if res, err = session.Run(ctx, sp); err != nil {
+	if res, err = run(ctx, sp); err != nil {
 		t.Fatal(err)
 	}
 	if ctx.Err() == nil {
@@ -241,7 +242,7 @@ func TestARunClosedBeforeTheContextEndsIsNoCancel(t *testing.T) {
 				}
 				return *gone("stopped", "cancelled", "no_longer_needed")
 			})
-			res, err := session.Run(ctx, sp)
+			res, err := run(ctx, sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -251,8 +252,11 @@ func TestARunClosedBeforeTheContextEndsIsNoCancel(t *testing.T) {
 			if !res.RunClosed || res.Cancelled || res.TimedOut || res.Signal != "SIGKILL" || res.State != "cancelled" || res.Reason != "no_longer_needed" {
 				t.Errorf("result %+v", res)
 			}
-			if state, reason, _ := endedWith(t, res); state != "cancelled" || reason != "no_longer_needed" {
-				t.Errorf("run.exited %s %s", state, reason)
+			if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "no_longer_needed" || code != -1 {
+				t.Errorf("session.exited %s %s %d", state, reason, code)
+			}
+			if exited := ofType(events(t, res), "dev.qory.run.exited"); len(exited) != 1 || data(exited[0])["state"] != "cancelled" || data(exited[0])["reason"] != "no_longer_needed" || data(exited[0])["exit_code"] != -1.0 {
+				t.Errorf("run.exited %v", exited)
 			}
 		})
 	}
@@ -270,7 +274,7 @@ func TestASignalFromElsewhereIsNoCancel(t *testing.T) {
 			syscall.Kill(pid, syscall.SIGTERM)
 		}
 	}()
-	res, err := session.Run(ctx, sp)
+	res, err := run(ctx, sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +320,7 @@ func TestAStopFromWhereTheRunWasStartedIsInterrupted(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			file := filepath.Join(t.TempDir(), "pid")
 			script := fmt.Sprintf(c.script, file)
-			var sp session.Spec
+			var sp runSpec
 			var g *linktest.Fake
 			if c.remote {
 				sp, g, _ = remoteSpec(t, 0)
@@ -331,7 +335,7 @@ func TestAStopFromWhereTheRunWasStartedIsInterrupted(t *testing.T) {
 				pidOf(t, file)
 				cancel()
 			}()
-			res, err := session.Run(ctx, sp)
+			res, err := run(ctx, sp)
 			if err != nil {
 				t.Fatalf("Run returned %v", err)
 			}
@@ -339,7 +343,10 @@ func TestAStopFromWhereTheRunWasStartedIsInterrupted(t *testing.T) {
 				t.Errorf("result %+v, want cancelled interrupted with exit %d %q", res, c.code, c.signal)
 			}
 			if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "interrupted" || code != c.code {
-				t.Errorf("run.exited %s %s %d", state, reason, code)
+				t.Errorf("session.exited %s %s %d", state, reason, code)
+			}
+			if exited := ofType(events(t, res), "dev.qory.run.exited"); len(exited) != 1 || data(exited[0])["state"] != "cancelled" || data(exited[0])["reason"] != "interrupted" || data(exited[0])["exit_code"] != float64(c.code) {
+				t.Errorf("run.exited %v", exited)
 			}
 			if c.remote {
 				posted := ofType(g.Events(), "dev.qory.run.exited")
@@ -368,7 +375,7 @@ func TestTheTimeLimitIsTheStopSignal(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			sp := shellSpec(t, c.script)
 			sp.Timeout = 300 * time.Millisecond
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatalf("Run returned %v", err)
 			}
@@ -376,7 +383,15 @@ func TestTheTimeLimitIsTheStopSignal(t *testing.T) {
 				t.Errorf("result %+v, want %s %q with exit %d", res, c.state, c.reason, c.code)
 			}
 			if state, reason, code := endedWith(t, res); state != c.state || reason != c.reason || code != c.code {
-				t.Errorf("run.exited %s %s %d", state, reason, code)
+				t.Errorf("session.exited %s %s %d", state, reason, code)
+			}
+			// The run of a time-limited session is cancelled with timeout and 124.
+			want := float64(c.code)
+			if c.timedOut {
+				want = 124
+			}
+			if exited := ofType(events(t, res), "dev.qory.run.exited"); len(exited) != 1 || data(exited[0])["state"] != c.state || data(exited[0])["exit_code"] != want {
+				t.Errorf("run.exited %v", exited)
 			}
 		})
 	}
@@ -385,12 +400,12 @@ func TestTheTimeLimitIsTheStopSignal(t *testing.T) {
 // TestAnExitWhoseOutputStaysOpenPastTheGrace pins a runtime that exits 0 by itself,
 // with the context alive, while a descendant holds its standard output open past the
 // stop grace: its exit is observed at the grace, succeeded with exit 0, Run returns its
-// result with no error, run.exited is recorded, and Cancelled is false. What the
+// result with no error, session.exited is recorded, and Cancelled is false. What the
 // descendant writes after the grace is not kept.
 func TestAnExitWhoseOutputStaysOpenPastTheGrace(t *testing.T) {
 	sp := shellSpec(t, `(sleep 1.5; echo late) & echo early; exit 0`)
 	sp.StopGrace = 300 * time.Millisecond
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatalf("Run returned %v", err)
 	}
@@ -398,7 +413,7 @@ func TestAnExitWhoseOutputStaysOpenPastTheGrace(t *testing.T) {
 		t.Errorf("result %+v", res)
 	}
 	if state, reason, code := endedWith(t, res); state != "succeeded" || reason != "" || code != 0 {
-		t.Errorf("run.exited %s %q %d", state, reason, code)
+		t.Errorf("session.exited %s %q %d", state, reason, code)
 	}
 	var logged strings.Builder
 	for _, e := range ofType(events(t, res), "dev.qory.run.log") {

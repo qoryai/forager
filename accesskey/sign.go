@@ -176,9 +176,10 @@ type Pin []ServerKey
 // ParsePin reads a pin written as JSON, the form QORY_APIARY_PUBLIC_KEY contains:
 // [{"alg": "ed25519", "public_key": "<32 bytes, base64url>"}]. A member it does not
 // define is refused, and so is a member twice. It then runs [Pin.Check]. A pin that
-// contains an access key secret is [ErrSecretInDocument], and one that contains a run
-// key [ErrRunKeyInDocument], whose messages quote nothing; a key the pin lists is left
-// out of that check as [SecretInPinDocument] leaves it out.
+// contains an access key secret is [ErrSecretInDocument], one that contains a run key
+// [ErrRunKeyInDocument], and one that contains a run code [ErrRunCodeInDocument], whose
+// messages quote nothing; a key the pin lists is left out of that check as
+// [SecretInPinDocument] leaves it out.
 func ParsePin(b []byte) (Pin, error) {
 	if err := SecretInPinDocument(string(b), ""); err != nil {
 		return nil, err
@@ -290,6 +291,21 @@ func (runKeyInDocument) Error() string {
 
 // Is reports [ErrSecretInDocument] as the error's kind.
 func (runKeyInDocument) Is(target error) bool { return target == ErrSecretInDocument }
+
+// ErrRunCodeInDocument is the error of a document that contains a run code, qecr_, and
+// no access key secret and no run key, where none belongs: a fixed message, so the run
+// code appears in no error. errors.Is reports it as [ErrSecretInDocument] as well.
+var ErrRunCodeInDocument error = runCodeInDocument{}
+
+// runCodeInDocument is [ErrRunCodeInDocument].
+type runCodeInDocument struct{}
+
+func (runCodeInDocument) Error() string {
+	return "remove the run code from the document: a run code belongs in a machine's start data only"
+}
+
+// Is reports [ErrSecretInDocument] as the error's kind.
+func (runCodeInDocument) Is(target error) bool { return target == ErrSecretInDocument }
 
 // encodeSignature writes a signature in base64url without padding.
 func encodeSignature(sig []byte) string { return base64.RawURLEncoding.EncodeToString(sig) }

@@ -16,7 +16,7 @@ import (
 
 // checkExec refuses an Exec a run cannot have: none behind a wall, one whose program is
 // empty, and one with a NUL in a word.
-func checkExec(spec Spec) error {
+func checkExec(spec runSpec) error {
 	switch {
 	case spec.Wall != nil && len(spec.Exec) == 0:
 		return errors.New("a walled run starts its launch through Exec, the helper's exec, when it has names to unset, and the spec has none")
@@ -43,7 +43,7 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 
 // Exec is the program that starts a walled run's launch with names taken out of its
 // environment, the caller's binary running it inside the enclosure in a hidden mode,
-// as it runs [Forward]: the session starts the launch through it, Spec.Exec, when the
+// as it runs [Forward]: the session starts the launch through it, SessionSpec.Exec, when the
 // run has names that nothing sets and wins with, the runtime's declared, reserved and
 // denied names, its model overrides and the node's denied ones, so a value the image
 // gives one never reaches the runtime, and neither does an empty one, which a program

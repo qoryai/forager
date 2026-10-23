@@ -1,5 +1,5 @@
 {
-  "note": "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, an attach and its answer, an outcome and its answer, a binding of a connection to the gateway, and an answer of the gateway on its link. go generate ./runkey writes them from the fixture keys of keys.json.",
+  "note": "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, a run code's redemption and its answer, that redemption as the gateway's relay signs it, an attach and its answer, an outcome and its answer, a binding of a connection to the gateway, and an answer of the gateway on its link. go generate ./runkey writes them from the fixture keys of keys.json.",
   "run_key": {
     "note": "The run key of run-key-payload.json, signed under the fixture signing key of the server: the signed message is the domain line, a line feed, then the payload bytes; the run key is qrk_, the payload in base64url without padding, a dot, and the signature in base64url without padding.",
     "payload": "fixtures/known-answers/run-key-payload.json",
@@ -106,6 +106,46 @@
       "signature": "WkxQ9RxDH-xSH8dQGKlDFfKs3qzKItRrRs-HamCdcezMMJRFWHRda0WT6f1l9lZnxiX-y3a2Pb8p3FDnF-IdBg"
     }
   ],
+  "run_enrolment": {
+    "note": "The redemption of a run code: the request of enrolment-run-request.json, its proof under the fixture access key secret over the five lines qory-enrol-ed25519-v1, the code, the public key, the name and the timestamp; then the 201 of enrolment-run-answer.json, the run's id, the run key of run-key-payload.json and the run's documents, signed under the fixture signing key with the domain line qory-enrol-answer-ed25519-v1 and the request's proof as line 3.",
+    "request": "fixtures/known-answers/enrolment-run-request.json",
+    "proof_lines": [
+      "qory-enrol-ed25519-v1",
+      "qecr_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+      "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+      "run-01",
+      "1791720000"
+    ],
+    "proof_length": 138,
+    "proof": "Vk6wlEpWPUu3qfmdJ2XAa5_3BxOedkHtfyz_IWtNpjTsNCzQ9iAXxV5ydPGqTqWCSb3boiJg3JPZ9m849gzAAQ",
+    "answer": "fixtures/known-answers/enrolment-run-answer.json",
+    "body_length": 893,
+    "lines": [
+      "qory-enrol-answer-ed25519-v1",
+      "201",
+      "Vk6wlEpWPUu3qfmdJ2XAa5_3BxOedkHtfyz_IWtNpjTsNCzQ9iAXxV5ydPGqTqWCSb3boiJg3JPZ9m849gzAAQ",
+      "d50829da0ae679b1506651224784b040bf75211a609c6a5375f30bb2b0d255c7",
+      "",
+      ""
+    ],
+    "length": 186,
+    "signature": "cpJhng0Q2ERFEmeIkbGwyB48SMJWsmfjqnJMrdHIwgqR8oGB8BtZuY-g1J8UmYwbCQr7ZSdKFb-aPsDm_uSZBA",
+    "relay": {
+      "note": "The request of enrolment-run-request.json as the gateway's relay passes it to the server: a POST to /.well-known/qory-enrolment, signed under the fixture gateway key secret as the gateway's access key with the gateway's instance id; the last line is the raw body, the file's bytes, its white space and its trailing line feed included. The relay deletes every X-Qory-Access-Key-Id, X-Qory-Instance-Id, X-Qory-Instance-Name, X-Qory-Signature-Ed25519 and X-Qory-Timestamp the machine sent, and sends access_key_id as X-Qory-Access-Key-Id, line 3 as X-Qory-Instance-Id and signature as X-Qory-Signature-Ed25519.",
+      "access_key_id": "ak_f1xt0re00000000g",
+      "body": "fixtures/known-answers/enrolment-run-request.json",
+      "lines": [
+        "qory-request-ed25519-v1",
+        "ak_f1xt0re00000000g",
+        "i_gYKDhIWGh4iJiouMjY6PkA",
+        "POST",
+        "/.well-known/qory-enrolment",
+        "{\n  \"version\": 1,\n  \"code\": \"qecr_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg\",\n  \"name\": \"run-01\",\n  \"public_key\": \"ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ\",\n  \"timestamp\": 1791720000,\n  \"proof\": \"Vk6wlEpWPUu3qfmdJ2XAa5_3BxOedkHtfyz_IWtNpjTsNCzQ9iAXxV5ydPGqTqWCSb3boiJg3JPZ9m849gzAAQ\"\n}\n"
+      ],
+      "length": 400,
+      "signature": "H_vfsxtDeQXaHSGmzcKoIFK4szaiTHLdWl31BtFLlaQgvB8nyCYi32UIPIK_Ux_bk0NjLsky6W5HsYc_mbKyAQ"
+    }
+  },
   "binding": {
     "note": "The binding of a connection to the gateway, for the fixed exporter value ekm, the 32 bytes counting up from 129, in place of the one a connection derives with the label: the gateway signs the three lines under the fixture gateway key, and answers QORY-BIND with bound_line, QORY-BOUND, a space, the fingerprint, a space, the signature in base64url without padding, and a newline.",
     "ekm": "8182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0",
@@ -130,19 +170,19 @@
       "8182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0",
       "POST",
       "/qory-link/events",
-      "[\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000100\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.run.started\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:00.120Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/run.started.schema.json\",\n    \"data\": {\n      \"opened_by\": \"session\",\n      \"runtime\": \"claude\",\n      \"command\": \"claude\",\n      \"args\": [],\n      \"dir\": \"/home/dev/app\",\n      \"interactive\": true,\n      \"terminal\": {\n        \"cols\": 120,\n        \"rows\": 40\n      },\n      \"forager_version\": \"0.6.0\",\n      \"host\": \"dev-laptop\",\n      \"labels\": {\n        \"forge\": \"example-forge\",\n        \"repository\": \"example-namespace/project\",\n        \"run_key\": \"rk-0001\"\n      }\n    }\n  },\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000101\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.session.started\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:01.400Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/session.started.schema.json\",\n    \"data\": {\n      \"session_id\": \"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90\",\n      \"source\": \"startup\",\n      \"model\": \"claude-sonnet-5\",\n      \"cwd\": \"/home/dev/app\"\n    }\n  },\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000102\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.run.log\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:01.450Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/run.log.schema.json\",\n    \"data\": {\n      \"stream\": \"terminal\",\n      \"bytes\": \"G1s/MTA0OWgbW0ggQ2xhdWRlIENvZGUgdjIuMS4yNzMNCg==\"\n    }\n  },\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000103\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.run.heartbeat\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:30.000Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/run.heartbeat.schema.json\",\n    \"data\": {\n      \"elapsed_seconds\": 30,\n      \"interval_seconds\": 30\n    }\n  }\n]\n"
+      "[\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000100\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.run.started\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:00.120Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/run.started.schema.json\",\n    \"data\": {\n      \"opened_by\": \"run\",\n      \"forager_version\": \"0.6.0\",\n      \"host\": \"dev-laptop\",\n      \"labels\": {\n        \"forge\": \"example-forge\",\n        \"repository\": \"example-namespace/project\",\n        \"run_key\": \"rk-0001\"\n      }\n    }\n  },\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000019001\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.session.started\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:00.120Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/session.started.schema.json\",\n    \"data\": {\n      \"session\": 1,\n      \"runtime\": \"claude\",\n      \"command\": \"claude\",\n      \"args\": [],\n      \"dir\": \"/home/dev/app\",\n      \"interactive\": true,\n      \"terminal\": {\n        \"cols\": 120,\n        \"rows\": 40\n      }\n    }\n  },\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000101\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.runtime.started\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:01.400Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/runtime.started.schema.json\",\n    \"data\": {\n      \"session_id\": \"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90\",\n      \"source\": \"startup\",\n      \"model\": \"claude-sonnet-5\",\n      \"cwd\": \"/home/dev/app\"\n    }\n  },\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000102\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.run.log\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:01.450Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/run.log.schema.json\",\n    \"data\": {\n      \"stream\": \"terminal\",\n      \"bytes\": \"G1s/MTA0OWgbW0ggQ2xhdWRlIENvZGUgdjIuMS4yNzMNCg==\"\n    }\n  },\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000103\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.run.heartbeat\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:30.000Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/run.heartbeat.schema.json\",\n    \"data\": {\n      \"elapsed_seconds\": 30,\n      \"interval_seconds\": 30\n    }\n  }\n]\n"
     ],
     "status": 202,
     "body_length": 0,
     "lines": [
       "qory-link-answer-ed25519-v1",
       "202",
-      "a8f9f9946d607b5f4b0b1d67fb832f0cb7e5192144797e350ea7d26416369d11",
+      "59f6501ce4064e05b525f54d4816df9cb82d871e8a8df6b502fea1805c9d5608",
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "sha256=ec7e9c2a09c42d096bc41da9c74a3f8ac6e81da7cf63991d191465945f81bf62",
       "sha256=6629797938f27cafa91774f5095aded55cdde5843d35dd26df5747e845a805e5"
     ],
     "length": 305,
-    "signature": "iTYtBRVcA6XEw8oniswddtsNkjInY1sXUT-iZurpmL9V5f0r0hSFRzNHAqM_8uIpBroyX7LjSgx5HRiM6_OCBw"
+    "signature": "r6y-TRONGr1ClP-8Gw3WT9r8mvFnnxfpIquoRg0sY8-qR9Xui6KQttFjLaVvdToBMN7TXxtsKlkhTP4ZSunbAw"
   }
 }

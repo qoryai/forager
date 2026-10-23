@@ -19,9 +19,10 @@ type Config struct {
 	// Policy is the node's policy, the one the command passes; nil means none. Without
 	// a server's policy it is each run's, and none is mode observe. Beside a server's
 	// policy it narrows that one: the node only takes away. Its allow list's entries
-	// that name a host itself, and that the run's policy allows, are the only ones that
-	// open this machine's addresses and the private network addresses to a guarded
-	// proxy.
+	// that name a host itself are the only ones that open this machine's addresses and
+	// the private network addresses to a guarded proxy: to the run's proxy those that
+	// the run's policy allows, and to the run's stack proxy those that StackHosts lists
+	// exactly.
 	Policy *Policy
 	// Credentials and Tools are the ones this machine defines; a run's policy selects
 	// among them by name. The gateway sets a credential's value for a run with or
@@ -65,6 +66,19 @@ type Config struct {
 	// RunLimits are the limits of each run on the gateway, the same for every run, so
 	// that one run cannot slow the others down. A field of zero is its default.
 	RunLimits RunLimits
+	// StackHosts are the hosts of a run's stack proxy, gateway.stack_hosts of qory's
+	// configuration: each a lower-case host name, an IPv4 address or a *. suffix, in the
+	// form of a policy's allow entry. Until the run's first join request the stack proxy
+	// passes a CONNECT or a plain HTTP request to one of them, on any port, and refuses
+	// every other, in enforce mode, with no certificate authority and no credential; the
+	// run's policy is not checked. Behind a wall or a separate gateway it is guarded as
+	// the run's proxy is: it reaches this machine's addresses and the private network
+	// addresses only for a host that the allow list of Policy and StackHosts both list by
+	// name, not by a *. pattern, and a link-local or cloud metadata address for none.
+	// Each decision is a line of Report, never a dev.qory.run.egress, and a refusal at
+	// RunLimits is reported at most once a second per limit. Empty means every host is
+	// refused.
+	StackHosts []string
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the
 	// system's choosing: the link for the sessions of other machines, the proxy for
 	// their agents, and the relay of their starters' and keyed machines' requests to the
@@ -118,6 +132,9 @@ type Config struct {
 	// upstreamRoots, when not nil, are the roots every run's proxy verifies a
 	// terminated host's certificate against, in place of this machine's. Tests set them.
 	upstreamRoots *x509.CertPool
+	// certCheck, when not zero, replaces the constant [certCheck], how often at most the
+	// one address checks its certificate and key files for a change. Tests set it.
+	certCheck time.Duration
 }
 
 // RunLimits are the limits of each run on the gateway's proxy: gateway.run_limits of
@@ -128,7 +145,9 @@ type RunLimits struct {
 	// Connections is the most connections a run has open through the gateway at once:
 	// CONNECT tunnels, blind or terminated, and plain HTTP requests in flight. From 1 to
 	// 65536; zero means 256. The next connection is refused at once with 429 Too Many
-	// Requests and Retry-After: 1.
+	// Requests and Retry-After: 1. Until the run's first join request its stack proxy
+	// ([Config.StackHosts]) counts its connections and requests apart from the run's
+	// proxy, at the same limits.
 	Connections int
 	// RequestsPerSecond is how many requests a run sends a second, beyond Burst: every
 	// CONNECT, plain request and request inside a terminated tunnel takes one token of

@@ -37,6 +37,12 @@ func ProxyEnv(u string) []string {
 // engine, a process of the machine.
 const RelayPreamble = "QORY-RELAY"
 
+// StackPreamble is what opens a connection to a run's stack proxy on a separate
+// gateway's one address: this word, a space, the run key and a newline, on a bound
+// connection. From the run's first join request on, the gateway closes such a
+// connection unanswered.
+const StackPreamble = "QORY-STACK"
+
 // EnvRunSocket is the variable that names the run's record socket in the session's
 // environment.
 const EnvRunSocket = "QORY_RUN_SOCKET"

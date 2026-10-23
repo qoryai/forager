@@ -106,10 +106,11 @@ func TestAnEntryWithAContainerIsLive(t *testing.T) {
 	if !slices.Equal(r.Names, []string{sub, leftID, root}) || r.Detail != want {
 		t.Errorf("names %q, detail %q", r.Names, r.Detail)
 	}
-	if len(a.asked) == 0 || !slices.EqualFunc(a.asked, []wall.Engine{leftEngine},
-		func(x, y wall.Engine) bool {
-			return x.Wall == y.Wall && x.Command == y.Command && slices.Equal(x.Env, y.Env)
-		}) || a.ids[0] != leftID {
+	// The open's entry and the join's mounts each check the entry: every ask is of the
+	// entry's engine, for the entry's run.
+	if len(a.asked) == 0 || slices.ContainsFunc(a.asked, func(x wall.Engine) bool {
+		return x.Wall != leftEngine.Wall || x.Command != leftEngine.Command || !slices.Equal(x.Env, leftEngine.Env)
+	}) || slices.ContainsFunc(a.ids, func(id string) bool { return id != leftID }) {
 		t.Errorf("asked %+v for %q", a.asked, a.ids)
 	}
 	if _, err := os.Stat(file); err != nil {
@@ -130,7 +131,7 @@ func TestAnEntryWithoutAContainerIsRemoved(t *testing.T) {
 	a := answer(t, false, nil)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: sub}}, sub
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Fatalf("a run beside an entry whose run is over: %+v, %v", res, err)
 	}
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
@@ -231,8 +232,8 @@ func (w *heldEngined) Engine(context.Context) wall.Engine { return w.engine }
 
 func (w *heldEngined) EngineID(context.Context) (string, error) { return "", nil }
 
-// closeFailing is a wall in a container engine whose Close fails, as one whose
-// containers could not be removed.
+// closeFailing is a wall in a container engine whose Unwrap and Close fail, as one
+// whose agent's container, and then whose other containers, could not be removed.
 type closeFailing struct{ enginedWall }
 
 func (w *closeFailing) Prepare(
@@ -242,8 +243,56 @@ func (w *closeFailing) Prepare(
 	return w, nil
 }
 
+func (w *closeFailing) Unwrap(context.Context) error {
+	return errors.New("wall docker: rm: exit status 1")
+}
+
 func (w *closeFailing) Close(context.Context) error {
 	return errors.New("wall docker: rm: exit status 1")
+}
+
+// runCloseFailing is a wall in a container engine whose agent's container is removed
+// at each session's end, and whose Close at the run's close fails.
+type runCloseFailing struct{ enginedWall }
+
+func (w *runCloseFailing) Prepare(
+	_ context.Context, req wall.Request,
+) (wall.Enclosure, error) {
+	w.req = req
+	return w, nil
+}
+
+func (w *runCloseFailing) Unwrap(context.Context) error { return nil }
+
+func (w *runCloseFailing) Close(context.Context) error {
+	return errors.New("wall docker: network rm: exit status 1")
+}
+
+// TestAnEntryStaysWhenTheRunsWallIsNotRemoved pins a run whose wall could not be
+// removed at the run's close, its sessions' containers removed: the entry stays, with
+// the run's binds and no session's, and the close reports the failure.
+func TestAnEntryStaysWhenTheRunsWallIsNotRemoved(t *testing.T) {
+	root := t.TempDir()
+	w := &runCloseFailing{enginedWall{engine: leftEngine}}
+	sp := walledSpec(t, w)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
+	var reports []string
+	sp.Report = func(s string) { reports = append(reports, s) }
+	if _, err := run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(registry(t), w.req.RunID)
+	t.Cleanup(func() { os.Remove(file) })
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("the entry of a run whose wall stays is gone: %v", err)
+	}
+	if strings.Contains(string(b), `"`+root+`"`) {
+		t.Errorf("the entry %s lists the session's bind %s", b, root)
+	}
+	if !slices.Equal(reports, []string{"removing the wall: wall docker: network rm: exit status 1"}) {
+		t.Errorf("reports %q", reports)
+	}
 }
 
 // TestAnEntryStaysWhenTheWallIsNotRemoved pins a run whose wall could not be removed:
@@ -254,7 +303,7 @@ func TestAnEntryStaysWhenTheWallIsNotRemoved(t *testing.T) {
 	w := &closeFailing{enginedWall{engine: leftEngine}}
 	sp := walledSpec(t, w)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(registry(t), w.req.RunID)
@@ -269,6 +318,47 @@ func TestAnEntryStaysWhenTheWallIsNotRemoved(t *testing.T) {
 	r := refusalOf(t, "mount_shared_with_run", runErr(other))
 	if !slices.Equal(r.Names, []string{sub, w.req.RunID, root}) {
 		t.Errorf("names %q", r.Names)
+	}
+}
+
+// TestAJoinAfterAWallThatStaysIsRefused pins a run whose first session's wall could
+// not be removed: a second join is refused before it writes anything, and the run's
+// entry still lists the first session's writable bind, so another walled run is
+// refused inside it.
+func TestAJoinAfterAWallThatStaysIsRefused(t *testing.T) {
+	root := t.TempDir()
+	w := &closeFailing{enginedWall{engine: leftEngine}}
+	sp := walledSpec(t, w)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(registry(t), r.ID())
+	t.Cleanup(func() { os.Remove(file) })
+	second := sp.SessionSpec
+	elsewhere := t.TempDir()
+	second.Mounts, second.Dir = []wall.Mount{{Path: elsewhere}}, elsewhere
+	if _, err := r.Join(ctx, second); err == nil || err.Error() != "Open a new run. The wall of session 1 could not be removed and may still run, so this run takes no more sessions." {
+		t.Errorf("a join after a wall that stays: %v", err)
+	}
+	if b, err := os.ReadFile(file); err != nil || !strings.Contains(string(b), `"`+root+`"`) || strings.Contains(string(b), elsewhere) {
+		t.Errorf("the entry %s, %v; want the first session's bind %s", b, err, root)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	answer(t, true, nil)
+	sub := mkdirs(t, filepath.Join(root, "sub"))
+	other := walledSpec(t, &openWall{})
+	other.Mounts, other.Dir = []wall.Mount{{Path: sub}}, sub
+	ref := refusalOf(t, "mount_shared_with_run", runErr(other))
+	if !slices.Equal(ref.Names, []string{sub, r.ID(), root}) {
+		t.Errorf("names %q", ref.Names)
 	}
 }
 
@@ -341,7 +431,7 @@ func TestTheIDIsRecordedOnceTheEnclosureIsPrepared(t *testing.T) {
 			w := &closeFailing{enginedWall{engine: leftEngine, id: c.id, idErr: c.err}}
 			sp := walledSpec(t, w)
 			sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
-			if _, err := session.Run(context.Background(), sp); err != nil {
+			if _, err := run(context.Background(), sp); err != nil {
 				t.Fatal(err)
 			}
 			file := filepath.Join(registry(t), w.req.RunID)

@@ -72,7 +72,7 @@ func TestAppliedCredentialsSendAPhraseForASecret(t *testing.T) {
 		}
 		if c.wantName != c.name || c.wantArg != c.argument {
 			for k, v := range a {
-				if s := strings.ToLower(stringOf(v)); strings.Contains(s, "qak_") || strings.Contains(s, "qrk_") {
+				if s := strings.ToLower(stringOf(v)); strings.Contains(s, "qak_") || strings.Contains(s, "qrk_") || strings.Contains(s, "qecr_") {
 					t.Errorf("%s, %s: a secret's prefix in %s: %v", c.name, c.argument, k, v)
 				}
 			}
@@ -135,7 +135,7 @@ func TestAppliedToolsSendAPhraseForASecret(t *testing.T) {
 			t.Errorf("%s, %s: tools %v, want %v", c.name, c.argument, a["tools"], want)
 		}
 		if c.wantName != c.name || c.wantArg != c.argument {
-			if s := strings.ToLower(stringOf(a["tools"])); strings.Contains(s, "qak_") || strings.Contains(s, "qrk_") {
+			if s := strings.ToLower(stringOf(a["tools"])); strings.Contains(s, "qak_") || strings.Contains(s, "qrk_") || strings.Contains(s, "qecr_") {
 				t.Errorf("%s, %s: a secret's prefix in tools: %v", c.name, c.argument, a["tools"])
 			}
 		}

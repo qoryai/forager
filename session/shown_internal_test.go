@@ -28,10 +28,10 @@ const (
 	rkName  = "(a name that contains a run key)"
 )
 
-// leaks reports whether text contains qak_ or qrk_ in any case.
+// leaks reports whether text contains qak_, qrk_ or qecr_ in any case.
 func leaks(text string) bool {
 	l := strings.ToLower(text)
-	return strings.Contains(l, "qak_") || strings.Contains(l, "qrk_")
+	return strings.Contains(l, "qak_") || strings.Contains(l, "qrk_") || strings.Contains(l, "qecr_")
 }
 
 // mkdir makes the directory of the names joined, and returns its path.
@@ -66,9 +66,9 @@ func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	base := t.TempDir()
 	ws, runs := mkdir(t, base, "workspace"), mkdir(t, base, "runs")
-	refused := func(t *testing.T, spec Spec) *Refusal {
+	refused := func(t *testing.T, spec runSpec) *Refusal {
 		t.Helper()
-		_, err := checkMounts(spec, filepath.Join(runs, "run"))
+		_, err := checkMounts(spec, filepath.Join(runs, "run"), filepath.Join(runs, "run", SessionsDir, "1"))
 		var r *Refusal
 		if !errors.As(err, &r) {
 			t.Fatalf("want a refusal, got %v", err)
@@ -97,8 +97,16 @@ func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			r := refused(t, Spec{Wall: filesWall{name: "open"}, Dir: ws, RunsDir: runs,
-				Mounts: []wall.Mount{{Path: c.mount, ReadOnly: true}}, ForagerFiles: []string{c.file}})
+			r := refused(t, runSpec{OpenSpec: OpenSpec{
+				Wall:    filesWall{name: "open"},
+				RunsDir: runs,
+			},
+				SessionSpec: SessionSpec{
+					Dir:          ws,
+					Mounts:       []wall.Mount{{Path: c.mount, ReadOnly: true}},
+					ForagerFiles: []string{c.file},
+				},
+			})
 			if !slices.Equal(r.Names, c.names) || r.Detail != c.detail {
 				t.Errorf("names %q, detail %q; want %q, %q", r.Names, r.Detail, c.names, c.detail)
 			}
@@ -108,8 +116,15 @@ func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 	t.Run("a secret in the wall's name", func(t *testing.T) {
 		mount := mkdir(t, base, "wallmount")
 		file := mkdir(t, mount, "file")
-		r := refused(t, Spec{Wall: filesWall{name: "qak_wall", files: []string{file}}, Dir: ws,
-			RunsDir: runs, Mounts: []wall.Mount{{Path: mount, ReadOnly: true}}})
+		r := refused(t, runSpec{OpenSpec: OpenSpec{
+			Wall:    filesWall{name: "qak_wall", files: []string{file}},
+			RunsDir: runs,
+		},
+			SessionSpec: SessionSpec{
+				Dir:    ws,
+				Mounts: []wall.Mount{{Path: mount, ReadOnly: true}},
+			},
+		})
 		want := "the mount " + mount + " contains " + file + ", one of the " + akName + " wall's files"
 		if r.Detail != want {
 			t.Errorf("detail %q, want %q", r.Detail, want)
@@ -118,8 +133,15 @@ func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 
 	t.Run("a mode conflict", func(t *testing.T) {
 		inner := mkdir(t, ws, "QRK_y")
-		r := refused(t, Spec{Wall: filesWall{name: "open"}, Dir: ws, RunsDir: runs,
-			Mounts: []wall.Mount{{Path: inner, ReadOnly: true}}})
+		r := refused(t, runSpec{OpenSpec: OpenSpec{
+			Wall:    filesWall{name: "open"},
+			RunsDir: runs,
+		},
+			SessionSpec: SessionSpec{
+				Dir:    ws,
+				Mounts: []wall.Mount{{Path: inner, ReadOnly: true}},
+			},
+		})
 		want := "the mount " + rkValue + " (read-only) lies inside the workspace " + ws +
 			" (writable): a part of a writable place can't be read-only"
 		if !slices.Equal(r.Names, []string{rkName, ws}) || r.Detail != want {
@@ -132,7 +154,10 @@ func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 			"qak_x/rel": "the Forager file " + akValue + " is not an absolute path",
 			"rel":       `the Forager file "rel" is not an absolute path`,
 		} {
-			_, err := checkMounts(Spec{ForagerFiles: []string{file}}, "")
+			_, err := checkMounts(runSpec{SessionSpec: SessionSpec{
+				ForagerFiles: []string{file},
+			},
+			}, "", "")
 			if err == nil || err.Error() != want {
 				t.Errorf("%s: %v, want %q", file, err, want)
 			}
@@ -189,8 +214,14 @@ func TestAWalledRunsCheckPrintsAPhraseForASecretInAPath(t *testing.T) {
 			{filepath.Join(base, "runs"), "/elsewhere/other", nil, ""},
 		} {
 			runDir := filepath.Join(c.runs, "run")
-			plan, err := checkMounts(Spec{Wall: filesWall{name: "open"}, Dir: mkdir(t, base, "ws"),
-				RunsDir: c.runs}, runDir)
+			plan, err := checkMounts(runSpec{OpenSpec: OpenSpec{
+				Wall:    filesWall{name: "open"},
+				RunsDir: c.runs,
+			},
+				SessionSpec: SessionSpec{
+					Dir: mkdir(t, base, "ws"),
+				},
+			}, runDir, filepath.Join(runDir, SessionsDir, "1"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -342,7 +373,7 @@ func TestAnImageCheckPrintsAPhraseForASecretInItsName(t *testing.T) {
 	}
 	for name, want := range map[string]string{"qak_x": "the image " + akName + " is defined twice", "agent": "the image agent is defined twice"} {
 		twice := []Image{{Name: name, Ref: "r"}, {Name: name, Ref: "r"}}
-		if err := checkImages(Spec{Images: twice}); err == nil || err.Error() != want {
+		if err := checkImages(OpenSpec{Images: twice}); err == nil || err.Error() != want {
 			t.Errorf("%s: %v, want %q", name, err, want)
 		}
 	}
@@ -391,9 +422,9 @@ func TestARefusalThroughALinkListsANamePhraseForASecret(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	base := t.TempDir()
 	ws, runs, outside := mkdir(t, base, "workspace"), mkdir(t, base, "runs"), mkdir(t, base, "outside")
-	refused := func(t *testing.T, spec Spec) *Refusal {
+	refused := func(t *testing.T, spec runSpec) *Refusal {
 		t.Helper()
-		_, err := checkMounts(spec, filepath.Join(runs, "run"))
+		_, err := checkMounts(spec, filepath.Join(runs, "run"), filepath.Join(runs, "run", SessionsDir, "1"))
 		var r *Refusal
 		if !errors.As(err, &r) {
 			t.Fatalf("want a refusal, got %v", err)
@@ -407,8 +438,15 @@ func TestARefusalThroughALinkListsANamePhraseForASecret(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(link)
-		r := refused(t, Spec{Wall: filesWall{name: "open"}, Dir: ws, RunsDir: runs,
-			ForagerFiles: []string{filepath.Join(link, "file")}})
+		r := refused(t, runSpec{OpenSpec: OpenSpec{
+			Wall:    filesWall{name: "open"},
+			RunsDir: runs,
+		},
+			SessionSpec: SessionSpec{
+				Dir:          ws,
+				ForagerFiles: []string{filepath.Join(link, "file")},
+			},
+		})
 		if want := []string{ws, akName}; r.Code != "mount_contains_forager_files" || !slices.Equal(r.Names, want) {
 			t.Errorf("%s names %q, want %q", r.Code, r.Names, want)
 		}
@@ -423,8 +461,15 @@ func TestARefusalThroughALinkListsANamePhraseForASecret(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(link)
-		r := refused(t, Spec{Wall: filesWall{name: "open"}, Dir: ws, RunsDir: runs,
-			Mounts: []wall.Mount{{Path: link, ReadOnly: true}}})
+		r := refused(t, runSpec{OpenSpec: OpenSpec{
+			Wall:    filesWall{name: "open"},
+			RunsDir: runs,
+		},
+			SessionSpec: SessionSpec{
+				Dir:    ws,
+				Mounts: []wall.Mount{{Path: link, ReadOnly: true}},
+			},
+		})
 		if want := []string{rkName, ws}; r.Code != "mount_through_link" || !slices.Equal(r.Names, want) {
 			t.Errorf("%s names %q, want %q", r.Code, r.Names, want)
 		}
@@ -469,7 +514,7 @@ type bindsFail struct {
 func (b bindsFail) Binds(wall.Launch) ([]wall.Bind, error) { return nil, b.err }
 
 // TestTheSessionsFileErrorsPrintAPhraseForASecretInAPath pins the errors of the run
-// directory's files, the lock, the preparation, the socket, the registry's walk and a
+// directory's files, the lock, the setup's script, the socket, the registry's walk and a
 // wall's binds: a path that contains qak_ or qrk_ is the phrase, and each error still
 // wraps the error of the file system.
 func TestTheSessionsFileErrorsPrintAPhraseForASecretInAPath(t *testing.T) {
@@ -492,8 +537,8 @@ func TestTheSessionsFileErrorsPrintAPhraseForASecretInAPath(t *testing.T) {
 		phrased(t, "the mark's read", err, syscall.ENOTDIR)
 		_, err = sessionRecord(filepath.Join(missing, "session.jsonl"))
 		phrased(t, "the record", err, fs.ErrNotExist)
-		_, err = withPreparation(missing, []string{"true"}, runtimes.Launch{Command: "agent"})
-		phrased(t, "the preparation", err, fs.ErrNotExist)
+		_, err = withSetup(missing, []string{"runner"}, []SetupCommand{{Name: "install", Args: []string{"true"}}}, runtimes.Launch{Command: "agent"})
+		phrased(t, "the setup's script", err, fs.ErrNotExist)
 		_, err = RunsBinding(context.Background(), nil, filepath.Join(file, "child"))
 		phrased(t, "the registry's walk", err, syscall.ENOTDIR)
 		_, err = wallBinds(bindsFail{err: &fs.PathError{Op: "open", Path: filepath.Join(base, "bind"), Err: fs.ErrPermission}}, "", nil)

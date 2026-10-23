@@ -13,10 +13,11 @@ import (
 )
 
 // Example runs one headless Claude Code turn inside the boundary: it starts the
-// gateway on this machine, with a policy and a server the caller read from its own
-// configuration, runs the session against the gateway's local link, and exits with the
-// runtime's status. The access key's secret and the pin come from the environment, as on a CI
-// machine, and the instance id from the caller's own file. It compiles with the
+// gateway on this machine, with a policy and a server the caller read from its
+// configuration, opens a run at the gateway's local link, joins one session, closes the
+// run with the session's outcome, and exits with the runtime's status. The access
+// key's secret and the pin come from the environment, as on a CI machine, and the
+// instance id from the caller's own file. It compiles with the
 // module's tests and is not run, since it starts a real program.
 func Example() {
 	exe, _ := os.Executable()
@@ -47,26 +48,39 @@ func Example() {
 		fmt.Fprintln(os.Stderr, "no gateway:", err)
 		os.Exit(1)
 	}
-	res, err := session.Run(ctx, session.Spec{
-		Runtime: rt,
-		Command: "claude",
-		Args:    []string{"--settings", "/path/to/settings.json", "-p", "Reply with the single word pong."},
-		Gateway: session.LocalGateway(gw.LocalLink()),
-		// The hook command; it calls session.Forward, see Example_forward.
-		Forwarder: []string{exe, "forward"},
-	})
-	// The gateway's close delivers the run's last events to the server.
-	gw.Close(ctx)
+	run, err := session.Open(ctx, session.OpenSpec{Gateway: session.LocalGateway(gw.LocalLink())})
 	var refused *session.Refusal
 	if errors.As(err, &refused) {
 		fmt.Fprintln(os.Stderr, "the run was refused:", refused.Code)
 		os.Exit(1)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "the run did not start:", err)
+		fmt.Fprintln(os.Stderr, "the run did not open:", err)
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "recorded in", res.Dir)
+	res, err := run.Join(ctx, session.SessionSpec{
+		Runtime:   rt,
+		Command:   "claude",
+		Args:      []string{"--settings", "/path/to/settings.json", "-p", "Reply with the single word pong."},
+		Forwarder: []string{exe, "forward"},
+	})
+	// The close's outcome is the session's, or failed with -1 when it did not start.
+	out := session.Outcome{State: "failed", ExitCode: -1}
+	if err == nil {
+		out = session.Outcome{State: res.State, ExitCode: res.ExitCode}
+	}
+	closed, cerr := run.Close(ctx, out)
+	// The gateway's close delivers the run's last events to the server.
+	gw.Close(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "the session did not start:", err)
+		os.Exit(1)
+	}
+	if cerr != nil {
+		fmt.Fprintln(os.Stderr, "the run did not close:", cerr)
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr, "recorded in", closed.Dir)
 	os.Exit(res.ExitCode)
 }
 

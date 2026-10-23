@@ -12,6 +12,7 @@ import (
 	"path"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -166,6 +167,8 @@ const (
 	linkReload     = "link-reload-answer.schema.json"
 	linkBatch      = "link-batch.schema.json"
 	linkRefusal    = "link-refusal.schema.json"
+	linkJoinReq    = "link-join-request.schema.json"
+	linkJoinAnswer = "link-join-answer.schema.json"
 )
 
 // namedSchema returns the longest schema name, without .schema.json, that the file's
@@ -186,17 +189,23 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // TestLinkFixturesValidate pins that every document under fixtures/link passes the schema
 // of the gateway's link its name starts with: the discovery of the local link and of a
 // separate gateway, each with its proxy address, a run request without a wall, one with a
-// wall, the names it passes and its images, and one with a narrowing as well, a run
+// wall and its images, and one with a narrowing as well, a run
 // answer with a wall, its placeholders, reserved names, credential hosts, image, applied
 // and certificate authority, one with a wall and an image but no certificate
 // authority, one without a wall, one without a wall whose gateway holds a credential,
 // with its certificate authority, and one without a policy, a reload answer with and
 // without a policy and one whose applied has ceiling_paths, a batch of a session's events without sequence, a batch of
-// a run.refused with a session's own code, a batch of a run.exited with timeout, and
-// refusals from the gateway, two internal ones among them, one whose message spans
+// a run.refused with a code the session decides, a batch of a session.exited and a run.exited
+// with timeout, two with interrupted, one of a refused join, two of a failure at the join
+// after its session.started, with no reason and with the wall's refusal's code, and one
+// of a run closed with no session, a batch of a setup step after a run.started with
+// machine and setup, a batch of a build step and the run's run.built, a join request
+// with and without model_credential, a join answer with and
+// without model_credential, and refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
-	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal)
+	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
+		linkJoinReq, linkJoinAnswer)
 	seen := map[string]bool{}
 	for _, f := range files(t, "fixtures/link") {
 		kind := namedSchema(s, f)
@@ -274,9 +283,8 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 }
 
 // beyondLinkSchema marks a refused fixture under fixtures/invalid whose rule only the
-// gateway checks, which its schema accepts: a session's dev.qory.run.exited whose state
-// is not the runtime's exit's, cancelled with no reason or
-// succeeded with an exit status other than 0.
+// gateway checks, which its schema accepts: a session's dev.qory.run.exited with a
+// reason of the starter's, which the close never writes.
 const beyondLinkSchema = "-beyond-schema-"
 
 // TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails the
@@ -293,7 +301,19 @@ const beyondLinkSchema = "-beyond-schema-"
 // false, or key prefixes that are none, five, with a space or of 33 characters, or
 // whose model_credential is no credential's name, a run.registered whose
 // interval is over 300 seconds or without its workspace, an event with an unpadded sequence, a run.started without opened_by,
-// with an unknown one, or opened by a session without its command,
+// with an unknown one, opened by a session, with a runtime member, with a machine in
+// upper case or with a setup other than outside and inside, a session.started
+// without its command, numbered 0, with preparation, whose setup_commands is empty, or
+// whose harness is empty, has a member it does not define or a commit of 39 characters, a session.exited without its session, failed
+// with exit status 0 and no reason, cancelled with stopped and an exit status, cancelled
+// with gateway_lost, or of a refused join with an exit status other than -1, a run.log
+// whose step is 0, a run.step_started with an unknown kind, without its name or numbered
+// 0, a run.built whose image has a tag, whose size is 0, whose commit is in upper case
+// or of 39 characters, whose environment_ref is empty or missing, whose environment_image
+// or base has a tag, whose environment_image is empty, or with a member it does not
+// define, a
+// run.step_exited without its state, with a state other than the three, with an
+// exit code below -1 or without its duration, a run.exited with no_session and succeeded,
 // a run.exited without state, with a state other than the three, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
@@ -305,16 +325,21 @@ const beyondLinkSchema = "-beyond-schema-"
 // list, without a variable or with oauth beside a header, a descriptor that declares a
 // secret read from LD_PRELOAD, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
-// not define, that passes a value with a name or whose image has no reference, a link run
-// answer without applied, with a proxy secret too short, whose image has no reference
+// not define, that has passes, a member only a join request has, or whose image has no
+// reference, a link run
+// answer without applied, with a proxy secret or a stack proxy secret too short, whose image has no reference
 // or whose credential_hosts entry has a member it does not define, no hosts, no
-// placeholders, a format without an endpoint or an endpoint without a format, a link reload answer with the proxy secret or the certificate
-// authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
-// run.registered or a run.egress, a run.started opened by a gateway, a run.exited with one of Forager's reasons
-// other than timeout, its old names among them, or with timeout and a state other than cancelled, or a run.refused with a gateway's code,
+// placeholders, a format without an endpoint or an endpoint without a format, a link reload answer with the proxy secret, the stack proxy secret or the
+// certificate authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
+// run.registered or a run.egress, a run.started opened by a gateway or a session, a run.exited with one of Forager's reasons
+// other than timeout, interrupted and no_session, its old names among them, or with timeout and a state other than cancelled
+// or an exit code other than 124, a session.exited cancelled with no reason, succeeded with exit status 1, with stopped,
+// succeeded with no exit status or cancelled with a refusal's code, or a run.refused with a gateway's code,
 // its old codes among them, run_closed, another code of the
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or
-// workspaces or has no heartbeat interval or proxy, and a link refusal without from, with a control
+// workspaces or has no heartbeat interval or proxy, a link join request without passes,
+// with a member it does not define or a name of the form <name>=<value> in passes, a
+// link join answer without its session or numbered 0, and a link refusal without from, with a control
 // character other than tab and newline in its message, C0, DEL or C1, or with a state
 // other than the three, and an API format outside the list, in upper case or as an
 // object. A fixture whose name holds -beyond-schema- breaks a
@@ -325,7 +350,7 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json", "event.schema.json", "batch.schema.json",
 		"api-format.schema.json", "descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
-		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
+		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal, linkJoinReq, linkJoinAnswer,
 		"run-key.schema.json", "run-registration-answer.schema.json",
 		"run-attach.schema.json", "run-attach-answer.schema.json", "run-outcome.schema.json",
 		"run-outcome-answer.schema.json", "batch-answer.schema.json",
@@ -367,7 +392,18 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // gateway's record of the server's accepted registration, or with run.started, and
 // ends with run.exited, and output.log is the concatenation of the run.log chunks. What
 // the schema does not require is pinned here: every run.exited Forager writes contains
-// exit_code, beside state, which the schema requires.
+// exit_code, beside state, which the schema requires; and the sessions are numbered from
+// 1 in order, each session.started followed by the session.exited of its number before
+// the next session.started and before run.exited; and a run.log, a run.resized or a
+// runtime event with a session member lies inside that session, so a run.log of the
+// host work, outside every session, has none; and the steps are numbered from 1 in the
+// order they start, after run.started, each run.step_exited following the
+// run.step_started of its number, once, and a run.log with a step member lies between
+// that step's run.step_started and run.step_exited; a join step lies outside every
+// session and no session starts during one, an image or a wall step lies inside a
+// session, and a run.log with both session and step is one of an image, a wall or a
+// setup step; and every step ends before run.exited, unless the gateway ended the run, whose
+// run.exited has a reason the close never writes.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
 	runs, err := fs.ReadDir(contracts.FS, "fixtures/run")
@@ -389,6 +425,17 @@ func TestRecordedRunValidates(t *testing.T) {
 			t.Fatalf("%s: no events", dir)
 		}
 		var log []byte
+		open, last := 0, 0
+		started, steps, stepped, kinds := false, 0, map[int]string{}, map[int]string{}
+		// openJoin reports whether a join step is open.
+		openJoin := func() bool {
+			for n, k := range kinds {
+				if k == "join" && stepped[n] == "started" {
+					return true
+				}
+			}
+			return false
+		}
 		for i, e := range events {
 			if err := s["event.schema.json"].Validate(e); err != nil {
 				t.Errorf("%s: line %d: %v", dir, i+1, err)
@@ -409,6 +456,78 @@ func TestRecordedRunValidates(t *testing.T) {
 				if !state || !code {
 					t.Errorf("%s: line %d: a run exits with state %v and exit_code %v",
 						dir, i+1, d["state"], d["exit_code"])
+				}
+			}
+			if n, ok := sessionNumber(m); ok {
+				switch m["type"] {
+				case "dev.qory.session.started":
+					if openJoin() {
+						t.Errorf("%s: line %d: session %d starts during a join step", dir, i+1, n)
+					}
+					if open != 0 || n != last+1 {
+						t.Errorf("%s: line %d: session %d starts after session %d, with session %d open", dir, i+1, n, last, open)
+					}
+					open, last = n, n
+				case "dev.qory.session.exited":
+					if n != open {
+						t.Errorf("%s: line %d: session %d exits, with session %d open", dir, i+1, n, open)
+					}
+					open = 0
+				}
+			}
+			if typ, _ := m["type"].(string); typ == "dev.qory.run.log" || typ == "dev.qory.run.resized" || strings.HasPrefix(typ, "dev.qory.runtime.") {
+				if n, ok := m["data"].(map[string]any)["session"].(json.Number); ok && n.String() != strconv.Itoa(open) {
+					t.Errorf("%s: line %d: %s of session %s, with session %d open", dir, i+1, typ, n, open)
+				}
+			}
+			if m["type"] == "dev.qory.run.started" {
+				started = true
+			}
+			if n, ok := stepNumber(m); ok {
+				switch m["type"] {
+				case "dev.qory.run.step_started":
+					if !started {
+						t.Errorf("%s: line %d: step %d starts before run.started", dir, i+1, n)
+					}
+					if n != steps+1 {
+						t.Errorf("%s: line %d: step %d starts after step %d", dir, i+1, n, steps)
+					}
+					steps, stepped[n] = n, "started"
+					kinds[n], _ = m["data"].(map[string]any)["kind"].(string)
+					switch inside := open != 0; kinds[n] {
+					case "join":
+						if inside {
+							t.Errorf("%s: line %d: join step %d starts inside session %d", dir, i+1, n, open)
+						}
+					case "image", "wall":
+						if !inside {
+							t.Errorf("%s: line %d: %s step %d starts outside every session", dir, i+1, kinds[n], n)
+						}
+					}
+				case "dev.qory.run.step_exited":
+					if stepped[n] != "started" {
+						t.Errorf("%s: line %d: step %d exits, and its state is %q, not started", dir, i+1, n, stepped[n])
+					}
+					stepped[n] = "exited"
+				case "dev.qory.run.log":
+					if stepped[n] != "started" {
+						t.Errorf("%s: line %d: a run.log of step %d, whose state is %q, not started", dir, i+1, n, stepped[n])
+					}
+					if _, ok := m["data"].(map[string]any)["session"]; ok && kinds[n] != "image" && kinds[n] != "wall" && kinds[n] != "setup" {
+						t.Errorf("%s: line %d: a run.log of a session in %s step %d", dir, i+1, kinds[n], n)
+					}
+				}
+			}
+			if m["type"] == "dev.qory.run.exited" && open != 0 {
+				t.Errorf("%s: line %d: the run exits with session %d open", dir, i+1, open)
+			}
+			if m["type"] == "dev.qory.run.exited" {
+				reason, _ := m["data"].(map[string]any)["reason"].(string)
+				byClose := reason == "" || reason == "timeout" || reason == "interrupted" || reason == "no_session"
+				for n, st := range stepped {
+					if st == "started" && byClose {
+						t.Errorf("%s: line %d: the run exits with step %d open", dir, i+1, n)
+					}
 				}
 			}
 			if m["type"] == "dev.qory.run.log" {
@@ -437,6 +556,87 @@ func TestRecordedRunValidates(t *testing.T) {
 	if n == 0 {
 		t.Fatal("fixtures/run holds no run")
 	}
+}
+
+// sessionNumber returns the session of a session.started or a session.exited.
+func sessionNumber(m map[string]any) (int, bool) {
+	if m["type"] != "dev.qory.session.started" && m["type"] != "dev.qory.session.exited" {
+		return 0, false
+	}
+	n, _ := m["data"].(map[string]any)["session"].(json.Number)
+	v, err := n.Int64()
+	return int(v), err == nil
+}
+
+// stepNumber returns the step of a run.step_started, a run.step_exited or a run.log
+// with a step member.
+func stepNumber(m map[string]any) (int, bool) {
+	if m["type"] != "dev.qory.run.step_started" && m["type"] != "dev.qory.run.step_exited" && m["type"] != "dev.qory.run.log" {
+		return 0, false
+	}
+	n, ok := m["data"].(map[string]any)["step"].(json.Number)
+	if !ok {
+		return 0, false
+	}
+	v, err := n.Int64()
+	return int(v), err == nil
+}
+
+// TestSessionExitedReasonsAreTheSessions pins the reasons of a dev.qory.session.exited in a
+// link batch to timeout, interrupted and the codes a link batch's dev.qory.run.refused may
+// carry, the codes the session decides itself: a refused join has its refusal's code as
+// reason. The event's reason is the open code of dev.qory.run.exited, since the gateway
+// writes a session's dev.qory.session.exited with the reason of the run's end.
+func TestSessionExitedReasonsAreTheSessions(t *testing.T) {
+	doc, err := contracts.Document("link-batch.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, rule := range doc.(map[string]any)["$defs"].(map[string]any)["event"].(map[string]any)["allOf"].([]any) {
+		r, _ := rule.(map[string]any)
+		typ, _ := dig(r, "if", "properties", "type", "const").(string)
+		if typ != "dev.qory.session.exited" {
+			continue
+		}
+		enum, _ := dig(r, "then", "properties", "data", "properties", "reason", "enum").([]any)
+		for _, c := range enum {
+			got = append(got, c.(string))
+		}
+	}
+	for _, code := range got {
+		if code != "timeout" && code != "interrupted" && !refusal.Decides(code) {
+			t.Errorf("a link batch's session.exited allows the reason %s, which the session does not decide", code)
+		}
+	}
+	for _, code := range []string{"timeout", "interrupted", "placeholder_conflict", "mount_mode_conflict", "engine_unreachable"} {
+		if !slices.Contains(got, code) {
+			t.Errorf("a link batch's session.exited does not allow the reason %s", code)
+		}
+	}
+	pattern := func(name string) any {
+		d, err := contracts.Document(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dig(d.(map[string]any), "properties", "reason", "pattern")
+	}
+	if s, r := pattern("events/session.exited.schema.json"), pattern("events/run.exited.schema.json"); s == nil || s != r {
+		t.Errorf("session.exited's reason pattern is %v; want run.exited's, %v", s, r)
+	}
+}
+
+// dig returns the value at the path of member names under m, or nil.
+func dig(m map[string]any, names ...string) any {
+	var v any = m
+	for _, n := range names {
+		o, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = o[n]
+	}
+	return v
 }
 
 // beyondSchema marks the refused fixtures of about whose rule only Forager checks: a
@@ -810,7 +1010,7 @@ func signBatches(t *testing.T) {
 // TestDescriptorsHaveFixturesThatValidate pins the rule that a descriptor without
 // fixtures is not accepted: every runtime under runtimes/ has a descriptor that passes
 // the schema, at least one fixture directory, and in each a records.jsonl of records and
-// an expected/events.jsonl whose every line is a session type of the descriptor with
+// an expected/events.jsonl whose every line is a runtime type of the descriptor with
 // data that passes that type's schema. It also pins that every hook event a rule matches
 // on is one the descriptor installs.
 func TestDescriptorsHaveFixturesThatValidate(t *testing.T) {

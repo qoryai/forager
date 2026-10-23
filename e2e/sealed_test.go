@@ -220,23 +220,26 @@ func (r sealedRun) check(t *testing.T, attached bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cert, _ := authority()
-	spec := session.Spec{
-		Command: wall.HelperPath,
-		Args:    []string{modeSealed},
-		Env: []string{
-			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-			sealedHostVar + "=" + r.host,
-			recordersCAVar + "=" + base64.StdEncoding.EncodeToString(cert.Raw),
-		},
-		Dir:            dir,
+	spec := runSpec{OpenSpec: session.OpenSpec{
 		RunsDir:        runs,
-		Stdin:          strings.NewReader(""),
-		Forwarder:      []string{wall.HelperPath, "forward"},
-		Exec:           append([]string{wall.HelperPath}, ExecArgs...),
 		Wall:           &wall.Docker{Command: r.command, Helper: r.helper, RelayArgs: RelayArgs, NestArgs: NestArgs},
 		Image:          r.image,
 		ForagerVersion: "walltest",
 		Report:         report,
+	},
+		SessionSpec: session.SessionSpec{
+			Command: wall.HelperPath,
+			Args:    []string{modeSealed},
+			Env: []string{
+				"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+				sealedHostVar + "=" + r.host,
+				recordersCAVar + "=" + base64.StdEncoding.EncodeToString(cert.Raw),
+			},
+			Dir:       dir,
+			Stdin:     strings.NewReader(""),
+			Forwarder: []string{wall.HelperPath, "forward"},
+			Exec:      append([]string{wall.HelperPath}, ExecArgs...),
+		},
 	}
 	var out, errs syncBuffer
 	spec.Stdout, spec.Stderr = &out, &errs
@@ -284,7 +287,7 @@ func (r sealedRun) check(t *testing.T, attached bool) {
 		recordOf = func(res *session.Result) string { return filepath.Join(res.Dir, "events.jsonl") }
 	}
 
-	res, err := session.Run(ctx, spec)
+	res, err := runOne(ctx, spec)
 	closeGateway()
 	if err != nil {
 		t.Fatalf("the run did not start: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errs.String())

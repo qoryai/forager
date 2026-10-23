@@ -366,7 +366,7 @@ func TestUnrootedChangesOnlyTheRootedName(t *testing.T) {
 	if got := unrooted(refused, "kit.example"); got != error(refused) {
 		t.Errorf("a refused connection: %v", got)
 	}
-	guard := &net.OpError{Op: "dial", Net: "tcp", Err: &guardError{"no"}}
+	guard := &net.OpError{Op: "dial", Net: "tcp", Err: &guardError{msg: "no"}}
 	if got := unrooted(guard, "kit.example"); got != error(guard) {
 		t.Errorf("the guard's refusal: %v", got)
 	}

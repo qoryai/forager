@@ -631,11 +631,12 @@ func (h *harness) newLink() *server.Link {
 	return l
 }
 
-// keep notes the proxy secret of a run answer: it may not reach a report.
+// keep notes the proxy secret and the stack proxy secret of a run answer: neither may
+// reach a report.
 func (h *harness) keep(a *server.LinkRunAnswer) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.secrets = append(h.secrets, a.ProxySecret)
+	h.secrets = append(h.secrets, a.ProxySecret, a.StackProxySecret)
 }
 
 // opened reports whether the harness opened the run on the local link.
@@ -692,6 +693,22 @@ func (h *harness) tryOpen(req server.LinkRunRequest) (*server.LinkRunAnswer, err
 	h.links[a.RunID] = l
 	h.mu.Unlock()
 	return a, err
+}
+
+// join joins a session to a run the harness opened on the local link, with the names
+// it passes.
+func (h *harness) join(runID string, passes ...string) (*server.LinkJoinAnswer, error) {
+	return h.linkOf(runID).Join(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{Passes: passes})
+}
+
+// joined joins a session to the run and returns its number.
+func (h *harness) joined(runID string, passes ...string) int {
+	h.t.Helper()
+	a, err := h.join(runID, passes...)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return a.Session
 }
 
 // post posts one batch of the run's events, on the link of the run its first event
@@ -752,7 +769,7 @@ func ev(runID, typ string, data map[string]any) map[string]any {
 
 // started is the session's run.started of a run with the labels.
 func started(runID string, labels map[string]string) map[string]any {
-	data := map[string]any{"opened_by": "session", "forager_version": "test", "runtime": "bare", "command": "true", "args": []string{}, "dir": "/work", "interactive": false}
+	data := map[string]any{"opened_by": "run", "forager_version": "test"}
 	if len(labels) > 0 {
 		data["labels"] = labels
 	}
@@ -777,6 +794,17 @@ func logged(runID string) map[string]any {
 
 func heartbeat(runID string) map[string]any {
 	return ev(runID, event.RunHeartbeat, map[string]any{"elapsed_seconds": 1, "interval_seconds": 30})
+}
+
+// sessionStarted is the session's dev.qory.session.started of the join numbered n.
+func sessionStarted(runID string, n int) map[string]any {
+	return ev(runID, event.SessionStarted, map[string]any{"session": n, "runtime": "bare", "command": "true", "args": []string{}, "dir": "/work", "interactive": false})
+}
+
+// sessionExited is the session's dev.qory.session.exited of the join numbered n, its
+// runtime exited 0.
+func sessionExited(runID string, n int) map[string]any {
+	return ev(runID, event.SessionExited, map[string]any{"session": n, "state": "succeeded", "exit_code": 0, "duration_ms": 5})
 }
 
 func exited(runID string) map[string]any {

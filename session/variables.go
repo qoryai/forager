@@ -69,13 +69,21 @@ func checkHarnessHome(home string) error {
 	return nil
 }
 
+// checkInputsDir refuses an inputs directory that is not an absolute path.
+func checkInputsDir(dir string) error {
+	if dir != "" && !path.IsAbs(dir) && !filepath.IsAbs(dir) {
+		return fmt.Errorf("set the inputs directory to an absolute path: %s is relative", accesskey.ShownValue(dir, true))
+	}
+	return nil
+}
+
 // passes are the names of the variables the run passes a value for from the node: in
 // what it inherits, what the harness sets, or the run's or the machine's variables,
 // sorted, each once. A name outside the grammar of a variable's name is left out: it
 // can match no placeholder. The run request carries them, names alone, so the gateway
 // refuses a placeholder the run passes a value for, as the session did. Without a wall
 // what the run inherits is left out: a placeholder wins over an inherited value.
-func passes(spec Spec) []string {
+func passes(spec runSpec) []string {
 	seen := map[string]bool{}
 	inherited := spec.Env
 	if spec.Wall == nil {
@@ -107,7 +115,7 @@ func passes(spec Spec) []string {
 // run's bundle, Forager's own names. When the run has a start key, key, its endpoint
 // variable is one of the run's fixed names: every other value of it is left out, the
 // harness's computed ones included, and the endpoint rule does not apply.
-func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool, bundle []string, key keyed) (variables.Resolved, []string, error) {
+func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool, bundle []string, key keyed) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
 		decl = s.Secrets()
@@ -142,16 +150,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentia
 	readFrom := reserved
 	// Forager's own names, the proxy's, the wall's and the preparation's: with the
 	// placeholders and the harness's computed values, the run's fixed names.
-	own := []string{EnvRunID, EnvSocket}
-	if spec.HarnessHome != "" {
-		own = append(own, EnvHarnessHome)
-	}
-	own = append(own, names(link.ProxyEnv(""))...)
-	own = append(own, names(prepared.Env)...)
-	own = append(own, bundle...)
-	if name := key.endpointName(); name != "" {
-		own = append(own, name)
-	}
+	own := foragerNames(spec, prepared, bundle, key)
 	// What Forager, the preparation and the wall set in this run, which the helper's
 	// exec never unsets: a name the wall sets only for a run with an authority counts
 	// when the run has one, and nested Docker's when the run has it.
@@ -213,6 +212,25 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentia
 		}
 	}
 	return vars, unset, nil
+}
+
+// foragerNames are the names Forager and the runtime's preparation set for a session
+// of spec, which win over every source of a variable: QORY_RUN_ID, QORY_RUN_SOCKET,
+// QORY_HARNESS_HOME when spec has a harness home, the proxy's variables, the names of
+// prepared.Env, bundle and the start key's endpoint variable. The wall's names are not
+// among them.
+func foragerNames(spec runSpec, prepared runtimes.Launch, bundle []string, key keyed) []string {
+	own := []string{EnvRunID, EnvSocket}
+	if spec.HarnessHome != "" {
+		own = append(own, EnvHarnessHome)
+	}
+	own = append(own, names(link.ProxyEnv(""))...)
+	own = append(own, names(prepared.Env)...)
+	own = append(own, bundle...)
+	if name := key.endpointName(); name != "" {
+		own = append(own, name)
+	}
+	return own
 }
 
 // names are the names of NAME=value entries.
@@ -533,7 +551,7 @@ func orList(items []string, sep, last string) string {
 
 // credentialVariables is the record's credential_variables: one entry per credential
 // and placeholder, in order; nil when there is none. A credential's name or a
-// placeholder that contains an access key secret or a run key is
+// placeholder that contains an access key secret, a run key or a run code is
 // [accesskey.ShownName]'s phrase in its place, so the record never carries one.
 func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]string {
 	var out []map[string]string
@@ -557,7 +575,7 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 // credential is not refused: its runtime may use the developer's login. The refusal is [refusal.ModelKeyMissing] with the model keys'
 // variables. Without a wall, an inherited value of one of placeholderNames reaches
 // nothing: the placeholder is set over it.
-func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, placeholderNames []string) error {
+func checkModelKey(spec runSpec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, placeholderNames []string) error {
 	if len(credentials) == 0 {
 		return nil
 	}

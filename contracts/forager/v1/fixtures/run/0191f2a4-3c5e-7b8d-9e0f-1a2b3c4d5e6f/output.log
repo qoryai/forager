@@ -1,3 +1,4 @@
+qory run: composed 42 entries from 3 modules for claude
 [?1049h[H Claude Code v2.1.273
 $ ls
 README.md  go.mod

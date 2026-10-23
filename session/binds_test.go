@@ -37,7 +37,7 @@ func mkdirs(t *testing.T, dirs ...string) string {
 }
 
 // walledSpec is a walled run of the fake runtime behind an open wall.
-func walledSpec(t *testing.T, w wall.Wall) session.Spec {
+func walledSpec(t *testing.T, w wall.Wall) runSpec {
 	t.Helper()
 	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
@@ -53,11 +53,11 @@ func TestTheWorkspaceIsReachedThroughTheMountThatHoldsIt(t *testing.T) {
 	w := &openWall{}
 	sp := walledSpec(t, w)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, sub
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("%+v, %v", res, err)
 	}
-	want := []wall.Mount{{Path: root}, {Path: res.Dir, ReadOnly: true}}
+	want := []wall.Mount{{Path: root}, {Path: res.SessionDir, ReadOnly: true}}
 	if !slices.Equal(w.got.Mounts, want) {
 		t.Errorf("mounts %v, want %v", w.got.Mounts, want)
 	}
@@ -74,7 +74,7 @@ func TestTheWorkspaceIsReachedThroughTheMountThatHoldsIt(t *testing.T) {
 	w = &openWall{}
 	sp = walledSpec(t, w)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, filepath.Join(link, "src", "app")
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	if len(w.got.Mounts) != 2 || w.got.Mounts[0].Path != root || w.got.Dir != sub {
@@ -86,12 +86,12 @@ func TestTheWorkspaceIsReachedThroughTheMountThatHoldsIt(t *testing.T) {
 	w = &openWall{}
 	sp = walledSpec(t, w)
 	sp.Mounts = []wall.Mount{{Path: home, ReadOnly: true}}
-	res, err = session.Run(context.Background(), sp)
+	res, err = run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want = []wall.Mount{
-		{Path: home, ReadOnly: true}, {Path: sp.Dir}, {Path: res.Dir, ReadOnly: true},
+		{Path: home, ReadOnly: true}, {Path: sp.Dir}, {Path: res.SessionDir, ReadOnly: true},
 	}
 	if !slices.Equal(w.got.Mounts, want) || w.got.Dir != sp.Dir {
 		t.Errorf("mounts %v, working directory %q", w.got.Mounts, w.got.Dir)
@@ -113,12 +113,12 @@ func TestNestedMountsOfOneModeAreOneBind(t *testing.T) {
 		{Path: vendor}, {Path: root}, {Path: docs, ReadOnly: true}, {Path: ro, ReadOnly: true},
 		{Path: root + "/"},
 	}
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []wall.Mount{
-		{Path: root}, {Path: ro, ReadOnly: true}, {Path: res.Dir, ReadOnly: true},
+		{Path: root}, {Path: ro, ReadOnly: true}, {Path: res.SessionDir, ReadOnly: true},
 	}
 	if !slices.Equal(w.got.Mounts, want) {
 		t.Errorf("mounts %v, want %v", w.got.Mounts, want)
@@ -167,8 +167,8 @@ func TestNestedMountsOfTwoModesAreNoRun(t *testing.T) {
 			if !slices.Equal(r.Names, c.names) || r.Detail != c.detail {
 				t.Errorf("names %q, detail %q", r.Names, r.Detail)
 			}
-			if w.req.RunID != "" {
-				t.Error("the wall was prepared")
+			if w.wrapped {
+				t.Error("the wall was wrapped")
 			}
 		})
 	}
@@ -199,7 +199,7 @@ func TestTheRunsDirectoryIsOneOfTheForagersFiles(t *testing.T) {
 
 	sp = spec(t, "FAKE_EXIT=0")
 	sp.RunsDir = ""
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil || res.Dir != filepath.Join(sp.Dir, ".qory", "runs", res.RunID) {
 		t.Errorf("an unwalled run: %+v, %v", res, err)
 	}
@@ -254,13 +254,16 @@ func registry(t *testing.T) string {
 	return filepath.Join(state, "qory-forager", "walled")
 }
 
-// holdingWall is an open wall whose Prepare waits until it is released, so its run is
-// a walled run still going for as long as the test needs.
+// holdingWall is an open wall whose Wrap waits until it is released, so its run is a
+// walled run still going, with its session's places listed, for as long as the test
+// needs. With inPrepare it waits in Prepare instead, as the run opens, before any join.
+// fail, when set, is Prepare's error.
 type holdingWall struct {
 	openWall
-	reached chan struct{}
-	release chan struct{}
-	fail    error
+	reached   chan struct{}
+	release   chan struct{}
+	fail      error
+	inPrepare bool
 	// id is the run's id, set before reached is signalled.
 	id string
 }
@@ -273,12 +276,23 @@ func (w *holdingWall) Prepare(
 	ctx context.Context, req wall.Request,
 ) (wall.Enclosure, error) {
 	w.id = req.RunID
-	w.reached <- struct{}{}
-	<-w.release
+	if w.inPrepare {
+		w.reached <- struct{}{}
+		<-w.release
+	}
 	if w.fail != nil {
 		return nil, w.fail
 	}
-	return w.openWall.Prepare(ctx, req)
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *holdingWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, error) {
+	if !w.inPrepare {
+		w.reached <- struct{}{}
+		<-w.release
+	}
+	return w.openWall.Wrap(ctx, l)
 }
 
 // started is a run started in the background, and what it came to.
@@ -288,18 +302,18 @@ type started struct {
 	err  error
 }
 
-func start(sp session.Spec) *started {
+func start(sp runSpec) *started {
 	s := &started{done: make(chan struct{})}
 	go func() {
 		defer close(s.done)
-		s.res, s.err = session.Run(context.Background(), sp)
+		s.res, s.err = run(context.Background(), sp)
 	}()
 	return s
 }
 
 // hold starts a walled run with the mounts and waits until it is going. The returned
 // function lets it finish and waits for it.
-func hold(t *testing.T, mounts []wall.Mount, dir string) (session.Spec, func() *started) {
+func hold(t *testing.T, mounts []wall.Mount, dir string) (runSpec, func() *started) {
 	t.Helper()
 	w := newHoldingWall()
 	sp := walledSpec(t, w)
@@ -423,7 +437,7 @@ func TestTheEntryOfAWalledRunLastsAsLongAsTheRun(t *testing.T) {
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
 		t.Errorf("the entry is still there: %v", err)
 	}
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("the run after the first ended: %+v, %v", res, err)
 	}
 }
@@ -447,7 +461,7 @@ func TestAWalledRunThatFailsLeavesTheRegistry(t *testing.T) {
 	}
 	sp = walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("the run after it: %+v, %v", res, err)
 	}
 }
@@ -460,7 +474,7 @@ func TestBindsThatMayShareRunSideBySide(t *testing.T) {
 	hold(t, []wall.Mount{{Path: root}}, sub)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: root + "/"}}, root
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("the same root: %+v, %v", res, err)
 	}
 
@@ -469,7 +483,7 @@ func TestBindsThatMayShareRunSideBySide(t *testing.T) {
 	hold(t, []wall.Mount{{Path: ro, ReadOnly: true}}, t.TempDir())
 	sp = walledSpec(t, &openWall{})
 	sp.Mounts = []wall.Mount{{Path: docs, ReadOnly: true}}
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("read-only inside read-only: %+v, %v", res, err)
 	}
 }
@@ -495,7 +509,7 @@ func TestABindThatRecordsNoModeIsWritable(t *testing.T) {
 			t.Errorf("names %q, want %q", r.Names, want)
 		}
 		readOnly(t, file, 0)
-		if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+		if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 			t.Errorf("inside a read-only bind: %+v, %v", res, err)
 		}
 	}
@@ -523,7 +537,7 @@ func TestAStaleEntryIsRemoved(t *testing.T) {
 	answer(t, false, nil)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Fatalf("a run beside a stale entry: %+v, %v", res, err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {

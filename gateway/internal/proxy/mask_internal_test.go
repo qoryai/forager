@@ -631,7 +631,7 @@ func TestMaskingCatchesAValueAtEverySplit(t *testing.T) {
 // kept back, the start of the value, and every find are overwritten.
 func TestAnAbortedAnswerKeepsNoPartOfTheValue(t *testing.T) {
 	m := (&Credential{Scheme: "bearer"}).masker([]byte(fakeKey))
-	finds := slices.Clone(m.pairs)
+	finds := m.Finds()
 	var held []byte
 	aborting := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		mw := w.(*masking)
@@ -650,9 +650,9 @@ func TestAnAbortedAnswerKeepsNoPartOfTheValue(t *testing.T) {
 	if len(held) != 10 || !bytes.Equal(held, make([]byte, 10)) {
 		t.Errorf("the bytes kept back after the panic: %q", held)
 	}
-	for _, p := range finds {
-		if !bytes.Equal(p.find, make([]byte, len(p.find))) {
-			t.Errorf("a find after the panic: %q", p.find)
+	for _, f := range finds {
+		if !bytes.Equal(f, make([]byte, len(f))) {
+			t.Errorf("a find after the panic: %q", f)
 		}
 	}
 }
@@ -660,13 +660,13 @@ func TestAnAbortedAnswerKeepsNoPartOfTheValue(t *testing.T) {
 // TestTheMaskersForms pins the forms looked for: a value of letters, digits and
 // hyphens in one form, a value with / and + also percent-encoded and with / escaped.
 func TestTheMaskersForms(t *testing.T) {
-	if m := (&Credential{Scheme: "header"}).masker([]byte(fakeKey)); len(m.pairs) != 1 {
-		t.Errorf("a plain value has %d forms", len(m.pairs))
+	if m := (&Credential{Scheme: "header"}).masker([]byte(fakeKey)); len(m.Finds()) != 1 {
+		t.Errorf("a plain value has %d forms", len(m.Finds()))
 	}
 	m := (&Credential{Scheme: "header"}).masker([]byte(fakeToken))
 	var finds []string
-	for _, p := range m.pairs {
-		finds = append(finds, string(p.find))
+	for _, f := range m.Finds() {
+		finds = append(finds, string(f))
 	}
 	if want := []string{fakeToken, "fake%2Ftoken%2B0002", `fake\/token+0002`}; !slices.Equal(finds, want) {
 		t.Errorf("the forms %q, want %q", finds, want)

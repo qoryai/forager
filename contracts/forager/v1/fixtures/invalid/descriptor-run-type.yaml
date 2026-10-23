@@ -1,4 +1,4 @@
-# A descriptor produces session events only; Forager produces the run events.
+# A descriptor produces runtime events only; Forager produces the run events.
 version: 1
 runtime: claude
 runtime_version: "2.1.273"

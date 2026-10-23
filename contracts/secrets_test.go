@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"math/big"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/qoryai/forager/contracts"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // The fixtures of the access key: enrolment's schema, and the known answers this
@@ -118,9 +120,9 @@ func (k fixtureKeys) accessKey(t *testing.T) ed25519.PrivateKey {
 
 // TestSecretsFixturesValidate pins that every fixture of enrolment and of the known
 // answers passes its schema: discovery, the registration and its answer, the run key's
-// payload, the registration through a gateway, the attach and the outcome, each with
-// its answer, and the enrolment request, answer and signed refusals each against the
-// part of enrolment.schema.json it is.
+// payload, the registration through a gateway, the run code's redemption, the attach
+// and the outcome, each with its answer, and the enrolment request, answer and signed
+// refusals each against the part of enrolment.schema.json it is.
 func TestSecretsFixturesValidate(t *testing.T) {
 	c, err := contracts.Compiler()
 	if err != nil {
@@ -146,6 +148,8 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		"fixtures/known-answers/discovery-gateway.json":           {"configuration.schema.json"},
 		"fixtures/known-answers/outcome.json":                     {"run-outcome.schema.json"},
 		"fixtures/known-answers/outcome-answer.json":              {"run-outcome-answer.schema.json"},
+		"fixtures/known-answers/enrolment-run-request.json":       {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
+		"fixtures/known-answers/enrolment-run-answer.json":        {"enrolment.schema.json", "enrolment.schema.json#/$defs/run_answer"},
 		"fixtures/enrolment/request.json":                         {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
 		"fixtures/enrolment/request-two-fingerprints.json":        {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
 		"fixtures/enrolment/request-gateway.json":                 {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
@@ -182,10 +186,19 @@ func TestSecretsFixturesValidate(t *testing.T) {
 			}
 		}
 	}
-	// The halves of enrolment.schema.json are distinct: a request is no answer.
+	// The parts of enrolment.schema.json are distinct: a request is no answer, and an
+	// access key's answer is no run's.
 	request, _ := contracts.Document("fixtures/enrolment/request.json")
 	if schema("enrolment.schema.json#/$defs/answer")(request) == nil {
 		t.Error("the enrolment request passes as an answer")
+	}
+	answer, _ := contracts.Document("fixtures/enrolment/answer.json")
+	run, _ := contracts.Document("fixtures/known-answers/enrolment-run-answer.json")
+	if schema("enrolment.schema.json#/$defs/run_answer")(answer) == nil {
+		t.Error("an access key's enrolment answer passes as a run's")
+	}
+	if schema("enrolment.schema.json#/$defs/answer")(run) == nil {
+		t.Error("a run's enrolment answer passes as an access key's")
 	}
 }
 
@@ -210,8 +223,79 @@ func TestEnrolmentAnswerNodeKinds(t *testing.T) {
 	}
 }
 
+// TestRunAnswerFixturesBreakOneRule pins each invalid fixture of a run code's answer to
+// the one rule of $defs/run_answer it breaks: the place in the answer and the keyword
+// that fails there, and no other. An unknown member, access_key_id, fails
+// additionalProperties at the top, and documents of another type than object fails
+// type at /documents.
+func TestRunAnswerFixturesBreakOneRule(t *testing.T) {
+	c, err := contracts.Compiler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Compile(contracts.Base + "/enrolment.schema.json#/$defs/run_answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"access-key-id":     "/ additionalProperties",
+		"no-run-key":        "/ required",
+		"run-id-upper-case": "/run_id pattern",
+		"no-documents":      "/ required",
+		"documents-array":   "/documents type",
+		"documents-null":    "/documents type",
+	}
+	const prefix = "fixtures/invalid/enrolment-run-answer-"
+	seen := map[string]bool{}
+	for _, f := range files(t, "fixtures/invalid") {
+		name, ok := strings.CutPrefix(f, prefix)
+		if !ok {
+			continue
+		}
+		name = strings.TrimSuffix(name, ".json")
+		seen[name] = true
+		rule, ok := want[name]
+		if !ok {
+			t.Errorf("%s: no rule pinned for the fixture", f)
+			continue
+		}
+		doc, err := contracts.Document(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ve *jsonschema.ValidationError
+		if err := s.Validate(doc); !errors.As(err, &ve) {
+			t.Errorf("%s passes $defs/run_answer: %v", f, err)
+			continue
+		}
+		if got := failures(ve); len(got) != 1 || got[0] != rule {
+			t.Errorf("%s fails %q; want %q alone", f, got, rule)
+		}
+	}
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("%s%s.json is missing", prefix, name)
+		}
+	}
+}
+
+// failures returns the leaves of ve, each its place in the document and the last
+// keyword of its keyword path, sorted and each once.
+func failures(ve *jsonschema.ValidationError) []string {
+	if len(ve.Causes) == 0 {
+		kw := ve.ErrorKind.KeywordPath()
+		return []string{"/" + strings.Join(ve.InstanceLocation, "/") + " " + kw[len(kw)-1]}
+	}
+	var out []string
+	for _, c := range ve.Causes {
+		out = append(out, failures(c)...)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 // TestEnrolmentCodePrefixes pins the prefixes of the enrolment request's code: qecn_,
-// qecp_, qecg_ and qeci_ in lower case pass, and qec_ alone, an unknown letter, qecx_,
+// qecp_, qecg_, qeci_ and qecr_ in lower case pass, and qec_ alone, an unknown letter, qecx_,
 // and a prefix in upper case are refused, as a server refuses a malformed code, an
 // invalid request, 400. The refused codes are tested inline, as documents here.
 func TestEnrolmentCodePrefixes(t *testing.T) {
@@ -231,8 +315,8 @@ func TestEnrolmentCodePrefixes(t *testing.T) {
 		return doc
 	}
 	for prefix, want := range map[string]bool{
-		"qecn_": true, "qecp_": true, "qecg_": true, "qeci_": true,
-		"qec_": false, "qecx_": false, "QECN_": false,
+		"qecn_": true, "qecp_": true, "qecg_": true, "qeci_": true, "qecr_": true,
+		"qec_": false, "qecx_": false, "QECN_": false, "QECR_": false,
 	} {
 		err := s.Validate(request(prefix + "F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg"))
 		if (err == nil) != want {
@@ -897,8 +981,8 @@ func TestRunRefusedCodes(t *testing.T) {
 	want := []string{
 		"answer_unsigned", "apiary_public_key_missing", "bad_request", "batch_refused",
 		"credential_check_invalid", "credential_check_unreachable", "credential_expired",
-		"differs_from_credential", "engine_unreachable", "image_not_allowed", "image_unknown",
-		"image_user_root", "instance_limit",
+		"differs_from_credential", "engine_unreachable", "image_missing", "image_not_allowed",
+		"image_unknown", "image_user_root", "instance_limit",
 		"invalid_request", "key_invalid", "key_limit", "labels_changed", "model_key_missing",
 		"mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run",
 		"mount_through_link", "not_found", "placeholder_conflict", "rate_limited", "run_attached",
@@ -909,8 +993,8 @@ func TestRunRefusedCodes(t *testing.T) {
 		"tool_unknown", "unauthorized", "unavailable", "unsupported_contract_version",
 		"variable_reserved", "workspace_not_served", "wrong_gateway",
 	}
-	if len(want) != 45 {
-		t.Fatalf("%d codes in the test's list; want 45", len(want))
+	if len(want) != 46 {
+		t.Fatalf("%d codes in the test's list; want 46", len(want))
 	}
 	if got := slices.Sorted(slices.Values(s.Then.Properties.Code.Enum)); !slices.Equal(got, want) {
 		t.Errorf("run.refused codes %q; want %q", got, want)

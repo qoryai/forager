@@ -21,7 +21,7 @@ stop: {signal: SIGINT, grace: 45s}
 rules:
   - source: output
     match: {kind: done}
-    type: dev.qory.session.result
+    type: dev.qory.runtime.result
     data: {result: text}
 `
 
@@ -37,13 +37,13 @@ func TestARuntimeWrittenAsDataAlone(t *testing.T) {
 	if s := rt.Stop(); s.Signal != "SIGINT" || s.Grace != 45*time.Second {
 		t.Errorf("stop %+v", s)
 	}
-	typ, data, ok := rt.Map(runtimes.Record{Source: runtimes.SourceOutput, Record: map[string]any{"kind": "done", "text": "ok"}})
-	if !ok || typ != "dev.qory.session.result" || data["result"] != "ok" {
-		t.Errorf("%v %s %v", ok, typ, data)
+	events := rt.Map(runtimes.Record{Source: runtimes.SourceOutput, Record: map[string]any{"kind": "done", "text": "ok"}})
+	if len(events) != 1 || events[0].Type != "dev.qory.runtime.result" || events[0].Data["result"] != "ok" {
+		t.Errorf("%+v", events)
 	}
 	// With a forwarder and no hooks source there is still nothing to install.
 	launch := runtimes.Launch{Command: "other", Args: []string{"run"}}
-	got, err := rt.Prepare(runtimes.Attach{Launch: launch, RunDir: t.TempDir(), Forwarder: []string{"q"}})
+	got, err := rt.Prepare(runtimes.Attach{Launch: launch, SessionDir: t.TempDir(), Forwarder: []string{"q"}})
 	if err != nil || got.Command != "other" || len(got.Args) != 1 {
 		t.Errorf("%+v %v", got, err)
 	}
@@ -64,7 +64,7 @@ func TestADescriptorNamesAnInstallerAndNeverBringsOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.Prepare(runtimes.Attach{RunDir: t.TempDir(), Forwarder: []string{"q"}}); err != nil || !called {
+	if _, err := rt.Prepare(runtimes.Attach{SessionDir: t.TempDir(), Forwarder: []string{"q"}}); err != nil || !called {
 		t.Errorf("the installer was not asked: %v", err)
 	}
 	for _, bad := range []string{"stop: {signal: SIGKILL}", "stop: {grace: soon}", "stop: {}", "stop: {signal: SIGINT, then: SIGTERM}"} {
@@ -248,5 +248,42 @@ func TestADescriptorSaysWhereItsModelGoesThroughTheOptionalInterface(t *testing.
 	}
 	if _, ok := runtimes.Bare("other-agent").(runtimes.Model); ok {
 		t.Error("a bare runtime implements runtimes.Model")
+	}
+}
+
+// TestOnlyADescriptorWithParentIsParents pins that a runtime written as data reports
+// links only when its descriptor has a parent member, so the session keeps no start
+// back for a runtime that never links one; and that such a runtime still declares its
+// secrets and model.
+func TestOnlyADescriptorWithParentIsParents(t *testing.T) {
+	rt, err := runtimes.Described("other-agent.yaml", []byte(other), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rt.(runtimes.Parents); ok {
+		t.Error("a descriptor without parent is Parents")
+	}
+	withParent := strings.Replace(other, "rules:\n", "parent: {source: output, match: {kind: line}, agent_id: agent, tool_use_id: call}\n"+
+		"model: {formats: [anthropic-messages], model: {flag: --model}, endpoint: {variable: OTHER_BASE_URL}}\nrules:\n", 1)
+	rt, err = runtimes.Described("other-agent.yaml", []byte(withParent), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimetest.Conforms(t, rt)
+	p, ok := rt.(runtimes.Parents)
+	if !ok {
+		t.Fatal("a descriptor with parent is not Parents")
+	}
+	agent, call, ok := p.Link(runtimes.Record{Source: runtimes.SourceOutput, Record: map[string]any{"kind": "line", "agent": "a1", "call": "c1"}})
+	if !ok || agent != "a1" || call != "c1" {
+		t.Errorf("Link = %q %q %v", agent, call, ok)
+	}
+	if m, ok := rt.(runtimes.Model); !ok {
+		t.Error("a descriptor with parent lost its model")
+	} else if places, ok := m.Model(); !ok || places.Endpoint.Variable != "OTHER_BASE_URL" {
+		t.Errorf("model %+v %v", places, ok)
+	}
+	if _, ok := rt.(runtimes.Secrets); !ok {
+		t.Error("a descriptor with parent is no Secrets")
 	}
 }

@@ -165,10 +165,10 @@ func Read(name string, b []byte) (*Config, error) {
 // Parse validates the bytes of a server document against the schema and decodes it,
 // and checks the pin's keys as [accesskey.Pin.Check] does. A document that contains an
 // access key secret anywhere, in its bytes or, escaped, in a decoded string or member
-// name, is [accesskey.ErrSecretInDocument] before a schema reads it, and one that
-// contains a run key [accesskey.ErrRunKeyInDocument], so no schema error quotes the
-// secret. A key the pin lists is left out of that check as
-// [accesskey.SecretInPinDocument] leaves it out.
+// name, is [accesskey.ErrSecretInDocument] before a schema reads it, one that contains
+// a run key [accesskey.ErrRunKeyInDocument], and one that contains a run code
+// [accesskey.ErrRunCodeInDocument], so no schema error quotes the secret. A key the
+// pin lists is left out of that check as [accesskey.SecretInPinDocument] leaves it out.
 func Parse(name string, b []byte) (*Config, error) {
 	if err := accesskey.SecretInPinDocument(string(b), "apiary_public_key"); err != nil {
 		return nil, err
@@ -207,7 +207,7 @@ func decode(name, schemaName string, b []byte, out any) error {
 		name += ".json"
 	}
 	// The decoder's and the schema's errors can quote the document, so a value in them
-	// that contains qak_ or qrk_ in any case is accesskey.ShownError's phrase.
+	// that contains qak_, qrk_ or qecr_ in any case is accesskey.ShownError's phrase.
 	doc, err := contracts.Decode(name, b)
 	if err != nil {
 		return accesskey.ShownError(err)
@@ -597,18 +597,18 @@ func (c *Client) fetchBody(ctx context.Context, what, u, digestHeader string) ([
 	return a.body, digest, nil
 }
 
-// errRunURLSecret refuses a run.url that contains qak_ or qrk_: the run's
-// run.policy_applied sends run.url as a URI, which no phrase is. Its text names
-// neither prefix, so accesskey.ShownError keeps it.
-var errRunURLSecret = errors.New("run.url contains the start of an access key secret or a run key, and run.policy_applied would send it as it is")
+// errRunURLSecret refuses a run.url that contains qak_, qrk_ or qecr_: the run's
+// run.policy_applied sends run.url as a URI, which no phrase is. Its text contains
+// none of the prefixes, so accesskey.ShownError keeps it.
+var errRunURLSecret = errors.New("run.url contains the start of an access key secret, a run key or a run code, and run.policy_applied would send it as it is")
 
 // Discover fetches the configuration document from the server's well-known path and
 // returns it with the server's digest of it. An error, transport, status or a document
 // the schema refuses, means no run; it names the URL. A document without the run
-// endpoint, or whose run.url contains qak_ or qrk_ in any case, is refused as one the
-// schema refuses. A 401 is unauthorized, a signed
-// refusal is the code its body contains, rate_limited say, and an answer that does not
-// verify is answer_unsigned, each an [*accesskey.Refusal].
+// endpoint, or whose run.url contains qak_, qrk_ or qecr_ in any case, is refused as
+// one the schema refuses. A 401 is unauthorized, a signed refusal is the code its
+// body contains, rate_limited say, and an answer that does not verify is
+// answer_unsigned, each an [*accesskey.Refusal].
 func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
 	if err := c.Check(); err != nil {
 		return nil, "", err
@@ -778,15 +778,13 @@ func CheckLabels(labels map[string]string) error {
 	return nil
 }
 
-// shownLabelKey reports whether k is one of the two phrases [ShownLabels] puts in
-// place of a label's key that contains qak_ or qrk_, which a label's key may be.
-func shownLabelKey(k string) bool {
-	return k == accesskey.ShownName("qak_", false) || k == accesskey.ShownName("qrk_", false)
-}
+// shownLabelKey reports whether k is one of the three phrases [ShownLabels] puts in
+// place of a label's key that contains qak_, qrk_ or qecr_, which a label's key may be.
+func shownLabelKey(k string) bool { return accesskey.IsNamePhrase(k) }
 
 // ShownLabels are a run's labels as Forager sends them to Qory Apiary, in run.started
-// and in a registration: each key and each value that contains qak_ or qrk_ in any case
-// is accesskey.ShownName's phrase in its place. Of two labels whose keys become the
+// and in a registration: each key and each value that contains qak_, qrk_ or qecr_ in
+// any case is accesskey.ShownName's phrase in its place. Of two labels whose keys become the
 // same phrase, the one whose key sorts first is kept. Nil is nil.
 func ShownLabels(labels map[string]string) map[string]string {
 	if labels == nil {

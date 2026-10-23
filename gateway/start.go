@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -56,6 +57,23 @@ func checkRunLimits(l *RunLimits) error {
 		}
 		if *f.v < 1 || *f.v > f.most {
 			return fmt.Errorf("Set RunLimits.%s to a number from 1 to %d, or 0 for the default of %d. It is %d.", f.name, f.most, f.normal, *f.v)
+		}
+	}
+	return nil
+}
+
+// stackHost is the shape of an entry of [Config.StackHosts], a policy's allow entry's:
+// a lower-case host name, an IPv4 address or a *. suffix.
+var stackHost = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// checkStackHosts refuses an entry of [Config.StackHosts] that is not in the form of a
+// policy's allow entry: the shape of policy.schema.json's, and, for one that is no *.
+// suffix, the form [policy.Host] gives it.
+func checkStackHosts(hosts []string) error {
+	for i, h := range hosts {
+		form, ok := policy.Host(h)
+		if !stackHost.MatchString(h) || (!strings.HasPrefix(h, "*.") && (!ok || form != h)) {
+			return fmt.Errorf("Set StackHosts[%d] to a lower-case host name, an IPv4 address or a *. suffix, such as git.example.com. It is %s.", i, accesskey.ShownValue(h, true))
 		}
 	}
 	return nil
@@ -139,8 +157,8 @@ type Gateway struct {
 // them later changes nothing.
 //
 // Start refuses, before anything starts, a field of [Config.RunLimits] outside its
-// range, a Listen that is not host:port, a Listen
-// without TLS or without a Server, TLS files it cannot read or whose certificate and key
+// range, an entry of [Config.StackHosts] that is not a host name or a *. suffix, a
+// Listen that is not host:port, a Listen without TLS or without a Server, TLS files it cannot read or whose certificate and key
 // do not match, and TLS without a Listen; Selects without a Listen, and an entry of
 // Selects that names no credential of Credentials or one another entry names, names a
 // Label, a Forge or a Pattern for a credential that takes no argument, leaves out any of
@@ -165,7 +183,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	cfg.Credentials, cfg.Tools = copyCredentials(cfg.Credentials), copyTools(cfg.Tools)
 	// A Selection holds strings alone: the list's copy shares nothing with it.
 	cfg.Selects = slices.Clone(cfg.Selects)
-	cert, err := checkService(&cfg)
+	certs, err := checkService(&cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -182,6 +200,10 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		return nil, fmt.Errorf("the heartbeat interval %s is not a whole number of seconds from 1 to the %d the link's discovery announces at most", cfg.Heartbeat, server.MaxInterval)
 	}
 	if err := checkRunLimits(&cfg.RunLimits); err != nil {
+		return nil, err
+	}
+	cfg.StackHosts = slices.Clone(cfg.StackHosts)
+	if err := checkStackHosts(cfg.StackHosts); err != nil {
 		return nil, err
 	}
 	if cfg.Policy != nil {
@@ -252,7 +274,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		// A gateway with an address serves other machines alone: no local link, and no
 		// proxy on loopback.
 		g.stream = stream.New(stream.Config{Dir: cfg.Dir, RunDir: cfg.RunDir, Events: cfg.Events, Report: report, CloseWait: cfg.closeWait})
-		if g.svc, err = g.startService(cert); err != nil {
+		if g.svc, err = g.startService(certs); err != nil {
 			return nil, err
 		}
 		ok = true

@@ -17,12 +17,13 @@ const (
 	runKeyName     = "(a name that contains a run key)"
 	accessKeyValue = "(a value that contains an access key secret)"
 	runKeyValue    = "(a value that contains a run key)"
+	runCodeName    = "(a name that contains a run code)"
 )
 
-// noSecretPrefix fails when text contains qak_ or qrk_ in any case.
+// noSecretPrefix fails when text contains qak_, qrk_ or qecr_ in any case.
 func noSecretPrefix(t *testing.T, what, text string) {
 	t.Helper()
-	if low := strings.ToLower(text); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") {
+	if low := strings.ToLower(text); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") {
 		t.Errorf("%s: %s contains a secret's prefix", what, text)
 	}
 }
@@ -45,6 +46,34 @@ func TestShownLabelsPhraseAKeyAndAValue(t *testing.T) {
 	err := server.CheckLabels(map[string]string{"QAK_x": "v"})
 	if want := "the label key " + accessKeyName + " is not 1 to 64 of a-z, 0-9, underscore, dot and dash"; err == nil || err.Error() != want {
 		t.Errorf("a key in upper case: %v, want %s", err, want)
+	}
+}
+
+// TestARunCodeInALabelIsTheRunCodesPhrase pins a run code, qecr_ in any case, in the
+// labels Forager sends to Qory Apiary: a key or a value that contains one is the run
+// code's phrase, CheckLabels accepts it, and the registration through a gateway contains
+// no qecr_ and is a body the schema accepts.
+func TestARunCodeInALabelIsTheRunCodesPhrase(t *testing.T) {
+	labels := map[string]string{"qecr_k": "v", "repository": "acme/QECR_x"}
+	got := server.ShownLabels(labels)
+	if want := map[string]string{runCodeName: "v", "repository": runCodeName}; !maps.Equal(got, want) {
+		t.Errorf("ShownLabels = %v, want %v", got, want)
+	}
+	if err := server.CheckLabels(got); err != nil {
+		t.Errorf("CheckLabels refuses the phrased labels: %v", err)
+	}
+	b, err := server.GatewayRegistration{RunID: gatewayRunID, Labels: labels, Time: "2026-10-11T12:00:00Z"}.Body()
+	if err != nil {
+		t.Fatal(err)
+	}
+	noSecretPrefix(t, "the registration", string(b))
+	schema, err := contracts.Compile("run-registration.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := contracts.Decode("r.json", b)
+	if err := schema.Validate(doc); err != nil {
+		t.Errorf("the schema refuses %s: %v", b, err)
 	}
 }
 

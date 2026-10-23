@@ -81,10 +81,10 @@ func TestAFileInAWrittenPlaceIsNotReadable(t *testing.T) {
 // TestASettingsFileAWalledRunCouldWriteIsNoRun pins that the session refuses the
 // settings a launch passes when they lie in a place a walled run could have written:
 // a place of Spec.Written, with or without a wall, and behind a wall the run's
-// workspace and its writable mounts. The run stops before the wall is prepared. A
+// workspace and its writable mounts. The run stops before the wall is wrapped. A
 // read-only mount is no such place.
 func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
-	settingsIn := func(t *testing.T, sp *session.Spec, dir string) string {
+	settingsIn := func(t *testing.T, sp *runSpec, dir string) string {
 		t.Helper()
 		f := filepath.Join(dir, "launch-settings.json")
 		if err := os.WriteFile(f, []byte("{}"), 0o644); err != nil {
@@ -105,8 +105,8 @@ func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 		if err == nil || err.Error() != want {
 			t.Errorf("the run: %v", err)
 		}
-		if w.req.RunID != "" || w.wrapped {
-			t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+		if w.wrapped {
+			t.Errorf("the wall was wrapped: %+v", w.got)
 		}
 	})
 	t.Run("a writable mount of a walled run", func(t *testing.T) {
@@ -149,7 +149,7 @@ func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 
 // TestAWalledLaunchThatPassesSettingsTwiceIsNoRun pins that a walled run whose launch
 // passes --settings twice, each a file no walled run could write, stops before the
-// wall is prepared, with the runtime's refusal.
+// wall is wrapped, with the runtime's refusal.
 func TestAWalledLaunchThatPassesSettingsTwiceIsNoRun(t *testing.T) {
 	dir := t.TempDir()
 	first, second := filepath.Join(dir, "first.json"), filepath.Join(dir, "second.json")
@@ -167,8 +167,8 @@ func TestAWalledLaunchThatPassesSettingsTwiceIsNoRun(t *testing.T) {
 	if err := runErr(sp); err == nil || err.Error() != want {
 		t.Errorf("the run: %v, want %q", err, want)
 	}
-	if w.req.RunID != "" || w.wrapped {
-		t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+	if w.wrapped {
+		t.Errorf("the wall was wrapped: %+v", w.got)
 	}
 }
 
@@ -268,9 +268,9 @@ func TestAPathWithADotDotIsNotReadable(t *testing.T) {
 				t.Errorf("Readable: %v", err)
 			}
 			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
-				Launch:   runtimes.Launch{Command: "claude", Args: []string{"--settings", path}},
-				RunDir:   t.TempDir(),
-				Readable: session.Readable([]string{ws}),
+				Launch:     runtimes.Launch{Command: "claude", Args: []string{"--settings", path}},
+				SessionDir: t.TempDir(),
+				Readable:   session.Readable([]string{ws}),
 			})
 			want := `Pass the path ` + path + ` without "..". This launch passes --settings ` + path +
 				`, and the path has a ".." part, so the run does not start.`
@@ -364,7 +364,7 @@ func TestADirectoryThatHoldsAWrittenPlaceIsNotReadable(t *testing.T) {
 
 // TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun pins that a walled run whose launch
 // passes --mcp-config with a file in its workspace, or reached through a link in it,
-// stops before the wall is prepared, with the runtime's text; and that a file outside
+// stops before the wall is wrapped, with the runtime's text; and that a file outside
 // every such place is passed as a copy in the run directory.
 func TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun(t *testing.T) {
 	t.Run("in the workspace", func(t *testing.T) {
@@ -382,8 +382,8 @@ func TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun(t *testing.T) {
 		if err := runErr(sp); err == nil || err.Error() != want {
 			t.Errorf("the run: %v, want %q", err, want)
 		}
-		if w.req.RunID != "" || w.wrapped {
-			t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+		if w.wrapped {
+			t.Errorf("the wall was wrapped: %+v", w.got)
 		}
 	})
 	t.Run("reached through the workspace", func(t *testing.T) {
@@ -420,7 +420,7 @@ func TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun(t *testing.T) {
 		if err != nil || res.ExitCode != 0 {
 			t.Fatalf("the run: %+v, %v", res, err)
 		}
-		if b, err := os.ReadFile(filepath.Join(res.Dir, "mcp-config-1.json")); err != nil || string(b) != `{"mcpServers":{}}` {
+		if b, err := os.ReadFile(filepath.Join(res.SessionDir, "mcp-config-1.json")); err != nil || string(b) != `{"mcpServers":{}}` {
 			t.Errorf("the copy: %s, %v", b, err)
 		}
 	})
@@ -474,11 +474,11 @@ func TestAQoryShapedWalledLaunchStarts(t *testing.T) {
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("the run: %+v, %v", res, err)
 	}
-	b, err := os.ReadFile(filepath.Join(res.Dir, "mcp-config-1.json"))
+	b, err := os.ReadFile(filepath.Join(res.SessionDir, "mcp-config-1.json"))
 	if want, _ := os.ReadFile(filepath.Join(home, "mcp.json")); err != nil || string(b) != string(want) {
 		t.Errorf("the copy of the servers: %s, %v", b, err)
 	}
-	b, err = os.ReadFile(filepath.Join(res.Dir, "append-system-prompt-file-1.md"))
+	b, err = os.ReadFile(filepath.Join(res.SessionDir, "append-system-prompt-file-1.md"))
 	if want, _ := os.ReadFile(filepath.Join(home, "launch", "CLAUDE.md")); err != nil || string(b) != string(want) {
 		t.Errorf("the copy of the launch's instructions: %s, %v", b, err)
 	}
@@ -486,7 +486,7 @@ func TestAQoryShapedWalledLaunchStarts(t *testing.T) {
 
 // TestAWalledLaunchsPromptFileOrProjectConfigRootIsNoRun pins that a walled run whose
 // launch passes --append-system-prompt-file with a file in its workspace, or passes
-// --project-config-root, stops before the wall is prepared, with the runtime's text.
+// --project-config-root, stops before the wall is wrapped, with the runtime's text.
 func TestAWalledLaunchsPromptFileOrProjectConfigRootIsNoRun(t *testing.T) {
 	t.Run("a prompt file in the workspace", func(t *testing.T) {
 		w := &openWall{}
@@ -503,8 +503,8 @@ func TestAWalledLaunchsPromptFileOrProjectConfigRootIsNoRun(t *testing.T) {
 		if err := runErr(sp); err == nil || err.Error() != want {
 			t.Errorf("the run: %v, want %q", err, want)
 		}
-		if w.req.RunID != "" || w.wrapped {
-			t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+		if w.wrapped {
+			t.Errorf("the wall was wrapped: %+v", w.got)
 		}
 	})
 	t.Run("--project-config-root", func(t *testing.T) {
@@ -518,8 +518,8 @@ func TestAWalledLaunchsPromptFileOrProjectConfigRootIsNoRun(t *testing.T) {
 		if err := runErr(sp); err == nil || err.Error() != want {
 			t.Errorf("the run: %v, want %q", err, want)
 		}
-		if w.req.RunID != "" || w.wrapped {
-			t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+		if w.wrapped {
+			t.Errorf("the wall was wrapped: %+v", w.got)
 		}
 	})
 }
@@ -540,8 +540,8 @@ func TestAQoryShapedWalledLaunchWithAModuleInTheCheckoutIsNoRun(t *testing.T) {
 	if err := runErr(sp); err == nil || err.Error() != want {
 		t.Errorf("the run: %v, want %q", err, want)
 	}
-	if w.req.RunID != "" || w.wrapped {
-		t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+	if w.wrapped {
+		t.Errorf("the wall was wrapped: %+v", w.got)
 	}
 }
 

@@ -8,6 +8,6 @@ sources:
 rules:
   - source: output
     match: {type: result}
-    type: dev.qory.session.result
+    type: dev.qory.runtime.result
     data:
       session_id: session_id

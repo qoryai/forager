@@ -221,31 +221,36 @@ route out leads to the gateway's proxy.
 The Docker adapter uses the `docker` command, and whatever engine it reaches:
 
 ```go
-res, err := session.Run(ctx, session.Spec{
-	Runtime: rt,
-	Command: "claude",                            // a path inside the image
-	Args:    []string{"-p", "Reply pong."},
-	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
-	Dir:     checkout,                            // the workspace and working directory
-	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
+run, err := session.Open(ctx, session.OpenSpec{
 	RunsDir: runs,                                // the run directories, outside every mount
-	ForagerFiles: []string{configDir},            // the caller's files, which no mount may hold
 	Image:   "base",                              // the default: a name of Images, or a reference
 	Images: []session.Image{                      // the machine's; a policy's image selects one by name
 		{Name: "base", Ref: "example.com/agent:1"},   // yours: the runtime and the toolchain
 		{Name: "with-docker", Ref: "example.com/agent:1-docker", Runtime: "sysbox-runc", Docker: true},
 	},
-	Limits:  wall.Limits{Memory: "8g", ShmSize: "2g"},  // what the agent may use: at most 8 GB of memory, 2 GB of /dev/shm; zero is the engine's default
-	Timeout: 5 * time.Hour,                       // the runtime is stopped at it; run.exited says so
 	Labels:  map[string]string{"issue": "77"},    // the caller's names for the run, in run.started and the run's registration
 	Wall: &wall.Docker{
 		Helper:    linuxBuild,                    // a static Linux build of this program
 		RelayArgs: []string{"relay"},             // the mode of it that calls wall.Relay
 		NestArgs:  []string{"nest"},              // the mode of it that calls wall.Nest
 	},
+	Gateway:   session.LocalGateway(g.LocalLink()), // the gateway on this machine, with the policy and the credentials
+})
+if err != nil {
+	return err
+}
+res, err := run.Join(ctx, session.SessionSpec{
+	Runtime: rt,
+	Command: "claude",                            // a path inside the image
+	Args:    []string{"-p", "Reply pong."},
+	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
+	Dir:     checkout,                            // the workspace and working directory
+	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
+	ForagerFiles: []string{configDir},            // the caller's files, which no mount may hold
+	Limits:  wall.Limits{Memory: "8g", ShmSize: "2g"},  // what the agent may use: at most 8 GB of memory, 2 GB of /dev/shm; zero is the engine's default
+	Timeout: 5 * time.Hour,                       // the runtime is stopped at it; session.exited says so
 	Forwarder: []string{wall.HelperPath, "forward"},
 	Exec:      []string{wall.HelperPath, "exec"},  // the mode of it that calls session.Exec
-	Gateway:   session.LocalGateway(g.LocalLink()), // the gateway on this machine, with the policy and the credentials
 })
 ```
 
@@ -266,10 +271,11 @@ refused.
 ### The relay to a separate gateway
 
 Behind a `session.RemoteGateway` the gateway's proxy is on another machine, at the
-gateway's one address, the run key's `gateway_url`. The relay still reaches the session's
+gateway's one address, the run key's `gateway_url`. The relay still reaches the run's
 forwarder, on the address the enclosure names, as on one machine, and the forwarder
-carries every connection to the gateway over TLS 1.3, its chain checked against the
-system's roots for the host name of the gateway's URL.
+carries every connection to the gateway over TLS 1.3. The forwarder checks the chain
+for the host name of the gateway's URL with the trust in `RemoteGateway.TLS`: the
+system's roots, or the authorities of its CA file, and its pin when one is set.
 
 - The relay opens every connection with `QORY-RELAY` and a hop secret the session makes
   for the run's forwarder alone, 256 bits from the system's random source. It is the
@@ -290,15 +296,16 @@ forwarder passes the connection on to the gateway's proxy on loopback as it is.
 ### Forager's files
 
 A walled run refuses a mount, or the workspace, that is, contains or lies inside one of
-Forager's files. Such a run returns a `*session.Refusal` with the code
+Forager's files. Such a join returns a `*session.Refusal` with the code
 `mount_contains_forager_files`, and `Names` holds the mount, then Forager's file. The
-check comes before the gateway is contacted and before anything starts.
+check comes at the join, after the join request and before anything starts, and the
+join's `dev.qory.session.exited` has the code as its reason.
 An agent that changes a program Forager starts outside the wall, or reads the access
-key secret, has left the wall. The check covers `Spec.Mounts` and the workspace; the run
+key secret, has left the wall. The check covers `SessionSpec.Mounts` and the workspace; the run
 directory and the hook socket's directory, which the session shows the enclosure itself,
 are the run's, and lie in Forager's files. Forager's files are:
 
-- `Spec.ForagerFiles`, the absolute paths the caller lists as Forager's files. `qory`
+- `SessionSpec.ForagerFiles`, the absolute paths the caller lists as Forager's files. `qory`
   lists the directory of `forager.yaml`, with the access key secret.
 - The gateway's files, which it hands the session with its local link,
   `link.Local.Files`, each with what it is:
@@ -322,9 +329,11 @@ are the run's, and lie in Forager's files. Forager's files are:
   session in the same process as the gateway reaches it in memory, never by that path
   (see [the gateway's link](../contracts/forager/v1/README.md#the-gateways-link)).
 - A wall's files, when it implements `wall.Filer`. For `wall.Docker` they are the
-  directory of the `docker` command, the directory of the helper, and the command's
-  configuration directory, `DOCKER_CONFIG` or `~/.docker`.
-- `Spec.RunsDir`, where the run directories are made. Its default, `.qory/runs` in the
+  directory of the `docker` command, the directory of the helper, the command's
+  configuration directory, `DOCKER_CONFIG` or `~/.docker`, and `CertsDir`,
+  `/etc/docker/certs.d` by default, where a certificate an agent wrote would be one the
+  engine trusts for a registry.
+- `OpenSpec.RunsDir`, where the run directories are made. Its default, `.qory/runs` in the
   workspace, lies inside the workspace, so a walled run passes one outside it.
 - The session's registry of walled runs, `$XDG_STATE_HOME/qory-forager/walled`, else
   `~/.local/state/qory-forager/walled`.
@@ -353,7 +362,7 @@ another walled run's still going, or in a directory inside one. A bind's root is
 up in its parent, so two binds of one root are allowed.
 
 - **One bind for the workspace.** The enclosure binds the outermost of the places the
-  run lists, `Spec.Mounts` and the workspace, each once. The workspace is the working
+  run lists, `SessionSpec.Mounts` and the workspace, each once. The workspace is the working
   directory inside (`--workdir` for Docker), reached through the mount that holds it.
   `qory` passes the checkout's root as a mount and the current directory as `Dir`:
   one bind, the checkout's root, and the working directory below it. A workspace that no
@@ -384,7 +393,7 @@ up in its parent, so two binds of one root are allowed.
   through it, and nothing is bound through the link. A link on the way to a place that
   lies inside no writable place of the run's is followed by the engine as it binds.
 
-  The same holds of a link inside a place of `Spec.Written`, the places the caller
+  The same holds of a link inside a place of `SessionSpec.Written`, the places the caller
   records as written by walled runs, though no walled run that wrote it is still
   going: `Names` holds the place, the link and the written place as passed. Its
   sentence reads: "List the path that /code/repo/.claude/worktrees/wt resolves to, in
@@ -396,9 +405,11 @@ up in its parent, so two binds of one root are allowed.
   inside the checkout, is `mount_contains_forager_files`: the agent could point the link
   elsewhere.
 - **The run directory.** The runs directory is one of Forager's files, so the run
-  directory lies inside no place the run lists. It is bound read-only to its run's
-  enclosure, and to no other: a bind that is, holds or lies inside another walled run's
-  run directory, whatever its mode, is `mount_shared_with_run`.
+  directory lies inside no place the run lists. Of the run directory, only the
+  directory of the session that runs, `sessions/<n>/`, is bound, read-only, to that
+  session's enclosure: the agent reads no record and no file of another session. A bind
+  that is, holds or lies inside another walled run's run directory, whatever its mode,
+  is `mount_shared_with_run`.
 - **The wall's extra binds.** For `wall.Docker` they are the helper, read-only, the hook
   socket's directory, writable, and, read-only, the private directory that holds the
   run's environment files and, with a CA, the `ca-bundle.pem` the enclosure binds. A
@@ -467,8 +478,12 @@ up in its parent, so two binds of one root are allowed.
   0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that run
   can change it", or "Forager's directory …" for a directory.
 
-  The check comes before the gateway is contacted, and the run leaves the registry when
-  it ends, however it ends, unless its wall could not be removed.
+  The check of the run directory and of Forager's directories comes at the open, before
+  the gateway is contacted, and the check of a session's places at its join. The run
+  leaves the registry when it closes, however it ends, unless a session's wall could not
+  be removed. Then the run's entry keeps that session's places, and a later join returns
+  "Open a new run. The wall of session 1 could not be removed and may still run, so this
+  run takes no more sessions."
 
   `session.RunsBinding(ctx, d, p)` reads the registry, under its lock, for a caller that
   removes or reuses a place p, an absolute path: it returns each walled run still going,
@@ -478,8 +493,8 @@ up in its parent, so two binds of one root are allowed.
   way to p is looked up in it, or a name on the way to it is looked up in p. The paths
   are compared as written and as resolved through links, either side resolved now, so a
   link on neither side hides an overlap; p is resolved as the filesystem resolves it, a
-  `..` after a link from the link's target. The run directory is bound read-only, so a
-  run whose run directory alone overlaps p is not returned. The answer holds when the
+  `..` after a link from the link's target. A session's directory in the run directory
+  is bound read-only, so a run whose run directory alone overlaps p is not returned. The answer holds when the
   read returns: a caller that removes or reuses p on it holds a lock that the runs it
   starts on p wait for, from the check to the action. A read-only bind does not count,
   and the read asks after an entry only when one of its writable binds overlaps p, or
@@ -493,8 +508,8 @@ up in its parent, so two binds of one root are allowed.
   `*wall.Docker`; a nil d, like a run behind another wall, asks as
   `wall.RunContainersExist` does, the method of a Docker with no field set.
 
-A refusal's first name is always a `Spec.Mounts` path or `Dir`, exactly as passed, and
-the run directory is named by `Spec.RunsDir`. Every check runs again just before the
+A refusal's first name is always a `SessionSpec.Mounts` path or `Dir`, exactly as passed, and
+the run directory is named by `OpenSpec.RunsDir`. Every check runs again just before the
 enclosure binds the mounts, with the wall's extra binds, and the run's entry is updated.
 A place that resolves otherwise than at the start, or whose names are looked up in other
 directories, fails the run, with a sentence that says which.
@@ -506,11 +521,12 @@ change a path between the last check and the bind.
 ### No file read from a place an agent can write
 
 Claude Code's runtime reads the settings file passed with `--settings` as the run
-starts, and copies it into the run directory with Forager's hooks added. The session
+starts, and copies it into the session's directory, `sessions/<n>/` in the run
+directory, with Forager's hooks added. The session
 refuses that file when it lies in a place a walled run can write, so no walled run
 chooses what a later run is given:
 
-- the places the caller lists in `Spec.Written`, the workspaces and the writable mounts
+- the places the caller lists in `SessionSpec.Written`, the workspaces and the writable mounts
   of the walled runs it starts, with or without a wall for this run;
 - the writable binds of the other walled runs of this user's in the registry, by the
   paths they resolved to, with or without a wall for this run. An entry whose session is
@@ -576,7 +592,7 @@ unwalled launch passes them unchecked.
   file`, `it cannot be read` or `it is no JSON object`. For `--settings` this holds in
   an unwalled launch too.
 - **`--mcp-config` and `--agents` files** are checked and read as the settings file is,
-  and Claude Code is passed a copy in the run directory, `mcp-config-<n>.json` or
+  and Claude Code is passed a copy in the session's directory, `mcp-config-<n>.json` or
   `agents-<n>.json`, numbered from 1 in the order the files appear. For a run whose
   workspace is at `/workspace` inside, a copy that is JSON has every string written as
   the enclosure sees it. A file in such a place is refused: "Move /work/mcp.json to a
@@ -653,7 +669,8 @@ unwalled launch passes them unchecked.
   Forager access to /a/mcp.json, or pass another --mcp-config path.", and any other
   error "Fix the error at the end of this message, or pass another --mcp-config path."
 
-A refusal stops the run before the wall is prepared, with the prefix `runtime claude: `.
+A refusal stops the session before the wall starts the agent's container, with the
+prefix `runtime claude: `.
 Claude Code also loads plugin directories named in `CLAUDE_CODE_PLUGIN_DIRS`,
 adds the directories named in `CLAUDE_RELAUNCH_SESSION_ADD_DIRS`, and reads plugins or
 settings from `CLAUDE_CODE_PLUGIN_SEED_DIR`, `CLAUDE_CODE_PLUGIN_CACHE_DIR` and
@@ -698,7 +715,7 @@ So the wall needs no separate image.
 
 ## Images
 
-The machine defines the images a run may start in, `Spec.Images`, and the session sends
+The machine defines the images a run may start in, `OpenSpec.Images`, and the session sends
 them with a walled run's request. The run's policy selects one by name, with `image`, as
 it selects credentials and tools; the gateway resolves the selection and its answer
 names the image. Without a selection, the run starts in `Image`.
@@ -709,7 +726,7 @@ starts in when its policy selects none.
 
 A policy may also name an image by its reference pinned by digest, `NAME@sha256:` and 64
 lower-case hexadecimal digits, with no tag. The machine runs one only under a prefix of
-`Spec.ImagesAllow`, its `images.allow`: an entry such as `registry.example/agents/` or
+`OpenSpec.ImagesAllow`, its `images.allow`: an entry such as `registry.example/agents/` or
 `registry.example/agents` covers the references that start with it at a whole part;
 without a list no reference runs. Any other reference is refused with
 `image_not_allowed`, and one with a tag or in upper case with
@@ -719,15 +736,19 @@ An image by reference starts as the default does: under the default's runtime, w
 nested Docker, as the node's user, which must then be given as `uid:gid` in numbers,
 neither 0: the engine would look a name, or a uid's groups, up in the image's
 `/etc/passwd` and `/etc/group`, which the image writes, so a user given by name or as a
-uid alone is refused. The wall pulls it before it makes anything else for the run,
-unless the engine holds it by that digest, and refuses with `image_user_root` an image
+uid alone is refused. The wall pulls it in the run's `image` step, before the first
+container of the image starts, unless the engine holds it by that digest, and refuses
+with `image_user_root` an image
 whose user is root: no user, `root`, uid 0, or a name the image's `/etc/passwd` maps to
 uid 0. An image whose user is a name its `/etc/passwd` does not map, or that has no
 `/etc/passwd`, is refused the same way, since its user cannot be checked: give the user
 as a uid. The relay always starts from the
 default image, never from the run's, and the authorities the run trusts are read out of
-the run's image. `dev.qory.run.started` reports `image_fetch_ms`, how long finding
-the image took, the pull included when there was one.
+the run's image. The run's `image` step spans the fetch and the check of the image's
+user, and its `dev.qory.run.step_exited` has how long they took as `duration_ms`
+([the record](events.md)). `(*session.Run).FetchImage` runs that step before the first
+join; without it, `(*session.Run).Setup` runs it first, or else the first join after its
+`dev.qory.session.started`.
 
 In such an image the checkout is mounted at `/workspace` and the working directory is
 under it; the paths Forager puts inside name it there, and values from the server,
@@ -740,8 +761,116 @@ copies it into the workspace; Forager copies none of it. Hooks reach the session
 Against an image by reference, which a repository may have built, what holds is what
 Forager enforces outside the enclosure: the wall, the egress policy, the credentials the
 proxy sets, the tools the gateway starts and the `dev.qory.run.*` records. The runtime's
-settings, its hooks and its prompts, and the `dev.qory.session.*` records, which the
+settings, its hooks and its prompts, and the `dev.qory.runtime.*` records, which the
 runtime reports from inside, are not that boundary: the image can change or forge them.
+
+## An image pulled through the gateway
+
+On a machine whose only route out is the gateway, the container engine pulls the run's
+image through the run's proxy, under the run's policy. Forager has no registry client:
+the engine pulls, and Forager gives the pull a forwarder to the gateway for the image
+step alone.
+
+1. Before the engine starts, write its proxy setting. For Docker, set `proxies` in
+   `/etc/docker/daemon.json`, mode 0600: `http-proxy` and `https-proxy` to
+   `http://qory:<password>@127.0.0.1:3129`, and `no-proxy` to `localhost,127.0.0.1`.
+   The daemon reads `proxies` only when it starts
+   ([Docker's daemon proxy page](https://docs.docker.com/engine/daemon/proxy/)).
+2. Give the user that runs Forager write access to `/etc/docker/certs.d`, or set
+   `wall.Docker.CertsDir` to the directory the engine reads registry authorities from.
+3. Pass the same address and password as `OpenSpec.EngineProxy`, and call
+   `(*session.Run).FetchImage` after the open and before the first join:
+
+```go
+run, err := session.Open(ctx, session.OpenSpec{
+	Wall:        &wall.Docker{Helper: linuxBuild, RelayArgs: []string{"relay"}},
+	EngineProxy: &session.EngineProxy{Addr: "127.0.0.1:3129", Password: password}, // the daemon's proxy setting
+	// the rest as in From Go
+})
+if err != nil {
+	return err
+}
+if err := run.FetchImage(ctx); err != nil { // the image step: the engine pulls through the gateway
+	return err
+}
+```
+
+`FetchImage` writes the `image` step, named after the reference. During the step alone,
+a forwarder listens at `127.0.0.1:3129` and passes on only a request with the password.
+For a run with a certificate authority, the Docker wall writes the run's certificate as
+`qory-run-<id>.crt` in the directory of the image's registry host and of each host of
+the run's credentials, and removes the files when the step ends, also when the pull
+fails. Each later join finds the image by its digest and writes no `image` step. The
+agent's container, the setup container, and the container the wall reads the image's
+files from, are created with `--pull=never`, so the engine pulls the image in the
+`image` step alone. Without
+`EngineProxy`, the engine pulls over the machine's network.
+
+What to know:
+
+- The machine has no `docker login`. The registry's host needs path rules in the run's
+  policy, and its token endpoint a credential with `basic` auth.
+- On its classic image store, Docker Engine reads no `certs.d` directory for
+  `docker.io`, so an image there comes only through a blind relay, with no credential.
+  On its containerd image store this is unverified.
+- The `docker` group, which the user that runs Forager is in, has root's reach on the
+  machine ([Docker's attack surface page](https://docs.docker.com/engine/security/#docker-daemon-attack-surface)).
+
+## Setup in a separate container
+
+`(*session.Run).Setup` runs a walled run's setup commands before the first join, in the
+setup container: a container of the run's image on the wall's inside network, beside
+the agent's. Give the Docker wall `HoldArgs`, the mode of the helper that calls
+`wall.Hold`, which keeps the setup container running:
+
+```go
+run, err := session.Open(ctx, session.OpenSpec{
+	Wall: &wall.Docker{
+		Helper:    linuxBuild,
+		RelayArgs: []string{"relay"},
+		HoldArgs:  []string{"hold"},              // the mode of it that calls wall.Hold
+	},
+	// the rest as in From Go
+})
+if err != nil {
+	return err
+}
+err = run.Setup(ctx, session.SetupSpec{
+	Dir: checkout,                                // the working folder, checked as a join's
+	Env: []string{"APP_ENV=test"},                // the setup container's variables
+	Commands: []session.SetupCommand{
+		{Name: "install", Args: []string{"make", "deps"}},
+		{Name: "start services", Args: []string{"sh", "-c", "pg_ctl start >/tmp/pg.log 2>&1"}},
+	},
+	ForagerFiles: []string{configDir},            // as for the join: no working folder may contain them
+	Written:      written,                        // the places walled runs could write, as for the join
+	Limits:       wall.Limits{Memory: "4g"},      // the setup container's limits, as the agent's
+})
+var failed *session.SetupError // a command exited otherwise than 0: no session joins the run
+```
+
+- `Setup` writes the `image` step when no step fetched the image yet, the `wall` step
+  `start the setup container`, and a `setup` step for each command, with its output and
+  exit status.
+- The setup container runs as the wall's user, with no capability, and reaches only the
+  relay. It gets the working folder, writable, and the helper and the run's bundle,
+  read-only: no home, run directory, hook socket or engine socket. It gets no host
+  proxy's URL or password.
+- Fill `Env` from `run.AgentEnv(sessionSpec)`, the session's full spec, so the setup
+  container gets the agent's variables. The result has `QORY_RUN_SYSTEM` and
+  `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup` accepts both. `Setup`
+  refuses, before any step, a value for one of the run's placeholders
+  (`placeholder_conflict`), any other `QORY_` name, `QORY_RUN_ID` and
+  `QORY_RUN_SOCKET` among them, or a name the machine's credentials are read from
+  (`variable_reserved`), and a name of `denied-variables.json`, such as `LD_PRELOAD`.
+- It runs until the run closes. The agent reaches a service that setup starts by the
+  name `qory-setup`, such as `qory-setup:5432`. Send a service's output to a file, so
+  its command returns.
+- Packages that setup installs outside the working folder stay in the setup container.
+
+The setup container has no Docker daemon, so a setup command that calls docker fails
+with Docker's error in its step's log. With wall.setup: inside, the setup commands run
+in the agent's container, which has nested Docker when the wall starts it with one.
 
 ## Nested Docker
 

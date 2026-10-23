@@ -60,15 +60,18 @@ server decides which labels identify what the run works on.
 
 ### Names and values that contain a key's prefix
 
-`qak_` starts every access key secret and `qrk_` every run key. Forager sends and prints
-a phrase in place of a name or a value that contains either, in any case:
+`qak_` starts every access key secret, `qrk_` every run key and `qecr_` every run code.
+Forager sends and prints a phrase in place of a name or a value that contains any of
+them, in any case:
 
 - A name, such as a credential's, a tool's, a variable's, an image or a label's key or
-  value, is `(a name that contains an access key secret)` when it contains `qak_`, and
-  `(a name that contains a run key)` when it contains `qrk_` and no `qak_`.
+  value, is `(a name that contains an access key secret)` when it contains `qak_`,
+  `(a name that contains a run key)` when it contains `qrk_` and no `qak_`, and `(a
+  name that contains a run code)` when it contains `qecr_` and neither of the others.
 - A value of free text, such as a path, a command, an argument, a URL, a program's
-  output or an error's text, is `(a value that contains an access key secret)` or `(a
-  value that contains a run key)` the same way. `run.started`'s `dir` is a path.
+  output or an error's text, is `(a value that contains an access key secret)`, `(a
+  value that contains a run key)` or `(a value that contains a run code)` the same
+  way. `run.started`'s `dir` is a path.
 - In a `run.refused`'s `names`, every entry is the name's phrase, a path among them;
   the refusal's `detail` prints a path as the value's phrase.
 
@@ -169,7 +172,7 @@ and for each name the run takes the value of the highest that sets it:
 - The deny list leaves out a value of the server, the run, the machine or the harness's
   defaults. The list is the contract's
   [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
-  `denies`, and `Spec.Variables.Deny`. It holds the session's names, the proxy's, the
+  `denies`, and `SessionSpec.Variables.Deny`. It holds the session's names, the proxy's, the
   trust store's, Docker's, `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` and
   `HOME`. The built-in list leaves out a value the harness computes as well; the
   runtime's `denies` and `Variables.Deny` leave those in.
@@ -178,7 +181,7 @@ and for each name the run takes the value of the highest that sets it:
   credential is read from, is left out. A node's value of a declared one reaches the
   runtime.
 - A run without a wall takes none of the server's variables, unless
-  `Spec.Variables.Unwalled` is `session.UnwalledAccept`. The run's variables,
+  `SessionSpec.Variables.Unwalled` is `session.UnwalledAccept`. The run's variables,
   `qory run --env`, apply with or without a wall.
 - A value that loses is left out, and the run starts.
 
@@ -222,8 +225,8 @@ checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,
 `QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first. Without a wall, a
 `QORY_` value of the server, the run, the machine or the harness is denied instead. A
 server's `QORY_` value is denied in any run, apart from `QORY_RUN_SYSTEM` and
-`QORY_RUN_REPOSITORIES`, the system and the repositories a run's preparation may use,
-which the server's variables may set and which reach the agent as any server variable
+`QORY_RUN_REPOSITORIES`, the system and the repositories a session's setup commands
+may use, which the server's variables may set and which reach the agent as any server variable
 does. Set by the node, they are `QORY_` names like any other.
 
 Before it resolves the variables, the session refuses a placeholder that goes into a
@@ -252,10 +255,11 @@ that lost with its source and why: `overridden`, `denied`, `fixed`, `unwalled`,
 `endpoint_uncovered` or `endpoint_unreadable`; behind a wall, the entry of the runtime's
 model endpoint variable has `kept`, with the model credential's name, when the value
 that applies is one the endpoint rule kept. A name
-that contains `qak_` or `qrk_` in any case is sent as `(a name that contains an access
-key secret)`, or `(a name that contains a run key)` when it contains `qrk_` and no
-`qak_`. A fixed name, and a name the run inherits, is listed only beside a value of the
-server, the run, the machine or the harness's defaults. `Spec.OnVariables` receives the
+that contains `qak_`, `qrk_` or `qecr_` in any case is sent as `(a name that contains an
+access key secret)`, `(a name that contains a run key)` when it contains `qrk_` and no
+`qak_`, or `(a name that contains a run code)` when it contains `qecr_` and neither of
+the others. A fixed name, and a name the run inherits, is listed only beside a value of the
+server, the run, the machine or the harness's defaults. `SessionSpec.OnVariables` receives the
 same list, as `session.Applied`, with each name as it is.
 
 ## A control plane

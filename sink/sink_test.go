@@ -56,6 +56,54 @@ func TestFileSinkWritesBothRecords(t *testing.T) {
 	}
 }
 
+// TestFileSinkWritesTheSessionsOutput pins a session's output.log: the bytes of the log
+// chunks written between StartSession and EndSession, and no other, while the run's
+// output.log has every chunk; a second session before the first one ends is refused,
+// and so is a directory that holds an output.log.
+func TestFileSinkWritesTheSessionsOutput(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	f, err := sink.NewFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := event.NewEmitter(event.NewRunID(), nil)
+	chunk := func(s string) {
+		f.Write(e.Make(event.RunLog, map[string]any{"stream": "terminal", "bytes": base64.StdEncoding.EncodeToString([]byte(s))}))
+	}
+	one, two := filepath.Join(dir, "one"), filepath.Join(dir, "two")
+	for _, d := range []string{one, two} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chunk("host ")
+	if err := f.StartSession(one); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StartSession(two); err == nil {
+		t.Error("a second session started before the first one ended")
+	}
+	chunk("one ")
+	if err := f.EndSession(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.StartSession(one); !errors.Is(err, fs.ErrExist) {
+		t.Errorf("a directory with an output.log: %v", err)
+	}
+	if err := f.StartSession(two); err != nil {
+		t.Fatal(err)
+	}
+	chunk("two")
+	if err := f.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{dir: "host one two", one: "one ", two: "two"} {
+		if out, _ := os.ReadFile(filepath.Join(path, sink.OutputFile)); string(out) != want {
+			t.Errorf("%s: output.log %q, want %q", path, out, want)
+		}
+	}
+}
+
 // TestWriterSinkWritesTheLineTheFileHolds pins that the writer sink and the file sink
 // write the same bytes for the same event, and that closing it leaves the stream open.
 func TestWriterSinkWritesTheLineTheFileHolds(t *testing.T) {
@@ -762,4 +810,40 @@ func TestAPanicInTheWorkerEndsOneBatchAlone(t *testing.T) {
 	}
 	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 60, "interval_seconds": 30}))
 	waitFor(t, func() bool { return g.hits() == 2 })
+}
+
+// TestFlushReturnsOnceTheBatchIsAccepted pins Flush: it returns once the gateway
+// accepted every event written before it, after a retry and a late answer too, and
+// with the context's error when the context ends first.
+func TestFlushReturnsOnceTheBatchIsAccepted(t *testing.T) {
+	var answered atomic.Int32
+	g := &linkGateway{answer: func(n int) (int, string) {
+		if n == 1 {
+			return http.StatusServiceUnavailable, ""
+		}
+		time.Sleep(300 * time.Millisecond)
+		answered.Add(1)
+		return http.StatusAccepted, ""
+	}}
+	w := linkSink(t, g, sink.Config{})
+	e := event.NewEmitter(event.NewRunID(), nil)
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+	if err := w.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if answered.Load() != 1 || g.hits() != 2 {
+		t.Errorf("Flush returned after %d accepted answers and %d deliveries", answered.Load(), g.hits())
+	}
+	w.Close(context.Background())
+
+	down := &linkGateway{answer: func(int) (int, string) { return http.StatusServiceUnavailable, "" }}
+	w = linkSink(t, down, sink.Config{})
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 60, "interval_seconds": 30}))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := w.Flush(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a Flush to a gateway that is down: %v", err)
+	}
+	// The context has ended: the close ends the retries.
+	w.Close(ctx)
 }

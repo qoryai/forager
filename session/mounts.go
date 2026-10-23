@@ -27,7 +27,7 @@ import (
 // case, and a name with *, ? or [ in it is a pattern of names, as the private
 // directories of the tools' sockets are. The comparison is by whole components: /a/bc
 // does not lie inside /a/b. A path that cannot be resolved, such as one through a
-// directory this user cannot search, is empty here; [Run] refuses a mount of one.
+// directory this user cannot search, is empty here; [Run.Join] refuses a mount of one.
 func Overlap(mount, path string) string {
 	how, _ := overlap(mount, path)
 	return how
@@ -181,7 +181,7 @@ type foragerFile struct {
 // gateway's, and every one Forager knows itself. The gateway's programs are every one
 // the machine defines, not only the ones the run's policy selects, because a server's
 // policy selects after the check, and a reload may select another credential.
-func foragerFiles(spec Spec) []foragerFile {
+func foragerFiles(spec runSpec) []foragerFile {
 	var out []foragerFile
 	for _, p := range spec.ForagerFiles {
 		out = append(out, foragerFile{p, "one of Forager's files"})
@@ -216,7 +216,8 @@ func foragerFiles(spec Spec) []foragerFile {
 		}
 	}
 	// The run directories hold the record, and the session reads the runtime's settings
-	// from them; a run's own is shown to its enclosure read-only, and to no other: no
+	// from a session's directory in them; the directory of the session that runs is
+	// shown to its enclosure read-only, and nothing else of a run directory is: no
 	// place of this run's holds the runs directory, and a walled run with a bind that
 	// is, holds or lies inside the run directory of another walled run still going does
 	// not start (checkShared).
@@ -436,7 +437,7 @@ func source(path, what, kind string, writable bool) (bindSource, error) {
 }
 
 // mountPlan is what the enclosure of a walled run binds: the outermost of the places
-// the run lists, each once, and then the run directory, read-only.
+// the run lists, each once, and then the session's directory, read-only.
 type mountPlan struct {
 	// Mounts are the binds, as [wall.Launch] lists them.
 	Mounts []wall.Mount
@@ -458,7 +459,7 @@ const workspaceInside = "/workspace"
 // bind that holds the workspace shown at [workspaceInside], the working directory under
 // it, and inside, which writes a path of that bind's as the enclosure sees it, at
 // whole components ([translate]). Every other bind stays at the same path; one whose
-// path is, holds or lies under workspaceInside, the run directory's among them, is
+// path is, holds or lies under workspaceInside, the session's directory among them, is
 // refused, with no code.
 func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 	if p.root == "" || p.root == string(filepath.Separator) {
@@ -481,49 +482,122 @@ func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 	return out, inside, nil
 }
 
-// translate is s with every occurrence of the absolute path from, at whole components,
-// written as to: where from starts s or follows a separator of words, and ends s or is
-// followed by a slash or such a separator. /work/app becomes /workspace/app for /work,
-// and /workshop, /a/work and work stay as they are. A separator of words is a space, a
-// quote, a colon, as in a list of paths, an equals sign, as in --flag=path, or one of
-// the shell's characters that end a word.
+// translate is s with every occurrence of the absolute path from, at whole components
+// by [argPaths], written as to. /work/app becomes /workspace/app for /work, and
+// /workshop, /a/work, ${A}/work and work stay as they are.
 func translate(s, from, to string) string {
 	if from == "" || from == to {
 		return s
 	}
+	return replacePaths(s, []pathPair{{from, to}}, argPaths)
+}
+
+// pathPair is an absolute path, from, and the text written in its place, to.
+type pathPair struct{ from, to string }
+
+// pathRule is where replacePaths matches a path: start reports whether a path may start
+// at byte i of s, and end whether a path that ends at byte end of s ends at a whole
+// component there.
+type pathRule struct {
+	start func(s string, i int) bool
+	end   func(s string, end int) bool
+}
+
+// argPaths is the rule for a value the agent gets, such as an argument or a variable,
+// where a wrong replacement changes what the agent does. A path matches where it starts
+// s, follows a separator of words or follows file://, and where it ends s, is followed
+// by a slash, a separator of words, ] or }, or is followed by ., ? or ! that ends s or
+// comes before white space, as at the end of a sentence. A separator of words is white
+// space, a quote, a comma, a colon, as in a list of paths, an equals sign, as in
+// --flag=path, or one of the shell's characters that end a word. ${A}/work stays as
+// it is for /work.
+var argPaths = pathRule{
+	start: func(s string, i int) bool {
+		return i == 0 || strings.IndexByte(wordSeparators, s[i-1]) >= 0 || strings.HasSuffix(s[:i], "file://")
+	},
+	end: func(s string, end int) bool {
+		if end == len(s) || s[end] == '/' || strings.IndexByte(wordSeparators+"]}", s[end]) >= 0 {
+			return true
+		}
+		return strings.IndexByte(".?!", s[end]) >= 0 && (end+1 == len(s) || strings.IndexByte(" \t\n\r", s[end+1]) >= 0)
+	},
+}
+
+// wordSeparators are the characters of argPaths that separate a path from what is
+// before it in a word or a line.
+const wordSeparators = " \t\n\r\"'`:;=,&|()<>"
+
+// shownPaths is the rule for a value that is only shown, such as an event's argument
+// or prompt, where a path left in its real form costs more than a wrong replacement: a
+// path matches wherever it is not part of a longer name. It matches where it starts s,
+// follows a character other than a slash or a character of a name ([nameByte]), or
+// follows file://, and where it ends s, is followed by a slash or by a character other
+// than one of a name. Of ., ? and !, one or more of them match unless a character of a
+// name follows them: /srv/in., /srv/in..., /srv/in.) and /srv/in? match /srv/in, and
+// /srv/in.bak, /srv/in.d and /srv/in?x=1 do not. ${BASE}/srv/in becomes ${BASE}<inputs>
+// for /srv/in, and https://host/srv/in and /a/srv/in stay as they are.
+var shownPaths = pathRule{
+	start: func(s string, i int) bool {
+		return i == 0 || (s[i-1] != '/' && !nameByte(s[i-1])) || strings.HasSuffix(s[:i], "file://")
+	},
+	end: func(s string, end int) bool {
+		k := end
+		for k < len(s) && strings.IndexByte(".?!", s[k]) >= 0 {
+			k++
+		}
+		if k == end {
+			return end == len(s) || s[end] == '/' || !nameByte(s[end])
+		}
+		return k == len(s) || !nameByte(s[k])
+	},
+}
+
+// nameByte reports whether c is a character of a name in a path: a letter or a digit
+// of ASCII, ., _, ~ or -.
+func nameByte(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("._~-", c) >= 0
+}
+
+// replacePaths is s with each path of pairs written as its to, in one pass over s: at
+// each slash where rule lets a path start, the first path of pairs that matches there
+// and ends where rule lets it end is replaced, and the text written in its place is
+// not matched again. With the longer path first in pairs, the longer of two paths
+// where one contains the other is replaced.
+func replacePaths(s string, pairs []pathPair, rule pathRule) string {
 	var b strings.Builder
 	last := 0
-	for i := 0; i < len(s); {
-		j := strings.Index(s[i:], from)
-		if j < 0 {
-			break
-		}
-		j += i
-		end := j + len(from)
-		if (j == 0 || wordEnd(s[j-1])) && (end == len(s) || s[end] == '/' || wordEnd(s[end])) {
-			b.WriteString(s[last:j])
-			b.WriteString(to)
-			last, i = end, end
+	for i := 0; i < len(s); i++ {
+		if s[i] != '/' || !rule.start(s, i) {
 			continue
 		}
-		i = j + 1
+		for _, p := range pairs {
+			end := i + len(p.from)
+			if p.from == "" || !strings.HasPrefix(s[i:], p.from) || !rule.end(s, end) {
+				continue
+			}
+			b.WriteString(s[last:i])
+			b.WriteString(p.to)
+			last, i = end, end-1
+			break
+		}
+	}
+	if last == 0 {
+		return s
 	}
 	b.WriteString(s[last:])
 	return b.String()
 }
 
-// wordEnd reports whether c separates a path from what is beside it in a word or a
-// line: see [translate].
-func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c) >= 0 }
-
 // checkMounts refuses a caller's Forager file that is not an absolute path and, behind a
 // wall, the places the run lists that it cannot bind as they are, and returns what the
-// enclosure binds. The places are the run's own, Spec.Mounts and the workspace; the run
-// directory, read-only, and the hook socket's directory are Forager's, which it
-// keeps apart from every caller's place: the runs directory is one of Forager's
-// files, and so is where the sockets are made. A refusal's first name is always one of
+// enclosure binds. The places are the run's own, SessionSpec.Mounts and the workspace; the
+// session's directory in the run directory, sessionDir, read-only, unless sessionDir is
+// empty, as for the setup container, which has none, and the hook socket's
+// directory are Forager's, which it keeps apart from every caller's place: the runs
+// directory is one of Forager's files, and so is where the sockets are made. A
+// refusal's first name is always one of
 // the places exactly as the caller passed it, or [accesskey.ShownName]'s phrase in its
-// place when it contains qak_ or qrk_ in any case. Detail prints such a path as
+// place when it contains qak_, qrk_ or qecr_ in any case. Detail prints such a path as
 // [accesskey.ShownValue]'s phrase, and the names list each phrase once:
 //
 //   - mount_contains_forager_files: a place that is, contains or lies inside one of
@@ -535,7 +609,7 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 //     part of a read-only one writes what the run shows read-only. Its names are the
 //     inner place and the outer one, in that order.
 //   - mount_through_link: a place, of either mode, whose path goes through a link
-//     inside a writable place, or inside a place of Spec.Written, and does not resolve
+//     inside a writable place, or inside a place of SessionSpec.Written, and does not resolve
 //     into it: the agent that writes the link chooses what is bound. Its names are the
 //     place, the link and the writable or written place, in that order.
 //
@@ -543,7 +617,7 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 // reaches it through the outer one, at the same path. So no bound place is reached
 // through a directory another bound place lets the agent write. The workspace is
 // writable, and is the working directory inside, in one of the binds.
-func checkMounts(spec Spec, runDir string) (mountPlan, error) {
+func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 	for _, p := range spec.ForagerFiles {
 		if strings.ContainsRune(p, 0) {
 			return mountPlan{}, errors.New("a Forager file's path holds a NUL byte")
@@ -623,7 +697,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 			}
 		}
 	}
-	// So is a place whose path goes through a link inside a place of Spec.Written and
+	// So is a place whose path goes through a link inside a place of SessionSpec.Written and
 	// does not resolve into it: an agent of an earlier walled run, ended or still going,
 	// may have written the link, and it would choose what is bound.
 	for _, w := range spec.Written {
@@ -694,16 +768,28 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	if err := dirInBinds(plan.Dir, plan.Mounts); err != nil {
 		return mountPlan{}, err
 	}
-	run, err := source(runDir, "the run directory "+pathShown(runDir), kindRun, false)
+	// The registry lists the run directory, which holds the session's: no other walled
+	// run binds a part of it.
+	run, err := runDirSource(spec.OpenSpec, runDir)
 	if err != nil {
 		return mountPlan{}, err
 	}
-	plan.Mounts = append(plan.Mounts, wall.Mount{Path: runDir, ReadOnly: true})
-	// The run directory is named by the runs directory the caller passed, in which the
-	// session makes it.
-	run.Path = spec.RunsDir
+	if sessionDir != "" {
+		plan.Mounts = append(plan.Mounts, wall.Mount{Path: sessionDir, ReadOnly: true})
+	}
 	plan.sources = append(plan.sources, run)
 	return plan, nil
+}
+
+// runDirSource is the run directory as the registry of walled runs lists it: named by
+// the runs directory the caller passed, in which the open makes it.
+func runDirSource(spec OpenSpec, runDir string) (bindSource, error) {
+	run, err := source(runDir, "the run directory "+pathShown(runDir), kindRun, false)
+	if err != nil {
+		return bindSource{}, err
+	}
+	run.Path = spec.RunsDir
+	return run, nil
 }
 
 // throughLink is the refusal of a place whose path goes through a link inside the
@@ -818,11 +904,11 @@ func paths(ms []wall.Mount) []string {
 }
 
 // pathShown is a path as a message prints it, bare: [accesskey.ShownValue]'s phrase in
-// its place when it contains qak_ or qrk_ in any case.
+// its place when it contains qak_, qrk_ or qecr_ in any case.
 func pathShown(p string) string { return accesskey.ShownValue(p, false) }
 
 // pathsShown are paths as a refusal's Names lists them: as [accesskey.ShownNames] lists
-// them, a name's phrase in place of a path that contains qak_ or qrk_ in any case, as
+// them, a name's phrase in place of a path that contains qak_, qrk_ or qecr_ in any case, as
 // run.refused's names are, each phrase once.
 func pathsShown(ps ...string) []string { return accesskey.ShownNames(ps) }
 

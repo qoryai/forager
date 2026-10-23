@@ -12,7 +12,7 @@ import (
 // phrase, and a clean one prints as before.
 func TestParsePrintsAPhraseForASecret(t *testing.T) {
 	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
-		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
 	declare := func(id string) string {
 		return "  - {id: " + id + ", title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: bearer}}\n"
 	}
@@ -39,7 +39,7 @@ func TestParsePrintsAPhraseForASecret(t *testing.T) {
 		"/d/qrk_y/amp.yaml": "a: [\n",
 	} {
 		_, err := descriptor.Parse(name, []byte(doc))
-		if err == nil || strings.Contains(strings.ToLower(err.Error()), "qak_") || strings.Contains(strings.ToLower(err.Error()), "qrk_") {
+		if err == nil || strings.Contains(strings.ToLower(err.Error()), "qak_") || strings.Contains(strings.ToLower(err.Error()), "qrk_") || strings.Contains(strings.ToLower(err.Error()), "qecr_") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

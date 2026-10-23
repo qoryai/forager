@@ -9,51 +9,66 @@ import (
 	"github.com/qoryai/forager/event"
 )
 
-// TestARunStartedWithRawValuesGoesOnPhrased pins a run.started a session sends with
-// its values as they are: the gateway phrases every member a session phrases, so none
-// that contains qak_ or qrk_ in any case goes on, the event still validates, and a
-// run.started without one is kept byte for byte.
+// TestARunStartedWithRawValuesGoesOnPhrased pins a run.started and a session.started a
+// session sends with its values as they are: the gateway phrases every member a
+// session phrases, so none that contains qak_ or qrk_ in any case goes on, each event
+// still validates, and one without such a value is kept byte for byte.
 func TestARunStartedWithRawValuesGoesOnPhrased(t *testing.T) {
 	const (
 		ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
 		av, rv = "(a value that contains an access key secret)", "(a value that contains a run key)"
 	)
-	raw := `{"opened_by":"session","forager_version":"test","interactive":false,` +
-		`"runtime":"qak_rt","host":"QRK_host","command":"/bin/qak_cmd","args":["a","--x=qrk_FAKE"],"dir":"/work/QAK_d",` +
-		`"runtime_version":"1 qrk_v","preparation":["true","qak_p"],"image":"registry.example/qrk_i@sha256:` + strings.Repeat("0", 64) + `",` +
+	run := `{"opened_by":"run","forager_version":"test","host":"QRK_host",` +
 		`"labels":{"repository":"acme/qak_FAKE"},"about":{"title":"qrk_t","subjects":[{"type":"issue","ref":"qak_r"},{"type":"issue","ref":"7"}]}}`
-	evs := []event.Event{{Type: event.RunStarted, Data: json.RawMessage(raw)}}
+	session := `{"session":1,"interactive":false,` +
+		`"runtime":"qak_rt","command":"/bin/qak_cmd","args":["a","--x=qrk_FAKE"],"dir":"/work/QAK_d",` +
+		`"runtime_version":"1 qrk_v","setup_commands":["install","qak_p"],"image":"registry.example/qrk_i@sha256:` + strings.Repeat("0", 64) + `"}`
+	evs := []event.Event{{Type: event.RunStarted, Data: json.RawMessage(run)}, {Type: event.SessionStarted, Data: json.RawMessage(session)}}
 	shownStarted(evs)
-	b, _ := evs[0].Data.(json.RawMessage)
-	if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") {
-		t.Errorf("the run.started goes on as %s", b)
-	}
-	var data map[string]any
-	if err := json.Unmarshal(b, &data); err != nil {
-		t.Fatal(err)
-	}
-	for member, want := range map[string]any{"runtime": ak, "host": rk, "command": av, "dir": av, "runtime_version": rv, "image": rk} {
-		if data[member] != want {
-			t.Errorf("%s: %v, want %v", member, data[member], want)
+	decoded := make([]map[string]any, len(evs))
+	for i, ev := range evs {
+		b, _ := ev.Data.(json.RawMessage)
+		if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") {
+			t.Errorf("the %s goes on as %s", ev.Type, b)
+		}
+		if err := json.Unmarshal(b, &decoded[i]); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if args, _ := data["args"].([]any); len(args) != 2 || args[0] != "a" || args[1] != rv {
-		t.Errorf("args: %v", data["args"])
+	runData, sessionData := decoded[0], decoded[1]
+	if runData["host"] != rk {
+		t.Errorf("host: %v, want %v", runData["host"], rk)
 	}
-	if about, _ := data["about"].(map[string]any); about["title"] != rk || len(about["subjects"].([]any)) != 1 {
-		t.Errorf("about: %v", data["about"])
+	if about, _ := runData["about"].(map[string]any); about["title"] != rk || len(about["subjects"].([]any)) != 1 {
+		t.Errorf("about: %v", runData["about"])
 	}
-	schema, err := contracts.Compile("events/run.started.schema.json")
-	if err != nil {
-		t.Fatal(err)
+	for member, want := range map[string]any{"runtime": ak, "command": av, "dir": av, "runtime_version": rv, "image": rk} {
+		if sessionData[member] != want {
+			t.Errorf("%s: %v, want %v", member, sessionData[member], want)
+		}
 	}
-	if err := schema.Validate(data); err != nil {
-		t.Errorf("the run.started does not validate: %v", err)
+	if args, _ := sessionData["args"].([]any); len(args) != 2 || args[0] != "a" || args[1] != rv {
+		t.Errorf("args: %v", sessionData["args"])
 	}
-	clean := `{"opened_by":"session","command":"true","args":["a\/b"],"dir":"/w","about":{"title":"t","kind":"k"},"labels":{"z":"1","a":"2"}}`
-	evs = []event.Event{{Type: event.RunStarted, Data: json.RawMessage(clean)}}
+	if names, _ := sessionData["setup_commands"].([]any); len(names) != 2 || names[0] != "install" || names[1] != av {
+		t.Errorf("setup_commands: %v", sessionData["setup_commands"])
+	}
+	for name, data := range map[string]map[string]any{"events/run.started.schema.json": runData, "events/session.started.schema.json": sessionData} {
+		schema, err := contracts.Compile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(data); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	cleanRun := `{"opened_by":"run","forager_version":"test","about":{"title":"t","kind":"k"},"labels":{"z":"1","a":"2"}}`
+	cleanSession := `{"session":1,"command":"true","args":["a\/b"],"dir":"/w"}`
+	evs = []event.Event{{Type: event.RunStarted, Data: json.RawMessage(cleanRun)}, {Type: event.SessionStarted, Data: json.RawMessage(cleanSession)}}
 	shownStarted(evs)
-	if got := string(evs[0].Data.(json.RawMessage)); got != clean {
-		t.Errorf("a clean run.started goes on as %s", got)
+	for i, want := range []string{cleanRun, cleanSession} {
+		if got := string(evs[i].Data.(json.RawMessage)); got != want {
+			t.Errorf("a clean %s goes on as %s", evs[i].Type, got)
+		}
 	}
 }

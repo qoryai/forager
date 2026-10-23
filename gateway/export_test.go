@@ -65,6 +65,10 @@ func SetRelayWait(c *Config, wait time.Duration) { c.relayWait = wait }
 // SetRelayInFlight makes n the most requests the relay has with the server at once.
 func SetRelayInFlight(c *Config, n int) { c.relayInFlight = n }
 
+// SetCertCheck makes d how often at most the one address checks its certificate and
+// key files for a change.
+func SetCertCheck(c *Config, d time.Duration) { c.certCheck = d }
+
 // SetNow makes now the clock the one address judges a run key's attach window by.
 func SetNow(c *Config, now func() time.Time) { c.now = now }
 

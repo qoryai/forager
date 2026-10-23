@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.started.schema.json",
+  "title": "dev.qory.runtime.started",
+  "description": "The runtime opened its session. In a run with a run key, Forager writes placeholders in cwd alone; every other member keeps its paths as the runtime wrote them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "source"],
+  "properties": {
+    "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
+    "session": {"description": "The number of the session whose runtime wrote the record, from 1: the session of its dev.qory.session.started.", "type": "integer", "minimum": 1},
+    "source": {"description": "How the session started, in the runtime's words: startup, resume.", "type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "cwd": {"description": "The runtime's working directory, as the runtime wrote it. In a run with a run key, the working directory is /workspace in it, and the run directory, the harness home and the inputs directory are <run>, <home> and <inputs>, at whole path components, as in args of dev.qory.session.started.", "type": "string", "minLength": 1},
+    "agent_id": {"description": "The subagent this happened in, when it did not happen in the main conversation.", "type": "string", "minLength": 1},
+    "agent_type": {"description": "The subagent's type, or the agent the session was started as.", "type": "string", "minLength": 1}
+  }
+}

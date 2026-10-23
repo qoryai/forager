@@ -473,37 +473,54 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// exitRule is why the link refuses a session's dev.qory.run.exited, its data, empty
-// when it accepts it: the runtime's exit decides, succeeded with exit_code 0 and failed
-// with any other exit status or a signal, both with no reason, or cancelled with
-// timeout, its time limit, or with interrupted, its stop from where it was started,
-// whatever its exit status or signal. The gateway writes the event of every other end
-// itself.
-func exitRule(data map[string]any) string {
-	state, _ := data["state"].(string)
+// closeRule is why the link refuses a session's dev.qory.run.exited, its data, empty
+// when it accepts it: the close's, with no reason or with timeout, interrupted,
+// no_session or image_missing, the last two only for a run with no join the gateway
+// numbered, and image_missing only failed with exit_code -1, the close after a fetch of
+// the run's image that its registry did not have. The gateway writes the event of every
+// other end itself. joined is true when the gateway numbered a join of the run.
+func closeRule(data map[string]any, joined bool) string {
 	given, hasReason := data["reason"]
 	why, _ := given.(string)
-	code, hasCode := data["exit_code"].(float64)
-	_, signalled := data["signal"]
 	switch {
-	case hasReason && (why == event.ReasonTimeout || why == event.ReasonInterrupted):
-		if state != event.StateCancelled {
-			return "a run.exited " + why + " that is not cancelled"
+	case !hasReason, why == event.ReasonTimeout, why == event.ReasonInterrupted:
+	case why == event.ReasonNoSession:
+		if joined {
+			return "a run.exited no_session of a run with a join"
 		}
-	case hasReason:
-		return "a run.exited with a reason the gateway decides"
-	case state == event.StateSucceeded:
-		if !hasCode || code != 0 || signalled {
-			return "a run.exited succeeded whose runtime did not exit 0"
-		}
-	case state == event.StateFailed:
-		if !signalled && (!hasCode || code == 0) {
-			return "a run.exited failed whose runtime exited 0"
+	case why == refusal.ImageMissing:
+		code, _ := data["exit_code"].(float64)
+		switch {
+		case joined:
+			return "a run.exited image_missing of a run with a join"
+		case data["state"] != event.StateFailed || code != -1:
+			return "a run.exited image_missing that is not failed with exit_code -1"
 		}
 	default:
-		return "a run.exited of a state the runtime's exit does not decide"
+		return "a run.exited with a reason the gateway decides"
 	}
 	return ""
+}
+
+// sessionOf is the session number of a dev.qory.session.started or
+// dev.qory.session.exited, as its data decodes; 0 for none.
+func sessionOf(data map[string]any) int {
+	n, _ := data["session"].(float64)
+	if n < 1 || n != float64(int(n)) {
+		return 0
+	}
+	return int(n)
+}
+
+// otherOpen reports whether a join of joins other than session n is open: answered
+// 200, with or without its dev.qory.session.started, and no dev.qory.session.exited.
+func otherOpen(joins map[int]join, n int) bool {
+	for m, j := range joins {
+		if m != n && j.open() {
+			return true
+		}
+	}
+	return false
 }
 
 // gatewayName is a refusal's name of the form only a gateway's refusal carries.
@@ -525,6 +542,11 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 	lr.mu.Lock()
 	seen, startedID, final := lr.seen, lr.startedID, lr.final
 	given := lr.given
+	// What the gateway holds of each join, as the batch's events change it, in order.
+	joins := make(map[int]join, len(lr.joins))
+	for _, j := range lr.joins {
+		joins[j.session] = *j
+	}
 	lr.mu.Unlock()
 	fresh := map[string]bool{}
 	for _, ev := range evs {
@@ -548,8 +570,8 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 		case event.RunRegistered, event.RunEgress:
 			return "an event of a type the gateway writes"
 		case event.RunStarted:
-			if data["opened_by"] != event.OpenedBySession {
-				return "a run.started not opened by the session"
+			if data["opened_by"] != event.OpenedByRun {
+				return "a run.started not opened by the run"
 			}
 			if !sameLabels(data["labels"], lr.labels) {
 				return "a run.started whose labels are not the run's"
@@ -559,10 +581,41 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			}
 			startedID = ev.ID
 		case event.RunExited:
-			if why := exitRule(data); why != "" {
+			if why := closeRule(data, len(joins) > 0); why != "" {
 				return why
 			}
+			for _, j := range joins {
+				if j.open() {
+					return "a run.exited while a join is open"
+				}
+			}
 			final = true
+		case event.SessionStarted:
+			n := sessionOf(data)
+			j, ok := joins[n]
+			switch {
+			case !ok || !j.accepted:
+				return "a session.started of no join the gateway accepted"
+			case j.started:
+				return "a second session.started of one session"
+			case j.exited:
+				return "a session.started after its session.exited"
+			case otherOpen(joins, n):
+				return "a session.started while another session runs"
+			}
+			j.started = true
+			joins[n] = j
+		case event.SessionExited:
+			n := sessionOf(data)
+			j, ok := joins[n]
+			switch {
+			case !ok:
+				return "a session.exited of no join the gateway numbered"
+			case j.exited:
+				return "a second session.exited of one session"
+			}
+			j.exited = true
+			joins[n] = j
 		case event.RunRefused:
 			if startedID != "" {
 				return "a run.refused after run.started"
@@ -610,6 +663,8 @@ func (lr *linkRun) accepted(evs []event.Event) bool {
 		case event.RunStarted:
 			lr.startedID = ev.ID
 			lr.startedAt, _ = time.Parse(time.RFC3339Nano, ev.Time)
+		case event.SessionStarted, event.SessionExited:
+			lr.joined(ev)
 		case event.RunExited, event.RunRefused:
 			lr.final, final = true, true
 		}
@@ -617,16 +672,40 @@ func (lr *linkRun) accepted(evs []event.Event) bool {
 	return final
 }
 
-// shownStarted phrases each dev.qory.run.started in evs, a batch [linkRun.check]
+// joined records a dev.qory.session.started or dev.qory.session.exited the stream
+// numbered on its join, which [linkRun.check] found. Called with lr.mu held.
+func (lr *linkRun) joined(ev event.Event) {
+	var data map[string]any
+	if raw, ok := ev.Data.(json.RawMessage); !ok || json.Unmarshal(raw, &data) != nil {
+		return
+	}
+	n := sessionOf(data)
+	if n < 1 || n > len(lr.joins) {
+		return
+	}
+	j := lr.joins[n-1]
+	if ev.Type == event.SessionExited {
+		j.exited = true
+		if held := lr.r.Held(); j.accepted && j.model != "" && held != nil && held.Start != "" {
+			// The session ended: the proxy sets the start key again.
+			lr.px.SetModelKey(held.Start)
+		}
+		return
+	}
+	j.started = true
+	j.startedAt, _ = time.Parse(time.RFC3339Nano, ev.Time)
+}
+
+// shownStarted phrases each dev.qory.run.started and dev.qory.session.started in evs, a batch [linkRun.check]
 // accepted, as a session phrases one, so a session that sends a value as it is passes
-// no value that contains qak_ or qrk_ in any case through the gateway: the members of
+// no value that contains qak_, qrk_ or qecr_ in any case through the gateway: the members of
 // startedNames as [accesskey.ShownName] shows them, those of startedValues and each
 // entry of startedLists as [accesskey.ShownValue] does, the labels as
 // [server.ShownLabels] gives them and about as [server.ShownAbout] does. Data with no
 // such value is left byte for byte.
 func shownStarted(evs []event.Event) {
 	for i, ev := range evs {
-		if ev.Type != event.RunStarted {
+		if ev.Type != event.RunStarted && ev.Type != event.SessionStarted {
 			continue
 		}
 		raw, ok := ev.Data.(json.RawMessage)
@@ -685,12 +764,12 @@ func shownStarted(evs []event.Event) {
 	}
 }
 
-// The members of dev.qory.run.started a session phrases: startedNames as names,
+// The members of dev.qory.run.started and dev.qory.session.started a session phrases: startedNames as names,
 // startedValues as values, and each entry of startedLists as a value.
 var (
 	startedNames  = []string{"runtime", "host", "wall", "image", "image_name", "container_runtime"}
 	startedValues = []string{"dir", "command", "runtime_version"}
-	startedLists  = []string{"args", "preparation"}
+	startedLists  = []string{"args", "setup_commands"}
 )
 
 // unescaped is v as JSON without HTML escaping, so the rest of an event's data keeps

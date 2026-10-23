@@ -32,7 +32,7 @@ type Runtime interface {
 	// was written against none.
 	Version() string
 	// Prepare makes a launch one the session can follow: it installs the forwarder as
-	// the program's hook, writes what that takes into the run directory, and returns
+	// the program's hook, writes what that takes into the session's directory, and returns
 	// the launch to start in place of the one given, command and arguments. A program
 	// that waits for a person to approve a stand-in of [Attach.Placeholders] may be
 	// started through a script Prepare writes there, which records the approval where
@@ -42,9 +42,9 @@ type Runtime interface {
 	// ReadsOutput reports whether the program's standard output, when the session runs
 	// on pipes, is JSON lines the session passes to Map as records of [SourceOutput].
 	ReadsOutput() bool
-	// Map turns one record of the program into one event of the contract, its type and
-	// data, or reports that the record is none.
-	Map(Record) (typ string, data map[string]any, ok bool)
+	// Map turns one record of the program into the events of the contract it is, each
+	// with its type and data, in order; nil when the record is none.
+	Map(Record) []Event
 	// Stop is how the program is asked to leave. A run that names its own signal or
 	// grace overrides it.
 	Stop() Stop
@@ -68,9 +68,11 @@ type Attach struct {
 	// Launch is what the caller asked to start. Its Env is empty: a runtime adds
 	// variables, it does not see the run's.
 	Launch Launch
-	// RunDir is the run directory. What Prepare writes goes here; under a wall the
-	// enclosure sees it read-only at the same path.
-	RunDir string
+	// SessionDir is the session's directory, sessions/<n>/ in the run directory, which
+	// no other session of the run writes to. What Prepare writes goes here; under a wall
+	// the enclosure sees it read-only at the same path, and nothing else of the run
+	// directory.
+	SessionDir string
 	// Forwarder is the command to install as the program's hook: it reads a hook's
 	// input and forwards it to the session as a record of [SourceHooks]. Empty means the
 	// run has none, and no hooks are installed.
@@ -98,8 +100,8 @@ type Attach struct {
 	// environment leaves these names out of the copy, regardless of case.
 	DeniedVariables []string
 	// Inside, when not nil, writes a path of this machine's as the enclosure sees it,
-	// in a string that may hold one: a runtime applies it to what it copies into the
-	// run directory of the caller's, so a path it names still leads where it led. The
+	// in a string that may hold one: a runtime applies it to what it copies into
+	// SessionDir from the caller's files, so a path it names still leads where it led. The
 	// session sets it for a run whose workspace is at /workspace inside. Nil leaves
 	// every path as it is.
 	Inside func(string) string
@@ -217,10 +219,26 @@ type Endpoint = descriptor.Endpoint
 // Record is one unit of what a program reports.
 type Record = descriptor.Record
 
-// The sources of a record.
+// Event is one event of the contract that [Runtime.Map] produces: its type, a runtime
+// event's, and its data.
+type Event = descriptor.Event
+
+// Parents is implemented by a runtime that reports which tool call started a subagent.
+// It is optional and checked by type assertion, so [Runtime] keeps its methods: the
+// session sets no parent_agent_id for a runtime without it.
+type Parents interface {
+	// Link returns, for a record that reports which tool call started a subagent, the
+	// subagent's id, the id of that tool call and true; for any other record, false.
+	Link(Record) (agentID, toolUseID string, ok bool)
+}
+
+// The sources of a record. A runtime maps records of SourceOutput and SourceHooks;
+// the session reads the records of SourceSetup, a setup command's, and passes none of
+// them to a runtime.
 const (
 	SourceOutput = descriptor.SourceOutput
 	SourceHooks  = descriptor.SourceHooks
+	SourceSetup  = descriptor.SourceSetup
 )
 
 // Stop is how a program is asked to leave: Signal, one [CheckStopSignal] passes, and
@@ -255,7 +273,7 @@ func (bare) Prepare(a Attach) (Launch, error) { return a.Launch, nil }
 func (bare) ReadsOutput() bool { return false }
 
 // Map finds no event in any record.
-func (bare) Map(Record) (string, map[string]any, bool) { return "", nil, false }
+func (bare) Map(Record) []Event { return nil }
 
 // Stop is Forager's defaults.
 func (bare) Stop() Stop { return Stop{} }
@@ -289,6 +307,9 @@ func Described(name string, document []byte, installers map[string]Installer) (R
 	}
 	if h := d.Headless; h != nil {
 		r.headless = h.Args
+	}
+	if d.Parent != nil {
+		return parented{r}, nil
 	}
 	return r, nil
 }
@@ -346,7 +367,14 @@ func (r *described) Prepare(a Attach) (Launch, error) {
 }
 
 // Map applies the descriptor's rules.
-func (r *described) Map(rec Record) (string, map[string]any, bool) { return r.d.Map(rec) }
+func (r *described) Map(rec Record) []Event { return r.d.Map(rec) }
+
+// parented is the runtime of a descriptor with a parent member, the one kind of
+// described runtime that is [Parents].
+type parented struct{ *described }
+
+// Link applies the descriptor's parent member.
+func (r parented) Link(rec Record) (string, string, bool) { return r.d.Link(rec) }
 
 // Secrets is the descriptor's secrets section, a copy; empty when it has none.
 func (r *described) Secrets() Declarations {

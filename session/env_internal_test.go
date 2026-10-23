@@ -16,7 +16,7 @@ func TestNoProgramReceivesTheAccessKeysVariables(t *testing.T) {
 	t.Setenv("QORY_APIARY_PUBLIC_KEY", "[]")
 	t.Setenv("QORY_RUN_KEY", "qrk_not-a-real-one.sig")
 	t.Setenv("OTHER_SETTING", "kept")
-	unwalled := withDefaults(Spec{Dir: t.TempDir()})
+	unwalled := sessionDefaults(SessionSpec{Dir: t.TempDir()}, false)
 	for name, env := range map[string][]string{
 		"the agent, by default":  environment(unwalled.Env, []string{EnvRunID + "=r"}),
 		"the agent, passed them": environment([]string{"QORY_ACCESS_KEY_SECRET=qak_x", "QORY_ACCESS_KEY_ID=x", "QORY_APIARY_PUBLIC_KEY=x", "QORY_RUN_KEY=qrk_x.y", "OTHER_SETTING=kept"}),

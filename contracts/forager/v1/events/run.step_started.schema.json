@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/run.step_started.schema.json",
+  "title": "dev.qory.run.step_started",
+  "description": "A step of the run started. A step is one named unit of the run's host work, such as a fetch, a compose or a setup command, with a start, an end, an outcome and its log lines. Steps come after dev.qory.run.started and are numbered from 1 in the order they start, one at a time. The step's log lines are dev.qory.run.log events with its number as step, between this event and the step's dev.qory.run.step_exited. A join step lies outside every session and ends before the session's dev.qory.session.started; an image or a wall step lies inside a session, after its dev.qory.session.started, and ends before the runtime starts; a setup step of a setup command inside the wall lies inside the session too, after its wall step, and ends before the runtime starts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["step", "name", "kind"],
+  "properties": {
+    "step": {"description": "The number of the step in the run, from 1.", "type": "integer", "minimum": 1},
+    "name": {"description": "A readable name of the step, such as fetch github.com/example-org/app; the name of a join step is join session <n>, of an image step the image's reference, and of a wall step start the wall. The run's masker replaces each forwarder's password in it, and a name that contains qak_, qrk_ or qecr_ in any case is `(a value that contains an access key secret)` in its place, `(a value that contains a run key)` when it contains qrk_ and no qak_, or `(a value that contains a run code)` when it contains qecr_ and neither of the others.", "type": "string", "minLength": 1},
+    "kind": {"description": "What the step does. fetch: a fetch of a source. compose: a compose of the harness. image: a fetch of the run's image. setup: a setup command, on the machine or inside the wall. join: the join of a session. wall: the start of a wall. build: a build of an image.", "type": "string", "enum": ["fetch", "compose", "image", "setup", "join", "wall", "build"]}
+  }
+}

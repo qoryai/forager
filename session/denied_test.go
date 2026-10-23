@@ -76,7 +76,7 @@ func TestAWalledLaunchStartsThroughTheHelpersExec(t *testing.T) {
 	sp := spec(t)
 	out := dumpsEnv(t, &sp)
 	sp.Wall, sp.Image = w, "example.com/agent:1"
-	res, err := session.Run(context.Background(), sp)
+	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestAWalledLaunchStartsThroughTheHelpersExec(t *testing.T) {
 			t.Errorf("the wall's environment has %q for %s, which is unset", got, name)
 		}
 	}
-	started := data(ofType(events(t, res), "dev.qory.run.started")[0])
+	started := data(ofType(events(t, res), "dev.qory.session.started")[0])
 	recorded := append([]string{started["command"].(string)}, anyStrings(started["args"])...)
 	if !slices.Equal(launch, recorded) {
 		t.Errorf("the helper's exec starts %q, and the record says %q", launch, recorded)
@@ -123,7 +123,7 @@ func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Variables.Deny = []string{"APP_SECRET", "APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID}
 	sp.Variables.Machine = []string{"APP_SECRET=the-machines"}
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	names, _ := unsetIn(t, w.got)
@@ -171,7 +171,7 @@ func TestAFixedValueOfADeniedNameStays(t *testing.T) {
 			answerVariables(g, `{"variables":{"`+name+`":{"value":"/server/config"}}}`)
 			sp.Variables.Run = []string{name + "=/run/config"}
 		}
-		if _, err := session.Run(context.Background(), sp); err != nil {
+		if _, err := run(context.Background(), sp); err != nil {
 			t.Fatalf("%s: %v", tc.what, err)
 		}
 		names, _ := unsetIn(t, w.got)
@@ -230,7 +230,7 @@ func TestAWalledRunDropsTheModelOverrides(t *testing.T) {
 			case "fixed":
 				sp.LaunchFixed = passed
 			}
-			res, err := session.Run(context.Background(), sp)
+			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -263,7 +263,7 @@ func TestAWalledRunDropsTheModelOverrides(t *testing.T) {
 		sp := spec(t)
 		out := dumpsEnv(t, &sp)
 		sp.Variables.Run = []string{"ANTHROPIC_MODEL=x", "CLAUDE_CODE_EFFORT_LEVEL=low"}
-		res, err := session.Run(context.Background(), sp)
+		res, err := run(context.Background(), sp)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -278,27 +278,27 @@ func TestAWalledRunDropsTheModelOverrides(t *testing.T) {
 }
 
 // TestExecIsAWallsAlone pins that a walled run needs the helper's exec, refused before
-// anything starts without one, and that a run without a wall needs none and starts its
+// the join request without one, and that a run without a wall needs none and starts its
 // launch as it is.
 func TestExecIsAWallsAlone(t *testing.T) {
 	sp, g := specGateway(t)
 	sp.Wall, sp.Image, sp.Exec = &openWall{}, "example.com/agent:1", nil
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "Exec") {
+	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "Exec") {
 		t.Errorf("a walled run without Exec: %v", err)
 	}
-	if len(g.Requests()) > 0 {
-		t.Error("the gateway was asked")
+	if len(g.Joins()) > 0 {
+		t.Error("the gateway got a join request")
 	}
 	for _, exec := range [][]string{{""}, {os.Args[0], "a\x00b"}} {
 		sp := spec(t)
 		sp.Wall, sp.Image, sp.Exec = &openWall{}, "example.com/agent:1", exec
-		if _, err := session.Run(context.Background(), sp); err == nil {
+		if _, err := run(context.Background(), sp); err == nil {
 			t.Errorf("Exec %q was taken", exec)
 		}
 	}
 	sp = spec(t, "FAKE_EXIT=0")
 	sp.Exec = nil
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("a run without a wall and without Exec: %v, %+v", err, res)
 	}
 }
@@ -330,7 +330,7 @@ func TestANameTheWallSetsIsNeverUnset(t *testing.T) {
 		selecting(g, c.image)
 		sp.Wall, sp.Image, sp.Images = w, "base", images
 		sp.Variables.Deny = []string{"DOCKER_CONFIG"}
-		if _, err := session.Run(context.Background(), sp); err != nil {
+		if _, err := run(context.Background(), sp); err != nil {
 			t.Fatalf("%s: %v", c.image, err)
 		}
 		if names, _ := unsetIn(t, w.got); slices.Contains(names, "DOCKER_CONFIG") != c.unset {
@@ -340,7 +340,7 @@ func TestANameTheWallSetsIsNeverUnset(t *testing.T) {
 	w := &settingWall{sets: []string{"CLAUDE_CODE_OAUTH_TOKEN"}}
 	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
-	if _, err := session.Run(context.Background(), sp); err != nil {
+	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	names, _ := unsetIn(t, w.got)
@@ -373,7 +373,7 @@ func TestANameTheWallSetsWithAnAuthorityIsUnsetWithoutOne(t *testing.T) {
 		}
 		sp.Wall, sp.Image = w, "example.com/agent:1"
 		sp.Variables.Deny = []string{"NODE_EXTRA_CA_CERTS"}
-		if _, err := session.Run(context.Background(), sp); err != nil {
+		if _, err := run(context.Background(), sp); err != nil {
 			t.Fatalf("an authority %v: %v", withAuthority, err)
 		}
 		if names, _ := unsetIn(t, w.got); slices.Contains(names, "NODE_EXTRA_CA_CERTS") == withAuthority {
@@ -402,7 +402,7 @@ func TestAVariableThatAddsPluginsOrDirectoriesIsDenied(t *testing.T) {
 			answerVariables(g, `{"variables":{"`+name+`":{"value":"/server/plugins"}}}`)
 			sp.Variables.Run = []string{name + "=/run/plugins"}
 			sp.Variables.Machine = []string{name + "=/machine/plugins"}
-			if _, err := session.Run(context.Background(), sp); err != nil {
+			if _, err := run(context.Background(), sp); err != nil {
 				t.Fatal(err)
 			}
 			names, _ := unsetIn(t, w.got)
