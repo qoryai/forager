@@ -13,8 +13,8 @@ release may change what an existing document does, and says so under Upgrading.
 - `receiver.Handler.Secrets` returns `[]receiver.Value` in place of `[][]byte`: make
   each with `receiver.NewValue(b)`, and set its `ExpiresAt` and `Apply`. A Value prints
   none of its bytes, also as a field of a struct printed by reflection. The hook is
-  handed the names the request lists: at a renewal, the entries that are due. Before, it returned the bytes alone, for every
-  entry.
+  handed the names the request lists: at a renewal, the entries that are due. Before,
+  it returned the bytes alone, for every entry.
 - Write a run configuration's host credential with `apply` items, each `{hosts, scheme,
   username, header, paths}`, in place of its `hosts`, `paths` and `auth`.
   `server.RunCredential` has `Apply`, a list of `server.Apply`, in place of `Hosts` and
