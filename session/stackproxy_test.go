@@ -309,8 +309,8 @@ func TestTheStackFetchThroughARealGateway(t *testing.T) {
 		t.Errorf("the fetch of a stack host got %d %q", status, body)
 	}
 	status, body := throughHost(t, h.ProxyURL, "http://other.example.net/")
-	const refusedBody = "qory: add other.example.net to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.\n" +
-		"qory: egress to other.example.net:80 denied by the gateway: the host is not in gateway.stack_hosts\n"
+	const refusedBody = "qory: add other.example.net to stack_hosts in forager.yaml or in the run configuration.\n" +
+		"qory: egress to other.example.net:80 denied by the gateway: the host is in neither stack_hosts list\n"
 	if status != http.StatusForbidden || body != refusedBody {
 		t.Errorf("another host got %d %q, want 403 %q", status, body, refusedBody)
 	}
@@ -342,7 +342,7 @@ func TestTheStackFetchThroughARealGateway(t *testing.T) {
 	runID := res.RunID
 	want := []string{
 		fmt.Sprintf("run %s: stack fetch to %s:%s allowed by gateway.stack_hosts entry %s", runID, originHost, originPort, originHost),
-		fmt.Sprintf("run %s: stack fetch to other.example.net:80 denied: the host is not in gateway.stack_hosts", runID),
+		fmt.Sprintf("run %s: stack fetch to other.example.net:80 denied: the host is in neither stack_hosts list", runID),
 		fmt.Sprintf("run %s: stack fetch to %s:%s allowed by gateway.stack_hosts entry %s", runID, originHost, originPort, originHost),
 	}
 	rg.mu.Lock()

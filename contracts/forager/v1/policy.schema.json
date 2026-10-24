@@ -26,10 +26,7 @@
           "description": "Hosts the session may reach: a lower-case host name, or a *. suffix matching every host below it and not the apex itself. No ports, no paths, no schemes: paths have a separate key. Absent means an empty list.",
           "type": "array",
           "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
-          }
+          "items": {"$ref": "#/$defs/host_entry"}
         },
         "allow_first": {
           "description": "Hosts the session may reach in either mode, checked before deny and allow: a lower-case host name or an IPv4 address in canonical form, with no *. pattern. A host an entry matches is allowed and recorded with the entry as its rule; a host below an entry is not matched. The guard, wall:host-form, wall:plain-request, the run limits and paths still apply. In a policy that narrows another, an entry lifts only the deny and allow of the policy that lists it. Absent means an empty list.",
@@ -95,6 +92,11 @@
     }
   },
   "$defs": {
+    "host_entry": {
+      "description": "A host entry of egress.allow, and of a run configuration's stack_hosts: a lower-case host name or an IPv4 address, or a *. suffix matching every host below it and not the apex itself. No port, no path, no scheme.",
+      "type": "string",
+      "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+    },
     "image_name": {
       "description": "The machine's name for one of its images: 1 to 64 of a-z, 0-9, underscore, dot and dash, starting with a letter or a digit.",
       "type": "string",

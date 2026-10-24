@@ -40,7 +40,7 @@ The module is a library with two entry points: the gateway and the session.
   `(*session.Run).HostProxy`, a forwarder on loopback with a password, for every run,
   walled or not: see [the host proxy](#the-host-proxy). qory fetches the run's harness
   definition through `(*session.Run).StackProxy` instead, which reaches the hosts of
-  `gateway.stack_hosts` alone.
+  `gateway.stack_hosts` and of the run configuration's `stack_hosts` alone.
 - It joins a session to the run, `(*session.Run).Join`, with a
   [`session.SessionSpec`](../session/spec.go): the program to start, and how. It gets a
   [`session.Result`](../session/spec.go) back once the runtime has exited and the
@@ -245,23 +245,50 @@ returns a `session.HostProxy`:
   `QORY-RELAY` and the run answer's `stack_proxy_secret`. Behind a separate gateway it
   dials the gateway's one address with `QORY-STACK` and the run key.
 - The stack proxy passes a CONNECT or a plain HTTP request to a host of
-  `gateway.Config.StackHosts` alone, on any port, in enforce mode, with no certificate
-  authority and no credential. The run's policy is not checked, and no
-  `dev.qory.run.egress` is written. `gateway.Config.Report` gets one line per decision,
-  such as "run <id>: stack fetch to git.example.com:443 allowed by gateway.stack_hosts
-  entry git.example.com". A refusal at `gateway.Config.RunLimits` is reported at most
-  once a second per limit. Until the run's first join request the stack proxy counts
-  its connections and requests apart from the run's proxy, at the same limits. A host
-  outside the list gets a `403` with this body:
+  `gateway.Config.StackHosts` or of the run configuration's `stack_hosts`, on any port,
+  in enforce mode, with no certificate authority and no credential. The node's policy,
+  `gateway.Config.Policy`, decides each host of the run configuration's `stack_hosts`:
+  the host passes when the node's policy allows it, under its mode, and has no path
+  rule for it, since the stack proxy does not read inside a connection to check one.
+  The node's policy does not decide the hosts of `StackHosts`. The run's policy is not
+  checked, and no `dev.qory.run.egress` is written. `gateway.Config.Report` gets one
+  line per decision, with the list of the entry that allowed it, such as "run <id>:
+  stack fetch to git.example.com:443 allowed by gateway.stack_hosts entry
+  git.example.com" or "run <id>: stack fetch to git.example:443 allowed by the run
+  configuration's stack_hosts entry git.example". A host both lists allow is reported
+  with `gateway.stack_hosts`. A refusal at `gateway.Config.RunLimits` is reported at
+  most once a second per limit. Until the run's first join request the stack proxy
+  counts its connections and requests apart from the run's proxy, at the same limits.
+  A host outside both lists gets a `403` with this body:
 
   ```
-  qory: add other.example.net to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.
-  qory: egress to other.example.net:443 denied by the gateway: the host is not in gateway.stack_hosts
+  qory: add other.example.net to stack_hosts in forager.yaml or in the run configuration.
+  qory: egress to other.example.net:443 denied by the gateway: the host is in neither stack_hosts list
   ```
+
+  A host of the run configuration's `stack_hosts` that `StackHosts` does not list gets
+  a `403` with this body when the node's policy does not allow it:
+
+  ```
+  qory: allow git.example in the node's policy, or list it in gateway.stack_hosts.
+  qory: egress to git.example:443 denied by the gateway: the node's policy does not allow this host of the run configuration's stack_hosts
+  ```
+
+  and with this body when the node's policy has path rules for it:
+
+  ```
+  qory: list git.example in gateway.stack_hosts: the node's path rules cover it.
+  qory: egress to git.example:443 denied by the gateway: the node's policy has path rules for this host, which the stack proxy cannot check
+  ```
+
+  The report line of a refused host ends with the same cause, such as "run <id>:
+  stack fetch to other.example.net:443 denied: the host is in neither stack_hosts
+  list".
 - Behind a wall or a separate gateway the stack proxy is guarded as the run's proxy
   is. It reaches the gateway's machine or a private network address only for a host
   that the allow list of `gateway.Config.Policy` and `StackHosts` both list by name,
-  not by a `*.` pattern, and never a link-local or cloud metadata address. The guard
+  not by a `*.` pattern, and never a link-local or cloud metadata address. The run
+  configuration's `stack_hosts` open none of these addresses. The guard
   refuses a host by its address and when its name resolves to such an address at dial
   time. The gateway's machine or a private network address gets a `403` with this
   body:
@@ -293,6 +320,13 @@ qory sets `gateway.Config.StackHosts` from `gateway.stack_hosts` in `forager.yam
 `gateway.Start` accepts a lower-case host name, an IPv4 address or a `*.` suffix, and
 refuses any other entry, such as "Set StackHosts[0] to a lower-case host name, an IPv4
 address or a *. suffix, such as git.example.com. It is "https://git.example.com"."
+
+The run configuration's `stack_hosts` come from the control plane: 1 to 32 entries in
+the grammar of the policy's `egress.allow`, such as `["git.example",
+"api.git.example"]`. They are fixed when the run starts: a reload whose run configuration
+lists other `stack_hosts` fails, the policy in force stays, and `gateway.Config.Report`
+gets "the reload failed: start another run to use other stack hosts: a run's
+stack_hosts are fixed when it starts".
 
 ```go
 s, err := run.StackProxy()                        // before the first Join

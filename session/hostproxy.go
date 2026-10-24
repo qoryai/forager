@@ -128,8 +128,9 @@ func (r *Run) HostProxy() (HostProxy, error) {
 
 // StackProxy starts a forwarder on loopback with a fresh password for the fetch of the
 // run's harness definition. Every request through it reaches the run's stack proxy,
-// which passes the hosts of gateway.stack_hosts alone: the run's policy does not apply,
-// no credential is set, no dev.qory.run.egress is written, and CABundle is empty. It
+// which passes the hosts of gateway.stack_hosts and of the run configuration's
+// stack_hosts alone: the run's policy does not apply, no credential is set, no
+// dev.qory.run.egress is written, and CABundle is empty. It
 // ends at HostProxy.Close, at the run's first Join and at Run.Close. An error means no
 // stack proxy started.
 //

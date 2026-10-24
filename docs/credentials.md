@@ -248,6 +248,26 @@ values. An entry is one of two kinds:
   model key of this machine's as the start key, with or without `model_credential`.
 - Without `credentials`, the run gets the machine's credentials as before.
 
+A run configuration may also list `stack_hosts`, the hosts qory may fetch the run's
+harness definition from before the first session joins, beside `gateway.stack_hosts`
+in `forager.yaml`:
+
+```json
+{"version": 1, "stack_hosts": ["git.example", "api.git.example"]}
+```
+
+- The run's stack proxy allows these hosts, with no credential, until the run's first
+  join request.
+- The node's policy decides each host. A host passes when the node's policy allows it
+  and has no path rule for it: the stack proxy does not read inside a connection, so it
+  cannot check a path. A host the node's policy does not allow is refused with "qory:
+  allow git.example in the node's policy, or list it in gateway.stack_hosts."
+- Behind a wall or a separate gateway they open no address of the gateway's machine
+  and no private network address. Such an address is reached only for a host that
+  `gateway.stack_hosts` and the node's policy both list by name.
+- They are fixed for the run. A reload that lists other `stack_hosts` fails, and the run
+  keeps its policy.
+
 ## Tools
 
 A **tool** is a program of the machine's that serves hosts. It is for what a run reaches

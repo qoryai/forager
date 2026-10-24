@@ -22,7 +22,8 @@ type Config struct {
 	// that name a host itself are the only ones that open this machine's addresses and
 	// the private network addresses to a guarded proxy: to the run's proxy those that
 	// the run's policy allows, and to the run's stack proxy those that StackHosts lists
-	// exactly.
+	// exactly. It also decides each host of a run configuration's stack_hosts at the
+	// stack proxy, and no host of StackHosts.
 	Policy *Policy
 	// Credentials and Tools are the ones this machine defines; a run's policy selects
 	// among them by name. The gateway sets a credential's value for a run with or
@@ -74,8 +75,10 @@ type Config struct {
 	// addresses only for a host that the allow list of Policy and StackHosts both list by
 	// name, not by a *. pattern, and a link-local or cloud metadata address for none.
 	// Each decision is a line of Report, never a dev.qory.run.egress, and a refusal at
-	// RunLimits is reported at most once a second per limit. Empty means every host is
-	// refused.
+	// RunLimits is reported at most once a second per limit. The stack proxy also
+	// allows the hosts of the run configuration's stack_hosts that Policy allows and has
+	// no path rule for; they open none of the addresses above. Empty, with no
+	// stack_hosts in the run configuration, means every host is refused.
 	StackHosts []string
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the
 	// system's choosing: the link for the sessions of other machines, the proxy for

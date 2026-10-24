@@ -304,6 +304,10 @@ type RunConfiguration struct {
 	// credential of Credentials or a model key of the machine's; empty when the document
 	// names none, which a run with one model key may.
 	ModelCredential string `json:"model_credential,omitzero"`
+	// StackHosts are the hosts the run's stack proxy allows beside the gateway's
+	// gateway.stack_hosts, each a lower-case host name, an IPv4 address or a *. suffix,
+	// in the document's order; nil when the document has none.
+	StackHosts []string `json:"stack_hosts,omitzero"`
 	// Computed is sha256= and the lower-case hex SHA-256 of the bytes the document was
 	// read from, which Forager computes itself: the digest a secrets request and the
 	// open of its answer use, never the answer's header. Empty for a document not read

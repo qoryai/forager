@@ -36,6 +36,14 @@
     "model_credential": {
       "description": "The name of the model key the runtime starts with: an API credential of credentials, or a model key the machine defines and the run's policy selects. Required when the run has two or more model keys, of the server's and the machine's together; with one, that one is the start key. The gateway holds every model key of the run and sets only the start key, on requests to its endpoint's host that carry its placeholder; the session gives the runtime the start key's variable and endpoint alone. A name of no model key of the run, or of a credential without format, is run_configuration_invalid. Fixed when the run starts.",
       "$ref": "#/$defs/credential_name"
+    },
+    "stack_hosts": {
+      "description": "The hosts the run's stack proxy allows beside the gateway's gateway.stack_hosts, for qory's fetch of the harness definition before the run's first session joins, such as [\"git.example\", \"api.git.example\"]: 1 to 32, none twice, each in the grammar of the policy's egress.allow entries. The node's policy decides each host: a host an entry matches passes only when the node's policy allows it and has no path rule for it, since the stack proxy does not read inside a connection. Behind a wall or a separate gateway they open no address of the gateway's machine and no private network address: the stack proxy reaches those only for a host that gateway.stack_hosts and the node's policy both list by name. Fixed when the run starts. Absent, the stack proxy allows gateway.stack_hosts alone.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {"$ref": "policy.schema.json#/$defs/host_entry"}
     }
   },
   "$defs": {

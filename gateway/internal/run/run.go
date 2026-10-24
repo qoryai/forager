@@ -153,6 +153,11 @@ type Run struct {
 	stored      []server.RunCredential
 	storedModel string
 	values      sealed.Values
+	// stack are the stack_hosts of the run configuration the run started with, nil
+	// when it has none, fixed for the run; stacks are those of each run configuration
+	// Read read that a reload has not decided yet.
+	stack  []string
+	stacks map[*policy.Loaded][]string
 }
 
 // storedSet is what a run configuration says of the run's credentials: its credentials
@@ -210,6 +215,7 @@ func Decide(cfg Config) (*Run, error) {
 		pol = fetched
 		set := r.takeCreds(fetched)
 		r.guard, r.named, r.stored, r.storedModel = r.takeGuard(fetched), r.takeNamed(fetched), set.creds, set.model
+		r.stack = r.takeStack(fetched)
 		if cfg.Fetched.Document != nil {
 			r.served = cfg.Fetched.Document.Values()
 		}
@@ -447,6 +453,51 @@ func (r *Run) Held() *credential.Held {
 // Uses are the held credentials as the proxy sets them.
 func (r *Run) Uses() []proxy.Credential { return ProxyUses(r.Held()) }
 
+// StackHosts are the stack_hosts of the run configuration the run started with, in
+// its order, nil when it has none: fixed when the run starts, so a reload with other
+// stack_hosts is refused.
+func (r *Run) StackHosts() []string { return slices.Clone(r.stack) }
+
+// StackCheck is the node's decision on a host for the run configuration's
+// stack_hosts.
+type StackCheck int
+
+const (
+	// StackAllowed is a host an entry of StackHosts matches and the node's policy
+	// allows.
+	StackAllowed StackCheck = iota
+	// StackUnlisted is a host no entry of StackHosts matches.
+	StackUnlisted
+	// StackNodeRefuses is a host the node's policy does not allow
+	// ([policy.Egress.Allows], under its mode).
+	StackNodeRefuses
+	// StackNodePaths is a host the node's policy, or a side beside it, has path rules
+	// for: the stack proxy tunnels without reading the request, so it cannot check them.
+	StackNodePaths
+)
+
+// StackChecked decides host, a host in the form [policy.Host] returns, for the run
+// configuration's stack_hosts: the node only takes away. A host an entry of
+// [Run.StackHosts] matches is allowed when the node's policy, if the run has one,
+// allows it and no path rule of the node's covers it.
+func (r *Run) StackChecked(host string) StackCheck {
+	if _, ok := policy.Match(r.stack, host); !ok {
+		return StackUnlisted
+	}
+	if r.node == nil {
+		return StackAllowed
+	}
+	if !r.node.Policy.Egress.Allows(host) {
+		return StackNodeRefuses
+	}
+	for _, side := range append([]map[string][]string{r.node.Policy.Egress.Paths}, r.beside...) {
+		if _, _, ok := policy.HostPaths(side, host); ok {
+			return StackNodePaths
+		}
+	}
+	return StackAllowed
+}
+
 // Image is the image the run starts in, resolved among [Config.Images]: zero without a
 // wall, and a Ref alone when the default is a reference.
 func (r *Run) Image() Image { return r.img }
@@ -585,6 +636,12 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		}
 		r.images[out] = named
 	}
+	if f.Document != nil && len(f.Document.StackHosts) > 0 {
+		if r.stacks == nil {
+			r.stacks = map[*policy.Loaded][]string{}
+		}
+		r.stacks[out] = slices.Clone(f.Document.StackHosts)
+	}
 	r.mu.Unlock()
 	return out, nil
 }
@@ -675,6 +732,16 @@ func (r *Run) takeNamed(p *policy.Loaded) string {
 	named := r.images[p]
 	delete(r.images, p)
 	return named
+}
+
+// takeStack is the stack_hosts of the run configuration of a policy [Run.Read] made,
+// nil when it has none, and forgets them.
+func (r *Run) takeStack(p *policy.Loaded) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	hosts := r.stacks[p]
+	delete(r.stacks, p)
+	return hosts
 }
 
 // GuardNames are the names a guarded proxy opens, this machine's own addresses and the
@@ -796,15 +863,15 @@ func (d *Decision) Discard() {
 // Reload decides what a run configuration read with [Run.Read] puts in force. One
 // that is the one in force is [Decision.Unchanged]. A reload is as strict as a start:
 // what a start refuses, path rules or an image without a wall, a credential that does
-// not resolve, fails the reload, and the policy in force stays; and the run's tools
-// and image are fixed when it starts. Whether a name needs a wall is decided by the
-// run's wall, as [Decide] decides it, never by the run's authority, which every run
-// with a server has. The image compared is the one the selection resolves to, so
+// not resolve, fails the reload, and the policy in force stays; and the run's tools,
+// image and stack_hosts are fixed when it starts. Whether a name needs a wall is
+// decided by the run's wall, as [Decide] decides it, never by the run's authority,
+// which every run with a server has. The image compared is the one the selection resolves to, so
 // naming the machine's default, or no longer naming it, is no change; an image the run
 // configuration names is fixed by the string, so one that differs from the start's,
 // appears or disappears is refused.
 func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error) {
-	guard, named, creds := r.takeGuard(next), r.takeNamed(next), r.takeCreds(next)
+	guard, named, creds, stack := r.takeGuard(next), r.takeNamed(next), r.takeCreds(next), r.takeStack(next)
 	if next.RunConfiguration == r.RunConfiguration() {
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
@@ -813,6 +880,9 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 	}
 	if creds.model != r.storedModel {
 		return nil, fmt.Errorf("run configuration %s: start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays", accesskey.ShownValue(next.URL, false))
+	}
+	if !sameHosts(stack, r.stack) {
+		return nil, errors.New("start another run to use other stack hosts: a run's stack_hosts are fixed when it starts")
 	}
 	d, err := r.decide(ctx, next, named)
 	if d != nil {
@@ -1045,6 +1115,15 @@ func sameCredentials(a, b []server.RunCredential) bool {
 		return s
 	}
 	return reflect.DeepEqual(order(a), order(b))
+}
+
+// sameHosts reports whether two run configurations' stack_hosts are the same entries,
+// in any order.
+func sameHosts(a, b []string) bool {
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }
 
 // sameSelection reports whether two selections, of tools or of credentials, are the

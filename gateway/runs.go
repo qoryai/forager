@@ -616,24 +616,40 @@ func (lr *linkRun) observe(d proxy.Decision) { lr.st.Emit(event.RunEgress, run.E
 
 // openStack makes the run's stack proxy, for qory's fetch of the harness definition
 // before the run's first session: in enforce mode, allowing the hosts of
-// [Config.StackHosts] alone, with no certificate authority, no credential and no model
-// key, at the run's limits with counters apart from the run's proxy. When guarded is
-// true it is guarded as the run's proxy is: this machine's addresses and the private
-// network addresses are reached only for a host that the node's policy's allow list
-// and StackHosts both list by name, not by a *. pattern, and a link-local or cloud
-// metadata address for none. The run's policy is not read. Each decision is a
-// line of the gateway's report ([stackLine]). On the local link it is registered under
+// [Config.StackHosts], and each host of the run configuration's stack_hosts that the
+// node's policy allows ([run.Run.StackChecked]), with no certificate authority, no credential
+// and no model key, at the run's limits with counters apart from the run's proxy. When
+// guarded is true it is guarded as the run's proxy is: this machine's addresses and the
+// private network addresses are reached only for a host that the node's policy's allow
+// list and StackHosts both list by name, not by a *. pattern, and a link-local or cloud
+// metadata address for none, so the run configuration's entries open none of these.
+// The run's policy is not read. Each decision is a line of the gateway's report
+// ([stackLine]). On the local link it is registered under
 // a fresh secret, the run answer's stack_proxy_secret, which no other proxy has; on
 // the one address the run key opens it, after [link.StackPreamble].
 func (lr *linkRun) openStack(guarded bool) error {
 	report := routine.ForRun(lr.g.report, lr.id)
-	px, err := proxy.New(policy.Enforce, slices.Clone(lr.g.cfg.StackHosts), nil, func(d proxy.Decision) { report(stackLine(d)) })
+	yaml := slices.Clone(lr.g.cfg.StackHosts)
+	// forager.yaml's entries come first, so a host both lists allow is reported as
+	// forager.yaml's.
+	hosts := slices.Clone(yaml)
+	for _, entry := range lr.r.StackHosts() {
+		if !slices.Contains(hosts, entry) {
+			hosts = append(hosts, entry)
+		}
+	}
+	px, err := proxy.New(policy.Enforce, hosts, nil, func(d proxy.Decision) { report(stackLine(d, yaml, lr.r.StackChecked)) })
 	if err != nil {
 		return err
 	}
 	px.ReportPanics(report)
 	px.SetLimits(proxy.Limits{Connections: lr.g.cfg.RunLimits.Connections, RequestsPerSecond: lr.g.cfg.RunLimits.RequestsPerSecond, Burst: lr.g.cfg.RunLimits.Burst, Stack: true})
-	px.Unlisted(stackRefused)
+	// A host of the run configuration's entries alone passes when the node's policy
+	// allows it; forager.yaml's entries are not checked.
+	px.Admit(func(host, rule string) bool {
+		return slices.Contains(yaml, rule) || lr.r.StackChecked(host) == run.StackAllowed
+	})
+	px.Unlisted(func(host string, port int) string { return stackRefused(host, port, lr.r.StackChecked(host)) })
 	if guarded {
 		// The names are the node's policy's allow entries that StackHosts lists exactly,
 		// so a *. entry of StackHosts opens nothing: both lists name the host itself.
@@ -688,29 +704,51 @@ func (lr *linkRun) closeStack() {
 }
 
 // stackLine is the gateway's report of one decision of a run's stack proxy, after
-// "run <run id>: ".
-func stackLine(d proxy.Decision) string {
+// "run <run id>: ". An allowed host's rule is an entry of yaml, [Config.StackHosts], or
+// else of the run configuration's stack_hosts; checked is the node's decision on a host
+// for the run configuration's entries.
+func stackLine(d proxy.Decision, yaml []string, checked func(string) run.StackCheck) string {
 	host := accesskey.ShownValue(d.Host, false)
 	if d.Rule == proxy.HostForm && !accesskey.ContainsSecret(d.Host) {
 		host = strconv.QuoteToASCII(d.Host)
 	}
 	to := fmt.Sprintf("stack fetch to %s:%d", host, d.Port)
+	list := "gateway.stack_hosts"
+	if !slices.Contains(yaml, d.Rule) {
+		list = "the run configuration's stack_hosts"
+	}
 	switch {
 	case d.Allowed && d.Outcome == proxy.DialFailed:
-		return fmt.Sprintf("%s allowed by gateway.stack_hosts entry %s; the dial failed", to, d.Rule)
+		return fmt.Sprintf("%s allowed by %s entry %s; the dial failed", to, list, d.Rule)
 	case d.Allowed:
-		return fmt.Sprintf("%s allowed by gateway.stack_hosts entry %s", to, d.Rule)
+		return fmt.Sprintf("%s allowed by %s entry %s", to, list, d.Rule)
 	case d.Rule == "":
-		return to + " denied: the host is not in gateway.stack_hosts"
+		switch checked(d.Host) {
+		case run.StackNodeRefuses:
+			return to + " denied: the node's policy does not allow this host of the run configuration's stack_hosts"
+		case run.StackNodePaths:
+			return to + " denied: the node's policy has path rules for this host, which the stack proxy cannot check"
+		}
+		return to + " denied: the host is in neither stack_hosts list"
 	}
 	return fmt.Sprintf("%s denied by the gateway's rule %s", to, d.Rule)
 }
 
-// stackRefused is the body of the 403 a run's stack proxy answers for a host that is
-// not in [Config.StackHosts].
-func stackRefused(host string, port int) string {
-	return fmt.Sprintf("qory: add %s to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.\n"+
-		"qory: egress to %s:%d denied by the gateway: the host is not in gateway.stack_hosts\n", host, host, port)
+// stackRefused is the body of the 403 a run's stack proxy answers for a host that
+// [Config.StackHosts] does not list, by checked, the node's decision on it for the run
+// configuration's stack_hosts: a host the node's policy does not allow, one it has path
+// rules for, or one in neither list.
+func stackRefused(host string, port int, checked run.StackCheck) string {
+	switch checked {
+	case run.StackNodeRefuses:
+		return fmt.Sprintf("qory: allow %s in the node's policy, or list it in gateway.stack_hosts.\n"+
+			"qory: egress to %s:%d denied by the gateway: the node's policy does not allow this host of the run configuration's stack_hosts\n", host, host, port)
+	case run.StackNodePaths:
+		return fmt.Sprintf("qory: list %s in gateway.stack_hosts: the node's path rules cover it.\n"+
+			"qory: egress to %s:%d denied by the gateway: the node's policy has path rules for this host, which the stack proxy cannot check\n", host, host, port)
+	}
+	return fmt.Sprintf("qory: add %s to stack_hosts in forager.yaml or in the run configuration.\n"+
+		"qory: egress to %s:%d denied by the gateway: the host is in neither stack_hosts list\n", host, host, port)
 }
 
 // stackGuarded is the body of the 403 a run's guarded stack proxy answers for a host
@@ -881,6 +919,15 @@ type reloadAnswerDoc struct {
 func (lr *linkRun) refresh() {
 	pol := lr.r.Policy()
 	applied := appliedOf(pol, lr.r.Beside(), lr.r.Held(), lr.r.Chosen(), lr.px.Terminated())
+	if hosts := lr.r.StackHosts(); !lr.opened && len(hosts) > 0 {
+		// The open's record lists the run configuration's stack_hosts, which the stack
+		// proxy allows until the run's first join request, in JSON's types as the rest.
+		listed := make([]any, len(hosts))
+		for i, h := range hosts {
+			listed[i] = h
+		}
+		applied["stack_hosts"] = listed
+	}
 	lr.given = append(lr.given, applied)
 	doc, digest := policyDocument(pol)
 	lr.reloadBody, _ = json.Marshal(reloadAnswerDoc{
