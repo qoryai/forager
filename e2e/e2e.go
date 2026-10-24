@@ -212,7 +212,7 @@ func Main() {
 	case modeRecorder:
 		os.Exit(serveRecorder())
 	case modeSealed:
-		os.Exit(sealedProbe())
+		os.Exit(sealedProbe(os.Args[2:]))
 	case modeHold:
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()

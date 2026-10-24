@@ -431,7 +431,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	r, err := run.Decide(run.Config{
 		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
 		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: lr.passing, Report: g.report,
-		Narrowing: narrowing, Secrets: secrets, Log: lr.logLine,
+		Narrowing: narrowing, Secrets: secrets, Log: lr.logLine, Clock: g.cfg.renewClock,
 	})
 	if err != nil {
 		return fail(err)

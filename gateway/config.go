@@ -135,6 +135,9 @@ type Config struct {
 	// certCheck, when not zero, replaces the constant [certCheck], how often at most the
 	// one address checks its certificate and key files for a change. Tests set it.
 	certCheck time.Duration
+	// renewClock, when not nil, is the clock each run's renewals of the server's values
+	// are judged by, in place of this machine's. Tests set it.
+	renewClock run.Clock
 }
 
 // RunLimits are the limits of each run on the gateway's proxy: gateway.run_limits of

@@ -88,8 +88,8 @@ type Use struct {
 	// Stored says the credential is the server's, a run configuration's credentials
 	// entry, whose value Qory Apiary sealed to the access key.
 	Stored bool
-	// Renewed says the server's value is fetched again before it expires and after a
-	// host refuses it, so [Use.Rejected] means something: a value with expires_at.
+	// Renewed is true when the server's value is fetched again before it expires and
+	// after a host refuses it: a value with expires_at, whose rejected asks for it again.
 	Renewed bool
 	// Format, Endpoint and OAuth are a model key's, from the server or the machine;
 	// empty for every other credential.
@@ -149,8 +149,8 @@ func (u *Use) Value() []byte {
 	return u.held.value()
 }
 
-// Rejected tells the holder a host refused the token, which is a reason to ask the
-// adapter again, or the server for a value with expires_at, not more often than every
+// Rejected is called when a host refused the token: the holder asks the adapter
+// again, or the server for a value with expires_at, not more often than every
 // [RetryWait].
 func (u *Use) Rejected() { u.held.rejected() }
 
@@ -657,8 +657,8 @@ type held struct {
 	// placeholders are the definition's placeholders and then the adapter's, each once.
 	placeholders []string
 	// value, for a credential from the server, returns its opened value; nil for the
-	// machine's. onRejected, for a value from the server with expires_at, hears a host's
-	// 401; nil for every other.
+	// machine's. onRejected, for a value from the server with expires_at, is called on a
+	// host's 401; nil for every other.
 	value      func() []byte
 	onRejected func()
 

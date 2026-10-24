@@ -30,7 +30,10 @@ type Clock interface {
 // machineClock is this machine's clock.
 type machineClock struct{}
 
-func (machineClock) Now() time.Time                         { return time.Now() }
+// Now returns this machine's time.
+func (machineClock) Now() time.Time { return time.Now() }
+
+// After returns [time.After] of d.
 func (machineClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 // renewer fetches again the values of the run configuration's credentials that have
@@ -201,7 +204,7 @@ func (w *renewer) plan(now time.Time) (due []string, next time.Time, gone []*ren
 		}
 		return least
 	}
-	soon := func(t time.Time) {
+	earliest := func(t time.Time) {
 		if next.IsZero() || t.Before(next) {
 			next = t
 		}
@@ -229,8 +232,8 @@ func (w *renewer) plan(now time.Time) (due []string, next time.Time, gone []*ren
 			due = append(due, e.name)
 			continue
 		}
-		soon(t)
-		soon(e.expires)
+		earliest(t)
+		earliest(e.expires)
 	}
 	return due, next, gone
 }
@@ -249,7 +252,7 @@ func (w *renewer) expire(e *renewal) {
 }
 
 // renew asks the server for the values of names under the digest of the run
-// configuration in force, and puts each one that holds the start's rules in place of
+// configuration in force, and puts each one that meets the start's rules in place of
 // the one the run has. Each one refused, and every one of a request that failed, keeps
 // its value and is reported.
 func (w *renewer) renew(names []string, now time.Time) {
@@ -313,8 +316,8 @@ var (
 	errApplyMoved = errors.New("its apply differs from the start")
 )
 
-// renewed checks the renewed value of name against the rules of the start: a value a
-// header can hold, one that starts with a model key's key_prefixes, expires_at, and
+// renewed checks the renewed value of name against the rules of the start: a value that
+// is a valid header value, one that starts with a model key's key_prefixes, expires_at, and
 // the start's apply.
 func (r *Run) renewed(name string, values sealed.Values) error {
 	i := slices.IndexFunc(r.stored, func(c server.RunCredential) bool { return c.Name == name })
@@ -337,7 +340,7 @@ func (r *Run) renewed(name string, values sealed.Values) error {
 }
 
 // effectiveApply is where the value of c is set: the answer's apply, or c's items when
-// the answer gives none.
+// the answer has none.
 func effectiveApply(c server.RunCredential, values sealed.Values) []credential.StoredApply {
 	var out []credential.StoredApply
 	if apply, ok := values.Apply(c.Name); ok {

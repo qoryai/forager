@@ -233,7 +233,7 @@ func TestTheFixtureOpens(t *testing.T) {
 	}
 }
 
-// TestReplaceClearsTheOldValue pins Replace: the new value, its expires_at and its
+// TestReplaceClearsTheOldValue pins Replace: the renewed value, its expires_at and its
 // apply take the old one's place, the old bytes are zeros, the other values stay, and
 // the source no longer has the value, so clearing it leaves the replaced one. A source
 // without the credential changes nothing.

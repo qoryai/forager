@@ -66,7 +66,7 @@
             "uniqueItems": true,
             "items": {"$ref": "#/properties/placeholders/items"}
           },
-          "auth": {"description": "How the proxy sets the value: the run configuration entry's auth for a credential from the server, and the definition's for a model key of the machine's. Absent for every other credential of the machine's.", "$ref": "auth.schema.json"},
+          "auth": {"description": "How the proxy sets the value: for a credential from the server, an API credential's auth, or a host credential's first apply item's scheme, username and header, those of the answer's value when it has apply; and the definition's for a model key of the machine's. Absent for every other credential of the machine's.", "$ref": "auth.schema.json"},
           "format": {"description": "The API format of an API credential, a model key from the server or the machine. The session gives the key to the variable the run's runtime lists for this format and auth, and refuses the run otherwise, run_configuration_invalid. Absent for every other credential.", "$ref": "api-format.schema.json"},
           "endpoint": {"description": "The endpoint of an API credential, which the session sets the runtime's model endpoint variable to; hosts is its host alone.", "$ref": "run-configuration.schema.json#/$defs/endpoint"}
         },

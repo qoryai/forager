@@ -237,7 +237,7 @@ func TestAValueIsRenewedBeforeItExpires(t *testing.T) {
 
 // TestCredentialsDueTogetherGoInOneRequest pins the batching: two credentials whose
 // renewals come within RetryWait of each other are asked for in one request, in the
-// document's order, and a third, due later, in its own.
+// document's order, and a third, due later, alone in a second request.
 func TestCredentialsDueTogetherGoInOneRequest(t *testing.T) {
 	doc := `{"version":1,"credentials":[` +
 		`{"name":"a","apply":[{"hosts":["a.example"],"scheme":"bearer"}]},` +
@@ -303,7 +303,7 @@ func TestA401AsksAgainAtMostEveryRetryWait(t *testing.T) {
 }
 
 // TestAFailedRenewalKeepsTheValue pins a renewal that fails, or whose answer changes
-// the start's apply or has no expires_at: the value stays, a report line says why, the
+// the start's apply or has no expires_at: the value stays, a report line contains the cause, the
 // request goes again RetryWait later, and a value that a later renewal brings takes
 // the old one's place.
 func TestAFailedRenewalKeepsTheValue(t *testing.T) {
@@ -338,7 +338,7 @@ func TestAFailedRenewalKeepsTheValue(t *testing.T) {
 			}
 			for _, l := range rep.lines() {
 				if strings.Contains(l, "forge-moved") || strings.Contains(l, "forge-forever") {
-					t.Errorf("a report holds a value: %s", l)
+					t.Errorf("a report contains a value: %s", l)
 				}
 			}
 			fails = false
@@ -447,7 +447,7 @@ func TestCloseStopsTheRenewer(t *testing.T) {
 
 // TestTheStartsAnswerIsCheckedAgainstItsEntry pins the open of values with expires_at
 // and apply: a value that expired before the run started and an apply outside its
-// entry are run_configuration_invalid with the texts the contract gives; an apply that
+// entry are run_configuration_invalid with the contract's texts; an apply that
 // narrows the entry is where the proxy sets the value.
 func TestTheStartsAnswerIsCheckedAgainstItsEntry(t *testing.T) {
 	narrow := []sealed.Apply{{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token", Paths: []string{"/example-org/app.git/*"}}}
