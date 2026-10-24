@@ -408,11 +408,11 @@ func within(a sealed.Apply, e server.Apply) bool {
 func checkOpened(c server.RunCredential, values sealed.Values, now time.Time) error {
 	if at, ok := values.ExpiresAt(c.Name); ok && !at.After(now) {
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-			"Report this answer to whoever runs the control plane: credential %s expired before the run started", accesskey.ShownName(c.Name, true))
+			"Tell whoever runs the control plane: credential %s expired before the run started", accesskey.ShownName(c.Name, true))
 	}
 	if host, ok := outside(c, values); ok {
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-			"Report this answer to whoever runs the control plane: credential %s applies to %s, outside its entry", accesskey.ShownName(c.Name, true), accesskey.ShownValue(host, false))
+			"Tell whoever runs the control plane: credential %s applies to %s, outside its entry", accesskey.ShownName(c.Name, true), accesskey.ShownValue(host, false))
 	}
 	return nil
 }

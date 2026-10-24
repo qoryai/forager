@@ -455,11 +455,11 @@ func TestTheStartsAnswerIsCheckedAgainstItsEntry(t *testing.T) {
 		forge answer
 		want  string
 	}{
-		"expired": {answer{value: "forge-0", expires: start}, `Report this answer to whoever runs the control plane: credential "forge" expired before the run started`},
+		"expired": {answer{value: "forge-0", expires: start}, `Tell whoever runs the control plane: credential "forge" expired before the run started`},
 		"another host": {answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: []string{"git2.example"}, Scheme: "basic", Username: "x-access-token"}}},
-			`Report this answer to whoever runs the control plane: credential "forge" applies to git2.example, outside its entry`},
+			`Tell whoever runs the control plane: credential "forge" applies to git2.example, outside its entry`},
 		"another scheme": {answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: []string{"git.example"}, Scheme: "bearer"}}},
-			`Report this answer to whoever runs the control plane: credential "forge" applies to git.example, outside its entry`},
+			`Tell whoever runs the control plane: credential "forge" applies to git.example, outside its entry`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := &controlPlane{answer: func(n string, call int) (answer, error) {

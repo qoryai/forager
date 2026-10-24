@@ -893,11 +893,10 @@ https://apiary.example/v1/run-configuration: store in the control plane a value 
 credential "model" that starts with "sk-ant-": the stored value starts with none of its
 key_prefixes`, and an answer `sealed.Open` refuses, but one whose envelope signature
 does not verify, `answer_unsigned`. Each is `run_configuration_invalid` too: a value
-whose `expires_at` is not after the machine's clock, `Report this answer to whoever
-runs the control plane: credential "forge" expired before the run started`, and an
-`apply` item that is not within one of its entry's items, `Report this answer to
-whoever runs the control plane: credential "forge" applies to git2.example, outside its
-entry`. No message contains a value. A credential from the
+whose `expires_at` is not after the machine's clock, `Tell whoever runs the control
+plane: credential "forge" expired before the run started`, and an `apply` item that is
+not within one of its entry's items, `Tell whoever runs the control plane: credential
+"forge" applies to git2.example, outside its entry`. No message contains a value. A credential from the
 server replaces each credential of the machine's whose hosts claim one of its hosts, or
 a host above or below one; the host of a model key, from the server or the machine, is
 its endpoint's. A key from `env` or `file`, such as forager.yaml's model key for that
