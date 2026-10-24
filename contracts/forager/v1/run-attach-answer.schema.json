@@ -6,7 +6,7 @@
   "allOf": [{"$ref": "run-configuration.schema.json"}],
   "properties": {
     "labels": {
-      "description": "The run's labels, as the starter's registration gave them. They select no policy; a separate gateway's selection of credentials can take a credential's argument from one. Absent means none.",
+      "description": "The run's labels, as the starter's registration gave them. They select no policy. Absent means none.",
       "$ref": "events/run.started.schema.json#/properties/labels"
     },
     "about": {

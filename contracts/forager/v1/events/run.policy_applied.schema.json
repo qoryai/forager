@@ -17,7 +17,7 @@
     "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when the server returned one: sha256= and the lower-case hex SHA-256 of the document's bytes as the server sent them.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
     "paths": {"description": "The policy's path rules, by host, when it has any: the server's, when the policy is fetched; node_policy contains the node's.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "credentials": {
-      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed, or, from the gateway's selection, the run's label it took. Never a secret.",
+      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed. Never a secret.",
       "type": "array",
       "items": {
         "type": "object",

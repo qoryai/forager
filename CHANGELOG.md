@@ -570,9 +570,7 @@ release may change what an existing document does, and says so under Upgrading.
 - The registration bodies, `server.Registration.Body` and
   `server.GatewayRegistration.Body`, send the labels and about as `server.ShownLabels`
   and `server.ShownAbout` give them, and so do `run.started` and the gateway's
-  `run.registered`. A separate gateway's selection reads the labels the attach answers
-  with, so a label value that contains `qak_` or `qrk_` gives no credential argument
-  (Gateway, Upgrading). `run.started.schema.json` admits the two name phrases as a
+  `run.registered`. `run.started.schema.json` admits the two name phrases as a
   label's key, and `server.CheckLabels` takes them. The reference receiver keeps a
   registration's labels and about as the two functions give them, and answers an
   attach with that copy. `server.ShownAbout` keeps `details` byte for byte when no
@@ -601,8 +599,6 @@ release may change what an existing document does, and says so under Upgrading.
   prefix by chance.
 - The `credentials` merge row: behind a separate gateway, a walled run gets the
   gateway's selection when the server's selects none.
-- `dev.qory.run.policy_applied`'s `credentials` carry, as the argument, the value of the
-  run's label a gateway's selection took it from.
 - `wall:echo-method` covers a host of every credential, the machine's included, and
   its denial is a `405`. `dev.qory.run.egress` takes the rule `wall:plain-request`, a
   plain request to a host that gets a credential and that the policy allows, denied in
@@ -660,12 +656,6 @@ release may change what an existing document does, and says so under Upgrading.
 - Each run on a gateway now has limits: at most 256 connections open at once, and 50
   requests a second with a burst of 200. A run past one gets `429 Too Many Requests`
   with `Retry-After: 1`. Set `gateway.Config.RunLimits` higher if your runs need more.
-- A credential's selection gives no argument for a label whose value is `(a name that
-  contains an access key secret)` or `(a name that contains a run key)`, whatever its
-  `pattern` admits, `.+` among them. A separate gateway reads the labels from the
-  attach answer, where a value that contains `qak_` or `qrk_` in any case is that
-  phrase, so a label such as `repository=acme/qrk_x` gave its value as the argument
-  before and gives none now. The run's user is told the label is no argument.
 - A separate gateway refuses a run key whose instance id contains `qak_` or `qrk_` in
   any case: the attach is answered `run_key_invalid`, 400. Before, the run attached and
   `run.registered` sent the instance id as it was.
@@ -763,9 +753,9 @@ release may change what an existing document does, and says so under Upgrading.
   policy cannot deny its hosts. The proxy sets no value of such a key, and replaces
   each model key's value in every answer from the key's host.
 - `gateway.Config.Selects`: behind a separate gateway, when the server's policy selects
-  no credential, a run, with or without a wall, gets the gateway's selection, a credential that takes an
-  argument taking it from a label of the run whose value matches the pattern named, for
-  a run whose `forge` label is the one named.
+  no credential, a run, with or without a wall, gets the gateway's selection. Selects
+  lists credentials that take no argument; a credential that takes an argument comes
+  from the run's policy.
 - The gateway decides an image a policy names by reference: refused with
   `image_not_allowed` under none of the request's `images.allow`, and otherwise the
   run's image under the default's runtime. The answer carries `relay_image`, the
@@ -926,7 +916,7 @@ release may change what an existing document does, and says so under Upgrading.
   and now print or send a phrase in place of one that contains `qak_` or `qrk_` in any
   case. The name's phrase: an image in `image_unknown` and `image_not_allowed`, their
   names included, in the refusal of an image that needs a wall, in a reload whose image
-  moved, and in the machine's image definitions; a selection's label and forge. The
+  moved, and in the machine's image definitions. The
   value's phrase: a tool's program, the lines it writes, its start's error and a host
   its definition gives; a path an adapter's answer claims, the decoder's and the
   schema's error of the answer, and a definition's scheme and hosts; the run
@@ -940,7 +930,7 @@ release may change what an existing document does, and says so under Upgrading.
 - More of the gateway's answers and errors sent or printed a value as written, and now
   send or print a phrase in place of one that contains `qak_` or `qrk_` in any case.
   The name's phrase: the `names` of a refusal on the link, `wall_required`'s
-  `image=<name>` among them, and a selection's pattern error. The value's phrase: the
+  `image=<name>` among them. The value's phrase: the
   errors of the gateway's address, its link socket and its directory, of a run's record
   files, locks and resend, and of an enrolment's request. A separate gateway refuses a
   run key whose instance id contains a prefix as `run_key_invalid`, as a registration's
@@ -964,10 +954,9 @@ release may change what an existing document does, and says so under Upgrading.
   env or file, env or file without hosts, and an argument the credential does not take
   or the machine does not provide for, its name and the argument; the two lines a
   renewal reports; the refusals of `Config.Selects`; the link's phrases for a
-  credential's program directory and file and a tool's program directory; the lines a
-  run is told when a selection entry gives it no credential, the entry's name, the run's
-  forge and the label's value among them, and the refusal of a selection the node's
-  policy does not list; the tool messages, a tool's name, argument and placeholder in
+  credential's program directory and file and a tool's program directory; the refusal
+  of a selection the node's policy does not list; the tool messages, a tool's name,
+  argument and placeholder in
   `Definition.Check`, `Choose` and `Check`, a tool that does not start, a tool that
   exits while the run goes on, and the lines a tool writes; the refusals of a server's
   tools and credentials that the node's policy does not list; the credential's name in
@@ -982,7 +971,7 @@ release may change what an existing document does, and says so under Upgrading.
   in the message of an adapter that fails, its path, its error and the first line of its
   error output; the adapter's path in the other messages about its answer; the error of
   a credential's file that cannot be read; the regular expression error of a
-  credential's or a tool's argument pattern and of a `Selects` pattern; and the error of
+  credential's or a tool's argument pattern; and the error of
   a server's `security_policy` that does not read as a policy. The rest of each message
   prints as before, and so does a value with neither prefix.
   `run.policy_applied.schema.json` admits the two name phrases as a variable's name.

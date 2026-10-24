@@ -31,10 +31,8 @@ type Config struct {
 	Tools       []Tool
 	// Selects are, behind a separate gateway, the credentials a run gets, with or
 	// without a wall, when the server's policy selects none, each one of Credentials by
-	// name. An entry that takes an argument names the run's label it takes, the forge
-	// the run's forge label must be, and the pattern the label's value must match whole;
-	// an entry the run's labels do not satisfy gives no credential, and the gateway
-	// reports why. Selects needs a Listen.
+	// name. An entry is for a credential that takes no argument; a credential that takes
+	// an argument comes from the run's policy. Selects needs a Listen.
 	Selects []Selection
 	// Version is Forager's version, reported in each run's registration and in the user
 	// agent of every request to the Server; empty means "dev".

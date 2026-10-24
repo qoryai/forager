@@ -261,32 +261,11 @@ func (c Credential) Check() error { return credential.Definition(c).Check() }
 
 // Selection is one credential the gateway selects, [Config.Selects]: behind a separate
 // gateway, a run gets it, with or without a wall, when the server's policy selects no
-// credential. An
-// entry for a credential that takes no argument names the credential alone; one for a
-// credential that takes an argument names Label, Forge and Pattern as well.
+// credential. An entry is for a credential that takes no argument; a credential that
+// takes an argument comes from the run's policy.
 type Selection struct {
 	// Name is the credential's, one of [Config.Credentials].
 	Name string
-	// Label is the run's label whose value is the credential's argument; empty for a
-	// credential that takes none.
-	Label string
-	// Forge is the value the run's forge label must be: a run with another, or none,
-	// gets no credential of the entry.
-	Forge string
-	// Pattern is a regular expression the label's value must match whole: a run whose
-	// value it does not match gets no credential of the entry.
-	Pattern string
-}
-
-// WholeMatch compiles pattern as a [Selection]'s is matched: anchored, so a value
-// matches only when the pattern matches all of it. The error of a pattern that does not
-// compile alone is that one's; one that compiles alone and not anchored, such as a\Q,
-// whose quote takes the anchor's closing in, has the anchored form's.
-func WholeMatch(pattern string) (*regexp.Regexp, error) {
-	if _, err := regexp.Compile(pattern); err != nil {
-		return nil, err
-	}
-	return regexp.Compile(`^(?:` + pattern + `)$`)
 }
 
 // Spaced is text with every control character, C0, DEL and C1, and every format

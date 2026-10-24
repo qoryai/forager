@@ -21,7 +21,6 @@ import (
 	"maps"
 	"os"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -55,7 +54,7 @@ type Config struct {
 	Fetched *Fetched
 	// Labels are the run's labels: on the local link, those the run configuration is
 	// asked for by; behind a separate gateway, those the attach's answer gives back of
-	// the starter's registration, which the gateway's selection of credentials reads.
+	// the starter's registration.
 	Labels map[string]string
 	// Wall says the run's agent runs behind a wall.
 	Wall bool
@@ -65,8 +64,8 @@ type Config struct {
 	Tools       []Tool
 	// Selects are the gateway's selection among Credentials, for a run that attached
 	// with a run key behind a separate gateway; nil on the local link. The run gets it,
-	// by its labels, with or without a wall, when the run configuration's policy selects
-	// no credential, at the start and at every reload.
+	// with or without a wall, when the run configuration's policy selects no credential,
+	// at the start and at every reload.
 	Selects []Selection
 	// Images are the images the run's policy selects among, and the one it starts in
 	// when the policy selects none; they mean something only behind a wall.
@@ -128,10 +127,7 @@ type Run struct {
 	relay  string
 	served map[string]string
 	server bool
-	// patterns are the compiled patterns of [Config.Selects], by index, nil for an entry
-	// whose credential takes no argument.
-	patterns []*regexp.Regexp
-	chosen   []tool.Chosen
+	chosen []tool.Chosen
 	// terminates says the proxy holds the run's authority, from the start on.
 	terminates bool
 
@@ -189,17 +185,6 @@ func Decide(cfg Config) (*Run, error) {
 	r.tools = make([]tool.Definition, len(cfg.Tools))
 	for i, t := range cfg.Tools {
 		r.tools[i] = tool.Definition(t)
-	}
-	r.patterns = make([]*regexp.Regexp, len(cfg.Selects))
-	for i, s := range cfg.Selects {
-		if s.Label == "" {
-			continue
-		}
-		re, err := WholeMatch(s.Pattern)
-		if err != nil {
-			return nil, accesskey.ShownError(err)
-		}
-		r.patterns[i] = re
 	}
 	pol := policy.None()
 	if cfg.Node != nil {
@@ -629,43 +614,12 @@ func nameImage(pol, fetched, node *policy.Loaded, image string) error {
 // policy [Run.Read] made whose server's side selects none, narrowed by the node's
 // credentials member whenever the node's policy has one, beside a server's policy or
 // alone in force, as the server's selection is: a selected credential the member does
-// not list is no run. An entry for a credential that takes an argument gives none when
-// the run's labels do not satisfy it, and the run's user is told why: a label it takes
-// that the run does not have, the forge label among them, a forge label of another
-// value, or a value outside its pattern or that is a name's phrase
-// ([accesskey.IsNamePhrase]). Nothing is resolved here: the policy's
-// credentials are resolved as any are, the argument checked against the definition's
-// pattern before its adapter runs.
+// not list is no run. Nothing is resolved here: the policy's credentials are resolved
+// as any are.
 func (r *Run) selects(pol *policy.Loaded) error {
-	id := r.cfg.RunID
 	var selected []policy.Selected
-	for i, s := range r.cfg.Selects {
-		if s.Label == "" {
-			selected = append(selected, policy.Selected{Name: s.Name})
-			continue
-		}
-		name := accesskey.ShownName(s.Name, false)
-		forge, ok := r.labels["forge"]
-		if !ok {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, "forge", name))
-			continue
-		}
-		if forge != s.Forge {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Forge, false)), Spaced(accesskey.ShownName(forge, false)), name))
-			continue
-		}
-		value, ok := r.labels[s.Label]
-		if !ok {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Label, false)), name))
-			continue
-		}
-		// A value that is a name's phrase, as a separate gateway reads the labels from
-		// the attach answer, is no argument, whatever the pattern admits.
-		if accesskey.IsNamePhrase(value) || !r.patterns[i].MatchString(value) {
-			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(accesskey.ShownName(s.Label, false)), Spaced(accesskey.ShownName(value, false)), name, name))
-			continue
-		}
-		selected = append(selected, policy.Selected{Name: s.Name, Argument: value})
+	for _, s := range r.cfg.Selects {
+		selected = append(selected, policy.Selected{Name: s.Name})
 	}
 	if r.node != nil && r.node.Policy.Credentials != nil {
 		var out []string

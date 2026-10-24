@@ -552,9 +552,8 @@ link. Its `gateway.Config` sets it:
   the gateway relays; one that only tunnels them sees the server's host and port.
   `Listen` needs it.
 - `Selects`: behind a separate gateway, the credentials a run gets, with or without a
-  wall, when the server's policy selects none. An entry that takes an argument names
-  the run's label it takes, the forge the run's `forge` label must be, and the pattern
-  the label's value must match whole.
+  wall, when the server's policy selects none. An entry is for a credential that takes
+  no argument; a credential that takes an argument comes from the run's policy.
 
 A separate gateway runs no sessions on the gateway's machine: it makes no local link, in
 memory or on a socket, and no proxy listener on loopback, and a session that dials its
@@ -575,14 +574,10 @@ without a `Server`, "the gateway's address <address> needs a server and a gatewa
 access key: the gateway attaches each run there", certificate and key files it cannot
 read or that do not match, and `TLS` without `Listen`; `Selects` without `Listen`,
 "gateway: Selects is for the runs on the gateway's address, and it has no Listen", and
-an entry of `Selects` that names no credential of `Credentials`, "gateway: Selects names
-<name>, which is no credential of Credentials", or one another entry names, "gateway:
-Selects names <name> twice", that names a `Label` for a credential that takes no
-argument, "gateway: Selects <name>: <name> takes no argument, so Label does not apply",
-and likewise a `Forge` or a `Pattern`, that leaves out any of the three for one that
-takes an argument, "gateway: Selects <name>: <name> takes an argument, so it needs
-Label, Forge and Pattern", or whose pattern does not compile as a label's value is
-matched, whole, "gateway: Selects <name>: the pattern does not compile: <reason>"; and
+an entry of `Selects` for no credential of `Credentials`, "gateway: Selects names
+<name>, which is no credential of Credentials", one that another entry is for, "gateway:
+Selects names <name> twice", or an entry for a credential that takes an argument,
+"gateway: remove <name> from Selects: its argument comes from the run's policy"; and
 once discovery is read, an access key that is not a gateway's, "the access key's node
 <node id> is not a gateway, ng_: the gateway's address <address> needs a gateway's
 access key". Without `Listen`, once discovery is read, it refuses a gateway's access
