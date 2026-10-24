@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -430,7 +431,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	r, err := run.Decide(run.Config{
 		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
 		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: lr.passing, Report: g.report,
-		Narrowing: narrowing, Secrets: secrets,
+		Narrowing: narrowing, Secrets: secrets, Log: lr.logLine, Clock: g.cfg.renewClock,
 	})
 	if err != nil {
 		return fail(err)
@@ -613,6 +614,13 @@ func (lr *linkRun) release() {
 // observe numbers one decision of the run's proxy as dev.qory.run.egress; the stream
 // holds it until run.started is numbered.
 func (lr *linkRun) observe(d proxy.Decision) { lr.st.Emit(event.RunEgress, run.Egress(d)) }
+
+// logLine numbers one line of the gateway's in the run's record as a dev.qory.run.log of
+// stream stderr, with no session: a value of the run configuration's credentials that
+// expired with no renewal.
+func (lr *linkRun) logLine(line string) {
+	lr.st.Emit(event.RunLog, map[string]any{"stream": "stderr", "bytes": base64.StdEncoding.EncodeToString([]byte(line + "\n"))})
+}
 
 // openStack makes the run's stack proxy, for qory's fetch of the harness definition
 // before the run's first session: in enforce mode, allowing the hosts of
@@ -964,7 +972,8 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 }
 
 // credentialHosts are the run answer's credential_hosts: one entry per credential held,
-// from the same uses as appliedOf's credentials, with the auth of a credential from the
+// and per apply item of a host credential from the server, from the same uses as
+// appliedOf's credentials, with the auth of a credential from the
 // server and of a model key, and the format and endpoint of a model key; nil when the
 // run holds none.
 func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
@@ -973,6 +982,19 @@ func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
 	}
 	var out []server.LinkCredentialHosts
 	for _, c := range held.Credentials() {
+		if c.Stored && c.Format == "" {
+			// A host credential from the server: one entry per item, each with its
+			// hosts and auth, the placeholders on the first alone.
+			for i, it := range c.Items {
+				e := server.LinkCredentialHosts{Name: c.Name, Hosts: it.Hosts, Placeholders: []string{},
+					Auth: &server.Auth{Scheme: it.Scheme, Header: it.Header, Username: it.Username}}
+				if i == 0 {
+					e.Placeholders = c.Placeholders
+				}
+				out = append(out, e)
+			}
+			continue
+		}
 		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint}
 		if c.Stored || c.Format != "" {
 			e.Auth = &server.Auth{Scheme: c.Scheme, Header: c.Header, Username: c.Username, OAuth: c.OAuth}

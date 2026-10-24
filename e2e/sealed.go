@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // What the run of a sealed credential is: the variable its placeholder is in, the
@@ -18,6 +19,11 @@ const (
 	sealedHostVar     = "PROBE_SEALED_HOST"
 	sealedMark        = "-SEALED-not-a-secret-"
 	sealedPrefix      = "walltest-sealed: "
+	// sealedRenew is the argument that makes the sealed probe send its request every
+	// sealedEvery for sealedFor, so a renewal of the value reaches the recorder.
+	sealedRenew = "renew"
+	sealedEvery = 2 * time.Second
+	sealedFor   = 50 * time.Second
 )
 
 // sealedReport is what the sealed probe found inside the enclosure: the placeholder
@@ -35,14 +41,29 @@ type sealedReport struct {
 // placeholder variable's value in x-api-key to the recorder sealedHostVar names,
 // through the proxy, as a model client sends its key; and it looks for sealedMark in
 // its environment, every process environment under /proc it can read and the answer.
-// It prints one line, sealedPrefix and the report as JSON, and exits 0.
-func sealedProbe() int {
+// With sealedRenew it sends the request every sealedEvery for sealedFor, and reports
+// the last status and the first error. It prints one line, sealedPrefix and the report
+// as JSON, and exits 0.
+func sealedProbe(args []string) int {
 	r := sealedReport{Placeholder: os.Getenv(sealedPlaceholder)}
 	u := "https://" + net.JoinHostPort(os.Getenv(sealedHostVar), recorderTLS) + modelPath
-	var answer string
-	r.Status, answer, r.Err = postAnswer(u, "x-api-key", r.Placeholder)
-	if strings.Contains(answer, sealedMark) {
-		r.Seen = append(r.Seen, "the answer of "+u)
+	end := time.Now()
+	if len(args) > 0 && args[0] == sealedRenew {
+		end = end.Add(sealedFor)
+	}
+	for {
+		status, answer, err := postAnswer(u, "x-api-key", r.Placeholder)
+		r.Status = status
+		if r.Err == "" {
+			r.Err = err
+		}
+		if strings.Contains(answer, sealedMark) {
+			r.Seen = append(r.Seen, "the answer of "+u)
+		}
+		if !time.Now().Add(sealedEvery).Before(end) {
+			break
+		}
+		time.Sleep(sealedEvery)
 	}
 	for _, kv := range os.Environ() {
 		if name, value, _ := strings.Cut(kv, "="); strings.Contains(value, sealedMark) {

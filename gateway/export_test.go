@@ -13,6 +13,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/server"
 )
 
@@ -117,6 +118,9 @@ func Guarded(g *Gateway, runID string) bool {
 // SetUpstreamRoots sets the roots every run's proxy verifies a terminated host's
 // certificate against.
 func SetUpstreamRoots(c *Config, roots *x509.CertPool) { c.upstreamRoots = roots }
+
+// SetRenewClock sets the clock each run's renewals of the server's values are judged by.
+func SetRenewClock(c *Config, clock run.Clock) { c.renewClock = clock }
 
 // SetOpened sets what is called once a run on the one address opened.
 func SetOpened(c *Config, f func()) { c.opened = f }

@@ -805,14 +805,17 @@ values the server stores for the run, at most 8, and `model_credential`
    "endpoint": "https://api.model.example/anthropic",
    "auth": {"scheme": "header", "header": "x-api-key"},
    "key_prefixes": ["sk-ant-"]},
-  {"name": "forge", "hosts": ["git.example", "api.git.example"],
-   "auth": {"scheme": "basic", "username": "x-access-token"}}]
+  {"name": "forge",
+   "apply": [{"hosts": ["git.example"], "scheme": "basic", "username": "x-access-token",
+              "paths": ["/example-org/app.git/*"]},
+             {"hosts": ["api.git.example"], "scheme": "bearer", "paths": ["/repos/example-org/app/*"]}],
+   "placeholders": ["GIT_TOKEN"]}]
 ```
 
 An entry is one of two kinds. An API credential, with `format`, is a model key, and has
 `name`, `format`, `endpoint`, `auth` and optionally `key_prefixes`. A host credential,
-with `hosts`, is any other secret, and has `name`, `hosts`, `auth`, and optionally
-`paths` and `placeholders`. An entry has no member beside those of its kind, and no
+with `apply`, is any other secret, and has `name`, `apply`, and optionally
+`placeholders`. An entry has no member beside those of its kind, and no
 value: the server seals each value to the access key in the answer to the secrets
 request (§The server, Secrets).
 
@@ -834,17 +837,23 @@ request (§The server, Secrets).
 - `key_prefixes`, optional, are 1 to 4 literal prefixes, each 1 to 32 characters of
   printable ASCII without a space, none twice, such as `sk-ant-`. A value that starts
   with none of them is `run_configuration_invalid` (below). Absent, any value is taken.
-- Each of `hosts`, 1 to 16, is exact: a lower-case DNS name whose last label starts
+- `apply` is 1 to 16 items, each where and how the value is set: `hosts`, `scheme`,
+  `username` with `basic` alone, `header` with `header` alone, and optionally `paths`.
+  An item is credential.schema.json's without `token`, with exact hosts. A `header`
+  is a token of RFC 9110, at most 64 characters.
+- Each of an item's `hosts`, 1 to 16, is exact: a lower-case DNS name whose last label starts
   with a letter, an IPv4 address of four decimal parts with no leading zero, or an IPv6
   address of lower-case hex groups with no leading zero, without brackets or a zone;
   never a `*.` pattern or a port. The server writes an IPv6 address in RFC 5952's form,
   the form `policy.Host` returns: the schema does not check which run of zero groups
   `::` replaces.
-- `paths` are in the policy's path grammar, absent meaning every path.
+- An item's `paths`, 1 to 32, are in the policy's path grammar, absent meaning every
+  path.
 - `placeholders` are variables for the enclosure to get with the placeholder value.
 
 Forager checks a run configuration's `credentials` against the schema, then refuses a
-name twice and an `auth.header` that frames the request or that the proxy sets:
+name twice and a header, an API credential's `auth.header` or an item's `header`, that
+frames the request or that the proxy sets:
 `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `TE`, `Trailer`,
 `Upgrade`, `Keep-Alive`, `Expect`, `Cookie`, and any name that starts with `Proxy-`,
 `X-Qory-` or `Qory-`, case ignored and `_` read as `-`. It also refuses a placeholder
@@ -869,10 +878,11 @@ beside two or more model keys of the server's and the machine's together.
 The gateway sets these credentials for every run, with or without a wall. A run
 configuration with `credentials` from a server whose discovery lists no `secrets` is
 `run_configuration_invalid`. When the run
-starts, the gateway sends the secrets request once, under the access key, for the
+starts, the gateway sends the secrets request under the access key, for the
 document's credentials in its order and the digest it computes of the document's bytes,
 and opens the answer with `sealed.Open` under the pinned `apiary_public_key` and the
-machine's clock. A pin or an access key that is a published fixture key is
+machine's clock. It sends the request again for the values that expire (Renewal,
+below). A pin or an access key that is a published fixture key is
 `run_configuration_invalid`: the registration or the attach has been sent, and the
 secrets request is not. A value with a control character other
 than tab, or a space or tab at its start or end, is `run_configuration_invalid`, and so
@@ -880,7 +890,17 @@ is a model key's value that starts with none of its `key_prefixes`, `run configu
 https://apiary.example/v1/run-configuration: store in the control plane a value of the
 credential "model" that starts with "sk-ant-": the stored value starts with none of its
 key_prefixes`, and an answer `sealed.Open` refuses, but one whose envelope signature
-does not verify, `answer_unsigned`. No message contains a value. A credential from the
+does not verify, `answer_unsigned`. Each is `run_configuration_invalid` too: a value
+whose `expires_at` is not after the machine's clock, `Tell whoever runs the control
+plane: credential "forge" expired before the run started`, and an `apply` item that is
+not within one of its entry's items. The refusal shows what differs: a host
+of no entry item, `Tell whoever runs the control plane: credential "forge" applies to
+git2.example, outside its entry`; else, on the item's first host that no entry item
+takes, the first of the scheme, the username, the header and the paths that no entry
+item with the host has, such as `Tell whoever runs the control plane: credential
+"forge" sets git.example with another scheme` or `… sets git.example on other paths`;
+else, for hosts of two entry items in one item, `Tell whoever runs the control plane:
+credential "forge" merges two apply items of its entry`. No message contains a value. A credential from the
 server replaces each credential of the machine's whose hosts claim one of its hosts, or
 a host above or below one; the host of a model key, from the server or the machine, is
 its endpoint's. A key from `env` or `file`, such as forager.yaml's model key for that
@@ -892,6 +912,36 @@ run the server's `model`. A credential of the machine's that stays, because its 
 claim none of the server's credential's hosts, and that has the same name is no run, so
 the record lists each name once. Without `credentials` the run gets the machine's
 credentials as before.
+
+**Renewal.** A value of the answer may have `expires_at`, when it stops working, and
+`apply`, where it is set (`sealed-plaintext.schema.json`). Each `apply` item is within
+one of its entry's items: its hosts among that item's hosts, the same `scheme`,
+`username` and `header`, and paths that the item's paths cover. An API credential's
+item is its endpoint's host with its `auth`. The items may narrow the entry and never
+widen it. The gateway sets the value on the answer's items, or on the entry's when the
+answer has none.
+
+The gateway sends the secrets request again for a value with `expires_at`: 5 minutes
+before it expires, and after a host answers `401` to a request that the value was set
+on. It waits at least 30 seconds between two requests for one entry. A request lists
+only the entries that are due, in the document's order, with entries due within 30
+seconds of each other in one request, under the digest it computes of the run
+configuration in force, a reload's once the reload is committed. A value without
+`expires_at`, such as a model key's, is never asked for again, after a `401` either.
+
+The answer's value takes the old value's place, whose bytes the gateway overwrites with
+zeros, if it passes the checks of the start, has an `expires_at` after the machine's
+clock, and its `apply`, or the entry's when it has none, is the start's. Otherwise, and
+when the request fails, the gateway keeps the old value, reports `run <run id>: If this
+repeats, check the control plane: credential "forge" was not renewed: ` and the cause,
+such as `its apply differs from the start`, `the answer has no expires_at` or `its
+expires_at has passed`, and asks again 30 seconds later. At
+`expires_at` with no renewal, the gateway writes one `dev.qory.run.log` line to the
+run's record, `Start another run once the control plane answers: credential "forge"
+expired at 2026-10-24T13:00:00Z`, and sets the value no more: the host's `401` reaches
+the client as the host sent it. The gateway judges `expires_at` by the machine's clock.
+A reload resolves the credentials again and keeps the run's renewals, and the run's
+end stops them.
 
 **The start key.** The gateway holds every model key of the run, from the server and
 the machine, and its proxy sets the start key alone. It sets the start key only on a
@@ -2468,7 +2518,8 @@ gateway's link).
 
 **Secrets.** `secrets-request.schema.json`, `secrets-answer.schema.json` and
 `sealed-plaintext.schema.json`. The secrets request fetches the values of a run
-configuration's `credentials` (§Credentials), once per run: a signed `POST <secrets.url>`,
+configuration's `credentials` (§Credentials): when the run starts, and again for the
+values that expire (§Credentials, Renewal). It is a signed `POST <secrets.url>`,
 `Content-Type: application/json`, under the access key, signed as every POST is, with the
 body as the request string's last line:
 
@@ -2481,7 +2532,9 @@ body as the request string's last line:
 ```
 
 `run_configuration` is the digest of the run configuration the credentials come from,
-`credentials` the names of its entries in the document's order, each once, and
+`credentials` the names of the entries whose values the server seals, in the document's
+order, each once: every entry when the run starts, and the entries that are due at a
+renewal, and
 `timestamp` the sender's clock in Unix seconds. A member the schema does not define is
 refused, and so is a member name twice in one object; the body is at most 32 KiB. After
 the shared order of refusals (§The server, Coded refusals), in which a body the schema refuses
@@ -2489,9 +2542,9 @@ is `400` `invalid_request` and a `timestamp` more than 300 seconds from the serv
 clock, either way, is `401`, the server refuses, in order: an access key not allowed
 stored secrets, with a signed `409` `secrets_not_allowed`; a digest that is not the
 digest of a run configuration it answered the run with, with a signed `410`
-`run_configuration_superseded`; and a `credentials` list other than that run
-configuration's names, with a signed `409` code it defines. Then it seals the value it
-stores for each credential of that run configuration, to the public key of the access key
+`run_configuration_superseded`; and a `credentials` list that is not some of that run
+configuration's names, in its order, with a signed `409` code it defines. Then it seals
+the value it stores for each credential the request lists, to the public key of the access key
 the request verified under, its X25519 u-coordinate (`accesskey.PublicKey.X25519`), with
 a fresh ephemeral key, and sets `exp` to its clock plus 600 seconds. The answer is a
 signed `200`, `application/json`, at most 5 MiB, whose body is the envelope:
@@ -2527,13 +2580,19 @@ The envelope opens to the sealed plaintext:
 {"version": 1,
  "run_configuration": "sha256=<64 hex digits>",
  "credentials": ["forge", "model"],
- "values": [{"credential": "forge", "value": "<the value>"},
+ "values": [{"credential": "forge", "value": "<the value>",
+             "expires_at": "2026-10-24T13:00:00Z",
+             "apply": [{"hosts": ["git.example"], "scheme": "basic",
+                        "username": "x-access-token", "paths": ["/example-org/app.git/*"]}]},
             {"credential": "model", "value": "<the value>"}]}
 ```
 
 `credentials` is the request's list, sorted, and `values` has one value for each,
 sorted by credential: UTF-8 text of 1 to 16384 bytes with no NUL, and, for a value set in
 a header, no control character other than tab and no leading or trailing space or tab.
+A value may have `expires_at`, an RFC 3339 time, and `apply`, 1 to 16 items of the run
+configuration's `$defs/apply`; §Credentials, Renewal, defines what the gateway does with
+them.
 Whoever opens the envelope checks, in order: the answer against its schema, with a suite
 other than this one refused before the signature; `sig` under the pinned
 `apiary_public_key`; `access_key_id`, `run_id` and `run_configuration` against the id of
@@ -2921,13 +2980,13 @@ registration, at the attach, at each reload and at each secrets request, and com
 the digest of the bytes it serves: the hook returns an empty digest or that one, and any
 other digest is a signed `500`. Without a hook it answers every run `{"version": 1}`, no
 policy. A second hook returns the values of a run's credentials for a secrets request it
-accepted, which it seals to the access key the request verified under and then
-overwrites with zeros. It answers a secrets request, after `secrets_not_allowed`, as a
+accepted, each with its `expires_at` and `apply` when it has them, which it seals to the
+access key the request verified under and then overwrites with zeros. It answers a secrets request, after `secrets_not_allowed`, as a
 reload of the run is answered: a signed `404` to a key that may not reload the run,
 `410` `workspace_not_served`, and `410` for a run it wants nothing more of. A digest
 that is not the one in force, or not one it answered the run with, is a signed `410`
-`run_configuration_superseded`, and a `credentials` list other than that run
-configuration's names in its order is a signed `409` `credentials_differ`. A hook
+`run_configuration_superseded`, and a `credentials` list that is not some of that run
+configuration's names, in its order, each once, is a signed `409` `credentials_differ`. A hook
 decides whether an instance may start a run, the instance limit. It keeps each
 registration it accepted by its run id, with what became of the run: its attach, its
 heartbeats, its `dev.qory.run.exited` and its outcome. The module's tests run Forager's
@@ -3432,8 +3491,11 @@ document:
   matches them, which are the hosts `applied.credentials` lists for it, in its order;
   and `placeholders`, the variables the session sets to a placeholder for this
   credential, each also in `placeholders` and each once, empty when it sets none. A
-  credential from the server also has `auth`, its run configuration entry's, and so
-  does a model key of the machine's, its definition's. A model key, from the server or
+  credential from the server also has `auth`, and so does a model key of the
+  machine's, its definition's. A host credential from the server has one entry per
+  `apply` item, the answer's items when its value has `apply`, in their order: each
+  with the item's hosts and its `scheme`, `username` and `header` as `auth`, and the
+  credential's `placeholders` on the first entry alone, empty on the others. A model key, from the server or
   the machine, also has `format` and `endpoint`; its `hosts` are the endpoint's host
   alone, and its `placeholders` are empty. An entry with `format` has `auth` and
   `endpoint`, and one with `endpoint` has `format`. The session adds the variable it
@@ -4737,7 +4799,7 @@ the option experimental.
 | `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
 | `fixtures/api-format/` | each API format of the list, one per file | `api-format.schema.json` |
 | `fixtures/descriptor/` | descriptors that are accepted: one whose `model` places the model id in a setting, the run's effort in a variable and an agent's in the frontmatter, with two formats, a key for each, one of them in two auths, and two `overrides`, and one whose `model` has no `effort` | `descriptor.schema.json` |
-| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy; `credentials.json`, with `model_credential`, an API credential with `key_prefixes`, an API credential whose endpoint has an IPv6 host and a port, and a host credential on an IPv4 host and a name; `credentials-forge.json`, with an API credential with `oauth` and a forge's host credential; `stack-hosts.json`, with `stack_hosts` of two names, a `*.` suffix and an IPv4 address | `run-configuration.schema.json` |
+| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy; `credentials.json`, with `model_credential`, an API credential with `key_prefixes`, an API credential whose endpoint has an IPv6 host and a port, and a host credential on an IPv4 host and a name; `credentials-forge.json`, with an API credential with `oauth` and a forge's host credential with two `apply` items and a placeholder; `stack-hosts.json`, with `stack_hosts` of two names, a `*.` suffix and an IPv4 address | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: a first batch, with the open's `dev.qory.run.started` and `dev.qory.run.policy_applied` and the first `dev.qory.session.started`, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.session.exited` and `dev.qory.run.exited` of a session's run whose starter gave no outcome while its session ran, each `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json`; and the `dev.qory.run.policy_applied` of a walled run whose policy file was put under a ceiling with path rules, with its `ceiling_paths`, `policy-applied-ceiling-paths.json`; and the `dev.qory.run.built` of an image built from a commit of 64 characters, `built-sha256-commit.json`, and one with `environment_image` and `base`, `built-environment-image-base.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each, each run opened and joined by one session: four closed, one on a developer machine, with a line of host work, which has no `session`, `session` `1` on each `dev.qory.run.log`, `dev.qory.run.resized` and runtime event of its session, and a `harness` of a 40-character commit, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one behind a wall in an image its policy names by reference, with its workspace at `/workspace`, its `join`, `image` and `wall` steps and a `harness` of a 64-character commit, and one with two steps of host work, a `fetch` and a `compose`, each with its `dev.qory.run.log` lines with `step`, then the `join` step of its session; and one whose starter ended it with no outcome while its session ran, with the gateway's `dev.qory.session.exited` and `dev.qory.run.exited`, each `cancelled` with `stopped` and `exit_code` `-1` | `event.schema.json` per line, plus the sequence, source and concatenation rules, that every `dev.qory.run.exited` contains `state` and `exit_code`, and that the sessions are numbered from 1, each `dev.qory.session.started` followed by its `dev.qory.session.exited` before the next one and before `dev.qory.run.exited`, and that a `dev.qory.run.log`, `dev.qory.run.resized` or runtime event with `session` lies inside that session, and that the steps are numbered from 1 after `dev.qory.run.started`, each `dev.qory.run.step_exited` once after its `dev.qory.run.step_started`, a `dev.qory.run.log` with `step` between the two, every step ended before a `dev.qory.run.exited` the close wrote, a `join` step outside every session with no session starting during it, an `image` or `wall` step inside a session, and a session's `dev.qory.run.log` with `step` in an `image` or `wall` step only |

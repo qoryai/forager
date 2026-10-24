@@ -3,11 +3,14 @@ package receiver_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/event"
@@ -20,8 +23,8 @@ import (
 // the credentials model and forge, in that order; credentialsDoc2 is the one it gives
 // once the test changes it.
 var (
-	credentialsDoc  = []byte(`{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"header","header":"x-api-key"}},{"name":"forge","hosts":["git.example"],"auth":{"scheme":"bearer"}}]}`)
-	credentialsDoc2 = []byte(`{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"header","header":"x-api-key"}},{"name":"forge","hosts":["git.example"],"auth":{"scheme":"basic"}}]}`)
+	credentialsDoc  = []byte(`{"version":1,"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"x-api-key"}]},{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"bearer"}]}]}`)
+	credentialsDoc2 = []byte(`{"version":1,"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"x-api-key"}]},{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"basic"}]}]}`)
 )
 
 // The values the secrets stand stores, each with a mark no other byte of a test has.
@@ -58,14 +61,18 @@ func newSecretsStand(t *testing.T) *secretsStand {
 		}
 		return out
 	}
-	ss.h.Secrets = func(_ receiver.Run, names []string) ([][]byte, *receiver.Refusal) {
+	ss.h.Secrets = func(_ receiver.Run, names []string) ([]receiver.Value, *receiver.Refusal) {
 		ss.handed = append(ss.handed, names)
 		if ss.refusal != nil {
 			return nil, ss.refusal
 		}
 		v := ss.values(names)
 		ss.returned = append(ss.returned, v...)
-		return v, nil
+		out := make([]receiver.Value, len(v))
+		for i, b := range v {
+			out[i] = receiver.NewValue(b)
+		}
+		return out, nil
 	}
 	ss.h.Log = func(l string) { ss.logged = append(ss.logged, l) }
 	return ss
@@ -201,6 +208,45 @@ func TestTheSecretsEndpointSealsTheRunsValues(t *testing.T) {
 	ss.noValueKept(answers...)
 }
 
+// TestARenewalAsksForSomeOfTheCredentials pins the secrets request of a renewal: one
+// that lists some of the run configuration's credentials, in its order, is answered
+// with those alone, the hook handed those names, and each value sealed with the
+// expires_at and the apply the hook returned.
+func TestARenewalAsksForSomeOfTheCredentials(t *testing.T) {
+	ss := newSecretsStand(t)
+	digest := digestOf(credentialsDoc)
+	expires := time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC)
+	apply := []sealed.Apply{{Hosts: []string{"git.example"}, Scheme: "bearer", Paths: []string{"/example-org/app.git/*"}}}
+	ss.h.Secrets = func(_ receiver.Run, names []string) ([]receiver.Value, *receiver.Refusal) {
+		ss.handed = append(ss.handed, names)
+		b := []byte(forgeValue)
+		ss.returned = append(ss.returned, b)
+		v := receiver.NewValue(b)
+		v.ExpiresAt, v.Apply = expires, apply
+		return []receiver.Value{v}, nil
+	}
+	runID := ss.direct()
+	_, rec := ss.secrets(directKey, inst, ss.secretsBody(runID, digest, "forge"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the renewal: %d %s", rec.Code, rec.Body.String())
+	}
+	values, err := sealed.Open(rec.Body.Bytes(), sealed.AccessKey{ID: directKey, Key: secrets[directKey]}, pin, runID, digest, []string{"forge"}, ss.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer values.Clear()
+	v, _ := values.Value("forge")
+	at, _ := values.ExpiresAt("forge")
+	got, _ := values.Apply("forge")
+	if string(v) != forgeValue || !at.Equal(expires) || !reflect.DeepEqual(got, apply) || values.Len() != 1 {
+		t.Errorf("the renewal opened to %d values, forge expiring at %v and set on %+v", values.Len(), at, got)
+	}
+	if len(ss.handed) != 1 || !slices.Equal(ss.handed[0], []string{"forge"}) {
+		t.Errorf("the hook was handed %v", ss.handed)
+	}
+	ss.noValueKept(rec.Body.Bytes())
+}
+
 func equalMaps(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false
@@ -237,8 +283,8 @@ func validDocument(t *testing.T, schema string, b []byte) {
 // node or instance may not send, 404; a gateway that may no longer serve the run's
 // workspace, 410 workspace_not_served; a run the receiver wants nothing more of, 410;
 // then a digest that is not the one in force, or one never served to the run, 410
-// run_configuration_superseded; other credentials than the run configuration's, in
-// another order included, 409 credentials_differ; the hook's refusal, signed with its
+// run_configuration_superseded; credentials that are not some of the run
+// configuration's, in its order, 409 credentials_differ; the hook's refusal, signed with its
 // code; and values outside the contract's form, a signed 500. The hook is called only
 // for a request past every check but its own.
 func TestTheSecretsRequestRefusesInItsOrder(t *testing.T) {
@@ -294,7 +340,7 @@ func TestTheSecretsRequestRefusesInItsOrder(t *testing.T) {
 
 	req, rec = ss.secrets(directKey, inst, ss.secretsBody(direct, "sha256="+strings.Repeat("0", 64), names...))
 	ss.expect("a digest never served", req, rec, http.StatusGone, "run_configuration_superseded")
-	for name, creds := range map[string][]string{"another order": {"forge", "model"}, "one of two": {"model"}, "another name": {"model", "other"}} {
+	for name, creds := range map[string][]string{"another order": {"forge", "model"}, "another name": {"model", "other"}, "one of two and another": {"forge", "other"}} {
 		req, rec := ss.secrets(directKey, inst, ss.secretsBody(direct, digest, creds...))
 		ss.expect(name, req, rec, http.StatusConflict, "credentials_differ")
 	}
@@ -402,6 +448,24 @@ func TestDiscoveryListsSecretsForAnAllowedKey(t *testing.T) {
 		}
 		if id == poolKey2 && !bytes.Equal(rec.Body.Bytes(), conf) {
 			t.Errorf("%s: the document %s, want it as configured", id, rec.Body.String())
+		}
+	}
+}
+
+// TestAValuePrintsNoneOfItsBytes pins receiver.Value's printing: with each verb, alone
+// and as a field of a struct printed by reflection, no byte of the value shows.
+func TestAValuePrintsNoneOfItsBytes(t *testing.T) {
+	v := receiver.NewValue([]byte(forgeValue))
+	v.ExpiresAt = time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC)
+	holder := struct {
+		V      receiver.Value
+		Values []receiver.Value
+	}{v, []receiver.Value{v}}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
+		for _, x := range []any{v, holder, &holder} {
+			if out := fmt.Sprintf(verb, x); strings.Contains(out, forgeValue) || strings.Contains(out, fmt.Sprintf("%x", forgeValue)) {
+				t.Errorf("%s of %T prints the value: %s", verb, x, out)
+			}
 		}
 	}
 }

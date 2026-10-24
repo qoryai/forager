@@ -10,6 +10,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- `receiver.Handler.Secrets` returns `[]receiver.Value` in place of `[][]byte`: make
+  each with `receiver.NewValue(b)`, and set its `ExpiresAt` and `Apply`. A Value prints
+  none of its bytes, also as a field of a struct printed by reflection. The hook is
+  handed the names the request lists: at a renewal, the entries that are due. Before, it returned the bytes alone, for every
+  entry.
+- Write a run configuration's host credential with `apply` items, each `{hosts, scheme,
+  username, header, paths}`, in place of its `hosts`, `paths` and `auth`.
+  `server.RunCredential` has `Apply`, a list of `server.Apply`, in place of `Hosts` and
+  `Paths`. Before, a host credential had one set of hosts with one `auth`; Forager
+  refuses that shape.
 - `accesskey.ContainsSecret` catches a run code, `qecr_` in any case, as it catches an
   access key secret, `qak_`, and a run key, `qrk_`. Forager refuses a run code where it
   refuses the other two, such as in a pin, a name or a built image, and sends and prints
@@ -436,14 +446,16 @@ release may change what an existing document does, and says so under Upgrading.
   stores for the run, with no value. An API credential, a model key, is `{name,
   format, endpoint, auth, key_prefixes}`: the gateway sets its value on every path of
   the endpoint's host alone. `endpoint` is `https`, with a host, an optional port and
-  path, and no user, query or fragment. A host credential is `{name, hosts, paths,
-  auth, placeholders}`, with exact hosts. Forager checks the member against
+  path, and no user, query or fragment. A host credential is `{name, apply,
+  placeholders}`, with 1 to 16 `apply` items of `{hosts, scheme, username, header,
+  paths}` and exact hosts. Forager checks the member against
   `run-configuration.schema.json`, and refuses a name twice, an `auth.header` that
-  frames the request or that the proxy sets, a placeholder that
+  frames the request or that the proxy sets, the same for an item's `header`, a
+  placeholder that
   `denied-variables.json` covers, and an endpoint from which `policy.EndpointHost`
   reads no host, each `run_configuration_invalid`. `server.RunCredential` has `Format`,
-  `Endpoint` and `KeyPrefixes`, and `Applies` returns the hosts and paths a value is
-  set on.
+  `Endpoint`, `KeyPrefixes` and `Apply`, and `Applies` returns the items a value is set
+  on.
 - `key_prefixes`, on an API credential, optional: 1 to 4 literal prefixes, each 1 to 32
   characters of printable ASCII without a space. The gateway refuses a stored value
   that starts with none of them, `run_configuration_invalid`, without printing the
@@ -459,7 +471,7 @@ release may change what an existing document does, and says so under Upgrading.
   with`. `server.RunConfiguration` has `ModelCredential`, and
   `server.CheckCredentials` takes it.
 - The gateway sets a run configuration's `credentials`, with or without a wall. When the run
-  starts it sends one secrets request under the access key, for the digest it computes of
+  starts it sends a secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value
   in place of a credential of the machine's that claims one of its hosts, of the same
   name or another. Without `secrets` in discovery, with a fixture pin or access
@@ -467,6 +479,23 @@ release may change what an existing document does, and says so under Upgrading.
   in force stays. A `TRACE` or `TRACK` through `CONNECT` to a host that gets one is
   denied with the rule `wall:echo-method`. A run configuration without `credentials`
   runs as before.
+- `expires_at` and `apply` in a sealed plaintext's value: the gateway fetches the value
+  again 5 minutes before it expires and on a 401, at most every 30 s. A request lists
+  the entries that are due, with entries due within 30 s of each other in one request,
+  under the digest of the run configuration in force. The answer's value takes the old
+  one's place, whose bytes the gateway overwrites with zeros; a failed renewal keeps the
+  old value and reports `run <run id>: If this repeats, check the control plane:
+  credential "forge" was not renewed: <cause>`, also for an `expires_at` that has
+  passed. At `expires_at` with no renewal, the gateway writes
+  `Start another run once the control plane answers: credential "forge" expired at
+  2026-10-24T13:00:00Z` to the run's record as `dev.qory.run.log` and sets the value no
+  more. `apply` may narrow the entry's items and never widen them, and a renewal keeps
+  the start's; a value that expired before the run started, or an item outside its
+  entry, is `run_configuration_invalid`. A value without `expires_at`, such as a model
+  key, is never renewed. `sealed.Values` has `ExpiresAt`, `Apply` and `Replace`, and
+  `sealed.Value` has `ExpiresAt` and `Apply`. The run answer's `credential_hosts` has
+  one entry per `apply` item of a host credential from the server, each with the
+  item's hosts and auth, and the credential's placeholders on the first.
 - The secrets request, `secrets-request.schema.json`, a signed `POST` to discovery's
   `secrets.url` for the values of a run configuration's `credentials`; its answer, the
   envelope of `secrets-answer.schema.json`, sealed with HPKE base mode, X25519,
@@ -475,16 +504,16 @@ release may change what an existing document does, and says so under Upgrading.
   sealed answer with its vectors and an envelope refused at each step.
 - The reference receiver serves the secrets endpoint, at `receiver.DefaultSecretsPath`,
   `/v1/secrets`, or `Handler.SecretsPath`, when the hook `Handler.Secrets` is set:
-  `func(run receiver.Run, credentials []string) (values [][]byte, refusal
-  *receiver.Refusal)`, one value for each credential of the run configuration in force.
+  `func(run receiver.Run, credentials []string) (values []receiver.Value, refusal
+  *receiver.Refusal)`, one value for each credential the request lists.
   It seals the values to the access key the request verified under with `sealed.Seal`,
   signs the answer under the receiver's key and overwrites the values with zeros; it
   logs and stores none. `receiver.AccessKey.StoredSecrets` allows a key stored secrets,
   and discovery lists the configuration's `secrets` for such a key alone. A request is
   refused in the contract's order, then as a reload of the run would be; a digest that
   is not the one in force, or not one the run was answered with, is a signed `410`
-  `run_configuration_superseded`, and a `credentials` list other than the run
-  configuration's names in its order a signed `409` `credentials_differ`.
+  `run_configuration_superseded`, and a `credentials` list that is not some of the run
+  configuration's names, in its order, a signed `409` `credentials_differ`.
   `receiver.MaxSecretsBody` is the bound of a request's body, 32 KiB.
 - Package `sealed`: `sealed.Open` checks a secrets answer in the contract's order and
   opens it with an access key, returning the values by credential name as bytes that
@@ -1548,6 +1577,9 @@ release may change what an existing document does, and says so under Upgrading.
   the machine's default, its workspace at `/workspace`, and a name its image's `ENV`
   sets that the runtime denies unset. The Docker adapter's test pushes the images to a
   registry it starts on the machine.
+- The Docker test of a sealed credential runs a third time with a value that expires 5
+  minutes 20 seconds after the start: the recorder gets the first value, then the
+  renewed one.
 
 #### Changed
 

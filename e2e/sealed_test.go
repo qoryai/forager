@@ -58,6 +58,11 @@ const (
 // event, no line the receiver logged and nothing the run printed or reported contains
 // the value.
 //
+// A third run, renew, seals a first value that expires 5 minutes 20 seconds after the
+// run starts and a second one an hour after, and its probe sends the request every 2
+// seconds for 50 seconds: the recorder gets the first value, then the second, which the
+// gateway asks for 30 seconds after the start, and no other.
+//
 // The test is skipped without an engine the docker command reaches, and, off Linux,
 // without a Linux build of the test binary in QORY_WALL_HELPER.
 func TestDockerSealedCredentialThroughTheWall(t *testing.T) {
@@ -92,8 +97,9 @@ func TestDockerSealedCredentialThroughTheWall(t *testing.T) {
 		t.Fatalf("this machine's roots are not the suite's authority: %v", err)
 	}
 	run := sealedRun{command: command, helper: helper, image: image, recorder: name, host: strings.TrimSpace(string(ip))}
-	t.Run("start", func(t *testing.T) { run.check(t, false) })
-	t.Run("attach", func(t *testing.T) { run.check(t, true) })
+	t.Run("start", func(t *testing.T) { run.check(t, false, false) })
+	t.Run("attach", func(t *testing.T) { run.check(t, true, false) })
+	t.Run("renew", func(t *testing.T) { run.check(t, false, true) })
 }
 
 // sealedRun is what the runs of TestDockerSealedCredentialThroughTheWall share.
@@ -109,12 +115,15 @@ type sealedReference struct {
 	stored string
 	mu     sync.Mutex
 	logged []string
+	asked  int
 }
 
 // reference starts the reference receiver for the recorder's host, signing under signer
-// and sealing value: every key it knows is allowed stored secrets but the pool's, which
+// and sealing value; with renewed set, value expiring 5 minutes 20 seconds after it is
+// sealed, and renewed, expiring an hour after, at every request after the first. Every
+// key it knows is allowed stored secrets but the pool's, which
 // registers runs through the separate gateway; the gateway's keys are accessKey.
-func (r sealedRun) reference(t *testing.T, accessKey, poolKey, signer *accesskey.Key, value string) *sealedReference {
+func (r sealedRun) reference(t *testing.T, accessKey, poolKey, signer *accesskey.Key, value, renewed string) *sealedReference {
 	t.Helper()
 	ref := &sealedReference{stored: filepath.Join(t.TempDir(), "received.jsonl")}
 	store, err := receiver.OpenFile(ref.stored)
@@ -124,7 +133,7 @@ func (r sealedRun) reference(t *testing.T, accessKey, poolKey, signer *accesskey
 	t.Cleanup(func() { store.Close() })
 	pin, _ := json.Marshal(accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}})
 	doc := []byte(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["` + r.host + `"]}},` +
-		`"credentials":[{"name":"model","hosts":["` + r.host + `"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"placeholders":["` + sealedPlaceholder + `"]}]}`)
+		`"credentials":[{"name":"model","apply":[{"hosts":["` + r.host + `"],"scheme":"header","header":"x-api-key","paths":["/v1/*"]}],"placeholders":["` + sealedPlaceholder + `"]}]}`)
 	keys := map[string]receiver.AccessKey{
 		sealedNodeKey:    {PublicKey: accessKey.PublicKey(), StoredSecrets: true},
 		sealedPoolKey:    {PublicKey: poolKey.PublicKey(), Node: sealedPool},
@@ -145,10 +154,25 @@ func (r sealedRun) reference(t *testing.T, accessKey, poolKey, signer *accesskey
 			return doc, "sha256=" + hex.EncodeToString(sum[:])
 		},
 		RunConfiguration: func(receiver.Run) ([]byte, string, *receiver.Refusal) { return doc, "", nil },
-		Secrets: func(_ receiver.Run, names []string) ([][]byte, *receiver.Refusal) {
-			var values [][]byte
+		Secrets: func(_ receiver.Run, names []string) ([]receiver.Value, *receiver.Refusal) {
+			ref.mu.Lock()
+			ref.asked++
+			first := ref.asked == 1
+			ref.mu.Unlock()
+			var values []receiver.Value
 			for range names {
-				values = append(values, []byte(value))
+				switch {
+				case renewed == "":
+					values = append(values, receiver.NewValue([]byte(value)))
+				case first:
+					v := receiver.NewValue([]byte(value))
+					v.ExpiresAt = time.Now().Add(5*time.Minute + 20*time.Second)
+					values = append(values, v)
+				default:
+					v := receiver.NewValue([]byte(renewed))
+					v.ExpiresAt = time.Now().Add(time.Hour)
+					values = append(values, v)
+				}
 			}
 			return values, nil
 		},
@@ -202,12 +226,17 @@ func separate(t *testing.T, cfg gateway.Config) (*gateway.Gateway, string) {
 }
 
 // check runs the probe once behind the wall, its gateway on this machine or, attached,
-// a separate one, and checks the run as TestDockerSealedCredentialThroughTheWall
-// describes.
-func (r sealedRun) check(t *testing.T, attached bool) {
+// a separate one, with renew the probe that repeats its request, and checks the run as
+// TestDockerSealedCredentialThroughTheWall describes.
+func (r sealedRun) check(t *testing.T, attached, renew bool) {
 	value := "sk-walltest" + sealedMark + strconv.Itoa(os.Getpid()) + "-" + strconv.FormatBool(attached)
+	renewed, args := "", []string{modeSealed}
+	if renew {
+		value += "-first"
+		renewed, args = value+"-renewed", []string{modeSealed, sealedRenew}
+	}
 	accessKey, poolKey, signer := mustGenerate(t), mustGenerate(t), mustGenerate(t)
-	ref := r.reference(t, accessKey, poolKey, signer, value)
+	ref := r.reference(t, accessKey, poolKey, signer, value, renewed)
 	pin := accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}
 	before, _ := exec.Command(r.command, "exec", r.recorder, "cat", RecorderFile).Output()
 	dir, runs, records := t.TempDir(), filepath.Join(t.TempDir(), "runs"), t.TempDir()
@@ -229,7 +258,7 @@ func (r sealedRun) check(t *testing.T, attached bool) {
 	},
 		SessionSpec: session.SessionSpec{
 			Command: wall.HelperPath,
-			Args:    []string{modeSealed},
+			Args:    args,
 			Env: []string{
 				"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 				sealedHostVar + "=" + r.host,
@@ -318,7 +347,27 @@ func (r sealedRun) check(t *testing.T, attached bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reqs) != 1 || reqs[0].Path != modelPath || !slices.Equal(reqs[0].Header.Values(apiKeyHeader), []string{value}) {
+	if renew {
+		var seen []string
+		for _, q := range reqs {
+			if q.Path != modelPath || len(q.Header.Values(apiKeyHeader)) != 1 {
+				t.Errorf("the recorder got a request to %s with %d values in %s; want one to %s", q.Path, len(q.Header.Values(apiKeyHeader)), apiKeyHeader, modelPath)
+				continue
+			}
+			if v := q.Header.Get(apiKeyHeader); len(seen) == 0 || seen[len(seen)-1] != v {
+				seen = append(seen, v)
+			}
+		}
+		if !slices.Equal(seen, []string{value, renewed}) {
+			t.Errorf("in %d requests the recorder got %d runs of values; want the first value, then the renewed one", len(reqs), len(seen))
+		}
+		ref.mu.Lock()
+		asked := ref.asked
+		ref.mu.Unlock()
+		if asked != 2 {
+			t.Errorf("the receiver was asked %d times, want twice", asked)
+		}
+	} else if len(reqs) != 1 || reqs[0].Path != modelPath || !slices.Equal(reqs[0].Header.Values(apiKeyHeader), []string{value}) {
 		t.Errorf("the recorder got %d requests; want one to %s with the value in %s once", len(reqs), modelPath, apiKeyHeader)
 	}
 
@@ -340,8 +389,8 @@ func (r sealedRun) check(t *testing.T, attached bool) {
 			t.Errorf("the request is recorded as %v; want allowed to the recorder with the credential model", e.Data)
 		}
 	}
-	if egress != 1 {
-		t.Errorf("the record lists %d requests through the proxy, want 1", egress)
+	if egress != len(reqs) || egress == 0 {
+		t.Errorf("the record lists %d requests through the proxy, want %d", egress, len(reqs))
 	}
 
 	var where []string

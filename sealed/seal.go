@@ -16,13 +16,19 @@ import (
 	"github.com/qoryai/forager/accesskey"
 )
 
-// Value is one value as the server seals it: the credential's name and the value. The
-// value is returned by a func, so a Value printed by reflection, as an unexported field
-// of a struct, prints the func's address and no byte of it; a Value formats as its
-// credential's name alone whatever the verb. Make one with [NewValue].
+// Value is one value as the server seals it: the credential's name, the value, and
+// optionally when it expires and where it is set. The value is returned by a func, so a
+// Value printed by reflection, as an unexported field of a struct, prints the func's
+// address and no byte of it; a Value formats as its credential's name alone whatever
+// the verb. Make one with [NewValue].
 type Value struct {
 	Credential string
-	value      func() []byte
+	// ExpiresAt is when the value stops working, written as RFC 3339 in UTC; zero
+	// writes no expires_at.
+	ExpiresAt time.Time
+	// Apply is where and how the value is set; nil writes no apply.
+	Apply []Apply
+	value func() []byte
 }
 
 // NewValue returns the Value of a credential. It keeps value, not a copy: the caller
@@ -86,15 +92,71 @@ func Expiry(now time.Time) uint64 { return uint64(now.Unix()) + Lifetime }
 
 // plaintextSize is an upper bound of the plaintext's length: JSON escapes a byte in at
 // most 6 bytes, \u001f say, and every identifier and the digest are ASCII.
-func plaintextSize(digest string, credentials []string, values []Value) int {
+func plaintextSize(digest string, credentials []string, values []Value, metas [][]byte) int {
 	n := len(`{"version":1,"run_configuration":"","credentials":[],"values":[]}`) + len(digest)
 	for _, c := range credentials {
 		n += len(c) + 3
 	}
-	for _, v := range values {
-		n += len(`{"credential":"","value":""},`) + len(v.Credential) + 6*len(v.bytes())
+	for i, v := range values {
+		n += len(`{"credential":"","value":""},`) + len(v.Credential) + 6*len(v.bytes()) + len(metas[i])
 	}
 	return n
+}
+
+// metaJSON is what the plaintext writes of a value after the value: expires_at, then
+// apply with each item's hosts, scheme, username, header and paths, the last three only
+// when set. It holds no secret. It refuses, with [ErrRequest], an apply that
+// sealed-plaintext.schema.json refuses, as [readMeta] reads it.
+func metaJSON(v Value) ([]byte, error) {
+	var expires, apply []byte
+	if !v.ExpiresAt.IsZero() {
+		expires, _ = jsontext.AppendQuote(nil, v.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	if v.Apply != nil {
+		list := func(b []byte, name string, items []string) []byte {
+			b = append(b, `"`+name+`":[`...)
+			for i, s := range items {
+				if i > 0 {
+					b = append(b, ',')
+				}
+				b, _ = jsontext.AppendQuote(b, s)
+			}
+			return append(b, ']')
+		}
+		apply = []byte{'['}
+		for i, a := range v.Apply {
+			if i > 0 {
+				apply = append(apply, ',')
+			}
+			apply = list(append(apply, '{'), "hosts", a.Hosts)
+			apply = append(apply, `,"scheme":`...)
+			apply, _ = jsontext.AppendQuote(apply, a.Scheme)
+			if a.Username != "" {
+				apply = append(apply, `,"username":`...)
+				apply, _ = jsontext.AppendQuote(apply, a.Username)
+			}
+			if a.Header != "" {
+				apply = append(apply, `,"header":`...)
+				apply, _ = jsontext.AppendQuote(apply, a.Header)
+			}
+			if a.Paths != nil {
+				apply = list(append(apply, ','), "paths", a.Paths)
+			}
+			apply = append(apply, '}')
+		}
+		apply = append(apply, ']')
+	}
+	if _, ok := readMeta(v.Credential, expires, apply); !ok {
+		return nil, refuse(ErrRequest, "the expires_at or the apply of the credential %s is outside sealed-plaintext.schema.json", accesskey.ShownName(v.Credential, true))
+	}
+	var b []byte
+	if expires != nil {
+		b = append(append(b, `,"expires_at":`...), expires...)
+	}
+	if apply != nil {
+		b = append(append(b, `,"apply":`...), apply...)
+	}
+	return b, nil
 }
 
 // Plaintext returns what the envelope seals: compact JSON of version,
@@ -126,7 +188,15 @@ func (s Sealing) Plaintext() ([]byte, error) {
 			return nil, refuse(ErrValue, "the value of the credential %s", accesskey.ShownName(name, true))
 		}
 	}
-	size := plaintextSize(s.RunConfiguration, credentials, values)
+	metas := make([][]byte, len(values))
+	for i, v := range values {
+		m, err := metaJSON(v)
+		if err != nil {
+			return nil, err
+		}
+		metas[i] = m
+	}
+	size := plaintextSize(s.RunConfiguration, credentials, values, metas)
 	b := make([]byte, 0, size)
 	b = append(b, `{"version":1,"run_configuration":`...)
 	b, _ = jsontext.AppendQuote(b, s.RunConfiguration)
@@ -150,7 +220,7 @@ func (s Sealing) Plaintext() ([]byte, error) {
 			clear(b[:cap(b)])
 			return nil, refuse(ErrValue, "the value of the credential %s", accesskey.ShownName(v.Credential, true))
 		}
-		b = append(b, '}')
+		b = append(append(b, metas[i]...), '}')
 	}
 	b = append(b, "]}"...)
 	if cap(b) != size {

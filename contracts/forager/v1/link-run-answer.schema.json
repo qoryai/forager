@@ -46,7 +46,7 @@
       "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
     },
     "credential_hosts": {
-      "description": "The hosts and placeholders of each credential the gateway holds for the run, so the session can tell which hosts the run's credentials cover: one entry per credential, in the order the policy selects them. Names and hosts alone, never a secret. Absent means none.",
+      "description": "The hosts and placeholders of each credential the gateway holds for the run, so the session can tell which hosts the run's credentials cover: one entry per credential, in the order the policy selects them, and for a host credential from the server one entry per apply item, in its order, each with that item's hosts and auth and the credential's placeholders on the first alone. Names and hosts alone, never a secret. Absent means none.",
       "type": "array",
       "items": {
         "type": "object",
@@ -66,7 +66,7 @@
             "uniqueItems": true,
             "items": {"$ref": "#/properties/placeholders/items"}
           },
-          "auth": {"description": "How the proxy sets the value: the run configuration entry's auth for a credential from the server, and the definition's for a model key of the machine's. Absent for every other credential of the machine's.", "$ref": "auth.schema.json"},
+          "auth": {"description": "How the proxy sets the value: for a credential from the server, an API credential's auth, or the scheme, username and header of the host credential's apply item, the answer's value's items when it has apply; and the definition's for a model key of the machine's. Absent for every other credential of the machine's.", "$ref": "auth.schema.json"},
           "format": {"description": "The API format of an API credential, a model key from the server or the machine. The session gives the key to the variable the run's runtime lists for this format and auth, and refuses the run otherwise, run_configuration_invalid. Absent for every other credential.", "$ref": "api-format.schema.json"},
           "endpoint": {"description": "The endpoint of an API credential, which the session sets the runtime's model endpoint variable to; hosts is its host alone.", "$ref": "run-configuration.schema.json#/$defs/endpoint"}
         },

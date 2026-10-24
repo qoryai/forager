@@ -19,7 +19,7 @@ import (
 
 // credentialDoc is a run configuration with two credentials: an API credential and a
 // host credential.
-const credentialDoc = `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"key_prefixes":["sk-ant-"]},{"name":"forge","hosts":["git.example"],"auth":{"scheme":"basic","username":"x-access-token"},"placeholders":["FORGE_TOKEN"]}],"model_credential":"model"}`
+const credentialDoc = `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"}],"placeholders":["FORGE_TOKEN"]}],"model_credential":"model"}`
 
 // TestARunConfigurationsCredentialsAndItsComputedDigest pins the reading of
 // credentials: each entry decoded, and Computed the SHA-256 of the bytes as they came,
@@ -34,14 +34,17 @@ func TestARunConfigurationsCredentialsAndItsComputedDigest(t *testing.T) {
 	sum := sha256.Sum256([]byte(credentialDoc))
 	want := []server.RunCredential{
 		{Name: "model", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "bearer", OAuth: true}, KeyPrefixes: []string{"sk-ant-"}},
-		{Name: "forge", Hosts: []string{"git.example"}, Auth: server.Auth{Scheme: "basic", Username: "x-access-token"}, Placeholders: []string{"FORGE_TOKEN"}},
+		{Name: "forge", Apply: []server.Apply{{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token"}}, Placeholders: []string{"FORGE_TOKEN"}},
 	}
 	if !reflect.DeepEqual(rc.Credentials, want) || rc.ModelCredential != "model" {
 		t.Errorf("credentials %+v, model_credential %q", rc.Credentials, rc.ModelCredential)
 	}
-	for i, w := range []struct{ hosts, paths []string }{{[]string{"api.model.example"}, nil}, {[]string{"git.example"}, nil}} {
-		if hosts, paths := rc.Credentials[i].Applies(); !slices.Equal(hosts, w.hosts) || paths != nil {
-			t.Errorf("%s applies to %v %v; want %v and every path", rc.Credentials[i].Name, hosts, paths, w.hosts)
+	for i, w := range [][]server.Apply{
+		{{Hosts: []string{"api.model.example"}, Scheme: "bearer"}},
+		{{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token"}},
+	} {
+		if got := rc.Credentials[i].Applies(); !reflect.DeepEqual(got, w) {
+			t.Errorf("%s applies to %+v; want %+v", rc.Credentials[i].Name, got, w)
 		}
 	}
 	if rc.Computed != "sha256="+hex.EncodeToString(sum[:]) || rc.Computed == d {
@@ -60,7 +63,7 @@ func TestARunConfigurationsCredentialsAndItsComputedDigest(t *testing.T) {
 // model_credential are refused with no name.
 func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 	entry := func(name, header string) string {
-		return `{"name":"` + name + `","hosts":["api.model.example"],"auth":{"scheme":"header","header":"` + header + `"}}`
+		return `{"name":"` + name + `","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"` + header + `"}]}`
 	}
 	cases := map[string]struct{ doc, want string }{
 		"a name twice": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `,` + entry("model", "x-other-key") + `]}`, `list the credential "model" once; the document lists it twice`},
@@ -175,12 +178,12 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 // which run.refused.schema.json's names accept.
 func TestARefusedCredentialShowsNoSecretInItsName(t *testing.T) {
 	const name = "x-qak_not-a-real-secret"
-	entry := `{"name":"` + name + `","hosts":["api.model.example"],"auth":{"scheme":"header","header":"Host"}}`
+	entry := `{"name":"` + name + `","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"Host"}]}`
 	v := newVerified(t)
 	for what, doc := range map[string]string{
 		"a name twice":      `{"version":1,"credentials":[` + strings.Replace(entry, "Host", "x-api-key", 1) + `,` + strings.Replace(entry, "Host", "x-other", 1) + `]}`,
 		"a reserved header": `{"version":1,"credentials":[` + entry + `]}`,
-		"a placeholder":     `{"version":1,"credentials":[` + strings.Replace(entry, `"header":"Host"}`, `"header":"x-api-key"},"placeholders":["SSL_CERT_FILE"]`, 1) + `]}`,
+		"a placeholder":     `{"version":1,"credentials":[` + strings.Replace(entry, `"header":"Host"}]`, `"header":"x-api-key"}],"placeholders":["SSL_CERT_FILE"]`, 1) + `]}`,
 	} {
 		v.runDoc = doc
 		_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
@@ -200,7 +203,7 @@ func TestARefusedCredentialShowsNoSecretInItsName(t *testing.T) {
 // credential's name; another is read. The header Expect is reserved as well.
 func TestAPlaceholderTheDenyListCoversIsRefused(t *testing.T) {
 	doc := func(placeholder string) string {
-		return `{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"},"placeholders":["MODEL_API_KEY","` + placeholder + `"]}]}`
+		return `{"version":1,"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}],"placeholders":["MODEL_API_KEY","` + placeholder + `"]}]}`
 	}
 	v := newVerified(t)
 	for _, p := range []string{"GIT_SSL_CAINFO", "git_ssl_cainfo", "HTTPS_PROXY", "no_proxy", "QORY_RUN_ID", "PATH", "NODE_OPTIONS", "ld_preload", "BASH_ENV", "HOME"} {

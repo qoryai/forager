@@ -219,17 +219,155 @@ func TestTheFixtureOpens(t *testing.T) {
 			t.Errorf("the value of %s is not the plaintext's", name)
 		}
 	}
+	if at, ok := v.ExpiresAt("forge"); !ok || !at.Equal(fixtureForgeExpires) {
+		t.Errorf("forge expires at %v, %t; want %v", at, ok, fixtureForgeExpires)
+	}
+	if apply, ok := v.Apply("forge"); !ok || fmt.Sprint(apply) != fmt.Sprint(fixtureForgeApply) {
+		t.Errorf("forge applies to %v, %t; want %v", apply, ok, fixtureForgeApply)
+	}
+	if _, ok := v.ExpiresAt("model"); ok {
+		t.Error("model has expires_at")
+	}
+	if _, ok := v.Apply("model"); ok {
+		t.Error("model has apply")
+	}
 }
+
+// TestReplaceClearsTheOldValue pins Replace: the renewed value, its expires_at and its
+// apply take the old one's place, the old bytes are zeros, the other values stay, and
+// the source no longer has the value, so clearing it leaves the replaced one. A source
+// without the credential changes nothing.
+func TestReplaceClearsTheOldValue(t *testing.T) {
+	digest := "sha256=" + strings.Repeat("ab", 32)
+	open := func(values ...Value) Values {
+		t.Helper()
+		var names []string
+		for _, v := range values {
+			names = append(names, v.Credential)
+		}
+		s := Sealing{AccessKeyID: "ak_0123456789abcdef", RunID: "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a", RunConfiguration: digest, Credentials: names, Values: values, Exp: 1}
+		pt, err := s.Plaintext()
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := Plaintext(pt, digest, names)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	first := NewValue("forge", []byte("first-fake-value"))
+	first.ExpiresAt = time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	held := open(first, NewValue("model", []byte("model-fake-value")))
+	old, _ := held.Value("forge")
+	second := NewValue("forge", []byte("second-fake-value"))
+	second.ExpiresAt, second.Apply = fixtureForgeExpires, fixtureForgeApply
+	renewed := open(second)
+	if !held.Replace("forge", renewed) {
+		t.Fatal("Replace reports no value")
+	}
+	if !bytes.Equal(old, make([]byte, len(old))) {
+		t.Errorf("the old bytes are %q; want zeros", old)
+	}
+	renewed.Clear()
+	if b, _ := held.Value("forge"); string(b) != "second-fake-value" {
+		t.Errorf("forge is %q after Replace and the source's Clear", b)
+	}
+	if at, _ := held.ExpiresAt("forge"); !at.Equal(fixtureForgeExpires) {
+		t.Errorf("forge expires at %v", at)
+	}
+	if apply, ok := held.Apply("forge"); !ok || fmt.Sprint(apply) != fmt.Sprint(fixtureForgeApply) {
+		t.Errorf("forge applies to %v", apply)
+	}
+	if b, _ := held.Value("model"); string(b) != "model-fake-value" {
+		t.Errorf("model is %q", b)
+	}
+	if held.Replace("model", renewed) {
+		t.Error("Replace from a source without the credential reports a value")
+	}
+	if b, _ := held.Value("model"); string(b) != "model-fake-value" {
+		t.Errorf("model is %q after a Replace from a source without it", b)
+	}
+}
+
+// TestPlaintextRefusesMetaOutsideTheSchema pins that a plaintext whose expires_at is no
+// time, or whose apply has a token, a *. host, no item or an unknown member, is
+// ErrPlaintext, and that the invalid fixtures are; a value's expires_at with t and z in
+// lower case reads as the time, and Seal refuses an apply the schema refuses.
+func TestPlaintextRefusesMetaOutsideTheSchema(t *testing.T) {
+	digest := "sha256=" + strings.Repeat("ab", 32)
+	doc := func(meta string) []byte {
+		return []byte(`{"version":1,"run_configuration":"` + digest + `","credentials":["forge"],"values":[{"credential":"forge","value":"fake-value"` + meta + `}]}`)
+	}
+	for _, meta := range []string{
+		`,"expires_at":"tomorrow"`, `,"expires_at":1700000000`, `,"expires_at":null`,
+		`,"apply":[{"hosts":["git.example"],"scheme":"bearer","token":"fake-value"}]`,
+		`,"apply":[{"hosts":["*.git.example"],"scheme":"bearer"}]`,
+		`,"apply":[]`, `,"apply":[{"hosts":["git.example"],"scheme":"basic"}]`,
+		`,"apply":[{"hosts":["git.example"],"scheme":"bearer","oauth":true}]`,
+		`,"apply":[{"hosts":["git.example"],"hosts":["git.example"],"scheme":"bearer"}]`,
+	} {
+		if _, err := Plaintext(doc(meta), digest, []string{"forge"}); !only(err, ErrPlaintext) {
+			t.Errorf("%s: %v; want ErrPlaintext", meta, err)
+		}
+	}
+	for _, name := range []string{"sealed-plaintext-expires-at-not-a-time.json", "sealed-plaintext-apply-with-token.json", "sealed-plaintext-apply-pattern-host.json"} {
+		pt := read(t, "fixtures/invalid/"+name)
+		if _, _, _, values, _, err := readPlaintext(pt); !only(err, ErrPlaintext) {
+			clearAll(values)
+			t.Errorf("%s: %v; want ErrPlaintext", name, err)
+		}
+	}
+	v, err := Plaintext(doc(`,"expires_at":"2026-10-24t13:00:00.5z"`), digest, []string{"forge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at, ok := v.ExpiresAt("forge"); !ok || !at.Equal(time.Date(2026, 10, 24, 13, 0, 0, 5e8, time.UTC)) {
+		t.Errorf("expires at %v, %t", at, ok)
+	}
+	// The year 1 is a time in the past, not an absent expires_at.
+	v, err = Plaintext(doc(`,"expires_at":"0001-01-01T00:00:00Z"`), digest, []string{"forge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at, ok := v.ExpiresAt("forge"); !ok || !at.IsZero() {
+		t.Errorf("year 1: expires at %v, %t; want the zero time, present", at, ok)
+	}
+	v, err = Plaintext(doc(""), digest, []string{"forge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := v.ExpiresAt("forge"); ok {
+		t.Error("a value without expires_at has one")
+	}
+	bad := NewValue("forge", []byte("fake-value"))
+	bad.Apply = []Apply{{Hosts: []string{"*.git.example"}, Scheme: "bearer"}}
+	s := Sealing{AccessKeyID: "ak_0123456789abcdef", RunID: "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a", RunConfiguration: digest, Credentials: []string{"forge"}, Values: []Value{bad}, Exp: 1}
+	if _, err := s.Plaintext(); !only(err, ErrRequest) {
+		t.Errorf("a sealing with a *. host: %v; want ErrRequest", err)
+	}
+}
+
+// fixtureForge are the expires_at and the apply of the fixture's forge value.
+var (
+	fixtureForgeExpires = time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC)
+	fixtureForgeApply   = []Apply{{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token", Paths: []string{"/example-org/app.git/*"}}}
+)
 
 // TestSealIsTheFixture pins that Seal, with the fixture's fixed ephemeral key and the
 // fixture signing key, writes the published answer, compacted, byte for byte, and that
-// its plaintext is the published plaintext.
+// its plaintext is the published plaintext, the forge value's expires_at and apply
+// among it.
 func TestSealIsTheFixture(t *testing.T) {
 	f := load(t)
 	s := Sealing{AccessKeyID: f.key.ID, PublicKey: f.key.Key.PublicKey(), RunID: f.runID, RunConfiguration: f.digest,
 		Credentials: f.requested, Exp: Expiry(f.now)}
 	for name, value := range values(t, f.plaintext) {
-		s.Values = append(s.Values, NewValue(name, []byte(value)))
+		v := NewValue(name, []byte(value))
+		if name == "forge" {
+			v.ExpiresAt, v.Apply = fixtureForgeExpires, fixtureForgeApply
+		}
+		s.Values = append(s.Values, v)
 	}
 	pt, err := s.Plaintext()
 	if err != nil || !bytes.Equal(pt, f.plaintext) {
@@ -633,7 +771,15 @@ func TestPlaintextIsBuiltInOneBuffer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := plaintextSize(s.RunConfiguration, names, values); cap(pt) != want || len(pt) > want {
+		sorted := slices.Clone(values)
+		slices.SortFunc(sorted, func(a, b Value) int { return strings.Compare(a.Credential, b.Credential) })
+		metas := make([][]byte, len(sorted))
+		for i, v := range sorted {
+			if metas[i], err = metaJSON(v); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if want := plaintextSize(s.RunConfiguration, slices.Sorted(slices.Values(names)), sorted, metas); cap(pt) != want || len(pt) > want {
 			t.Errorf("the plaintext of %d bytes has a buffer of %d; want %d, allocated once", len(pt), cap(pt), want)
 		}
 		got, err := Plaintext(pt, s.RunConfiguration, names)
@@ -760,11 +906,13 @@ func FuzzPlaintext(f *testing.F) {
 		f.Fatal(err)
 	}
 	for _, name := range []string{"fixtures/sealed/sealed-plaintext.json", "fixtures/sealed/plaintext-other-digest.json",
-		"fixtures/sealed/plaintext-not-requested.json", "fixtures/invalid/sealed-plaintext-secret-id.json", "fixtures/invalid/sealed-plaintext-value-nul.json"} {
+		"fixtures/sealed/plaintext-not-requested.json", "fixtures/invalid/sealed-plaintext-secret-id.json", "fixtures/invalid/sealed-plaintext-value-nul.json",
+		"fixtures/invalid/sealed-plaintext-expires-at-not-a-time.json", "fixtures/invalid/sealed-plaintext-apply-with-token.json",
+		"fixtures/invalid/sealed-plaintext-apply-pattern-host.json"} {
 		f.Add(read(f, name))
 	}
 	f.Fuzz(func(t *testing.T, pt []byte) {
-		_, _, _, values, err := readPlaintext(pt)
+		_, _, _, values, _, err := readPlaintext(pt)
 		clearAll(values)
 		doc, derr := contracts.Decode("plaintext.json", pt)
 		schemaOK := derr == nil && schema.Validate(doc) == nil

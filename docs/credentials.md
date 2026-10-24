@@ -211,7 +211,9 @@ values. An entry is one of two kinds:
 
 - An API credential is a model key: `{name, format, endpoint, auth, key_prefixes}`, as
   in [Model keys](#model-keys).
-- A host credential is any other secret: `{name, hosts, paths, auth, placeholders}`.
+- A host credential is any other secret: `{name, apply, placeholders}`. Each of its 1
+  to 16 `apply` items is one place and way the value is set: `{hosts, scheme, username,
+  header, paths}`.
 
 ```json
 {"version": 1,
@@ -221,18 +223,37 @@ values. An entry is one of two kinds:
     "endpoint": "https://api.model.example/anthropic",
     "auth": {"scheme": "header", "header": "x-api-key"},
     "key_prefixes": ["sk-ant-"]},
-   {"name": "forge", "hosts": ["git.example"],
-    "auth": {"scheme": "basic", "username": "x-access-token"}}]}
+   {"name": "forge",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic",
+               "username": "x-access-token", "paths": ["/example-org/app.git/*"]},
+              {"hosts": ["api.git.example"], "scheme": "bearer",
+               "paths": ["/repos/example-org/app/*"]}],
+    "placeholders": ["GIT_TOKEN"]}]}
 ```
 
 - The run needs no wall: the gateway sets these credentials with or without one.
   On an unwalled local run the agent can read the gateway's access key, which opens the
   sealed values. The program that starts the run must refuse stored credentials there,
   as qory's `key_needs_wall` does.
-- When the run starts, the gateway fetches the values once, sealed to its access key,
-  and opens them. The values stay outside the container. A model key's value that
-  starts with none of its `key_prefixes` stops the run with
-  `run_configuration_invalid`.
+- When the run starts, the gateway fetches the values, sealed to its access key, and
+  opens them. The values stay outside the container. A model key's value that starts
+  with none of its `key_prefixes` stops the run with `run_configuration_invalid`.
+- The control plane may send a value with `expires_at`, when it stops working, and
+  `apply`, where it is set. `apply` may narrow the entry's items, such as to fewer hosts
+  or paths, and never widen them. A value that expired before the run started, or an
+  item outside its entry, stops the run with `run_configuration_invalid`.
+- The gateway fetches a value with `expires_at` again 5 minutes before it expires, and
+  after a host answers `401` to a request with the value, at most every 30 seconds per
+  credential. The renewed value takes the old value's place, and the gateway overwrites the
+  old bytes with zeros. A value without `expires_at`, such as a model key's, is fetched
+  once.
+- If a renewal fails, or its `expires_at` is not after the machine's clock, the run
+  keeps the old value and the gateway reports `run <run id>: If this repeats, check the
+  control plane: credential "forge" was not renewed:` with the cause, then tries again
+  30 seconds later. At `expires_at` with no renewal, the
+  run's record gets one line, `Start another run once the control plane answers:
+  credential "forge" expired at 2026-10-24T13:00:00Z`, and the proxy sets the value no
+  more.
 - On a host that one of these credentials is for, its value replaces the machine's
   credential, such as the model key in `forager.yaml` for the same endpoint host,
   whatever its name.
@@ -243,8 +264,8 @@ values. An entry is one of two kinds:
   endpoint's variable or a model key's variable stops the run
   (`run_configuration_invalid`). The same holds for the run's placeholders from this
   machine's credentials and tools. A tool's variable, such as `GITHUB_TOKEN`, is fine.
-- The credentials and `model_credential` are fixed for the run. A reload that changes
-  them fails, and the run keeps its policy. So does a reload that selects another
+- The credentials and `model_credential` are fixed for the run: a renewal changes only
+  a value. A reload that changes them fails, and the run keeps its policy. So does a reload that selects another
   model key of this machine's as the start key, with or without `model_credential`.
 - Without `credentials`, the run gets the machine's credentials as before.
 

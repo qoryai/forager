@@ -85,12 +85,19 @@ type Config struct {
 	// selection whose credential the run does not get.
 	// Nil reports nothing.
 	Report func(string)
-	// Secrets fetches the values of the credentials of the run configuration the run
-	// starts with, by their names in the document's order, under digest, the digest
-	// Forager computed of the document's bytes, and opens them: the secrets request,
-	// once per run. Nil when the server's discovery lists no secrets endpoint; a run
-	// configuration with credentials is then refused.
+	// Log writes one line to the run's record, a dev.qory.run.log of stream stderr: a
+	// value of the run configuration's credentials that expired with no renewal. Nil
+	// writes none.
+	Log func(string)
+	// Secrets fetches the values of credentials of the run configuration in force, by
+	// their names in the document's order, under digest, the digest Forager computed of
+	// that document's bytes, and opens them: the secrets request. The run sends it when
+	// it starts, for every credential, and again for each credential whose value has
+	// expires_at ([renewer]). Nil when the server's discovery lists no secrets endpoint;
+	// a run configuration with credentials is then refused.
 	Secrets func(ctx context.Context, digest string, credentials []string) (sealed.Values, error)
+	// Clock is the time renewals are judged by; nil is this machine's clock.
+	Clock Clock
 }
 
 // Fetched is one run configuration as the server answered it.
@@ -143,13 +150,18 @@ type Run struct {
 	images    map[*policy.Loaded]string
 	held      *credential.Held
 	runDigest string
+	// computed is the digest Forager computed of the bytes of the run configuration in
+	// force, the one a renewal's secrets request is sent under, and computedRead those of
+	// each run configuration Read read that a reload has not decided yet.
+	computed     string
+	computedRead map[*policy.Loaded]string
 	// creds are the credentials and the model_credential of each run configuration Read
 	// read that a reload has not decided yet.
 	creds map[*policy.Loaded]storedSet
 
 	// stored are the credentials of the run configuration the run started with, and
-	// values their values as they opened, fixed for the run and cleared by Close.
-	// storedModel is its model_credential, empty when it names none.
+	// values their values, as they opened or as a renewal replaced them, cleared by
+	// Close. storedModel is its model_credential, empty when it names none.
 	stored      []server.RunCredential
 	storedModel string
 	values      sealed.Values
@@ -158,6 +170,11 @@ type Run struct {
 	// Read read that a reload has not decided yet.
 	stack  []string
 	stacks map[*policy.Loaded][]string
+	// applies are where each of stored is set, fixed when the run opens: the answer's
+	// apply, or the entry's items.
+	applies map[string][]credential.StoredApply
+	// renew fetches again the values with expires_at; nil when none has it.
+	renew *renewer
 }
 
 // storedSet is what a run configuration says of the run's credentials: its credentials
@@ -218,7 +235,9 @@ func Decide(cfg Config) (*Run, error) {
 		r.stack = r.takeStack(fetched)
 		if cfg.Fetched.Document != nil {
 			r.served = cfg.Fetched.Document.Values()
+			r.computed = cfg.Fetched.Document.Computed
 		}
+		r.takeComputed(fetched)
 		r.runDigest = pol.RunConfiguration
 	}
 	if !cfg.Wall {
@@ -288,6 +307,7 @@ func (r *Run) Hold(ctx context.Context) error {
 	r.mu.Lock()
 	r.held = held
 	r.mu.Unlock()
+	r.renew.start(routine.ForRun(r.cfg.Report, r.cfg.RunID))
 	r.chosen = chosen
 	pol := r.start
 	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || r.server
@@ -306,9 +326,10 @@ func Open(ctx context.Context, cfg Config) (*Run, error) {
 	return r, nil
 }
 
-// Close stops the renewals of the credentials the run holds, and overwrites the values
-// of the run configuration's credentials. The tools are the caller's to stop, with the
-// set [Run.StartTools] returned.
+// Close stops the renewals of the credentials the run holds, those of the run
+// configuration's values among them, and overwrites the values of the run
+// configuration's credentials. The tools are the caller's to stop, with the set
+// [Run.StartTools] returned.
 func (r *Run) Close() {
 	r.mu.Lock()
 	held := r.held
@@ -317,13 +338,32 @@ func (r *Run) Close() {
 	if held != nil {
 		held.Close()
 	}
+	r.renew.close()
 	r.clearValues()
+}
+
+// computedDigest is the digest Forager computed of the run configuration in force.
+func (r *Run) computedDigest() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.computed
+}
+
+// takeComputed is the digest Forager computed of the run configuration of a policy
+// [Run.Read] made, empty when none was read from bytes, and forgets it.
+func (r *Run) takeComputed(p *policy.Loaded) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d := r.computedRead[p]
+	delete(r.computedRead, p)
+	return d
 }
 
 // open fetches and opens the values of the start's run configuration's credentials,
 // under the digest Forager computed of the document's bytes, and refuses a value a
-// header cannot hold and a model key's value that starts with none of its
-// key_prefixes.
+// header cannot hold, a model key's value that starts with none of its key_prefixes,
+// a value that expired before the run started, and one whose apply is outside its
+// entry ([checkOpened]).
 func (r *Run) open(ctx context.Context) error {
 	names := make([]string, len(r.stored))
 	for i, c := range r.stored {
@@ -337,6 +377,7 @@ func (r *Run) open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	now := r.clock().Now()
 	for i, name := range names {
 		v, _ := values.Value(name)
 		if !HeaderValue(v) {
@@ -353,7 +394,16 @@ func (r *Run) open(ctx context.Context) error {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
 				"run configuration %s: store in the control plane a value of the credential %s that starts with %s: the stored value starts with none of its key_prefixes", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true), strings.Join(shown, " or "))
 		}
+		if err := checkOpened(r.stored[i], values, now); err != nil {
+			values.Clear()
+			return err
+		}
 	}
+	r.applies = make(map[string][]credential.StoredApply, len(r.stored))
+	for _, c := range r.stored {
+		r.applies[c.Name] = effectiveApply(c, values)
+	}
+	r.renew = newRenewer(r, values, now)
 	r.mu.Lock()
 	r.values = values
 	r.mu.Unlock()
@@ -630,6 +680,12 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		}
 		r.creds[out] = storedSet{f.Document.Credentials, f.Document.ModelCredential}
 	}
+	if f.Document != nil && f.Document.Computed != "" {
+		if r.computedRead == nil {
+			r.computedRead = map[*policy.Loaded]string{}
+		}
+		r.computedRead[out] = f.Document.Computed
+	}
 	if named != "" {
 		if r.images == nil {
 			r.images = map[*policy.Loaded]string{}
@@ -850,6 +906,9 @@ type Decision struct {
 	// force.
 	CredentialsChanged bool
 	held               *credential.Held
+	// computed is the digest Forager computed of the run configuration's bytes, empty
+	// when it was not read from bytes.
+	computed string
 }
 
 // Discard stops the renewals of the decision's credentials, for a decision the
@@ -871,7 +930,8 @@ func (d *Decision) Discard() {
 // configuration names is fixed by the string, so one that differs from the start's,
 // appears or disappears is refused.
 func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error) {
-	guard, named, creds, stack := r.takeGuard(next), r.takeNamed(next), r.takeCreds(next), r.takeStack(next)
+	guard, named, creds := r.takeGuard(next), r.takeNamed(next), r.takeCreds(next)
+	stack, computed := r.takeStack(next), r.takeComputed(next)
 	if next.RunConfiguration == r.RunConfiguration() {
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
@@ -886,7 +946,7 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 	}
 	d, err := r.decide(ctx, next, named)
 	if d != nil {
-		d.Guard = guard
+		d.Guard, d.computed = guard, computed
 	}
 	if err != nil {
 		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", accesskey.ShownValue(next.URL, false), err)
@@ -963,6 +1023,9 @@ func (r *Run) Commit(d *Decision) {
 	r.mu.Lock()
 	old := r.held
 	r.pol, r.held, r.runDigest, r.guard = d.Policy, d.held, d.Policy.RunConfiguration, d.Guard
+	if d.computed != "" {
+		r.computed = d.computed
+	}
 	r.mu.Unlock()
 	if old != nil {
 		old.Close()
@@ -1086,17 +1149,17 @@ func claimedBy(held *credential.Held) func(string) string {
 }
 
 // storedUses are the run configuration's credentials the run started with, as the
-// credential package holds them. Each one's Value copies the opened value under r.mu,
-// as [Run.clearValues] clears it, so a request that is still being served when the run
-// ends copies the value whole or gets none, and never reads bytes while they are
-// overwritten.
+// credential package holds them, each set where the start's answer says ([Run.open]).
+// Each one's Value copies the value under r.mu, as [Run.clearValues] clears it and a
+// renewal replaces it, so a request that is still being served when the run ends copies
+// the value whole or gets none, and never reads bytes while they are overwritten. A
+// value with expires_at has the renewer's Rejected, which every reload's uses share.
 func (r *Run) storedUses() []credential.Stored {
 	out := make([]credential.Stored, len(r.stored))
 	for i, c := range r.stored {
 		name := c.Name
-		hosts, paths := c.Applies()
-		out[i] = credential.Stored{Name: name, Hosts: hosts, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header,
-			Paths: paths, Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth, Value: func() []byte {
+		out[i] = credential.Stored{Name: name, Apply: r.applies[name], Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
+			ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				b, _ := r.values.Value(name)
@@ -1154,8 +1217,12 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 			c.Placeholder = link.KeyPlaceholder(u.Name)
 		}
 		if u.Stored {
-			// The server's value: no renewal, and no Token, so it stays bytes.
+			// The server's value has no Token, so it stays bytes. A host's 401 asks for it
+			// again only when it has expires_at.
 			c.Value, c.Stored = u.Value, true
+			if u.Renewed {
+				c.Rejected = u.Rejected
+			}
 		} else {
 			c.Token, c.Rejected = u.Token, u.Rejected
 		}

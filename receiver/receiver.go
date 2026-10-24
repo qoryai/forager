@@ -71,9 +71,10 @@
 // window, the unsigned 401, a key not allowed is a signed 409 secrets_not_allowed; then
 // the request is answered as a reload of the run is; a digest that is not that of the
 // run configuration in force, or not one the run was answered with, is a signed 410
-// run_configuration_superseded; and a credentials list other than that run
-// configuration's names, in its order, a signed 409 credentials_differ. Otherwise the
-// hook's values are sealed to the requesting access key with [sealed.Seal], signed
+// run_configuration_superseded; and a credentials list that is not some of that run
+// configuration's names, in its order, each once, a signed 409 credentials_differ: a
+// renewal lists the names that are due. Otherwise the hook's values, with their
+// expires_at and apply, are sealed to the requesting access key with [sealed.Seal], signed
 // under the receiver's key and answered 200, and the receiver overwrites them with
 // zeros. No value is logged or stored.
 package receiver
@@ -87,6 +88,7 @@ import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -324,13 +326,14 @@ type Handler struct {
 	// policy. Nil gives every run NoPolicy.
 	RunConfiguration func(run Run) (document []byte, digest string, refusal *Refusal)
 	// Secrets returns the values of a run's credentials, for a secrets request the
-	// receiver accepted: one value for each name of credentials, the names of the
-	// credentials of the run configuration in force, in its order, or a refusal, which
-	// is answered as RunConfiguration's is. Each value is a copy, which the receiver
-	// overwrites with zeros once it sealed it. A value outside the contract's form, or
-	// a count other than the names', is a signed 500. Nil serves no secrets endpoint:
-	// list secrets in Configuration's document only with the hook set.
-	Secrets func(run Run, credentials []string) (values [][]byte, refusal *Refusal)
+	// receiver accepted: one value for each name of credentials, the names the request
+	// lists of the credentials of the run configuration in force, in its order, every
+	// one when the run starts and those due at a renewal, or a refusal, which is
+	// answered as RunConfiguration's is. Each value's bytes are a copy, which the
+	// receiver overwrites with zeros once it sealed them. A value outside the contract's
+	// form, or a count other than the names', is a signed 500. Nil serves no secrets
+	// endpoint: list secrets in Configuration's document only with the hook set.
+	Secrets func(run Run, credentials []string) (values []Value, refusal *Refusal)
 	// EventsPath, RunPath and SecretsPath are where the events endpoint, the run
 	// endpoint and the secrets endpoint are served; empty means DefaultEventsPath,
 	// DefaultRunPath and DefaultSecretsPath.
@@ -1124,6 +1127,38 @@ func (h *Handler) reload(w http.ResponseWriter, v verified, runID string) {
 	h.answerRun(w, v, doc, digest)
 }
 
+// Value is one value the Secrets hook returns: the bytes, which [NewValue] keeps behind
+// a func, so a struct printed by reflection shows none of them; when they stop working,
+// zero when they do not; and where they are set, nil for the run configuration entry's
+// items (sealed-plaintext.schema.json). A Value formats as a fixed phrase whatever the
+// verb, and nothing of its bytes.
+type Value struct {
+	ExpiresAt time.Time
+	Apply     []sealed.Apply
+	value     func() []byte
+}
+
+// NewValue returns the Value of the bytes b. It keeps b, not a copy: the receiver
+// overwrites b with zeros once it sealed it.
+func NewValue(b []byte) Value { return Value{value: func() []byte { return b }} }
+
+// bytes returns the value's bytes, nil for a Value not made by NewValue.
+func (v Value) bytes() []byte {
+	if v.value == nil {
+		return nil
+	}
+	return v.value()
+}
+
+// String returns a fixed phrase, and nothing of the bytes.
+func (v Value) String() string { return "a sealed value" }
+
+// GoString returns what String returns.
+func (v Value) GoString() string { return v.String() }
+
+// Format writes what String returns, whatever the verb.
+func (v Value) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, v.String()) }
+
 // secretsBody is what the receiver reads of a secrets request's body, decoded with each
 // member name once and no member the schema does not define, its timestamp kept as its
 // raw number so its form is checked.
@@ -1180,6 +1215,23 @@ func credentialNames(doc []byte) []string {
 	return names
 }
 
+// inOrder reports whether requested are some of names, at least one, each once, in
+// names' order.
+func inOrder(names, requested []string) bool {
+	if len(requested) == 0 {
+		return false
+	}
+	i := 0
+	for _, n := range requested {
+		j := slices.Index(names[i:], n)
+		if j < 0 {
+			return false
+		}
+		i += j + 1
+	}
+	return true
+}
+
 // secrets answers one verified secrets request, in its order after the shared one: a
 // body the contract refuses, 400 invalid_request; a timestamp more than the window
 // from the receiver's clock, either way, the unsigned 401; an access key not allowed
@@ -1189,8 +1241,8 @@ func credentialNames(doc []byte) []string {
 // workspace_not_served; a run it wants nothing more of, 410; the hook's refusal of the
 // run configuration; then a digest that is not the digest of the run configuration in
 // force, or not one the run was answered with, 410 run_configuration_superseded; a
-// credentials list other than that run configuration's names, in its order, 409
-// credentials_differ; the Secrets hook's refusal; values outside the contract's form, or
+// credentials list that is not some of that run configuration's names, in its order,
+// each once, 409 credentials_differ; the Secrets hook's refusal; values outside the contract's form, or
 // a count other than the names', a signed 500. Otherwise each value is sealed to the
 // access key the request verified under, signed under the receiver's key, with exp its
 // clock plus sealed.Lifetime, and answered 200. The values are cleared once sealed, and
@@ -1236,8 +1288,8 @@ func (h *Handler) secrets(w http.ResponseWriter, v verified, body []byte) {
 		h.refuseSigned(w, v, http.StatusGone, "run_configuration_superseded")
 		return
 	}
-	names := credentialNames(doc)
-	if !slices.Equal(names, req.Credentials) {
+	names := req.Credentials
+	if !inOrder(credentialNames(doc), names) {
 		h.refuseSigned(w, v, http.StatusConflict, "credentials_differ")
 		return
 	}
@@ -1246,7 +1298,7 @@ func (h *Handler) secrets(w http.ResponseWriter, v verified, body []byte) {
 	values, refusal := h.Secrets(run, slices.Clone(names))
 	defer func() {
 		for _, b := range values {
-			clear(b)
+			clear(b.bytes())
 		}
 	}()
 	if refusal != nil {
@@ -1260,7 +1312,9 @@ func (h *Handler) secrets(w http.ResponseWriter, v verified, body []byte) {
 	s := sealed.Sealing{AccessKeyID: v.id, PublicKey: v.key.PublicKey, RunID: req.RunID, RunConfiguration: digest,
 		Credentials: names, Exp: sealed.Expiry(h.now())}
 	for i, name := range names {
-		s.Values = append(s.Values, sealed.NewValue(name, values[i]))
+		sv := sealed.NewValue(name, values[i].bytes())
+		sv.ExpiresAt, sv.Apply = values[i].ExpiresAt, values[i].Apply
+		s.Values = append(s.Values, sv)
 	}
 	answer, err := sealed.Seal(s, h.Signer)
 	if err != nil {
