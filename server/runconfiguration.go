@@ -105,9 +105,11 @@ func CheckCredentials(creds []RunCredential, model string) error {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 				"the document is refused: give the credential %s an endpoint whose host is a DNS name or an IP address, port 1 to 65535: Forager reads no host from its endpoint", name)
 		}
-		if c.Auth.Scheme == "header" && ReservedHeader(c.Auth.Header) {
-			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"the document is refused: set the credential %s in another header than %s; that header frames the request, or the proxy sets it", name, accesskey.ShownName(c.Auth.Header, true))
+		for _, a := range c.Applies() {
+			if a.Scheme == "header" && ReservedHeader(a.Header) {
+				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+					"the document is refused: set the credential %s in another header than %s; that header frames the request, or the proxy sets it", name, accesskey.ShownName(a.Header, true))
+			}
 		}
 		for _, p := range c.Placeholders {
 			if DeniedPlaceholder(p) {

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/sealed-plaintext.schema.json",
   "title": "Sealed plaintext",
-  "description": "What the envelope of secrets-answer.schema.json opens to: the digest, the requested credentials and a value for each, nothing else. Whoever opens it checks run_configuration against the digest it computed and credentials against the set it requested. values has exactly one value for each name of credentials, sorted by credential. A member the schema does not define is refused, and so is a member name twice in one object.",
+  "description": "What the envelope of secrets-answer.schema.json opens to: the digest, the requested credentials and a value for each, with when it expires and where it is set, nothing else. Whoever opens it checks run_configuration against the digest it computed and credentials against the set it requested. values has exactly one value for each name of credentials, sorted by credential. A member the schema does not define is refused, and so is a member name twice in one object.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "run_configuration", "credentials", "values"],
@@ -35,7 +35,9 @@
         "required": ["credential", "value"],
         "properties": {
           "credential": {"description": "The credential's name, one of credentials.", "$ref": "run-configuration.schema.json#/$defs/credential_name"},
-          "value": {"description": "The value: UTF-8 text of 1 to 16384 bytes with no NUL; the schema's maxLength counts characters and bounds it from above. A value set in a header must also have no control character other than tab and no leading or trailing space or tab.", "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\x00]+$"}
+          "value": {"description": "The value: UTF-8 text of 1 to 16384 bytes with no NUL; the schema's maxLength counts characters and bounds it from above. A value set in a header must also have no control character other than tab and no leading or trailing space or tab.", "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\x00]+$"},
+          "expires_at": {"description": "When the value stops working, RFC 3339, such as 2026-10-24T13:00:00Z: the gateway sends the secrets request again for this credential 5 minutes before, and after a host answers 401 to a request that the value was set on, at most every 30 seconds. A value that has expired when the run opens is run_configuration_invalid. Once it expires with no renewal, the gateway sets it no more. Absent, the value does not expire and is never fetched again.", "type": "string", "format": "date-time"},
+          "apply": {"description": "Where and how the value is set: items of the run configuration's apply. Each item is within one item of the entry, an API credential's being its endpoint's host with its auth: its hosts among that item's hosts, the same scheme, username and header, and paths that the item's paths cover. It may narrow the entry and never widen it. At a renewal, the items, or the entry's when there are none, are those of the start. Absent, the gateway sets the entry's items.", "type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "run-configuration.schema.json#/$defs/apply"}}
         }
       }
     }

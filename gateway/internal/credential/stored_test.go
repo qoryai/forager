@@ -14,7 +14,7 @@ import (
 
 // storedModel is a credential from the server for api.model.example.
 func storedModel(value string) Stored {
-	return Stored{Name: "server-model", Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"MODEL_API_KEY"},
+	return Stored{Name: "server-model", Apply: []StoredApply{{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}}, Placeholders: []string{"MODEL_API_KEY"},
 		Value: func() []byte { return []byte(value) }}
 }
 
@@ -84,7 +84,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 func TestACredentialFromTheServerOfTheSameNameReplacesTheMachines(t *testing.T) {
 	t.Setenv("MODEL_TOKEN", "a-token")
 	defs := []Definition{{Name: "model", Env: "MODEL_TOKEN", Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"}}}
-	stored := []Stored{{Name: "model", Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"},
+	stored := []Stored{{Name: "model", Apply: []StoredApply{{Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key"}}, Placeholders: []string{"ANTHROPIC_API_KEY"},
 		Value: func() []byte { return []byte("server-value") }}}
 	held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "model"}}, stored, "", policy.Enforce, []string{"api.anthropic.com"}, func(l string) { t.Log(l) })
 	if err != nil {
@@ -182,7 +182,7 @@ func TestAModelKeyStartsTheRunAsModelCredentialSays(t *testing.T) {
 	first, second := modelKey("first"), modelKey("second")
 	second.Endpoint = "https://api.other-model.example/v1"
 	plain := Definition{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"}
-	server := Stored{Name: "server-model", Format: "openai-responses", Endpoint: "https://api.server-model.example/v1", Hosts: []string{"api.server-model.example"}, Scheme: "bearer",
+	server := Stored{Name: "server-model", Format: "openai-responses", Endpoint: "https://api.server-model.example/v1", Apply: []StoredApply{{Hosts: []string{"api.server-model.example"}, Scheme: "bearer"}},
 		Value: func() []byte { return []byte("sk-fake-server-value") }}
 	selected := func(defs []Definition) []policy.Selected {
 		var out []policy.Selected
@@ -287,7 +287,7 @@ func TestTwoModelKeysMayShareAHost(t *testing.T) {
 			t.Errorf("%s:\n got %v\nwant %s", name, err, c.want)
 		}
 	}
-	stored := Stored{Name: "server-key", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key",
+	stored := Stored{Name: "server-key", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Apply: []StoredApply{{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}},
 		Value: func() []byte { return []byte("sk-ant-fake-server-value") }}
 	held, err = ResolveWith(context.Background(), []Definition{first}, []policy.Selected{{Name: "first"}}, []Stored{stored, storedModel("server-value")}, "server-key", policy.Observe, nil, func(l string) { t.Log(l) })
 	if err == nil {

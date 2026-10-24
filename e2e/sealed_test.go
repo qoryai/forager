@@ -124,7 +124,7 @@ func (r sealedRun) reference(t *testing.T, accessKey, poolKey, signer *accesskey
 	t.Cleanup(func() { store.Close() })
 	pin, _ := json.Marshal(accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}})
 	doc := []byte(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["` + r.host + `"]}},` +
-		`"credentials":[{"name":"model","hosts":["` + r.host + `"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"placeholders":["` + sealedPlaceholder + `"]}]}`)
+		`"credentials":[{"name":"model","apply":[{"hosts":["` + r.host + `"],"scheme":"header","header":"x-api-key","paths":["/v1/*"]}],"placeholders":["` + sealedPlaceholder + `"]}]}`)
 	keys := map[string]receiver.AccessKey{
 		sealedNodeKey:    {PublicKey: accessKey.PublicKey(), StoredSecrets: true},
 		sealedPoolKey:    {PublicKey: poolKey.PublicKey(), Node: sealedPool},
@@ -145,10 +145,10 @@ func (r sealedRun) reference(t *testing.T, accessKey, poolKey, signer *accesskey
 			return doc, "sha256=" + hex.EncodeToString(sum[:])
 		},
 		RunConfiguration: func(receiver.Run) ([]byte, string, *receiver.Refusal) { return doc, "", nil },
-		Secrets: func(_ receiver.Run, names []string) ([][]byte, *receiver.Refusal) {
-			var values [][]byte
+		Secrets: func(_ receiver.Run, names []string) ([]receiver.Value, *receiver.Refusal) {
+			var values []receiver.Value
 			for range names {
-				values = append(values, []byte(value))
+				values = append(values, receiver.Value{Value: []byte(value)})
 			}
 			return values, nil
 		},

@@ -40,6 +40,7 @@ import (
 	"io"
 	"slices"
 	"strconv"
+	"time"
 )
 
 // Suite is the envelope's suite on the wire: RFC 9180 base mode with DHKEM(X25519,
@@ -125,12 +126,27 @@ func refuse(err error, format string, a ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{err}, a...)...)
 }
 
-// Values are the values an envelope opened to, by credential name, stored as bytes. A
-// Values formats as its count whatever the verb, and marshals as text to the same. The
-// map is returned by a func, so fmt printing a Values by reflection, as an unexported
-// field of a struct, prints the func's address alone. The zero Values has none.
+// Values are the values an envelope opened to, by credential name, stored as bytes,
+// with when each expires and where it is set. A Values formats as its count whatever
+// the verb, and marshals as text to the same. The store is returned by a func, so fmt
+// printing a Values by reflection, as an unexported field of a struct, prints the
+// func's address alone. The zero Values has none.
 type Values struct {
-	m func() map[string][]byte
+	m func() *store
+}
+
+// store is what a Values keeps: each value's bytes and meta, by credential name.
+type store struct {
+	values map[string][]byte
+	metas  map[string]meta
+}
+
+// Apply is one item of a value's apply, sealed-plaintext.schema.json: the hosts the
+// value is set on, how, and on which paths, nil for every path.
+type Apply struct {
+	Hosts                    []string
+	Scheme, Username, Header string
+	Paths                    []string
 }
 
 // Value returns the value of a credential and whether the envelope had one. The bytes
@@ -140,8 +156,66 @@ func (v Values) Value(credential string) ([]byte, bool) {
 	if v.m == nil {
 		return nil, false
 	}
-	b, ok := v.m()[credential]
+	b, ok := v.m().values[credential]
 	return b, ok
+}
+
+// ExpiresAt returns when the value of a credential stops working, and whether the
+// plaintext gave it expires_at.
+func (v Values) ExpiresAt(credential string) (time.Time, bool) {
+	if v.m == nil {
+		return time.Time{}, false
+	}
+	m := v.m().metas[credential]
+	return m.expires, !m.expires.IsZero()
+}
+
+// Apply returns a copy of where the value of a credential is set, and whether the
+// plaintext gave it apply.
+func (v Values) Apply(credential string) ([]Apply, bool) {
+	if v.m == nil {
+		return nil, false
+	}
+	m := v.m().metas[credential]
+	if m.apply == nil {
+		return nil, false
+	}
+	out := make([]Apply, len(m.apply))
+	for i, a := range m.apply {
+		out[i] = Apply{Hosts: slices.Clone(a.Hosts), Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: slices.Clone(a.Paths)}
+	}
+	return out, true
+}
+
+// Replace puts the value of a credential that from has, with its expires_at and apply,
+// in place of the one v has: the old bytes are overwritten with zeros, and from no
+// longer has the value, so clearing from leaves v's. It reports whether from had a value
+// for the credential; without one, v is as it was.
+func (v Values) Replace(credential string, from Values) bool {
+	b, ok := from.Value(credential)
+	if !ok || v.m == nil {
+		return false
+	}
+	src, dst := from.m(), v.m()
+	if old, ok := dst.values[credential]; ok {
+		clear(old)
+	}
+	dst.values[credential], dst.metas[credential] = b, src.metas[credential]
+	delete(src.values, credential)
+	delete(src.metas, credential)
+	return true
+}
+
+// Drop overwrites the value of a credential with zeros and drops it, with its
+// expires_at and apply.
+func (v Values) Drop(credential string) {
+	if v.m == nil {
+		return
+	}
+	s := v.m()
+	clear(s.values[credential])
+	delete(s.values, credential)
+	delete(s.metas, credential)
 }
 
 // Credentials returns the names of the credentials stored, sorted.
@@ -149,8 +223,8 @@ func (v Values) Credentials() []string {
 	if v.m == nil {
 		return nil
 	}
-	out := make([]string, 0, len(v.m()))
-	for name := range v.m() {
+	out := make([]string, 0, len(v.m().values))
+	for name := range v.m().values {
 		out = append(out, name)
 	}
 	slices.Sort(out)
@@ -162,7 +236,7 @@ func (v Values) Len() int {
 	if v.m == nil {
 		return 0
 	}
-	return len(v.m())
+	return len(v.m().values)
 }
 
 // Clear overwrites every value's bytes with zeros and drops them.
@@ -170,10 +244,11 @@ func (v Values) Clear() {
 	if v.m == nil {
 		return
 	}
-	m := v.m()
-	for name, b := range m {
+	s := v.m()
+	for name, b := range s.values {
 		clear(b)
-		delete(m, name)
+		delete(s.values, name)
+		delete(s.metas, name)
 	}
 }
 

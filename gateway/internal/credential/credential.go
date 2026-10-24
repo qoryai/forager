@@ -88,6 +88,9 @@ type Use struct {
 	// Stored says the credential is the server's, a run configuration's credentials
 	// entry, whose value Qory Apiary sealed to the access key.
 	Stored bool
+	// Renewed says the server's value is fetched again before it expires and after a
+	// host refuses it, so [Use.Rejected] means something: a value with expires_at.
+	Renewed bool
 	// Format, Endpoint and OAuth are a model key's, from the server or the machine;
 	// empty for every other credential.
 	Format, Endpoint string
@@ -97,20 +100,34 @@ type Use struct {
 }
 
 // Stored is a credential whose value Qory Apiary stores for the run: an entry of the
-// run configuration's credentials, how its value is set, and the value as it opened.
+// run configuration's credentials, where and how its value is set, and the value as it
+// opened.
 type Stored struct {
-	Name                     string
-	Hosts                    []string
-	Scheme, Username, Header string
-	// Paths are nil for every path.
-	Paths        []string
+	Name string
+	// Apply are where and how the value is set, one [Use] each: an API credential's one
+	// item on its endpoint's host, or a host credential's items.
+	Apply        []StoredApply
 	Placeholders []string
 	// Format, Endpoint and OAuth are an API credential's; empty for a host credential.
 	Format, Endpoint string
 	OAuth            bool
 	// Value returns a copy of the opened value's bytes, which the caller clears once it
-	// has set them; empty once the run has ended.
+	// has set them; empty once the run has ended, and once the value expired.
 	Value func() []byte
+	// ExpiresAt is when the value stops working, zero when it does not expire. Rejected,
+	// for a value with ExpiresAt, hears that a host answered 401 to a request the value
+	// was set on: the caller fetches the value again. A value without ExpiresAt is never
+	// fetched again, so Rejected is not called for it.
+	ExpiresAt time.Time
+	Rejected  func()
+}
+
+// StoredApply is one way a [Stored] value is set: the hosts, the scheme with its
+// username or header, and the paths, nil for every path.
+type StoredApply struct {
+	Hosts                    []string
+	Scheme, Username, Header string
+	Paths                    []string
 }
 
 // Token is the token as it is now, of a credential of the machine's; empty for a
@@ -133,18 +150,19 @@ func (u *Use) Value() []byte {
 }
 
 // Rejected tells the holder a host refused the token, which is a reason to ask the
-// adapter again, not more often than every [retryWait].
+// adapter again, or the server for a value with expires_at, not more often than every
+// [RetryWait].
 func (u *Use) Rejected() { u.held.rejected() }
 
-// Timing of an adapter.
+// Timing of a renewal, of an adapter's token and of a value from the server alike.
 const (
 	// adapterWait is how long an adapter has to answer.
 	adapterWait = time.Minute
-	// renewBefore is how long before a credential expires the gateway runs the adapter
+	// RenewBefore is how long before a credential expires the gateway asks for it
 	// again.
-	renewBefore = 5 * time.Minute
-	// retryWait is the least time between two askings.
-	retryWait = 30 * time.Second
+	RenewBefore = 5 * time.Minute
+	// RetryWait is the least time between two askings for one credential.
+	RetryWait = 30 * time.Second
 )
 
 // Held are a run's credentials, resolved. Start is the name of the model key the
@@ -198,12 +216,13 @@ func (h *Held) Credentials() []Credential {
 		for _, u := range h.Uses {
 			if u.held == c {
 				cred.Hosts = append(cred.Hosts, u.Hosts...)
-				if u.Stored {
-					cred.Stored = true
-				}
-				if u.Stored || u.Format != "" {
+				// Of several uses, the first one's scheme is the credential's.
+				if (u.Stored || u.Format != "") && cred.Scheme == "" {
 					cred.Scheme, cred.Username, cred.Header = u.Scheme, u.Username, u.Header
 					cred.Format, cred.Endpoint, cred.OAuth = u.Format, u.Endpoint, u.OAuth
+				}
+				if u.Stored {
+					cred.Stored = true
 				}
 			}
 		}
@@ -242,10 +261,12 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 	out := &Held{}
 	replaced := func(hosts []string) bool {
 		for _, s := range stored {
-			for _, theirs := range s.Hosts {
-				for _, host := range hosts {
-					if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
-						return true
+			for _, a := range s.Apply {
+				for _, theirs := range a.Hosts {
+					for _, host := range hosts {
+						if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
+							return true
+						}
 					}
 				}
 			}
@@ -307,8 +328,14 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 	}
 	for _, s := range stored {
 		h := &held{def: Definition{Name: s.Name}, value: s.Value, done: make(chan struct{})}
-		out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: s.Hosts, Scheme: s.Scheme, Username: s.Username, Header: s.Header, Paths: s.Paths, Stored: true,
-			Format: s.Format, Endpoint: s.Endpoint, OAuth: s.OAuth, held: h})
+		renewed := !s.ExpiresAt.IsZero() && s.Rejected != nil
+		if renewed {
+			h.onRejected = s.Rejected
+		}
+		for _, a := range s.Apply {
+			out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, Stored: true,
+				Renewed: renewed, Format: s.Format, Endpoint: s.Endpoint, OAuth: s.OAuth, held: h})
+		}
 		for _, p := range s.Placeholders {
 			if !slices.Contains(h.placeholders, p) {
 				h.placeholders = append(h.placeholders, p)
@@ -630,8 +657,10 @@ type held struct {
 	// placeholders are the definition's placeholders and then the adapter's, each once.
 	placeholders []string
 	// value, for a credential from the server, returns its opened value; nil for the
-	// machine's.
-	value func() []byte
+	// machine's. onRejected, for a value from the server with expires_at, hears a host's
+	// 401; nil for every other.
+	value      func() []byte
+	onRejected func()
 
 	mu      sync.Mutex
 	tokens  []string
@@ -674,6 +703,10 @@ func (h *held) set(a *answer) {
 }
 
 func (h *held) rejected() {
+	if h.onRejected != nil {
+		h.onRejected()
+		return
+	}
 	h.mu.Lock()
 	h.stale = true
 	wake := h.wake
@@ -711,11 +744,11 @@ func (h *held) renew() {
 func (h *held) renewals() {
 	for {
 		h.mu.Lock()
-		wait := time.Until(h.expires.Add(-renewBefore))
+		wait := time.Until(h.expires.Add(-RenewBefore))
 		if h.expires.IsZero() {
 			wait = 24 * time.Hour
 		}
-		if least := time.Until(h.asked.Add(retryWait)); h.stale || wait < least {
+		if least := time.Until(h.asked.Add(RetryWait)); h.stale || wait < least {
 			wait = max(least, 0)
 		}
 		h.mu.Unlock()

@@ -27,7 +27,7 @@
       "additionalProperties": {"$ref": "#/$defs/variable"}
     },
     "credentials": {
-      "description": "The credentials whose values the server stores for the run, at most 8, each name once. The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it once, when a walled run starts, and sets each value in place of a credential of the machine's that claims one of its hosts; the credentials are fixed for the run.",
+      "description": "The credentials whose values the server stores for the run, at most 8, each name once. The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it when the run starts, for every entry, and again for each entry whose value has expires_at: 5 minutes before it expires, and after a host answers 401 to a request that the value was set on, at most every 30 seconds per entry. It sets each value in place of a credential of the machine's that claims one of its hosts. The entries are fixed for the run: a renewal changes only the value.",
       "type": "array",
       "minItems": 1,
       "maxItems": 8,
@@ -49,7 +49,7 @@
       }
     },
     "credential": {
-      "description": "One credential whose value the server stores, with no value: the server seals it to the access key in its answer to the secrets request, secrets-answer.schema.json. An API credential, with format, is a model key, and the session gives it to the runtime's variable for that API format and auth. A host credential, with hosts, is any other secret.",
+      "description": "One credential whose value the server stores, with no value: the server seals it to the access key in its answer to the secrets request, secrets-answer.schema.json. An API credential, with format, is a model key, and the session gives it to the runtime's variable for that API format and auth. A host credential, with apply, is any other secret.",
       "oneOf": [{"$ref": "#/$defs/api_credential"}, {"$ref": "#/$defs/host_credential"}]
     },
     "api_credential": {
@@ -66,17 +66,32 @@
       }
     },
     "host_credential": {
-      "description": "Any other secret: its name, the hosts and paths its value is set on, how, and the variables the enclosure gets a placeholder in.",
+      "description": "Any other secret: its name, where and how its value is set, and the variables the enclosure gets a placeholder in.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "hosts", "auth"],
+      "required": ["name", "apply"],
       "properties": {
         "name": {"description": "The credential's name, unique among the entries.", "$ref": "#/$defs/credential_name"},
-        "hosts": {"description": "The hosts the value is set on, each exact: a DNS name or an IP literal, never a *. pattern.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/credential_host"}},
-        "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Several host credentials may claim one host when each has paths and no path of one overlaps a path of another; the proxy sets the one whose paths match the request, and a request no credential's paths match gets none. A host credential without paths is alone on its hosts. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
-        "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},
+        "apply": {"description": "Where and how the value is set: 1 to 16 items. The answer to the secrets request may give the value narrower items (sealed-plaintext.schema.json); without them the gateway sets these.", "type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/apply"}},
         "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start. A placeholder goes only into a variable for a credential: one that the run's runtime's descriptor denies, lists in its model overrides or reserves, reads its model endpoint or a model key from is run_configuration_invalid.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}}
       }
+    },
+    "apply": {
+      "description": "One way a host credential's value is set: an item of credential.schema.json's apply without token, with exact hosts. Several host credentials may claim one host when each item on it has paths and no path of one overlaps a path of another; the proxy sets the one whose paths match the request, and a request no credential's paths match gets none. An item without paths is alone on its hosts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hosts", "scheme"],
+      "properties": {
+        "hosts": {"description": "The hosts the value is set on, each exact: a DNS name or an IP literal, never a *. pattern.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/credential_host"}},
+        "scheme": {"description": "bearer sets Authorization: Bearer and the value. basic sets Authorization: Basic with username and the value as the password. header sets the header in header to the value.", "enum": ["bearer", "basic", "header"]},
+        "username": {"description": "With basic alone.", "type": "string", "minLength": 1, "pattern": "^[^:\\s]+$"},
+        "header": {"description": "With header alone.", "type": "string", "maxLength": 64, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
+        "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}}
+      },
+      "allOf": [
+        {"if": {"properties": {"scheme": {"const": "header"}}}, "then": {"required": ["header"]}, "else": {"not": {"required": ["header"]}}},
+        {"if": {"properties": {"scheme": {"const": "basic"}}}, "then": {"required": ["username"]}, "else": {"not": {"required": ["username"]}}}
+      ]
     },
     "endpoint": {
       "description": "A model API's base URL: https, a host, an optional port and path, and no user information, query or fragment, at most 2048 characters. Forager refuses, run_configuration_invalid, one whose host policy.EndpointHost does not read.",

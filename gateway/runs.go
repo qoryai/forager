@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -430,7 +431,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	r, err := run.Decide(run.Config{
 		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
 		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: lr.passing, Report: g.report,
-		Narrowing: narrowing, Secrets: secrets,
+		Narrowing: narrowing, Secrets: secrets, Log: lr.logLine,
 	})
 	if err != nil {
 		return fail(err)
@@ -613,6 +614,13 @@ func (lr *linkRun) release() {
 // observe numbers one decision of the run's proxy as dev.qory.run.egress; the stream
 // holds it until run.started is numbered.
 func (lr *linkRun) observe(d proxy.Decision) { lr.st.Emit(event.RunEgress, run.Egress(d)) }
+
+// logLine numbers one line of the gateway's in the run's record as a dev.qory.run.log of
+// stream stderr, with no session: a value of the run configuration's credentials that
+// expired with no renewal.
+func (lr *linkRun) logLine(line string) {
+	lr.st.Emit(event.RunLog, map[string]any{"stream": "stderr", "bytes": base64.StdEncoding.EncodeToString([]byte(line + "\n"))})
+}
 
 // openStack makes the run's stack proxy, for qory's fetch of the harness definition
 // before the run's first session: in enforce mode, allowing the hosts of

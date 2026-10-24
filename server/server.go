@@ -313,7 +313,7 @@ type RunConfiguration struct {
 
 // RunCredential is one entry of a run configuration's credentials, with no value. An
 // API credential, a model key, has Format, Endpoint, Auth and KeyPrefixes; a host
-// credential has Hosts, Paths, Auth and Placeholders.
+// credential has Apply and Placeholders.
 type RunCredential struct {
 	Name string `json:"name"`
 	// Format is the API format of an API credential, one of api-format.schema.json;
@@ -324,26 +324,38 @@ type RunCredential struct {
 	// KeyPrefixes are the prefixes an API credential's value must start with; nil for
 	// any value.
 	KeyPrefixes []string `json:"key_prefixes,omitzero"`
-	Hosts       []string `json:"hosts,omitzero"`
-	// Paths are nil for every path.
-	Paths        []string `json:"paths,omitzero"`
-	Auth         Auth     `json:"auth"`
+	// Auth is how an API credential's value is set; zero for a host credential.
+	Auth Auth `json:"auth,omitzero"`
+	// Apply are where and how a host credential's value is set, one item per way; nil
+	// for an API credential.
+	Apply        []Apply  `json:"apply,omitzero"`
 	Placeholders []string `json:"placeholders,omitzero"`
 }
 
-// Applies are the hosts and paths the credential's value is set on: for an API
-// credential the host [policy.EndpointHost] reads from its endpoint and every path, nil
-// paths; for a host credential its Hosts and Paths. An API credential whose endpoint
-// has no host applies to none.
-func (c RunCredential) Applies() (hosts, paths []string) {
+// Apply is one item of a host credential's apply, run-configuration.schema.json: the
+// hosts its value is set on, the scheme with its username or header, and the paths,
+// nil for every path.
+type Apply struct {
+	Hosts    []string `json:"hosts"`
+	Scheme   string   `json:"scheme"`
+	Username string   `json:"username,omitzero"`
+	Header   string   `json:"header,omitzero"`
+	Paths    []string `json:"paths,omitzero"`
+}
+
+// Applies are where and how the credential's value is set: for an API credential one
+// item, the host [policy.EndpointHost] reads from its endpoint with its auth and every
+// path; for a host credential its Apply. An API credential whose endpoint has no host
+// applies to none.
+func (c RunCredential) Applies() []Apply {
 	if c.Format == "" {
-		return c.Hosts, c.Paths
+		return c.Apply
 	}
 	host, ok := policy.EndpointHost(c.Endpoint)
 	if !ok {
-		return nil, nil
+		return nil
 	}
-	return []string{host}, nil
+	return []Apply{{Hosts: []string{host}, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header}}
 }
 
 // Auth is how a value is set on a request, auth.schema.json: Scheme is bearer, basic

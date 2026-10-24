@@ -194,9 +194,9 @@ func TestARefusedDocumentOpensNoRun(t *testing.T) {
 	for name, c := range map[string]struct{ doc, message string }{
 		"a name twice": {`{"version":1,"credentials":[` + modelEntry + `,` + modelEntry + `]}`,
 			`the document is refused: list the credential "model" once; the document lists it twice`},
-		"Host": {`{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"header","header":"Host"}}]}`,
+		"Host": {`{"version":1,"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"Host"}]}]}`,
 			`the document is refused: set the credential "model" in another header than "Host"; that header frames the request, or the proxy sets it`},
-		"X-Qory-": {`{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"header","header":"x_qory_credential_set"}}]}`,
+		"X-Qory-": {`{"version":1,"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"x_qory_credential_set"}]}]}`,
 			`the document is refused: set the credential "model" in another header than "x_qory_credential_set"; that header frames the request, or the proxy sets it`},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -415,7 +415,7 @@ func TestAReloadKeepsTheCredentialsFixed(t *testing.T) {
 		t.Errorf("the reload's policy_applied: %+v", d)
 	}
 	// Other credentials: the hosts differ.
-	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","c.example"]}},"credentials":[{"name":"model","hosts":["c.example"],"auth":{"scheme":"bearer"}}]}`, 'c')
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","c.example"]}},"credentials":[{"name":"model","apply":[{"hosts":["c.example"],"scheme":"bearer"}]}]}`, 'c')
 	h.post(logged(runID))
 	line := "start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays"
 	eventually(t, "the failed reload's report", func() bool {
@@ -504,7 +504,7 @@ func TestASealedKeyReachesATLSOrigin(t *testing.T) {
 			defer origin.Close()
 			_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 
-			doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"credentials":[{"name":"model","hosts":["localhost"],"auth":{"scheme":"header","header":"x-api-key"}}]}`
+			doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"credentials":[{"name":"model","apply":[{"hosts":["localhost"],"scheme":"header","header":"x-api-key"}]}]}`
 			ctl := newControl(t)
 			ctl.serveDocument(doc, 'a')
 			ctl.mu.Lock()
@@ -586,7 +586,7 @@ func TestARefusalAnswerShowsNoSecretInAName(t *testing.T) {
 func TestASealedModelReplacesForagerYamlsModel(t *testing.T) {
 	t.Setenv("GATEWAY_TEST_MODEL_KEY", machineValue)
 	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.anthropic.com"]},"credentials":[{"name":"model"}]},` +
-		`"credentials":[{"name":"model","hosts":["api.anthropic.com"],"auth":{"scheme":"header","header":"x-api-key"},"placeholders":["ANTHROPIC_API_KEY"]}]}`
+		`"credentials":[{"name":"model","apply":[{"hosts":["api.anthropic.com"],"scheme":"header","header":"x-api-key"}],"placeholders":["ANTHROPIC_API_KEY"]}]}`
 	c := newControl(t)
 	c.serveDocument(doc, 'a')
 	c.mu.Lock()

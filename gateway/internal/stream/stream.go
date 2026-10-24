@@ -325,9 +325,9 @@ func (r *Run) Accept(evs []event.Event) (int, error) {
 	return n, nil
 }
 
-// Emit numbers one of the gateway's own events: run.egress, or for a run with no
-// session its run.started, run.policy_applied, heartbeats; and run.exited when the run
-// ends at the gateway. A run.egress before run.started waits for it, and follows it;
+// Emit numbers one of the gateway's own events: run.egress, a run.log line of a
+// credential's value that expired, or for a run with no session its run.started,
+// run.policy_applied, heartbeats; and run.exited when the run ends at the gateway. A run.egress before run.started waits for it, and follows it;
 // in a run that never starts it comes before the run's end. A run.egress while a
 // [Hold] waits joins the newest one.
 func (r *Run) Emit(typ string, data any) error {
