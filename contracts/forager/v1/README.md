@@ -895,7 +895,7 @@ key_prefixes`, and an answer `sealed.Open` refuses, but one whose envelope signa
 does not verify, `answer_unsigned`. Each is `run_configuration_invalid` too: a value
 whose `expires_at` is not after the machine's clock, `Tell whoever runs the control
 plane: credential "forge" expired before the run started`, and an `apply` item that is
-not within one of its entry's items. The text of that item names what differs: a host
+not within one of its entry's items. The refusal shows what differs: a host
 of no entry item, `Tell whoever runs the control plane: credential "forge" applies to
 git2.example, outside its entry`; else, on the item's first host that no entry item
 takes, the first of the scheme, the username, the header and the paths that no entry
