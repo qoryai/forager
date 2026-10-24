@@ -730,7 +730,7 @@ func stackLine(d proxy.Decision, yaml []string) string {
 // stackRefused is the body of the 403 a run's stack proxy answers for a host that is
 // neither in [Config.StackHosts] nor in the run configuration's stack_hosts.
 func stackRefused(host string, port int) string {
-	return fmt.Sprintf("qory: add %s to gateway.stack_hosts in forager.yaml or to the run configuration's stack_hosts.\n"+
+	return fmt.Sprintf("qory: add %s to stack_hosts in forager.yaml or in the run configuration.\n"+
 		"qory: egress to %s:%d denied by the gateway: the host is in neither stack_hosts list\n", host, host, port)
 }
 

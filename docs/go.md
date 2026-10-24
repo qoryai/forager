@@ -260,7 +260,7 @@ returns a `session.HostProxy`:
   A host outside both lists gets a `403` with this body:
 
   ```
-  qory: add other.example.net to gateway.stack_hosts in forager.yaml or to the run configuration's stack_hosts.
+  qory: add other.example.net to stack_hosts in forager.yaml or in the run configuration.
   qory: egress to other.example.net:443 denied by the gateway: the host is in neither stack_hosts list
   ```
 

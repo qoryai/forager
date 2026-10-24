@@ -3907,8 +3907,8 @@ limits at most once a second per limit, and no `dev.qory.run.egress` is written.
 allowed host's line ends `allowed by gateway.stack_hosts entry <entry>`, or `allowed by
 the run configuration's stack_hosts entry <entry>` for a host `gateway.stack_hosts`
 does not allow. A host of neither list gets a `403` whose first line is `qory: add
-<host> to gateway.stack_hosts in forager.yaml or to the run configuration's
-stack_hosts.` and whose second ends `the host is in neither stack_hosts list`. A host
+<host> to stack_hosts in forager.yaml or in the run configuration.` and whose second
+ends `the host is in neither stack_hosts list`. A host
 of the run configuration's `stack_hosts` that the node's policy does not allow gets one
 whose first line is `qory: allow <host> in the node's policy, or add it to
 gateway.stack_hosts in forager.yaml.` The gateway closes the stack proxy at the run's first

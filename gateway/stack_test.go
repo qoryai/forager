@@ -30,7 +30,7 @@ import (
 // stackRefusedBody is the 403 the stack proxy answers for host:port outside
 // gateway.stack_hosts and the run configuration's stack_hosts.
 func stackRefusedBody(host string, port int) string {
-	return "qory: add " + host + " to gateway.stack_hosts in forager.yaml or to the run configuration's stack_hosts.\n" +
+	return "qory: add " + host + " to stack_hosts in forager.yaml or in the run configuration.\n" +
 		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the host is in neither stack_hosts list\n", host, port)
 }
 
