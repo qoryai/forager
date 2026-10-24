@@ -1127,14 +1127,27 @@ func (h *Handler) reload(w http.ResponseWriter, v verified, runID string) {
 	h.answerRun(w, v, doc, digest)
 }
 
-// Value is one value the Secrets hook returns: the bytes, when they stop working, zero
-// when they do not, and where they are set, nil for the run configuration entry's
+// Value is one value the Secrets hook returns: the bytes, which [NewValue] keeps behind
+// a func, so a struct printed by reflection shows none of them; when they stop working,
+// zero when they do not; and where they are set, nil for the run configuration entry's
 // items (sealed-plaintext.schema.json). A Value formats as a fixed phrase whatever the
 // verb, and nothing of its bytes.
 type Value struct {
-	Value     []byte
 	ExpiresAt time.Time
 	Apply     []sealed.Apply
+	value     func() []byte
+}
+
+// NewValue returns the Value of the bytes b. It keeps b, not a copy: the receiver
+// overwrites b with zeros once it sealed it.
+func NewValue(b []byte) Value { return Value{value: func() []byte { return b }} }
+
+// bytes returns the value's bytes, nil for a Value not made by NewValue.
+func (v Value) bytes() []byte {
+	if v.value == nil {
+		return nil
+	}
+	return v.value()
 }
 
 // String returns a fixed phrase, and nothing of the bytes.
@@ -1285,7 +1298,7 @@ func (h *Handler) secrets(w http.ResponseWriter, v verified, body []byte) {
 	values, refusal := h.Secrets(run, slices.Clone(names))
 	defer func() {
 		for _, b := range values {
-			clear(b.Value)
+			clear(b.bytes())
 		}
 	}()
 	if refusal != nil {
@@ -1299,7 +1312,7 @@ func (h *Handler) secrets(w http.ResponseWriter, v verified, body []byte) {
 	s := sealed.Sealing{AccessKeyID: v.id, PublicKey: v.key.PublicKey, RunID: req.RunID, RunConfiguration: digest,
 		Credentials: names, Exp: sealed.Expiry(h.now())}
 	for i, name := range names {
-		sv := sealed.NewValue(name, values[i].Value)
+		sv := sealed.NewValue(name, values[i].bytes())
 		sv.ExpiresAt, sv.Apply = values[i].ExpiresAt, values[i].Apply
 		s.Values = append(s.Values, sv)
 	}

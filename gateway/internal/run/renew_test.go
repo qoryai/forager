@@ -1,6 +1,7 @@
 package run_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -106,6 +107,8 @@ type answer struct {
 	value   string
 	expires time.Time
 	apply   []sealed.Apply
+	// yearOne writes expires_at 0001-01-01T00:00:00Z, which a zero expires leaves out.
+	yearOne bool
 }
 
 // controlPlane is a Config.Secrets that answers each name with answer, and records each
@@ -131,10 +134,14 @@ func (s *controlPlane) fetch(ctx context.Context, digest string, names []string)
 		return sealed.Values{}, ctx.Err()
 	}
 	sl := sealed.Sealing{AccessKeyID: "ak_0123456789abcdef", RunID: runID, RunConfiguration: digest, Credentials: names, Exp: 1}
+	var yearOne []string
 	for _, n := range names {
 		a, err := s.answer(n, call)
 		if err != nil {
 			return sealed.Values{}, err
+		}
+		if a.yearOne {
+			yearOne = append(yearOne, `"value":"`+a.value+`"`)
 		}
 		v := sealed.NewValue(n, []byte(a.value))
 		v.ExpiresAt, v.Apply = a.expires, a.apply
@@ -143,6 +150,9 @@ func (s *controlPlane) fetch(ctx context.Context, digest string, names []string)
 	pt, err := sl.Plaintext()
 	if err != nil {
 		return sealed.Values{}, err
+	}
+	for _, v := range yearOne {
+		pt = bytes.Replace(pt, []byte(v), []byte(v+`,"expires_at":"0001-01-01T00:00:00Z"`), 1)
 	}
 	v, err := sealed.Plaintext(pt, digest, names)
 	if err == nil {
@@ -320,6 +330,15 @@ func TestAFailedRenewalKeepsTheValue(t *testing.T) {
 		}, `If this repeats, check the control plane: credential "forge" was not renewed: its apply differs from the start`},
 		"no expires_at": {func(int) (answer, error) { return answer{value: "forge-forever"}, nil },
 			`If this repeats, check the control plane: credential "forge" was not renewed: the answer has no expires_at`},
+		// The renewal comes at 12:55, 5 minutes before the value expires at 13:00.
+		"an expires_at before the renewal": {func(int) (answer, error) {
+			return answer{value: "forge-past", expires: start.Add(50 * time.Minute)}, nil
+		},
+			`If this repeats, check the control plane: credential "forge" was not renewed: its expires_at has passed`},
+		"an expires_at at the renewal": {func(int) (answer, error) {
+			return answer{value: "forge-past", expires: start.Add(55 * time.Minute)}, nil
+		},
+			`If this repeats, check the control plane: credential "forge" was not renewed: its expires_at has passed`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			clock := &fakeClock{now: start}
@@ -333,11 +352,11 @@ func TestAFailedRenewalKeepsTheValue(t *testing.T) {
 			rep := &reports{}
 			r := renewRun(t, renewDoc, s, clock, rep, nil)
 			clock.step(t, time.Hour-credential.RenewBefore)
-			if value(r, "forge") != "forge-0" || !rep.reported(c.want) {
+			if value(r, "forge") != "forge-0" || !rep.reported("run "+runID+": "+c.want) {
 				t.Fatalf("after the failed renewal: forge %s, reports %q", value(r, "forge"), rep.lines())
 			}
 			for _, l := range rep.lines() {
-				if strings.Contains(l, "forge-moved") || strings.Contains(l, "forge-forever") {
+				if strings.Contains(l, "forge-moved") || strings.Contains(l, "forge-forever") || strings.Contains(l, "forge-past") {
 					t.Errorf("a report contains a value: %s", l)
 				}
 			}
@@ -451,15 +470,35 @@ func TestCloseStopsTheRenewer(t *testing.T) {
 // narrows the entry is where the proxy sets the value.
 func TestTheStartsAnswerIsCheckedAgainstItsEntry(t *testing.T) {
 	narrow := []sealed.Apply{{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token", Paths: []string{"/example-org/app.git/*"}}}
+	// pathsDoc has forge on git.example's /example-org/ alone; twoDoc has it on
+	// git.example and api.git.example in two items of the same scheme.
+	pathsDoc := strings.Replace(renewDoc, `"username":"x-access-token"}]}`, `"username":"x-access-token","paths":["/example-org/*"]}]}`, 1)
+	twoDoc := strings.Replace(renewDoc, `{"hosts":["git.example","api.git.example"],"scheme":"basic","username":"x-access-token"}`,
+		`{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"},{"hosts":["api.git.example"],"scheme":"basic","username":"x-access-token"}`, 1)
+	item := func(hosts []string, scheme, username, header string, paths ...string) answer {
+		return answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: hosts, Scheme: scheme, Username: username, Header: header, Paths: paths}}}
+	}
+	git := []string{"git.example"}
 	for name, c := range map[string]struct {
+		doc   string
 		forge answer
 		want  string
 	}{
-		"expired": {answer{value: "forge-0", expires: start}, `Tell whoever runs the control plane: credential "forge" expired before the run started`},
-		"another host": {answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: []string{"git2.example"}, Scheme: "basic", Username: "x-access-token"}}},
+		"expired": {renewDoc, answer{value: "forge-0", expires: start}, `Tell whoever runs the control plane: credential "forge" expired before the run started`},
+		"the year 1": {renewDoc, answer{value: "forge-0", yearOne: true},
+			`Tell whoever runs the control plane: credential "forge" expired before the run started`},
+		"another host": {renewDoc, item([]string{"git2.example"}, "basic", "x-access-token", ""),
 			`Tell whoever runs the control plane: credential "forge" applies to git2.example, outside its entry`},
-		"another scheme": {answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: []string{"git.example"}, Scheme: "bearer"}}},
-			`Tell whoever runs the control plane: credential "forge" applies to git.example, outside its entry`},
+		"another scheme": {renewDoc, item(git, "bearer", "", ""),
+			`Tell whoever runs the control plane: credential "forge" sets git.example with another scheme`},
+		"another username": {renewDoc, item(git, "basic", "x-other", ""),
+			`Tell whoever runs the control plane: credential "forge" sets git.example with another username`},
+		"other paths": {pathsDoc, item(git, "basic", "x-access-token", "", "/other-org/*"),
+			`Tell whoever runs the control plane: credential "forge" sets git.example on other paths`},
+		"every path": {pathsDoc, item(git, "basic", "x-access-token", ""),
+			`Tell whoever runs the control plane: credential "forge" sets git.example on other paths`},
+		"two items in one": {twoDoc, item([]string{"git.example", "api.git.example"}, "basic", "x-access-token", ""),
+			`Tell whoever runs the control plane: credential "forge" merges two apply items of its entry`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := &controlPlane{answer: func(n string, call int) (answer, error) {
@@ -468,11 +507,14 @@ func TestTheStartsAnswerIsCheckedAgainstItsEntry(t *testing.T) {
 				}
 				return renewing(n, call)
 			}}
-			f := document(t, renewDoc, digest('1'))
+			f := document(t, c.doc, digest('1'))
 			f.Document.Computed = digest('c')
 			_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: f, Secrets: s.fetch, Clock: &fakeClock{now: start}})
 			if code, names := refusalOf(err); code != "run_configuration_invalid" || !slices.Equal(names, []string{"forge"}) || err == nil || !strings.HasPrefix(err.Error(), c.want) {
 				t.Errorf("%v; want %q", err, c.want)
+			}
+			if len(c.want) > 100 {
+				t.Errorf("the text is %d characters, over 100: %s", len(c.want), c.want)
 			}
 		})
 	}

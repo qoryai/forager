@@ -650,3 +650,27 @@ func TestASecretsURLWithASecretIsAPhrase(t *testing.T) {
 		})
 	}
 }
+
+// TestEachApplyItemIsACredentialHostsEntry pins the run answer's credential_hosts of a
+// host credential from the server with two apply items: one entry per item, each with
+// its hosts and auth, basic with its username on git.example and bearer on
+// api.git.example, and the credential's placeholders on the first entry alone.
+func TestEachApplyItemIsACredentialHostsEntry(t *testing.T) {
+	forge := `{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token","paths":["/example-org/app.git/*"]},` +
+		`{"hosts":["api.git.example"],"scheme":"bearer","paths":["/repos/example-org/app/*"]}],"placeholders":["GIT_TOKEN"]}`
+	policy := `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example","api.git.example"]},"credentials":[{"name":"machine-model"}]}`
+	doc := `{"version":1,"security_policy":` + policy + `,"credentials":[` + modelEntry + `,` + forge + `]}`
+	_, h := sealedGateway(t, doc, map[string]string{"model": sealedValue, "forge": sealedValue})
+	a := h.open(server.LinkRunRequest{Wall: true})
+	want := []server.LinkCredentialHosts{
+		{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{},
+			Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}},
+		{Name: "forge", Hosts: []string{"git.example"}, Placeholders: []string{"GIT_TOKEN"}, Auth: &server.Auth{Scheme: "basic", Username: "x-access-token"}},
+		{Name: "forge", Hosts: []string{"api.git.example"}, Placeholders: []string{}, Auth: &server.Auth{Scheme: "bearer"}},
+	}
+	if !reflect.DeepEqual(a.CredentialHosts, want) {
+		t.Errorf("credential hosts %+v; want %+v", a.CredentialHosts, want)
+	}
+	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
+	h.close()
+}

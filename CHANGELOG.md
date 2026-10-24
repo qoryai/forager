@@ -10,9 +10,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- `receiver.Handler.Secrets` returns `[]receiver.Value`, each with `Value`, `ExpiresAt`
-  and `Apply`, in place of `[][]byte`, and is handed the names the request lists: at a
-  renewal, the entries that are due. Before, it returned the bytes alone, for every
+- `receiver.Handler.Secrets` returns `[]receiver.Value` in place of `[][]byte`: make
+  each with `receiver.NewValue(b)`, and set its `ExpiresAt` and `Apply`. A Value prints
+  none of its bytes, also as a field of a struct printed by reflection. The hook is
+  handed the names the request lists: at a renewal, the entries that are due. Before, it returned the bytes alone, for every
   entry.
 - Write a run configuration's host credential with `apply` items, each `{hosts, scheme,
   username, header, paths}`, in place of its `hosts`, `paths` and `auth`.
@@ -483,15 +484,18 @@ release may change what an existing document does, and says so under Upgrading.
   the entries that are due, with entries due within 30 s of each other in one request,
   under the digest of the run configuration in force. The answer's value takes the old
   one's place, whose bytes the gateway overwrites with zeros; a failed renewal keeps the
-  old value and reports `If this repeats, check the control plane: credential "forge"
-  was not renewed: <cause>`. At `expires_at` with no renewal, the gateway writes
+  old value and reports `run <run id>: If this repeats, check the control plane:
+  credential "forge" was not renewed: <cause>`, also for an `expires_at` that has
+  passed. At `expires_at` with no renewal, the gateway writes
   `Start another run once the control plane answers: credential "forge" expired at
   2026-10-24T13:00:00Z` to the run's record as `dev.qory.run.log` and sets the value no
   more. `apply` may narrow the entry's items and never widen them, and a renewal keeps
   the start's; a value that expired before the run started, or an item outside its
   entry, is `run_configuration_invalid`. A value without `expires_at`, such as a model
   key, is never renewed. `sealed.Values` has `ExpiresAt`, `Apply` and `Replace`, and
-  `sealed.Value` has `ExpiresAt` and `Apply`.
+  `sealed.Value` has `ExpiresAt` and `Apply`. The run answer's `credential_hosts` has
+  one entry per `apply` item of a host credential from the server, each with the
+  item's hosts and auth, and the credential's placeholders on the first.
 - The secrets request, `secrets-request.schema.json`, a signed `POST` to discovery's
   `secrets.url` for the values of a run configuration's `credentials`; its answer, the
   envelope of `secrets-answer.schema.json`, sealed with HPKE base mode, X25519,

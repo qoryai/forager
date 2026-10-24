@@ -115,8 +115,8 @@ type Stored struct {
 	// has set them; empty once the run has ended, and once the value expired.
 	Value func() []byte
 	// ExpiresAt is when the value stops working, zero when it does not expire. Rejected,
-	// for a value with ExpiresAt, hears that a host answered 401 to a request the value
-	// was set on: the caller fetches the value again. A value without ExpiresAt is never
+	// for a value with ExpiresAt, is called when a host answers 401 to a request the
+	// value was set on: the caller fetches the value again. A value without ExpiresAt is never
 	// fetched again, so Rejected is not called for it.
 	ExpiresAt time.Time
 	Rejected  func()
@@ -194,7 +194,9 @@ func (h *Held) reportPanic(line string) {
 // order, as the proxy matches them, and the variables the enclosure gets a placeholder in
 // for it, each once. Of a credential from the server, Stored is true. Of a model key,
 // from the server or the machine, Format, Endpoint and OAuth are set. Of both, Scheme,
-// Username and Header are how its value is set.
+// Username and Header are how its value is set on its first use's hosts. Items, of a
+// credential from the server, are its uses in order: each one's hosts with how the value
+// is set there.
 type Credential struct {
 	Name                     string
 	Hosts                    []string
@@ -203,6 +205,14 @@ type Credential struct {
 	Scheme, Username, Header string
 	Format, Endpoint         string
 	OAuth                    bool
+	Items                    []Item
+}
+
+// Item is one use of a [Credential] from the server: its hosts, and the scheme with its
+// username or header that the value is set with there.
+type Item struct {
+	Hosts                    []string
+	Scheme, Username, Header string
 }
 
 // Credentials are the run's credentials, one each, in the order the policy selects
@@ -223,6 +233,7 @@ func (h *Held) Credentials() []Credential {
 				}
 				if u.Stored {
 					cred.Stored = true
+					cred.Items = append(cred.Items, Item{Hosts: slices.Clone(u.Hosts), Scheme: u.Scheme, Username: u.Username, Header: u.Header})
 				}
 			}
 		}

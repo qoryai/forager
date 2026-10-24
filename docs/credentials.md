@@ -247,9 +247,10 @@ values. An entry is one of two kinds:
   credential. The renewed value takes the old value's place, and the gateway overwrites the
   old bytes with zeros. A value without `expires_at`, such as a model key's, is fetched
   once.
-- If a renewal fails, the run keeps the old value and the gateway reports
-  `If this repeats, check the control plane: credential "forge" was not renewed:` with
-  the cause, then tries again 30 seconds later. At `expires_at` with no renewal, the
+- If a renewal fails, or its `expires_at` is not after the machine's clock, the run
+  keeps the old value and the gateway reports `run <run id>: If this repeats, check the
+  control plane: credential "forge" was not renewed:` with the cause, then tries again
+  30 seconds later. At `expires_at` with no renewal, the
   run's record gets one line, `Start another run once the control plane answers:
   credential "forge" expired at 2026-10-24T13:00:00Z`, and the proxy sets the value no
   more.

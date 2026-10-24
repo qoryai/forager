@@ -3,6 +3,7 @@ package receiver_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -69,7 +70,7 @@ func newSecretsStand(t *testing.T) *secretsStand {
 		ss.returned = append(ss.returned, v...)
 		out := make([]receiver.Value, len(v))
 		for i, b := range v {
-			out[i] = receiver.Value{Value: b}
+			out[i] = receiver.NewValue(b)
 		}
 		return out, nil
 	}
@@ -220,7 +221,9 @@ func TestARenewalAsksForSomeOfTheCredentials(t *testing.T) {
 		ss.handed = append(ss.handed, names)
 		b := []byte(forgeValue)
 		ss.returned = append(ss.returned, b)
-		return []receiver.Value{{Value: b, ExpiresAt: expires, Apply: apply}}, nil
+		v := receiver.NewValue(b)
+		v.ExpiresAt, v.Apply = expires, apply
+		return []receiver.Value{v}, nil
 	}
 	runID := ss.direct()
 	_, rec := ss.secrets(directKey, inst, ss.secretsBody(runID, digest, "forge"))
@@ -445,6 +448,24 @@ func TestDiscoveryListsSecretsForAnAllowedKey(t *testing.T) {
 		}
 		if id == poolKey2 && !bytes.Equal(rec.Body.Bytes(), conf) {
 			t.Errorf("%s: the document %s, want it as configured", id, rec.Body.String())
+		}
+	}
+}
+
+// TestAValuePrintsNoneOfItsBytes pins receiver.Value's printing: with each verb, alone
+// and as a field of a struct printed by reflection, no byte of the value shows.
+func TestAValuePrintsNoneOfItsBytes(t *testing.T) {
+	v := receiver.NewValue([]byte(forgeValue))
+	v.ExpiresAt = time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC)
+	holder := struct {
+		V      receiver.Value
+		Values []receiver.Value
+	}{v, []receiver.Value{v}}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
+		for _, x := range []any{v, holder, &holder} {
+			if out := fmt.Sprintf(verb, x); strings.Contains(out, forgeValue) || strings.Contains(out, fmt.Sprintf("%x", forgeValue)) {
+				t.Errorf("%s of %T prints the value: %s", verb, x, out)
+			}
 		}
 	}
 }

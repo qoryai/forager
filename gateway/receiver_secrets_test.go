@@ -101,7 +101,7 @@ func newReference(t *testing.T, origin string) *reference {
 			ref.mu.Unlock()
 			var values []receiver.Value
 			for range names {
-				values = append(values, receiver.Value{Value: []byte(refValue)})
+				values = append(values, receiver.NewValue([]byte(refValue)))
 			}
 			return values, nil
 		},

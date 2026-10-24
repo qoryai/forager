@@ -107,7 +107,9 @@ func TestARenewedValueReachesTheOrigin(t *testing.T) {
 		ref.asked = append(ref.asked, names)
 		ref.mu.Unlock()
 		v := fmt.Sprintf("forge-value-%d-sealed-by-the-reference-receiver", n+1)
-		return []receiver.Value{{Value: []byte(v), ExpiresAt: begun.Add(time.Duration(n+1) * time.Hour)}}, nil
+		value := receiver.NewValue([]byte(v))
+		value.ExpiresAt = begun.Add(time.Duration(n+1) * time.Hour)
+		return []receiver.Value{value}, nil
 	}
 	asked := func() [][]string {
 		ref.mu.Lock()

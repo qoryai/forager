@@ -325,6 +325,21 @@ func TestPlaintextRefusesMetaOutsideTheSchema(t *testing.T) {
 	if at, ok := v.ExpiresAt("forge"); !ok || !at.Equal(time.Date(2026, 10, 24, 13, 0, 0, 5e8, time.UTC)) {
 		t.Errorf("expires at %v, %t", at, ok)
 	}
+	// The year 1 is a time in the past, not an absent expires_at.
+	v, err = Plaintext(doc(`,"expires_at":"0001-01-01T00:00:00Z"`), digest, []string{"forge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at, ok := v.ExpiresAt("forge"); !ok || !at.IsZero() {
+		t.Errorf("year 1: expires at %v, %t; want the zero time, present", at, ok)
+	}
+	v, err = Plaintext(doc(""), digest, []string{"forge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := v.ExpiresAt("forge"); ok {
+		t.Error("a value without expires_at has one")
+	}
 	bad := NewValue("forge", []byte("fake-value"))
 	bad.Apply = []Apply{{Hosts: []string{"*.git.example"}, Scheme: "bearer"}}
 	s := Sealing{AccessKeyID: "ak_0123456789abcdef", RunID: "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a", RunConfiguration: digest, Credentials: []string{"forge"}, Values: []Value{bad}, Exp: 1}

@@ -167,7 +167,7 @@ func (v Values) ExpiresAt(credential string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	m := v.m().metas[credential]
-	return m.expires, !m.expires.IsZero()
+	return m.expires, m.hasExpires
 }
 
 // Apply returns a copy of where the value of a credential is set, and whether the

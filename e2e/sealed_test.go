@@ -163,11 +163,15 @@ func (r sealedRun) reference(t *testing.T, accessKey, poolKey, signer *accesskey
 			for range names {
 				switch {
 				case renewed == "":
-					values = append(values, receiver.Value{Value: []byte(value)})
+					values = append(values, receiver.NewValue([]byte(value)))
 				case first:
-					values = append(values, receiver.Value{Value: []byte(value), ExpiresAt: time.Now().Add(5*time.Minute + 20*time.Second)})
+					v := receiver.NewValue([]byte(value))
+					v.ExpiresAt = time.Now().Add(5*time.Minute + 20*time.Second)
+					values = append(values, v)
 				default:
-					values = append(values, receiver.Value{Value: []byte(renewed), ExpiresAt: time.Now().Add(time.Hour)})
+					v := receiver.NewValue([]byte(renewed))
+					v.ExpiresAt = time.Now().Add(time.Hour)
+					values = append(values, v)
 				}
 			}
 			return values, nil

@@ -51,6 +51,8 @@ type renewer struct {
 	stopped chan struct{}
 	stop    sync.Once
 	started bool
+	// report is the gateway's report with the run's prefix, set by start.
+	report func(string)
 
 	mu sync.Mutex
 	// entries are the credentials with expires_at, in the document's order.
@@ -113,16 +115,21 @@ func (w *renewer) rejected(name string) func() {
 		return nil
 	}
 	return func() {
-		w.mu.Lock()
-		for _, e := range w.entries {
-			if e.name == name && !e.expired {
-				e.stale = true
-			}
-		}
-		w.mu.Unlock()
+		w.refused(name)
 		select {
 		case w.wake <- struct{}{}:
 		default:
+		}
+	}
+}
+
+// refused marks name, unless it expired, as refused by a host.
+func (w *renewer) refused(name string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, e := range w.entries {
+		if e.name == name && !e.expired {
+			e.stale = true
 		}
 	}
 }
@@ -133,16 +140,12 @@ func (w *renewer) start(report func(string)) {
 	if w == nil {
 		return
 	}
-	w.started = true
+	w.started, w.report = true, report
 	routine.Go(report, func() {
 		defer close(w.stopped)
 		for routine.Do(report, w.loop) {
 			now := w.clock.Now()
-			w.mu.Lock()
-			for _, e := range w.entries {
-				e.asked, e.stale = now, false
-			}
-			w.mu.Unlock()
+			w.asking(nil, now)
 		}
 	})
 }
@@ -242,13 +245,18 @@ func (w *renewer) plan(now time.Time) (due []string, next time.Time, gone []*ren
 // line to the run's record.
 func (w *renewer) expire(e *renewal) {
 	r := w.r
-	r.mu.Lock()
-	r.values.Drop(e.name)
-	r.mu.Unlock()
+	r.dropValue(e.name)
 	if r.cfg.Log != nil {
 		r.cfg.Log(fmt.Sprintf("Start another run once the control plane answers: credential %s expired at %s",
 			accesskey.ShownName(e.name, true), e.expires.UTC().Format(time.RFC3339)))
 	}
+}
+
+// dropValue overwrites the run's value of name with zeros and drops it.
+func (r *Run) dropValue(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.values.Drop(name)
 }
 
 // renew asks the server for the values of names under the digest of the run
@@ -256,13 +264,7 @@ func (w *renewer) expire(e *renewal) {
 // the one the run has. Each one refused, and every one of a request that failed, keeps
 // its value and is reported.
 func (w *renewer) renew(names []string, now time.Time) {
-	w.mu.Lock()
-	for _, e := range w.entries {
-		if slices.Contains(names, e.name) {
-			e.asked, e.stale = now, false
-		}
-	}
-	w.mu.Unlock()
+	w.asking(names, now)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -276,27 +278,48 @@ func (w *renewer) renew(names []string, now time.Time) {
 	values, err := r.cfg.Secrets(ctx, r.computedDigest(), names)
 	defer values.Clear()
 	for _, name := range names {
-		if err == nil {
-			err := r.renewed(name, values)
-			if err == nil {
-				at, _ := values.ExpiresAt(name)
-				r.mu.Lock()
-				r.values.Replace(name, values)
-				r.mu.Unlock()
-				w.mu.Lock()
-				for _, e := range w.entries {
-					if e.name == name {
-						e.expires = at
-					}
-				}
-				w.mu.Unlock()
-				continue
-			}
+		if err != nil {
 			w.notRenewed(name, err)
 			continue
 		}
-		w.notRenewed(name, err)
+		if err := r.renewed(name, values, w.clock.Now()); err != nil {
+			w.notRenewed(name, err)
+			continue
+		}
+		at, _ := values.ExpiresAt(name)
+		r.replaceValue(name, values)
+		w.renewedAt(name, at)
 	}
+}
+
+// asking marks names, every credential when names is nil, as asked for at now, which
+// clears a host's refusal.
+func (w *renewer) asking(names []string, now time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, e := range w.entries {
+		if names == nil || slices.Contains(names, e.name) {
+			e.asked, e.stale = now, false
+		}
+	}
+}
+
+// renewedAt sets the expires_at of name to at.
+func (w *renewer) renewedAt(name string, at time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, e := range w.entries {
+		if e.name == name {
+			e.expires = at
+		}
+	}
+}
+
+// replaceValue puts the value of name that values has in place of the run's.
+func (r *Run) replaceValue(name string, values sealed.Values) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.values.Replace(name, values)
 }
 
 // notRenewed reports a renewal of the credential name that failed.
@@ -307,19 +330,21 @@ func (w *renewer) notRenewed(name string, err error) {
 		return
 	default:
 	}
-	w.r.cfg.Report(fmt.Sprintf("If this repeats, check the control plane: credential %s was not renewed: %v", accesskey.ShownName(name, true), accesskey.ShownError(err)))
+	w.report(fmt.Sprintf("If this repeats, check the control plane: credential %s was not renewed: %v", accesskey.ShownName(name, true), accesskey.ShownError(err)))
 }
 
-// errNoExpiry and errApplyMoved are the causes of a renewal refused for its form.
+// errNoExpiry, errExpiresPassed and errApplyMoved are the causes of a renewal refused
+// for its form.
 var (
-	errNoExpiry   = errors.New("the answer has no expires_at")
-	errApplyMoved = errors.New("its apply differs from the start")
+	errNoExpiry      = errors.New("the answer has no expires_at")
+	errExpiresPassed = errors.New("its expires_at has passed")
+	errApplyMoved    = errors.New("its apply differs from the start")
 )
 
 // renewed checks the renewed value of name against the rules of the start: a value that
-// is a valid header value, one that starts with a model key's key_prefixes, expires_at, and
-// the start's apply.
-func (r *Run) renewed(name string, values sealed.Values) error {
+// is a valid header value, one that starts with a model key's key_prefixes, an
+// expires_at after now, and the start's apply.
+func (r *Run) renewed(name string, values sealed.Values, now time.Time) error {
 	i := slices.IndexFunc(r.stored, func(c server.RunCredential) bool { return c.Name == name })
 	v, ok := values.Value(name)
 	switch {
@@ -330,8 +355,12 @@ func (r *Run) renewed(name string, values sealed.Values) error {
 	case !credential.KeyMatches(r.stored[i].KeyPrefixes, v):
 		return errors.New("its value starts with none of its key_prefixes")
 	}
-	if _, ok := values.ExpiresAt(name); !ok {
+	at, ok := values.ExpiresAt(name)
+	switch {
+	case !ok:
 		return errNoExpiry
+	case !at.After(now):
+		return errExpiresPassed
 	}
 	if !reflect.DeepEqual(effectiveApply(r.stored[i], values), r.applies[name]) {
 		return errApplyMoved
@@ -355,8 +384,11 @@ func effectiveApply(c server.RunCredential, values sealed.Values) []credential.S
 	return out
 }
 
-// outside is the first host of the answer's apply of c that no item of c's entry has
-// within it, as [within] decides, and whether there is one.
+// outside is what makes the answer's apply of c not within c's entry, as [within]
+// decides, and whether something does: of its first item outside, a host that no
+// entry item has, else of its first host that no entry item takes alone, the first of
+// scheme, username, header and paths that no entry item with the host has; and when
+// each host is within an entry item but no one item takes them all, the item's span.
 func outside(c server.RunCredential, values sealed.Values) (string, bool) {
 	apply, ok := values.Apply(c.Name)
 	if !ok {
@@ -368,11 +400,42 @@ func outside(c server.RunCredential, values sealed.Values) (string, bool) {
 			continue
 		}
 		for _, h := range a.Hosts {
-			if !slices.ContainsFunc(entry, func(e server.Apply) bool { return slices.Contains(e.Hosts, h) }) {
-				return h, true
+			if why, ok := differs(a, h, entry); ok {
+				return why, true
 			}
 		}
-		return a.Hosts[0], true
+		return "merges two apply items of its entry", true
+	}
+	return "", false
+}
+
+// differs is what no item of entry with the host h has of the answer's item a, and
+// whether there is something: the host, the scheme, the username, the header or the
+// paths, checked in that order.
+func differs(a sealed.Apply, h string, entry []server.Apply) (string, bool) {
+	shown := accesskey.ShownValue(h, false)
+	one := sealed.Apply{Hosts: []string{h}, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths}
+	var with []server.Apply
+	for _, e := range entry {
+		if slices.Contains(e.Hosts, h) {
+			with = append(with, e)
+		}
+	}
+	same := func(keep func(e server.Apply) bool) bool {
+		with = slices.DeleteFunc(with, func(e server.Apply) bool { return !keep(e) })
+		return len(with) > 0
+	}
+	switch {
+	case len(with) == 0:
+		return "applies to " + shown + ", outside its entry", true
+	case !same(func(e server.Apply) bool { return e.Scheme == a.Scheme }):
+		return "sets " + shown + " with another scheme", true
+	case !same(func(e server.Apply) bool { return e.Username == a.Username }):
+		return "sets " + shown + " with another username", true
+	case !same(func(e server.Apply) bool { return strings.EqualFold(e.Header, a.Header) }):
+		return "sets " + shown + " with another header", true
+	case !same(func(e server.Apply) bool { return within(one, e) }):
+		return "sets " + shown + " on other paths", true
 	}
 	return "", false
 }
@@ -410,9 +473,9 @@ func checkOpened(c server.RunCredential, values sealed.Values, now time.Time) er
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 			"Tell whoever runs the control plane: credential %s expired before the run started", accesskey.ShownName(c.Name, true))
 	}
-	if host, ok := outside(c, values); ok {
+	if why, ok := outside(c, values); ok {
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-			"Tell whoever runs the control plane: credential %s applies to %s, outside its entry", accesskey.ShownName(c.Name, true), accesskey.ShownValue(host, false))
+			"Tell whoever runs the control plane: credential %s %s", accesskey.ShownName(c.Name, true), why)
 	}
 	return nil
 }

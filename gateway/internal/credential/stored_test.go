@@ -60,7 +60,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 				t.Errorf("placeholders %v, want the server's alone", held.Placeholders)
 			}
 			want := []Credential{{Name: "plain", Hosts: []string{"plain.example"}, Placeholders: []string{}}, {Name: "server-model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_API_KEY"},
-				Stored: true, Scheme: "header", Header: "x-api-key"}}
+				Stored: true, Scheme: "header", Header: "x-api-key", Items: []Item{{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}}}}
 			if got := held.Credentials(); !reflect.DeepEqual(got, want) {
 				t.Errorf("credentials %+v, want %+v", got, want)
 			}

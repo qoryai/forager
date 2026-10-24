@@ -925,7 +925,8 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 }
 
 // credentialHosts are the run answer's credential_hosts: one entry per credential held,
-// from the same uses as appliedOf's credentials, with the auth of a credential from the
+// and per apply item of a host credential from the server, from the same uses as
+// appliedOf's credentials, with the auth of a credential from the
 // server and of a model key, and the format and endpoint of a model key; nil when the
 // run holds none.
 func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
@@ -934,6 +935,19 @@ func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
 	}
 	var out []server.LinkCredentialHosts
 	for _, c := range held.Credentials() {
+		if c.Stored && c.Format == "" {
+			// A host credential from the server: one entry per item, each with its
+			// hosts and auth, the placeholders on the first alone.
+			for i, it := range c.Items {
+				e := server.LinkCredentialHosts{Name: c.Name, Hosts: it.Hosts, Placeholders: []string{},
+					Auth: &server.Auth{Scheme: it.Scheme, Header: it.Header, Username: it.Username}}
+				if i == 0 {
+					e.Placeholders = c.Placeholders
+				}
+				out = append(out, e)
+			}
+			continue
+		}
 		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint}
 		if c.Stored || c.Format != "" {
 			e.Auth = &server.Auth{Scheme: c.Scheme, Header: c.Header, Username: c.Username, OAuth: c.OAuth}

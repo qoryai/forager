@@ -41,18 +41,20 @@ type plainApply struct {
 	Paths    []string `json:"paths"`
 }
 
-// meta is what a value has beside its bytes: when it expires, zero when it does not,
-// and where it is set, nil when the plaintext gives no apply.
+// meta is what a value has beside its bytes: when it expires, with hasExpires false
+// when the plaintext has no expires_at, so that 0001-01-01T00:00:00Z is a time and not
+// an absence; and where it is set, nil when the plaintext has no apply.
 type meta struct {
-	expires time.Time
-	apply   []Apply
+	expires    time.Time
+	hasExpires bool
+	apply      []Apply
 }
 
 // plaintextSchema is sealed-plaintext.schema.json, compiled once.
 var plaintextSchema = sync.OnceValues(func() (*jsonschema.Schema, error) { return contracts.Compile("sealed-plaintext.schema.json") })
 
 // readMeta reads a value's expires_at and apply, raw as the plaintext has them. They
-// hold no secret, so the schema checks them: a plaintext of one credential, this
+// contain no secret, so the schema checks them: a plaintext of one credential, this
 // value's members beside a stand-in value, keeps the validator from every value's
 // bytes. An apply that does not decode into its items, a member twice or unknown, is
 // refused before the schema.
@@ -94,7 +96,7 @@ func readMeta(credential string, expiresAt, apply jsontext.Value) (meta, bool) {
 		if !ok {
 			return m, false
 		}
-		m.expires = t
+		m.expires, m.hasExpires = t, true
 	}
 	if apply != nil {
 		m.apply = make([]Apply, len(items))

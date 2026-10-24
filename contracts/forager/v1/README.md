@@ -895,8 +895,14 @@ key_prefixes`, and an answer `sealed.Open` refuses, but one whose envelope signa
 does not verify, `answer_unsigned`. Each is `run_configuration_invalid` too: a value
 whose `expires_at` is not after the machine's clock, `Tell whoever runs the control
 plane: credential "forge" expired before the run started`, and an `apply` item that is
-not within one of its entry's items, `Tell whoever runs the control plane: credential
-"forge" applies to git2.example, outside its entry`. No message contains a value. A credential from the
+not within one of its entry's items. The text of that item names what differs: a host
+of no entry item, `Tell whoever runs the control plane: credential "forge" applies to
+git2.example, outside its entry`; else, on the item's first host that no entry item
+takes, the first of the scheme, the username, the header and the paths that no entry
+item with the host has, such as `Tell whoever runs the control plane: credential
+"forge" sets git.example with another scheme` or `… sets git.example on other paths`;
+else, for hosts of two entry items in one item, `Tell whoever runs the control plane:
+credential "forge" merges two apply items of its entry`. No message contains a value. A credential from the
 server replaces each credential of the machine's whose hosts claim one of its hosts, or
 a host above or below one; the host of a model key, from the server or the machine, is
 its endpoint's. A key from `env` or `file`, such as forager.yaml's model key for that
@@ -926,11 +932,12 @@ configuration in force, a reload's once the reload is committed. A value without
 `expires_at`, such as a model key's, is never asked for again, after a `401` either.
 
 The answer's value takes the old value's place, whose bytes the gateway overwrites with
-zeros, if it passes the checks of the start and has `expires_at`, and its `apply`, or
-the entry's when it has none, is the start's. Otherwise, and when the request fails,
-the gateway keeps the old value, reports `If this repeats, check the control plane:
-credential "forge" was not renewed: ` and the cause, such as `its apply differs from the
-start` or `the answer has no expires_at`, and asks again 30 seconds later. At
+zeros, if it passes the checks of the start, has an `expires_at` after the machine's
+clock, and its `apply`, or the entry's when it has none, is the start's. Otherwise, and
+when the request fails, the gateway keeps the old value, reports `run <run id>: If this
+repeats, check the control plane: credential "forge" was not renewed: ` and the cause,
+such as `its apply differs from the start`, `the answer has no expires_at` or `its
+expires_at has passed`, and asks again 30 seconds later. At
 `expires_at` with no renewal, the gateway writes one `dev.qory.run.log` line to the
 run's record, `Start another run once the control plane answers: credential "forge"
 expired at 2026-10-24T13:00:00Z`, and sets the value no more: the host's `401` reaches
@@ -3465,8 +3472,11 @@ document:
   matches them, which are the hosts `applied.credentials` lists for it, in its order;
   and `placeholders`, the variables the session sets to a placeholder for this
   credential, each also in `placeholders` and each once, empty when it sets none. A
-  credential from the server also has `auth`, its run configuration entry's, and so
-  does a model key of the machine's, its definition's. A model key, from the server or
+  credential from the server also has `auth`, and so does a model key of the
+  machine's, its definition's. A host credential from the server has one entry per
+  `apply` item, the answer's items when its value has `apply`, in their order: each
+  with the item's hosts and its `scheme`, `username` and `header` as `auth`, and the
+  credential's `placeholders` on the first entry alone, empty on the others. A model key, from the server or
   the machine, also has `format` and `endpoint`; its `hosts` are the endpoint's host
   alone, and its `placeholders` are empty. An entry with `format` has `auth` and
   `endpoint`, and one with `endpoint` has `format`. The session adds the variable it
