@@ -34,11 +34,18 @@ func stackRefusedBody(host string, port int) string {
 		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the host is in neither stack_hosts list\n", host, port)
 }
 
-// stackNarrowedBody is the 403 the stack proxy answers for host:port of the run
+// stackNodeBody is the 403 the stack proxy answers for host:port of the run
 // configuration's stack_hosts that the node's policy does not allow.
-func stackNarrowedBody(host string, port int) string {
-	return "qory: allow " + host + " in the node's policy, or add it to gateway.stack_hosts in forager.yaml.\n" +
+func stackNodeBody(host string, port int) string {
+	return "qory: allow " + host + " in the node's policy, or list it in gateway.stack_hosts.\n" +
 		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the node's policy does not allow this host of the run configuration's stack_hosts\n", host, port)
+}
+
+// stackPathsBody is the 403 the stack proxy answers for host:port of the run
+// configuration's stack_hosts that the node's policy has path rules for.
+func stackPathsBody(host string, port int) string {
+	return "qory: list " + host + " in gateway.stack_hosts: the node's path rules cover it.\n" +
+		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the node's policy has path rules for this host, which the stack proxy cannot check\n", host, port)
 }
 
 // stackNeverBody is the body of the 403 a run's guarded stack proxy answers for a
@@ -209,8 +216,8 @@ func TestTheStackProxyOnOneMachine(t *testing.T) {
 	h.close()
 	want := []string{
 		fmt.Sprintf("run %s: stack fetch to 127.0.0.1:%s allowed by gateway.stack_hosts entry 127.0.0.1", a.RunID, port),
-		fmt.Sprintf("run %s: stack fetch to other.example.net:443 denied: the host is not in gateway.stack_hosts", a.RunID),
-		fmt.Sprintf("run %s: stack fetch to other.example.net:80 denied: the host is not in gateway.stack_hosts", a.RunID),
+		fmt.Sprintf("run %s: stack fetch to other.example.net:443 denied: the host is in neither stack_hosts list", a.RunID),
+		fmt.Sprintf("run %s: stack fetch to other.example.net:80 denied: the host is in neither stack_hosts list", a.RunID),
 		fmt.Sprintf("run %s: stack fetch to 127.0.0.1:%s allowed by gateway.stack_hosts entry 127.0.0.1", a.RunID, port),
 	}
 	if got := h.reportsWith("stack fetch"); !slices.Equal(got, want) {
@@ -453,7 +460,7 @@ func TestTheStackProxyBehindASeparateGateway(t *testing.T) {
 		t.Fatalf("the last batch: %d %s", got.status, got.body)
 	}
 	for _, line := range []string{
-		"run " + runID + ": stack fetch to other.example.net:80 denied: the host is not in gateway.stack_hosts",
+		"run " + runID + ": stack fetch to other.example.net:80 denied: the host is in neither stack_hosts list",
 		"run " + runID + ": stack fetch to 127.0.0.1:" + port + " denied by the gateway's rule wall:own-address",
 		"run " + runID + ": stack fetch to stack.invalid:80 allowed by gateway.stack_hosts entry stack.invalid; the dial failed",
 	} {
@@ -523,7 +530,7 @@ func TestTheStackProxyAllowsTheRunConfigurationsStackHosts(t *testing.T) {
 	want := []string{
 		fmt.Sprintf("run %s: stack fetch to 127.0.0.1:%s allowed by the run configuration's stack_hosts entry 127.0.0.1", a.RunID, port),
 		fmt.Sprintf("run %s: stack fetch to localhost:%s allowed by gateway.stack_hosts entry localhost", a.RunID, port),
-		fmt.Sprintf("run %s: stack fetch to other.example.net:443 denied: the host is not in gateway.stack_hosts", a.RunID),
+		fmt.Sprintf("run %s: stack fetch to other.example.net:443 denied: the host is in neither stack_hosts list", a.RunID),
 	}
 	if got := h.reportsWith("stack fetch"); !slices.Equal(got, want) {
 		t.Errorf("reported\n%q\nwant\n%q", got, want)
@@ -578,47 +585,57 @@ func TestTheRunConfigurationsStackHostsOpenNoPrivateAddress(t *testing.T) {
 	}
 }
 
-// TestTheNodesPolicyNarrowsTheRunConfigurationsStackHosts pins Tom's rule that the node
-// only takes away: a host of the run configuration's stack_hosts that the node's
-// policy does not allow, by its allow list under enforce or by its deny list, is
-// refused with the body that sends the fix to the node's policy, while a host it allows
-// passes; gateway.stack_hosts is not narrowed.
-func TestTheNodesPolicyNarrowsTheRunConfigurationsStackHosts(t *testing.T) {
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "harness") }))
-	defer origin.Close()
-	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
-	n, _ := strconv.Atoi(port)
+// TestTheNodesPolicyDecidesEachStackHost pins Tom's rule that the node only takes
+// away, decided per host: a host of the run configuration's stack_hosts passes when the
+// node's policy allows it under its mode and has no path rule for it, which the stack
+// proxy cannot check; otherwise it is refused with the body of the check that refused
+// it, and the report line ends with that check's cause. A *. entry is decided for each host below it, so
+// a deny entry under it takes away that host alone. gateway.stack_hosts is not decided
+// by the node's policy. Hosts under .invalid resolve nowhere, so a host that passes
+// gets the stack proxy's 502 for its dial.
+func TestTheNodesPolicyDecidesEachStackHost(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		node gateway.PolicyEgress
+		name    string
+		node    gateway.PolicyEgress
+		wall    bool
+		stack   string
+		pass    []string
+		refused map[string]string
+		lines   []string
 	}{
-		{"enforce", gateway.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}}},
-		{"deny", gateway.PolicyEgress{Mode: "observe", Deny: []string{"localhost", "git.example"}}},
+		{"observe with a deny under a *. entry", gateway.PolicyEgress{Mode: "observe", Deny: []string{"a.cdn.invalid", "yaml.invalid"}}, false,
+			`["*.cdn.invalid"]`, []string{"b.cdn.invalid"},
+			map[string]string{"a.cdn.invalid": stackNodeBody("a.cdn.invalid", 443)},
+			[]string{"stack fetch to a.cdn.invalid:443 denied: the node's policy does not allow this host of the run configuration's stack_hosts"}},
+		{"enforce with an allow", gateway.PolicyEgress{Mode: "enforce", Allow: []string{"*.cdn.invalid"}}, false,
+			`["b.cdn.invalid","git.other.invalid"]`, []string{"b.cdn.invalid"},
+			map[string]string{"git.other.invalid": stackNodeBody("git.other.invalid", 443)},
+			[]string{"stack fetch to b.cdn.invalid:443 allowed by the run configuration's stack_hosts entry b.cdn.invalid; the dial failed"}},
+		{"path rules of the node", gateway.PolicyEgress{Mode: "enforce", Allow: []string{"*.cdn.invalid"}, Paths: map[string][]string{"a.cdn.invalid": {"/harness/*"}}}, true,
+			`["*.cdn.invalid"]`, []string{"b.cdn.invalid"},
+			map[string]string{"a.cdn.invalid": stackPathsBody("a.cdn.invalid", 443)},
+			[]string{"stack fetch to a.cdn.invalid:443 denied: the node's policy has path rules for this host, which the stack proxy cannot check"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, h := stackGateway(t, `{"version":1,"stack_hosts":["127.0.0.1","localhost"]}`, []string{"git.example"}, &gateway.Policy{Version: 1, Egress: c.node})
-			a := h.open(server.LinkRunRequest{})
-			stack := relay(h.g.Addr(), a.StackProxySecret)
-			resp, err := stack.Get(origin.URL)
-			if err != nil {
-				t.Fatal(err)
+			_, h := stackGateway(t, `{"version":1,"stack_hosts":`+c.stack+`}`, []string{"yaml.invalid"}, &gateway.Policy{Version: 1, Egress: c.node})
+			a := h.open(server.LinkRunRequest{Wall: c.wall})
+			for _, host := range append(c.pass, "yaml.invalid") {
+				if status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), host+":443"); status != http.StatusBadGateway {
+					t.Errorf("%s: %d %q, want the 502 of its dial", host, status, body)
+				}
 			}
-			b, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusOK || string(b) != "harness" {
-				t.Errorf("a host the node's policy allows: %d %q", resp.StatusCode, b)
+			for host, want := range c.refused {
+				if status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), host+":443"); status != http.StatusForbidden || body != want {
+					t.Errorf("%s: %d %q, want 403 %q", host, status, body, want)
+				}
 			}
-			resp, err = stack.Get("http://localhost:" + port + "/")
-			if err != nil {
-				t.Fatal(err)
+			if status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), "other.invalid:443"); status != http.StatusForbidden || body != stackRefusedBody("other.invalid", 443) {
+				t.Errorf("a host of neither list: %d %q", status, body)
 			}
-			b, _ = io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusForbidden || string(b) != stackNarrowedBody("localhost", n) {
-				t.Errorf("a host the node's policy does not allow: %d %q", resp.StatusCode, b)
-			}
-			if status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), "git.example:443"); status == http.StatusForbidden {
-				t.Errorf("gateway.stack_hosts was narrowed: %d %q", status, body)
+			for _, line := range c.lines {
+				if !h.reported("run " + a.RunID + ": " + line) {
+					t.Errorf("no report %q in %q", line, h.reportsWith("stack fetch"))
+				}
 			}
 		})
 	}
@@ -635,8 +652,7 @@ func TestAReloadKeepsTheStackHostsFixed(t *testing.T) {
 		t.Fatalf("the first batch: %+v", d)
 	}
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["b.example"]}},"stack_hosts":["git.example","api.git.example"]}`, 'b')
-	line := "the reload failed: start another run to use other stack hosts: a run's stack_hosts are fixed when it starts, and run configuration " +
-		c.srv.URL + runsPath + " lists others; the policy in force stays"
+	line := "the reload failed: start another run to use other stack hosts: a run's stack_hosts are fixed when it starts"
 	eventually(t, "the failed reload's report", func() bool {
 		h.post(heartbeat(runID))
 		return h.reported(line)

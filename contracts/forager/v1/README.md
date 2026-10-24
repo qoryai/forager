@@ -1004,17 +1004,18 @@ The stack fetch), such as the hosts qory fetches a harness definition from:
 `stack_hosts` has 1 to 32 entries, none twice, each in the grammar of the policy's
 `egress.allow`, `policy.schema.json#/$defs/host_entry`: a lower-case host name, an
 IPv4 address, or a `*.` suffix. No credential goes with them: the stack proxy sets
-none. The node's policy narrows them, and the node only takes away. A name stays when
-the node's policy allows it; a `*.` entry stays when the node's policy allows every
-host below it; under enforce, the node's entries below a `*.` entry that does not stay
-take its place. The run configuration's entries open no address of the gateway's
-machine and no private network address: behind a wall or a separate gateway the stack
-proxy reaches those only for a host that `gateway.stack_hosts` and the node's policy
-both list by name. `dev.qory.run.policy_applied` at the open lists `stack_hosts` as
+none. The node's policy decides each host, and the node only takes away: a host an
+entry matches passes when the node's policy allows it, `policy.Egress.Allows` under
+its mode, and has no path rule for it, in `egress.paths` or a side put beside it. The
+stack proxy does not read inside a connection, so it cannot check a path, and a host
+with path rules is refused rather than reached past them. Behind a wall or a separate
+gateway the run configuration's entries open no address of the gateway's machine and
+no private network address: the stack proxy reaches those only for a host that
+`gateway.stack_hosts` and the node's policy both list by name. On an unwalled run on
+one machine the stack proxy is not guarded, as for `gateway.stack_hosts`. `dev.qory.run.policy_applied` at the open lists `stack_hosts` as
 the document has them. They are fixed when the run starts: a reload whose
 `stack_hosts` differ, in any order, fails with `start another run to use other stack
-hosts: a run's stack_hosts are fixed when it starts, and run configuration <url> lists
-others; the policy in force stays`, and the policy in force stays.
+hosts: a run's stack_hosts are fixed when it starts`, and the policy in force stays.
 
 ## Tools
 
@@ -3896,8 +3897,8 @@ them with `QORY-STACK` and the run key, over TLS, bound. The gateway serves thes
 connections through the run's stack proxy: enforce mode, a CONNECT or a plain HTTP
 request to the hosts of `gateway.stack_hosts` and of the run configuration's
 `stack_hosts` alone, on any port, no certificate authority and no credential. The
-node's policy narrows the run configuration's `stack_hosts` (§Credentials, Stack hosts
-from the server), and not `gateway.stack_hosts`. The run's policy does not apply.
+node's policy decides each host of the run configuration's `stack_hosts` (§Credentials,
+Stack hosts from the server), and no host of `gateway.stack_hosts`. The run's policy does not apply.
 Behind a wall or a separate gateway the stack proxy is guarded as the run's proxy is:
 it reaches the gateway's machine or a private network address only for a host that the
 node's policy and `gateway.stack_hosts` both list by name, not by a `*.` pattern, and
@@ -3908,10 +3909,12 @@ allowed host's line ends `allowed by gateway.stack_hosts entry <entry>`, or `all
 the run configuration's stack_hosts entry <entry>` for a host `gateway.stack_hosts`
 does not allow. A host of neither list gets a `403` whose first line is `qory: add
 <host> to stack_hosts in forager.yaml or in the run configuration.` and whose second
-ends `the host is in neither stack_hosts list`. A host
-of the run configuration's `stack_hosts` that the node's policy does not allow gets one
-whose first line is `qory: allow <host> in the node's policy, or add it to
-gateway.stack_hosts in forager.yaml.` The gateway closes the stack proxy at the run's first
+ends `the host is in neither stack_hosts list`. A host of the run configuration's
+`stack_hosts` that the node's policy does not allow gets one whose first line is
+`qory: allow <host> in the node's policy, or list it in gateway.stack_hosts.`, and one
+the node's policy has path rules for gets `qory: list <host> in gateway.stack_hosts:
+the node's path rules cover it.` The report line of a refused host ends with the cause
+of its `403`. The gateway closes the stack proxy at the run's first
 join request, so no session reaches it. qory also writes the fetch in the run machine's
 log.
 

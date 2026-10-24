@@ -308,50 +308,6 @@ func (e Egress) Allows(host string) bool {
 	return ok
 }
 
-// Narrow is the entries of a host list in allow's grammar, such as a run
-// configuration's stack_hosts, that e, the node's side of a policy, allows: e only
-// takes away. A name is kept when e allows it ([Egress.Allows]). A *. entry is kept
-// when e allows every host below it: no deny entry covers it or lies below it, and,
-// under enforce, an allow entry covers it. Under enforce, e's allow_first and allow
-// entries below a *. entry that is not kept take its place, each when e allows all of
-// it, so the list keeps the hosts both allow. The result is in the entries' order,
-// then those of e, each once, and nil when nothing is kept.
-func (e Egress) Narrow(entries []string) []string {
-	var out, dropped []string
-	for _, entry := range entries {
-		switch {
-		case slices.Contains(out, entry):
-		case e.allowsAll(entry):
-			out = append(out, entry)
-		default:
-			dropped = append(dropped, entry)
-		}
-	}
-	if e.Mode != Enforce {
-		return out
-	}
-	for _, n := range e.Listed() {
-		below := slices.ContainsFunc(dropped, func(entry string) bool { return entry != n && Covers(entry, n) })
-		if below && !slices.Contains(out, n) && e.allowsAll(n) {
-			out = append(out, n)
-		}
-	}
-	return out
-}
-
-// allowsAll reports whether e allows every host an allow entry matches: for a name,
-// [Egress.Allows]; for a *. entry, no deny entry covers it or lies below it, and, under
-// enforce, an allow entry covers it.
-func (e Egress) allowsAll(entry string) bool {
-	if !strings.HasPrefix(entry, "*.") {
-		return e.Allows(entry)
-	}
-	if slices.ContainsFunc(e.Deny, func(d string) bool { return Covers(d, entry) || Covers(entry, d) }) {
-		return false
-	}
-	return e.Mode != Enforce || slices.ContainsFunc(e.Allow, func(a string) bool { return Covers(a, entry) })
-}
-
 // Listed is the allow_first entries, then the allow entries: what a check of a host
 // under enforce counts as covering it by [Covers], an allow_first entry covering the
 // host it is alone.

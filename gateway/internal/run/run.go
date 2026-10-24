@@ -473,14 +473,44 @@ func (r *Run) Uses() []proxy.Credential { return ProxyUses(r.Held()) }
 // stack_hosts is refused.
 func (r *Run) StackHosts() []string { return slices.Clone(r.stack) }
 
-// StackAllowed are [Run.StackHosts] as the node's policy narrows them
-// ([policy.Egress.Narrow]): the node only takes away. Without a node's policy they are
-// StackHosts.
-func (r *Run) StackAllowed() []string {
-	if r.node == nil {
-		return r.StackHosts()
+// StackCheck is the node's decision on a host for the run configuration's
+// stack_hosts.
+type StackCheck int
+
+const (
+	// StackAllowed is a host an entry of StackHosts matches and the node's policy
+	// allows.
+	StackAllowed StackCheck = iota
+	// StackUnlisted is a host no entry of StackHosts matches.
+	StackUnlisted
+	// StackNodeRefuses is a host the node's policy does not allow
+	// ([policy.Egress.Allows], under its mode).
+	StackNodeRefuses
+	// StackNodePaths is a host the node's policy, or a side beside it, has path rules
+	// for: the stack proxy tunnels without reading the request, so it cannot check them.
+	StackNodePaths
+)
+
+// StackChecked decides host, a host in the form [policy.Host] returns, for the run
+// configuration's stack_hosts: the node only takes away. A host an entry of
+// [Run.StackHosts] matches is allowed when the node's policy, if the run has one,
+// allows it and no path rule of the node's covers it.
+func (r *Run) StackChecked(host string) StackCheck {
+	if _, ok := policy.Match(r.stack, host); !ok {
+		return StackUnlisted
 	}
-	return r.node.Policy.Egress.Narrow(r.stack)
+	if r.node == nil {
+		return StackAllowed
+	}
+	if !r.node.Policy.Egress.Allows(host) {
+		return StackNodeRefuses
+	}
+	for _, side := range append([]map[string][]string{r.node.Policy.Egress.Paths}, r.beside...) {
+		if _, _, ok := policy.HostPaths(side, host); ok {
+			return StackNodePaths
+		}
+	}
+	return StackAllowed
 }
 
 // Image is the image the run starts in, resolved among [Config.Images]: zero without a
@@ -898,7 +928,7 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 		return nil, fmt.Errorf("run configuration %s: start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays", accesskey.ShownValue(next.URL, false))
 	}
 	if !sameHosts(stack, r.stack) {
-		return nil, fmt.Errorf("start another run to use other stack hosts: a run's stack_hosts are fixed when it starts, and run configuration %s lists others; the policy in force stays", accesskey.ShownValue(next.URL, false))
+		return nil, errors.New("start another run to use other stack hosts: a run's stack_hosts are fixed when it starts")
 	}
 	d, err := r.decide(ctx, next, named)
 	if d != nil {

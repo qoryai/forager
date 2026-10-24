@@ -258,11 +258,13 @@ in `forager.yaml`:
 
 - The run's stack proxy allows these hosts, with no credential, until the run's first
   join request.
-- The node's policy narrows them: a host it does not allow is refused with "qory: allow
-  git.example in the node's policy, or add it to gateway.stack_hosts in forager.yaml."
-- Behind a wall or a separate gateway they open no address of the gateway's machine and no private network address.
-  Such an address is reached only for a host that `gateway.stack_hosts` and the node's
-  policy both list by name.
+- The node's policy decides each host. A host passes when the node's policy allows it
+  and has no path rule for it: the stack proxy does not read inside a connection, so it
+  cannot check a path. A host the node's policy does not allow is refused with "qory:
+  allow git.example in the node's policy, or list it in gateway.stack_hosts."
+- Behind a wall or a separate gateway they open no address of the gateway's machine
+  and no private network address. Such an address is reached only for a host that
+  `gateway.stack_hosts` and the node's policy both list by name.
 - They are fixed for the run. A reload that lists other `stack_hosts` fails, and the run
   keeps its policy.
 

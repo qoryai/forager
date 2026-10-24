@@ -342,7 +342,7 @@ func TestTheStackFetchThroughARealGateway(t *testing.T) {
 	runID := res.RunID
 	want := []string{
 		fmt.Sprintf("run %s: stack fetch to %s:%s allowed by gateway.stack_hosts entry %s", runID, originHost, originPort, originHost),
-		fmt.Sprintf("run %s: stack fetch to other.example.net:80 denied: the host is not in gateway.stack_hosts", runID),
+		fmt.Sprintf("run %s: stack fetch to other.example.net:80 denied: the host is in neither stack_hosts list", runID),
 		fmt.Sprintf("run %s: stack fetch to %s:%s allowed by gateway.stack_hosts entry %s", runID, originHost, originPort, originHost),
 	}
 	rg.mu.Lock()

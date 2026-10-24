@@ -191,6 +191,8 @@ type Proxy struct {
 	// unlisted, when set, is the body of the 403 of a host no allow entry matches under
 	// enforce ([Proxy.Unlisted]).
 	unlisted atomic.Pointer[func(host string, port int) string]
+	// admit, when set, decides each host an allow entry matches ([Proxy.Admit]).
+	admit atomic.Pointer[func(host, rule string) bool]
 	// guardBody, when set, is the body of the 403 of a host the guard refuses
 	// ([Proxy.GuardRefused]).
 	guardBody atomic.Pointer[func(host string, port int, never bool) string]
@@ -528,6 +530,11 @@ func (p *Proxy) AllowFirst(entries []string) {
 // enforce: body's text for the host and the port, in place of the line with the
 // policy's mode. Every other refusal keeps its body.
 func (p *Proxy) Unlisted(body func(host string, port int) string) { p.unlisted.Store(&body) }
+
+// Admit sets a check of each host an allow entry matches, rule being the entry: a host
+// it returns false for is decided as one no allow entry matches, refused under enforce
+// with [Proxy.Unlisted]'s body. A host an allow_first entry matches is not checked.
+func (p *Proxy) Admit(check func(host, rule string) bool) { p.admit.Store(&check) }
 
 // GuardRefused sets the body of the 403 that refuses a host by the guard's rule
 // ([GuardRule]), when the connection is decided and when its dial is: body's text for
@@ -901,6 +908,8 @@ func (p *Proxy) decide(method, host string, port int) Decision {
 	first, lifted := policy.Exact(r.first, host)
 	if lifted {
 		rule, ok = first, true
+	} else if admit := p.admit.Load(); ok && admit != nil && !(*admit)(host, rule) {
+		rule, ok = "", false
 	}
 	if p.guarded.Load() {
 		ip := net.ParseIP(host)

@@ -247,8 +247,10 @@ returns a `session.HostProxy`:
 - The stack proxy passes a CONNECT or a plain HTTP request to a host of
   `gateway.Config.StackHosts` or of the run configuration's `stack_hosts`, on any port,
   in enforce mode, with no certificate authority and no credential. The node's policy,
-  `gateway.Config.Policy`, narrows the run configuration's `stack_hosts`: a host it
-  does not allow is refused. It does not narrow `StackHosts`. The run's policy is not
+  `gateway.Config.Policy`, decides each host of the run configuration's `stack_hosts`:
+  the host passes when the node's policy allows it, under its mode, and has no path
+  rule for it, since the stack proxy does not read inside a connection to check one.
+  The node's policy does not decide the hosts of `StackHosts`. The run's policy is not
   checked, and no `dev.qory.run.egress` is written. `gateway.Config.Report` gets one
   line per decision, with the list of the entry that allowed it, such as "run <id>:
   stack fetch to git.example.com:443 allowed by gateway.stack_hosts entry
@@ -264,13 +266,24 @@ returns a `session.HostProxy`:
   qory: egress to other.example.net:443 denied by the gateway: the host is in neither stack_hosts list
   ```
 
-  A host of the run configuration's `stack_hosts` that the node's policy does not
-  allow, and that `StackHosts` does not list, gets a `403` with this body:
+  A host of the run configuration's `stack_hosts` that `StackHosts` does not list gets
+  a `403` with this body when the node's policy does not allow it:
 
   ```
-  qory: allow git.example in the node's policy, or add it to gateway.stack_hosts in forager.yaml.
+  qory: allow git.example in the node's policy, or list it in gateway.stack_hosts.
   qory: egress to git.example:443 denied by the gateway: the node's policy does not allow this host of the run configuration's stack_hosts
   ```
+
+  and with this body when the node's policy has path rules for it:
+
+  ```
+  qory: list git.example in gateway.stack_hosts: the node's path rules cover it.
+  qory: egress to git.example:443 denied by the gateway: the node's policy has path rules for this host, which the stack proxy cannot check
+  ```
+
+  The report line of a refused host ends with the same cause, such as "run <id>:
+  stack fetch to other.example.net:443 denied: the host is in neither stack_hosts
+  list".
 - Behind a wall or a separate gateway the stack proxy is guarded as the run's proxy
   is. It reaches the gateway's machine or a private network address only for a host
   that the allow list of `gateway.Config.Policy` and `StackHosts` both list by name,
@@ -313,8 +326,7 @@ the grammar of the policy's `egress.allow`, such as `["git.example",
 "api.git.example"]`. They are fixed when the run starts: a reload whose run configuration
 lists other `stack_hosts` fails, the policy in force stays, and `gateway.Config.Report`
 gets "the reload failed: start another run to use other stack hosts: a run's
-stack_hosts are fixed when it starts, and run configuration <url> lists others; the
-policy in force stays".
+stack_hosts are fixed when it starts".
 
 ```go
 s, err := run.StackProxy()                        // before the first Join
