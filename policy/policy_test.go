@@ -912,3 +912,27 @@ func TestAPolicyErrorPrintsAPhraseForASecret(t *testing.T) {
 		t.Errorf("a clean error: %v", e)
 	}
 }
+
+// TestNarrowKeepsWhatTheNodeAllows pins the node's narrowing of a host list such as a
+// run configuration's stack_hosts: a name the node allows stays, one it does not is
+// taken away; a *. entry stays when the node allows every host below it, and under
+// enforce the node's entries below one it does not take its place; nothing is added.
+func TestNarrowKeepsWhatTheNodeAllows(t *testing.T) {
+	list := []string{"git.example", "*.cdn.example", "other.example", "10.0.0.1"}
+	for _, tc := range []struct {
+		name string
+		node policy.Egress
+		want []string
+	}{
+		{"observe", policy.Egress{Mode: policy.Observe}, list},
+		{"observe with a deny", policy.Egress{Mode: policy.Observe, Deny: []string{"other.example", "a.cdn.example"}}, []string{"git.example", "10.0.0.1"}},
+		{"enforce", policy.Egress{Mode: policy.Enforce, Allow: []string{"git.example", "*.example"}}, []string{"git.example", "*.cdn.example", "other.example"}},
+		{"enforce below a pattern", policy.Egress{Mode: policy.Enforce, Allow: []string{"git.example", "a.cdn.example"}, AllowFirst: []string{"10.0.0.1"}}, []string{"git.example", "10.0.0.1", "a.cdn.example"}},
+		{"enforce with a deny below", policy.Egress{Mode: policy.Enforce, Allow: []string{"*.example"}, Deny: []string{"b.cdn.example"}}, []string{"git.example", "other.example"}},
+		{"enforce with nothing", policy.Egress{Mode: policy.Enforce}, nil},
+	} {
+		if got := tc.node.Narrow(list); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

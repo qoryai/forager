@@ -1,0 +1,1 @@
+{"version": 1, "stack_hosts": ["git.example", "api.git.example", "*.cdn.git.example", "192.0.2.10"]}

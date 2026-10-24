@@ -616,24 +616,40 @@ func (lr *linkRun) observe(d proxy.Decision) { lr.st.Emit(event.RunEgress, run.E
 
 // openStack makes the run's stack proxy, for qory's fetch of the harness definition
 // before the run's first session: in enforce mode, allowing the hosts of
-// [Config.StackHosts] alone, with no certificate authority, no credential and no model
-// key, at the run's limits with counters apart from the run's proxy. When guarded is
-// true it is guarded as the run's proxy is: this machine's addresses and the private
-// network addresses are reached only for a host that the node's policy's allow list
-// and StackHosts both list by name, not by a *. pattern, and a link-local or cloud
-// metadata address for none. The run's policy is not read. Each decision is a
-// line of the gateway's report ([stackLine]). On the local link it is registered under
+// [Config.StackHosts] and the run configuration's stack_hosts as the node's policy
+// narrows them ([run.Run.StackAllowed]), with no certificate authority, no credential
+// and no model key, at the run's limits with counters apart from the run's proxy. When
+// guarded is true it is guarded as the run's proxy is: this machine's addresses and the
+// private network addresses are reached only for a host that the node's policy's allow
+// list and StackHosts both list by name, not by a *. pattern, and a link-local or cloud
+// metadata address for none, so the run configuration's entries open none of these.
+// The run's policy is not read. Each decision is a line of the gateway's report
+// ([stackLine]). On the local link it is registered under
 // a fresh secret, the run answer's stack_proxy_secret, which no other proxy has; on
 // the one address the run key opens it, after [link.StackPreamble].
 func (lr *linkRun) openStack(guarded bool) error {
 	report := routine.ForRun(lr.g.report, lr.id)
-	px, err := proxy.New(policy.Enforce, slices.Clone(lr.g.cfg.StackHosts), nil, func(d proxy.Decision) { report(stackLine(d)) })
+	yaml, served := slices.Clone(lr.g.cfg.StackHosts), lr.r.StackHosts()
+	// forager.yaml's entries come first, so a host both lists allow is reported as
+	// forager.yaml's.
+	hosts := slices.Clone(yaml)
+	for _, entry := range lr.r.StackAllowed() {
+		if !slices.Contains(hosts, entry) {
+			hosts = append(hosts, entry)
+		}
+	}
+	px, err := proxy.New(policy.Enforce, hosts, nil, func(d proxy.Decision) { report(stackLine(d, yaml)) })
 	if err != nil {
 		return err
 	}
 	px.ReportPanics(report)
 	px.SetLimits(proxy.Limits{Connections: lr.g.cfg.RunLimits.Connections, RequestsPerSecond: lr.g.cfg.RunLimits.RequestsPerSecond, Burst: lr.g.cfg.RunLimits.Burst, Stack: true})
-	px.Unlisted(stackRefused)
+	px.Unlisted(func(host string, port int) string {
+		if _, ok := policy.Match(served, host); ok {
+			return stackNarrowed(host, port)
+		}
+		return stackRefused(host, port)
+	})
 	if guarded {
 		// The names are the node's policy's allow entries that StackHosts lists exactly,
 		// so a *. entry of StackHosts opens nothing: both lists name the host itself.
@@ -688,18 +704,23 @@ func (lr *linkRun) closeStack() {
 }
 
 // stackLine is the gateway's report of one decision of a run's stack proxy, after
-// "run <run id>: ".
-func stackLine(d proxy.Decision) string {
+// "run <run id>: ". An allowed host's rule is an entry of yaml, [Config.StackHosts], or
+// else of the run configuration's stack_hosts.
+func stackLine(d proxy.Decision, yaml []string) string {
 	host := accesskey.ShownValue(d.Host, false)
 	if d.Rule == proxy.HostForm && !accesskey.ContainsSecret(d.Host) {
 		host = strconv.QuoteToASCII(d.Host)
 	}
 	to := fmt.Sprintf("stack fetch to %s:%d", host, d.Port)
+	list := "gateway.stack_hosts"
+	if !slices.Contains(yaml, d.Rule) {
+		list = "the run configuration's stack_hosts"
+	}
 	switch {
 	case d.Allowed && d.Outcome == proxy.DialFailed:
-		return fmt.Sprintf("%s allowed by gateway.stack_hosts entry %s; the dial failed", to, d.Rule)
+		return fmt.Sprintf("%s allowed by %s entry %s; the dial failed", to, list, d.Rule)
 	case d.Allowed:
-		return fmt.Sprintf("%s allowed by gateway.stack_hosts entry %s", to, d.Rule)
+		return fmt.Sprintf("%s allowed by %s entry %s", to, list, d.Rule)
 	case d.Rule == "":
 		return to + " denied: the host is not in gateway.stack_hosts"
 	}
@@ -707,10 +728,18 @@ func stackLine(d proxy.Decision) string {
 }
 
 // stackRefused is the body of the 403 a run's stack proxy answers for a host that is
-// not in [Config.StackHosts].
+// neither in [Config.StackHosts] nor in the run configuration's stack_hosts.
 func stackRefused(host string, port int) string {
-	return fmt.Sprintf("qory: add %s to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.\n"+
-		"qory: egress to %s:%d denied by the gateway: the host is not in gateway.stack_hosts\n", host, host, port)
+	return fmt.Sprintf("qory: add %s to gateway.stack_hosts in forager.yaml or to the run configuration's stack_hosts.\n"+
+		"qory: egress to %s:%d denied by the gateway: the host is in neither stack_hosts list\n", host, host, port)
+}
+
+// stackNarrowed is the body of the 403 a run's stack proxy answers for a host of the
+// run configuration's stack_hosts that the node's policy does not allow, and that
+// [Config.StackHosts] does not list.
+func stackNarrowed(host string, port int) string {
+	return fmt.Sprintf("qory: allow %s in the node's policy, or add it to gateway.stack_hosts in forager.yaml.\n"+
+		"qory: egress to %s:%d denied by the gateway: the node's policy does not allow this host of the run configuration's stack_hosts\n", host, host, port)
 }
 
 // stackGuarded is the body of the 403 a run's guarded stack proxy answers for a host
@@ -881,6 +910,15 @@ type reloadAnswerDoc struct {
 func (lr *linkRun) refresh() {
 	pol := lr.r.Policy()
 	applied := appliedOf(pol, lr.r.Beside(), lr.r.Held(), lr.r.Chosen(), lr.px.Terminated())
+	if hosts := lr.r.StackHosts(); !lr.opened && len(hosts) > 0 {
+		// The open's record lists the run configuration's stack_hosts, which the stack
+		// proxy allows until the run's first join request, in JSON's types as the rest.
+		listed := make([]any, len(hosts))
+		for i, h := range hosts {
+			listed[i] = h
+		}
+		applied["stack_hosts"] = listed
+	}
 	lr.given = append(lr.given, applied)
 	doc, digest := policyDocument(pol)
 	lr.reloadBody, _ = json.Marshal(reloadAnswerDoc{

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,10 +28,17 @@ import (
 // definition through before the run's first session joins.
 
 // stackRefusedBody is the 403 the stack proxy answers for host:port outside
-// gateway.stack_hosts.
+// gateway.stack_hosts and the run configuration's stack_hosts.
 func stackRefusedBody(host string, port int) string {
-	return "qory: add " + host + " to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.\n" +
-		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the host is not in gateway.stack_hosts\n", host, port)
+	return "qory: add " + host + " to gateway.stack_hosts in forager.yaml or to the run configuration's stack_hosts.\n" +
+		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the host is in neither stack_hosts list\n", host, port)
+}
+
+// stackNarrowedBody is the 403 the stack proxy answers for host:port of the run
+// configuration's stack_hosts that the node's policy does not allow.
+func stackNarrowedBody(host string, port int) string {
+	return "qory: allow " + host + " in the node's policy, or add it to gateway.stack_hosts in forager.yaml.\n" +
+		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the node's policy does not allow this host of the run configuration's stack_hosts\n", host, port)
 }
 
 // stackNeverBody is the body of the 403 a run's guarded stack proxy answers for a
@@ -462,4 +470,181 @@ func TestTheStackProxyBehindASeparateGateway(t *testing.T) {
 			t.Errorf("the record has a dev.qory.run.egress of the stack proxy: %v", l.Data)
 		}
 	}
+}
+
+// stackGateway is a gateway on the local link whose control serves doc, with
+// gateway.stack_hosts yaml and the node's policy node, nil for none.
+func stackGateway(t *testing.T, doc string, yaml []string, node *gateway.Policy) (*control, *harness) {
+	t.Helper()
+	c := newControl(t)
+	c.serveDocument(doc, 'a')
+	return c, start(t, gateway.Config{Server: c.server(), StackHosts: yaml, Policy: node})
+}
+
+// TestTheStackProxyAllowsTheRunConfigurationsStackHosts pins a run configuration's
+// stack_hosts: the stack proxy passes a host of the list beside gateway.stack_hosts,
+// and reports each with the list its entry is in; a host of neither list gets the 403
+// whose body has both lists; the open's dev.qory.run.policy_applied lists stack_hosts as
+// the document has them, and a join's record repeats the open's members.
+func TestTheStackProxyAllowsTheRunConfigurationsStackHosts(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "harness") }))
+	defer origin.Close()
+	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	_, h := stackGateway(t, `{"version":1,"stack_hosts":["127.0.0.1","git.example"]}`, []string{"localhost", "git.example"}, nil)
+	a := h.open(server.LinkRunRequest{})
+	stack := relay(h.g.Addr(), a.StackProxySecret)
+	for _, u := range []string{origin.URL, "http://localhost:" + port + "/"} {
+		resp, err := stack.Get(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(b) != "harness" {
+			t.Errorf("%s: %d %q", u, resp.StatusCode, b)
+		}
+	}
+	if status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), "other.example.net:443"); status != http.StatusForbidden || body != stackRefusedBody("other.example.net", 443) {
+		t.Errorf("a host of neither list: %d %q", status, body)
+	}
+	var members map[string]any
+	if err := json.Unmarshal(a.Applied, &members); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(members["stack_hosts"]); got != "[127.0.0.1 git.example]" {
+		t.Errorf("the open's applied stack_hosts %s, want [127.0.0.1 git.example]", got)
+	}
+	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	h.joined(a.RunID)
+	h.post(sessionStarted(a.RunID, 1), applied(a.RunID, a.Applied), sessionExited(a.RunID, 1), exited(a.RunID))
+	h.close()
+	want := []string{
+		fmt.Sprintf("run %s: stack fetch to 127.0.0.1:%s allowed by the run configuration's stack_hosts entry 127.0.0.1", a.RunID, port),
+		fmt.Sprintf("run %s: stack fetch to localhost:%s allowed by gateway.stack_hosts entry localhost", a.RunID, port),
+		fmt.Sprintf("run %s: stack fetch to other.example.net:443 denied: the host is not in gateway.stack_hosts", a.RunID),
+	}
+	if got := h.reportsWith("stack fetch"); !slices.Equal(got, want) {
+		t.Errorf("reported\n%q\nwant\n%q", got, want)
+	}
+	var recorded []string
+	for _, l := range h.record(a.RunID) {
+		if l.Type == event.PolicyApplied {
+			recorded = append(recorded, fmt.Sprint(l.Data["stack_hosts"]))
+		}
+	}
+	if want := []string{"[127.0.0.1 git.example]", "[127.0.0.1 git.example]"}; !slices.Equal(recorded, want) {
+		t.Errorf("the record's dev.qory.run.policy_applied stack_hosts %q, want %q", recorded, want)
+	}
+}
+
+// TestTheRunConfigurationsStackHostsOpenNoPrivateAddress pins that a run
+// configuration's stack_hosts open no private address behind a wall: this machine's
+// address listed there, and allowed by name in the node's policy, is refused with the
+// guard's body, and nothing is dialled; the same address in gateway.stack_hosts is
+// reached.
+func TestTheRunConfigurationsStackHostsOpenNoPrivateAddress(t *testing.T) {
+	if _, err := net.DefaultResolver.LookupHost(context.Background(), "stack.localhost."); err != nil {
+		t.Skipf("stack.localhost. does not resolve here: %v", err)
+	}
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "harness") }))
+	defer origin.Close()
+	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	n, _ := strconv.Atoi(port)
+	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"stack.localhost", "other.localhost", "127.0.0.1"}}}
+	_, h := stackGateway(t, `{"version":1,"stack_hosts":["other.localhost","127.0.0.1"]}`, []string{"stack.localhost"}, node)
+	a := h.open(server.LinkRunRequest{Wall: true})
+	stack := relay(h.g.Addr(), a.StackProxySecret)
+	for host, want := range map[string]string{"other.localhost": stackGuardedBody("other.localhost", n), "127.0.0.1": stackGuardedBody("127.0.0.1", n)} {
+		resp, err := stack.Get("http://" + host + ":" + port + "/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden || string(b) != want {
+			t.Errorf("%s of the run configuration's stack_hosts: %d %q, want %q", host, resp.StatusCode, b, want)
+		}
+	}
+	resp, err := stack.Get("http://stack.localhost:" + port + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(b) != "harness" {
+		t.Errorf("the name of gateway.stack_hosts and the node's policy: %d %q", resp.StatusCode, b)
+	}
+}
+
+// TestTheNodesPolicyNarrowsTheRunConfigurationsStackHosts pins Tom's rule that the node
+// only takes away: a host of the run configuration's stack_hosts that the node's
+// policy does not allow, by its allow list under enforce or by its deny list, is
+// refused with the body that sends the fix to the node's policy, while a host it allows
+// passes; gateway.stack_hosts is not narrowed.
+func TestTheNodesPolicyNarrowsTheRunConfigurationsStackHosts(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "harness") }))
+	defer origin.Close()
+	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	n, _ := strconv.Atoi(port)
+	for _, c := range []struct {
+		name string
+		node gateway.PolicyEgress
+	}{
+		{"enforce", gateway.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}}},
+		{"deny", gateway.PolicyEgress{Mode: "observe", Deny: []string{"localhost", "git.example"}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, h := stackGateway(t, `{"version":1,"stack_hosts":["127.0.0.1","localhost"]}`, []string{"git.example"}, &gateway.Policy{Version: 1, Egress: c.node})
+			a := h.open(server.LinkRunRequest{})
+			stack := relay(h.g.Addr(), a.StackProxySecret)
+			resp, err := stack.Get(origin.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || string(b) != "harness" {
+				t.Errorf("a host the node's policy allows: %d %q", resp.StatusCode, b)
+			}
+			resp, err = stack.Get("http://localhost:" + port + "/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || string(b) != stackNarrowedBody("localhost", n) {
+				t.Errorf("a host the node's policy does not allow: %d %q", resp.StatusCode, b)
+			}
+			if status, body := connectThrough(t, localStack(t, h, a.StackProxySecret), "git.example:443"); status == http.StatusForbidden {
+				t.Errorf("gateway.stack_hosts was narrowed: %d %q", status, body)
+			}
+		})
+	}
+}
+
+// TestAReloadKeepsTheStackHostsFixed pins that a run's stack_hosts are fixed when it
+// starts: a reload whose run configuration lists others fails, the user is told with
+// the fix first, and the policy in force stays.
+func TestAReloadKeepsTheStackHostsFixed(t *testing.T) {
+	c, h := stackGateway(t, `{"version":1,"stack_hosts":["git.example"]}`, nil, nil)
+	a := h.open(server.LinkRunRequest{})
+	runID, first := a.RunID, a.Digest
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["b.example"]}},"stack_hosts":["git.example","api.git.example"]}`, 'b')
+	line := "the reload failed: start another run to use other stack hosts: a run's stack_hosts are fixed when it starts, and run configuration " +
+		c.srv.URL + runsPath + " lists others; the policy in force stays"
+	eventually(t, "the failed reload's report", func() bool {
+		h.post(heartbeat(runID))
+		return h.reported(line)
+	})
+	again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
+	if err != nil || again.Digest != first {
+		t.Errorf("after a refused reload: %v %+v, want the digest %s", err, again, first)
+	}
+	h.post(exited(runID))
+	h.close()
 }

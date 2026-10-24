@@ -76,8 +76,10 @@ type Config struct {
 	// addresses only for a host that the allow list of Policy and StackHosts both list by
 	// name, not by a *. pattern, and a link-local or cloud metadata address for none.
 	// Each decision is a line of Report, never a dev.qory.run.egress, and a refusal at
-	// RunLimits is reported at most once a second per limit. Empty means every host is
-	// refused.
+	// RunLimits is reported at most once a second per limit. The stack proxy also
+	// allows the stack_hosts of the run's run configuration, as the allow list, allow_first
+	// and deny of Policy narrow them; they open none of the addresses above. Empty, with
+	// no stack_hosts in the run configuration, means every host is refused.
 	StackHosts []string
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the
 	// system's choosing: the link for the sessions of other machines, the proxy for

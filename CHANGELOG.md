@@ -711,6 +711,8 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.egress`, and a refusal at the run's limits is reported at most once a
   second per limit. Start accepts a lower-case host name, an IPv4 address or a `*.`
   suffix, and refuses any other entry.
+- `stack_hosts` in a run configuration: the stack proxy allows these hosts beside
+  `gateway.stack_hosts`. They open no private address.
 - `QORY-STACK`, `link.StackPreamble`, on a separate gateway's one address. From the
   run's first join request on, it is refused.
 - A separate gateway reads a renewed certificate and key from `gateway.TLS`'s files

@@ -309,8 +309,8 @@ func TestTheStackFetchThroughARealGateway(t *testing.T) {
 		t.Errorf("the fetch of a stack host got %d %q", status, body)
 	}
 	status, body := throughHost(t, h.ProxyURL, "http://other.example.net/")
-	const refusedBody = "qory: add other.example.net to gateway.stack_hosts in forager.yaml, or fetch the harness definition from a host listed there.\n" +
-		"qory: egress to other.example.net:80 denied by the gateway: the host is not in gateway.stack_hosts\n"
+	const refusedBody = "qory: add other.example.net to gateway.stack_hosts in forager.yaml or to the run configuration's stack_hosts.\n" +
+		"qory: egress to other.example.net:80 denied by the gateway: the host is in neither stack_hosts list\n"
 	if status != http.StatusForbidden || body != refusedBody {
 		t.Errorf("another host got %d %q, want 403 %q", status, body, refusedBody)
 	}
