@@ -141,12 +141,13 @@ jobs:
         # they skip on a machine with none of the CA bundles, and in the part job a skip
         # passes. Their names are in this -run, so that a missing bundle fails here: a
         # step in the part job with QORY_WALL_REQUIRE would run them twice in that job.
-        # TestDockerHarnessCredentialThroughTheStackProxy needs Docker and is not a
-        # subtest of TestDockerConforms, so its name is in this -run too.
+        # TestDockerSealedCredentialThroughTheWall and
+        # TestDockerHarnessCredentialThroughTheStackProxy need Docker and are not subtests
+        # of TestDockerConforms, so their names are in this -run too.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerHarnessCredentialThroughTheStackProxy)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy)$'
 
   e2e-docker:
     name: Wall conformance, nested Docker
