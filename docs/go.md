@@ -342,10 +342,18 @@ if err != nil {
 fetch := exec.Command("git", "clone", "--depth=1", "https://git.example.com/harness.git")
 fetch.Env = append(os.Environ(), "GIT_CONFIG_COUNT=1",
 	"GIT_CONFIG_KEY_0=http.proxy", "GIT_CONFIG_VALUE_0="+s.ProxyURL)
-fetch.Env = append(fetch.Env, s.Env...)           // GIT_SSL_CAINFO when CABundle is set
+if s.CABundle != "" {
+	fetch.Env = append(fetch.Env, "GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_1=http.sslCAInfo", "GIT_CONFIG_VALUE_1="+s.CABundle)
+}
 err = fetch.Run()
 s.Close()                                         // Join closes it too
 ```
+
+Give git `ProxyURL` and `CABundle` through its configuration, as the example does, and
+leave `Env` out of git's environment. `Env` contains `NO_PROXY=localhost,127.0.0.1,::1`,
+and git sends a request to a host that `NO_PROXY` lists past `http.proxy`, so a harness
+host on loopback would not go through the stack proxy.
 
 Write the host work as steps, one at a time, so a reader shows each step, the step that
 failed and its lines:
