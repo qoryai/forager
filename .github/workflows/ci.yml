@@ -141,8 +141,8 @@ jobs:
         # they skip on a machine with none of the CA bundles, and in the part job a skip
         # passes. Their names are in this -run, so that a missing bundle fails here: a
         # step in the part job with QORY_WALL_REQUIRE would run them twice in that job.
-        # TestDockerHarnessCredentialThroughTheStackProxy is a top-level Docker test
-        # outside TestDockerConforms, so it is named here too.
+        # TestDockerHarnessCredentialThroughTheStackProxy needs Docker and is not a
+        # subtest of TestDockerConforms, so its name is in this -run too.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
