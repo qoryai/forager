@@ -211,7 +211,9 @@ values. An entry is one of two kinds:
 
 - An API credential is a model key: `{name, format, endpoint, auth, key_prefixes}`, as
   in [Model keys](#model-keys).
-- A host credential is any other secret: `{name, hosts, paths, auth, placeholders}`.
+- A host credential is any other secret: `{name, apply, placeholders}`. Each of its 1
+  to 16 `apply` items is one place and way the value is set: `{hosts, scheme, username,
+  header, paths}`.
 
 ```json
 {"version": 1,
@@ -221,18 +223,37 @@ values. An entry is one of two kinds:
     "endpoint": "https://api.model.example/anthropic",
     "auth": {"scheme": "header", "header": "x-api-key"},
     "key_prefixes": ["sk-ant-"]},
-   {"name": "forge", "hosts": ["git.example"],
-    "auth": {"scheme": "basic", "username": "x-access-token"}}]}
+   {"name": "forge",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic",
+               "username": "x-access-token", "paths": ["/example-org/app.git/*"]},
+              {"hosts": ["api.git.example"], "scheme": "bearer",
+               "paths": ["/repos/example-org/app/*"]}],
+    "placeholders": ["GIT_TOKEN"]}]}
 ```
 
 - The run needs no wall: the gateway sets these credentials with or without one.
   On an unwalled local run the agent can read the gateway's access key, which opens the
   sealed values. The program that starts the run must refuse stored credentials there,
   as qory's `key_needs_wall` does.
-- When the run starts, the gateway fetches the values once, sealed to its access key,
-  and opens them. The values stay outside the container. A model key's value that
-  starts with none of its `key_prefixes` stops the run with
-  `run_configuration_invalid`.
+- When the run starts, the gateway fetches the values, sealed to its access key, and
+  opens them. The values stay outside the container. A model key's value that starts
+  with none of its `key_prefixes` stops the run with `run_configuration_invalid`.
+- The control plane may send a value with `expires_at`, when it stops working, and
+  `apply`, where it is set. `apply` may narrow the entry's items, such as to fewer hosts
+  or paths, and never widen them. A value that expired before the run started, or an
+  item outside its entry, stops the run with `run_configuration_invalid`.
+- The gateway fetches a value with `expires_at` again 5 minutes before it expires, and
+  after a host answers `401` to a request with the value, at most every 30 seconds per
+  credential. The renewed value takes the old value's place, and the gateway overwrites the
+  old bytes with zeros. A value without `expires_at`, such as a model key's, is fetched
+  once.
+- If a renewal fails, or its `expires_at` is not after the machine's clock, the run
+  keeps the old value and the gateway reports `run <run id>: If this repeats, check the
+  control plane: credential "forge" was not renewed:` with the cause, then tries again
+  30 seconds later. At `expires_at` with no renewal, the
+  run's record gets one line, `Start another run once the control plane answers:
+  credential "forge" expired at 2026-10-24T13:00:00Z`, and the proxy sets the value no
+  more.
 - On a host that one of these credentials is for, its value replaces the machine's
   credential, such as the model key in `forager.yaml` for the same endpoint host,
   whatever its name.
@@ -243,10 +264,82 @@ values. An entry is one of two kinds:
   endpoint's variable or a model key's variable stops the run
   (`run_configuration_invalid`). The same holds for the run's placeholders from this
   machine's credentials and tools. A tool's variable, such as `GITHUB_TOKEN`, is fine.
-- The credentials and `model_credential` are fixed for the run. A reload that changes
-  them fails, and the run keeps its policy. So does a reload that selects another
+- The credentials and `model_credential` are fixed for the run: a renewal changes only
+  a value. A reload that changes them fails, and the run keeps its policy. So does a reload that selects another
   model key of this machine's as the start key, with or without `model_credential`.
 - Without `credentials`, the run gets the machine's credentials as before.
+
+A run configuration may also list `stack_hosts`, the hosts qory may fetch the run's
+harness definition from before the first session joins, beside `gateway.stack_hosts`
+in `forager.yaml`:
+
+```json
+{"version": 1, "stack_hosts": ["git.example", "api.git.example"]}
+```
+
+- The run's stack proxy allows these hosts until the run's first join request. It sets
+  only the run's harness credentials ([Harness credentials](#harness-credentials)).
+- The node's policy decides each host. A host passes when the node's policy allows it
+  and has no path rule for it: the stack proxy does not check the node's path rules. A
+  host the node's policy does not allow is refused with "qory: allow git.example in the
+  node's policy, or list it in gateway.stack_hosts."
+- Each decision of the stack proxy is a `dev.qory.run.egress` in the run's record, with
+  `channel: stack`.
+- Behind a wall or a separate gateway they open no address of the gateway's machine
+  and no private network address. Such an address is reached only for a host that
+  `gateway.stack_hosts` and the node's policy both list by name.
+- They are fixed for the run. A reload that lists other `stack_hosts` fails, and the run
+  keeps its policy.
+
+### Harness credentials
+
+A host credential with `purpose: harness` is for qory's fetch of the run's harness
+definition, before the first session joins. Without `purpose`, or with `purpose: work`,
+a host credential is for the run's work, as described in [From Qory Apiary](#from-qory-apiary).
+An API credential has no `purpose`.
+
+```json
+{"version": 1,
+ "stack_hosts": ["git.example"],
+ "credentials": [
+   {"name": "harness-1", "purpose": "harness",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic",
+               "username": "x-access-token", "paths": ["/example-org/harness.git/*"]}]},
+   {"name": "work-1",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic",
+               "username": "x-access-token", "paths": ["/example-org/app.git/*"]}],
+    "placeholders": ["GIT_TOKEN"]}]}
+```
+
+- Only the run's stack proxy sets a harness credential, on its hosts and paths. The
+  run's proxy, which the sessions, `HostProxy` and the setup step go through, never sets
+  one, and the run answer lists no host or placeholder for it.
+- The run gets a certificate authority. `(*session.Run).StackProxy` returns its bundle
+  in `CABundle`, and its CA variables in `Env`. On a walled run whose bundle could not
+  be written, such as on a machine with no CA bundle file, `CABundle` is empty and
+  `Env` has no CA variable. On a harness credential's host the stack
+  proxy reads each request: it sets the value on the credential's paths and passes other
+  paths with no value.
+- The gateway fetches and renews the value as any other stored credential's. At the
+  run's first join request it overwrites the value with zeros and stops its renewals.
+- The stack proxy must allow each host of a harness credential: a host of
+  `gateway.stack_hosts`, or a host of the run configuration's `stack_hosts` that the
+  node's policy allows with no path rule. Otherwise the run stops with
+  `run_configuration_invalid`, such as "Add git.example to a stack_hosts list: the
+  harness credential "harness-1" is for it". A harness credential with `placeholders`
+  stops the run with "Remove placeholders from the harness credential "harness-1": no
+  session gets it".
+- Two harness credentials on one host, or two `apply` items of one, need paths, and
+  their paths must not overlap. A work credential on the same host is fine: no proxy
+  sets both.
+- The open's `dev.qory.run.policy_applied` lists each harness credential with
+  `purpose: harness`. A join's lists none.
+
+A run configuration with `harness_hidden: true` is for a harness the run's workspace may
+not see, such as one of another organisation. Its open's `dev.qory.run.policy_applied`
+lists each harness credential by `name` and `purpose` alone, and the stack proxy's
+`dev.qory.run.egress` records have no `path` and no `path_rule`. `harness_hidden` is
+fixed when the run starts: a reload ignores it.
 
 ## Tools
 

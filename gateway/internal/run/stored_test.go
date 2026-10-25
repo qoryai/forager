@@ -17,7 +17,7 @@ import (
 
 // storedDoc is a run configuration with a credential from the server for
 // api.model.example, under a policy that allows it.
-const storedDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}},"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"},"placeholders":["MODEL_API_KEY"]}]}`
+const storedDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}},"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}],"placeholders":["MODEL_API_KEY"]}]}`
 
 // computed is a document whose Computed is set, as the server package sets it on the
 // document it reads.
@@ -125,7 +125,7 @@ func opensOnce(t *testing.T, wall bool) {
 // header cannot hold, and a model key's value that starts with none of its
 // key_prefixes, whose messages have the name and not the value.
 func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
-	twice := strings.Replace(storedDoc, `]}]}`, `]},{"name":"model","hosts":["b.example"],"auth":{"scheme":"bearer"}}]}`, 1)
+	twice := strings.Replace(storedDoc, `]}]}`, `]},{"name":"model","apply":[{"hosts":["b.example"],"scheme":"bearer"}]}]}`, 1)
 	reserved := strings.Replace(storedDoc, `"scheme":"bearer"`, `"scheme":"header","header":"Proxy-Authorization"`, 1)
 	prefixed := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}},"credentials":[` +
 		`{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-api","sk-ant-oat"]}]}`
@@ -263,7 +263,7 @@ func TestARunConfigurationURLWithASecretIsAPhrase(t *testing.T) {
 	check("enrol an access key allowed stored secrets", err)
 	_, err = run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: at(computed(t, storedDoc, digest('1'))), Secrets: (&secrets{value: "opened\nvalue"}).fetch})
 	check("which a header value cannot have", err)
-	entry := `{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"}}`
+	entry := `{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]}`
 	twice := `{"version":1,"credentials":[` + entry + `,` + entry + `]}`
 	_, err = run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: at(computed(t, twice, digest('1'))), Secrets: (&secrets{value: "opened-value"}).fetch})
 	check(`list the credential "model" once`, err)

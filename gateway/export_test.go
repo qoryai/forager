@@ -13,6 +13,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/server"
 )
 
@@ -118,6 +119,9 @@ func Guarded(g *Gateway, runID string) bool {
 // certificate against.
 func SetUpstreamRoots(c *Config, roots *x509.CertPool) { c.upstreamRoots = roots }
 
+// SetRenewClock sets the clock each run's renewals of the server's values are judged by.
+func SetRenewClock(c *Config, clock run.Clock) { c.renewClock = clock }
+
 // SetOpened sets what is called once a run on the one address opened.
 func SetOpened(c *Config, f func()) { c.opened = f }
 
@@ -211,4 +215,17 @@ func RunLimitsOf(g *Gateway, runID string) RunLimits {
 	g.mu.Unlock()
 	l := lr.px.Limits()
 	return RunLimits{Connections: l.Connections, RequestsPerSecond: l.RequestsPerSecond, Burst: l.Burst}
+}
+
+// StackTokens are the values of the harness credentials that g's stack proxy of the run
+// of runID sets now, by the credential's name: empty once the values are cleared.
+func StackTokens(g *Gateway, runID string) map[string]string {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	out := map[string]string{}
+	for _, u := range lr.r.StackUses() {
+		out[u.Name] = string(u.Value())
+	}
+	return out
 }

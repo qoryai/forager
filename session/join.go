@@ -535,7 +535,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	r.emitMu.Lock()
 	r.sessionApplied = sessionMembers
-	r.record(event.PolicyApplied, r.policyApplied(r.members))
+	r.record(event.PolicyApplied, r.policyApplied(withoutHarness(r.members)))
 	r.emitMu.Unlock()
 	defer r.setApplied(nil)
 	if spec.Wall != nil {

@@ -22,7 +22,8 @@ type Config struct {
 	// that name a host itself are the only ones that open this machine's addresses and
 	// the private network addresses to a guarded proxy: to the run's proxy those that
 	// the run's policy allows, and to the run's stack proxy those that StackHosts lists
-	// exactly.
+	// exactly. It also decides each host of a run configuration's stack_hosts at the
+	// stack proxy, and no host of StackHosts.
 	Policy *Policy
 	// Credentials and Tools are the ones this machine defines; a run's policy selects
 	// among them by name. The gateway sets a credential's value for a run with or
@@ -31,10 +32,8 @@ type Config struct {
 	Tools       []Tool
 	// Selects are, behind a separate gateway, the credentials a run gets, with or
 	// without a wall, when the server's policy selects none, each one of Credentials by
-	// name. An entry that takes an argument names the run's label it takes, the forge
-	// the run's forge label must be, and the pattern the label's value must match whole;
-	// an entry the run's labels do not satisfy gives no credential, and the gateway
-	// reports why. Selects needs a Listen.
+	// name. An entry is for a credential that takes no argument; a credential that takes
+	// an argument comes from the run's policy. Selects needs a Listen.
 	Selects []Selection
 	// Version is Forager's version, reported in each run's registration and in the user
 	// agent of every request to the Server; empty means "dev".
@@ -70,14 +69,17 @@ type Config struct {
 	// configuration: each a lower-case host name, an IPv4 address or a *. suffix, in the
 	// form of a policy's allow entry. Until the run's first join request the stack proxy
 	// passes a CONNECT or a plain HTTP request to one of them, on any port, and refuses
-	// every other, in enforce mode, with no certificate authority and no credential; the
-	// run's policy is not checked. Behind a wall or a separate gateway it is guarded as
+	// every other, in enforce mode, and sets the run configuration's harness credentials
+	// alone, with the run's certificate authority on their hosts; the run's policy is not
+	// checked. Behind a wall or a separate gateway it is guarded as
 	// the run's proxy is: it reaches this machine's addresses and the private network
 	// addresses only for a host that the allow list of Policy and StackHosts both list by
 	// name, not by a *. pattern, and a link-local or cloud metadata address for none.
-	// Each decision is a line of Report, never a dev.qory.run.egress, and a refusal at
-	// RunLimits is reported at most once a second per limit. Empty means every host is
-	// refused.
+	// Each decision is a line of Report and a dev.qory.run.egress with channel stack,
+	// and a refusal at RunLimits is reported at most once a second per limit. The stack proxy also
+	// allows the hosts of the run configuration's stack_hosts that Policy allows and has
+	// no path rule for; they open none of the addresses above. Empty, with no
+	// stack_hosts in the run configuration, means every host is refused.
 	StackHosts []string
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the
 	// system's choosing: the link for the sessions of other machines, the proxy for
@@ -135,6 +137,9 @@ type Config struct {
 	// certCheck, when not zero, replaces the constant [certCheck], how often at most the
 	// one address checks its certificate and key files for a change. Tests set it.
 	certCheck time.Duration
+	// renewClock, when not nil, is the clock each run's renewals of the server's values
+	// are judged by, in place of this machine's. Tests set it.
+	renewClock run.Clock
 }
 
 // RunLimits are the limits of each run on the gateway's proxy: gateway.run_limits of

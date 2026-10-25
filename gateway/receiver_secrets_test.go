@@ -95,13 +95,13 @@ func newReference(t *testing.T, origin string) *reference {
 			return doc, digestOf(string(doc))
 		},
 		RunConfiguration: func(receiver.Run) ([]byte, string, *receiver.Refusal) { return ref.doc, "", nil },
-		Secrets: func(_ receiver.Run, names []string) ([][]byte, *receiver.Refusal) {
+		Secrets: func(_ receiver.Run, names []string) ([]receiver.Value, *receiver.Refusal) {
 			ref.mu.Lock()
 			ref.asked = append(ref.asked, names)
 			ref.mu.Unlock()
-			var values [][]byte
+			var values []receiver.Value
 			for range names {
-				values = append(values, []byte(refValue))
+				values = append(values, receiver.NewValue([]byte(refValue)))
 			}
 			return values, nil
 		},

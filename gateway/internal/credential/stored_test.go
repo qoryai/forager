@@ -3,10 +3,12 @@ package credential
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/policy"
@@ -14,7 +16,7 @@ import (
 
 // storedModel is a credential from the server for api.model.example.
 func storedModel(value string) Stored {
-	return Stored{Name: "server-model", Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"MODEL_API_KEY"},
+	return Stored{Name: "server-model", Apply: []StoredApply{{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}}, Placeholders: []string{"MODEL_API_KEY"},
 		Value: func() []byte { return []byte(value) }}
 }
 
@@ -58,7 +60,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 				t.Errorf("placeholders %v, want the server's alone", held.Placeholders)
 			}
 			want := []Credential{{Name: "plain", Hosts: []string{"plain.example"}, Placeholders: []string{}}, {Name: "server-model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_API_KEY"},
-				Stored: true, Scheme: "header", Header: "x-api-key"}}
+				Stored: true, Scheme: "header", Header: "x-api-key", Items: []Item{{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}}}}
 			if got := held.Credentials(); !reflect.DeepEqual(got, want) {
 				t.Errorf("credentials %+v, want %+v", got, want)
 			}
@@ -84,7 +86,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 func TestACredentialFromTheServerOfTheSameNameReplacesTheMachines(t *testing.T) {
 	t.Setenv("MODEL_TOKEN", "a-token")
 	defs := []Definition{{Name: "model", Env: "MODEL_TOKEN", Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"}}}
-	stored := []Stored{{Name: "model", Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"},
+	stored := []Stored{{Name: "model", Apply: []StoredApply{{Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key"}}, Placeholders: []string{"ANTHROPIC_API_KEY"},
 		Value: func() []byte { return []byte("server-value") }}}
 	held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "model"}}, stored, "", policy.Enforce, []string{"api.anthropic.com"}, func(l string) { t.Log(l) })
 	if err != nil {
@@ -182,7 +184,7 @@ func TestAModelKeyStartsTheRunAsModelCredentialSays(t *testing.T) {
 	first, second := modelKey("first"), modelKey("second")
 	second.Endpoint = "https://api.other-model.example/v1"
 	plain := Definition{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"}
-	server := Stored{Name: "server-model", Format: "openai-responses", Endpoint: "https://api.server-model.example/v1", Hosts: []string{"api.server-model.example"}, Scheme: "bearer",
+	server := Stored{Name: "server-model", Format: "openai-responses", Endpoint: "https://api.server-model.example/v1", Apply: []StoredApply{{Hosts: []string{"api.server-model.example"}, Scheme: "bearer"}},
 		Value: func() []byte { return []byte("sk-fake-server-value") }}
 	selected := func(defs []Definition) []policy.Selected {
 		var out []policy.Selected
@@ -287,7 +289,7 @@ func TestTwoModelKeysMayShareAHost(t *testing.T) {
 			t.Errorf("%s:\n got %v\nwant %s", name, err, c.want)
 		}
 	}
-	stored := Stored{Name: "server-key", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key",
+	stored := Stored{Name: "server-key", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Apply: []StoredApply{{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}},
 		Value: func() []byte { return []byte("sk-ant-fake-server-value") }}
 	held, err = ResolveWith(context.Background(), []Definition{first}, []policy.Selected{{Name: "first"}}, []Stored{stored, storedModel("server-value")}, "server-key", policy.Observe, nil, func(l string) { t.Log(l) })
 	if err == nil {
@@ -295,5 +297,39 @@ func TestTwoModelKeysMayShareAHost(t *testing.T) {
 		t.Error("a model key and a host credential from the server on one host resolved")
 	} else if want := "claim api.model.example in only one of the credentials server-key and server-model; both claim it, and a credential without paths is alone on its hosts"; err.Error() != want {
 		t.Errorf("a model key and a host credential from the server:\n got %v\nwant %s", err, want)
+	}
+}
+
+// TestAValueThatExpiresIsRenewedOnA401 pins a credential from the server with
+// ExpiresAt and Rejected: one use per apply item, each Renewed, whose Rejected calls
+// the Stored's; one without ExpiresAt is not Renewed, and its Rejected calls nothing.
+func TestAValueThatExpiresIsRenewedOnA401(t *testing.T) {
+	calls := 0
+	forge := Stored{Name: "forge", Apply: []StoredApply{
+		{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token", Paths: []string{"/example-org/app.git/*"}},
+		{Hosts: []string{"api.git.example"}, Scheme: "bearer"},
+	}, Value: func() []byte { return []byte("forge-value") }, ExpiresAt: time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC), Rejected: func() { calls++ }}
+	model := storedModel("model-value")
+	model.Rejected = func() { t.Error("Rejected of a value without expires_at was called") }
+	held, err := ResolveWith(context.Background(), nil, nil, []Stored{forge, model}, "", policy.Observe, nil, func(l string) { t.Log(l) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	var got []string
+	for _, u := range held.Uses {
+		got = append(got, fmt.Sprintf("%s %v %s %v renewed=%v", u.Name, u.Hosts, u.Scheme, u.Paths, u.Renewed))
+		u.Rejected()
+	}
+	want := []string{
+		"forge [git.example] basic [/example-org/app.git/*] renewed=true",
+		"forge [api.git.example] bearer [] renewed=true",
+		"server-model [api.model.example] header [] renewed=false",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("uses %q, want %q", got, want)
+	}
+	if calls != 2 {
+		t.Errorf("forge's Rejected was called %d times, want once per use", calls)
 	}
 }

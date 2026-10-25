@@ -299,7 +299,10 @@ const beyondLinkSchema = "-beyond-schema-"
 // hosts or placeholders, no endpoint, an endpoint that is not https or has a user, a
 // query or a fragment, a format outside the list, oauth beside a header or set to
 // false, or key prefixes that are none, five, with a space or of 33 characters, or
-// whose model_credential is no credential's name, a run.registered whose
+// whose model_credential is no credential's name, or whose host credential has hosts and
+// auth in place of apply, an apply item with a token or a bearer item with a username, a
+// sealed plaintext whose expires_at is not a time or whose apply has a token or a *.
+// pattern host, a run.registered whose
 // interval is over 300 seconds or without its workspace, an event with an unpadded sequence, a run.started without opened_by,
 // with an unknown one, opened by a session, with a runtime member, with a machine in
 // upper case or with a setup other than outside and inside, a session.started

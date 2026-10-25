@@ -304,6 +304,15 @@ type RunConfiguration struct {
 	// credential of Credentials or a model key of the machine's; empty when the document
 	// names none, which a run with one model key may.
 	ModelCredential string `json:"model_credential,omitzero"`
+	// StackHosts are the hosts the run's stack proxy allows beside the gateway's
+	// gateway.stack_hosts, each a lower-case host name, an IPv4 address or a *. suffix,
+	// in the document's order; nil when the document has none.
+	StackHosts []string `json:"stack_hosts,omitzero"`
+	// HarnessHidden is true for a harness the run's workspace may not see, such as one of
+	// another organisation: the stack channel's dev.qory.run.egress has no path and no
+	// path_rule, and dev.qory.run.policy_applied lists each harness credential by its name
+	// and purpose alone. False when the document has no harness_hidden.
+	HarnessHidden bool `json:"harness_hidden,omitzero"`
 	// Computed is sha256= and the lower-case hex SHA-256 of the bytes the document was
 	// read from, which Forager computes itself: the digest a secrets request and the
 	// open of its answer use, never the answer's header. Empty for a document not read
@@ -313,7 +322,7 @@ type RunConfiguration struct {
 
 // RunCredential is one entry of a run configuration's credentials, with no value. An
 // API credential, a model key, has Format, Endpoint, Auth and KeyPrefixes; a host
-// credential has Hosts, Paths, Auth and Placeholders.
+// credential has Apply, Placeholders and Purpose.
 type RunCredential struct {
 	Name string `json:"name"`
 	// Format is the API format of an API credential, one of api-format.schema.json;
@@ -324,26 +333,53 @@ type RunCredential struct {
 	// KeyPrefixes are the prefixes an API credential's value must start with; nil for
 	// any value.
 	KeyPrefixes []string `json:"key_prefixes,omitzero"`
-	Hosts       []string `json:"hosts,omitzero"`
-	// Paths are nil for every path.
-	Paths        []string `json:"paths,omitzero"`
-	Auth         Auth     `json:"auth"`
+	// Auth is how an API credential's value is set; zero for a host credential.
+	Auth Auth `json:"auth,omitzero"`
+	// Apply are where and how a host credential's value is set, one item per way; nil
+	// for an API credential.
+	Apply        []Apply  `json:"apply,omitzero"`
 	Placeholders []string `json:"placeholders,omitzero"`
+	// Purpose is a host credential's purpose: [PurposeHarness] for one the stack proxy
+	// sets for the fetch of the harness definition, and [PurposeWork] or empty for one
+	// the run's proxy sets for the run's sessions, host work and setup. Empty for an API
+	// credential.
+	Purpose string `json:"purpose,omitzero"`
 }
 
-// Applies are the hosts and paths the credential's value is set on: for an API
-// credential the host [policy.EndpointHost] reads from its endpoint and every path, nil
-// paths; for a host credential its Hosts and Paths. An API credential whose endpoint
-// has no host applies to none.
-func (c RunCredential) Applies() (hosts, paths []string) {
+// The purposes of a host credential, run-configuration.schema.json's purpose.
+const (
+	PurposeHarness = "harness"
+	PurposeWork    = "work"
+)
+
+// Harness reports whether the credential is for the fetch of the harness definition
+// alone, purpose harness: the stack proxy sets it, and the run's proxy never does.
+func (c RunCredential) Harness() bool { return c.Purpose == PurposeHarness }
+
+// Apply is one item of a host credential's apply, run-configuration.schema.json: the
+// hosts its value is set on, the scheme with its username or header, and the paths,
+// nil for every path.
+type Apply struct {
+	Hosts    []string `json:"hosts"`
+	Scheme   string   `json:"scheme"`
+	Username string   `json:"username,omitzero"`
+	Header   string   `json:"header,omitzero"`
+	Paths    []string `json:"paths,omitzero"`
+}
+
+// Applies are where and how the credential's value is set: for an API credential one
+// item, the host [policy.EndpointHost] reads from its endpoint with its auth and every
+// path; for a host credential its Apply. An API credential whose endpoint has no host
+// applies to none.
+func (c RunCredential) Applies() []Apply {
 	if c.Format == "" {
-		return c.Hosts, c.Paths
+		return c.Apply
 	}
 	host, ok := policy.EndpointHost(c.Endpoint)
 	if !ok {
-		return nil, nil
+		return nil
 	}
-	return []string{host}, nil
+	return []Apply{{Hosts: []string{host}, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header}}
 }
 
 // Auth is how a value is set on a request, auth.schema.json: Scheme is bearer, basic

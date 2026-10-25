@@ -21,7 +21,6 @@ import (
 	"maps"
 	"os"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -55,7 +54,7 @@ type Config struct {
 	Fetched *Fetched
 	// Labels are the run's labels: on the local link, those the run configuration is
 	// asked for by; behind a separate gateway, those the attach's answer gives back of
-	// the starter's registration, which the gateway's selection of credentials reads.
+	// the starter's registration.
 	Labels map[string]string
 	// Wall says the run's agent runs behind a wall.
 	Wall bool
@@ -65,8 +64,8 @@ type Config struct {
 	Tools       []Tool
 	// Selects are the gateway's selection among Credentials, for a run that attached
 	// with a run key behind a separate gateway; nil on the local link. The run gets it,
-	// by its labels, with or without a wall, when the run configuration's policy selects
-	// no credential, at the start and at every reload.
+	// with or without a wall, when the run configuration's policy selects no credential,
+	// at the start and at every reload.
 	Selects []Selection
 	// Images are the images the run's policy selects among, and the one it starts in
 	// when the policy selects none; they mean something only behind a wall.
@@ -86,12 +85,23 @@ type Config struct {
 	// selection whose credential the run does not get.
 	// Nil reports nothing.
 	Report func(string)
-	// Secrets fetches the values of the credentials of the run configuration the run
-	// starts with, by their names in the document's order, under digest, the digest
-	// Forager computed of the document's bytes, and opens them: the secrets request,
-	// once per run. Nil when the server's discovery lists no secrets endpoint; a run
-	// configuration with credentials is then refused.
+	// Log writes one line to the run's record, a dev.qory.run.log of stream stderr: a
+	// value of the run configuration's credentials that expired with no renewal. Nil
+	// writes none.
+	Log func(string)
+	// Secrets fetches the values of credentials of the run configuration in force, by
+	// their names in the document's order, under digest, the digest Forager computed of
+	// that document's bytes, and opens them: the secrets request. The run sends it when
+	// it starts, for every credential, and again for each credential whose value has
+	// expires_at ([renewer]). Nil when the server's discovery lists no secrets endpoint;
+	// a run configuration with credentials is then refused.
 	Secrets func(ctx context.Context, digest string, credentials []string) (sealed.Values, error)
+	// Clock is the time renewals are judged by; nil is this machine's clock.
+	Clock Clock
+	// StackHosts are the gateway's gateway.stack_hosts, which the run's stack proxy
+	// allows beside the run configuration's stack_hosts: each host of a harness
+	// credential must be one of the two lists allows ([Run.StackAllows]).
+	StackHosts []string
 }
 
 // Fetched is one run configuration as the server answered it.
@@ -128,10 +138,7 @@ type Run struct {
 	relay  string
 	served map[string]string
 	server bool
-	// patterns are the compiled patterns of [Config.Selects], by index, nil for an entry
-	// whose credential takes no argument.
-	patterns []*regexp.Regexp
-	chosen   []tool.Chosen
+	chosen []tool.Chosen
 	// terminates says the proxy holds the run's authority, from the start on.
 	terminates bool
 
@@ -147,16 +154,36 @@ type Run struct {
 	images    map[*policy.Loaded]string
 	held      *credential.Held
 	runDigest string
+	// computed is the digest Forager computed of the bytes of the run configuration in
+	// force, the one a renewal's secrets request is sent under, and computedRead those of
+	// each run configuration Read read that a reload has not decided yet.
+	computed     string
+	computedRead map[*policy.Loaded]string
 	// creds are the credentials and the model_credential of each run configuration Read
 	// read that a reload has not decided yet.
 	creds map[*policy.Loaded]storedSet
 
 	// stored are the credentials of the run configuration the run started with, and
-	// values their values as they opened, fixed for the run and cleared by Close.
-	// storedModel is its model_credential, empty when it names none.
+	// values their values, as they opened or as a renewal replaced them, cleared by
+	// Close. storedModel is its model_credential, empty when it names none.
 	stored      []server.RunCredential
 	storedModel string
 	values      sealed.Values
+	// stack are the stack_hosts of the run configuration the run started with, nil
+	// when it has none, fixed for the run; stacks are those of each run configuration
+	// Read read that a reload has not decided yet.
+	stack  []string
+	stacks map[*policy.Loaded][]string
+	// hidden is harness_hidden of the run configuration the run started with, fixed
+	// for the run. harnessClosed is true once [Run.CloseHarness] cleared the values of
+	// the harness credentials: from then on no renewal puts one back.
+	hidden        bool
+	harnessClosed bool
+	// applies are where each of stored is set, fixed when the run opens: the answer's
+	// apply, or the entry's items.
+	applies map[string][]credential.StoredApply
+	// renew fetches again the values with expires_at; nil when none has it.
+	renew *renewer
 }
 
 // storedSet is what a run configuration says of the run's credentials: its credentials
@@ -190,17 +217,6 @@ func Decide(cfg Config) (*Run, error) {
 	for i, t := range cfg.Tools {
 		r.tools[i] = tool.Definition(t)
 	}
-	r.patterns = make([]*regexp.Regexp, len(cfg.Selects))
-	for i, s := range cfg.Selects {
-		if s.Label == "" {
-			continue
-		}
-		re, err := WholeMatch(s.Pattern)
-		if err != nil {
-			return nil, accesskey.ShownError(err)
-		}
-		r.patterns[i] = re
-	}
 	pol := policy.None()
 	if cfg.Node != nil {
 		b, _ := json.Marshal(cfg.Node)
@@ -225,9 +241,16 @@ func Decide(cfg Config) (*Run, error) {
 		pol = fetched
 		set := r.takeCreds(fetched)
 		r.guard, r.named, r.stored, r.storedModel = r.takeGuard(fetched), r.takeNamed(fetched), set.creds, set.model
+		r.stack = r.takeStack(fetched)
 		if cfg.Fetched.Document != nil {
 			r.served = cfg.Fetched.Document.Values()
+			r.computed = cfg.Fetched.Document.Computed
+			r.hidden = cfg.Fetched.Document.HarnessHidden
 		}
+		if err := r.checkHarness(); err != nil {
+			return nil, err
+		}
+		r.takeComputed(fetched)
 		r.runDigest = pol.RunConfiguration
 	}
 	if !cfg.Wall {
@@ -297,9 +320,10 @@ func (r *Run) Hold(ctx context.Context) error {
 	r.mu.Lock()
 	r.held = held
 	r.mu.Unlock()
+	r.renew.start(routine.ForRun(r.cfg.Report, r.cfg.RunID))
 	r.chosen = chosen
 	pol := r.start
-	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || r.server
+	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || r.server || r.hasHarness()
 	return nil
 }
 
@@ -315,9 +339,10 @@ func Open(ctx context.Context, cfg Config) (*Run, error) {
 	return r, nil
 }
 
-// Close stops the renewals of the credentials the run holds, and overwrites the values
-// of the run configuration's credentials. The tools are the caller's to stop, with the
-// set [Run.StartTools] returned.
+// Close stops the renewals of the credentials the run holds, those of the run
+// configuration's values among them, and overwrites the values of the run
+// configuration's credentials. The tools are the caller's to stop, with the set
+// [Run.StartTools] returned.
 func (r *Run) Close() {
 	r.mu.Lock()
 	held := r.held
@@ -326,13 +351,32 @@ func (r *Run) Close() {
 	if held != nil {
 		held.Close()
 	}
+	r.renew.close()
 	r.clearValues()
+}
+
+// computedDigest is the digest Forager computed of the run configuration in force.
+func (r *Run) computedDigest() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.computed
+}
+
+// takeComputed is the digest Forager computed of the run configuration of a policy
+// [Run.Read] made, empty when none was read from bytes, and forgets it.
+func (r *Run) takeComputed(p *policy.Loaded) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d := r.computedRead[p]
+	delete(r.computedRead, p)
+	return d
 }
 
 // open fetches and opens the values of the start's run configuration's credentials,
 // under the digest Forager computed of the document's bytes, and refuses a value a
-// header cannot hold and a model key's value that starts with none of its
-// key_prefixes.
+// header cannot hold, a model key's value that starts with none of its key_prefixes,
+// a value that expired before the run started, and one whose apply is outside its
+// entry ([checkOpened]).
 func (r *Run) open(ctx context.Context) error {
 	names := make([]string, len(r.stored))
 	for i, c := range r.stored {
@@ -346,6 +390,7 @@ func (r *Run) open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	now := r.clock().Now()
 	for i, name := range names {
 		v, _ := values.Value(name)
 		if !HeaderValue(v) {
@@ -362,7 +407,16 @@ func (r *Run) open(ctx context.Context) error {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
 				"run configuration %s: store in the control plane a value of the credential %s that starts with %s: the stored value starts with none of its key_prefixes", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true), strings.Join(shown, " or "))
 		}
+		if err := checkOpened(r.stored[i], values, now); err != nil {
+			values.Clear()
+			return err
+		}
 	}
+	r.applies = make(map[string][]credential.StoredApply, len(r.stored))
+	for _, c := range r.stored {
+		r.applies[c.Name] = effectiveApply(c, values)
+	}
+	r.renew = newRenewer(r, values, now)
 	r.mu.Lock()
 	r.values = values
 	r.mu.Unlock()
@@ -462,6 +516,53 @@ func (r *Run) Held() *credential.Held {
 // Uses are the held credentials as the proxy sets them.
 func (r *Run) Uses() []proxy.Credential { return ProxyUses(r.Held()) }
 
+// StackHosts are the stack_hosts of the run configuration the run started with, in
+// its order, nil when it has none: fixed when the run starts, so a reload with other
+// stack_hosts is refused.
+func (r *Run) StackHosts() []string { return slices.Clone(r.stack) }
+
+// StackCheck is the node's decision on a host for the run configuration's
+// stack_hosts.
+type StackCheck int
+
+const (
+	// StackAllowed is a host an entry of StackHosts matches and the node's policy
+	// allows.
+	StackAllowed StackCheck = iota
+	// StackUnlisted is a host no entry of StackHosts matches.
+	StackUnlisted
+	// StackNodeRefuses is a host the node's policy does not allow
+	// ([policy.Egress.Allows], under its mode).
+	StackNodeRefuses
+	// StackNodePaths is a host the node's policy, or a side beside it, has path rules
+	// for: the stack proxy does not check the node's path rules. It tunnels a host with
+	// no harness credential, and on a harness credential's host it checks the
+	// credential's paths alone.
+	StackNodePaths
+)
+
+// StackChecked decides host, a host in the form [policy.Host] returns, for the run
+// configuration's stack_hosts: the node only takes away. A host an entry of
+// [Run.StackHosts] matches is allowed when the node's policy, if the run has one,
+// allows it and no path rule of the node's covers it.
+func (r *Run) StackChecked(host string) StackCheck {
+	if _, ok := policy.Match(r.stack, host); !ok {
+		return StackUnlisted
+	}
+	if r.node == nil {
+		return StackAllowed
+	}
+	if !r.node.Policy.Egress.Allows(host) {
+		return StackNodeRefuses
+	}
+	for _, side := range append([]map[string][]string{r.node.Policy.Egress.Paths}, r.beside...) {
+		if _, _, ok := policy.HostPaths(side, host); ok {
+			return StackNodePaths
+		}
+	}
+	return StackAllowed
+}
+
 // Image is the image the run starts in, resolved among [Config.Images]: zero without a
 // wall, and a Ref alone when the default is a reference.
 func (r *Run) Image() Image { return r.img }
@@ -522,7 +623,8 @@ func (r *Run) Conflict(passes func(name string) bool) error {
 }
 
 // NeedsCA says the run has an authority of its own: for the hosts a credential is for,
-// the hosts its tools serve and the hosts with path rules, and with a server always,
+// the hosts of its harness credentials on the stack proxy, the hosts its tools serve
+// and the hosts with path rules, and with a server always,
 // with or without a wall, since a reload may bring a run configuration with
 // credentials or path rules, and the agent's tools trust only what they were given at
 // the start.
@@ -594,11 +696,23 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		}
 		r.creds[out] = storedSet{f.Document.Credentials, f.Document.ModelCredential}
 	}
+	if f.Document != nil && f.Document.Computed != "" {
+		if r.computedRead == nil {
+			r.computedRead = map[*policy.Loaded]string{}
+		}
+		r.computedRead[out] = f.Document.Computed
+	}
 	if named != "" {
 		if r.images == nil {
 			r.images = map[*policy.Loaded]string{}
 		}
 		r.images[out] = named
+	}
+	if f.Document != nil && len(f.Document.StackHosts) > 0 {
+		if r.stacks == nil {
+			r.stacks = map[*policy.Loaded][]string{}
+		}
+		r.stacks[out] = slices.Clone(f.Document.StackHosts)
 	}
 	r.mu.Unlock()
 	return out, nil
@@ -629,43 +743,12 @@ func nameImage(pol, fetched, node *policy.Loaded, image string) error {
 // policy [Run.Read] made whose server's side selects none, narrowed by the node's
 // credentials member whenever the node's policy has one, beside a server's policy or
 // alone in force, as the server's selection is: a selected credential the member does
-// not list is no run. An entry for a credential that takes an argument gives none when
-// the run's labels do not satisfy it, and the run's user is told why: a label it takes
-// that the run does not have, the forge label among them, a forge label of another
-// value, or a value outside its pattern or that is a name's phrase
-// ([accesskey.IsNamePhrase]). Nothing is resolved here: the policy's
-// credentials are resolved as any are, the argument checked against the definition's
-// pattern before its adapter runs.
+// not list is no run. Nothing is resolved here: the policy's credentials are resolved
+// as any are.
 func (r *Run) selects(pol *policy.Loaded) error {
-	id := r.cfg.RunID
 	var selected []policy.Selected
-	for i, s := range r.cfg.Selects {
-		if s.Label == "" {
-			selected = append(selected, policy.Selected{Name: s.Name})
-			continue
-		}
-		name := accesskey.ShownName(s.Name, false)
-		forge, ok := r.labels["forge"]
-		if !ok {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, "forge", name))
-			continue
-		}
-		if forge != s.Forge {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Forge, false)), Spaced(accesskey.ShownName(forge, false)), name))
-			continue
-		}
-		value, ok := r.labels[s.Label]
-		if !ok {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Label, false)), name))
-			continue
-		}
-		// A value that is a name's phrase, as a separate gateway reads the labels from
-		// the attach answer, is no argument, whatever the pattern admits.
-		if accesskey.IsNamePhrase(value) || !r.patterns[i].MatchString(value) {
-			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(accesskey.ShownName(s.Label, false)), Spaced(accesskey.ShownName(value, false)), name, name))
-			continue
-		}
-		selected = append(selected, policy.Selected{Name: s.Name, Argument: value})
+	for _, s := range r.cfg.Selects {
+		selected = append(selected, policy.Selected{Name: s.Name})
 	}
 	if r.node != nil && r.node.Policy.Credentials != nil {
 		var out []string
@@ -721,6 +804,16 @@ func (r *Run) takeNamed(p *policy.Loaded) string {
 	named := r.images[p]
 	delete(r.images, p)
 	return named
+}
+
+// takeStack is the stack_hosts of the run configuration of a policy [Run.Read] made,
+// nil when it has none, and forgets them.
+func (r *Run) takeStack(p *policy.Loaded) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	hosts := r.stacks[p]
+	delete(r.stacks, p)
+	return hosts
 }
 
 // GuardNames are the names a guarded proxy opens, this machine's own addresses and the
@@ -829,6 +922,9 @@ type Decision struct {
 	// force.
 	CredentialsChanged bool
 	held               *credential.Held
+	// computed is the digest Forager computed of the run configuration's bytes, empty
+	// when it was not read from bytes.
+	computed string
 }
 
 // Discard stops the renewals of the decision's credentials, for a decision the
@@ -842,15 +938,16 @@ func (d *Decision) Discard() {
 // Reload decides what a run configuration read with [Run.Read] puts in force. One
 // that is the one in force is [Decision.Unchanged]. A reload is as strict as a start:
 // what a start refuses, path rules or an image without a wall, a credential that does
-// not resolve, fails the reload, and the policy in force stays; and the run's tools
-// and image are fixed when it starts. Whether a name needs a wall is decided by the
-// run's wall, as [Decide] decides it, never by the run's authority, which every run
-// with a server has. The image compared is the one the selection resolves to, so
+// not resolve, fails the reload, and the policy in force stays; and the run's tools,
+// image and stack_hosts are fixed when it starts. Whether a name needs a wall is
+// decided by the run's wall, as [Decide] decides it, never by the run's authority,
+// which every run with a server has. The image compared is the one the selection resolves to, so
 // naming the machine's default, or no longer naming it, is no change; an image the run
 // configuration names is fixed by the string, so one that differs from the start's,
 // appears or disappears is refused.
 func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error) {
 	guard, named, creds := r.takeGuard(next), r.takeNamed(next), r.takeCreds(next)
+	stack, computed := r.takeStack(next), r.takeComputed(next)
 	if next.RunConfiguration == r.RunConfiguration() {
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
@@ -860,9 +957,12 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 	if creds.model != r.storedModel {
 		return nil, fmt.Errorf("run configuration %s: start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays", accesskey.ShownValue(next.URL, false))
 	}
+	if !sameHosts(stack, r.stack) {
+		return nil, errors.New("start another run to use other stack hosts: a run's stack_hosts are fixed when it starts")
+	}
 	d, err := r.decide(ctx, next, named)
 	if d != nil {
-		d.Guard = guard
+		d.Guard, d.computed = guard, computed
 	}
 	if err != nil {
 		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", accesskey.ShownValue(next.URL, false), err)
@@ -939,6 +1039,9 @@ func (r *Run) Commit(d *Decision) {
 	r.mu.Lock()
 	old := r.held
 	r.pol, r.held, r.runDigest, r.guard = d.Policy, d.held, d.Policy.RunConfiguration, d.Guard
+	if d.computed != "" {
+		r.computed = d.computed
+	}
 	r.mu.Unlock()
 	if old != nil {
 		old.Close()
@@ -1061,23 +1164,28 @@ func claimedBy(held *credential.Held) func(string) string {
 	}
 }
 
-// storedUses are the run configuration's credentials the run started with, as the
-// credential package holds them. Each one's Value copies the opened value under r.mu,
-// as [Run.clearValues] clears it, so a request that is still being served when the run
-// ends copies the value whole or gets none, and never reads bytes while they are
-// overwritten.
+// storedUses are the run configuration's work credentials the run started with, as the
+// credential package holds them, each set where the start's answer says ([Run.open]).
+// The harness credentials are left out: the run's proxy never sets them
+// ([Run.StackUses]).
+// Each one's Value copies the value under r.mu, as [Run.clearValues] clears it and a
+// renewal replaces it, so a request that is still being served when the run ends copies
+// the value whole or gets none, and never reads bytes while they are overwritten. A
+// value with expires_at has the renewer's Rejected, which every reload's uses share.
 func (r *Run) storedUses() []credential.Stored {
-	out := make([]credential.Stored, len(r.stored))
-	for i, c := range r.stored {
+	var out []credential.Stored
+	for _, c := range r.stored {
+		if c.Harness() {
+			continue
+		}
 		name := c.Name
-		hosts, paths := c.Applies()
-		out[i] = credential.Stored{Name: name, Hosts: hosts, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header,
-			Paths: paths, Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth, Value: func() []byte {
+		out = append(out, credential.Stored{Name: name, Apply: r.applies[name], Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
+			ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				b, _ := r.values.Value(name)
 				return slices.Clone(b)
-			}}
+			}})
 	}
 	return out
 }
@@ -1091,6 +1199,15 @@ func sameCredentials(a, b []server.RunCredential) bool {
 		return s
 	}
 	return reflect.DeepEqual(order(a), order(b))
+}
+
+// sameHosts reports whether two run configurations' stack_hosts are the same entries,
+// in any order.
+func sameHosts(a, b []string) bool {
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }
 
 // sameSelection reports whether two selections, of tools or of credentials, are the
@@ -1121,8 +1238,12 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 			c.Placeholder = link.KeyPlaceholder(u.Name)
 		}
 		if u.Stored {
-			// The server's value: no renewal, and no Token, so it stays bytes.
+			// The server's value has no Token, so it stays bytes. A host's 401 asks for it
+			// again only when it has expires_at.
 			c.Value, c.Stored = u.Value, true
+			if u.Renewed {
+				c.Rejected = u.Rejected
+			}
 		} else {
 			c.Token, c.Rejected = u.Token, u.Rejected
 		}

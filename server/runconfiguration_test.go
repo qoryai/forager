@@ -161,18 +161,19 @@ func TestARunConfigurationNamesItsImageByDigest(t *testing.T) {
 // TestARunConfigurationsCredentialsAreChecked pins that a run configuration's
 // credentials are read against the schema: a document with an API credential and a
 // host credential is read, and an entry with a value member, a *. host, a host with a
-// port, no auth, an API credential with hosts or placeholders, an http endpoint, an
+// port, an apply item with no scheme or with a token, hosts and auth in place of apply,
+// an API credential with hosts or placeholders, an http endpoint, an
 // endpoint with a user or a query, or key prefixes with a space is
 // run_configuration_invalid at the entry, with an error that quotes no value.
 func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 	entry := func(extra string) string {
-		return `{"version":1,"credentials":[{"name":"forge","hosts":["api.model.example"],"auth":{"scheme":"bearer"}` + extra + `}]}`
+		return `{"version":1,"credentials":[{"name":"forge","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]` + extra + `}]}`
 	}
 	api := func(extra string) string {
 		return `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer"}` + extra + `}]}`
 	}
 	v := newVerified(t)
-	v.runDoc = `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://10.0.0.5:4443/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]},{"name":"forge","hosts":["git.example","fd00::5"],"paths":["/v1/*"],"auth":{"scheme":"basic","username":"x-access-token"},"placeholders":["FORGE_TOKEN"]}]}`
+	v.runDoc = `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://10.0.0.5:4443/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example","fd00::5"],"scheme":"basic","username":"x-access-token","paths":["/v1/*"]}],"placeholders":["FORGE_TOKEN"]}]}`
 	if _, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t)); err != nil {
 		t.Fatalf("a run configuration with credentials: %v", err)
 	}
@@ -180,14 +181,16 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		"a value":                   entry(`,"value":"` + value + `"`),
 		"a *. host":                 strings.Replace(entry(""), `"api.model.example"`, `"*.model.example"`, 1),
 		"a host and port":           strings.Replace(entry(""), `"api.model.example"`, `"api.model.example:443"`, 1),
-		"no auth":                   strings.Replace(entry(""), `,"auth":{"scheme":"bearer"}`, ``, 1),
+		"no scheme":                 strings.Replace(entry(""), `,"scheme":"bearer"`, ``, 1),
+		"hosts and auth":            `{"version":1,"credentials":[{"name":"forge","hosts":["api.model.example"],"auth":{"scheme":"bearer"}}]}`,
+		"a token in apply":          strings.Replace(entry(""), `"scheme":"bearer"`, `"scheme":"bearer","token":"`+value+`"`, 1),
 		"an API with hosts":         api(`,"hosts":["api.model.example"]`),
 		"an API with placeholders":  api(`,"placeholders":["MODEL_API_KEY"]`),
 		"an http endpoint":          strings.Replace(api(""), `https://`, `http://`, 1),
 		"an endpoint with a user":   strings.Replace(api(""), `https://`, `https://`+value+`@`, 1),
 		"an endpoint with a query":  strings.Replace(api(""), `/anthropic`, `/anthropic?key=`+value, 1),
 		"a key prefix with a space": api(`,"key_prefixes":["sk ant"]`),
-		"nine credentials":          `{"version":1,"credentials":[` + strings.Repeat(`{"name":"forge","hosts":["api.model.example"],"auth":{"scheme":"bearer"}},`, 8) + `{"name":"forge","hosts":["api.model.example"],"auth":{"scheme":"bearer"}}]}`,
+		"nine credentials":          `{"version":1,"credentials":[` + strings.Repeat(`{"name":"forge","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]},`, 8) + `{"name":"forge","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]}]}`,
 	} {
 		v := newVerified(t)
 		v.runDoc = doc

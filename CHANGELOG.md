@@ -10,6 +10,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- `receiver.Handler.Secrets` returns `[]receiver.Value` in place of `[][]byte`: make
+  each with `receiver.NewValue(b)`, and set its `ExpiresAt` and `Apply`. A Value prints
+  none of its bytes, also as a field of a struct printed by reflection. The hook is
+  handed the names the request lists: at a renewal, the entries that are due. Before,
+  it returned the bytes alone, for every entry.
+- Write a run configuration's host credential with `apply` items, each `{hosts, scheme,
+  username, header, paths}`, in place of its `hosts`, `paths` and `auth`.
+  `server.RunCredential` has `Apply`, a list of `server.Apply`, in place of `Hosts` and
+  `Paths`. Before, a host credential had one set of hosts with one `auth`; Forager
+  refuses that shape.
 - `accesskey.ContainsSecret` catches a run code, `qecr_` in any case, as it catches an
   access key secret, `qak_`, and a run key, `qrk_`. Forager refuses a run code where it
   refuses the other two, such as in a pin, a name or a built image, and sends and prints
@@ -436,14 +446,16 @@ release may change what an existing document does, and says so under Upgrading.
   stores for the run, with no value. An API credential, a model key, is `{name,
   format, endpoint, auth, key_prefixes}`: the gateway sets its value on every path of
   the endpoint's host alone. `endpoint` is `https`, with a host, an optional port and
-  path, and no user, query or fragment. A host credential is `{name, hosts, paths,
-  auth, placeholders}`, with exact hosts. Forager checks the member against
+  path, and no user, query or fragment. A host credential is `{name, apply,
+  placeholders}`, with 1 to 16 `apply` items of `{hosts, scheme, username, header,
+  paths}` and exact hosts. Forager checks the member against
   `run-configuration.schema.json`, and refuses a name twice, an `auth.header` that
-  frames the request or that the proxy sets, a placeholder that
+  frames the request or that the proxy sets, the same for an item's `header`, a
+  placeholder that
   `denied-variables.json` covers, and an endpoint from which `policy.EndpointHost`
   reads no host, each `run_configuration_invalid`. `server.RunCredential` has `Format`,
-  `Endpoint` and `KeyPrefixes`, and `Applies` returns the hosts and paths a value is
-  set on.
+  `Endpoint`, `KeyPrefixes` and `Apply`, and `Applies` returns the items a value is set
+  on.
 - `key_prefixes`, on an API credential, optional: 1 to 4 literal prefixes, each 1 to 32
   characters of printable ASCII without a space. The gateway refuses a stored value
   that starts with none of them, `run_configuration_invalid`, without printing the
@@ -459,7 +471,7 @@ release may change what an existing document does, and says so under Upgrading.
   with`. `server.RunConfiguration` has `ModelCredential`, and
   `server.CheckCredentials` takes it.
 - The gateway sets a run configuration's `credentials`, with or without a wall. When the run
-  starts it sends one secrets request under the access key, for the digest it computes of
+  starts it sends a secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value
   in place of a credential of the machine's that claims one of its hosts, of the same
   name or another. Without `secrets` in discovery, with a fixture pin or access
@@ -467,6 +479,35 @@ release may change what an existing document does, and says so under Upgrading.
   in force stays. A `TRACE` or `TRACK` through `CONNECT` to a host that gets one is
   denied with the rule `wall:echo-method`. A run configuration without `credentials`
   runs as before.
+- `expires_at` and `apply` in a sealed plaintext's value: the gateway fetches the value
+  again 5 minutes before it expires and on a 401, at most every 30 s. A request lists
+  the entries that are due, with entries due within 30 s of each other in one request,
+  under the digest of the run configuration in force. The answer's value takes the old
+  one's place, whose bytes the gateway overwrites with zeros; a failed renewal keeps the
+  old value and reports `run <run id>: If this repeats, check the control plane:
+  credential "forge" was not renewed: <cause>`, also for an `expires_at` that has
+  passed. At `expires_at` with no renewal, the gateway writes
+  `Start another run once the control plane answers: credential "forge" expired at
+  2026-10-24T13:00:00Z` to the run's record as `dev.qory.run.log` and sets the value no
+  more. `apply` may narrow the entry's items and never widen them, and a renewal keeps
+  the start's; a value that expired before the run started, or an item outside its
+  entry, is `run_configuration_invalid`. A value without `expires_at`, such as a model
+  key, is never renewed. `sealed.Values` has `ExpiresAt`, `Apply` and `Replace`, and
+  `sealed.Value` has `ExpiresAt` and `Apply`. The run answer's `credential_hosts` has
+  one entry per `apply` item of a host credential from the server, each with the
+  item's hosts and auth, and the credential's placeholders on the first.
+- `purpose` on a run configuration's host credential, `harness` or `work`, absent
+  meaning `work`: the stack proxy sets a harness credential, for qory's fetch of the
+  harness definition, and the run's proxy never does. An API credential with `purpose`
+  is refused by the schema. `server.RunCredential` has `Purpose` and `Harness`, and
+  `server.PurposeHarness` and `server.PurposeWork` are the two values.
+- `harness_hidden` in a run configuration, a boolean, fixed when the run starts: the
+  open's `dev.qory.run.policy_applied` lists each harness credential by `name` and
+  `purpose` alone, and the stack proxy's `dev.qory.run.egress` records have no `path`
+  and no `path_rule`. `server.RunConfiguration` has `HarnessHidden`.
+- `dev.qory.run.egress` has `channel: stack` on a record of the stack proxy's.
+  `dev.qory.run.policy_applied`'s `credentials` entry has `purpose: harness` for a
+  harness credential, and, under `harness_hidden`, `name` and `purpose` alone.
 - The secrets request, `secrets-request.schema.json`, a signed `POST` to discovery's
   `secrets.url` for the values of a run configuration's `credentials`; its answer, the
   envelope of `secrets-answer.schema.json`, sealed with HPKE base mode, X25519,
@@ -475,16 +516,16 @@ release may change what an existing document does, and says so under Upgrading.
   sealed answer with its vectors and an envelope refused at each step.
 - The reference receiver serves the secrets endpoint, at `receiver.DefaultSecretsPath`,
   `/v1/secrets`, or `Handler.SecretsPath`, when the hook `Handler.Secrets` is set:
-  `func(run receiver.Run, credentials []string) (values [][]byte, refusal
-  *receiver.Refusal)`, one value for each credential of the run configuration in force.
+  `func(run receiver.Run, credentials []string) (values []receiver.Value, refusal
+  *receiver.Refusal)`, one value for each credential the request lists.
   It seals the values to the access key the request verified under with `sealed.Seal`,
   signs the answer under the receiver's key and overwrites the values with zeros; it
   logs and stores none. `receiver.AccessKey.StoredSecrets` allows a key stored secrets,
   and discovery lists the configuration's `secrets` for such a key alone. A request is
   refused in the contract's order, then as a reload of the run would be; a digest that
   is not the one in force, or not one the run was answered with, is a signed `410`
-  `run_configuration_superseded`, and a `credentials` list other than the run
-  configuration's names in its order a signed `409` `credentials_differ`.
+  `run_configuration_superseded`, and a `credentials` list that is not some of the run
+  configuration's names, in its order, a signed `409` `credentials_differ`.
   `receiver.MaxSecretsBody` is the bound of a request's body, 32 KiB.
 - Package `sealed`: `sealed.Open` checks a secrets answer in the contract's order and
   opens it with an access key, returning the values by credential name as bytes that
@@ -570,9 +611,7 @@ release may change what an existing document does, and says so under Upgrading.
 - The registration bodies, `server.Registration.Body` and
   `server.GatewayRegistration.Body`, send the labels and about as `server.ShownLabels`
   and `server.ShownAbout` give them, and so do `run.started` and the gateway's
-  `run.registered`. A separate gateway's selection reads the labels the attach answers
-  with, so a label value that contains `qak_` or `qrk_` gives no credential argument
-  (Gateway, Upgrading). `run.started.schema.json` admits the two name phrases as a
+  `run.registered`. `run.started.schema.json` admits the two name phrases as a
   label's key, and `server.CheckLabels` takes them. The reference receiver keeps a
   registration's labels and about as the two functions give them, and answers an
   attach with that copy. `server.ShownAbout` keeps `details` byte for byte when no
@@ -601,8 +640,6 @@ release may change what an existing document does, and says so under Upgrading.
   prefix by chance.
 - The `credentials` merge row: behind a separate gateway, a walled run gets the
   gateway's selection when the server's selects none.
-- `dev.qory.run.policy_applied`'s `credentials` carry, as the argument, the value of the
-  run's label a gateway's selection took it from.
 - `wall:echo-method` covers a host of every credential, the machine's included, and
   its denial is a `405`. `dev.qory.run.egress` takes the rule `wall:plain-request`, a
   plain request to a host that gets a credential and that the policy allows, denied in
@@ -660,12 +697,6 @@ release may change what an existing document does, and says so under Upgrading.
 - Each run on a gateway now has limits: at most 256 connections open at once, and 50
   requests a second with a burst of 200. A run past one gets `429 Too Many Requests`
   with `Retry-After: 1`. Set `gateway.Config.RunLimits` higher if your runs need more.
-- A credential's selection gives no argument for a label whose value is `(a name that
-  contains an access key secret)` or `(a name that contains a run key)`, whatever its
-  `pattern` admits, `.+` among them. A separate gateway reads the labels from the
-  attach answer, where a value that contains `qak_` or `qrk_` in any case is that
-  phrase, so a label such as `repository=acme/qrk_x` gave its value as the argument
-  before and gives none now. The run's user is told the label is no argument.
 - A separate gateway refuses a run key whose instance id contains `qak_` or `qrk_` in
   any case: the attach is answered `run_key_invalid`, 400. Before, the run attached and
   `run.registered` sent the instance id as it was.
@@ -701,16 +732,32 @@ release may change what an existing document does, and says so under Upgrading.
 - `gateway.Config.StackHosts`, `gateway.stack_hosts` in `forager.yaml`, default
   empty. These are the hosts of a run's stack proxy until the run's first join
   request, for qory's fetch of the harness definition. The stack proxy passes a
-  CONNECT or a plain HTTP request to one of them, on any port, in enforce mode, with no
-  certificate authority and no credential, and the run's policy is not checked. Behind
-  a wall or a separate gateway it is guarded as the run's proxy is: it reaches this
+  CONNECT or a plain HTTP request to one of them, on any port, in enforce mode, and the
+  run's policy is not checked. It sets the run configuration's harness credentials
+  alone, with the run's certificate authority on their hosts. Behind a wall or a
+  separate gateway it is guarded as the run's proxy is: it reaches this
   machine's addresses and the private network addresses only for a host that the
   node's policy and `gateway.stack_hosts` both list by name, not by a `*.` pattern,
   and never a link-local or cloud metadata address. It counts at the run's limits,
-  apart from the run's proxy. Each decision is a line of `Config.Report`, never a
-  `dev.qory.run.egress`, and a refusal at the run's limits is reported at most once a
-  second per limit. Start accepts a lower-case host name, an IPv4 address or a `*.`
-  suffix, and refuses any other entry.
+  apart from the run's proxy. Each decision is a line of `Config.Report` and a
+  `dev.qory.run.egress` with `channel: stack`, and a refusal at the run's limits is
+  reported at most once a second per limit. Start accepts a lower-case host name, an
+  IPv4 address or a `*.` suffix, and refuses any other entry.
+- `stack_hosts` in a run configuration: the stack proxy allows these hosts beside
+  `gateway.stack_hosts`, each host when the node's policy allows it and has no path
+  rule for it. Behind a wall or a separate gateway they open no private address.
+- A run configuration's harness credential, `purpose: harness`: the stack proxy sets it
+  on its hosts and paths and passes the hosts' other paths with no value, and the run's
+  proxy never sets it, so the run answer has no `credential_hosts` or `placeholders`
+  entry for it. The gateway renews it as other stored credentials, and at the run's
+  first join request overwrites its value with zeros and stops its renewals. The open's
+  `dev.qory.run.policy_applied` lists it with `purpose: harness`, and the gateway
+  accepts a join's that leaves it out. Each of these is `run_configuration_invalid`: a
+  harness credential with placeholders, `Remove placeholders from the harness
+  credential "harness-1": no session gets it`; a host the stack proxy does not allow,
+  such as `Add git.example to a stack_hosts list: the harness credential "harness-1" is
+  for it`; and two harness credentials, or two `apply` items of one, on one host when
+  one has no paths or their paths overlap.
 - `QORY-STACK`, `link.StackPreamble`, on a separate gateway's one address. From the
   run's first join request on, it is refused.
 - A separate gateway reads a renewed certificate and key from `gateway.TLS`'s files
@@ -763,9 +810,9 @@ release may change what an existing document does, and says so under Upgrading.
   policy cannot deny its hosts. The proxy sets no value of such a key, and replaces
   each model key's value in every answer from the key's host.
 - `gateway.Config.Selects`: behind a separate gateway, when the server's policy selects
-  no credential, a run, with or without a wall, gets the gateway's selection, a credential that takes an
-  argument taking it from a label of the run whose value matches the pattern named, for
-  a run whose `forge` label is the one named.
+  no credential, a run, with or without a wall, gets the gateway's selection. Selects
+  lists credentials that take no argument; a credential that takes an argument comes
+  from the run's policy.
 - The gateway decides an image a policy names by reference: refused with
   `image_not_allowed` under none of the request's `images.allow`, and otherwise the
   run's image under the default's runtime. The answer carries `relay_image`, the
@@ -926,7 +973,7 @@ release may change what an existing document does, and says so under Upgrading.
   and now print or send a phrase in place of one that contains `qak_` or `qrk_` in any
   case. The name's phrase: an image in `image_unknown` and `image_not_allowed`, their
   names included, in the refusal of an image that needs a wall, in a reload whose image
-  moved, and in the machine's image definitions; a selection's label and forge. The
+  moved, and in the machine's image definitions. The
   value's phrase: a tool's program, the lines it writes, its start's error and a host
   its definition gives; a path an adapter's answer claims, the decoder's and the
   schema's error of the answer, and a definition's scheme and hosts; the run
@@ -940,7 +987,7 @@ release may change what an existing document does, and says so under Upgrading.
 - More of the gateway's answers and errors sent or printed a value as written, and now
   send or print a phrase in place of one that contains `qak_` or `qrk_` in any case.
   The name's phrase: the `names` of a refusal on the link, `wall_required`'s
-  `image=<name>` among them, and a selection's pattern error. The value's phrase: the
+  `image=<name>` among them. The value's phrase: the
   errors of the gateway's address, its link socket and its directory, of a run's record
   files, locks and resend, and of an enrolment's request. A separate gateway refuses a
   run key whose instance id contains a prefix as `run_key_invalid`, as a registration's
@@ -964,10 +1011,9 @@ release may change what an existing document does, and says so under Upgrading.
   env or file, env or file without hosts, and an argument the credential does not take
   or the machine does not provide for, its name and the argument; the two lines a
   renewal reports; the refusals of `Config.Selects`; the link's phrases for a
-  credential's program directory and file and a tool's program directory; the lines a
-  run is told when a selection entry gives it no credential, the entry's name, the run's
-  forge and the label's value among them, and the refusal of a selection the node's
-  policy does not list; the tool messages, a tool's name, argument and placeholder in
+  credential's program directory and file and a tool's program directory; the refusal
+  of a selection the node's policy does not list; the tool messages, a tool's name,
+  argument and placeholder in
   `Definition.Check`, `Choose` and `Check`, a tool that does not start, a tool that
   exits while the run goes on, and the lines a tool writes; the refusals of a server's
   tools and credentials that the node's policy does not list; the credential's name in
@@ -982,7 +1028,7 @@ release may change what an existing document does, and says so under Upgrading.
   in the message of an adapter that fails, its path, its error and the first line of its
   error output; the adapter's path in the other messages about its answer; the error of
   a credential's file that cannot be read; the regular expression error of a
-  credential's or a tool's argument pattern and of a `Selects` pattern; and the error of
+  credential's or a tool's argument pattern; and the error of
   a server's `security_policy` that does not read as a policy. The rest of each message
   prints as before, and so does a value with neither prefix.
   `run.policy_applied.schema.json` admits the two name phrases as a variable's name.
@@ -1158,7 +1204,11 @@ release may change what an existing document does, and says so under Upgrading.
 #### Added
 
 - `Run.StackProxy`, a forwarder for the fetch of the harness definition. It is
-  refused after the run's first `Join` and ends at it.
+  refused after the run's first `Join` and ends at it. When the run has a certificate
+  authority, as a run with a harness credential has, its `CABundle` is the authority's
+  bundle and its `Env` has the CA variables, as `HostProxy`'s. On a walled run whose
+  bundle could not be written, `CABundle` is empty and `Env` has no CA variable. A join's
+  `dev.qory.run.policy_applied` lists no harness credential.
 - `session.SessionSpec.InputsDir`, the run's inputs directory, an absolute path: in a
   run with a run key, `dev.qory.session.started` has `<inputs>` in place of each
   occurrence of it in `command` and `args`. `Join` refuses a relative path with
@@ -1556,6 +1606,9 @@ release may change what an existing document does, and says so under Upgrading.
   the machine's default, its workspace at `/workspace`, and a name its image's `ENV`
   sets that the runtime denies unset. The Docker adapter's test pushes the images to a
   registry it starts on the machine.
+- The Docker test of a sealed credential runs a third time with a value that expires 5
+  minutes 20 seconds after the start: the recorder gets the first value, then the
+  renewed one.
 
 #### Changed
 

@@ -17,19 +17,24 @@
     "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when the server returned one: sha256= and the lower-case hex SHA-256 of the document's bytes as the server sent them.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
     "paths": {"description": "The policy's path rules, by host, when it has any: the server's, when the policy is fetched; node_policy contains the node's.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "credentials": {
-      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed, or, from the gateway's selection, the run's label it took. Never a secret.",
+      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed. The open's record also lists the run configuration's harness credentials, which the stack proxy sets until the run's first join request, each with purpose harness; a join's record and a later run configuration's list none. Never a secret.",
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "hosts", "scheme"],
+        "required": ["name"],
         "properties": {
           "name": {"type": "string", "minLength": 1},
           "argument": {"description": "The argument the policy's credentials entry passed, such as the repositories the secret is minted for: the same on every use of one credential. Absent when the entry passes none.", "type": "string", "minLength": 1, "maxLength": 4096},
           "hosts": {"type": "array", "items": {"type": "string", "minLength": 1}},
           "scheme": {"type": "string", "enum": ["bearer", "basic", "header"]},
-          "paths": {"type": "array", "items": {"type": "string"}}
-        }
+          "paths": {"type": "array", "items": {"type": "string"}},
+          "purpose": {"description": "harness for a harness credential of the run configuration, which the stack proxy sets and the run's proxy never does. Absent for every other credential. When the run configuration has harness_hidden, the entry is the credential's name and purpose alone, one per credential, with no hosts, scheme or paths.", "const": "harness"}
+        },
+        "anyOf": [
+          {"required": ["hosts", "scheme"]},
+          {"required": ["purpose"], "not": {"anyOf": [{"required": ["hosts"]}, {"required": ["scheme"]}, {"required": ["paths"]}, {"required": ["argument"]}]}}
+        ]
       }
     },
     "tools": {
@@ -48,6 +53,7 @@
     },
     "image": {"description": "The image the policy or the run configuration selects, which the run started in: the machine's name for it, or its reference pinned by digest. Absent when neither selects one and the machine's default was used. Fixed for the run. An image that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case is one of four phrases in its place: the access key secret's when it contains qak_, else the run key's when it contains qrk_, else the run code's when it contains qecr_, else the enrolment code's.", "anyOf": [{"$ref": "../policy.schema.json#/properties/image"}, {"enum": ["(a name that contains an access key secret)", "(a name that contains a run key)", "(a name that contains a run code)", "(a name that contains an enrolment code)"]}]},
     "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read. A credential's *. entry is not for a name under it that ends in .local, .internal or .home.arpa, such as x.home.arpa under *.arpa: the credential is for such a name only through an entry equal to it. A credential's *. entry under which every name has one of these endings, such as *.local, is not listed for the credential; it is listed when a tool serves it or it has path rules.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "stack_hosts": {"description": "The stack_hosts of the run configuration the run started with, as the document lists them, when it has them: until the run's first join request the stack proxy allows a host of them beside gateway.stack_hosts when the node's policy allows it and has no path rule for it. Present in the open's record and in each join's record before a later run configuration takes effect; absent from the record of a later run configuration, since a run's stack_hosts are fixed when it starts.", "type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
     "harness_hosts": {"description": "The egress the session's harness declared, as passed to Forager, when present; absent at the open. Information only: it decides nothing. A host that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case is `(a value that contains an access key secret)` in its place, `(a value that contains a run key)` when it contains qrk_ and no qak_, `(a value that contains a run code)` when it contains qecr_ and neither of the others, or `(a value that contains an enrolment code)` when it contains qecn_, qecp_, qecg_ or qeci_ and none of the others.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "node_policy": {
       "description": "The node's policy, when the run has both a fetched policy and a policy the command passes, which narrows it, so the record shows the path rules of the server's policy and of the node's.",

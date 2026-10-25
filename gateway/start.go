@@ -160,11 +160,10 @@ type Gateway struct {
 // range, an entry of [Config.StackHosts] that is not a host name or a *. suffix, a
 // Listen that is not host:port, a Listen without TLS or without a Server, TLS files it cannot read or whose certificate and key
 // do not match, and TLS without a Listen; Selects without a Listen, and an entry of
-// Selects that names no credential of Credentials or one another entry names, names a
-// Label, a Forge or a Pattern for a credential that takes no argument, leaves out any of
-// them for one that takes an argument, or whose pattern does not compile; and once
-// discovery is read, a Listen whose access key is not a gateway's, whose node id is not
-// ng_, and a gateway's access key, ng_, without a Listen.
+// Selects for no credential of Credentials, one that another entry is for, or one
+// for a credential that takes an argument; and once discovery is read, a Listen whose
+// access key is not a gateway's, whose node id is not ng_, and a gateway's access key,
+// ng_, without a Listen.
 //
 // Before it starts anything, Start limits core dumps of this process and debugger
 // access to it: on Linux it makes the process non-dumpable,
@@ -322,10 +321,9 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 }
 
 // checkSelects refuses a [Config.Selects] the gateway cannot hold: a selection without
-// a Listen, whose runs alone it is for; and an entry that names no credential of
-// Credentials, or one another entry names; that names a Label, a Forge or a Pattern for
-// a credential that takes no argument; that leaves out any of them for one that takes
-// an argument; or whose pattern does not compile as a label's value is matched, whole.
+// a Listen, whose runs alone it is for; and an entry for no credential of
+// Credentials, one that another entry is for, or one for a credential that takes an
+// argument, which a run gets from the run's policy.
 func checkSelects(cfg *Config) error {
 	if len(cfg.Selects) > 0 && cfg.Listen == "" {
 		return errors.New("gateway: Selects is for the runs on the gateway's address, and it has no Listen")
@@ -338,19 +336,8 @@ func checkSelects(cfg *Config) error {
 		if slices.ContainsFunc(cfg.Selects[:i], func(o Selection) bool { return o.Name == s.Name }) {
 			return fmt.Errorf("gateway: Selects names %s twice", accesskey.ShownName(s.Name, false))
 		}
-		if cfg.Credentials[j].Argument == "" {
-			for _, f := range []struct{ name, value string }{{"Label", s.Label}, {"Forge", s.Forge}, {"Pattern", s.Pattern}} {
-				if f.value != "" {
-					return fmt.Errorf("gateway: Selects %s: %s takes no argument, so %s does not apply", accesskey.ShownName(s.Name, false), accesskey.ShownName(s.Name, false), f.name)
-				}
-			}
-			continue
-		}
-		if s.Label == "" || s.Forge == "" || s.Pattern == "" {
-			return fmt.Errorf("gateway: Selects %s: %s takes an argument, so it needs Label, Forge and Pattern", accesskey.ShownName(s.Name, false), accesskey.ShownName(s.Name, false))
-		}
-		if _, err := run.WholeMatch(s.Pattern); err != nil {
-			return fmt.Errorf("gateway: Selects %s: the pattern does not compile: %s", accesskey.ShownName(s.Name, false), accesskey.ShownValue(err.Error(), false))
+		if cfg.Credentials[j].Argument != "" {
+			return fmt.Errorf("gateway: remove %s from Selects: its argument comes from the run's policy", accesskey.ShownName(s.Name, false))
 		}
 	}
 	return nil
