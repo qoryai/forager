@@ -69,13 +69,14 @@ type Config struct {
 	// configuration: each a lower-case host name, an IPv4 address or a *. suffix, in the
 	// form of a policy's allow entry. Until the run's first join request the stack proxy
 	// passes a CONNECT or a plain HTTP request to one of them, on any port, and refuses
-	// every other, in enforce mode, with no certificate authority and no credential; the
-	// run's policy is not checked. Behind a wall or a separate gateway it is guarded as
+	// every other, in enforce mode, and sets the run configuration's harness credentials
+	// alone, with the run's certificate authority on their hosts; the run's policy is not
+	// checked. Behind a wall or a separate gateway it is guarded as
 	// the run's proxy is: it reaches this machine's addresses and the private network
 	// addresses only for a host that the allow list of Policy and StackHosts both list by
 	// name, not by a *. pattern, and a link-local or cloud metadata address for none.
-	// Each decision is a line of Report, never a dev.qory.run.egress, and a refusal at
-	// RunLimits is reported at most once a second per limit. The stack proxy also
+	// Each decision is a line of Report and a dev.qory.run.egress with channel stack,
+	// and a refusal at RunLimits is reported at most once a second per limit. The stack proxy also
 	// allows the hosts of the run configuration's stack_hosts that Policy allows and has
 	// no path rule for; they open none of the addresses above. Empty, with no
 	// stack_hosts in the run configuration, means every host is refused.

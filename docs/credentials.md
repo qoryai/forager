@@ -277,17 +277,66 @@ in `forager.yaml`:
 {"version": 1, "stack_hosts": ["git.example", "api.git.example"]}
 ```
 
-- The run's stack proxy allows these hosts, with no credential, until the run's first
-  join request.
+- The run's stack proxy allows these hosts until the run's first join request. It sets
+  only the run's harness credentials ([Harness credentials](#harness-credentials)).
 - The node's policy decides each host. A host passes when the node's policy allows it
-  and has no path rule for it: the stack proxy does not read inside a connection, so it
-  cannot check a path. A host the node's policy does not allow is refused with "qory:
-  allow git.example in the node's policy, or list it in gateway.stack_hosts."
+  and has no path rule for it: the stack proxy does not check the node's path rules. A
+  host the node's policy does not allow is refused with "qory: allow git.example in the
+  node's policy, or list it in gateway.stack_hosts."
+- Each decision of the stack proxy is a `dev.qory.run.egress` in the run's record, with
+  `channel: stack`.
 - Behind a wall or a separate gateway they open no address of the gateway's machine
   and no private network address. Such an address is reached only for a host that
   `gateway.stack_hosts` and the node's policy both list by name.
 - They are fixed for the run. A reload that lists other `stack_hosts` fails, and the run
   keeps its policy.
+
+### Harness credentials
+
+A host credential with `purpose: harness` is for qory's fetch of the run's harness
+definition, before the first session joins. Without `purpose`, or with `purpose: work`,
+a host credential is for the run's work, as described in [From Qory Apiary](#from-qory-apiary).
+An API credential has no `purpose`.
+
+```json
+{"version": 1,
+ "stack_hosts": ["git.example"],
+ "credentials": [
+   {"name": "harness-1", "purpose": "harness",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic",
+               "username": "x-access-token", "paths": ["/example-org/harness.git/*"]}]},
+   {"name": "work-1",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic",
+               "username": "x-access-token", "paths": ["/example-org/app.git/*"]}],
+    "placeholders": ["GIT_TOKEN"]}]}
+```
+
+- Only the run's stack proxy sets a harness credential, on its hosts and paths. The
+  run's proxy, which the sessions, `HostProxy` and the setup step go through, never sets
+  one, and the run answer lists no host or placeholder for it.
+- The run gets a certificate authority. `(*session.Run).StackProxy` returns its bundle
+  in `CABundle`, and its CA variables in `Env`. On a harness credential's host the stack
+  proxy reads each request: it sets the value on the credential's paths and passes other
+  paths with no value.
+- The gateway fetches and renews the value as any other stored credential's. At the
+  run's first join request it overwrites the value with zeros and stops its renewals.
+- The stack proxy must allow each host of a harness credential: a host of
+  `gateway.stack_hosts`, or a host of the run configuration's `stack_hosts` that the
+  node's policy allows with no path rule. Otherwise the run stops with
+  `run_configuration_invalid`, such as "Add git.example to a stack_hosts list: the
+  harness credential "harness-1" is for it". A harness credential with `placeholders`
+  stops the run with "Remove placeholders from the harness credential "harness-1": no
+  session gets it".
+- Two harness credentials on one host need paths, and their paths must not overlap.
+  A work credential on the same host is fine: no proxy sets both.
+- The open's `dev.qory.run.policy_applied` lists each harness credential with
+  `purpose: harness`. A join's lists none.
+
+A run configuration with `harness_hidden: true` is for a harness the run's workspace may
+not see, such as one of another organisation. Its open's `dev.qory.run.policy_applied`
+lists each harness credential by `name` and `purpose` alone, and the stack proxy's
+`dev.qory.run.egress` records have no `path` and no `path_rule`. `harness_hidden` is
+fixed when the run starts: a reload ignores it.
 
 ## Tools
 

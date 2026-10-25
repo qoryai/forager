@@ -1,0 +1,26 @@
+{
+  "specversion": "1.0",
+  "id": "7e1c0000-0000-7000-8000-000000000003",
+  "source": "urn:qory:run:0193b1c2-8d3e-7f40-9b5c-6d7e8f9a0b1c",
+  "type": "dev.qory.run.egress",
+  "subject": "0193b1c2-8d3e-7f40-9b5c-6d7e8f9a0b1c",
+  "time": "2026-10-24T12:00:01.250Z",
+  "sequence": "0000000003",
+  "dataschema": "https://qory.dev/contracts/forager/v1/events/run.egress.schema.json",
+  "data": {
+    "host": "git.example",
+    "port": 443,
+    "method": "HTTPS",
+    "request_method": "GET",
+    "path": "/example-org/harness.git/info/refs",
+    "path_rule": "/*",
+    "credential": "harness-1",
+    "request_id": "0123456789abcdef0123456789abcdef",
+    "status": 200,
+    "channel": "run",
+    "decision": "allowed",
+    "outcome": "connected",
+    "mode": "enforce",
+    "rule": "git.example"
+  }
+}

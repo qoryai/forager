@@ -637,6 +637,31 @@ func (r *Run) policyApplied(members map[string]any) map[string]any {
 	return a
 }
 
+// withoutHarness are members of policy_applied without the run configuration's
+// harness credentials, the credentials entries with purpose harness: the stack proxy
+// sets them until the first join request, so the open's record lists them and a join's
+// none. Without credentials left, the members have none.
+func withoutHarness(members map[string]any) map[string]any {
+	listed, ok := members["credentials"].([]any)
+	if !ok {
+		return members
+	}
+	kept := slices.DeleteFunc(slices.Clone(listed), func(c any) bool {
+		e, _ := c.(map[string]any)
+		return e["purpose"] == server.PurposeHarness
+	})
+	if len(kept) == len(listed) {
+		return members
+	}
+	out := maps.Clone(members)
+	if len(kept) == 0 {
+		delete(out, "credentials")
+	} else {
+		out["credentials"] = kept
+	}
+	return out
+}
+
 // setApplied sets the members of policy_applied of the session that runs, nil when
 // none runs.
 func (r *Run) setApplied(m map[string]any) {

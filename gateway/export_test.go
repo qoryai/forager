@@ -216,3 +216,16 @@ func RunLimitsOf(g *Gateway, runID string) RunLimits {
 	l := lr.px.Limits()
 	return RunLimits{Connections: l.Connections, RequestsPerSecond: l.RequestsPerSecond, Burst: l.Burst}
 }
+
+// StackTokens are the values of the harness credentials that g's stack proxy of the run
+// of runID sets now, by the credential's name: empty once the values are cleared.
+func StackTokens(g *Gateway, runID string) map[string]string {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	out := map[string]string{}
+	for _, u := range lr.r.StackUses() {
+		out[u.Name] = string(u.Value())
+	}
+	return out
+}

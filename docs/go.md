@@ -246,13 +246,15 @@ returns a `session.HostProxy`:
   dials the gateway's one address with `QORY-STACK` and the run key.
 - The stack proxy passes a CONNECT or a plain HTTP request to a host of
   `gateway.Config.StackHosts` or of the run configuration's `stack_hosts`, on any port,
-  in enforce mode, with no certificate authority and no credential. The node's policy,
+  in enforce mode. It sets the run configuration's harness credentials alone
+  ([credentials](credentials.md#harness-credentials)), and reads the requests to their
+  hosts with the run's certificate authority. The node's policy,
   `gateway.Config.Policy`, decides each host of the run configuration's `stack_hosts`:
   the host passes when the node's policy allows it, under its mode, and has no path
-  rule for it, since the stack proxy does not read inside a connection to check one.
+  rule for it, since the stack proxy does not check the node's path rules.
   The node's policy does not decide the hosts of `StackHosts`. The run's policy is not
-  checked, and no `dev.qory.run.egress` is written. `gateway.Config.Report` gets one
-  line per decision, with the list of the entry that allowed it, such as "run <id>:
+  checked. Each decision is a `dev.qory.run.egress` with `channel: stack`, and
+  `gateway.Config.Report` gets one line for it, with the list of the entry that allowed it, such as "run <id>:
   stack fetch to git.example.com:443 allowed by gateway.stack_hosts entry
   git.example.com" or "run <id>: stack fetch to git.example:443 allowed by the run
   configuration's stack_hosts entry git.example". A host both lists allow is reported
@@ -304,7 +306,9 @@ returns a `session.HostProxy`:
   qory: fetch the harness definition from another host: the gateway never reaches a link-local or cloud metadata address, and 169.254.169.254 is one or resolves to one.
   qory: egress to 169.254.169.254:80 denied by the gateway: no entry of gateway.stack_hosts or of the node's policy opens a link-local or cloud metadata address
   ```
-- `CABundle` is empty, and `Env` sets no CA variable.
+- When the run has a certificate authority, as a run with a harness credential has,
+  `CABundle` is its bundle and `Env` sets its CA variables, as for `HostProxy`.
+  Otherwise `CABundle` is empty, and `Env` sets no CA variable.
 - `Close()` ends it as it ends a host proxy. The run's first `Join` closes it before
   the join request. At that join request the gateway closes the stack proxy, whatever
   the answer, and every connection through it, one opened before the join among them.
@@ -334,8 +338,9 @@ if err != nil {
 	return err
 }
 fetch := exec.Command("git", "clone", "--depth=1", "https://git.example.com/harness.git")
-fetch.Env = append(os.Environ(), "GIT_CONFIG_COUNT=1",
-	"GIT_CONFIG_KEY_0=http.proxy", "GIT_CONFIG_VALUE_0="+s.ProxyURL)
+fetch.Env = append(os.Environ(), "GIT_CONFIG_COUNT=2",
+	"GIT_CONFIG_KEY_0=http.proxy", "GIT_CONFIG_VALUE_0="+s.ProxyURL,
+	"GIT_CONFIG_KEY_1=http.sslCAInfo", "GIT_CONFIG_VALUE_1="+s.CABundle) // when not empty
 err = fetch.Run()
 s.Close()                                         // Join closes it too
 ```

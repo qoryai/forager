@@ -129,7 +129,8 @@ gateway:
 - `gateway.stack_hosts` lists the hosts qory fetches a run's harness definition from
   before the run's first session, over HTTPS or plain HTTP, on any port: each a
   lower-case host name, an IPv4 address or a `*.` suffix. The run's policy is not
-  checked, and the fetch shows in the gateway's log, not in the run's record. Behind a
+  checked. Each fetch shows in the gateway's log, and in the run's record as a
+  `dev.qory.run.egress` with `channel: stack`. Behind a
   wall or a separate gateway, a host at this machine's address or a private network
   address is reached only when `gateway.stack_hosts` and `egress.allow` of the node's
   policy both list it by name, not by a `*.` pattern. A link-local or cloud metadata

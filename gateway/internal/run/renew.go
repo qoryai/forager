@@ -278,6 +278,10 @@ func (w *renewer) renew(names []string, now time.Time) {
 	values, err := r.cfg.Secrets(ctx, r.computedDigest(), names)
 	defer values.Clear()
 	for _, name := range names {
+		if !w.has(name) {
+			// A harness credential whose renewals stopped at the run's first join request.
+			continue
+		}
 		if err != nil {
 			w.notRenewed(name, err)
 			continue
@@ -315,11 +319,33 @@ func (w *renewer) renewedAt(name string, at time.Time) {
 	}
 }
 
-// replaceValue puts the value of name that values has in place of the run's.
+// replaceValue puts the value of name that values has in place of the run's, unless
+// name is a harness credential whose value [Run.CloseHarness] cleared.
 func (r *Run) replaceValue(name string, values sealed.Values) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.harnessGone(name) {
+		return
+	}
 	r.values.Replace(name, values)
+}
+
+// drop stops the renewals of names: they are planned no more, and a renewal in flight
+// keeps no value of them.
+func (w *renewer) drop(names []string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.entries = slices.DeleteFunc(w.entries, func(e *renewal) bool { return slices.Contains(names, e.name) })
+}
+
+// has reports whether name is renewed still.
+func (w *renewer) has(name string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.ContainsFunc(w.entries, func(e *renewal) bool { return e.name == name })
 }
 
 // notRenewed reports a renewal of the credential name that failed.

@@ -14,7 +14,8 @@ import (
 // credentials there. [Run.HostProxy] starts it, for every run, walled or not. It ends
 // at [HostProxy.Close], at the next [Run.Join] or at [Run.Close]; from then on its port
 // takes no connection. [Run.StackProxy] starts one that reaches the run's stack proxy
-// instead, with no policy of the run's and no credential.
+// instead, with no policy of the run's and the run configuration's harness credentials
+// alone.
 //
 // Its proxy URL has a password, 32 random bytes in base64url made for this forwarder
 // alone, which every request must carry in its Proxy-Authorization, as the password of
@@ -129,10 +130,13 @@ func (r *Run) HostProxy() (HostProxy, error) {
 // StackProxy starts a forwarder on loopback with a fresh password for the fetch of the
 // run's harness definition. Every request through it reaches the run's stack proxy,
 // which passes the hosts of gateway.stack_hosts and of the run configuration's
-// stack_hosts alone: the run's policy does not apply, no credential is set, no
-// dev.qory.run.egress is written, and CABundle is empty. It
-// ends at HostProxy.Close, at the run's first Join and at Run.Close. An error means no
-// stack proxy started.
+// stack_hosts alone: the run's policy does not apply, the run configuration's harness
+// credentials are the only ones set, and each decision is a dev.qory.run.egress with
+// channel stack. When the run has a certificate authority, CABundle is the bundle's
+// path and Env sets the bundle's variables, as [Run.HostProxy] does, so a program
+// trusts the stack proxy on a harness credential's host; otherwise CABundle is empty.
+// It ends at HostProxy.Close, at the run's first Join and at Run.Close. An error means
+// no stack proxy started.
 //
 // On one machine it opens each connection to the gateway's proxy with the relay's
 // preamble and the run answer's stack_proxy_secret, and behind a separate gateway it
@@ -168,9 +172,14 @@ func (r *Run) StackProxy() (HostProxy, error) {
 		return HostProxy{}, err
 	}
 	r.hosts.add(fwd)
+	env := fwd.Env()
+	if r.bundle != "" {
+		env = append(env, r.bundleVars...)
+	}
 	return HostProxy{
-		Env:      fwd.Env(),
+		Env:      env,
 		ProxyURL: fwd.URL(),
+		CABundle: r.bundle,
 		close:    func() error { return r.hosts.close(fwd) },
 	}, nil
 }

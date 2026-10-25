@@ -8,6 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +22,7 @@ import (
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // The tests of this file start a run's stack proxy, the forwarder on loopback that qory
@@ -286,9 +290,9 @@ func TestTheStackProxySecretStaysOutOfTheWall(t *testing.T) {
 // TestTheStackFetchThroughARealGateway is the stack fetch end to end on one machine: a
 // real session's stack proxy reaches a host of gateway.stack_hosts that the run's policy
 // denies, a host outside gateway.stack_hosts gets the gateway's 403, each decision is a
-// line of the gateway's report and none a dev.qory.run.egress, and from the first Join
-// on the stack proxy secret opens nothing, a connection opened before the join among
-// it, while the run's proxy secret still opens the run's proxy.
+// line of the gateway's report and a dev.qory.run.egress with channel stack, and from
+// the first Join on the stack proxy secret opens nothing, a connection opened before the
+// join among it, while the run's proxy secret still opens the run's proxy.
 func TestTheStackFetchThroughARealGateway(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "harness") }))
 	defer origin.Close()
@@ -356,9 +360,112 @@ func TestTheStackFetchThroughARealGateway(t *testing.T) {
 	if !slices.Equal(lines, want) {
 		t.Errorf("the gateway reported\n%q\nwant\n%q", lines, want)
 	}
+	var stacked []string
 	for _, e := range ofType(record(t, res), event.RunEgress) {
-		if d := data(e); d["host"] == originHost || d["host"] == "other.example.net" {
-			t.Errorf("the record has a dev.qory.run.egress of the stack fetch: %v", d)
+		if d := data(e); d["channel"] == "stack" {
+			stacked = append(stacked, fmt.Sprint(d["host"], " ", d["method"], " ", d["decision"]))
 		}
+	}
+	if want := []string{originHost + " HTTP allowed", "other.example.net HTTP denied", originHost + " CONNECT allowed"}; !slices.Equal(stacked, want) {
+		t.Errorf("the record's dev.qory.run.egress of the stack fetch %q, want %q", stacked, want)
+	}
+}
+
+// TestTheStackProxysBundle pins CABundle and the bundle's variables in the stack
+// proxy's Env, as the host proxy's: for a run with an authority, walled or not,
+// CABundle is ca-bundle.pem in the run directory and each variable of OpenSpec.CAEnv is
+// set to its path, so a fetch trusts the stack proxy on a harness credential's host;
+// for a run with no authority, CABundle is empty and Env is the proxy variables alone.
+func TestTheStackProxysBundle(t *testing.T) {
+	roots := filepath.Join(t.TempDir(), "cert.pem")
+	if err := os.WriteFile(roots, []byte(machineRoots), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer session.SetMachineBundles([]string{roots})()
+	for _, c := range []struct {
+		name              string
+		walled, authority bool
+	}{{"unwalled", false, true}, {"walled", true, true}, {"no authority", false, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			if c.authority {
+				credentialAnswer(g)
+			}
+			if c.walled {
+				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			}
+			ctx := context.Background()
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+			h, err := r.StackProxy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer h.Close()
+			if !c.authority {
+				if h.CABundle != "" || !slices.Equal(h.Env, link.ProxyEnv(h.ProxyURL)) {
+					t.Errorf("CABundle %q, Env %q; want no bundle", h.CABundle, h.Env)
+				}
+				return
+			}
+			bundle := filepath.Join(r.Dir(), session.BundleFile)
+			if h.CABundle != bundle || !slices.Equal(h.Env[:len(link.ProxyEnv(h.ProxyURL))], link.ProxyEnv(h.ProxyURL)) {
+				t.Errorf("CABundle is %q, want %q; Env %q", h.CABundle, bundle, h.Env)
+			}
+			for _, n := range wall.DefaultCAEnv {
+				if !slices.Contains(h.Env, n+"="+bundle) {
+					t.Errorf("Env has no %s=%s: %q", n, bundle, h.Env)
+				}
+			}
+		})
+	}
+}
+
+// TestAJoinsRecordListsNoHarnessCredential pins the session's
+// dev.qory.run.policy_applied of a run whose gateway's applied lists a harness
+// credential: the open's record lists it, with purpose harness, and the join's, whose
+// stack proxy is closed, lists the other credentials alone, or no credentials when
+// every one is a harness one.
+func TestAJoinsRecordListsNoHarnessCredential(t *testing.T) {
+	harness := map[string]any{"name": "harness-1", "hosts": []any{"git.example"}, "scheme": "basic", "purpose": "harness"}
+	work := map[string]any{"name": "work-1", "hosts": []any{"git.example"}, "scheme": "basic"}
+	for _, c := range []struct {
+		name      string
+		listed    []any
+		afterJoin any
+	}{
+		{"beside a work credential", []any{work, harness}, []any{work}},
+		{"alone", []any{harness}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t, "FAKE_EXIT=0")
+			g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+				a := linktest.RunAnswer(req)
+				a["applied"] = map[string]any{"mode": "observe", "allow": []any{}, "deny": []any{}, "source": "none", "credentials": c.listed}
+				return linktest.Reply{Status: 200, Body: a}
+			})
+			ctx := context.Background()
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := r.Join(ctx, sp.SessionSpec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Close(ctx, outcomeOf(res, nil)); err != nil {
+				t.Fatal(err)
+			}
+			var got []any
+			for _, e := range ofType(g.Events(), event.PolicyApplied) {
+				got = append(got, data(e)["credentials"])
+			}
+			if want := []any{c.listed, c.afterJoin}; !reflect.DeepEqual(got, want) {
+				t.Errorf("the records' credentials %v, want %v", got, want)
+			}
+		})
 	}
 }

@@ -136,7 +136,8 @@ func TestStartRefusesAStackHostOfAnotherForm(t *testing.T) {
 // answer's stack_proxy_secret is another secret than proxy_secret; a connection opened
 // with it reaches a host of StackHosts that the run's policy denies, and is refused
 // another host with the stack proxy's 403; each decision is one line of the gateway's
-// report, and no dev.qory.run.egress; from the run's first join request on, the secret
+// report and a dev.qory.run.egress with channel stack, which the run's proxy's have
+// not; from the run's first join request on, the secret
 // opens nothing, a tunnel opened before it is closed, and the run's proxy secret still
 // opens the run's proxy.
 func TestTheStackProxyOnOneMachine(t *testing.T) {
@@ -226,11 +227,13 @@ func TestTheStackProxyOnOneMachine(t *testing.T) {
 	var egress []string
 	for _, l := range h.record(a.RunID) {
 		if l.Type == event.RunEgress {
-			egress = append(egress, fmt.Sprint(l.Data["host"], " ", l.Data["decision"]))
+			egress = append(egress, fmt.Sprint(l.Data["host"], " ", l.Data["decision"], " ", l.Data["channel"]))
 		}
 	}
-	if want := []string{"127.0.0.1 denied", "api.example allowed"}; !slices.Equal(egress, want) {
-		t.Errorf("the record's dev.qory.run.egress %q, want the run's proxy's alone, %q", egress, want)
+	want = []string{"127.0.0.1 allowed stack", "other.example.net denied stack", "other.example.net denied stack", "127.0.0.1 denied <nil>",
+		"127.0.0.1 allowed stack", "api.example allowed <nil>"}
+	if !slices.Equal(egress, want) {
+		t.Errorf("the record's dev.qory.run.egress %q, want %q", egress, want)
 	}
 }
 
@@ -371,7 +374,8 @@ func TestTheStackProxyCountsAtTheRunsLimits(t *testing.T) {
 // dial; QORY-STACK with an unbound connection, another run's key or a run key that is
 // none is closed unanswered; from the run's first join request on, QORY-STACK is closed
 // unanswered and a tunnel opened before it is closed, while QORY-RELAY still reaches
-// the run's proxy.
+// the run's proxy. Each decision of the stack proxy is a dev.qory.run.egress with
+// channel stack.
 func TestTheStackProxyBehindASeparateGateway(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("the guarded stack proxy reached this machine: %s", r.URL)
@@ -472,10 +476,19 @@ func TestTheStackProxyBehindASeparateGateway(t *testing.T) {
 		rec := r.record(runID)
 		return len(rec) > 0 && rec[len(rec)-1].Type == event.RunExited
 	})
+	var stacked []string
 	for _, l := range r.record(runID) {
-		if l.Type == event.RunEgress && l.Data["host"] != "api.example" {
-			t.Errorf("the record has a dev.qory.run.egress of the stack proxy: %v", l.Data)
+		if l.Type != event.RunEgress {
+			continue
 		}
+		if l.Data["channel"] == "stack" {
+			stacked = append(stacked, fmt.Sprint(l.Data["host"], " ", l.Data["decision"], " ", l.Data["rule"]))
+		} else if l.Data["host"] != "api.example" {
+			t.Errorf("the record has a dev.qory.run.egress of the run's proxy to %v", l.Data["host"])
+		}
+	}
+	if want := []string{"other.example.net denied ", "127.0.0.1 denied wall:own-address", "stack.invalid allowed stack.invalid"}; !slices.Equal(stacked, want) {
+		t.Errorf("the record's dev.qory.run.egress of the stack proxy %q, want %q", stacked, want)
 	}
 }
 
