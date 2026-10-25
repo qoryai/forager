@@ -36,14 +36,14 @@ import (
 // definition before the first join, from an HTTPS origin that needs the run
 // configuration's harness credential, harness-1, which the reference receiver seals.
 
-// harnessPath is the path of the harness repository that harness-1 is set on.
+// harnessPath is a path that harness-1 is set on.
 const harnessPath = "/example-org/harness.git/info/refs"
 
 // harnessKey is the reference receiver's access key id of the gateway on this machine.
 const harnessKey = "ak_f1xt0re00000000h"
 
 // harnessReference starts the reference receiver for host: its run configuration has
-// stack_hosts, when stack is set, and harness-1, basic on host's harness repository,
+// stack_hosts, when stack is set, and harness-1, basic on host's paths under /example-org/harness.git/,
 // whose value it seals. It returns the receiver's URL, its pin and the gateway's access
 // key, which is allowed stored secrets.
 func harnessReference(t *testing.T, host, value string, stack bool) (string, accesskey.Pin, *accesskey.Key) {

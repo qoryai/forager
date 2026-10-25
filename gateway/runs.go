@@ -768,8 +768,8 @@ func stackLine(d proxy.Decision, yaml []string, checked func(string) run.StackCh
 	}
 	switch {
 	case !d.Allowed && strings.HasPrefix(d.PathRule, "wall:"):
-		// A request to a harness credential's host that the proxy refuses by its own
-		// rule, such as a TRACE.
+		// A request to a harness credential's host that a rule of the gateway's refuses,
+		// such as wall:echo-method for a TRACE.
 		return fmt.Sprintf("%s denied by the gateway's rule %s", to, d.PathRule)
 	case d.Allowed && d.Outcome == proxy.DialFailed:
 		return fmt.Sprintf("%s allowed by %s entry %s; the dial failed", to, list, d.Rule)

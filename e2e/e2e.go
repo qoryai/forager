@@ -1053,8 +1053,9 @@ func setupOutside(t *testing.T, o Options, h hosts, outside string) {
 	})
 	t.Run(names[3], func(t *testing.T) {
 		// The stack proxy is open while the setup runs: the host's fetch through it is
-		// allowed and its dial fails, a 502. The setup container's request for the same
-		// host goes through the run's proxy, whose policy denies it.
+		// allowed and its dial fails, a 502, recorded with channel stack. The setup
+		// container's request for the same host goes through the run's proxy, whose policy
+		// denies it, recorded with no channel.
 		runID := event.NewRunID()
 		var setupErr, stackErr error
 		stackStatus := 0
@@ -1077,11 +1078,11 @@ func setupOutside(t *testing.T, o Options, h hosts, outside string) {
 				b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
 				lines.Write(b)
 			case e["type"] == "dev.qory.run.egress" && d["host"] == stackHost:
-				egress = append(egress, fmt.Sprint(d["decision"], " ", d["rule"]))
+				egress = append(egress, fmt.Sprint(d["decision"], " ", d["rule"], " ", d["channel"]))
 			}
 		}
-		if !strings.Contains(lines.String(), "403") || !slices.Equal(egress, []string{"denied "}) {
-			t.Errorf("the setup command's lines %q and its dev.qory.run.egress %q; want the run's policy's 403, recorded denied", lines.String(), egress)
+		if want := []string{"allowed " + stackHost + " stack", "denied  <nil>"}; !strings.Contains(lines.String(), "403") || !slices.Equal(egress, want) {
+			t.Errorf("the setup command's lines %q and the dev.qory.run.egress %q; want the run's policy's 403, recorded denied, after the stack fetch's %q", lines.String(), egress, want)
 		}
 		var stack []string
 		for _, l := range strings.Split(r.reports, "\n") {

@@ -105,7 +105,7 @@ func (o *harnessOrigin) requests() []string {
 
 // harnessGatewayDoc is a run configuration whose policy allows localhost, whose
 // stack_hosts list it, and whose harness credential, harness-1, is set as basic on
-// localhost's harness repository; harness_hidden, when hidden.
+// localhost's paths under /example-org/harness.git/; harness_hidden, when hidden.
 func harnessGatewayDoc(hidden bool) string {
 	d := `{"version":1,`
 	if hidden {
