@@ -1090,12 +1090,15 @@ with the credential's name in `names`: a harness credential with `placeholders`,
 host of one that the stack proxy does not allow, `Add git.example to a stack_hosts
 list: the harness credential "harness-1" is for it`, or, for a host of the run
 configuration's `stack_hosts`, `Allow git.example in the node's policy: the harness
-credential "harness-1" is for it` and `List git.example in gateway.stack_hosts: node
-path rules cover the harness credential "harness-1"`; and two harness credentials that
-claim one host, or a host above or below one, `Claim git.example in only one of the
-harness credentials harness-1 and harness-2: one has no paths` when one has no paths,
-and `Give the harness credentials harness-1 and harness-2 paths that do not overlap on
-git.example` when their paths overlap. A work credential on a harness credential's host
+credential "harness-1" is for it` and `List git.example in gateway.stack_hosts: the
+node's path rules cover this host of "harness-1"`; and two harness credentials that
+claim one host, `Claim git.example in only one harness credential, "harness-1" or
+"harness-2": one has no paths` when one has no paths, and `Give the harness
+credentials "harness-1" and "harness-2" paths that do not overlap on git.example` when
+their paths overlap. Two apply items of one harness credential on one host get `Claim
+git.example in only one apply item of the harness credential "harness-1": one has no
+paths` and `Give the apply items of the harness credential "harness-1" paths that do not
+overlap on git.example`. A work credential on a harness credential's host
 is no conflict, since no proxy sets both. The open's `dev.qory.run.policy_applied`
 lists each harness credential in `credentials`, with `purpose: harness`; a join's lists
 none (The run answer, `applied`).

@@ -17,8 +17,8 @@ func (r *Run) hasHarness() bool {
 }
 
 // HarnessHidden is harness_hidden of the run configuration the run started with: true
-// when the run's harness belongs to an organisation other than the run's. It is fixed
-// for the run.
+// for a harness the run's workspace may not see, such as one of another organisation.
+// It is fixed for the run.
 func (r *Run) HarnessHidden() bool { return r.hidden }
 
 // StackAllows reports whether the run's stack proxy allows host, an exact host: an
@@ -33,8 +33,9 @@ func (r *Run) StackAllows(host string) bool {
 // checkHarness refuses, run_configuration_invalid with the credential's name, a harness
 // credential of the run configuration the run starts with that the stack proxy cannot
 // set: one with placeholders, which no session gets; one with a host the stack proxy
-// does not allow ([Run.StackAllows]); and two items of harness credentials that claim
-// one host when one of them has no paths, or when their paths overlap. A work
+// does not allow ([Run.StackAllows]); and two items of harness credentials, of one
+// credential or of two, that claim one exact host when one of them has no paths, or when
+// their paths overlap. A work
 // credential on the same host is no conflict: no proxy sets both.
 func (r *Run) checkHarness() error {
 	type item struct {
@@ -64,7 +65,7 @@ func (r *Run) checkHarness() error {
 						"Allow %s in the node's policy: the harness credential %s is for it", host, name)
 				case StackNodePaths:
 					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-						"List %s in gateway.stack_hosts: node path rules cover the harness credential %s", host, name)
+						"List %s in gateway.stack_hosts: the node's path rules cover this host of %s", host, name)
 				}
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 					"Add %s to a stack_hosts list: the harness credential %s is for it", host, name)
@@ -75,17 +76,29 @@ func (r *Run) checkHarness() error {
 	for i, u := range items {
 		for _, other := range items[:i] {
 			for _, host := range u.hosts {
-				if !slices.ContainsFunc(other.hosts, func(theirs string) bool { return policy.Covers(theirs, host) || policy.Covers(host, theirs) }) {
+				if !slices.Contains(other.hosts, host) {
 					continue
 				}
-				first, second, shown := accesskey.ShownName(other.name, false), accesskey.ShownName(u.name, false), accesskey.ShownValue(host, false)
+				first, second, shown := accesskey.ShownName(other.name, true), accesskey.ShownName(u.name, true), accesskey.ShownValue(host, false)
+				one := other.name == u.name
 				names := refusal.Shown(other.name, u.name)
+				if one {
+					names = refusal.Shown(u.name)
+				}
 				if len(u.paths) == 0 || len(other.paths) == 0 {
+					if one {
+						return refusal.New(refusal.RunConfigurationInvalid, names,
+							"Claim %s in only one apply item of the harness credential %s: one has no paths", shown, first)
+					}
 					return refusal.New(refusal.RunConfigurationInvalid, names,
-						"Claim %s in only one of the harness credentials %s and %s: one has no paths", shown, first, second)
+						"Claim %s in only one harness credential, %s or %s: one has no paths", shown, first, second)
 				}
 				for _, x := range other.paths {
 					if slices.ContainsFunc(u.paths, func(y string) bool { return policy.CoversPath(x, y) || policy.CoversPath(y, x) }) {
+						if one {
+							return refusal.New(refusal.RunConfigurationInvalid, names,
+								"Give the apply items of the harness credential %s paths that do not overlap on %s", first, shown)
+						}
 						return refusal.New(refusal.RunConfigurationInvalid, names,
 							"Give the harness credentials %s and %s paths that do not overlap on %s", first, second, shown)
 					}

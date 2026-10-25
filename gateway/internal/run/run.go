@@ -535,7 +535,9 @@ const (
 	// ([policy.Egress.Allows], under its mode).
 	StackNodeRefuses
 	// StackNodePaths is a host the node's policy, or a side beside it, has path rules
-	// for: the stack proxy tunnels without reading the request, so it cannot check them.
+	// for: the stack proxy does not check the node's path rules. It tunnels a host with
+	// no harness credential, and on a harness credential's host it checks the
+	// credential's paths alone.
 	StackNodePaths
 )
 

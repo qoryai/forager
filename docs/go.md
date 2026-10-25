@@ -280,7 +280,7 @@ returns a `session.HostProxy`:
 
   ```
   qory: list git.example in gateway.stack_hosts: the node's path rules cover it.
-  qory: egress to git.example:443 denied by the gateway: the node's policy has path rules for this host, which the stack proxy cannot check
+  qory: egress to git.example:443 denied by the gateway: the node's policy has path rules for this host, which the stack proxy does not check
   ```
 
   The report line of a refused host ends with the same cause, such as "run <id>:
@@ -308,7 +308,9 @@ returns a `session.HostProxy`:
   ```
 - When the run has a certificate authority, as a run with a harness credential has,
   `CABundle` is its bundle and `Env` sets its CA variables, as for `HostProxy`.
-  Otherwise `CABundle` is empty, and `Env` sets no CA variable.
+  Otherwise `CABundle` is empty, and `Env` sets no CA variable. That is also the case
+  on a walled run whose bundle could not be written, such as on a machine with none of
+  the CA bundle files Forager reads, where `HostProxy` returns the error.
 - `Close()` ends it as it ends a host proxy. The run's first `Join` closes it before
   the join request. At that join request the gateway closes the stack proxy, whatever
   the answer, and every connection through it, one opened before the join among them.
@@ -338,9 +340,9 @@ if err != nil {
 	return err
 }
 fetch := exec.Command("git", "clone", "--depth=1", "https://git.example.com/harness.git")
-fetch.Env = append(os.Environ(), "GIT_CONFIG_COUNT=2",
-	"GIT_CONFIG_KEY_0=http.proxy", "GIT_CONFIG_VALUE_0="+s.ProxyURL,
-	"GIT_CONFIG_KEY_1=http.sslCAInfo", "GIT_CONFIG_VALUE_1="+s.CABundle) // when not empty
+fetch.Env = append(os.Environ(), "GIT_CONFIG_COUNT=1",
+	"GIT_CONFIG_KEY_0=http.proxy", "GIT_CONFIG_VALUE_0="+s.ProxyURL)
+fetch.Env = append(fetch.Env, s.Env...)           // GIT_SSL_CAINFO when CABundle is set
 err = fetch.Run()
 s.Close()                                         // Join closes it too
 ```

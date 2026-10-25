@@ -315,7 +315,9 @@ An API credential has no `purpose`.
   run's proxy, which the sessions, `HostProxy` and the setup step go through, never sets
   one, and the run answer lists no host or placeholder for it.
 - The run gets a certificate authority. `(*session.Run).StackProxy` returns its bundle
-  in `CABundle`, and its CA variables in `Env`. On a harness credential's host the stack
+  in `CABundle`, and its CA variables in `Env`. On a walled run whose bundle could not
+  be written, such as on a machine with no CA bundle file, `CABundle` is empty and
+  `Env` has no CA variable. On a harness credential's host the stack
   proxy reads each request: it sets the value on the credential's paths and passes other
   paths with no value.
 - The gateway fetches and renews the value as any other stored credential's. At the
@@ -327,8 +329,9 @@ An API credential has no `purpose`.
   harness credential "harness-1" is for it". A harness credential with `placeholders`
   stops the run with "Remove placeholders from the harness credential "harness-1": no
   session gets it".
-- Two harness credentials on one host need paths, and their paths must not overlap.
-  A work credential on the same host is fine: no proxy sets both.
+- Two harness credentials on one host, or two `apply` items of one, need paths, and
+  their paths must not overlap. A work credential on the same host is fine: no proxy
+  sets both.
 - The open's `dev.qory.run.policy_applied` lists each harness credential with
   `purpose: harness`. A join's lists none.
 

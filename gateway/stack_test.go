@@ -45,7 +45,7 @@ func stackNodeBody(host string, port int) string {
 // configuration's stack_hosts that the node's policy has path rules for.
 func stackPathsBody(host string, port int) string {
 	return "qory: list " + host + " in gateway.stack_hosts: the node's path rules cover it.\n" +
-		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the node's policy has path rules for this host, which the stack proxy cannot check\n", host, port)
+		fmt.Sprintf("qory: egress to %s:%d denied by the gateway: the node's policy has path rules for this host, which the stack proxy does not check\n", host, port)
 }
 
 // stackNeverBody is the body of the 403 a run's guarded stack proxy answers for a
@@ -627,7 +627,7 @@ func TestTheNodesPolicyDecidesEachStackHost(t *testing.T) {
 		{"path rules of the node", gateway.PolicyEgress{Mode: "enforce", Allow: []string{"*.cdn.invalid"}, Paths: map[string][]string{"a.cdn.invalid": {"/harness/*"}}}, true,
 			`["*.cdn.invalid"]`, []string{"b.cdn.invalid"},
 			map[string]string{"a.cdn.invalid": stackPathsBody("a.cdn.invalid", 443)},
-			[]string{"stack fetch to a.cdn.invalid:443 denied: the node's policy has path rules for this host, which the stack proxy cannot check"}},
+			[]string{"stack fetch to a.cdn.invalid:443 denied: the node's policy has path rules for this host, which the stack proxy does not check"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, h := stackGateway(t, `{"version":1,"stack_hosts":`+c.stack+`}`, []string{"yaml.invalid"}, &gateway.Policy{Version: 1, Egress: c.node})

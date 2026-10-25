@@ -780,7 +780,7 @@ func stackLine(d proxy.Decision, yaml []string, checked func(string) run.StackCh
 		case run.StackNodeRefuses:
 			return to + " denied: the node's policy does not allow this host of the run configuration's stack_hosts"
 		case run.StackNodePaths:
-			return to + " denied: the node's policy has path rules for this host, which the stack proxy cannot check"
+			return to + " denied: the node's policy has path rules for this host, which the stack proxy does not check"
 		}
 		return to + " denied: the host is in neither stack_hosts list"
 	}
@@ -798,7 +798,7 @@ func stackRefused(host string, port int, checked run.StackCheck) string {
 			"qory: egress to %s:%d denied by the gateway: the node's policy does not allow this host of the run configuration's stack_hosts\n", host, host, port)
 	case run.StackNodePaths:
 		return fmt.Sprintf("qory: list %s in gateway.stack_hosts: the node's path rules cover it.\n"+
-			"qory: egress to %s:%d denied by the gateway: the node's policy has path rules for this host, which the stack proxy cannot check\n", host, host, port)
+			"qory: egress to %s:%d denied by the gateway: the node's policy has path rules for this host, which the stack proxy does not check\n", host, host, port)
 	}
 	return fmt.Sprintf("qory: add %s to stack_hosts in forager.yaml or in the run configuration.\n"+
 		"qory: egress to %s:%d denied by the gateway: the host is in neither stack_hosts list\n", host, host, port)

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,8 +19,8 @@ import (
 
 // harnessDoc is a run configuration with a work credential, work-1, and a harness
 // credential, harness-1, on one host, git.example, which its stack_hosts lists: the
-// run's policy allows git.example for work-1, and harness-1 is held to the harness's
-// repository.
+// run's policy allows git.example for work-1, and harness-1 is held to the paths under
+// /example-org/harness.git/.
 const harnessDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["git.example"]}},` +
 	`"stack_hosts":["git.example"],"credentials":[` +
 	`{"name":"work-1","purpose":"work","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"}],"placeholders":["GIT_TOKEN"]},` +
@@ -128,11 +129,17 @@ func TestAHarnessCredentialTheStackProxyCannotSetIsRefused(t *testing.T) {
 			`Allow git.example in the node's policy: the harness credential "harness-1" is for it`, []string{"harness-1"}},
 		{"a host the node's policy has path rules for", doc(`"git.example"`, entry("harness-1", "git.example", "", "")),
 			&run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "enforce", Allow: []string{"git.example"}, Paths: map[string][]string{"git.example": {"/example-org/*"}}}}, nil,
-			`List git.example in gateway.stack_hosts: node path rules cover the harness credential "harness-1"`, []string{"harness-1"}},
+			`List git.example in gateway.stack_hosts: the node's path rules cover this host of "harness-1"`, []string{"harness-1"}},
+		{"two items of one on one host, one without paths", doc(`"git.example"`,
+			`{"name":"harness-1","purpose":"harness","apply":[{"hosts":["git.example"],"scheme":"bearer","paths":["/example-org/a.git/*"]},{"hosts":["git.example"],"scheme":"bearer"}]}`), nil, nil,
+			`Claim git.example in only one apply item of the harness credential "harness-1": one has no paths`, []string{"harness-1"}},
+		{"two items of one on one host whose paths overlap", doc(`"git.example"`,
+			`{"name":"harness-1","purpose":"harness","apply":[{"hosts":["git.example"],"scheme":"bearer","paths":["/example-org/*"]},{"hosts":["git.example"],"scheme":"bearer","paths":["/example-org/a.git/*"]}]}`), nil, nil,
+			`Give the apply items of the harness credential "harness-1" paths that do not overlap on git.example`, []string{"harness-1"}},
 		{"two on one host, one without paths", doc(`"git.example"`, entry("harness-1", "git.example", `"/example-org/a.git/*"`, ""), entry("harness-2", "git.example", "", "")), nil, nil,
-			`Claim git.example in only one of the harness credentials harness-1 and harness-2: one has no paths`, []string{"harness-1", "harness-2"}},
+			`Claim git.example in only one harness credential, "harness-1" or "harness-2": one has no paths`, []string{"harness-1", "harness-2"}},
 		{"two on one host whose paths overlap", doc(`"git.example"`, entry("harness-1", "git.example", `"/example-org/*"`, ""), entry("harness-2", "git.example", `"/example-org/a.git/*"`, "")), nil, nil,
-			`Give the harness credentials harness-1 and harness-2 paths that do not overlap on git.example`, []string{"harness-1", "harness-2"}},
+			`Give the harness credentials "harness-1" and "harness-2" paths that do not overlap on git.example`, []string{"harness-1", "harness-2"}},
 		{"a host of gateway.stack_hosts alone", doc("", entry("harness-1", "git.example", "", "")), allow("api.example"), []string{"*.example"}, "", nil},
 		{"two on one host with paths apart", doc(`"git.example"`, entry("harness-1", "git.example", `"/example-org/a.git/*"`, ""), entry("harness-2", "git.example", `"/example-org/b.git/*"`, "")), nil, nil, "", nil},
 	} {
@@ -163,9 +170,9 @@ func TestAHarnessCredentialTheStackProxyCannotSetIsRefused(t *testing.T) {
 }
 
 // TestCloseHarnessStopsItsRenewals pins the renewals of a harness credential: before
-// CloseHarness its value is renewed as a work credential's; after it, the renewer asks
-// for the work credential alone, and a renewal of the harness credential that was in
-// flight puts no value back.
+// CloseHarness its value is renewed as a work credential's; after it, the renewer
+// requests the work credential alone, and a renewal of the harness credential that was
+// in flight puts no value back.
 func TestCloseHarnessStopsItsRenewals(t *testing.T) {
 	expiring := func(name string, call int) (answer, error) {
 		return answer{value: name + "-" + string(rune('0'+call)), expires: start.Add(time.Hour + time.Duration(call)*time.Hour)}, nil
@@ -228,5 +235,42 @@ func TestTheHarnessPlaceholdersFixtureIsRefused(t *testing.T) {
 	if code, names := refusalOf(err); code != refusal.RunConfigurationInvalid || !slices.Equal(names, []string{"harness-1"}) ||
 		!strings.HasPrefix(err.Error(), "Remove placeholders from the harness credential") {
 		t.Errorf("Open: %v; want the placeholders refused", err)
+	}
+}
+
+// TestAReloadWhileTheStackClosesIsNoRace pins the renewer's lock: reloads and the
+// stack proxy's credentials read the renewals while CloseHarness, at the run's first
+// join request, drops harness-1's. Run it with -race. The goroutines share no channel
+// or lock before CloseHarness, so only the renewer's lock orders them.
+func TestAReloadWhileTheStackClosesIsNoRace(t *testing.T) {
+	c := &fakeClock{now: start}
+	s := &controlPlane{answer: func(name string, call int) (answer, error) {
+		return answer{value: name + "-" + string(rune('0'+call)), expires: start.Add(time.Hour + time.Duration(call)*time.Hour)}, nil
+	}}
+	r := renewRun(t, harnessDoc, s, c, &reports{}, nil)
+	f := document(t, harnessDoc, digest('1'))
+	f.Document.Computed = digest('c')
+	var wg sync.WaitGroup
+	var reloadErr error
+	wg.Go(func() {
+		for range 20 {
+			if _, err := reload(t, r, f); err != nil && reloadErr == nil {
+				reloadErr = err
+			}
+		}
+	})
+	wg.Go(func() {
+		for end := time.Now().Add(50 * time.Millisecond); time.Now().Before(end); {
+			r.StackUses()
+		}
+	})
+	time.Sleep(10 * time.Millisecond)
+	r.CloseHarness()
+	wg.Wait()
+	if reloadErr != nil {
+		t.Errorf("a reload: %v", reloadErr)
+	}
+	if stackValue(r, "harness-1") != "(none)" {
+		t.Errorf("after CloseHarness harness-1 is %s; want none", stackValue(r, "harness-1"))
 	}
 }

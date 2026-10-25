@@ -132,9 +132,12 @@ func (r *Run) HostProxy() (HostProxy, error) {
 // which passes the hosts of gateway.stack_hosts and of the run configuration's
 // stack_hosts alone: the run's policy does not apply, the run configuration's harness
 // credentials are the only ones set, and each decision is a dev.qory.run.egress with
-// channel stack. When the run has a certificate authority, CABundle is the bundle's
-// path and Env sets the bundle's variables, as [Run.HostProxy] does, so a program
-// trusts the stack proxy on a harness credential's host; otherwise CABundle is empty.
+// channel stack. When the run has a certificate authority and the session wrote its
+// bundle, CABundle is the bundle's path and Env sets the bundle's variables, as
+// [Run.HostProxy] does, so a program trusts the stack proxy on a harness credential's
+// host. Otherwise CABundle is empty and Env sets no CA variable: for a run with no
+// authority, and for a walled run whose bundle could not be written, such as on a
+// machine with no CA bundle file, where [Run.HostProxy] returns the error.
 // It ends at HostProxy.Close, at the run's first Join and at Run.Close. An error means
 // no stack proxy started.
 //

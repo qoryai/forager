@@ -308,10 +308,10 @@ type RunConfiguration struct {
 	// gateway.stack_hosts, each a lower-case host name, an IPv4 address or a *. suffix,
 	// in the document's order; nil when the document has none.
 	StackHosts []string `json:"stack_hosts,omitzero"`
-	// HarnessHidden is true when the run's harness belongs to an organisation other than
-	// the run's: the stack channel's dev.qory.run.egress has no path, and
-	// dev.qory.run.policy_applied lists each harness credential by its name and purpose
-	// alone. False when the document has no harness_hidden.
+	// HarnessHidden is true for a harness the run's workspace may not see, such as one of
+	// another organisation: the stack channel's dev.qory.run.egress has no path and no
+	// path_rule, and dev.qory.run.policy_applied lists each harness credential by its name
+	// and purpose alone. False when the document has no harness_hidden.
 	HarnessHidden bool `json:"harness_hidden,omitzero"`
 	// Computed is sha256= and the lower-case hex SHA-256 of the bytes the document was
 	// read from, which Forager computes itself: the digest a secrets request and the

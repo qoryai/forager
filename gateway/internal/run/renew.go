@@ -111,7 +111,7 @@ func (w *renewer) expiresAt(name string) time.Time {
 // value is asked for again once RetryWait has passed since the last asking. Nil for a
 // credential without expires_at, whose 401 asks for nothing.
 func (w *renewer) rejected(name string) func() {
-	if w == nil || !slices.ContainsFunc(w.entries, func(e *renewal) bool { return e.name == name }) {
+	if w == nil || !w.has(name) {
 		return nil
 	}
 	return func() {
