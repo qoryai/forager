@@ -78,6 +78,26 @@ func TestAHarnessCredentialIsTheStackProxysAlone(t *testing.T) {
 	}
 }
 
+// TestAWorkCredentialOverlappingAHarnessCredentialIsNoConflict pins a run
+// configuration whose work credential has an apply item with paths that cover
+// harness-1's on one host: the run opens, the run's proxy sets work-1 alone on its
+// paths, and the stack proxy sets harness-1 alone on its paths, since no proxy sets both.
+func TestAWorkCredentialOverlappingAHarnessCredentialIsNoConflict(t *testing.T) {
+	doc := strings.Replace(harnessDoc, `"username":"x-access-token"}],"placeholders"`, `"username":"x-access-token","paths":["/example-org/*"]}],"placeholders"`, 1)
+	if doc == harnessDoc {
+		t.Fatal("harnessDoc has no apply item of work-1 to give paths")
+	}
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Secrets: (&controlPlane{answer: harnessValue}).fetch})
+	uses := r.Uses()
+	if len(uses) != 1 || uses[0].Name != "work-1" || !slices.Equal(uses[0].Paths, []string{"/example-org/*"}) || value(r, "work-1") != "value-of-work-1" {
+		t.Errorf("the run's proxy sets %+v; want work-1 alone on /example-org/*", uses)
+	}
+	stack := r.StackUses()
+	if len(stack) != 1 || stack[0].Name != "harness-1" || !slices.Equal(stack[0].Paths, []string{"/example-org/harness.git/*"}) || stackValue(r, "harness-1") != "value-of-harness-1" {
+		t.Errorf("the stack proxy sets %+v; want harness-1 alone on /example-org/harness.git/*", stack)
+	}
+}
+
 // TestHarnessHiddenIsTheStartsDocuments pins HarnessHidden: true for a run
 // configuration with harness_hidden true, false without it.
 func TestHarnessHiddenIsTheStartsDocuments(t *testing.T) {
