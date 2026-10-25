@@ -308,6 +308,11 @@ type RunConfiguration struct {
 	// gateway.stack_hosts, each a lower-case host name, an IPv4 address or a *. suffix,
 	// in the document's order; nil when the document has none.
 	StackHosts []string `json:"stack_hosts,omitzero"`
+	// HarnessHidden is true for a harness the run's workspace may not see, such as one of
+	// another organisation: the stack channel's dev.qory.run.egress has no path and no
+	// path_rule, and dev.qory.run.policy_applied lists each harness credential by its name
+	// and purpose alone. False when the document has no harness_hidden.
+	HarnessHidden bool `json:"harness_hidden,omitzero"`
 	// Computed is sha256= and the lower-case hex SHA-256 of the bytes the document was
 	// read from, which Forager computes itself: the digest a secrets request and the
 	// open of its answer use, never the answer's header. Empty for a document not read
@@ -317,7 +322,7 @@ type RunConfiguration struct {
 
 // RunCredential is one entry of a run configuration's credentials, with no value. An
 // API credential, a model key, has Format, Endpoint, Auth and KeyPrefixes; a host
-// credential has Apply and Placeholders.
+// credential has Apply, Placeholders and Purpose.
 type RunCredential struct {
 	Name string `json:"name"`
 	// Format is the API format of an API credential, one of api-format.schema.json;
@@ -334,7 +339,22 @@ type RunCredential struct {
 	// for an API credential.
 	Apply        []Apply  `json:"apply,omitzero"`
 	Placeholders []string `json:"placeholders,omitzero"`
+	// Purpose is a host credential's purpose: [PurposeHarness] for one the stack proxy
+	// sets for the fetch of the harness definition, and [PurposeWork] or empty for one
+	// the run's proxy sets for the run's sessions, host work and setup. Empty for an API
+	// credential.
+	Purpose string `json:"purpose,omitzero"`
 }
+
+// The purposes of a host credential, run-configuration.schema.json's purpose.
+const (
+	PurposeHarness = "harness"
+	PurposeWork    = "work"
+)
+
+// Harness reports whether the credential is for the fetch of the harness definition
+// alone, purpose harness: the stack proxy sets it, and the run's proxy never does.
+func (c RunCredential) Harness() bool { return c.Purpose == PurposeHarness }
 
 // Apply is one item of a host credential's apply, run-configuration.schema.json: the
 // hosts its value is set on, the scheme with its username or header, and the paths,

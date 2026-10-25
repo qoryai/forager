@@ -98,6 +98,10 @@ type Config struct {
 	Secrets func(ctx context.Context, digest string, credentials []string) (sealed.Values, error)
 	// Clock is the time renewals are judged by; nil is this machine's clock.
 	Clock Clock
+	// StackHosts are the gateway's gateway.stack_hosts, which the run's stack proxy
+	// allows beside the run configuration's stack_hosts: each host of a harness
+	// credential must be one of the two lists allows ([Run.StackAllows]).
+	StackHosts []string
 }
 
 // Fetched is one run configuration as the server answered it.
@@ -170,6 +174,11 @@ type Run struct {
 	// Read read that a reload has not decided yet.
 	stack  []string
 	stacks map[*policy.Loaded][]string
+	// hidden is harness_hidden of the run configuration the run started with, fixed
+	// for the run. harnessClosed is true once [Run.CloseHarness] cleared the values of
+	// the harness credentials: from then on no renewal puts one back.
+	hidden        bool
+	harnessClosed bool
 	// applies are where each of stored is set, fixed when the run opens: the answer's
 	// apply, or the entry's items.
 	applies map[string][]credential.StoredApply
@@ -236,6 +245,10 @@ func Decide(cfg Config) (*Run, error) {
 		if cfg.Fetched.Document != nil {
 			r.served = cfg.Fetched.Document.Values()
 			r.computed = cfg.Fetched.Document.Computed
+			r.hidden = cfg.Fetched.Document.HarnessHidden
+		}
+		if err := r.checkHarness(); err != nil {
+			return nil, err
 		}
 		r.takeComputed(fetched)
 		r.runDigest = pol.RunConfiguration
@@ -310,7 +323,7 @@ func (r *Run) Hold(ctx context.Context) error {
 	r.renew.start(routine.ForRun(r.cfg.Report, r.cfg.RunID))
 	r.chosen = chosen
 	pol := r.start
-	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || r.server
+	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || r.server || r.hasHarness()
 	return nil
 }
 
@@ -522,7 +535,9 @@ const (
 	// ([policy.Egress.Allows], under its mode).
 	StackNodeRefuses
 	// StackNodePaths is a host the node's policy, or a side beside it, has path rules
-	// for: the stack proxy tunnels without reading the request, so it cannot check them.
+	// for: the stack proxy does not check the node's path rules. It tunnels a host with
+	// no harness credential, and on a harness credential's host it checks the
+	// credential's paths alone.
 	StackNodePaths
 )
 
@@ -608,7 +623,8 @@ func (r *Run) Conflict(passes func(name string) bool) error {
 }
 
 // NeedsCA says the run has an authority of its own: for the hosts a credential is for,
-// the hosts its tools serve and the hosts with path rules, and with a server always,
+// the hosts of its harness credentials on the stack proxy, the hosts its tools serve
+// and the hosts with path rules, and with a server always,
 // with or without a wall, since a reload may bring a run configuration with
 // credentials or path rules, and the agent's tools trust only what they were given at
 // the start.
@@ -1148,23 +1164,28 @@ func claimedBy(held *credential.Held) func(string) string {
 	}
 }
 
-// storedUses are the run configuration's credentials the run started with, as the
+// storedUses are the run configuration's work credentials the run started with, as the
 // credential package holds them, each set where the start's answer says ([Run.open]).
+// The harness credentials are left out: the run's proxy never sets them
+// ([Run.StackUses]).
 // Each one's Value copies the value under r.mu, as [Run.clearValues] clears it and a
 // renewal replaces it, so a request that is still being served when the run ends copies
 // the value whole or gets none, and never reads bytes while they are overwritten. A
 // value with expires_at has the renewer's Rejected, which every reload's uses share.
 func (r *Run) storedUses() []credential.Stored {
-	out := make([]credential.Stored, len(r.stored))
-	for i, c := range r.stored {
+	var out []credential.Stored
+	for _, c := range r.stored {
+		if c.Harness() {
+			continue
+		}
 		name := c.Name
-		out[i] = credential.Stored{Name: name, Apply: r.applies[name], Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
+		out = append(out, credential.Stored{Name: name, Apply: r.applies[name], Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
 			ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				b, _ := r.values.Value(name)
 				return slices.Clone(b)
-			}}
+			}})
 	}
 	return out
 }

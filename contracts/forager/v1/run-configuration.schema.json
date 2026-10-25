@@ -38,12 +38,16 @@
       "$ref": "#/$defs/credential_name"
     },
     "stack_hosts": {
-      "description": "The hosts the run's stack proxy allows beside the gateway's gateway.stack_hosts, for qory's fetch of the harness definition before the run's first session joins, such as [\"git.example\", \"api.git.example\"]: 1 to 32, none twice, each in the grammar of the policy's egress.allow entries. The node's policy decides each host: a host an entry matches passes only when the node's policy allows it and has no path rule for it, since the stack proxy does not read inside a connection. Behind a wall or a separate gateway they open no address of the gateway's machine and no private network address: the stack proxy reaches those only for a host that gateway.stack_hosts and the node's policy both list by name. Fixed when the run starts. Absent, the stack proxy allows gateway.stack_hosts alone.",
+      "description": "The hosts the run's stack proxy allows beside the gateway's gateway.stack_hosts, for qory's fetch of the harness definition before the run's first session joins, such as [\"git.example\", \"api.git.example\"]: 1 to 32, none twice, each in the grammar of the policy's egress.allow entries. The node's policy decides each host: a host an entry matches passes only when the node's policy allows it and has no path rule for it, since the stack proxy does not check the node's path rules. Behind a wall or a separate gateway they open no address of the gateway's machine and no private network address: the stack proxy reaches those only for a host that gateway.stack_hosts and the node's policy both list by name. Fixed when the run starts. Absent, the stack proxy allows gateway.stack_hosts alone.",
       "type": "array",
       "minItems": 1,
       "maxItems": 32,
       "uniqueItems": true,
       "items": {"$ref": "policy.schema.json#/$defs/host_entry"}
+    },
+    "harness_hidden": {
+      "description": "Whether the run's harness is one the run's workspace may not see, such as one of another organisation. True: the stack channel's dev.qory.run.egress has no path and no path_rule, and the open's dev.qory.run.policy_applied lists each harness credential by name and purpose alone. Fixed when the run starts. Absent, false.",
+      "type": "boolean"
     }
   },
   "$defs": {
@@ -81,7 +85,8 @@
       "properties": {
         "name": {"description": "The credential's name, unique among the entries.", "$ref": "#/$defs/credential_name"},
         "apply": {"description": "Where and how the value is set: 1 to 16 items. The value in the answer to the secrets request may have narrower items (sealed-plaintext.schema.json); without them the gateway sets these.", "type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/apply"}},
-        "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start. A placeholder goes only into a variable for a credential: one that the run's runtime's descriptor denies, lists in its model overrides or reserves, reads its model endpoint or a model key from is run_configuration_invalid.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}}
+        "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start. A placeholder goes only into a variable for a credential: one that the run's runtime's descriptor denies, lists in its model overrides or reserves, reads its model endpoint or a model key from is run_configuration_invalid. A harness credential with placeholders is run_configuration_invalid: no session gets it.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}},
+        "purpose": {"description": "What the value is for. work: the run's proxy sets it, for the run's sessions, its host work and its setup. harness: the run's stack proxy sets it, for qory's fetch of the harness definition before the run's first session joins, and the run's proxy never does; the gateway overwrites the value with zeros at the run's first join request. Each host of a harness credential's items must be one the stack proxy allows: in gateway.stack_hosts, or in stack_hosts and allowed by the node's policy with no path rule for it. Two harness credentials may claim one host as two work credentials may; a harness credential and a work credential on one host do not conflict, since no proxy sets both. Absent, work.", "enum": ["harness", "work"]}
       }
     },
     "apply": {

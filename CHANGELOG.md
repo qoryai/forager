@@ -496,6 +496,18 @@ release may change what an existing document does, and says so under Upgrading.
   `sealed.Value` has `ExpiresAt` and `Apply`. The run answer's `credential_hosts` has
   one entry per `apply` item of a host credential from the server, each with the
   item's hosts and auth, and the credential's placeholders on the first.
+- `purpose` on a run configuration's host credential, `harness` or `work`, absent
+  meaning `work`: the stack proxy sets a harness credential, for qory's fetch of the
+  harness definition, and the run's proxy never does. An API credential with `purpose`
+  is refused by the schema. `server.RunCredential` has `Purpose` and `Harness`, and
+  `server.PurposeHarness` and `server.PurposeWork` are the two values.
+- `harness_hidden` in a run configuration, a boolean, fixed when the run starts: the
+  open's `dev.qory.run.policy_applied` lists each harness credential by `name` and
+  `purpose` alone, and the stack proxy's `dev.qory.run.egress` records have no `path`
+  and no `path_rule`. `server.RunConfiguration` has `HarnessHidden`.
+- `dev.qory.run.egress` has `channel: stack` on a record of the stack proxy's.
+  `dev.qory.run.policy_applied`'s `credentials` entry has `purpose: harness` for a
+  harness credential, and, under `harness_hidden`, `name` and `purpose` alone.
 - The secrets request, `secrets-request.schema.json`, a signed `POST` to discovery's
   `secrets.url` for the values of a run configuration's `credentials`; its answer, the
   envelope of `secrets-answer.schema.json`, sealed with HPKE base mode, X25519,
@@ -720,19 +732,32 @@ release may change what an existing document does, and says so under Upgrading.
 - `gateway.Config.StackHosts`, `gateway.stack_hosts` in `forager.yaml`, default
   empty. These are the hosts of a run's stack proxy until the run's first join
   request, for qory's fetch of the harness definition. The stack proxy passes a
-  CONNECT or a plain HTTP request to one of them, on any port, in enforce mode, with no
-  certificate authority and no credential, and the run's policy is not checked. Behind
-  a wall or a separate gateway it is guarded as the run's proxy is: it reaches this
+  CONNECT or a plain HTTP request to one of them, on any port, in enforce mode, and the
+  run's policy is not checked. It sets the run configuration's harness credentials
+  alone, with the run's certificate authority on their hosts. Behind a wall or a
+  separate gateway it is guarded as the run's proxy is: it reaches this
   machine's addresses and the private network addresses only for a host that the
   node's policy and `gateway.stack_hosts` both list by name, not by a `*.` pattern,
   and never a link-local or cloud metadata address. It counts at the run's limits,
-  apart from the run's proxy. Each decision is a line of `Config.Report`, never a
-  `dev.qory.run.egress`, and a refusal at the run's limits is reported at most once a
-  second per limit. Start accepts a lower-case host name, an IPv4 address or a `*.`
-  suffix, and refuses any other entry.
+  apart from the run's proxy. Each decision is a line of `Config.Report` and a
+  `dev.qory.run.egress` with `channel: stack`, and a refusal at the run's limits is
+  reported at most once a second per limit. Start accepts a lower-case host name, an
+  IPv4 address or a `*.` suffix, and refuses any other entry.
 - `stack_hosts` in a run configuration: the stack proxy allows these hosts beside
   `gateway.stack_hosts`, each host when the node's policy allows it and has no path
   rule for it. Behind a wall or a separate gateway they open no private address.
+- A run configuration's harness credential, `purpose: harness`: the stack proxy sets it
+  on its hosts and paths and passes the hosts' other paths with no value, and the run's
+  proxy never sets it, so the run answer has no `credential_hosts` or `placeholders`
+  entry for it. The gateway renews it as other stored credentials, and at the run's
+  first join request overwrites its value with zeros and stops its renewals. The open's
+  `dev.qory.run.policy_applied` lists it with `purpose: harness`, and the gateway
+  accepts a join's that leaves it out. Each of these is `run_configuration_invalid`: a
+  harness credential with placeholders, `Remove placeholders from the harness
+  credential "harness-1": no session gets it`; a host the stack proxy does not allow,
+  such as `Add git.example to a stack_hosts list: the harness credential "harness-1" is
+  for it`; and two harness credentials, or two `apply` items of one, on one host when
+  one has no paths or their paths overlap.
 - `QORY-STACK`, `link.StackPreamble`, on a separate gateway's one address. From the
   run's first join request on, it is refused.
 - A separate gateway reads a renewed certificate and key from `gateway.TLS`'s files
@@ -1179,7 +1204,11 @@ release may change what an existing document does, and says so under Upgrading.
 #### Added
 
 - `Run.StackProxy`, a forwarder for the fetch of the harness definition. It is
-  refused after the run's first `Join` and ends at it.
+  refused after the run's first `Join` and ends at it. When the run has a certificate
+  authority, as a run with a harness credential has, its `CABundle` is the authority's
+  bundle and its `Env` has the CA variables, as `HostProxy`'s. On a walled run whose
+  bundle could not be written, `CABundle` is empty and `Env` has no CA variable. A join's
+  `dev.qory.run.policy_applied` lists no harness credential.
 - `session.SessionSpec.InputsDir`, the run's inputs directory, an absolute path: in a
   run with a run key, `dev.qory.session.started` has `<inputs>` in place of each
   occurrence of it in `command` and `args`. `Join` refuses a relative path with

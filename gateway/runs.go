@@ -431,7 +431,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	r, err := run.Decide(run.Config{
 		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
 		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: lr.passing, Report: g.report,
-		Narrowing: narrowing, Secrets: secrets, Log: lr.logLine, Clock: g.cfg.renewClock,
+		Narrowing: narrowing, Secrets: secrets, Log: lr.logLine, Clock: g.cfg.renewClock, StackHosts: g.cfg.StackHosts,
 	})
 	if err != nil {
 		return fail(err)
@@ -477,9 +477,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		lr.px.NodePaths(sides...)
 	}
 	var authority []byte
+	var ca *proxy.CA
 	if r.NeedsCA() {
-		ca, err := proxy.NewCA(req.RunID)
-		if err != nil {
+		if ca, err = proxy.NewCA(req.RunID); err != nil {
 			return fail(err)
 		}
 		lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
@@ -500,7 +500,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			return fail(err)
 		}
 	}
-	if err := lr.openStack(req.Wall || remote); err != nil {
+	if err := lr.openStack(req.Wall || remote, ca); err != nil {
 		return fail(err)
 	}
 	lr.mu.Lock()
@@ -625,17 +625,22 @@ func (lr *linkRun) logLine(line string) {
 // openStack makes the run's stack proxy, for qory's fetch of the harness definition
 // before the run's first session: in enforce mode, allowing the hosts of
 // [Config.StackHosts], and each host of the run configuration's stack_hosts that the
-// node's policy allows ([run.Run.StackChecked]), with no certificate authority, no credential
-// and no model key, at the run's limits with counters apart from the run's proxy. When
+// node's policy allows ([run.Run.StackChecked]), with no model key, at the run's limits
+// with counters apart from the run's proxy. With the run configuration's harness
+// credentials ([run.Run.StackUses]), it ends TLS for their hosts with ca, the run's
+// authority, and sets each credential on the paths of its items; every other path of
+// such a host passes with no credential, as a tunnel's would. Without them it has no
+// certificate authority and no credential. When
 // guarded is true it is guarded as the run's proxy is: this machine's addresses and the
 // private network addresses are reached only for a host that the node's policy's allow
 // list and StackHosts both list by name, not by a *. pattern, and a link-local or cloud
 // metadata address for none, so the run configuration's entries open none of these.
 // The run's policy is not read. Each decision is a line of the gateway's report
-// ([stackLine]). On the local link it is registered under
+// ([stackLine]) and a dev.qory.run.egress with channel stack ([stackEgress]). On the
+// local link it is registered under
 // a fresh secret, the run answer's stack_proxy_secret, which no other proxy has; on
 // the one address the run key opens it, after [link.StackPreamble].
-func (lr *linkRun) openStack(guarded bool) error {
+func (lr *linkRun) openStack(guarded bool, ca *proxy.CA) error {
 	report := routine.ForRun(lr.g.report, lr.id)
 	yaml := slices.Clone(lr.g.cfg.StackHosts)
 	// forager.yaml's entries come first, so a host both lists allow is reported as
@@ -646,11 +651,29 @@ func (lr *linkRun) openStack(guarded bool) error {
 			hosts = append(hosts, entry)
 		}
 	}
-	px, err := proxy.New(policy.Enforce, hosts, nil, func(d proxy.Decision) { report(stackLine(d, yaml, lr.r.StackChecked)) })
+	hidden := lr.r.HarnessHidden()
+	px, err := proxy.New(policy.Enforce, hosts, nil, func(d proxy.Decision) {
+		report(stackLine(d, yaml, lr.r.StackChecked))
+		lr.st.Emit(event.RunEgress, stackEgress(d, hidden))
+	})
 	if err != nil {
 		return err
 	}
 	px.ReportPanics(report)
+	if lr.g.cfg.upstreamRoots != nil {
+		px.TrustUpstream(lr.g.cfg.upstreamRoots)
+	}
+	if uses := lr.r.StackUses(); len(uses) > 0 && ca != nil {
+		// Every path of a harness credential's host passes, as before the credential
+		// was set: the credential is set on its items' paths alone.
+		every := map[string][]string{}
+		for _, u := range uses {
+			for _, h := range u.Hosts {
+				every[h] = []string{"/*"}
+			}
+		}
+		px.Terminate(ca, uses, every, nil)
+	}
 	px.SetLimits(proxy.Limits{Connections: lr.g.cfg.RunLimits.Connections, RequestsPerSecond: lr.g.cfg.RunLimits.RequestsPerSecond, Burst: lr.g.cfg.RunLimits.Burst, Stack: true})
 	// A host of the run configuration's entries alone passes when the node's policy
 	// allows it; forager.yaml's entries are not checked.
@@ -697,7 +720,9 @@ func (lr *linkRun) stackProxy() *proxy.Proxy {
 
 // closeStack closes the run's stack proxy, once, at the run's first join request and as
 // the run lets go of what it holds: its secret is refused from then on, and every
-// connection through it closes, one opened before the call among them.
+// connection through it closes, one opened before the call among them. Then the
+// renewals of the harness credentials stop and their values are overwritten with
+// zeros, before any session joins.
 func (lr *linkRun) closeStack() {
 	lr.mu.Lock()
 	px, secret := lr.stack, lr.stackSecret
@@ -709,6 +734,22 @@ func (lr *linkRun) closeStack() {
 	if px != nil {
 		px.Close()
 	}
+	if lr.r != nil {
+		lr.r.CloseHarness()
+	}
+}
+
+// stackEgress is the data of the dev.qory.run.egress of one decision of a run's stack
+// proxy: [run.Egress] with channel stack, and without the request's path and path rule
+// when the run's harness is hidden.
+func stackEgress(d proxy.Decision, hidden bool) map[string]any {
+	data := run.Egress(d)
+	data["channel"] = "stack"
+	if hidden {
+		delete(data, "path")
+		delete(data, "path_rule")
+	}
+	return data
 }
 
 // stackLine is the gateway's report of one decision of a run's stack proxy, after
@@ -726,6 +767,10 @@ func stackLine(d proxy.Decision, yaml []string, checked func(string) run.StackCh
 		list = "the run configuration's stack_hosts"
 	}
 	switch {
+	case !d.Allowed && strings.HasPrefix(d.PathRule, "wall:"):
+		// A request to a harness credential's host that a rule of the gateway's refuses,
+		// such as wall:echo-method for a TRACE.
+		return fmt.Sprintf("%s denied by the gateway's rule %s", to, d.PathRule)
 	case d.Allowed && d.Outcome == proxy.DialFailed:
 		return fmt.Sprintf("%s allowed by %s entry %s; the dial failed", to, list, d.Rule)
 	case d.Allowed:
@@ -735,7 +780,7 @@ func stackLine(d proxy.Decision, yaml []string, checked func(string) run.StackCh
 		case run.StackNodeRefuses:
 			return to + " denied: the node's policy does not allow this host of the run configuration's stack_hosts"
 		case run.StackNodePaths:
-			return to + " denied: the node's policy has path rules for this host, which the stack proxy cannot check"
+			return to + " denied: the node's policy has path rules for this host, which the stack proxy does not check"
 		}
 		return to + " denied: the host is in neither stack_hosts list"
 	}
@@ -753,7 +798,7 @@ func stackRefused(host string, port int, checked run.StackCheck) string {
 			"qory: egress to %s:%d denied by the gateway: the node's policy does not allow this host of the run configuration's stack_hosts\n", host, host, port)
 	case run.StackNodePaths:
 		return fmt.Sprintf("qory: list %s in gateway.stack_hosts: the node's path rules cover it.\n"+
-			"qory: egress to %s:%d denied by the gateway: the node's policy has path rules for this host, which the stack proxy cannot check\n", host, host, port)
+			"qory: egress to %s:%d denied by the gateway: the node's policy has path rules for this host, which the stack proxy does not check\n", host, host, port)
 	}
 	return fmt.Sprintf("qory: add %s to stack_hosts in forager.yaml or in the run configuration.\n"+
 		"qory: egress to %s:%d denied by the gateway: the host is in neither stack_hosts list\n", host, host, port)
@@ -935,6 +980,15 @@ func (lr *linkRun) refresh() {
 			listed[i] = h
 		}
 		applied["stack_hosts"] = listed
+	}
+	if harness := harnessApplied(lr.r.StackUses(), lr.r.HarnessHidden()); !lr.opened && len(harness) > 0 {
+		// A join's record lists no harness credential, whose value is gone by then: the
+		// members without them come first, and the open's, with them, last.
+		lr.given = append(lr.given, applied)
+		withHarness := maps.Clone(applied)
+		listed, _ := applied["credentials"].([]any)
+		withHarness["credentials"] = append(slices.Clone(listed), harness...)
+		applied = withHarness
 	}
 	lr.given = append(lr.given, applied)
 	doc, digest := policyDocument(pol)
@@ -1129,6 +1183,40 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 	b, _ := json.Marshal(a)
 	var out map[string]any
 	json.Unmarshal(b, &out)
+	return out
+}
+
+// harnessApplied are the entries of dev.qory.run.policy_applied's credentials of the
+// run configuration's harness credentials, from uses, [run.Run.StackUses], in JSON's
+// types as appliedOf's: one per item, with its hosts, scheme and paths and purpose
+// harness; under hidden, one per credential, with its name and purpose alone.
+func harnessApplied(uses []proxy.Credential, hidden bool) []any {
+	var out []any
+	var seen []string
+	for _, u := range uses {
+		name := accesskey.ShownName(u.Name, false)
+		if hidden {
+			if !slices.Contains(seen, u.Name) {
+				seen = append(seen, u.Name)
+				out = append(out, map[string]any{"name": name, "purpose": server.PurposeHarness})
+			}
+			continue
+		}
+		e := map[string]any{"name": name, "hosts": anyOf(shownValues(u.Hosts)), "scheme": u.Scheme, "purpose": server.PurposeHarness}
+		if u.Paths != nil {
+			e["paths"] = anyOf(shownValues(u.Paths))
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// anyOf is values in JSON's types, as an event's data decodes.
+func anyOf(values []string) []any {
+	out := make([]any, len(values))
+	for i, v := range values {
+		out[i] = v
+	}
 	return out
 }
 

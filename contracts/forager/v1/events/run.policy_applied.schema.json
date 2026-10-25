@@ -17,19 +17,24 @@
     "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when the server returned one: sha256= and the lower-case hex SHA-256 of the document's bytes as the server sent them.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
     "paths": {"description": "The policy's path rules, by host, when it has any: the server's, when the policy is fetched; node_policy contains the node's.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "credentials": {
-      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed. Never a secret.",
+      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed. The open's record also lists the run configuration's harness credentials, which the stack proxy sets until the run's first join request, each with purpose harness; a join's record and a later run configuration's list none. Never a secret.",
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "hosts", "scheme"],
+        "required": ["name"],
         "properties": {
           "name": {"type": "string", "minLength": 1},
           "argument": {"description": "The argument the policy's credentials entry passed, such as the repositories the secret is minted for: the same on every use of one credential. Absent when the entry passes none.", "type": "string", "minLength": 1, "maxLength": 4096},
           "hosts": {"type": "array", "items": {"type": "string", "minLength": 1}},
           "scheme": {"type": "string", "enum": ["bearer", "basic", "header"]},
-          "paths": {"type": "array", "items": {"type": "string"}}
-        }
+          "paths": {"type": "array", "items": {"type": "string"}},
+          "purpose": {"description": "harness for a harness credential of the run configuration, which the stack proxy sets and the run's proxy never does. Absent for every other credential. When the run configuration has harness_hidden, the entry is the credential's name and purpose alone, one per credential, with no hosts, scheme or paths.", "const": "harness"}
+        },
+        "anyOf": [
+          {"required": ["hosts", "scheme"]},
+          {"required": ["purpose"], "not": {"anyOf": [{"required": ["hosts"]}, {"required": ["scheme"]}, {"required": ["paths"]}, {"required": ["argument"]}]}}
+        ]
       }
     },
     "tools": {
