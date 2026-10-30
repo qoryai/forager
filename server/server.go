@@ -209,7 +209,7 @@ func decode(name, schemaName string, b []byte, out any) error {
 		name += ".json"
 	}
 	// The decoder's and the schema's errors can quote the document, so a value in them that
-	// contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case is
+	// contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case is
 	// accesskey.ShownError's phrase.
 	doc, err := contracts.Decode(name, b)
 	if err != nil {
@@ -636,18 +636,18 @@ func (c *Client) fetchBody(ctx context.Context, what, u, digestHeader string) ([
 	return a.body, digest, nil
 }
 
-// errRunURLSecret refuses a run.url that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_
-// or qeci_: the run's run.policy_applied sends run.url as a URI, which no phrase is. Its
-// text contains none of the prefixes, so accesskey.ShownError keeps it.
+// errRunURLSecret refuses a run.url that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_,
+// qeci_ or qecd_: the run's run.policy_applied sends run.url as a URI, which no phrase
+// is. Its text contains none of the prefixes, so accesskey.ShownError keeps it.
 var errRunURLSecret = errors.New("remove the secret from run.url: run.policy_applied would send run.url as it is")
 
 // Discover fetches the configuration document from the server's well-known path and
 // returns it with the server's digest of it. An error, transport, status or a document the
 // schema refuses, means no run; its text contains the URL. A document without the run
-// endpoint, or whose run.url contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in
-// any case, is refused as one the schema refuses. A 401 is unauthorized, a signed refusal
-// is the code its body contains, rate_limited say, and an answer that does not verify is
-// answer_unsigned, each an [*accesskey.Refusal].
+// endpoint, or whose run.url contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
+// qecd_ in any case, is refused as one the schema refuses. A 401 is unauthorized, a
+// signed refusal is the code its body contains, rate_limited say, and an answer that
+// does not verify is answer_unsigned, each an [*accesskey.Refusal].
 func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
 	if err := c.Check(); err != nil {
 		return nil, "", err
@@ -818,15 +818,15 @@ func CheckLabels(labels map[string]string) error {
 }
 
 // shownLabelKey reports whether k is one of the four phrases [ShownLabels] puts in place
-// of a label's key that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_, which a
-// label's key may be.
+// of a label's key that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
+// qecd_, which a label's key may be.
 func shownLabelKey(k string) bool { return accesskey.IsNamePhrase(k) }
 
 // ShownLabels are a run's labels as Forager sends them to Qory Apiary, in run.started and
 // in a registration: each key and each value that contains qak_, qrk_, qecr_, qecn_,
-// qecp_, qecg_ or qeci_ in any case is accesskey.ShownName's phrase in its place. Of two
-// labels whose keys become the same phrase, the one whose key sorts first is kept. Nil is
-// nil.
+// qecp_, qecg_, qeci_ or qecd_ in any case is accesskey.ShownName's phrase in its
+// place. Of two labels whose keys become the same phrase, the one whose key sorts first
+// is kept. Nil is nil.
 func ShownLabels(labels map[string]string) map[string]string {
 	if labels == nil {
 		return nil

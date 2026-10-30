@@ -9,15 +9,20 @@ import (
 )
 
 // TestTheLaunchLineIsMasked pins the line of Report of a run with a run key: the
-// values of this machine, with the run's masker's placeholder in place of a
-// forwarder's password and the run key's phrase in place of a value that contains
-// qrk_.
+// values of this machine, with the run key's phrase in place of a value that contains
+// qrk_, and, once the run's masker replaces in it as OpenSpec.Report does, the
+// masker's placeholder in place of a forwarder's password. launchLine itself leaves the
+// password, so the line is masked once.
 func TestTheLaunchLineIsMasked(t *testing.T) {
 	password := strings.Repeat("p", 43)
 	r := &Run{dir: "/srv/runs/r1", masker: &mask.Masker{}}
 	r.masker.AddProxy(proxyUser, password)
 	spec := runSpec{SessionSpec: SessionSpec{Dir: "/srv/work", HarnessHome: "/srv/home", InputsDir: "/srv/in"}}
-	line := r.launchLine(spec, 2, runtimes.Launch{Command: "/usr/bin/agent", Args: []string{"--proxy", "http://qory:" + password + "@127.0.0.1:1", "qrk_example"}})
+	raw := r.launchLine(spec, 2, runtimes.Launch{Command: "/usr/bin/agent", Args: []string{"--proxy", "http://qory:" + password + "@127.0.0.1:1", "qrk_example"}})
+	if !strings.Contains(raw, password) {
+		t.Errorf("launchLine replaced the password itself: %s", raw)
+	}
+	line := r.masker.Replace(raw)
 	host := hostname()
 	want := `session 2 starts on this machine: host ` + host + `, dir "/srv/work", home "/srv/home", inputs "/srv/in", command "/usr/bin/agent", ` +
 		`args ["--proxy" "http://qory:` + mask.ProxyPassword + `@127.0.0.1:1" "` + rkValue + `"]`

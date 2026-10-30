@@ -93,7 +93,7 @@ func TestTheHighestRungWins(t *testing.T) {
 		{"Forager's names and a placeholder are fixed", variables.Inputs{
 			Own: []string{"CLAUDE_SETTINGS_HINT"}, Placeholders: []string{"GITHUB_TOKEN"},
 			Server: map[string]string{"CLAUDE_SETTINGS_HINT": "x", "GITHUB_TOKEN": "x"}, Machine: []string{"CLAUDE_SETTINGS_HINT=y"},
-		}, nil, []string{"CLAUDE_SETTINGS_HINT<-fixed apiary:fixed machine:fixed", "GITHUB_TOKEN<-fixed apiary:fixed"}},
+		}, nil, []string{"CLAUDE_SETTINGS_HINT<-fixed apiary:fixed machine:fixed", "GITHUB_TOKEN<-fixed apiary:denied"}},
 		{"a later value of one source replaces an earlier", variables.Inputs{Run: []string{"A=1", "B=2", "A=3"}, Machine: []string{"C=1", "C=2"}},
 			[]string{"A=3", "B=2", "C=2"}, []string{"A<-run", "B<-run", "C<-machine"}},
 		{"names compare exactly", variables.Inputs{Server: map[string]string{"Region": "eu"}, Run: []string{"REGION=us"}},
@@ -281,7 +281,8 @@ func TestAnUnwalledRun(t *testing.T) {
 // the run, the machine or the harness's defaults set; a fixed name only when it won
 // over one of those; a name of the inherited environment only when one of those set
 // it too; a variable the runtime declares, which behind a wall is unset inside when
-// nothing applies, only when a source set it, with no source that won.
+// nothing applies, only when a source set it, with no source that won, such as a model
+// key's variable, which the deny list's model_keys leave out.
 func TestWhichNamesTheRecordLists(t *testing.T) {
 	in := claude
 	in.Walled = true
@@ -291,14 +292,15 @@ func TestWhichNamesTheRecordLists(t *testing.T) {
 	in.Server = map[string]string{"ANTHROPIC_API_KEY": "x", "EDITOR": "nano"}
 	in.Defaults = []string{"CLAUDE_CODE_OAUTH_TOKEN=a-fake-credential"}
 	got := resolve(t, in)
-	want(t, "record", record(got.Applied), []string{"ANTHROPIC_API_KEY apiary:denied", "CLAUDE_CODE_OAUTH_TOKEN<-harness", "EDITOR<-apiary shell:overridden"})
-	want(t, "env", got.Env, []string{"CLAUDE_CODE_OAUTH_TOKEN=a-fake-credential", "EDITOR=nano"})
+	want(t, "record", record(got.Applied), []string{"ANTHROPIC_API_KEY apiary:denied", "CLAUDE_CODE_OAUTH_TOKEN harness:denied", "EDITOR<-apiary shell:overridden"})
+	want(t, "env", got.Env, []string{"EDITOR=nano"})
 }
 
 // TestTheServersValueOfWhatStaysOutsideIsLeftOut pins the server's values the run
 // leaves out besides the deny list: a variable the runtime declares or reserves and
-// one a value of the machine's is read from, denied, while the node's value of either
-// applies; a node value of a declared name passes, and only the server's is left out.
+// one a value of the machine's is read from, denied, while the node's value of a name
+// a machine value is read from applies; a model key's variable is among the deny
+// list's model_keys, so the run's value of it is left out too.
 func TestTheServersValueOfWhatStaysOutsideIsLeftOut(t *testing.T) {
 	in := claude
 	in.Unwalled = variables.Accept
@@ -307,8 +309,8 @@ func TestTheServersValueOfWhatStaysOutsideIsLeftOut(t *testing.T) {
 	in.Run = []string{"ANTHROPIC_AUTH_TOKEN=a-fake-credential"}
 	in.Shell = []string{"SENTRY_AUTH_SOURCE=the-machine-value"}
 	got := resolve(t, in)
-	want(t, "env", got.Env, []string{"ANTHROPIC_AUTH_TOKEN=a-fake-credential"})
-	want(t, "record", record(got.Applied), []string{"ANTHROPIC_AUTH_TOKEN<-run apiary:denied", "SENTRY_AUTH_SOURCE<-shell apiary:denied"})
+	want(t, "env", got.Env, nil)
+	want(t, "record", record(got.Applied), []string{"ANTHROPIC_AUTH_TOKEN apiary:denied run:denied", "SENTRY_AUTH_SOURCE<-shell apiary:denied"})
 }
 
 // TestRefusalsComeFirst pins that Resolve refuses before it resolves, over every value

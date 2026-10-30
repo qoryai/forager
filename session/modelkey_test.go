@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
@@ -245,7 +246,8 @@ func TestTheKeysEndpointTakesThePlaceOfEveryOther(t *testing.T) {
 }
 
 // TestAStartKeyTheRuntimeDoesNotReadIsRefused pins an API credential for which the
-// runtime's descriptor lists no key: a runtime with no model section, a format the
+// runtime's descriptor lists no key: a runtime with no model section, here the bare
+// runtime set by name in the spec, unlike a spec with no runtime, a format the
 // descriptor lists no key for, and an auth no key of the format has, by its scheme,
 // its header's name or its oauth, a header's name that contains qak_ being the value's
 // phrase. Each is run_configuration_invalid with the credential's name, before the
@@ -280,6 +282,133 @@ func TestAStartKeyTheRuntimeDoesNotReadIsRefused(t *testing.T) {
 			joinRefusedOnLink(t, g, "run_configuration_invalid")
 		})
 	}
+}
+
+// TestASessionWithNoRuntimeHasNoStartKey pins a session whose spec has no runtime in a
+// run with model keys: one key, behind a wall and without one, and two keys and a
+// model_credential. AgentEnv and the
+// join pass, the program's environment has no model key's variable, no endpoint
+// variable and no key's placeholder, and the record has no credential_variables.
+func TestASessionWithNoRuntimeHasNoStartKey(t *testing.T) {
+	keys := []map[string]any{model(), apiKey("backup", "anthropic-messages", "https://backup.model.example", "bearer")}
+	for _, tc := range []struct {
+		what   string
+		keys   []map[string]any
+		start  string
+		walled bool
+	}{
+		{"one key, walled", keys[:1], "", true},
+		{"one key, unwalled", keys[:1], "", false},
+		{"two keys and a model_credential", keys, "backup", true},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			ctx := context.Background()
+			sp, g := specGateway(t)
+			out := dumpsEnv(t, &sp)
+			sp.Runtime = nil
+			if tc.walled {
+				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			}
+			answeringStart(g, tc.keys, nil, tc.start)
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			agentEnv, err := r.AgentEnv(sp.SessionSpec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := r.Join(ctx, sp.SessionSpec)
+			if _, cerr := r.Close(ctx, outcomeOf(res, err)); cerr != nil && err == nil {
+				t.Fatal(cerr)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			placeholders := []string{link.KeyPlaceholder("model"), link.KeyPlaceholder("backup")}
+			check := func(where string, env map[string]string) {
+				for name, value := range env {
+					if slices.Contains(modelKeys, name) || name == endpointVariable || slices.Contains(placeholders, value) {
+						t.Errorf("%s has %s=%q; want no model key's variable, endpoint or placeholder", where, name, value)
+					}
+				}
+			}
+			check("the program's environment", envOf(t, out))
+			fromAgentEnv := map[string]string{}
+			for _, kv := range agentEnv {
+				name, value, _ := strings.Cut(kv, "=")
+				fromAgentEnv[name] = value
+			}
+			check("AgentEnv", fromAgentEnv)
+			if got := credentialVariables(t, res); got != nil {
+				t.Errorf("credential_variables %q, want none", got)
+			}
+		})
+	}
+}
+
+// TestTheJoinRequestAsksForAModelKeyWithARuntime pins the join request's model_key:
+// true for a session with a runtime, the Claude Code descriptor or the bare runtime
+// set by name, and false for a session whose spec has no runtime.
+func TestTheJoinRequestAsksForAModelKeyWithARuntime(t *testing.T) {
+	for _, tc := range []struct {
+		what    string
+		runtime func(t *testing.T) runtimes.Runtime
+		want    bool
+	}{
+		{"Claude Code", claudeCode, true},
+		{"the bare runtime by name", func(*testing.T) runtimes.Runtime { return runtimes.Bare("sh") }, true},
+		{"no runtime", func(*testing.T) runtimes.Runtime { return nil }, false},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			sp, g := specGateway(t)
+			dumpsEnv(t, &sp)
+			sp.Runtime = tc.runtime(t)
+			if _, err := run(context.Background(), sp); err != nil {
+				t.Fatal(err)
+			}
+			joins := g.Joins()
+			if len(joins) != 1 || joins[0].Request.ModelKey != tc.want {
+				t.Fatalf("join requests %+v; want one with model_key %v", joins, tc.want)
+			}
+		})
+	}
+}
+
+// TestASessionWithNoRuntimeNamesNoModelKey pins a spec with no runtime and a
+// ModelCredential: AgentEnv and Join each refuse it with the fix first, the name
+// through accesskey.ShownName, and no join request is sent. The fake gateway answers
+// such a join request 400 invalid_request, as the gateway does.
+func TestASessionWithNoRuntimeNamesNoModelKey(t *testing.T) {
+	ctx := context.Background()
+	sp, g := specGateway(t)
+	dumpsEnv(t, &sp)
+	sp.Runtime, sp.ModelCredential = nil, "backup"
+	answeringStart(g, []map[string]any{model(), apiKey("backup", "anthropic-messages", "https://backup.model.example", "bearer")}, nil, "model")
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `set SessionSpec.Runtime, or leave SessionSpec.ModelCredential empty: a session with no runtime starts with no model key, and the spec names the model key "backup"`
+	if _, err := r.AgentEnv(sp.SessionSpec); err == nil || err.Error() != want {
+		t.Errorf("AgentEnv: %v\nwant %s", err, want)
+	}
+	res, err := r.Join(ctx, sp.SessionSpec)
+	if err == nil || err.Error() != want {
+		t.Errorf("Join: %v\nwant %s", err, want)
+	}
+	if joins := g.Joins(); len(joins) != 0 {
+		t.Errorf("join requests %+v; want none", joins)
+	}
+	k, err := server.NewLocalLink(g.Local(), "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ref *accesskey.Refusal
+	if _, err := k.Join(ctx, server.LocalOrigin+"/v1/run-configuration", r.ID(), server.LinkJoinRequest{Passes: []string{}, ModelCredential: "backup"}); !errors.As(err, &ref) || ref.Status != 400 || ref.Code != "invalid_request" {
+		t.Errorf("the fake's answer to model_key false and a model_credential: %v", err)
+	}
+	r.Close(ctx, outcomeOf(res, err))
 }
 
 // TestModelCredentialChoosesTheStartKey pins a run with two API credentials: the one
@@ -493,12 +622,12 @@ func (p *recordsPrepare) Model() (runtimes.ModelPlaces, bool) {
 }
 
 // TestAWalledRunNeedsAModelKey pins the session's check that a walled run whose gateway
-// holds credentials for it has a model key for its runtime: an API credential, or a
-// value of one of the model keys' variables from the run or the machine. A run without
-// credential_hosts is not checked, nor is a run without a wall: its runtime may use the
-// developer's login. A value the harness or the runtime's preparation sets to empty is
-// no model key. The refusal is model_key_missing with the model keys' variables, and
-// quotes no value.
+// holds credentials for it has a model key for its runtime: an API credential. A run
+// without credential_hosts is not checked, nor is a run without a wall: its runtime may
+// use the developer's login. A value the harness or the runtime's preparation sets to
+// empty is no model key, and neither is a value of one of the model keys' variables from
+// the run or the machine, which the deny list's model_keys leave out. The refusal is
+// model_key_missing with the model keys' variables, and quotes no value.
 func TestAWalledRunNeedsAModelKey(t *testing.T) {
 	forge := sealed("forge", "api.github.com", "GITHUB_TOKEN")
 	for _, tc := range []struct {
@@ -522,10 +651,10 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 		{"walled, an API credential", true, []map[string]any{forge, model()}, nil, false},
 		{"walled, a value from the machine", true, []map[string]any{forge}, func(sp *runSpec) {
 			sp.Variables.Machine = []string{apiKeyVariable + "=sk-ant-a-key-of-the-test"}
-		}, false},
+		}, true},
 		{"walled, a value from the run", true, []map[string]any{forge}, func(sp *runSpec) {
 			sp.Variables.Run = []string{oauthVariable + "=sk-ant-oat-a-key-of-the-test"}
-		}, false},
+		}, true},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -783,12 +912,12 @@ func (p *preparesKeys) Model() (runtimes.ModelPlaces, bool) {
 	return p.Runtime.(runtimes.Model).Model()
 }
 
-// TestTheSettingsEnvSetsNoModelKeyVariable pins that, beside an x-api-key start key,
-// the run's settings.json keeps no value of a Claude Code model-key variable or of
+// TestTheSettingsEnvSetsNoModelKeyVariable pins that the run's settings.json keeps no
+// value of a Claude Code model-key variable, of a forge token's variable or of
 // ANTHROPIC_BASE_URL from the env object of the --settings file, which Claude Code
-// applies over its environment, and keeps the other members and the hooks. Without a
-// start key the model-key variables are kept, and ANTHROPIC_BASE_URL, which the
-// descriptor denies, is not.
+// applies over its environment, and keeps the other members and the hooks, with or
+// without a start key. The run reports a line for each forge token's or model key's
+// name it leaves out, apart from the start key's variables.
 func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 	env := map[string]any{
 		authTokenVariable:    "sk-fake-auth-token",
@@ -796,18 +925,28 @@ func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 		apiKeyVariable:       "sk-fake-api-key",
 		"ANTHROPIC_BASE_URL": "https://settings.invalid/anthropic",
 		"QORY_TEST_KEPT":     "kept",
+		"GH_TOKEN":           "ghp_" + strings.Repeat("x", 36),
+	}
+	line := func(name, kind string) string {
+		return "Move " + name + " to the gateway's credentials in forager.yaml: the run leaves out the value that the env of --settings passes, since denied-variables.json lists it as a " + kind + "."
 	}
 	for _, c := range []struct {
 		name  string
 		hosts []map[string]any
-		want  map[string]any
+		lines []string
 	}{
-		{"start key", []map[string]any{model()}, map[string]any{"QORY_TEST_KEPT": "kept"}},
-		{"no start key", nil, map[string]any{authTokenVariable: "sk-fake-auth-token", oauthVariable: "sk-fake-oauth-token",
-			apiKeyVariable: "sk-fake-api-key", "QORY_TEST_KEPT": "kept"}},
+		{"start key", []map[string]any{model()}, []string{line("GH_TOKEN", "forge token")}},
+		{"no start key", nil, []string{line(apiKeyVariable, "model key"), line(authTokenVariable, "model key"),
+			line(oauthVariable, "model key"), line("GH_TOKEN", "forge token")}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sp, g := specGateway(t)
+			var reported []string
+			sp.Report = func(l string) {
+				if strings.HasPrefix(l, "Move ") {
+					reported = append(reported, l)
+				}
+			}
 			passed := filepath.Join(t.TempDir(), "launch-settings.json")
 			b, _ := json.Marshal(map[string]any{"env": env, "permissions": map[string]any{"allow": []string{"Bash"}}})
 			if err := os.WriteFile(passed, b, 0o644); err != nil {
@@ -828,8 +967,11 @@ func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 			if err := json.Unmarshal(b, &doc); err != nil {
 				t.Fatal(err)
 			}
-			if got, want := must(json.Marshal(doc.Env)), must(json.Marshal(c.want)); string(got) != string(want) {
+			if got, want := must(json.Marshal(doc.Env)), `{"QORY_TEST_KEPT":"kept"}`; string(got) != want {
 				t.Errorf("env is %s, want %s", got, want)
+			}
+			if !slices.Equal(reported, c.lines) {
+				t.Errorf("the run reported\n%q\nwant\n%q", reported, c.lines)
 			}
 			if doc.Permissions == nil || len(doc.Hooks) == 0 || !strings.Contains(string(b), os.Args[0]) {
 				t.Errorf("settings.json without the launch's permissions or the hooks:\n%s", b)

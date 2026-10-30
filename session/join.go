@@ -22,6 +22,7 @@ import (
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/parents"
 	"github.com/qoryai/forager/session/internal/socket"
+	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/wall"
 )
@@ -89,7 +90,16 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // stops the runtime, and so does the run being closed from outside; a runtime that
 // exits 0 at that stop, or at the time limit's, has exited 0, and its
 // dev.qory.session.exited is recorded and its Result returned like any other.
+//
+// The run's masker replaces the run's secrets in the error's text and in a refusal's,
+// and errors.As gives a refusal's masked copy with its code.
 func (r *Run) Join(ctx context.Context, spec SessionSpec) (*Result, error) {
+	res, err := r.join(ctx, spec)
+	return res, maskError(r.masker, err)
+}
+
+// join is Join with its error as the session made it, unmasked.
+func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if !r.joining.TryLock() {
 		return nil, errors.New("a session of the run is still running: sessions of one run join one after another")
 	}
@@ -177,6 +187,11 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 	}
 	rt := spec.Runtime
 	if rt == nil {
+		// A session with no runtime has no start key, so it names none.
+		if spec.ModelCredential != "" {
+			return runSpec{}, nil, fmt.Errorf("set SessionSpec.Runtime, or leave SessionSpec.ModelCredential empty: a session with no runtime starts with no model key, and the spec names the model key %s",
+				accesskey.ShownName(spec.ModelCredential, true))
+		}
 		rt = runtimes.Bare(filepath.Base(spec.Command))
 	}
 	leave := rt.Stop()
@@ -209,9 +224,10 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 // with -1 when the run ended. A 403 with a code, numbered by the gateway as the next
 // join, writes the refused join's dev.qory.session.exited after it. A 410 ends the
 // run. A failure that leaves unknown whether the gateway numbered the join keeps the
-// close from writing no_session.
+// close from writing no_session. The request asks the gateway to set no model key for
+// a session with no runtime, which has no start key.
 func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.LinkJoinAnswer, int, error) {
-	answer, err := r.link.Join(ctx, r.disc.Run.URL, r.id, server.LinkJoinRequest{Passes: passes(s), ModelCredential: s.ModelCredential})
+	answer, err := r.link.Join(ctx, r.disc.Run.URL, r.id, server.LinkJoinRequest{Passes: passes(s), ModelKey: s.Runtime != nil, ModelCredential: s.ModelCredential})
 	if err == nil {
 		r.numbered = answer.Session
 		return answer, answer.Session, nil
@@ -258,7 +274,8 @@ func (r *Run) refusedJoin(n int, err error) {
 //
 // Behind a wall the session's start has two steps after dev.qory.session.started. The
 // image step, when the policy's image is a reference and no step fetched it yet, spans
-// the wall's pull and the check of the image's user, wall.Puller. The wall step spans
+// the check of the image's manifest at its registry, the wall's pull and the check of
+// the image's user, wall.Puller. The wall step spans
 // the rest: the wall's preparation, its networks, the forwarder, the hook socket, the
 // second check of the places and the wall's Wrap, up to the launch's start. Each setup
 // command of SessionSpec.Setup then has a setup step, which the session writes from its
@@ -395,11 +412,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// The runtime chooses the variable of the start key, the API credential the session
 	// starts with, the join answer's: from here on it is one of the credential's
 	// placeholders and of the run's, and key sets it and the runtime's endpoint variable.
+	// A session whose spec has no runtime has no start key.
 	model := answer.ModelCredential
 	if model == "" {
 		model = r.answer.ModelCredential
 	}
-	credentialHosts, placeholderNames, key, err := chosen(rt, r.answer.CredentialHosts, r.answer.Placeholders, model)
+	credentialHosts, placeholderNames, key, err := chosen(rt, spec.Runtime == nil, r.answer.CredentialHosts, r.answer.Placeholders, model)
 	if err != nil {
 		return fail(err)
 	}
@@ -441,10 +459,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// when it contains such a place. The places are worked out once, for both.
 	written := sync.OnceValues(func() ([]string, error) { return writtenPlaces(spec, r.id, plan, r.wallOwn) })
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
+	denied, err := deniedVariables(rt, spec.Wall != nil)
+	if err != nil {
+		return fail(err)
+	}
 	attach := runtimes.Attach{Launch: prepared, SessionDir: sessionDir, Forwarder: spec.Forwarder, Interactive: interactive,
 		Readable: readable(written), ReadableDir: readableDir(written),
 		Walled: spec.Wall != nil, Placeholders: append([]string(nil), placeholderNames...), ModelVariables: key.modelVariables(),
-		DeniedVariables: deniedVariables(rt, spec.Wall != nil)}
+		DeniedVariables: denied}
 	if r.byReference {
 		attach.Inside = inside
 	}
@@ -488,6 +510,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if spec.OnVariables != nil {
 		spec.OnVariables(applied(vars.Applied))
 	}
+	for _, line := range leftOutCredentials(vars.Applied, prepared.LeftOut, placeholderNames, key.modelVariables()) {
+		r.open.Report(line)
+	}
 	// password is what the first request of every connection to an unwalled forwarder
 	// must contain, the password of the agent's proxy URL, a secret of this session's
 	// forwarder: without a wall the agent's proxy is a port on loopback any process of
@@ -499,12 +524,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if password, err = newForwarderSecret(); err != nil {
 			return fail(err)
 		}
-		r.masker.AddProxy(proxyUser, password)
+		r.addPassword(password)
 	}
+	// The session masks with the run's masker even while it is empty: a reload may add
+	// a server's variable value to it while the session runs.
 	masker := r.masker
-	if masker.Empty() {
-		masker = nil
-	}
 	// Behind a wall the run's wall, its forwarder and its relay started as the run
 	// opened, and the session's launch starts the agent's container alone. The session starts
 	// before the wall step: dev.qory.session.started and the session's policy_applied
@@ -550,7 +574,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return fail(err)
 		}
 		// The image step, for an image by reference no step fetched yet, spans the
-		// wall's pull and the check of the image's user. After a fetch, the wall finds
+		// check of the image's manifest, the wall's pull and the check of its user. After a fetch, the wall finds
 		// the image by its digest and the join writes no image step.
 		if puller, ok := spec.Wall.(wall.Puller); ok && r.byReference && r.imageStep == 0 {
 			open = r.startStep(event.StepImage, r.img.Ref)
@@ -801,14 +825,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 }
 
 // sessionStarted is the data of the session's dev.qory.session.started. A value of the
-// session's that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case is
-// sent as a phrase in its place: accesskey.ShownName's for the runtime, the image, its
-// name and its container runtime; accesskey.ShownValue's for the directory, the command,
-// each argument, the runtime's version, the name of each setup command and each harness
-// source. In a run with a run key, dir is /workspace, the command and the arguments have
-// <run>, <home> and <inputs> in place of the run directory, the harness home and the
-// inputs directory (neutralPaths), and harness is left out: launchLine reports the values
-// of this machine.
+// session's that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any
+// case is sent as a phrase in its place: accesskey.ShownName's for the runtime, the
+// image, its name and its container runtime; accesskey.ShownValue's for the directory,
+// the command, each argument, the runtime's version, the name of each setup command and
+// each harness source. In a run with a run key, dir is /workspace, the command and the
+// arguments have <run>, <home> and <inputs> in place of the run directory, the harness
+// home and the inputs directory (neutralPaths), and harness is left out: launchLine
+// reports the values of this machine.
 func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared runtimes.Launch, shown mountPlan, neutral func(string) string, interactive bool, cols, rows int) map[string]any {
 	command, args, dir := prepared.Command, prepared.Args, spec.Dir
 	if r.byReference {
@@ -853,13 +877,15 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 		}
 	}
 	if len(spec.Harness) > 0 && r.remote == nil {
-		harness := make([]map[string]any, len(spec.Harness))
+		harness := make([]any, len(spec.Harness))
 		for i, h := range spec.Harness {
 			harness[i] = map[string]any{"source": accesskey.ShownValue(h.Source, false), "commit": h.Commit}
 		}
 		started["harness"] = harness
 	}
-	return started
+	// The run's masker replaces the run's secrets in every string, such as a query value
+	// of a harness source's URL or a value in the args.
+	return maskedValue(texts{secrets: r.masker}, started).(map[string]any)
 }
 
 // neutralPaths writes, in a value of a run with a run key, <run> in place of the run
@@ -927,9 +953,9 @@ func neutralRoot(placeholder string) string {
 // directory, the harness home and the inputs directory on this machine; the command and
 // the arguments as the session starts them, which in a run whose policy has its image by
 // reference are the paths inside, under /workspace; and each harness source with its
-// commit. A value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ is the
-// phrase in its place, and the run's masker replaces each forwarder's password in the
-// line.
+// commit. A value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_
+// is the phrase in its place. The run's masker replaces the run's secrets in the line
+// once, as OpenSpec.Report passes it on.
 func (r *Run) launchLine(spec runSpec, n int, prepared runtimes.Launch) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "session %d starts on this machine:", n)
@@ -947,5 +973,89 @@ func (r *Run) launchLine(spec runSpec, n int, prepared runtimes.Launch) string {
 	for _, h := range spec.Harness {
 		fmt.Fprintf(&b, ", harness %q at %s", accesskey.ShownValue(h.Source, false), h.Commit)
 	}
-	return r.masker.Replace(b.String())
+	return b.String()
+}
+
+// leftOutCredentials is the lines for the names that denied-variables.json lists in
+// forge_tokens or model_keys and whose value a source passed and the run left out: a
+// value of the record the deny list left out, and a name of settings, what the runtime
+// left out of the file it copied. A name has a line for the server's value, whose fix
+// is in the run configuration, and one for the node's sources, whose fix is in
+// forager.yaml; each line has its sources in the record's order, the highest source
+// first, then the env of --settings. A placeholder of the run, and a model key's
+// variable the session sets or leaves out for the start key, model, have no line: the
+// gateway already has the credential.
+func leftOutCredentials(entries []variables.Entry, settings, placeholderNames, model []string) []string {
+	builtin, err := variables.Builtin()
+	if err != nil {
+		return nil
+	}
+	server, node := map[string]bool{}, map[string][]string{}
+	var names []string
+	add := func(name, from string) {
+		if slices.Contains(placeholderNames, name) || slices.Contains(model, name) {
+			return
+		}
+		if !server[name] && node[name] == nil {
+			names = append(names, name)
+		}
+		if from == variables.FromApiary {
+			server[name] = true
+		} else if source := sourceOf(from); !slices.Contains(node[name], source) {
+			node[name] = append(node[name], source)
+		}
+	}
+	for _, e := range entries {
+		for _, l := range e.Lost {
+			if l.Why == variables.WhyDenied {
+				add(e.Name, l.From)
+			}
+		}
+	}
+	for _, name := range settings {
+		add(name, fromSettings)
+	}
+	slices.Sort(names)
+	var lines []string
+	for _, name := range names {
+		kind := "forge token"
+		if !slices.ContainsFunc(builtin.ForgeTokens, func(c string) bool { return strings.EqualFold(c, name) }) {
+			if !slices.ContainsFunc(builtin.ModelKeys, func(c string) bool { return strings.EqualFold(c, name) }) {
+				continue
+			}
+			kind = "model key"
+		}
+		shown := accesskey.ShownName(name, false)
+		if server[name] {
+			lines = append(lines, fmt.Sprintf("Define %s as a credential in the run configuration, not as a variable: the run leaves out the value that the server passes, since denied-variables.json lists it as a %s.", shown, kind))
+		}
+		if from := node[name]; len(from) > 0 {
+			what := "the value that " + from[0] + " passes"
+			if len(from) > 1 {
+				what = "the values that " + strings.Join(from, " and ") + " pass"
+			}
+			lines = append(lines, fmt.Sprintf("Move %s to the gateway's credentials in forager.yaml: the run leaves out %s, since denied-variables.json lists it as a %s.", shown, what, kind))
+		}
+	}
+	return lines
+}
+
+// fromSettings is the source of a name the runtime left out of the file it copied.
+const fromSettings = "settings"
+
+// sourceOf is how a line names a source of the record.
+func sourceOf(from string) string {
+	switch from {
+	case variables.FromRun:
+		return "--env"
+	case variables.FromMachine:
+		return "wall.env"
+	case variables.FromHarness:
+		return "the harness's defaults"
+	case variables.FromFixed:
+		return "the harness"
+	case fromSettings:
+		return "the env of --settings"
+	}
+	return from
 }

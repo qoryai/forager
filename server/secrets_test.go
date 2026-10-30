@@ -215,7 +215,8 @@ func TestAPlaceholderTheDenyListCoversIsRefused(t *testing.T) {
 			t.Errorf("%s: %v", p, err)
 		}
 	}
-	for _, p := range []string{"ANTHROPIC_API_KEY", "PROXY_KEY", "MY_PATH"} {
+	// The deny list's credentials, such as GH_TOKEN, are placeholders a credential may take.
+	for _, p := range []string{"ANTHROPIC_API_KEY", "GH_TOKEN", "github_token", "PROXY_KEY", "MY_PATH"} {
 		v.runDoc = doc(p)
 		if _, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID); err != nil {
 			t.Errorf("%s: %v", p, err)

@@ -68,6 +68,13 @@ In a run with no wall, `qory-proxy-password` replaces the password of the agent'
 URL in the session's bytes and in the events made from the runtime's output and hook
 records.
 
+`***` replaces each secret the run knows: the values `qory` passes, such as those of
+`--env` and `wall.env`, the server's variable values of 8 characters or more, and text in
+the shape of an Anthropic, GitHub or AWS key or of an HTTP bearer token. It does so in
+the session's bytes, the events, the copy of the output on your terminal, and the
+errors that opening, joining and closing the run, its setup, its image's fetch and its
+steps return. See [docs/go.md](docs/go.md) for the shapes.
+
 Forager writes its events: the start, the policy, each connection, each chunk of output,
 a heartbeat every 30 seconds, and the exit. The agent's hooks and output add the
 runtime's events: prompts, tool calls, subagents, turns, as the runtime reports them
@@ -139,10 +146,10 @@ Every event goes to files. With a server, the events it selects go there too:
   Ed25519 key, and every answer is verified under the server's key the machine pins.
 - The server can return the run's policy and variables, chosen by the run's labels. It
   can change the policy while the run goes.
-- A name or a value that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or
-  `qeci_`, the start of an access key secret, a run key, a run code or an enrolment
-  code, is sent and printed as a phrase in its place, such as `(a name that contains a
-  run key)`. [docs/server.md](docs/server.md) lists where.
+- A name or a value that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`,
+  `qeci_` or `qecd_`, the start of an access key secret, a run key, a run code or an
+  enrolment code, is sent and printed as a phrase in its place, such as `(a name that
+  contains a run key)`. [docs/server.md](docs/server.md) lists where.
 
 A server is your control plane, or your receiver. The package `receiver` is a worked
 example.

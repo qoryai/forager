@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/policy"
 )
 
@@ -321,11 +322,11 @@ var nameMessages = map[string]struct {
 }
 
 // noSecretPrefix fails the test when the error contains qak_, qrk_, qecr_, qecn_, qecp_,
-// qecg_ or qeci_ in any case.
+// qecg_, qeci_ or qecd_ in any case.
 func noSecretPrefix(t *testing.T, what string, err error) {
 	t.Helper()
 	lower := strings.ToLower(err.Error())
-	if strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") || strings.Contains(lower, "qecn_") || strings.Contains(lower, "qecp_") || strings.Contains(lower, "qecg_") || strings.Contains(lower, "qeci_") {
+	if strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") || strings.Contains(lower, "qecn_") || strings.Contains(lower, "qecp_") || strings.Contains(lower, "qecg_") || strings.Contains(lower, "qeci_") || strings.Contains(lower, "qecd_") {
 		t.Errorf("%s: the error contains a secret's prefix: %v", what, err)
 	}
 }
@@ -639,7 +640,7 @@ func TestARenewalReportPrintsAPhraseForASecretInAName(t *testing.T) {
 	for name, phrase := range map[string]string{"qak_x": accessKeyPhrase, "a.qrk_b": runKeyPhrase, "qrk_x.qak_y": accessKeyPhrase, "model": "model"} {
 		if l := renewReport(t, name, fails, ""); !strings.HasPrefix(l, "credential "+phrase+" was not renewed: the adapter ") || !strings.HasSuffix(l, ": exit status 3: no installation") {
 			t.Errorf("a renewal of %s that fails: %s", name, l)
-		} else if lower := strings.ToLower(l); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") || strings.Contains(lower, "qecn_") || strings.Contains(lower, "qecp_") || strings.Contains(lower, "qecg_") || strings.Contains(lower, "qeci_") {
+		} else if lower := strings.ToLower(l); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") || strings.Contains(lower, "qecn_") || strings.Contains(lower, "qecp_") || strings.Contains(lower, "qecg_") || strings.Contains(lower, "qeci_") || strings.Contains(lower, "qecd_") {
 			t.Errorf("a renewal of %s that fails: a secret's prefix in %s", name, l)
 		}
 		want := "credential " + phrase + " was not renewed: the adapter answered with other hosts, schemes or paths than when the run started"
@@ -678,7 +679,7 @@ func TestAnAdaptersAnswerPrintsAPhraseForASecretInItsPath(t *testing.T) {
 		rest string
 	}{
 		"no JSON document":         {"echo not-a-document\n", Definition{}, " did not print a JSON document: "},
-		"outside the schema":       {`echo '{"version":1}'` + "\n", Definition{}, ": "},
+		"outside the schema":       {`echo '{"version":1}'` + "\n", Definition{}, " to match credential.schema.json: / fails required"},
 		"basic without a username": {answer(`{"hosts":["a.example"],"scheme":"basic"}`), Definition{}, ": the scheme basic needs a username without a colon or a space"},
 		"no token":                 {`echo '{"version":1,"apply":[{"hosts":["a.example"],"scheme":"bearer"}]}'` + "\n", Definition{}, " gave no token for [a.example]"},
 		"a host above":             {answer(`{"hosts":["a.example"],"scheme":"bearer"}`), Definition{Hosts: []string{"b.example"}}, " claims a.example, above the hosts the machine gives it"},
@@ -695,7 +696,10 @@ func TestAnAdaptersAnswerPrintsAPhraseForASecretInItsPath(t *testing.T) {
 				shown = path
 			}
 			want := "credential product: the adapter " + shown + c.rest
-			// A rest that ends with ": " is followed by a decoder's or a schema's error.
+			if strings.HasPrefix(c.rest, " to match ") {
+				want = "credential product: Fix the output of the adapter " + shown + c.rest
+			}
+			// A rest that ends with ": " is followed by a decoder's error.
 			if err == nil || !strings.HasPrefix(err.Error(), want) || (!strings.HasSuffix(c.rest, ": ") && err.Error() != want) {
 				t.Errorf("%s, %s:\n got %v\nwant %s", what, dir, err, want)
 				continue
@@ -732,10 +736,10 @@ func TestAFileThatCannotBeReadPrintsAPhraseForASecretInItsPath(t *testing.T) {
 }
 
 // TestAnAdaptersAnswerContentsPrintAPhraseForASecret pins the messages that print what
-// an adapter's answer contains: a path it claims, the schema's or the decoder's error,
-// which can quote the answer, and a scheme a definition gives. Each prints the value's
-// phrase in place of a value or an error text that contains qak_ or qrk_ in any case,
-// and a clean one as it is.
+// an adapter's answer contains: a path it claims and a scheme a definition gives print
+// the value's phrase in place of a value that contains qak_ or qrk_ in any case, and a
+// clean one as it is; an answer that fails the schema prints only the locations and
+// keywords, with no value, and no member name other than the schema's.
 func TestAnAdaptersAnswerContentsPrintAPhraseForASecret(t *testing.T) {
 	answer := func(apply string) string {
 		return `echo '{"version":1,"token":"t","apply":[` + apply + `]}'` + "\n"
@@ -747,14 +751,18 @@ func TestAnAdaptersAnswerContentsPrintAPhraseForASecret(t *testing.T) {
 	}{
 		"a path above":           {answer(`{"hosts":["a.example"],"scheme":"bearer","paths":["/qak_x"]}`), Definition{Paths: []string{"/x/*"}}, " claims the path " + accessKeyValuePhrase + ", above the paths the machine gives it"},
 		"a clean path above":     {answer(`{"hosts":["a.example"],"scheme":"bearer","paths":["/y"]}`), Definition{Paths: []string{"/x/*"}}, " claims the path /y, above the paths the machine gives it"},
-		"a host of the schema":   {answer(`{"hosts":["QRK_x.example"],"scheme":"bearer"}`), Definition{}, ": " + runKeyValuePhrase},
-		"a member of the schema": {`echo '{"version":1,"token":"t","apply":[{"hosts":["a.example"],"scheme":"bearer"}],"qak_x":1}'` + "\n", Definition{}, ": " + accessKeyValuePhrase},
+		"a host of the schema":   {answer(`{"hosts":["QRK_x.example"],"scheme":"bearer"}`), Definition{}, " to match credential.schema.json: /apply/0/hosts/0 fails pattern"},
+		"a member of the schema": {`echo '{"version":1,"token":"t","apply":[{"hosts":["a.example"],"scheme":"bearer"}],"qak_x":1}'` + "\n", Definition{}, " to match credential.schema.json: / fails additionalProperties"},
 	} {
 		path := adapterIn(t, "model", c.body)
 		d := c.def
 		d.Name, d.Adapter = "product", []string{path}
 		err := resolveError(t, []Definition{d}, []policy.Selected{{Name: "product"}}, nil)
-		if want := "credential product: the adapter " + path + c.want; err == nil || err.Error() != want {
+		want := "credential product: the adapter " + path + c.want
+		if strings.HasPrefix(c.want, " to match ") {
+			want = "credential product: Fix the output of the adapter " + path + c.want
+		}
+		if err == nil || err.Error() != want {
 			t.Errorf("%s:\n got %v\nwant %s", what, err, want)
 			continue
 		}
@@ -929,9 +937,9 @@ func TestAModelKeysTokenThatMatchesNoPrefixIsRefused(t *testing.T) {
 		body string
 		want string
 	}{
-		"placeholders":     {answer(set, `,"placeholders":["MODEL_KEY"]`), "remove placeholders from the answer of the adapter %s: the model key model takes none, since the session gives the runtime the key's variable"},
-		"another scheme":   {answer(`{"hosts":["api.model.example"],"scheme":"bearer"}`, ""), "set the model key model in the answer of the adapter %s with the scheme, header and username of its definition: the answer has others"},
-		"another header":   {answer(`{"hosts":["api.model.example"],"scheme":"header","header":"Authorization"}`, ""), "set the model key model in the answer of the adapter %s with the scheme, header and username of its definition: the answer has others"},
+		"placeholders":     {answer(set, `,"placeholders":["MODEL_KEY"]`), "remove placeholders from the output of the adapter %s: the model key model takes none, since the session gives the runtime the key's variable"},
+		"another scheme":   {answer(`{"hosts":["api.model.example"],"scheme":"bearer"}`, ""), "set the model key model in the output of the adapter %s with the scheme, header and username of its definition: the output has others"},
+		"another header":   {answer(`{"hosts":["api.model.example"],"scheme":"header","header":"Authorization"}`, ""), "set the model key model in the output of the adapter %s with the scheme, header and username of its definition: the output has others"},
 		"a host above its": {answer(`{"hosts":["other.model.example"],"scheme":"header","header":"x-api-key"}`, ""), "the adapter %s claims other.model.example, above the hosts the machine gives it"},
 	} {
 		path := adapter(t, c.body)
@@ -1039,4 +1047,107 @@ func TestAModelKeyOutsideTheAllowListIsRefused(t *testing.T) {
 		t.Fatalf("a model key whose endpoint host an allow entry covers: %v", err)
 	}
 	held.Close()
+}
+
+// TestAnAdaptersAnswerThatFailsTheSchemaHasNoKey pins the error of an answer that
+// fails credential.schema.json: it starts with the fix and lists each failing
+// location and keyword, at most 5 and then how many more, with no value, and no
+// member name other than the schema's, whatever their size, bytes or number.
+func TestAnAdaptersAnswerThatFailsTheSchemaHasNoKey(t *testing.T) {
+	const secret = "fake.secret_token-0123456789"
+	long := strings.Repeat("x.", 2700)
+	apply := func(header string) string {
+		return `"apply":[{"hosts":["a.example"],"scheme":"header","header":` + header + `,"token":"X-Api-Key"}]`
+	}
+	var hosts []string
+	for i := range 1100 {
+		hosts = append(hosts, fmt.Sprintf(`"h%04d.example"`, i))
+	}
+	for _, c := range []struct {
+		name, answer, secret, want string
+	}{
+		{"a token in the header's place", `{"version":1,` + apply(`"`+secret+`"`) + `}`, secret, "/apply/0/header fails pattern"},
+		{"a token of 5,400 bytes in the header", `{"version":1,` + apply(`"`+long+`"`) + `}`, long, "/apply/0/header fails pattern"},
+		{"a token as a member name", `{"version":1,"` + secret + `":1,"token":"t",` + `"apply":[{"hosts":["a.example"],"scheme":"bearer"}]}`, secret, "/ fails additionalProperties"},
+		{"an expires_at that is a number", `{"version":1,"expires_at":5,` + apply(`"`+secret+`"`) + `}`, secret, "/apply/0/header fails pattern; /expires_at fails type"},
+		{"a token with a quote", `{"version":1,` + apply(`"fake'secret-token-0123"`) + `}`, "secret-token-0123", "/apply/0/header fails pattern"},
+		{"a token with a control byte", `{"version":1,` + apply(`"fake\u0001secret-token-0123"`) + `}`, "secret-token-0123", "/apply/0/header fails pattern"},
+		{"a token after 1100 strings", `{"version":1,"apply":[{"hosts":[` + strings.Join(hosts, ",") + `],"scheme":"header","header":"` + secret + `","token":"X-Api-Key"}]}`, secret, "/apply/0/header fails pattern"},
+		{"seven failures", `{"version":1,"token":"t","apply":[{"hosts":["A0","A1","A2","A3","A4","A5","A6"],"scheme":"bearer"}]}`, "A6",
+			"/apply/0/hosts/0 fails pattern; /apply/0/hosts/1 fails pattern; /apply/0/hosts/2 fails pattern; /apply/0/hosts/3 fails pattern; /apply/0/hosts/4 fails pattern and 2 more"},
+	} {
+		body := "cat <<'EOF'\n" + c.answer + "\nEOF\n"
+		err := resolveError(t, []Definition{{Name: "product", Adapter: []string{adapter(t, body)}}}, []policy.Selected{{Name: "product"}}, nil)
+		if err == nil {
+			t.Errorf("%s: no error", c.name)
+			continue
+		}
+		if strings.Contains(err.Error(), c.secret) || !strings.Contains(err.Error(), "Fix the output of the adapter ") ||
+			!strings.HasSuffix(err.Error(), " to match credential.schema.json: "+c.want) {
+			t.Errorf("%s: %.300s", c.name, err)
+		}
+	}
+}
+
+// TestManyFailuresOfAnAnswerAreQuick pins the cost of an answer with 100,000 hosts
+// that fail the schema: the error lists the first 5 by number, hosts/0 to hosts/4, and
+// "and 99995 more", and building it from the validation error takes less than 2
+// seconds.
+func TestManyFailuresOfAnAnswerAreQuick(t *testing.T) {
+	hosts := make([]string, 100_000)
+	for i := range hosts {
+		hosts[i] = fmt.Sprintf(`"A%d"`, i)
+	}
+	doc, err := contracts.Decode("answer.json", []byte(`{"version":1,"token":"t","apply":[{"hosts":[`+strings.Join(hosts, ",")+`],"scheme":"bearer"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := contracts.Compile("credential.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := schema.Validate(doc)
+	document, _ := contracts.Document("credential.schema.json")
+	began := time.Now()
+	got := schemaFailures(invalid, document)
+	took := time.Since(began)
+	t.Logf("100000 failures in %s", took)
+	want := "/apply/0/hosts/0 fails pattern; /apply/0/hosts/1 fails pattern; /apply/0/hosts/2 fails pattern; /apply/0/hosts/3 fails pattern; /apply/0/hosts/4 fails pattern and 99995 more"
+	if got != want {
+		t.Errorf("schemaFailures = %.400s, want %s", got, want)
+	}
+	if took > 2*time.Second {
+		t.Errorf("schemaFailures took %s, want less than 2s", took)
+	}
+}
+
+// TestAnAdaptersLineHasNoKey pins the adapter's first line of standard error, in the
+// error of a start and in a renewal's report: a match of mask.Shapes is ***, and so is
+// the token the gateway holds for the credential when a renewal fails.
+func TestAnAdaptersLineHasNoKey(t *testing.T) {
+	ghp := "ghp_" + strings.Repeat("x", 36)
+	body := "echo 'denied for " + ghp + " and fake-held-token-0123' >&2; exit 3\n"
+	err := resolveError(t, []Definition{{Name: "product", Adapter: []string{adapter(t, body)}}}, []policy.Selected{{Name: "product"}}, nil)
+	if err == nil || strings.Contains(err.Error(), ghp) || !strings.HasSuffix(err.Error(), ": exit status 3: denied for *** and fake-held-token-0123") {
+		t.Errorf("a start whose adapter fails: %v", err)
+	}
+	said := make(chan string, 1)
+	h := &held{
+		def:     Definition{Name: "product", Adapter: []string{adapter(t, body)}},
+		report:  func(l string) { said <- l },
+		done:    make(chan struct{}),
+		tokens:  []string{"fake-held-token-0123"},
+		expires: time.Now(),
+		asked:   time.Now().Add(-time.Hour),
+	}
+	go h.renew()
+	defer h.stop()
+	select {
+	case l := <-said:
+		if !strings.HasSuffix(l, ": exit status 3: denied for *** and ***") {
+			t.Errorf("a renewal whose adapter fails: %s", l)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no renewal was reported")
+	}
 }

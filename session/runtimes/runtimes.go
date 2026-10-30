@@ -61,6 +61,10 @@ type Launch struct {
 	Command string
 	Args    []string
 	Env     []string
+	// LeftOut is the names of the variables a runtime left out of a file it copied
+	// whose values reach the program's environment, such as the env object of Claude
+	// Code's --settings, sorted; the session reports a forge token's or a model key's.
+	LeftOut []string
 }
 
 // Attach is what Prepare is given.
@@ -93,11 +97,12 @@ type Attach struct {
 	// reach the program's environment leaves these names out of the copy. Empty when
 	// the run has no start key.
 	ModelVariables []string
-	// DeniedVariables are the runtime's denies and, behind a wall, its model
-	// overrides, from its descriptor: the names the session leaves out of the values
-	// of the server, the run, the machine and the harness's defaults, with or without
-	// a start key. A runtime that copies a file whose values reach the program's
-	// environment leaves these names out of the copy, regardless of case.
+	// DeniedVariables are the runtime's denies, the names of forge_tokens and
+	// model_keys of denied-variables.json and, behind a wall, the runtime's model
+	// overrides: names the session leaves out of the values of the server, the run, the
+	// machine and the harness's defaults, with or without a start key. A runtime that
+	// copies a file whose values reach the program's environment leaves these names out
+	// of the copy, regardless of case.
 	DeniedVariables []string
 	// Inside, when not nil, writes a path of this machine's as the enclosure sees it,
 	// in a string that may hold one: a runtime applies it to what it copies into

@@ -14,6 +14,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/wall"
@@ -65,7 +66,7 @@ type OpenSpec struct {
 	// @. Nil allows no reference. A list needs an Image, the default: an image by
 	// reference starts under the default's runtime, with no nested Docker,
 	// as the wall's user, its workspace at /workspace inside, and the wall fetches it,
-	// unless the engine holds it by that digest, and refuses one whose user is root,
+	// also when the engine holds it by that digest, and refuses one whose user is root,
 	// image_user_root. A reference no entry covers is no run, image_not_allowed.
 	ImagesAllow []string
 	// RunsDir holds the run directories; empty means .qory/runs in the working
@@ -137,6 +138,46 @@ type OpenSpec struct {
 	// default, masks no harness text, and a session with no HarnessHome masks none
 	// either.
 	HarnessHidden bool
+	// Masker is the run's masker: it replaces the run's secrets with *** (mask.Secret),
+	// as they are, percent-encoded and JSON-escaped, from the open to the close, before
+	// the first event is written, in the host steps and in every session. Make it with
+	// mask.New, add the secret values you know and the run does not with
+	// mask.Masker.AddSecret, such as the values of qory's --env and wall.env, a run
+	// code, a run key and the query values of a harness URL, and wrap your writers
+	// with mask.NewWriter on the same masker, so your output and the run's are masked
+	// with one set of values. The run adds to it the server's variable values of 8
+	// characters or more, the run answer's at the open and each reload's from that
+	// reload on, and each forwarder's password, replaced with mask.ProxyPassword,
+	// before the forwarder starts. AddSecret refuses a value of more than
+	// mask.MaxSecretSize bytes, and a new value once the masker has mask.MaxSecrets
+	// different values: a server's value it refuses is a Report line with its
+	// variable's name, and is not masked. AddSecret does not filter by length: leave
+	// out a value that would replace ordinary text. The run's masker covers the
+	// dev.qory.run.log chunks of the runtime's output, of the host steps and of the
+	// setup steps, and so output.log; every event the descriptor maps from an output or
+	// hook record; every string of dev.qory.session.started; each step's name; the
+	// environment_ref of dev.qory.run.built; every string of dev.qory.run.started but
+	// its labels, its host, wall and about's members among them; each Report line, once;
+	// the copy of the runtime's output to SessionSpec.Stdout and SessionSpec.Stderr,
+	// flushed when the runtime's process ends; and the text of the errors that [Open],
+	// [Run.Join], [Run.Close], [Run.Setup], [Run.FetchImage], [Run.StartStep],
+	// [Step.Log] and [Step.Exit] return, where errors.As gives a refusal's masked copy
+	// with its code. run.started's labels stay as the gateway registered them: the
+	// gateway refuses a run.started with other labels. The gateway receives the events as the record has them. A value
+	// split across two writes of the runtime is replaced whole, and values that overlap
+	// are replaced as one ***, however long the chain of them and however the writes
+	// split it. These are not masked, and a value in them is sent or written as the
+	// caller or the gateway passed it: the labels and about of the run request; the
+	// members of policy_applied, such as the harness's hosts; run.built's image,
+	// environment_image, base and commit; run.exited's reason; run.refused's names; the
+	// errors the run's other methods return, apart from the engine proxy's password; a
+	// value split across two calls of [Step.Log]; and the files the run writes for the
+	// runtime to read, such as the setup script in the session's directory, which has
+	// the setup commands as given. [Run.Close] leaves a masker you pass as it is: clear
+	// it with mask.Masker.Clear once your writers are flushed. Nil makes the run make
+	// one with mask.New, which masks the server's values and the forwarders' passwords,
+	// and which [Run.Close] overwrites.
+	Masker *mask.Masker
 }
 
 // EngineProxy is the proxy setting the machine's container engine reads when it
@@ -198,7 +239,8 @@ type SessionSpec struct {
 	// Runtime is the program that is run: what is prepared before it starts, what its
 	// records mean and how it is asked to leave. The catalog package resolves a name to
 	// one. Nil means a bare runtime named after the Command: the session is recorded,
-	// the runtime's session inside it is not.
+	// the runtime's session inside it is not. A session with no runtime has no start
+	// key: the program gets no model key's variable, placeholder or endpoint.
 	Runtime runtimes.Runtime
 	// Command, Args and Dir are what to start; an empty Dir is the working directory.
 	Command string
@@ -244,7 +286,8 @@ type SessionSpec struct {
 	Harness []HarnessSource
 	// ModelCredential is the name of the model key the session starts with, one of the
 	// model keys the gateway holds for the run; empty means the run's start key. The join
-	// request contains it.
+	// request contains it. A session with no Runtime starts with no model key: Join and
+	// AgentEnv refuse ModelCredential beside a nil Runtime before any request.
 	ModelCredential string
 	// OnVariables, when not nil, is called once the session's variables are resolved,
 	// before the wall and the agent start, with each name, its source and the values
@@ -255,7 +298,11 @@ type SessionSpec struct {
 	// attached to Stdin and Stdout, unless Args contains an argument the Runtime lists as
 	// headless, -p for Claude Code, in which case it runs on pipes as if the caller had
 	// said so. Otherwise it runs on pipes with Stdin as its input and its output copied
-	// to Stdout and Stderr. A nil stream is the process's.
+	// to Stdout and Stderr. A nil stream is the process's. The run's masker
+	// (OpenSpec.Masker) replaces the run's secrets in the copy of the runtime's output to
+	// Stdout and Stderr, and the session writes its setup lines masked: pass writers
+	// that do not mask again, since a second pass may replace text inside a
+	// placeholder, such as a server's value password inside qory-proxy-password.
 	Interactive bool
 	Stdin       io.Reader
 	Stdout      io.Writer
@@ -318,8 +365,8 @@ type SessionSpec struct {
 	Written []string
 	// Declared is the egress the harness declared, nil when nothing was. It is reported in the
 	// session's dev.qory.run.policy_applied as harness_hosts, a host that contains qak_, qrk_,
-	// qecr_, qecn_, qecp_, qecg_ or qeci_ in any case as accesskey.ShownValue's phrase, and
-	// decides nothing: the policy alone decides.
+	// qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case as accesskey.ShownValue's
+	// phrase, and decides nothing: the policy alone decides.
 	Declared []string
 	// Forwarder is the command the Runtime installs as the program's hook: it reads the
 	// hook's input and forwards it to the socket. Empty means no hooks are installed.

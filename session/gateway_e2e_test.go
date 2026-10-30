@@ -159,6 +159,52 @@ func ofTypes(evs []map[string]any, among []string) []string {
 	return out
 }
 
+// TestARealGatewayAcceptsLabelsWithAMaskedValue pins run.started's labels in a run
+// whose masker has a value, as qory adds an --env value, inside a label's value, and a
+// label value with a key in the shape of a GitHub token: the labels stay as the gateway
+// registered them, so the gateway takes every batch and nothing is undelivered, while
+// about's title, which has the value too, is *** in both records.
+func TestARealGatewayAcceptsLabelsWithAMaskedValue(t *testing.T) {
+	const envValue = "fake-env-value-0123"
+	ghp := "ghp_" + strings.Repeat("x", 36)
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Masker = maskerOf(t, envValue)
+	sp.Labels = map[string]string{"repository": "example-org/" + envValue, "key": ghp}
+	sp.About = &session.About{Kind: "task", Title: "deploy " + envValue}
+	rg := startGateway(t, &sp, gateway.Config{Version: "test", Heartbeat: time.Second,
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}})
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := rg.close(t); d != (gateway.Delivery{}) {
+		t.Errorf("delivery %+v", d)
+	}
+	if res.ExitCode != 0 || res.RunClosed {
+		t.Errorf("result %+v", res)
+	}
+	for where, evs := range map[string][]map[string]any{"the session's record": events(t, res), "the gateway's record": record(t, res)} {
+		started := ofType(evs, event.RunStarted)
+		if len(started) != 1 {
+			t.Fatalf("%s: %d run.started", where, len(started))
+		}
+		d := data(started[0])
+		if l, _ := d["labels"].(map[string]any); l["repository"] != "example-org/"+envValue || l["key"] != ghp {
+			t.Errorf("%s: run.started labels %v", where, d["labels"])
+		}
+		if about, _ := d["about"].(map[string]any); about == nil || about["title"] != "deploy ***" {
+			t.Errorf("%s: run.started about %v", where, d["about"])
+		}
+	}
+	rg.mu.Lock()
+	defer rg.mu.Unlock()
+	for _, l := range rg.reports {
+		if strings.Contains(l, "labels are not the run's") {
+			t.Errorf("the gateway refused a batch: %s", l)
+		}
+	}
+}
+
 // TestARealGatewayRefusesARunThatNeedsAWall pins wall_required end to end: a machine
 // policy with path rules and a run without a wall is no run, with the refusal's text
 // word for word, and no run at the gateway.

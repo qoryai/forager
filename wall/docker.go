@@ -494,45 +494,32 @@ func (e *dockerEnclosure) hardening() []string {
 // long the run's image has to be pulled when it is not the relay's.
 const relayWait = 5 * time.Minute
 
-// pullWait is how long finding an image a run names by its reference may take, the
-// check of the engine's store and any pull.
+// pullWait is how long the pull of an image a run names by its reference may take.
 const pullWait = 10 * time.Minute
 
-// pull fetches the image a run names by its reference with docker pull, unless the
-// engine holds it by that digest, [dockerEnclosure.held], the check included, under
-// [pullWait]. An image held with no Config, as a containerd store holds an index
-// with the content of none of its platforms, is pulled then all the same, and its Config
-// read again. pull refuses an image whose user is root, image_user_root: no user, root, a uid
-// of 0 in any spelling, with or without a group, or a name the image's /etc/passwd maps
-// to uid 0. A name the image cannot map, for want of /etc/passwd or of the name in it,
-// is refused as well, since it cannot be checked. The agent runs as the wall's user
-// whatever the image's, and that user is uid:gid in numbers, which Prepare requires
+// pull fetches the image a run names by its reference with docker pull, under
+// [pullWait], also when the engine holds it by that digest, so the engine fetches the
+// layers it lacks: through the run's proxy when the session gives it an engine proxy,
+// else over the machine's network with the engine's credentials. A pull is no check of
+// the run's right to the image: on the classic image store the engine answers a pull of
+// an image it holds from its cache of manifests. The session checks the manifest at the
+// registry with the run's credentials before it calls Pull. pull refuses an image whose
+// user is root, image_user_root: no user, root, a uid of 0 in any spelling, with or
+// without a group, or a name the image's /etc/passwd maps to uid 0. A name the image
+// cannot map, for want of /etc/passwd or of the name in it, is refused as well, since
+// it cannot be checked. The agent runs as the wall's user whatever the image's, and that user is uid:gid in numbers, which Prepare requires
 // for such an image, so neither the image's /etc/passwd nor its /etc/group chooses who
 // the agent is; this keeps an image that expects root out of the run. An image its
 // registry does not have is image_missing, [dockerEnclosure.fetch].
 func (e *dockerEnclosure) pull(ctx context.Context) error {
 	fetch, cancel := context.WithTimeout(ctx, pullWait)
 	defer cancel()
-	held, err := e.held(fetch)
-	if err != nil {
+	if err := e.fetch(fetch); err != nil {
 		return err
-	}
-	if !held {
-		if err := e.fetch(fetch); err != nil {
-			return err
-		}
 	}
 	config, err := e.imageConfig(ctx)
 	if err != nil {
 		return err
-	}
-	if config == nil && held {
-		if err := e.fetch(fetch); err != nil {
-			return err
-		}
-		if config, err = e.imageConfig(ctx); err != nil {
-			return err
-		}
 	}
 	var user string
 	if config != nil {
@@ -619,7 +606,7 @@ func imageMissing(out []byte) bool {
 // Pull is [Puller.Pull] for a run's image by reference: it checks the request as
 // Prepare does, then, with ca, writes ca as qory-run-<id>.crt, id the run's, in the
 // directory of CertsDir for the registry host of req.Image and for each of hosts, runs
-// the pull, docker pull unless the engine holds the image by that digest, and the check
+// the pull, docker pull also of an image the engine holds by that digest, and the check
 // of its user, under [pullWait], and removes the certificates and the container it read
 // the image's /etc/passwd from, in deferred calls that also run on a panic. A host that
 // cannot be a directory name, such as a *. pattern, gets no certificate. The engine
@@ -781,13 +768,26 @@ func registryHost(ref string) string {
 	return domain
 }
 
+// RegistryManifest is where the registry of an image a run names by its reference,
+// NAME@sha256:…, serves the image's manifest, as the engine reads the reference: host is
+// the registry's API host, registry-1.docker.io for docker.io; repository is the path
+// after the host, in library/ for a docker.io name of one part; digest is sha256:….
+func RegistryManifest(ref string) (host, repository, digest string) {
+	name, digest, _ := strings.Cut(fullReference(ref), "@")
+	host, repository, _ = strings.Cut(name, "/")
+	if host == "docker.io" {
+		host = "registry-1.docker.io"
+	}
+	return host, repository, digest
+}
+
 // held reports whether the engine holds the image a run names by its reference by that
 // very reference: the image inspect of NAME@sha256:… answers, and NAME@sha256:… is among
 // the image's repository digests. The same content under another name, or an image whose
-// id is the digest, is not held by the reference, and is pulled. An engine that has no
-// such image says so, and the image is not held; any other failure of the inspect, an
-// engine that does not answer say, is the run's error, as it would be the pull's, and is
-// never taken for an image the engine lacks.
+// id is the digest, is not held by the reference. An engine that has no such image says
+// so, and the image is not held. Any other failure of the inspect, such as an engine
+// that cannot be reached, is the run's error, and is never taken for an image the
+// engine lacks.
 func (e *dockerEnclosure) held(ctx context.Context) (bool, error) {
 	argv := []string{e.command(), "image", "inspect", "--format", "{{json .RepoDigests}}", e.req.Image}
 	out, err := e.sys.output(ctx, argv, e.env)
@@ -935,8 +935,8 @@ func (e *dockerEnclosure) copyOut(ctx context.Context, container, p string) ([]b
 // createImage creates the container of the run's image that is never started, once,
 // under [relayWait], since it pulls an image the machine defines that the engine does
 // not have: the image's files are read out of it, and the image is there before the
-// agent's container starts. For an image by reference it runs with --pull=never, as
-// the agent's container does: the engine pulls that image in the image step alone.
+// agent's container starts. For an image by reference, and with NeverPull for any
+// image, it runs with --pull=never, as the agent's container does.
 func (e *dockerEnclosure) createImage(ctx context.Context) error {
 	if e.created {
 		return nil
@@ -947,21 +947,36 @@ func (e *dockerEnclosure) createImage(ctx context.Context) error {
 	create := []string{"create", "--name", e.image(), "--label", e.label(), "--network", "none"}
 	create = append(create, e.neverPull()...)
 	create = append(create, "--entrypoint", HelperPath, e.req.Image)
-	if _, err := e.docker(pull, create...); err != nil {
-		return err
+	if out, err := e.docker(pull, create...); err != nil {
+		if e.req.Pull {
+			return err
+		}
+		return e.unpulled(e.req.Image, out, err)
 	}
 	e.created = true
 	return nil
 }
 
-// neverPull is --pull=never for a run's image by reference, which the engine pulls in
-// the image step alone, through the gateway's proxy when the run has an engine proxy,
-// and nothing for an image the machine defines.
+// neverPull is --pull=never for a container of the run's image: for an image by
+// reference, which the engine pulls in the image step alone, and with NeverPull for an
+// image the machine defines as well. Without either it is nothing, and the engine pulls
+// an image the machine defines that it does not have.
 func (e *dockerEnclosure) neverPull() []string {
-	if e.req.Pull {
+	if e.req.Pull || e.req.NeverPull {
 		return []string{"--pull=never"}
 	}
 	return nil
+}
+
+// unpulled is the error of a docker create or docker run of a container from image,
+// one the machine defines, that failed with err after printing out. With NeverPull, an
+// engine that has no such image fails the run with what to pull; any other failure is
+// err as it is.
+func (e *dockerEnclosure) unpulled(image string, out []byte, err error) error {
+	if !e.req.NeverPull || !noSuchImage(string(out)) {
+		return err
+	}
+	return fmt.Errorf("Pull the image on this machine before you set the engine proxy: the engine has no image %s, and under an engine proxy the wall pulls only in a run's image step.", accesskey.ShownName(image, false))
 }
 
 // relayImage is the image the relay starts from: the machine's default, or the run's
@@ -1011,6 +1026,11 @@ func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 		// advertisement: its addresses and routes are the engine's alone.
 		create = append(create, "--sysctl", "net.ipv6.conf.all.accept_ra=0", "--sysctl", "net.ipv6.conf.default.accept_ra=0")
 	}
+	// The relay's image is always one the machine defines: with NeverPull the engine
+	// pulls none of it.
+	if e.req.NeverPull {
+		create = append(create, "--pull=never")
+	}
 	// The image's health check would run inside the relay, as its user and beside its
 	// environment, with the relay's way out; the relay runs none.
 	create = append(create, "--env-file", relayEnvFile, "--read-only", "--no-healthcheck", "--mount", helper, "--entrypoint", HelperPath, e.relayImage())
@@ -1019,8 +1039,8 @@ func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	pull, cancel := context.WithTimeout(ctx, relayWait)
 	defer cancel()
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.relay()})
-	if _, err := e.docker(pull, create...); err != nil {
-		return err
+	if out, err := e.docker(pull, create...); err != nil {
+		return e.unpulled(e.relayImage(), out, err)
 	}
 	if _, err := e.docker(ctx, "network", "connect", "--alias", relayAlias, e.inside(), e.relay()); err != nil {
 		return err
@@ -1264,8 +1284,11 @@ func (e *dockerEnclosure) StartSetup(ctx context.Context, l Launch) error {
 	pull, cancel := context.WithTimeout(ctx, relayWait)
 	defer cancel()
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.setup()})
-	if _, err := e.docker(pull, run...); err != nil {
-		return err
+	if out, err := e.docker(pull, run...); err != nil {
+		if e.req.Pull {
+			return err
+		}
+		return e.unpulled(e.req.Image, out, err)
 	}
 	e.setupDir, e.setupEnv = l.Dir, envFile
 	return nil

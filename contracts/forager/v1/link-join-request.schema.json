@@ -2,10 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-join-request.schema.json",
   "title": "Link join request",
-  "description": "The body of the session's POST to <run.url>/<run_id>/sessions on its gateway's link, application/json, which joins a session to the open run: the names of the variables the session passes a value for and, optionally, the model key the session starts with. Behind a separate gateway the request contains the run's run key, whose run the run_id of the path must be, any other run_key_invalid. A body this schema refuses, a member it does not define among them, is invalid_request; a placeholder of a credential or a tool the gateway holds among passes is placeholder_conflict, a 403, and the run stays open; a join of a run that has ended is a 410.",
+  "description": "The body of the session's POST to <run.url>/<run_id>/sessions on its gateway's link, application/json, which joins a session to the open run: the names of the variables the session passes a value for, whether the gateway sets a model key for the session's requests and, optionally, the model key the session starts with. Behind a separate gateway the request contains the run's run key, whose run the run_id of the path must be, any other run_key_invalid. A body this schema refuses, a member it does not define among them, is invalid_request; a placeholder of a credential or a tool the gateway holds among passes is placeholder_conflict, a 403, and the run stays open; a join of a run that has ended is a 410.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "passes"],
+  "required": ["version", "passes", "model_key"],
+  "if": {"properties": {"model_key": {"const": false}}},
+  "then": {"not": {"required": ["model_credential"]}},
   "properties": {
     "version": {
       "description": "The document format. The gateway reads version 1 alone.",
@@ -16,8 +18,12 @@
       "type": "array",
       "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
     },
+    "model_key": {
+      "description": "Whether the gateway sets a model key for this session's requests. When it is false, the gateway's proxy sets no model key from the join's 200 until the gateway receives the session's dev.qory.session.exited, the join answer has no model_credential, and the request may not contain model_credential. The session sends false for a session with no runtime.",
+      "type": "boolean"
+    },
     "model_credential": {
-      "description": "The name of the model key the session starts with, one of the model keys the gateway holds for the run, from the server or the machine. Absent means the run's start key, the run answer's model_credential. A name of no model key of the run is invalid_request.",
+      "description": "The name of the model key the session starts with, one of the model keys the gateway holds for the run, from the server or the machine. Absent means the run's start key, the run answer's model_credential. A name of no model key of the run is invalid_request, and so is model_credential beside a model_key of false.",
       "$ref": "policy.schema.json#/properties/credentials/items/properties/name"
     }
   }

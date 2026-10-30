@@ -73,6 +73,9 @@ type masking struct {
 	w    http.ResponseWriter
 	m    *masker
 	tail []byte
+	// covered is how many bytes at the start of tail a put written already stands
+	// for, as mask.Masker.Scan returns it.
+	covered int
 	// final says the status of the answer, past every 1xx, is written.
 	final bool
 }
@@ -97,9 +100,9 @@ func (mw *masking) Write(b []byte) (int, error) {
 	}
 	buf := append(mw.tail, b...)
 	defer clear(buf)
-	out, rest := mw.m.Scan(nil, buf, false)
+	out, rest, kept := mw.m.Scan(nil, buf, mw.covered, false)
 	defer clear(out)
-	mw.tail = append([]byte(nil), buf[rest:]...)
+	mw.tail, mw.covered = append([]byte(nil), buf[rest:]...), kept
 	if len(out) == 0 {
 		return len(b), nil
 	}
@@ -118,16 +121,21 @@ func (mw *masking) Flush() {
 // ends early, with the server's panic, keeps no part of the value.
 func (mw *masking) discard() {
 	clear(mw.tail)
-	mw.tail = nil
+	mw.tail, mw.covered = nil, 0
 }
 
-// finish writes the bytes kept back, which hold no find, and replaces every find in
-// the trailer, which the server writes once the handler returns.
+// finish writes the bytes kept back, with every find replaced and without the bytes a
+// put written already stands for, and replaces every find in the trailer, which the
+// server writes once the handler returns.
 func (mw *masking) finish() {
 	if len(mw.tail) > 0 {
-		_, _ = mw.w.Write(mw.tail)
+		out, _, _ := mw.m.Scan(nil, mw.tail, mw.covered, true)
+		if len(out) > 0 {
+			_, _ = mw.w.Write(out)
+		}
+		clear(out)
 		clear(mw.tail)
-		mw.tail = nil
+		mw.tail, mw.covered = nil, 0
 	}
 	mw.m.Header(mw.w.Header())
 }

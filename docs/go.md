@@ -128,8 +128,8 @@ At each `Join` the session:
    image and the harness's sources, and `dev.qory.run.policy_applied` with the session's
    variables, the credential variables and the harness's hosts;
 4. behind a wall, records the image step, when the policy's image is a reference that
-   no step fetched yet (`FetchImage`), around the image's fetch and the check of its
-   user, and the wall step, `start the wall`, around the wall's start up to the
+   no step fetched yet (`FetchImage`), around the check of the image's manifest at its
+   registry, the image's fetch and the check of its user, and the wall step, `start the wall`, around the wall's start up to the
    runtime's start;
 5. starts the runtime, in no step, records `dev.qory.session.exited` when it exits, and
    returns once the gateway accepted that batch, or the run ended.
@@ -361,16 +361,18 @@ failed and its lines:
 - `(*session.Run).StartStep(kind, name)` writes `dev.qory.run.step_started` with the
   run's next step number, shared with each join's steps, and returns a `*session.Step`.
   `kind` is `event.StepFetch`, `event.StepCompose` or `event.StepBuild`. The run's
-  masker replaces each forwarder's password in `name`, and a `name` that contains
-  `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` is a phrase in its
-  place. Pass a `name` with no URL userinfo, token or other credential: `StartStep`
+  masker replaces each forwarder's password, each value of `OpenSpec.Masker` and each
+  server's variable value of 8 characters or more in `name`, and a `name` that contains
+  `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` is a phrase in
+  its place. Pass a `name` with no URL userinfo, token or other credential: `StartStep`
   writes any other secret in `name` as given.
 - `(*session.Step).Log(b)` writes the step's lines, such as what the fetch or the
   compose prints: each line is a `dev.qory.run.log` with `stream` `stderr`, the step's
   number as `step` and no `session`, cut at 4096 bytes as a session's lines on pipes
-  are, and goes to `output.log`. The run's masker replaces each forwarder's password in
-  the lines, the host proxy's included, within one call: pass whole lines, because a
-  password split across two calls stays as written. Pass an error's text through
+  are, and goes to `output.log`. The run's masker replaces each forwarder's password,
+  the host proxy's included, and each value of `OpenSpec.Masker` and each server's
+  variable value of 8 characters or more in the lines, within one call: pass whole
+  lines, because a value split across two calls stays as written. Pass an error's text through
   `accesskey.ShownError`, which replaces a text that contains an access key secret, a
   run key, a run code or an enrolment code.
 - `(*session.Step).Exit(state, exitCode)` writes `dev.qory.run.step_exited` with
@@ -412,15 +414,16 @@ with the members of `session.Built`:
 
 - `Image` as `image`: the image by its digest, `NAME@sha256:` and 64 lower-case
   hexadecimal digits, with no tag and with no `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`,
-  `qecg_` or `qeci_` in any case.
+  `qecg_`, `qeci_` or `qecd_` in any case.
 - `Size` as `size`: the image's size in bytes, 1 or more.
 - `Commit` as `commit`: the full commit id the image was built from, 40 or 64
   hexadecimal characters in lower case.
 - `EnvironmentRef` as `environment_ref`: your reference to the environment the image is
-  for, not empty. The run's masker replaces each forwarder's password in it, and a
-  reference that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_`
-  is a phrase in its place, as in a step's `name`. Pass no other credential in it:
-  `Built` writes any other secret as you pass it.
+  for, not empty. The run's masker replaces each forwarder's password, each value of
+  `OpenSpec.Masker` and each server's variable value of 8 characters or more in it, and a
+  reference that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or
+  `qecd_` is a phrase in its place, as in a step's `name`. Pass no other credential in
+  it: `Built` writes any other secret as you pass it.
 - `EnvironmentImage` as `environment_image`: the environment image the build pushed,
   or the one it started from, of the form of `Image`. Leave it empty if you do not
   report it: `Built` then writes no `environment_image`.
@@ -432,11 +435,11 @@ Call `Built` once per run, with no host step open, before the first `Join` or af
 
 | When | Error |
 |---|---|
-| an image that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` | `set the built image to a reference without qak_, qrk_ or qec[npgir]_: each starts a secret` |
+| an image that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` | `set the built image to a reference without qak_, qrk_ or qec[npgidr]_: each starts a secret` |
 | an image with a tag, in upper case or without a digest | `set the built image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
-| an `EnvironmentImage` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` | `set the environment image to a reference without qak_, qrk_ or qec[npgir]_: each starts a secret` |
+| an `EnvironmentImage` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` | `set the environment image to a reference without qak_, qrk_ or qec[npgidr]_: each starts a secret` |
 | an `EnvironmentImage` with a tag, in upper case or without a digest | `set the environment image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
-| a `Base` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` | `set the base image to a reference without qak_, qrk_ or qec[npgir]_: each starts a secret` |
+| a `Base` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` | `set the base image to a reference without qak_, qrk_ or qec[npgidr]_: each starts a secret` |
 | a `Base` with a tag, in upper case or without a digest | `set the base image to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag` |
 | a size of 0 | `set the built image's size to its size in bytes, 1 or more, not 0` |
 | a commit that is not a full commit id | `set the commit of the build to a full commit id, 40 or 64 hexadecimal characters in lower case` |
@@ -881,6 +884,11 @@ res, err := session.Resend(ctx, session.ResendSpec{
 3. A bare runtime, for a name with neither. It is run and recorded, with no session
    events.
 
+A session whose `SessionSpec.Runtime` is nil runs a bare runtime named after its
+command, and has no start key: its program gets no model key's variable, placeholder or
+endpoint, whatever model keys the run has. A runtime set in the spec without a `model`
+section, even a bare one, fails in a run with a model key.
+
 A program that needs custom code implements the interface.
 `session/runtimes/runtimetest` runs the same checks on it.
 
@@ -888,7 +896,7 @@ A program that needs custom code implements the interface.
 
 `session.OpenSpec` has the run's fields: `Gateway`, `Wall`, `CAEnv`, `Image`, `Images`,
 `ImagesAllow`, `RunsDir`, `ForagerVersion`, `RunID`, `Labels`, `About`, `Machine`,
-`Setup`, `Report` and `HarnessHidden`. `Machine` is the adapter that made the run's machine, such as
+`Setup`, `Report`, `HarnessHidden` and `Masker`. `Machine` is the adapter that made the run's machine, such as
 `aws-ec2`, or `none` when no adapter made it. `Setup` is where the run's setup commands
 run, or would run if it had any: `outside`, in a container apart from the agent's, or
 `inside`, in the agent's container before the runtime starts.
@@ -896,6 +904,82 @@ run, or would run if it had any: `outside`, in a container apart from the agent'
 out. `session.Open` refuses any other value before it contacts the gateway, and the
 error starts with the fix: `set OpenSpec.Setup to outside or inside, or leave it
 empty: "elsewhere"`.
+
+Set `Masker` to the run's masker, so your output and the run's are masked with one set
+of values. Make it with `mask.New()`, add the secret values you know and the run does
+not with `AddSecret`, such as the values of `--env` and `wall.env`, the run code, the
+run key and the query values of a harness URL, and wrap your writers with
+`mask.NewWriter` on the same masker. From the open to the close, the run's masker
+replaces each value with `***`, as it is, percent-encoded and JSON-escaped, before the
+first event is written: in every `dev.qory.run.log` chunk of the runtime's output, of
+the host steps and of the setup steps, and so in `output.log`; in every event the
+runtime's output and hooks map to; in every string of `dev.qory.session.started`, such
+as a harness source's URL, a setup command's name and the args; in each step's name; in
+the `environment_ref` of `dev.qory.run.built`; in every string of `dev.qory.run.started`
+but its `labels`, its `host`, `wall` and `about`'s members among them; in each `Report`
+line, once; in the copy of the runtime's output to `SessionSpec.Stdout` and
+`SessionSpec.Stderr`, flushed when the runtime's process ends; and in the text of the
+errors that `session.Open`, `Join`, `Close`, `Setup`, `FetchImage`, `StartStep`,
+`Step.Log` and `Step.Exit` return. `errors.Is` still reaches what such an error wraps,
+and `errors.As` gives a refusal's copy with its text, detail and names masked and its
+`Code` kept. The session writes its setup lines to `Stdout` and `Stderr` masked as well,
+so pass writers that do not mask again: a second pass may replace text inside a
+placeholder, such as a server's value `password` inside `qory-proxy-password`. The
+gateway receives those events as the record has them. A value split across two writes of
+the runtime is replaced whole, and values that overlap are replaced as one `***`,
+however long the chain of them and however the writes split it.
+
+The run adds to the masker the server's variable values of 8 characters or more, the
+run answer's at the open and each reload's from that reload on, and each forwarder's
+password, replaced with `qory-proxy-password`, before the forwarder starts, so your
+writers mask them too. `AddSecret` adds at most `mask.MaxSecrets` (1024) different
+values to one masker, each of at most `mask.MaxSecretSize` (4096) bytes, and returns an
+error that starts with the fix and contains no value past either bound: `add at most
+1024 values to the masker: it has 1024 already, and this value is not masked`. A
+server's value past the count is not masked, and the run reports `the server's variable
+<name> is not masked: the run's masker has 1024 values already`. `AddSecret` does not
+filter by length, so leave out a value that would replace ordinary text. `Close` leaves
+a masker you pass as it is: call its `Clear` once your writers are flushed. With no
+`Masker`, the run makes one with `mask.New()`, which masks the server's values and the
+forwarders' passwords, and `Close` overwrites its copies.
+
+A masker from `mask.New()` also replaces text in the shape of a known key with a bare
+`***`, its prefix included, whether or not anyone added the key's value. `mask.Shapes()`
+lists the shapes, each a prefix and a token of an alphabet, between a least and a most
+number of characters (`Min` and `Max`):
+
+| Key | Prefix | Token |
+|---|---|---|
+| Anthropic key | `sk-ant-` | 16 to 256 of `A-Z a-z 0-9 _ -` |
+| GitHub personal access, OAuth, user-to-server, app installation and refresh token | `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` | 36 to 256 of `A-Z a-z 0-9` |
+| GitHub fine-grained personal access token | `github_pat_` | 16 to 256 of `A-Z a-z 0-9 _ -` |
+| AWS access key id, long-term and temporary | `AKIA`, `ASIA` | 16 to 256 of `A-Z 0-9` |
+| HTTP bearer token | `bearer` in any case, then 1 to 16 spaces or tabs | 16 to 4096 of `A-Z a-z 0-9 . _ ~ + / = -` |
+
+The `***` covers at most `Max` characters of a token: the characters after them stay as
+written, so a writer keeps back at most the prefix, the blanks and `Max`-1 characters.
+The keys' tokens stop at 256 characters, because real keys of those shapes have 20 to
+about 110 characters, and a longer cap makes a stream of a repeated prefix, such as
+`AKIAAKIA…` or `ASIAASIA…`, slow to mask. A bearer token, such as a JSON web token, can have thousands
+of characters, so its cap is 4096, `mask.MaxSecretSize`. A shape is looked for as
+written, not percent-encoded or JSON-escaped; a JSON-escaped `\/` ends a bearer token.
+`Clear` leaves the shapes. A masker that `mask.New()` did not make, such as the zero
+`mask.Masker` or `mask.Proxy`'s, replaces no shape.
+
+The run's masker does not cover these, and a value in them is sent or written as you or
+the gateway passed it:
+
+- The labels and about of the run request, and the `labels` of `dev.qory.run.started`,
+  which stay as the gateway registered them: the gateway refuses a `dev.qory.run.started`
+  with other labels.
+- The members of `dev.qory.run.policy_applied`, such as the harness's hosts.
+- `dev.qory.run.built`'s `image`, `environment_image`, `base` and `commit`.
+- `dev.qory.run.exited`'s `reason`, and `dev.qory.run.refused`'s `names`.
+- The errors the run's other methods return, such as `HostProxy`, `StackProxy`,
+  `EngineProxy`, `AgentEnv` and `Built`, apart from the engine proxy's password.
+- A value split across two calls of `Step.Log`.
+- The files the run writes for the runtime to read, such as the setup script in the
+  session's directory, which has the setup commands as given.
 
 Set `HarnessHidden` from `harness_hidden` in the run's documents. When it is true,
 each session reads the files in its `HarnessHome` as it starts and masks their text in
@@ -940,14 +1024,14 @@ matching.
 `session.SessionSpec` has each session's: the runtime and its command, the variables,
 the mounts, the setup commands and the rest below. `Harness` lists the harness's
 sources, each a `source` and a full `commit`; `dev.qory.session.started` records them, a
-source that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` as
-the value's phrase in its place. `ModelCredential` is the credential the join request
-asks the gateway for, for this session.
+source that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or
+`qecd_` as the value's phrase in its place. `ModelCredential` is the credential the join
+request asks the gateway for, for this session.
 
 - `Declared` is the egress the harness declared. The record reports it as
   `harness_hosts`, a host that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`,
-  `qecg_` or `qeci_` as the value's phrase in its place, and it decides nothing. `nil`
-  means no declaration.
+  `qecg_`, `qeci_` or `qecd_` as the value's phrase in its place, and it decides
+  nothing. `nil` means no declaration.
 - `Interactive` runs the session on a pseudo-terminal.
   - The exception: an argument the runtime's descriptor lists as headless is among
     `Args`, such as `-p` for Claude Code. Then the session runs on pipes.

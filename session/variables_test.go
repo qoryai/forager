@@ -337,11 +337,12 @@ func TestTheHarnessHome(t *testing.T) {
 	}
 }
 
-// TestAWalledRunPassesTheRuntimesKeyItLists pins the walled run that passes the
-// runtime's credential as the machine's variable, as wall.env does: the value reaches
-// the agent as passed, and the runtime's other declared and reserved variables, which
-// neither a placeholder nor the run sets, are unset there.
-func TestAWalledRunPassesTheRuntimesKeyItLists(t *testing.T) {
+// TestAWalledRunLeavesOutTheRuntimesKeyFromTheMachine pins the walled run that passes
+// the runtime's credential as the machine's variable, as wall.env does: the deny list's
+// model_keys leave the value out, the record has it as denied, and the runtime's
+// declared and reserved variables, which neither a placeholder nor the run sets, are
+// unset in the agent.
+func TestAWalledRunLeavesOutTheRuntimesKeyFromTheMachine(t *testing.T) {
 	sp := spec(t)
 	out := dumpsEnv(t, &sp)
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
@@ -354,13 +355,53 @@ func TestAWalledRunPassesTheRuntimesKeyItLists(t *testing.T) {
 		t.Fatalf("exit %d", res.ExitCode)
 	}
 	env := envOf(t, out)
-	if env["CLAUDE_CODE_OAUTH_TOKEN"] != "a-fake-credential" {
-		t.Errorf("CLAUDE_CODE_OAUTH_TOKEN=%q, want the value the run passed", env["CLAUDE_CODE_OAUTH_TOKEN"])
+	if got, want := variablesApplied(t, res), []string{"CLAUDE_CODE_OAUTH_TOKEN machine:denied"}; !slices.Equal(got, want) {
+		t.Errorf("the record %q, want %q", got, want)
 	}
-	for _, name := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
+	for _, name := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"} {
 		if value, ok := env[name]; ok {
 			t.Errorf("%s=%q reached the agent; want it unset", name, value)
 		}
+	}
+}
+
+// TestALeftOutCredentialHasALine pins the lines the run reports for each forge token's
+// or model key's variable whose value the deny list leaves out, walled, with no value:
+// for the server's value, the fix in the run configuration; for wall.env, --env and the
+// harness, the fix in forager.yaml with the sources; a name from both gets both lines. A name the deny
+// list leaves out that is no credential's, and a credential's name no source passes,
+// have no line.
+func TestALeftOutCredentialHasALine(t *testing.T) {
+	sp, g := specGateway(t)
+	answerVariables(g, serverVariables)
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	sp.Variables.Machine = []string{"GH_TOKEN=ghp_" + strings.Repeat("x", 36), "APP_NAME=app", "ANTHROPIC_AUTH_TOKEN=a-fake-machine-token"}
+	sp.Variables.Run = []string{"GITLAB_TOKEN=a-fake-token"}
+	sp.Variables.Deny = []string{"APP_*"}
+	sp.LaunchDefaults = []string{"GITLAB_TOKEN=another-fake-token"}
+	var reported []string
+	sp.Report = func(l string) { reported = append(reported, l) }
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit %d", res.ExitCode)
+	}
+	want := []string{
+		"Define ANTHROPIC_AUTH_TOKEN as a credential in the run configuration, not as a variable: the run leaves out the value that the server passes, since denied-variables.json lists it as a model key.",
+		"Move ANTHROPIC_AUTH_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the value that wall.env passes, since denied-variables.json lists it as a model key.",
+		"Move GH_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the value that wall.env passes, since denied-variables.json lists it as a forge token.",
+		"Move GITLAB_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the values that --env and the harness's defaults pass, since denied-variables.json lists it as a forge token.",
+	}
+	var got []string
+	for _, l := range reported {
+		if strings.HasPrefix(l, "Move ") || strings.HasPrefix(l, "Define ") || strings.Contains(l, "APP_NAME") || strings.Contains(l, "fake") {
+			got = append(got, l)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the run reported\n%q\nwant\n%q", got, want)
 	}
 }
 
@@ -379,7 +420,8 @@ func (p preparing) Secrets() runtimes.Declarations { return p.Runtime.(runtimes.
 // TestWhatThePreparationSetsIsNotUnset pins that behind a wall a variable the
 // runtime reserves and its preparation sets keeps the preparation's value, over a
 // value the harness computes and one of the machine's, which the record lists as
-// fixed, while the declared ones nothing sets are unset there.
+// denied, since the deny list's model_keys have the name, while the declared ones
+// nothing sets are unset there.
 func TestWhatThePreparationSetsIsNotUnset(t *testing.T) {
 	sp := spec(t)
 	out := dumpsEnv(t, &sp)
@@ -398,7 +440,7 @@ func TestWhatThePreparationSetsIsNotUnset(t *testing.T) {
 	if env["ANTHROPIC_AUTH_TOKEN"] != "set-by-the-preparation" {
 		t.Errorf("ANTHROPIC_AUTH_TOKEN=%q, want the preparation's value", env["ANTHROPIC_AUTH_TOKEN"])
 	}
-	if got, want := variablesApplied(t, res), []string{"ANTHROPIC_AUTH_TOKEN<-fixed machine:fixed"}; !slices.Equal(got, want) {
+	if got, want := variablesApplied(t, res), []string{"ANTHROPIC_AUTH_TOKEN<-fixed fixed:denied machine:denied"}; !slices.Equal(got, want) {
 		t.Errorf("the record %q, want %q", got, want)
 	}
 	for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {
@@ -538,7 +580,7 @@ func shownIn(t *testing.T, err error, want []any) {
 			t.Errorf("the refusal %v does not contain %s", err, w)
 		}
 	}
-	if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") {
+	if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") || strings.Contains(low, "qecd_") {
 		t.Errorf("the refusal prints a secret's prefix: %v", err)
 	}
 }
@@ -643,7 +685,7 @@ func TestAppliedVariablesSendAPhraseForASecret(t *testing.T) {
 		t.Errorf("the policy_applied does not validate: %v", err)
 	}
 	vars, _ := json.Marshal(data(pa[0])["variables"])
-	if lower := strings.ToLower(string(vars)); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") || strings.Contains(lower, "qecn_") || strings.Contains(lower, "qecp_") || strings.Contains(lower, "qecg_") || strings.Contains(lower, "qeci_") {
+	if lower := strings.ToLower(string(vars)); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") || strings.Contains(lower, "qecn_") || strings.Contains(lower, "qecp_") || strings.Contains(lower, "qecg_") || strings.Contains(lower, "qeci_") || strings.Contains(lower, "qecd_") {
 		t.Errorf("a secret's prefix in the variables: %s", vars)
 	}
 	if want := []string{"PLAIN_ONE<-run", "QAK_ONE<-run", "QRK_X_QAK_Y<-run", "qrk_two<-run"}; len(calls) != 1 || !slices.Equal(lines(calls[0]), want) {
@@ -813,7 +855,7 @@ func TestARunStartedSendsAPhraseForASecretInAnArgument(t *testing.T) {
 		t.Errorf("session.started args %v", args)
 	}
 	b, _ := json.Marshal(started)
-	if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") {
+	if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") || strings.Contains(low, "qecd_") {
 		t.Errorf("session.started contains a secret's prefix: %s", b)
 	}
 }
@@ -900,7 +942,7 @@ func TestAWrapThatFailsPrintsAPhraseForASecretInAPath(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s: the run started", p)
 		}
-		if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") || !errors.Is(err, fs.ErrPermission) {
+		if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") || strings.Contains(low, "qecd_") || !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("%s: %q, want a phrase that wraps fs.ErrPermission", p, err)
 		}
 	}

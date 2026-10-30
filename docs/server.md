@@ -61,16 +61,16 @@ server decides which labels identify what the run works on.
 ### Names and values that contain a key's prefix
 
 `qak_` starts every access key secret, `qrk_` every run key and `qecr_` every run code.
-`qecn_`, `qecp_`, `qecg_` and `qeci_` start the enrolment code of a node's, a node
-pool's, a gateway's and an adapter's access key. Forager sends and prints a phrase in
-place of a name or a value that contains any of them, in any case:
+`qecn_`, `qecp_`, `qecg_`, `qeci_` and `qecd_` start the enrolment code of a node's, a
+node pool's, a gateway's, an adapter's and a diagnostics access key. Forager sends and
+prints a phrase in place of a name or a value that contains any of them, in any case:
 
 - A name, such as a credential's, a tool's, a variable's, an image or a label's key or
   value, is `(a name that contains an access key secret)` when it contains `qak_`,
   `(a name that contains a run key)` when it contains `qrk_` and no `qak_`, `(a name
   that contains a run code)` when it contains `qecr_` and neither of the others, and
-  `(a name that contains an enrolment code)` when it contains `qecn_`, `qecp_`, `qecg_`
-  or `qeci_` and none of the others.
+  `(a name that contains an enrolment code)` when it contains `qecn_`, `qecp_`, `qecg_`,
+  `qeci_` or `qecd_` and none of the others.
 - A value of free text, such as a path, a command, an argument, a URL, a program's
   output or an error's text, is `(a value that contains an access key secret)`, `(a
   value that contains a run key)`, `(a value that contains a run code)` or `(a value
@@ -175,7 +175,11 @@ and for each name the run takes the value of the highest that sets it:
   [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
   `denies`, and `SessionSpec.Variables.Deny`. It holds the session's names, the proxy's, the
   trust store's, Docker's, `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` and
-  `HOME`. The built-in list leaves out a value the harness computes as well; the
+  `HOME`, and in `model_keys` and `forge_tokens` the model keys' variables, `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`, and the forge tokens', `GH_TOKEN`,
+  `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`,
+  `GL_TOKEN` and `BITBUCKET_TOKEN`. A credential's placeholder may take a credential's
+  name. The built-in list leaves out a value the harness computes as well; the
   runtime's `denies` and `Variables.Deny` leave those in.
 - A value of a fixed name from any other source is left out.
 - The server's value of a variable the runtime declares or reserves, or one a
@@ -256,14 +260,14 @@ that lost with its source and why: `overridden`, `denied`, `fixed`, `unwalled`,
 `endpoint_uncovered` or `endpoint_unreadable`; behind a wall, the entry of the runtime's
 model endpoint variable has `kept`, with the model credential's name, when the value
 that applies is one the endpoint rule kept. A name that contains `qak_`, `qrk_`,
-`qecr_`, `qecn_`, `qecp_`, `qecg_` or `qeci_` in any case is sent as `(a name that
-contains an access key secret)`, `(a name that contains a run key)` when it contains
-`qrk_` and no `qak_`, `(a name that contains a run code)` when it contains `qecr_` and
-neither of the others, or `(a name that contains an enrolment code)` when it contains
-`qecn_`, `qecp_`, `qecg_` or `qeci_` and none of the others. A fixed name, and a name
-the run inherits, is listed only beside a value of the server, the run, the machine or
-the harness's defaults. `SessionSpec.OnVariables` receives the same list, as
-`session.Applied`, with each name as it is.
+`qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` in any case is sent as `(a name
+that contains an access key secret)`, `(a name that contains a run key)` when it
+contains `qrk_` and no `qak_`, `(a name that contains a run code)` when it contains
+`qecr_` and neither of the others, or `(a name that contains an enrolment code)` when it
+contains `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` and none of the others. A fixed
+name, and a name the run inherits, is listed only beside a value of the server, the run,
+the machine or the harness's defaults. `SessionSpec.OnVariables` receives the same list,
+as `session.Applied`, with each name as it is.
 
 ## A control plane
 

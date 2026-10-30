@@ -34,8 +34,10 @@ type join struct {
 	// passes are the names of the variables the session passes a value for.
 	passes []string
 	// model is the model key the session starts with, the join answer's; empty when
-	// the run holds none.
+	// the run holds none or the join asked for none. noKey says the join request's
+	// model_key is false: the proxy sets no model key while the join is open.
 	model string
+	noKey bool
 	// started and exited say the run's stream numbered the session's
 	// dev.qory.session.started and dev.qory.session.exited; startedAt is the time of
 	// the former.
@@ -102,8 +104,8 @@ func readJoinRequest(body []byte) (*server.LinkJoinRequest, bool) {
 // in the order the run's joins arrive; 403 placeholder_conflict, numbered too, for
 // passes that contain a placeholder of a credential or a tool the gateway holds for
 // the run, which leaves the run open; 410 for a run that ended at the gateway; and 400
-// invalid_request for a body the schema refuses, for a model_credential of no model
-// key of the run, for a join while another join of the run is open, and on the local
+// invalid_request for a body the schema refuses, model_credential beside a model_key
+// of false among them, for a model_credential of no model key of the run, for a join while another join of the run is open, and on the local
 // link for a run id of no run here. On the one
 // address the run id is the run key's, any other 400 run_key_invalid, and a run the
 // gateway does not hold is a 410 ([Gateway.heldRun]).
@@ -151,10 +153,13 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	lr.touch()
-	model, ok := lr.modelKey(req.ModelCredential)
-	if !ok {
-		invalid(w)
-		return
+	// A join with no model key gets none; the schema has refused one that names one.
+	var model string
+	if req.ModelKey {
+		if model, ok = lr.modelKey(req.ModelCredential); !ok {
+			invalid(w)
+			return
+		}
 	}
 	conflict := lr.r.Conflict(run.Passing(req.Passes))
 	lr.mu.Lock()
@@ -170,7 +175,7 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway, joinWhileOpen)
 		return
 	}
-	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes), model: model}
+	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes), model: model, noKey: !req.ModelKey}
 	lr.joins = append(lr.joins, j)
 	digest := lr.reloadDigest
 	lr.mu.Unlock()
@@ -178,7 +183,12 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		refuseOpen(w, conflict)
 		return
 	}
-	if model != "" {
+	switch held := lr.r.Held(); {
+	case j.noKey && held != nil && held.Start != "":
+		// From the join's 200 until its session.exited the proxy sets no model key,
+		// the start key neither. A run with no model key has none to leave out.
+		lr.px.SetNoModelKey()
+	case model != "":
 		// From the join's 200 until its session.exited the proxy sets the session's
 		// model key in place of the start key.
 		lr.px.SetModelKey(model)

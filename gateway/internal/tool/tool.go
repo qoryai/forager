@@ -35,6 +35,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
 )
@@ -368,7 +369,7 @@ func (t *Running) lines(r io.Reader) {
 		}
 		t.mu.Unlock()
 		if ready {
-			t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + accesskey.ShownValue(line, false))
+			t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + shownLine(line))
 		}
 	}
 	// A line longer than the buffer ends the scan; the rest is read and dropped, so the
@@ -391,7 +392,7 @@ func (t *Running) listens(ctx context.Context) error {
 			t.early = nil
 			t.mu.Unlock()
 			for _, line := range early {
-				t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + accesskey.ShownValue(line, false))
+				t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + shownLine(line))
 			}
 			return nil
 		}
@@ -419,8 +420,17 @@ func (t *Running) reason() string {
 	if len(t.early) == 0 {
 		return ""
 	}
-	return ": " + accesskey.ShownValue(t.early[len(t.early)-1], false)
+	return ": " + shownLine(t.early[len(t.early)-1])
 }
+
+// shapes is the masker of the tool's lines: the gateway holds none of a tool's
+// secrets, so it replaces the matches of mask.Shapes alone.
+var shapes = mask.New()
+
+// shownLine is a line the tool wrote with *** in place of each match of mask.Shapes,
+// and accesskey.ShownValue's phrase in place of a line that contains an access key
+// secret, a run key, a run code or an enrolment code.
+func shownLine(line string) string { return accesskey.ShownValue(shapes.Replace(line), false) }
 
 // stop ends the tool and removes its socket's directory.
 func (t *Running) stop() {

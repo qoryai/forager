@@ -28,7 +28,7 @@ func TestARunStartedWithRawValuesGoesOnPhrased(t *testing.T) {
 	decoded := make([]map[string]any, len(evs))
 	for i, ev := range evs {
 		b, _ := ev.Data.(json.RawMessage)
-		if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") {
+		if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") || strings.Contains(low, "qecd_") {
 			t.Errorf("the %s goes on as %s", ev.Type, b)
 		}
 		if err := json.Unmarshal(b, &decoded[i]); err != nil {

@@ -43,9 +43,9 @@
           "const": 1
         },
         "code": {
-          "description": "The enrolment code in its normalised form: a prefix in lower case and 26 Crockford base32 characters in upper case, then a dot and the fingerprint of the server's public key, and during a rotation of the server's key a second dot and the next key's fingerprint. A fingerprint is base64url(SHA-256(raw public key)[:16]). The prefix names the kind of key the code enrols: qecn_ a node's, qecp_ a node pool's, qecg_ a gateway's and qeci_ an integration's (node_kind adapter), and the 201's node_kind is the prefix's kind. qecr_ is a run code: it enrols no access key and redeems a run's run key, and its 201 is $defs/run_answer. A code whose prefix names another kind than its node's is unknown to the server, which answers it 401 as any unknown code; a code with any other prefix is malformed, and the server refuses it as an invalid request, 400.",
+          "description": "The enrolment code in its normalised form: a prefix in lower case and 26 Crockford base32 characters in upper case, then a dot and the fingerprint of the server's public key, and during a rotation of the server's key a second dot and the next key's fingerprint. A fingerprint is base64url(SHA-256(raw public key)[:16]). The prefix names the kind of key the code enrols: qecn_ a node's, qecp_ a node pool's, qecg_ a gateway's, qeci_ an integration's (node_kind adapter) and qecd_ a diagnostics key's (node_kind diagnostics), and the 201's node_kind is the prefix's kind. qecr_ is a run code: it enrols no access key and redeems a run's run key, and its 201 is $defs/run_answer. A code whose prefix names another kind than its node's is unknown to the server, which answers it 401 as any unknown code; a code with any other prefix is malformed, and the server refuses it as an invalid request, 400.",
           "type": "string",
-          "pattern": "^qec[npgir]_[0-9A-HJKMNP-TV-Z]{26}(\\.[A-Za-z0-9_-]{22}){1,2}$"
+          "pattern": "^qec[npgidr]_[0-9A-HJKMNP-TV-Z]{26}(\\.[A-Za-z0-9_-]{22}){1,2}$"
         },
         "name": {
           "description": "The access key's name for people, by default the host name of the machine that enrols it.",
@@ -71,7 +71,7 @@
     },
     "answer": {
       "title": "Enrolment answer",
-      "description": "The 201 answer: the new access key's id, its node, node pool, gateway or adapter, its stored-secrets flag and the server's public keys. The access key is active from the 201 on. Every member is required.",
+      "description": "The 201 answer: the new access key's id, its node, node pool, gateway, adapter or diagnostics key, its stored-secrets flag and the server's public keys. The access key is active from the 201 on. Every member is required.",
       "type": "object",
       "additionalProperties": false,
       "required": ["version", "access_key_id", "node_id", "node_kind", "stored_secrets", "apiary_public_key"],
@@ -86,14 +86,14 @@
           "pattern": "^ak_[0-9a-hjkmnp-tv-z]{16}$"
         },
         "node_id": {
-          "description": "The id of the access key's node, nd_, node pool, np_, gateway, ng_, or adapter, na_, followed by 16 lower-case Crockford base32 characters.",
+          "description": "The id of the access key's node, nd_, node pool, np_, gateway, ng_, adapter, na_, or diagnostics key, dg_, followed by 16 lower-case Crockford base32 characters.",
           "type": "string",
-          "pattern": "^n[dpga]_[0-9a-hjkmnp-tv-z]{16}$"
+          "pattern": "^(n[dpga]|dg)_[0-9a-hjkmnp-tv-z]{16}$"
         },
         "node_kind": {
-          "description": "node for an nd_ id, pool for an np_ id, gateway for an ng_ id, adapter for an na_ id.",
+          "description": "node for an nd_ id, pool for an np_ id, gateway for an ng_ id, adapter for an na_ id, diagnostics for a dg_ id.",
           "type": "string",
-          "enum": ["node", "pool", "gateway", "adapter"]
+          "enum": ["node", "pool", "gateway", "adapter", "diagnostics"]
         },
         "stored_secrets": {
           "description": "The access key's stored-secrets flag, fixed when the key is created.",
@@ -117,6 +117,10 @@
         {
           "if": {"properties": {"node_kind": {"const": "adapter"}}},
           "then": {"properties": {"node_id": {"pattern": "^na_"}}}
+        },
+        {
+          "if": {"properties": {"node_kind": {"const": "diagnostics"}}},
+          "then": {"properties": {"node_id": {"pattern": "^dg_"}}}
         }
       ]
     },

@@ -25,9 +25,7 @@
 package variables
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/fs"
 	"maps"
 	"regexp"
 	"slices"
@@ -498,20 +496,21 @@ func CheckDeny(entries []string) error {
 	return nil
 }
 
-// Deny is a deny list: the contract's built-in names and patterns with a run's own
-// entries.
+// Deny is a deny list: the names and patterns of denied-variables.json, its forge
+// tokens' and model keys' names among the names, with the entries a run adds.
 type Deny struct {
 	names    map[string]bool
 	patterns []string
 }
 
-// List is the built-in deny list with the entries added.
+// List is the built-in deny list, its names, patterns, forge tokens and model keys,
+// with the entries added.
 func List(entries []string) (*Deny, error) {
 	builtin, err := Builtin()
 	if err != nil {
 		return nil, err
 	}
-	return entriesOf(slices.Concat(builtin.Names, builtin.Patterns, entries)), nil
+	return entriesOf(slices.Concat(builtin.Names, builtin.Patterns, builtin.Credentials(), entries)), nil
 }
 
 // entriesOf is the deny list of the names and patterns given alone, without the
@@ -562,20 +561,12 @@ func glob(pattern, name string) bool {
 }
 
 // Denied is the document denied-variables.json.
-type Denied struct {
-	Version  int      `json:"version"`
-	Names    []string `json:"names"`
-	Patterns []string `json:"patterns"`
-}
+type Denied = contracts.Denied
 
 var builtin = sync.OnceValues(func() (*Denied, error) {
-	b, err := fs.ReadFile(contracts.FS, "denied-variables.json")
+	d, err := contracts.DeniedVariables()
 	if err != nil {
 		return nil, err
-	}
-	var d Denied
-	if err := json.Unmarshal(b, &d); err != nil {
-		return nil, fmt.Errorf("denied-variables.json: %w", err)
 	}
 	return &d, nil
 })

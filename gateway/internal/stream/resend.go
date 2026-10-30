@@ -98,8 +98,8 @@ type ResendResult struct {
 // left as it is. dev.qory.run.registered is never sent.
 func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	// The record directory's path, which the caller passed, is in the text of a file's error:
-	// the phrase stands in for one that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or
-	// qeci_ in any case.
+	// the phrase stands in for one that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_,
+	// qeci_ or qecd_ in any case.
 	res, err := resend(ctx, cfg)
 	return res, accesskey.ShownError(err)
 }

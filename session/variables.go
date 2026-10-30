@@ -296,7 +296,8 @@ func (k keyed) modelVariables() []string {
 // or -1 when credentials have none: the one named model, the run answer's
 // model_credential, or the one API credential when model is empty. An empty model
 // beside two or more API credentials, and a model that names none of them, are
-// [refusal.RunConfigurationInvalid]: the gateway refuses both first.
+// [refusal.RunConfigurationInvalid]: the gateway refuses both first. [chosen] does not
+// call it for a session whose spec has no runtime, which starts with no key.
 func startKey(credentials []server.LinkCredentialHosts, model string) (int, error) {
 	var keys []string
 	start := -1
@@ -321,25 +322,31 @@ func startKey(credentials []server.LinkCredentialHosts, model string) (int, erro
 }
 
 // chosen is the run answer's credentials and placeholders after the runtime's choice,
-// and what the start key sets. Of the API credentials, the start key alone, by
-// [startKey], gets the variable of rt's model key whose format is the credential's and
-// whose auth has its scheme, its header's name, compared without case, and its oauth:
-// the variable joins the credential's placeholders and the run's, and the start key
+// and what the start key sets. When bare, the session's spec has no runtime and the
+// session has no start key: no runtime lists a variable for a model key, so [startKey]
+// does not run, every API credential stays as the answer has it, with no placeholder,
+// and nothing sets a model key's variable or an endpoint. Otherwise, of the API
+// credentials, the start key alone, by [startKey], gets the variable of rt's model key
+// whose format is the credential's and whose auth has its scheme, its header's name,
+// compared without case, and its oauth: the variable joins the credential's placeholders and the run's, and the start key
 // sets it and the runtime's endpoint variable. The other API credentials stay as the
 // answer has them, with no placeholder. A start key of a format rt lists no key for,
 // or of an auth none of them has, is [refusal.RunConfigurationInvalid] with the
 // credential's name, and so is a placeholder [checkPlaceholders] refuses. Every other
 // credential is as the answer has it.
-func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, placeholders []string, model string) ([]server.LinkCredentialHosts, []string, keyed, error) {
+func chosen(rt runtimes.Runtime, bare bool, credentials []server.LinkCredentialHosts, placeholders []string, model string) ([]server.LinkCredentialHosts, []string, keyed, error) {
 	names := slices.Clone(placeholders)
 	out := make([]server.LinkCredentialHosts, len(credentials))
 	for i, c := range credentials {
 		c.Placeholders = slices.Clone(c.Placeholders)
 		out[i] = c
 	}
-	start, err := startKey(out, model)
-	if err != nil {
-		return nil, nil, keyed{}, err
+	start := -1
+	if !bare {
+		var err error
+		if start, err = startKey(out, model); err != nil {
+			return nil, nil, keyed{}, err
+		}
 	}
 	var key keyed
 	if start >= 0 {
@@ -414,10 +421,20 @@ func modelOf(rt runtimes.Runtime) (runtimes.ModelPlaces, bool) {
 	return runtimes.ModelPlaces{}, false
 }
 
-// deniedVariables are rt's denies and, when walled, its model overrides, each once:
-// the names [variables.Resolve] adds to the deny list.
-func deniedVariables(rt runtimes.Runtime, walled bool) []string {
+// deniedVariables are rt's denies, the forge tokens' and model keys' names of
+// denied-variables.json and, when walled, rt's model overrides, each once: the names a
+// runtime leaves out of a file it copies whose values reach the program's environment.
+func deniedVariables(rt runtimes.Runtime, walled bool) ([]string, error) {
 	out := slices.Clone(secretsOf(rt).Denies)
+	builtin, err := variables.Builtin()
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range builtin.Credentials() {
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
 	if walled {
 		places, _ := modelOf(rt)
 		for _, name := range places.Overrides {
@@ -426,7 +443,7 @@ func deniedVariables(rt runtimes.Runtime, walled bool) []string {
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // keyVariables are the variables of rt's model keys, each once.

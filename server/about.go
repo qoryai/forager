@@ -285,13 +285,14 @@ func ReportedAbout(a *About) *About {
 
 // ShownAbout is a checked About as Forager sends it to Qory Apiary, in run.started and in
 // a registration: a copy in which a value that contains qak_, qrk_, qecr_, qecn_, qecp_,
-// qecg_ or qeci_ in any case does not appear. Kind, Title and each subject's Title are
-// accesskey.ShownName's phrase in place of such a value. A subject whose Type or Ref
-// contains one is left out, since neither form can be a phrase and a subject needs both,
-// and so is a URL that contains one. In Details, a string is accesskey.ShownValue's phrase
-// and a member name accesskey.ShownName's; of two members whose names become the same, the
-// first is kept. Details that grow past their bound are left out, and Details without such
-// a value are kept byte for byte. A nil About is nil.
+// qecg_, qeci_ or qecd_ in any case does not appear. Kind, Title and each subject's
+// Title are accesskey.ShownName's phrase in place of such a value. A subject whose Type
+// or Ref contains one is left out, since neither form can be a phrase and a subject
+// needs both, and so is a URL that contains one. In Details, a string is
+// accesskey.ShownValue's phrase and a member name accesskey.ShownName's; of two members
+// whose names become the same, the first is kept. Details that grow past their bound
+// are left out, and Details without such a value are kept byte for byte. A nil About is
+// nil.
 func ShownAbout(a *About) *About {
 	if a == nil {
 		return nil
@@ -323,8 +324,8 @@ func ShownAbout(a *About) *About {
 }
 
 // aboutContainsSecret reports whether a member of a, a decoded string or member name of
-// its Details among them, contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any
-// case.
+// its Details among them, contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
+// qecd_ in any case.
 func aboutContainsSecret(a *About) bool {
 	if accesskey.ContainsSecret(a.Kind) || accesskey.ContainsSecret(a.Title) {
 		return true
@@ -340,9 +341,9 @@ func aboutContainsSecret(a *About) bool {
 }
 
 // jsonSecrets are the strings and member names of the JSON d, as they decode, that contain
-// qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case, joined by spaces, so an
-// escape such as \u0061 hides neither; empty when there are none. Bytes that do not decode
-// as JSON are checked as they are written.
+// qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case, joined by spaces,
+// so an escape such as \u0061 hides neither; empty when there are none. Bytes that do
+// not decode as JSON are checked as they are written.
 func jsonSecrets(d []byte) string {
 	dec := jsontext.NewDecoder(bytes.NewReader(d), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
 	var found []string

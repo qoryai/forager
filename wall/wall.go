@@ -111,11 +111,18 @@ type Request struct {
 	// [Puller] fetches it before the enclosure starts the first container of it, which
 	// finds it by that digest and pulls nothing. Such an image never gets nested Docker.
 	Pull bool
+	// NeverPull is set when the run has an engine proxy: the machine's engine sends
+	// every pull to a run's forwarder, which listens only during that run's image step,
+	// or during a host step of a run with no wall (Run.EngineProxy). Every container the
+	// enclosure creates or runs then starts with --pull=never, also one of an image the
+	// machine defines, so no pull the enclosure starts goes through another run's
+	// forwarder. An image the engine does not have fails the run.
+	NeverPull bool
 }
 
 // Puller is a wall that fetches a run's image by reference, for a [Request] with Pull,
-// before the enclosure starts the first container of it: the engine pulls it unless it
-// holds it by that digest, and an image whose user is root is refused, image_user_root.
+// before the enclosure starts the first container of it: the engine pulls it, also when
+// it holds it by that digest, and an image whose user is root is refused, image_user_root.
 // An image its registry does not have is refused too, image_missing. The session runs
 // Pull as the run's image step.
 type Puller interface {

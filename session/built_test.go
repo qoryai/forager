@@ -209,14 +209,14 @@ func TestBuiltRefusesAndWritesNothing(t *testing.T) {
 }
 
 // TestBuiltKeepsAKeyOutOfItsEvent pins the two members that could contain a key's
-// prefix: an image that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any
-// case is refused with an error that starts with the fix and shows no value, and writes
-// nothing; an environment_ref that contains qak_ is the access key secret's phrase in
-// the record and on the link, one with qrk_ alone the run key's, one with qecr_ alone,
-// in lower or upper case, the run code's, one with qecn_, qecp_, qecg_ or qeci_ alone,
-// in lower or mixed case, the enrolment code's, and one with the host proxy's password has
-// qory-proxy-password in its place; no file of the run directory the test reads
-// contains the fake keys or the password.
+// prefix: an image that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_
+// in any case is refused with an error that starts with the fix and shows no value, and
+// writes nothing; an environment_ref that contains qak_ is the access key secret's
+// phrase in the record and on the link, one with qrk_ alone the run key's, one with
+// qecr_ alone, in lower or upper case, the run code's, one with qecn_, qecp_, qecg_,
+// qeci_ or qecd_ alone, in lower or mixed case, the enrolment code's, and one with the
+// host proxy's password has qory-proxy-password in its place; no file of the run
+// directory the test reads contains the fake keys or the password.
 func TestBuiltKeepsAKeyOutOfItsEvent(t *testing.T) {
 	for _, c := range []struct{ ref, want string }{
 		{"env-qak_FAKE0123456789", "(a value that contains an access key secret)"},
@@ -227,6 +227,7 @@ func TestBuiltKeepsAKeyOutOfItsEvent(t *testing.T) {
 		{"env-QeCp_FAKE0123456789", "(a value that contains an enrolment code)"},
 		{"env-qecg_FAKE0123456789", "(a value that contains an enrolment code)"},
 		{"env-qECI_FAKE0123456789", "(a value that contains an enrolment code)"},
+		{"env-QeCd_FAKE0123456789", "(a value that contains an enrolment code)"},
 		{"env-<password>-01", "env-qory-proxy-password-01"},
 	} {
 		sp, g := specGateway(t)
@@ -251,11 +252,12 @@ func TestBuiltKeepsAKeyOutOfItsEvent(t *testing.T) {
 			"registry.example/QeCp_FAKE/env@sha256:" + strings.Repeat("3f", 32),
 			"registry.example/example-org/qecg_fake0123456789@sha256:" + strings.Repeat("3f", 32),
 			"registry.example/qECI_FAKE/env@sha256:" + strings.Repeat("3f", 32),
+			"registry.example/qecd_fake0123456789/env@sha256:" + strings.Repeat("3f", 32),
 		} {
 			b := aBuild()
 			b.Image = image
 			err := r.Built(b)
-			if err == nil || !strings.HasPrefix(err.Error(), "set the built image to a reference without qak_, qrk_ or qec[npgir]_: ") ||
+			if err == nil || !strings.HasPrefix(err.Error(), "set the built image to a reference without qak_, qrk_ or qec[npgidr]_: ") ||
 				strings.Contains(strings.ToLower(err.Error()), "fake") {
 				t.Errorf("an image with a key's prefix: %v", err)
 			}
@@ -348,7 +350,7 @@ func TestBuiltChecksTheEnvironmentImageAndTheBase(t *testing.T) {
 		{"base image", func(b *session.Built, v string) { b.Base = v }},
 	} {
 		shape := "set the " + m.name + " to NAME@sha256: and 64 hexadecimal digits, all in lower case, with no tag"
-		key := "set the " + m.name + " to a reference without qak_, qrk_ or qec[npgir]_: "
+		key := "set the " + m.name + " to a reference without qak_, qrk_ or qec[npgidr]_: "
 		for _, c := range []struct{ value, fix string }{
 			{"registry.example/example-org/env:latest", shape},
 			{"registry.example/example-org/env", shape},
@@ -358,6 +360,7 @@ func TestBuiltChecksTheEnvironmentImageAndTheBase(t *testing.T) {
 			{"registry.example/QAK_FAKE0123456789/env" + digest, key},
 			{"registry.example/qecn_fake0123456789/env" + digest, key},
 			{"registry.example/example-org/QeCi_FAKE0123456789" + digest, key},
+			{"registry.example/example-org/QECD_FAKE0123456789" + digest, key},
 		} {
 			b := aBuild()
 			m.set(&b, c.value)

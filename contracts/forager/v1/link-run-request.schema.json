@@ -94,7 +94,7 @@
           "type": "boolean"
         },
         "reference": {
-          "description": "In an answer alone: true when the policy named the image by its reference pinned by digest, under one of images.allow. Such an image starts under the default's runtime, with no nested Docker, as the wall's user; the wall fetches it unless the engine holds it by that digest, and refuses one whose user is root, image_user_root; and the run's workspace is at /workspace inside. Absent means false.",
+          "description": "In an answer alone: true when the policy named the image by its reference pinned by digest, under one of images.allow. Such an image starts under the default's runtime, with no nested Docker, as the wall's user; the wall fetches it, also when the engine holds it by that digest, and refuses one whose user is root, image_user_root; and the run's workspace is at /workspace inside. Absent means false.",
           "const": true
         }
       }

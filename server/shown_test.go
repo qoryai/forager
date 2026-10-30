@@ -21,11 +21,11 @@ const (
 	enrolmentName  = "(a name that contains an enrolment code)"
 )
 
-// noSecretPrefix fails when text contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_
-// in any case.
+// noSecretPrefix fails when text contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_
+// or qecd_ in any case.
 func noSecretPrefix(t *testing.T, what, text string) {
 	t.Helper()
-	if low := strings.ToLower(text); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") {
+	if low := strings.ToLower(text); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || strings.Contains(low, "qecr_") || strings.Contains(low, "qecn_") || strings.Contains(low, "qecp_") || strings.Contains(low, "qecg_") || strings.Contains(low, "qeci_") || strings.Contains(low, "qecd_") {
 		t.Errorf("%s: %s contains a secret's prefix", what, text)
 	}
 }
@@ -80,16 +80,16 @@ func TestARunCodeInALabelIsTheRunCodesPhrase(t *testing.T) {
 }
 
 // TestAnEnrolmentCodeInALabelIsTheEnrolmentCodesPhrase pins an enrolment code, qecn_,
-// qecp_, qecg_ or qeci_ in lower or mixed case, in the labels Forager sends to Qory
-// Apiary: a key or a value that contains one is the enrolment code's phrase, CheckLabels
-// accepts it, and the registration through a gateway contains none of the prefixes and
-// is a body the schema accepts.
+// qecp_, qecg_, qeci_ or qecd_ in lower or mixed case, in the labels Forager sends to
+// Qory Apiary: a key or a value that contains one is the enrolment code's phrase,
+// CheckLabels accepts it, and the registration through a gateway contains none of the
+// prefixes and is a body the schema accepts.
 func TestAnEnrolmentCodeInALabelIsTheEnrolmentCodesPhrase(t *testing.T) {
 	schema, err := contracts.Compile("run-registration.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range [][2]string{{"qecn_", "QeCn_"}, {"qecp_", "qECP_"}, {"qecg_", "QecG_"}, {"qeci_", "QEcI_"}} {
+	for _, c := range [][2]string{{"qecn_", "QeCn_"}, {"qecp_", "qECP_"}, {"qecg_", "QecG_"}, {"qeci_", "QEcI_"}, {"qecd_", "qEcD_"}} {
 		labels := map[string]string{c[0] + "k": "v", "repository": "acme/" + c[1] + "x"}
 		got := server.ShownLabels(labels)
 		if want := map[string]string{enrolmentName: "v", "repository": enrolmentName}; !maps.Equal(got, want) {

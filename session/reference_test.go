@@ -206,7 +206,7 @@ func refusedIn(t *testing.T, sp runSpec) map[string]any {
 // by reference: an allow list that cannot be one, before the gateway hears of the run;
 // the gateway's image_not_allowed; the wall's image_user_root and image_missing, after
 // the session's start, the code as the reason of its session.exited, recorded and posted;
-// and a place of the run's at /workspace, before the wall pulls or wraps.
+// a pull the image's registry denies, with no reason and no wrap; and a place of the run's at /workspace, before the wall pulls or wraps.
 func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	for name, change := range map[string]func(*runSpec){
 		"an entry of *":          func(s *runSpec) { s.ImagesAllow = []string{"*"} },
@@ -265,6 +265,17 @@ func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 
 	sp, g = specGateway(t, "FAKE_EXIT=0")
 	byReference(g)
+	denied := errors.New("wall docker: docker pull " + pinned + ": exit status 1: Error response from daemon: error from registry: requested access to the resource is denied")
+	w = &targetWall{refuse: denied}
+	sp.Wall, sp.Image, sp.ImagesAllow, sp.RunID = w, "example.com/agent:1", []string{"registry.example/"}, event.NewRunID()
+	if _, err = run(context.Background(), sp); !errors.Is(err, denied) || errors.As(err, &r) || len(w.pulls) != 1 || w.wrapped {
+		t.Errorf("a denied pull: %v; the wall pulled %+v, wrapped %v", err, w.pulls, w.wrapped)
+	}
+	startedThenExited(t, "the record", events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)}), "")
+	startedThenExited(t, "the link", g.Events(), "")
+
+	sp, g = specGateway(t, "FAKE_EXIT=0")
+	byReference(g)
 	w = &targetWall{}
 	sp.Wall, sp.Image, sp.ImagesAllow = w, "example.com/agent:1", []string{"registry.example/"}
 	sp.Mounts = []wall.Mount{{Path: "/workspace/tools", ReadOnly: true}}
@@ -277,6 +288,8 @@ func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 // real gateway: the gateway takes the session's batch, and its record has the session's
 // session.exited, failed with -1 and the reason image_missing.
 func TestAGatewayTakesASessionEndedByAMissingImage(t *testing.T) {
+	// The real gateway reaches no test registry: the check of the image passes.
+	defer session.SetManifestCheck(func(context.Context, string) error { return nil })()
 	c := newControl(t)
 	c.serveDocument(`{"version":1,"image":"` + pinned + `"}`)
 	w := &targetWall{refuse: refusals.New(refusals.ImageMissing, []string{pinned}, "the image %s is not in its registry", pinned)}
@@ -303,6 +316,8 @@ func TestAGatewayTakesASessionEndedByAMissingImage(t *testing.T) {
 // reason image_missing, is taken with no join, nothing is undelivered, and the
 // gateway's record ends with that dev.qory.run.exited.
 func TestAGatewayTakesARunClosedForAMissingImage(t *testing.T) {
+	// The real gateway reaches no test registry: the check of the image passes.
+	defer session.SetManifestCheck(func(context.Context, string) error { return nil })()
 	c := newControl(t)
 	c.serveDocument(`{"version":1,"image":"` + pinned + `"}`)
 	w := &targetWall{refuse: refusals.New(refusals.ImageMissing, []string{pinned}, "the image %s is not in its registry", pinned)}
@@ -359,6 +374,8 @@ func anyStrings(v any) []string {
 // the session gives the wall is that reference, to pull, with the default's image for
 // the relay, so the server's answer is in force before the wall fetches anything.
 func TestTheServersImageByReferenceIsTheOneTheWallPulls(t *testing.T) {
+	// The real gateway reaches no test registry: the check of the image passes.
+	defer session.SetManifestCheck(func(context.Context, string) error { return nil })()
 	for _, doc := range []string{
 		`{"version":1,"image":"` + pinned + `"}`,
 		`{"version":1,"security_policy":{"version":1,"egress":{"mode":"observe"},"image":"` + pinned + `"}}`,

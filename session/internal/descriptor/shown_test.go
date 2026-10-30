@@ -43,7 +43,7 @@ func TestParsePrintsAPhraseForASecret(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 			continue
 		}
-		if l := strings.ToLower(err.Error()); strings.Contains(l, "qak_") || strings.Contains(l, "qrk_") || strings.Contains(l, "qecr_") || strings.Contains(l, "qecn_") || strings.Contains(l, "qecp_") || strings.Contains(l, "qecg_") || strings.Contains(l, "qeci_") {
+		if l := strings.ToLower(err.Error()); strings.Contains(l, "qak_") || strings.Contains(l, "qrk_") || strings.Contains(l, "qecr_") || strings.Contains(l, "qecn_") || strings.Contains(l, "qecp_") || strings.Contains(l, "qecg_") || strings.Contains(l, "qeci_") || strings.Contains(l, "qecd_") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
