@@ -163,9 +163,9 @@ type Proxy struct {
 	refused func()
 	// term, when set, says which hosts the proxy terminates TLS for.
 	term atomic.Pointer[terminator]
-	// model is the name of the model key the proxy sets, [Proxy.SetModelKey]; nil sets
-	// whichever model key a request's credential is.
-	model atomic.Pointer[string]
+	// model is the model key the proxy sets, [Proxy.SetModelKey] or
+	// [Proxy.SetNoModelKey]; nil sets whichever model key a request's credential is.
+	model atomic.Pointer[modelKey]
 	// node are the sides of path rules beside the policy's, set before term and fixed
 	// for the run.
 	node        []map[string][]string

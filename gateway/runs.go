@@ -1127,7 +1127,7 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 	}
 	if pol.URL != "" {
 		// server.Client.Discover refuses a run.url that contains qak_, qrk_, qecr_, qecn_, qecp_,
-		// qecg_ or qeci_, which no phrase can stand in for: the schema's url is a URI.
+		// qecg_, qeci_ or qecd_, which no phrase can stand in for: the schema's url is a URI.
 		a["url"], a["run_configuration"] = pol.URL, pol.RunConfiguration
 	}
 	if pol.Node != nil {
@@ -1150,9 +1150,10 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 	if held != nil && len(held.Uses) > 0 {
 		uses := make([]map[string]any, len(held.Uses))
 		for i, u := range held.Uses {
-			// A name or an argument that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in
-			// any case is sent as accesskey.ShownName's phrase in its place. A host or a path is
-			// accesskey.ShownValue's phrase in place of one that contains any of them.
+			// A name or an argument that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_
+			// or qecd_ in any case is sent as accesskey.ShownName's phrase in its place. A host
+			// or a path is accesskey.ShownValue's phrase in place of one that contains any of
+			// them.
 			uses[i] = map[string]any{"name": accesskey.ShownName(u.Name, false), "hosts": shownValues(u.Hosts), "scheme": u.Scheme}
 			if u.Argument != "" {
 				uses[i]["argument"] = accesskey.ShownName(u.Argument, false)

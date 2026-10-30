@@ -117,7 +117,7 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/run-configuration/"+runID && r.URL.RawQuery == "":
 			answer(w, 200, reloadAnswer)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/run-configuration/"+runID+"/sessions":
-			if b, _ := io.ReadAll(r.Body); r.Header.Get("Content-Type") != server.LinkContentType || string(b) != `{"version":1,"passes":["NODE_ENV","HOME"]}` {
+			if b, _ := io.ReadAll(r.Body); r.Header.Get("Content-Type") != server.LinkContentType || string(b) != `{"version":1,"passes":["NODE_ENV","HOME"],"model_key":true}` {
 				note("join request %q %s", r.Header.Get("Content-Type"), b)
 			}
 			answer(w, 200, `{"version":1,"session":1}`)
@@ -162,7 +162,7 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 	if re.Values()["NODE_ENV"] != "prod" || re.Digest != policyHex || len(re.Reserved) != 1 || re.Placeholders == nil {
 		t.Errorf("reload answer %+v", re)
 	}
-	j, err := k.Join(ctx, d.Run.URL, runID, server.LinkJoinRequest{Passes: []string{"NODE_ENV", "HOME"}})
+	j, err := k.Join(ctx, d.Run.URL, runID, server.LinkJoinRequest{Passes: []string{"NODE_ENV", "HOME"}, ModelKey: true})
 	if err != nil || j.Session != 1 || j.ModelCredential != "" {
 		t.Errorf("join answer %+v, %v", j, err)
 	}

@@ -17,8 +17,11 @@ import (
 
 // FetchImage fetches the run's image by reference, the policy's image pinned by digest,
 // as a host step of kind event.StepImage with the reference as its name, before the
-// first join or between joins: the wall's [wall.Puller] pulls it, unless the engine
-// holds it by that digest, and checks its user. With OpenSpec.EngineProxy the engine
+// first join or between joins. The session first requests the image's manifest from
+// its registry through the run's proxy, with the run's credentials, with or without an
+// engine proxy: the engine may answer a pull from an image it holds by that digest
+// without such a request. Then the wall's [wall.Puller] pulls the image, also when the
+// engine holds it, and checks its user. With OpenSpec.EngineProxy the engine
 // sends the pull through the run's proxy. For the step alone, a forwarder listens at
 // its Addr, passes on only a request with its Password, and reaches the gateway's proxy
 // as the host proxy does, and, for a run with a certificate authority, the engine
@@ -38,7 +41,9 @@ import (
 // step failed, or cancelled when ctx ended, with -1; an image whose user is root is a
 // [*Refusal], image_user_root, and an image its registry does not have is a [*Refusal],
 // image_missing. When the pull panics, the step ends failed and the panic continues.
-func (r *Run) FetchImage(ctx context.Context) error {
+// The run's masker replaces the run's secrets in the error, as in Open's.
+func (r *Run) FetchImage(ctx context.Context) (err error) {
+	defer func() { err = maskError(r.masker, err) }()
 	if r.open.Wall == nil {
 		return errors.New("Open the run with a wall to fetch its image: a run without a wall has no image.")
 	}
@@ -82,17 +87,25 @@ func (r *Run) FetchImage(ctx context.Context) error {
 }
 
 // wallRequest is the request that the session passes to the run's wall: the run's
-// image, and Pull for an image by reference.
+// image, Pull for an image by reference, and NeverPull for a run with an engine proxy,
+// whose forwarder listens during the image step alone, so the wall starts no pull
+// outside it.
 func (r *Run) wallRequest() wall.Request {
-	return wall.Request{RunID: r.id, Image: r.img.Ref, Runtime: r.img.Runtime, Docker: r.img.Docker, RelayImage: r.relayImage, Pull: r.byReference}
+	return wall.Request{RunID: r.id, Image: r.img.Ref, Runtime: r.img.Runtime, Docker: r.img.Docker, RelayImage: r.relayImage, Pull: r.byReference, NeverPull: r.open.EngineProxy != nil}
 }
 
-// pullImage runs the wall's pull of the run's image by reference: with
+// pullImage checks the run's image by reference at its registry with the run's
+// credentials, [Run.checkManifest], and then runs the wall's pull of it: with
 // OpenSpec.EngineProxy behind the engine proxy's forwarder, which a deferred call
 // closes, also on a panic, and with the run's certificate for the image's registry host
-// and the hosts of the run's credentials. The caller holds r.joining and writes the
-// step.
+// and the hosts of the run's credentials. A check that fails pulls nothing. The caller
+// holds r.joining and writes the step. The error is as the check or the pull returned
+// it: the caller writes its line through the run's masker, and FetchImage returns it
+// masked.
 func (r *Run) pullImage(ctx context.Context, puller wall.Puller) (err error) {
+	if err := r.checkManifest(ctx); err != nil {
+		return err
+	}
 	p := r.open.EngineProxy
 	if p == nil {
 		return puller.Pull(ctx, r.wallRequest(), nil, nil)
@@ -101,7 +114,7 @@ func (r *Run) pullImage(ctx context.Context, puller wall.Puller) (err error) {
 	if err != nil {
 		return err
 	}
-	defer func() { err = r.maskEngine(errors.Join(err, fwd.Close()), p) }()
+	defer func() { err = errors.Join(err, fwd.Close()) }()
 	var hosts []string
 	for _, c := range r.answer.CredentialHosts {
 		hosts = append(hosts, c.Hosts...)
@@ -118,7 +131,7 @@ func (r *Run) listenEngine(p *EngineProxy) (*forwarder, error) {
 	if err := checkEngineProxy(p); err != nil {
 		return nil, err
 	}
-	r.masker.AddProxy(proxyUser, p.Password)
+	r.addPassword(p.Password)
 	var fwd *forwarder
 	var err error
 	if r.remote == nil {
@@ -134,7 +147,9 @@ func (r *Run) listenEngine(p *EngineProxy) (*forwarder, error) {
 
 // maskEngine is err with the run's masker applied to its text when the text contains
 // p.Password, since an engine's error text may contain its proxy setting, the password
-// with it; err as it is otherwise.
+// with it; err as it is otherwise. It is for an error the run returns: a line the run
+// writes or reports gets err as it is, since that line passes through the run's masker
+// once.
 func (r *Run) maskEngine(err error, p *EngineProxy) error {
 	if err != nil && p != nil && strings.Contains(err.Error(), p.Password) {
 		return errors.New(r.masker.Replace(err.Error()))

@@ -1132,8 +1132,8 @@ func TestARunThroughTheGateway(t *testing.T) {
 	}
 	// A join on the one address: the run key's run, session 1; another run's is
 	// run_key_invalid and is numbered not.
-	refused(t, "a join of another run", r.do(t, key, http.MethodPost, "/qory-link/run-configuration/"+event.NewRunID()+"/sessions", []byte(`{"version":1,"passes":[]}`)), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
-	j := r.do(t, key, http.MethodPost, "/qory-link/run-configuration/"+runID+"/sessions", []byte(`{"version":1,"passes":["HOME"]}`))
+	refused(t, "a join of another run", r.do(t, key, http.MethodPost, "/qory-link/run-configuration/"+event.NewRunID()+"/sessions", []byte(`{"version":1,"passes":[],"model_key":true}`)), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
+	j := r.do(t, key, http.MethodPost, "/qory-link/run-configuration/"+runID+"/sessions", []byte(`{"version":1,"passes":["HOME"],"model_key":true}`))
 	if j.status != http.StatusOK {
 		t.Fatalf("the join: %d %s", j.status, j.body)
 	}

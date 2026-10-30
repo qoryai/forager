@@ -34,12 +34,11 @@ const (
 	// that no prefix of the machine's images.allow covers: its name is the reference.
 	ImageNotAllowed = "image_not_allowed"
 	// ImageUserRoot is an image a policy names by its reference whose user is root, as
-	// the wall reads it from the image after it fetches it, or finds the engine holds it
-	// by that digest: its name is the reference.
+	// the wall reads it from the image after it fetches it: its name is the reference.
 	ImageUserRoot = "image_user_root"
 	// ImageMissing is an image that a policy sets by reference that its registry does not
-	// have, as the engine's pull reports it: no manifest of that digest, or no
-	// repository of that name. Its name is the reference.
+	// have, as the session's check of its manifest or the engine's pull reports it: no
+	// manifest of that digest, or no repository of that name. Its name is the reference.
 	ImageMissing = "image_missing"
 	// VariableReserved is a walled run whose environment passes a QORY_ variable, or a
 	// variable a machine value is read from, into the enclosure.

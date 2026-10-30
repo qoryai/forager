@@ -367,7 +367,7 @@ func TestEachMethodReadsOneKindOfCode(t *testing.T) {
 			t.Errorf("%s with a run code: %v; want %q", name, err, toRun)
 		}
 	}
-	for prefix, kind := range map[string]string{accesskey.CodePrefixNode: "node", accesskey.CodePrefixPool: "pool", accesskey.CodePrefixGateway: "gateway", accesskey.CodePrefixAdapter: "adapter"} {
+	for prefix, kind := range map[string]string{accesskey.CodePrefixNode: "node", accesskey.CodePrefixPool: "pool", accesskey.CodePrefixGateway: "gateway", accesskey.CodePrefixAdapter: "adapter", accesskey.CodePrefixDiagnostics: "diagnostics"} {
 		r, err := accesskey.NewEnrolmentRequest(newKey(t), prefix+"F1XT0RE0000000000000000000."+signer.Fingerprint(), "build-01", time.Now())
 		if err != nil {
 			t.Fatal(err)

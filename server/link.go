@@ -131,6 +131,10 @@ type LinkJoinRequest struct {
 	// The gateway answers 403 placeholder_conflict to a join whose Passes contain a
 	// placeholder of a credential or a tool it holds for the run.
 	Passes []string `json:"passes"`
+	// ModelKey is whether the gateway sets a model key for this session's requests.
+	// When it is false, the gateway's proxy sets none from the join's 200 until the
+	// session's dev.qory.session.exited, and ModelCredential must be empty.
+	ModelKey bool `json:"model_key"`
 	// ModelCredential is the name of the model key the session starts with, one the
 	// gateway holds for the run; empty for the run's start key.
 	ModelCredential string `json:"model_credential,omitempty"`
@@ -272,8 +276,8 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	if s.StackProxySecret != "" {
 		s.StackProxySecret = redactedSecret
 	}
-	// A name or a value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any
-	// case prints its phrase.
+	// A name or a value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
+	// qecd_ in any case prints its phrase.
 	s.Labels = ShownLabels(a.Labels)
 	if a.Variables != nil {
 		s.Variables = make(map[string]Variable, len(a.Variables))
@@ -316,7 +320,7 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 
 // shownDocument is a document as it prints: the value's phrase, as a JSON string, in place
 // of all of it when a string or member name in it, as it decodes, contains qak_, qrk_,
-// qecr_, qecn_, qecp_, qecg_ or qeci_ in any case.
+// qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case.
 func shownDocument(d json.RawMessage) json.RawMessage {
 	secrets := jsonSecrets(d)
 	if secrets == "" {

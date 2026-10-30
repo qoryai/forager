@@ -192,6 +192,8 @@ func TestSecretInPinEntry(t *testing.T) {
 		{"a key with qecr_", "ed25519", qecr, nil},
 		{"a key with qecn_", "ed25519", keyWith(t, "qecn_", true), nil},
 		{"a key with QeCi_", "ed25519", keyWith(t, "QeCi_", true), nil},
+		{"a key with qecd_", "ed25519", keyWith(t, "qecd_", true), nil},
+		{"a diagnostics code as the key", "ed25519", "QECD_F1XT0RE0000000000000000000.x", accesskey.ErrEnrolmentCodeInDocument},
 		{"a run code in alg", "QECR_F1XT0RE0000000000000000000.x", qak, accesskey.ErrRunCodeInDocument},
 		{"an enrolment code in alg", "qEcP_F1XT0RE0000000000000000000.x", qak, accesskey.ErrEnrolmentCodeInDocument},
 		{"an enrolment code as the key", "ed25519", "qecg_F1XT0RE0000000000000000000.x", accesskey.ErrEnrolmentCodeInDocument},
@@ -209,9 +211,9 @@ func TestSecretInPinEntry(t *testing.T) {
 }
 
 // TestAKeyThatStartsWithASecretPrefixIsChecked pins that a valid key that starts with
-// qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_, in any case, is not left out, since a
-// secret cut to 43 characters can read as a key, and that a valid key with qak_ further in
-// still is.
+// qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_, in any case, is not left out,
+// since a secret cut to 43 characters can read as a key, and that a valid key with qak_
+// further in still is.
 func TestAKeyThatStartsWithASecretPrefixIsChecked(t *testing.T) {
 	for prefix, want := range map[string]error{
 		"qak_":  accesskey.ErrSecretInDocument,
@@ -224,6 +226,8 @@ func TestAKeyThatStartsWithASecretPrefixIsChecked(t *testing.T) {
 		"QECP_": accesskey.ErrEnrolmentCodeInDocument,
 		"qEcG_": accesskey.ErrEnrolmentCodeInDocument,
 		"QeCi_": accesskey.ErrEnrolmentCodeInDocument,
+		"qecd_": accesskey.ErrEnrolmentCodeInDocument,
+		"QeCd_": accesskey.ErrEnrolmentCodeInDocument,
 	} {
 		k := keyAt(t, 0, prefix, true)
 		if _, err := accesskey.ParsePin([]byte("[" + entry("ed25519", k) + "]")); err != want {

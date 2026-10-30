@@ -26,10 +26,11 @@ type Step struct {
 // StartStep starts a step of the run's host work and writes its dev.qory.run.step_started,
 // with the run's next step number as step, name as name and kind as kind: event.StepFetch,
 // event.StepCompose or event.StepBuild. Join numbers its steps from the same counter. The
-// run's masker replaces each forwarder's password in name, and a name that contains qak_,
-// qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case is a phrase in its place, as
-// accesskey.ShownValue gives it. Write the step's lines with [Step.Log], and end it with
-// [Step.Exit].
+// run's masker replaces each forwarder's password, each value of OpenSpec.Masker and each
+// server's variable value of 8 characters or more in name, and a name that contains qak_,
+// qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case is a phrase in its place,
+// as accesskey.ShownValue gives it. Write the step's lines with [Step.Log], and end it
+// with [Step.Exit].
 //
 // An error means nothing is written: the kind is not fetch, compose or build, the name
 // is empty, a session of the run is running, another host step is open, or the run is
@@ -37,10 +38,13 @@ type Step struct {
 // returns an error and writes nothing while a host step is open.
 //
 // The name must contain no URL userinfo, token or other credential. The masker replaces
-// only the forwarders' passwords, and accesskey.ShownValue replaces only a name that
-// contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_; any other secret in name is
-// written as given.
-func (r *Run) StartStep(kind, name string) (*Step, error) {
+// only the forwarders' passwords, OpenSpec.Masker's values, the server's variable
+// values and text in the shape of a known key (mask.Shapes), and accesskey.ShownValue
+// replaces only a name that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
+// qecd_; any other secret in name is written as given. The run's masker replaces the
+// run's secrets in the errors of StartStep, [Step.Log] and [Step.Exit], as in Open's.
+func (r *Run) StartStep(kind, name string) (_ *Step, err error) {
+	defer func() { err = maskError(r.masker, err) }()
 	if kind != event.StepFetch && kind != event.StepCompose && kind != event.StepBuild {
 		return nil, fmt.Errorf("start a host step of kind fetch, compose or build, not %s: Join writes the join, image and wall steps", accesskey.ShownValue(kind, true))
 	}
@@ -64,16 +68,18 @@ func (r *Run) StartStep(kind, name string) (*Step, error) {
 // Log writes b, lines of the step, into the record as dev.qory.run.log with stream
 // stderr, the step's number as step and no session member: one chunk per line, and a
 // line longer than 4096 bytes in chunks of 4096, as a session's chunks on pipes. The
-// run's masker replaces the password of each forwarder of the run in b first, within
-// this call alone: a password split across two calls stays as written, so pass whole
+// run's masker replaces the password of each forwarder of the run, each value of
+// OpenSpec.Masker and each server's variable value of 8 characters or more in b first,
+// within this call alone: a value split across two calls stays as written, so pass whole
 // lines. The chunks go to output.log in the run directory. A last line without a line
 // break is a chunk too, and an empty b writes nothing. A run the gateway closed has the
 // chunks in session.jsonl alone.
 //
 // An error means nothing is written: the step exited, a session of the run is running,
 // or the run is closed.
-func (s *Step) Log(b []byte) error {
+func (s *Step) Log(b []byte) (err error) {
 	r := s.r
+	defer func() { err = maskError(r.masker, err) }()
 	if !r.joining.TryLock() {
 		return fmt.Errorf("write step %d's lines after Join returns: a session of the run is still running", s.n)
 	}
@@ -96,8 +102,9 @@ func (s *Step) Log(b []byte) error {
 // An error means nothing is written: the state is not one of the three, exitCode is
 // below -1, the step exited already, a session of the run is running, or the run is
 // closed, whose [Run.Close] ended the step as cancelled.
-func (s *Step) Exit(state string, exitCode int) error {
+func (s *Step) Exit(state string, exitCode int) (err error) {
 	r := s.r
+	defer func() { err = maskError(r.masker, err) }()
 	if !event.IsState(state) {
 		return fmt.Errorf("exit the step with succeeded, failed or cancelled, not %s", accesskey.ShownValue(state, true))
 	}
@@ -141,8 +148,9 @@ func (s *Step) end(state string, exitCode int) {
 }
 
 // stepName is name as a step's dev.qory.run.step_started has it: the run's masker replaces
-// each forwarder's password in it, then a name that contains qak_, qrk_, qecr_, qecn_,
-// qecp_, qecg_ or qeci_ in any case is accesskey.ShownValue's phrase in its place.
+// the run's secrets in it, then a name that contains qak_, qrk_, qecr_, qecn_,
+// qecp_, qecg_, qeci_ or qecd_ in any case is accesskey.ShownValue's phrase in its
+// place.
 func (r *Run) stepName(name string) string {
 	return accesskey.ShownValue(r.masker.Replace(name), false)
 }
@@ -161,7 +169,9 @@ func (r *Run) post(typ string, data any) {
 // writeLog writes b as dev.qory.run.log chunks of stream, cut as on pipes, after the
 // run's masker: with n as session, or with no session member when n is 0, for the
 // run's host work, and with step as step, or with no step member when step is 0. A run
-// the gateway closed has the chunks in its record alone.
+// the gateway closed has the chunks in its record alone. b is text no masker has
+// replaced in yet: masking twice replaces a value inside a placeholder, such as a
+// server's value password inside qory-proxy-password.
 func (r *Run) writeLog(stream string, n, step int, b []byte) {
 	masker := r.masker
 	if masker.Empty() {
@@ -171,6 +181,13 @@ func (r *Run) writeLog(stream string, n, step int, b []byte) {
 	masked := mask.NewWriter(chunks, masker)
 	masked.Write(b)
 	masked.Flush()
+	chunks.Flush()
+}
+
+// writeMasked is writeLog for b the run's masker has replaced in already.
+func (r *Run) writeMasked(stream string, n, step int, b []byte) {
+	chunks := chunk.New(r.logEmit(stream, n, step))
+	chunks.Write(b)
 	chunks.Flush()
 }
 

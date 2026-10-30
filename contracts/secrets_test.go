@@ -156,6 +156,7 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		"fixtures/enrolment/answer.json":                          {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
 		"fixtures/enrolment/answer-gateway.json":                  {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
 		"fixtures/enrolment/answer-adapter.json":                  {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
+		"fixtures/enrolment/answer-diagnostics.json":              {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
 		"fixtures/enrolment/refusal-key-limit.json":               {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 		"fixtures/enrolment/refusal-key-invalid.json":             {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 		"fixtures/enrolment/refusal-key-limit-rotation.json":      {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
@@ -203,11 +204,11 @@ func TestSecretsFixturesValidate(t *testing.T) {
 }
 
 // TestEnrolmentAnswerNodeKinds pins node_kind against node_id in the enrolment answer:
-// node with nd_, pool with np_, gateway with ng_ and adapter with na_ pass, and every
-// other pair is refused.
+// node with nd_, pool with np_, gateway with ng_, adapter with na_ and diagnostics with
+// dg_ pass, and every other pair is refused.
 func TestEnrolmentAnswerNodeKinds(t *testing.T) {
 	s := compile(t, "enrolment.schema.json")["enrolment.schema.json"]
-	kinds := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_"}
+	kinds := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_", "diagnostics": "dg_"}
 	for kind := range kinds {
 		for _, prefix := range kinds {
 			var doc map[string]any
@@ -295,9 +296,9 @@ func failures(ve *jsonschema.ValidationError) []string {
 }
 
 // TestEnrolmentCodePrefixes pins the prefixes of the enrolment request's code: qecn_,
-// qecp_, qecg_, qeci_ and qecr_ in lower case pass, and qec_ alone, an unknown letter, qecx_,
-// and a prefix in upper case are refused, as a server refuses a malformed code, an
-// invalid request, 400. The refused codes are tested inline, as documents here.
+// qecp_, qecg_, qeci_, qecd_ and qecr_ in lower case pass, and qec_ alone, an unknown
+// letter, qecx_, and a prefix in upper case are refused, as a server refuses a
+// malformed code, an invalid request, 400. The refused codes are tested inline, as documents here.
 func TestEnrolmentCodePrefixes(t *testing.T) {
 	c, err := contracts.Compiler()
 	if err != nil {
@@ -315,8 +316,8 @@ func TestEnrolmentCodePrefixes(t *testing.T) {
 		return doc
 	}
 	for prefix, want := range map[string]bool{
-		"qecn_": true, "qecp_": true, "qecg_": true, "qeci_": true, "qecr_": true,
-		"qec_": false, "qecx_": false, "QECN_": false, "QECR_": false,
+		"qecn_": true, "qecp_": true, "qecg_": true, "qeci_": true, "qecd_": true, "qecr_": true,
+		"qec_": false, "qecx_": false, "QECN_": false, "QECR_": false, "QECD_": false,
 	} {
 		err := s.Validate(request(prefix + "F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg"))
 		if (err == nil) != want {
@@ -962,6 +963,72 @@ func TestDeniedVariables(t *testing.T) {
 		if denied(name) {
 			t.Errorf("%s is on the deny list; want it left to the server", name)
 		}
+	}
+}
+
+// TestDeniedVariablesListsCredentials pins forge_tokens and model_keys of
+// denied-variables.json, as ForgeTokenNames and ModelKeyNames return them: each a
+// sorted list of names without repeats, apart from names, patterns and each other;
+// forge_tokens has the forge tokens' names, and model_keys every variable a runtime
+// descriptor of runtimes.json reads a model key from. Each call returns a new slice.
+func TestDeniedVariablesListsCredentials(t *testing.T) {
+	d, err := contracts.DeniedVariables()
+	if err != nil {
+		t.Fatal(err)
+	}
+	forge, model := contracts.ForgeTokenNames(), contracts.ModelKeyNames()
+	if !slices.Equal(forge, d.ForgeTokens) || !slices.Equal(model, d.ModelKeys) {
+		t.Errorf("ForgeTokenNames %q and ModelKeyNames %q differ from the file", forge, model)
+	}
+	entry := regexp.MustCompile(`^[A-Za-z0-9_]{1,128}$`)
+	var patterns []*regexp.Regexp
+	for _, p := range d.Patterns {
+		patterns = append(patterns, regexp.MustCompile("(?i)^"+strings.ReplaceAll(regexp.QuoteMeta(p), `\*`, ".*")+"$"))
+	}
+	matched := func(n string) bool {
+		return slices.ContainsFunc(patterns, func(p *regexp.Regexp) bool { return p.MatchString(n) })
+	}
+	for list, names := range map[string][]string{"forge_tokens": forge, "model_keys": model} {
+		if len(names) == 0 || !slices.IsSorted(names) || len(slices.Compact(slices.Clone(names))) != len(names) {
+			t.Errorf("%s %q; want a sorted list without repeats", list, names)
+		}
+		for _, n := range names {
+			if !entry.MatchString(n) || slices.Contains(d.Names, n) || matched(n) || slices.Contains(forge, n) && slices.Contains(model, n) {
+				t.Errorf("%s: %q is no name, or is in another list or matches a pattern", list, n)
+			}
+		}
+	}
+	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GITLAB_TOKEN", "GL_TOKEN", "BITBUCKET_TOKEN"} {
+		if !slices.Contains(forge, name) {
+			t.Errorf("%s is not among forge_tokens", name)
+		}
+	}
+	keys := []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+	var described struct {
+		Runtimes []struct {
+			Model *struct {
+				Keys []struct {
+					Variable string `json:"variable"`
+				} `json:"keys"`
+			} `json:"model"`
+		} `json:"runtimes"`
+	}
+	load(t, "runtimes.json", &described)
+	for _, rt := range described.Runtimes {
+		if rt.Model != nil {
+			for _, k := range rt.Model.Keys {
+				keys = append(keys, k.Variable)
+			}
+		}
+	}
+	for _, name := range keys {
+		if !slices.Contains(model, name) {
+			t.Errorf("%s is not among model_keys", name)
+		}
+	}
+	forge[0], model[0] = "CHANGED", "CHANGED"
+	if contracts.ForgeTokenNames()[0] == "CHANGED" || contracts.ModelKeyNames()[0] == "CHANGED" {
+		t.Error("a change to a returned slice reached the next call")
 	}
 }
 

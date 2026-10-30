@@ -108,7 +108,7 @@ func (r *Run) HostProxy() (HostProxy, error) {
 	if err != nil {
 		return HostProxy{}, err
 	}
-	r.masker.AddProxy(proxyUser, password)
+	r.addPassword(password)
 	var fwd *forwarder
 	if r.remote == nil {
 		fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.ProxySecret, password)
@@ -164,7 +164,7 @@ func (r *Run) StackProxy() (HostProxy, error) {
 	if err != nil {
 		return HostProxy{}, err
 	}
-	r.masker.AddProxy(proxyUser, password)
+	r.addPassword(password)
 	var fwd *forwarder
 	if r.remote == nil {
 		fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.StackProxySecret, password)

@@ -295,7 +295,9 @@ type Options struct {
 	// root, and RootReference one whose user is root: the cases of a run whose policy
 	// names its image by reference run in them. Allow is the machine's images.allow
 	// prefix that covers both. Without Reference those cases are skipped, and said so.
-	Reference, RootReference, Allow string
+	// Unpublished, under the same prefix, is an image the engine holds by its digest
+	// whose manifest its registry no longer has.
+	Reference, RootReference, Unpublished, Allow string
 	// RelayImage, when not nil, is the image the relay of the run of the id was created
 	// from, as the engine reports it while the run goes; the case of the relay's image
 	// asks it. Nil skips that case.
@@ -828,7 +830,8 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 		if o.Docker {
 			reason = "an image by reference starts with no Docker inside, which the run of the suite without one checks"
 		}
-		for _, name := range []string{"an image whose user is root is refused", "the relay's image is the machine's", "the workspace is at /workspace",
+		for _, name := range []string{"an image whose user is root is refused", "an image the engine holds and its registry does not is refused",
+			"the relay's image is the machine's", "the workspace is at /workspace", "the manifest is checked through the run's proxy",
 			"a name the image sets and the runtime denies is unset", "the image fetched before the join is the run's first step"} {
 			t.Run(name, func(t *testing.T) { t.Skip(reason) })
 		}
@@ -840,6 +843,24 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 		var r *session.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.ImageUserRoot {
 			t.Errorf("the run: %v, want image_user_root", err)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the refused run left %v (%v)", left, err)
+			}
+		}
+	})
+	// The session checks the manifest at the registry before the wall's pull, so an
+	// image the engine holds by its digest does not run when its registry lacks it,
+	// whatever the engine's image store answers a pull from. The refusal's detail is the
+	// session check's.
+	t.Run("an image the engine holds and its registry does not is refused", func(t *testing.T) {
+		runID := event.NewRunID()
+		_, err := runIn(t, o, variant{image: o.Unpublished, allow: []string{o.Allow}, runID: runID}, false, h, outside)
+		var r *session.Refusal
+		want := "the image " + o.Unpublished + " is not in its registry: the registry answered 404 to the check of its manifest"
+		if !errors.As(err, &r) || r.Code != refusal.ImageMissing || r.Detail != want {
+			t.Errorf("the run: %v, want image_missing: %s", err, want)
 		}
 		if o.Leftovers != nil {
 			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
@@ -879,6 +900,20 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 		if got := <-relay; got != o.Image {
 			t.Errorf("the relay was created from %q, want the machine's default %q", got, o.Image)
 		}
+	})
+	t.Run("the manifest is checked through the run's proxy", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("the run did not start: %v", err)
+		}
+		host, _, _ := wall.RegistryManifest(o.Reference)
+		name, port, _ := strings.Cut(host, ":")
+		for _, e := range r.events {
+			if d, _ := e["data"].(map[string]any); e["type"] == "dev.qory.run.egress" && d["host"] == name && fmt.Sprint(d["port"]) == port &&
+				d["decision"] == "allowed" && d["status"] == float64(http.StatusOK) {
+				return
+			}
+		}
+		t.Errorf("the record has no request to %s that the run's proxy passed and the registry answered 200", host)
 	})
 	t.Run("the workspace is at /workspace", func(t *testing.T) {
 		if err != nil {
@@ -1164,6 +1199,12 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	allow := []string{mustHost(t, h.origin), "169.254.169.254", credentialHost, toolHost, modelHost}
 	if h.named {
 		allow = append(allow, "127.0.0.1")
+	}
+	// The session checks an image by reference at its registry through the run's proxy.
+	if strings.Contains(v.image, "@") {
+		host, _, _ := wall.RegistryManifest(v.image)
+		name, _, _ := strings.Cut(host, ":")
+		allow = append(allow, name)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

@@ -10,6 +10,29 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Move a model key or forge token from `wall.env`, `--env`, a harness default or the
+  `env` of a `--settings` file to `gateway.credentials` in forager.yaml: a run now leaves
+  its value out. The built-in deny list, `denied-variables.json`, has `model_keys`, the
+  model keys' variables `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and
+  `CLAUDE_CODE_OAUTH_TOKEN`, and `forge_tokens`, the forge tokens' `GH_TOKEN`,
+  `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`,
+  `GL_TOKEN` and `BITBUCKET_TOKEN`. A run leaves out a value of one that the server,
+  `--env`, `wall.env` or the harness passes, as for any denied name, and Claude Code's
+  copy of the `--settings` file leaves the names out of its `env`. For a value of the
+  server's the run reports `Define <NAME> as a credential in the run configuration, not
+  as a variable: the run leaves out the value that the server passes, since
+  denied-variables.json lists it as a forge token.` (or `a model key`), and for the
+  node's sources `Move <NAME> to the gateway's credentials in forager.yaml: the run
+  leaves out the value that <SOURCE> passes, since denied-variables.json lists it as a
+  forge token.`; `<SOURCE>` is `wall.env`, `--env`, `the harness's defaults`, `the
+  harness` or `the env of --settings`. A credential's
+  placeholder may still take one, and the session still sets a model key's variable to
+  its placeholder. `Run.Setup` refuses one with `Move <NAME> to the gateway's
+  credentials in forager.yaml: denied-variables.json lists it as a forge token or a model
+  key, which the setup's variables may not pass into the wall.`
+  `contracts.ForgeTokenNames()` and `contracts.ModelKeyNames()` return the two lists, and
+  `contracts.DeniedVariables()` the whole file. In 0.7.0, a model key or a forge token
+  listed in `wall.env`, `--env` or the `env` of `--settings` reached the agent.
 - `receiver.Handler.Secrets` returns `[]receiver.Value` in place of `[][]byte`: make
   each with `receiver.NewValue(b)`, and set its `ExpiresAt` and `Apply`. A Value prints
   none of its bytes, also as a field of a struct printed by reflection. The hook is
@@ -28,8 +51,8 @@ release may change what an existing document does, and says so under Upgrading.
   `accesskey.ErrRunCodeInDocument` for a document that contains a run code and neither
   of the others; `errors.Is` reports it as `accesskey.ErrSecretInDocument`. The event
   schemas accept both phrases. Before, a run code passed as any other value.
-- `accesskey.ContainsSecret` catches an enrolment code, `qecn_`, `qecp_`, `qecg_` or
-  `qeci_` in any case, as it catches `qak_`, `qrk_` and `qecr_`. Forager refuses an
+- `accesskey.ContainsSecret` catches an enrolment code, `qecn_`, `qecp_`, `qecg_`,
+  `qeci_` or `qecd_` in any case, as it catches `qak_`, `qrk_` and `qecr_`. Forager refuses an
   enrolment code where it refuses the other three, such as in a pin, a name or a built
   image, and sends and prints `(a name that contains an enrolment code)` or `(a value
   that contains an enrolment code)` in place of a name or a value that contains one.
@@ -38,7 +61,7 @@ release may change what an existing document does, and says so under Upgrading.
   it as `accesskey.ErrSecretInDocument`. The event schemas accept both phrases. The
   errors of a malformed enrolment code and of a `run.url` with a secret start with
   their fix, and the error of a built image with a secret's prefix lists `qak_, qrk_ or
-  qec[npgir]_`. Before, an enrolment code passed as any other value.
+  qec[npgidr]_`. Before, an enrolment code passed as any other value.
 - A configuration document whose `run.url` contains `qak_` or `qrk_` in any case is
   refused: `server.Client.Discover` returns a `*server.DocumentError`, and no run
   starts. Before, the document was read and `run.policy_applied` sent `run.url` as it
@@ -137,6 +160,14 @@ release may change what an existing document does, and says so under Upgrading.
   has a path, a query, user information, an underscore, a trailing dot or port 0, so
   Sign makes no run key and a run with such a run key does not start. Before, they
   accepted an underscore, a trailing dot and port 0.
+- On a machine with `OpenSpec.EngineProxy`, pull each image the machine defines, the
+  relay's and every entry of `OpenSpec.Images`, before you set the engine's proxy
+  setting. The session sets `wall.Request.NeverPull`, and the Docker wall then creates
+  the relay and every container of the run's image with `--pull=never`, so the Docker
+  wall starts no pull outside the run's `image` step, where another run's forwarder and
+  token could carry the pull. A run whose image the engine does not have fails with "Pull the
+  image on this machine before you set the engine proxy: …". Before, the engine pulled a
+  missing image the machine defines when the wall created its container.
 
 #### Added
 
@@ -300,8 +331,8 @@ release may change what an existing document does, and says so under Upgrading.
 - The reason `no_session` of `dev.qory.run.exited`, reserved: the run was closed with no
   join, `failed` with `exit_code` `-1`.
 - The join request on the gateway's link, `POST <run.url>/<run_id>/sessions` on both
-  transports, `link-join-request.schema.json`, with `version`, `passes` and an optional
-  `model_credential`, and its answer, `link-join-answer.schema.json`, with `version`,
+  transports, `link-join-request.schema.json`, with `version`, `passes`, `model_key`
+  and an optional `model_credential`, and its answer, `link-join-answer.schema.json`, with `version`,
   `session` and `model_credential`. The gateway answers a join it does not accept with
   `400` `invalid_request`, a join while another join of the run is open among them,
   `403` `placeholder_conflict` or a `410` for a run that has ended, and with no new
@@ -358,7 +389,12 @@ release may change what an existing document does, and says so under Upgrading.
   set a key, cloud credentials or model ids in place of the start key; a value in Claude
   Code's other settings files can still reach it. A descriptor without a `model`
   section, a format it lists no key for, and an auth no key of that format has are
-  `run_configuration_invalid`.
+  `run_configuration_invalid`. A session whose spec has no runtime has no start key:
+  the session chooses none, and its program gets no model key's variable, placeholder
+  or endpoint. Its join request has `model_key` false, and the gateway's proxy sets no
+  model key from the join's `200` until the session's `dev.qory.session.exited`; the
+  join answer has no `model_credential`. `Join` and `AgentEnv` refuse such a spec with
+  a `ModelCredential` before any request.
 - A model key's placeholder contains its name: `qory-`, the name and
   `-sets-the-credential-outside-the-enclosure`, such as
   `qory-model-sets-the-credential-outside-the-enclosure`, `link.KeyPlaceholder` in Go.
@@ -630,6 +666,10 @@ release may change what an existing document does, and says so under Upgrading.
   and `one_of` groups.
 - Enrolment: an access key can belong to an adapter, `node_kind` `adapter` with an
   `na_` id.
+- Enrolment: an access key can be a diagnostics key, `node_kind` `diagnostics` with a
+  `dg_` id, enrolled with a `qecd_` code. Forager catches and phrases `qecd_` as it
+  does the other enrolment codes, and the error of a malformed code or of a built image
+  with a secret's prefix lists `qec[npgidr]_`.
 - Enrolment: an enrolment code's prefix names the kind of key it enrols, `qecn_` a
   node's, `qecp_` a node pool's, `qecg_` a gateway's and `qeci_` an integration's
   (node_kind `adapter`), in place of `qec_`, which is refused. `accesskey.CodeKind`
@@ -729,6 +769,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The gateway replaces text in the shape of a known key (`mask.Shapes`) with `***` in
+  the line of an adapter that fails, in the error of a run's start and in a renewal's
+  report, and in each line a tool writes to standard error, in its report and in the
+  error of a tool that exits before it listens. A renewal's report also has `***` in
+  place of the token the gateway holds for that credential. Before, these lines were
+  printed as written, apart from a value with an access key secret, a run key, a run
+  code or an enrolment code.
 - `gateway.Config.StackHosts`, `gateway.stack_hosts` in `forager.yaml`, default
   empty. These are the hosts of a run's stack proxy until the run's first join
   request, for qory's fetch of the harness definition. The stack proxy passes a
@@ -832,6 +879,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- An adapter's output that fails `credential.schema.json` is refused with `Fix the
+  output of the adapter <PATH> to match credential.schema.json: <LOCATIONS>`, where
+  `<LOCATIONS>` lists each failing location and keyword, such as `/apply/0/header fails
+  pattern`, at most 5 and then `and N more`. Before, the error had the schema's text,
+  which quotes the value it refused, such as a token in the wrong field, and grew with
+  the output.
 - The relay signs every enrolment it passes to the server,
   `POST /.well-known/qory-enrolment`, under the gateway's access key. It deletes every
   value of `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id`, `X-Qory-Instance-Name`,
@@ -1099,8 +1152,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
-- `wall.Request.Pull` and `wall.Puller`: `(*wall.Docker).Pull` pulls a run's image by
-  reference, unless the engine holds it by that digest, under a timeout, and refuses
+- `wall.Request.Pull` and `wall.Puller`: before a run uses an image by reference, the
+  session checks its manifest at the registry with the run's credentials, through the
+  run's proxy, with or without an engine proxy; a 404 is `image_missing`, and any other
+  failure fails the image step. `wall.RegistryManifest` is the registry API host and the
+  repository of a reference. `(*wall.Docker).Pull` then pulls the image, also when the
+  engine holds it by that digest, under a timeout, and refuses
   with `image_user_root` an image whose user is root, a uid of 0 or a name its
   `/etc/passwd` maps to uid 0, or a name it cannot map. With the run's certificate, it
   writes the certificate in `wall.Docker.CertsDir`, `/etc/docker/certs.d` by default,
@@ -1108,10 +1165,11 @@ release may change what an existing document does, and says so under Upgrading.
   digest, and none starts when the engine does not hold it. The agent's container, the
   setup container and the container the wall reads the image's files from are created
   with `--pull=never`, so the engine pulls such an image in the image step alone.
-- `image_missing`, a refusal code of `refusal.Decides`: `(*wall.Docker).Pull` refuses
-  an image whose registry has no manifest of its digest or no repository of its name,
-  with the reference as its name. When the join's image step pulls the image, the
-  session's `dev.qory.session.exited` is failed, with `exit_code` `-1` and `reason`
+- `image_missing`, a refusal code of `refusal.Decides`: the session's check of the
+  manifest, on a 404, and `(*wall.Docker).Pull` refuse an image whose registry has no
+  manifest of its digest or no repository of its name, with the reference as its name.
+  When the join's image step pulls the image, the session's `dev.qory.session.exited`
+  is failed, with `exit_code` `-1` and `reason`
   `image_missing`; `(*session.Run).FetchImage` returns the refusal. When the engine
   pulls from the image's registry alone, a denied pull, an unreachable registry and a
   timeout stay failures with no reason. On the containerd image store of Docker Engine
@@ -1200,9 +1258,63 @@ release may change what an existing document does, and says so under Upgrading.
   directory has its file's permission bits within 0644, less the umask, so the copy of
   a file of mode 0600 is 0600, and a wall whose user is another one cannot read it.
   Before, a copy was 0644 less the umask.
+- Pass `covered` to `mask.Masker.Scan` and keep the `kept` it returns: give 0 with the
+  first bytes of a stream, then the `kept` of the call before with the next bytes, and
+  scan the bytes kept back with `final` at the end of the stream. `kept` is how many
+  of the bytes kept back a put written already stands for. Before, `Scan` took
+  `(dst, b, final)` and returned `(out, rest)`.
 
 #### Added
 
+- `runtimes.Launch.LeftOut`, the names of the variables a runtime left out of a file it
+  copied whose values reach the program's environment, such as the `env` of Claude
+  Code's `--settings`; the session reports a forge token's or a model key's name of
+  them. `runtimes.Attach.DeniedVariables` also has the names of `forge_tokens` and
+  `model_keys` of `denied-variables.json`, so a runtime leaves them out of such a copy.
+- `session.OpenSpec.Masker`, the run's masker, which the caller makes with `mask.New()`,
+  fills with `mask.Masker.AddSecret` and wraps its writers with `mask.NewWriter` on, so
+  the caller's output and the run's are masked with one set of values: secret values the
+  caller knows and the run does not, such as the values of qory's `--env` and
+  `wall.env`, the run code, the run key and the query values of a harness URL. The run
+  adds the server's variable values of 8 characters or more, the run answer's and each
+  reload's from that reload on, and each forwarder's password. From the open to the
+  close, the masker replaces each value with `***` (`mask.Secret`), as it is,
+  percent-encoded and JSON-escaped, in the `dev.qory.run.log` chunks of the runtime's
+  output, of the host steps and of the setup steps, in `output.log`, in the events
+  mapped from output and hook records, in every string of `dev.qory.session.started`, in
+  step names, in the `environment_ref` of `dev.qory.run.built`, in every string of
+  `dev.qory.run.started` but its labels, in `Report` lines, in the copy of the runtime's
+  output to `SessionSpec.Stdout` and `Stderr`, and in the text of the errors that
+  `session.Open`, `Join`, `Close`, `Setup`, `FetchImage`, `StartStep`, `Step.Log` and
+  `Step.Exit` return, where `errors.Is` still reaches what the error wraps and
+  `errors.As` gives a refusal's masked copy with its code. These are not masked: the run
+  request's labels and about, `dev.qory.run.started`'s labels, which stay as the gateway
+  registered them, the members of `dev.qory.run.policy_applied`, `dev.qory.run.built`'s
+  other members, `dev.qory.run.exited`'s reason, `dev.qory.run.refused`'s names, the
+  errors the run's other methods return, such as `HostProxy` and `AgentEnv`, a value
+  split across two calls of `Step.Log`, and the files written for the runtime, such as
+  the setup script. `AddSecret` returns an error, which contains no value, for a value
+  of more than `mask.MaxSecretSize` (4096) bytes and for a new value once the masker has
+  `mask.MaxSecrets` (1024) different values; a server's value it refuses is a `Report`
+  line with its name. With no `Masker`, the run makes one with `mask.New()`, and `Close`
+  overwrites its copies; `Close` leaves a masker the caller passes as it is. A
+  `mask.Masker` is safe for an add while other goroutines mask with it, finds that
+  overlap are replaced as one, `Writer.Flush` masks the bytes it kept back, and `Clear`
+  leaves a masker that replaces nothing; a `mask.Writer` drops the bytes it kept back
+  before a `Clear`. A stream that `mask.Masker.Scan` masks in pieces is masked as in one
+  call, byte for byte. Before, the run's masker replaced the forwarders' passwords
+  alone, and `Report` lines were unmasked apart from the launch line of a run with a run
+  key and the engine proxy's errors.
+- `mask.Shapes()`: a masker from `mask.New()`, the run's among them, replaces text in
+  the shape of a known key with a bare `***`, prefix included, whether or not anyone
+  added the key's value: `sk-ant-`, `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`,
+  `github_pat_`, `AKIA` and `ASIA`, each followed by its key's alphabet, and `bearer` in
+  any case, 1 to 16 spaces or tabs and a token of 16 or more characters. The `***`
+  covers at most 256 characters of a key's token and 4096 of a bearer token
+  (`mask.Shape.Max`); a shape is looked for as written, not percent-encoded or
+  JSON-escaped. A stream a `mask.Writer` masks in writes is masked as one `Replace` of the
+  whole stream, byte for byte, shapes included. The zero `mask.Masker` and
+  `mask.Proxy`'s replace no shape.
 - `Run.StackProxy`, a forwarder for the fetch of the harness definition. It is
   refused after the run's first `Join` and ends at it. When the run has a certificate
   authority, as a run with a harness credential has, its `CABundle` is the authority's
@@ -1244,7 +1356,11 @@ release may change what an existing document does, and says so under Upgrading.
   address alone. fmt prints the password with the address under `%p` of a value, under
   `%w`, and for a value in a struct field that is not exported. A walled run refuses a
   mount of `wall.Docker.CertsDir`, where the engine reads the certificates it trusts
-  for a registry.
+  for a registry. The run's masker replaces the engine proxy's password, as every
+  forwarder's, with `qory-proxy-password` as it is, as the base64 of `qory:<password>`,
+  and where a URL prints it escaped: in a proxy URL's userinfo, as `url.QueryEscape`
+  and `url.PathEscape` give it, and percent-encoded, since a password may have `@`,
+  `/`, `:` or `%`.
 - `(*session.Run).EngineProxy(hosts)`: in a run with no wall, the machine's container
   engine sends its requests, such as a build's pulls and push, through the run's proxy
   at `OpenSpec.EngineProxy`, so a build runs on a machine whose only route out is the

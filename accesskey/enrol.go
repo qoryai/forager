@@ -34,6 +34,8 @@ const (
 	CodePrefixGateway = "qecg_"
 	// CodePrefixAdapter starts the enrolment code of an adapter's access key.
 	CodePrefixAdapter = "qeci_"
+	// CodePrefixDiagnostics starts the enrolment code of a diagnostics access key.
+	CodePrefixDiagnostics = "qecd_"
 	// CodePrefixRun starts a run code: the code a provisioner puts in a machine's start
 	// data in place of the run key. It enrols no access key: its 201 contains the
 	// run's run key, [EnrolmentRequest.VerifyRunAnswer].
@@ -50,6 +52,7 @@ var codeKinds = []struct{ prefix, kind string }{
 	{CodePrefixPool, "pool"},
 	{CodePrefixGateway, "gateway"},
 	{CodePrefixAdapter, "adapter"},
+	{CodePrefixDiagnostics, "diagnostics"},
 	{CodePrefixRun, kindRun},
 }
 
@@ -104,12 +107,12 @@ func crockford(c rune) (rune, bool) {
 
 // NormaliseCode returns an enrolment code in the form the request sends and the proof
 // covers: its prefix in lower case, [CodePrefixNode], [CodePrefixPool],
-// [CodePrefixGateway], [CodePrefixAdapter] or [CodePrefixRun], the 26 characters of the code in upper
-// case with I and L read as 1, O as 0 and hyphens removed, then "." and the fingerprint
-// of the server's key, and during a rotation of it a second "." and the next key's
-// fingerprint, each as issued. So a person may type the code in either case and in
-// groups. Another prefix, U, and every character outside Crockford's alphabet, is
-// refused.
+// [CodePrefixGateway], [CodePrefixAdapter], [CodePrefixDiagnostics] or [CodePrefixRun],
+// the 26 characters of the code in upper case with I and L read as 1, O as 0 and
+// hyphens removed, then "." and the fingerprint of the server's key, and during a
+// rotation of it a second "." and the next key's fingerprint, each as issued. So a
+// person may type the code in either case and in groups. Another prefix, U, and every
+// character outside Crockford's alphabet, is refused.
 func NormaliseCode(code string) (string, error) {
 	head, fingerprints, ok := strings.Cut(code, ".")
 	prefix, _, known := codePrefix(head)
@@ -147,8 +150,8 @@ func NormaliseCode(code string) (string, error) {
 }
 
 // CodeKind returns the node_kind of the key an enrolment code enrols, as its prefix
-// names it: node, pool, gateway or adapter; for a run code, [CodePrefixRun], it
-// returns run. A code [NormaliseCode] refuses is an error.
+// names it: node, pool, gateway, adapter or diagnostics; for a run code,
+// [CodePrefixRun], it returns run. A code [NormaliseCode] refuses is an error.
 func CodeKind(code string) (string, error) {
 	normal, err := NormaliseCode(code)
 	if err != nil {
@@ -236,8 +239,9 @@ func (r *EnrolmentRequest) VerifyProof() bool {
 }
 
 // EnrolmentAnswer is the server's 201 to an enrolment: the access key's id, the id of
-// its node, node pool, gateway or adapter with its kind, node, pool, gateway or
-// adapter, its stored-secrets flag and the server's keys. The key is active from the 201 on.
+// its node, node pool, gateway, adapter or diagnostics key with its kind, node, pool,
+// gateway, adapter or diagnostics, its stored-secrets flag and the server's keys. The
+// key is active from the 201 on.
 type EnrolmentAnswer struct {
 	Version       int    `json:"version"`
 	AccessKeyID   string `json:"access_key_id"`
@@ -419,7 +423,7 @@ func (a *EnrolmentAnswer) check() error {
 	if err := CheckNodeID(a.NodeID); err != nil {
 		return err
 	}
-	if want := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_"}[a.NodeKind]; want == "" || !strings.HasPrefix(a.NodeID, want) {
+	if want := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_", "diagnostics": "dg_"}[a.NodeKind]; want == "" || !strings.HasPrefix(a.NodeID, want) {
 		return fmt.Errorf("node_kind %s does not match the node id %s", ShownName(a.NodeKind, true), a.NodeID)
 	}
 	if n := len(a.ApiaryPublicKey); n < 1 || n > 2 {

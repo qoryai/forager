@@ -74,10 +74,10 @@ func TestNeedsWallSaysWhatARunAlwaysSaid(t *testing.T) {
 }
 
 // TestShownListsAPhraseForASecret pins Shown: a name that contains qak_, qrk_, qecr_,
-// qecn_, qecp_, qecg_ or qeci_ in any case is its phrase, a clean name is as it is, and
-// New lists a phrase once, even when two names become that phrase.
+// qecn_, qecp_, qecg_, qeci_ or qecd_ in any case is its phrase, a clean name is as it
+// is, and New lists a phrase once, even when two names become that phrase.
 func TestShownListsAPhraseForASecret(t *testing.T) {
-	got := New(RunConfigurationInvalid, Shown("x-qak_one", "model", "QAK_two", "qrk_three", "QECR_four", "qecr_five", "qecn_six", "QeCp_seven", "qecg_eight", "QECI_nine"), "refused").Names
+	got := New(RunConfigurationInvalid, Shown("x-qak_one", "model", "QAK_two", "qrk_three", "QECR_four", "qecr_five", "qecn_six", "QeCp_seven", "qecg_eight", "QECI_nine", "QeCd_ten"), "refused").Names
 	want := []string{"(a name that contains a run code)", "(a name that contains a run key)", "(a name that contains an access key secret)", "(a name that contains an enrolment code)", "model"}
 	if !slices.Equal(got, want) {
 		t.Errorf("names %q, want %q", got, want)

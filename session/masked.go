@@ -6,15 +6,15 @@ import (
 	"github.com/qoryai/forager/mask"
 )
 
-// texts masks the strings of a session's events: the run's masker replaces the
-// forwarders' passwords first, then the harness masker the harness's text. Either is
-// nil for none.
+// texts masks the strings of a session's events: the run's masker replaces the run's
+// secrets first, the forwarders' passwords, OpenSpec.Masker's values and the server's variable
+// values, then the harness masker the harness's text. Either is nil for none.
 type texts struct {
 	secrets *mask.Masker
 	harness *mask.Harness
 }
 
-// replace is s with both maskers' finds replaced, the passwords first.
+// replace is s with both maskers' finds replaced, the run's secrets first.
 func (t texts) replace(s string) string { return t.harness.Replace(t.secrets.Replace(s)) }
 
 // maskedRecord is the data of an event mapped from an output or hook record with every
@@ -29,8 +29,8 @@ func maskedRecord(t texts, data map[string]any) map[string]any {
 	return maskedValue(t, data).(map[string]any)
 }
 
-// maskedValue is v with every string in it masked by t: a string, and the strings of
-// the maps and slices encoding/json decodes into, at any depth. Every other value is
+// maskedValue is v with every string in it masked by t: a string, a []string, and the
+// strings of the maps and slices encoding/json decodes into, at any depth. Every other value is
 // returned as it is.
 func maskedValue(t texts, v any) any {
 	switch v := v.(type) {
@@ -46,6 +46,12 @@ func maskedValue(t texts, v any) any {
 		out := make([]any, len(v))
 		for i, e := range v {
 			out[i] = maskedValue(t, e)
+		}
+		return out
+	case []string:
+		out := make([]string, len(v))
+		for i, e := range v {
+			out[i] = t.replace(e)
 		}
 		return out
 	}

@@ -266,12 +266,13 @@ func (p PublicKey) Fixture() bool {
 func shown(v string) string { return ShownValue(v, true) }
 
 // ShownValue is a value as a message prints it: quoted when quote is true, bare when it
-// is false, and, when it contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in
-// any case, a phrase in its place. A message passes it a whole part that is not a name,
-// such as a path, or the text of an error or of a program's error output, so that part
-// never prints any of the seven prefixes. A value with more than one kind of prefix
-// gets the phrase of the first kind in this order: the access key secret's, the run
-// key's, the run code's, then the enrolment code's, for qecn_, qecp_, qecg_ and qeci_.
+// is false, and, when it contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
+// qecd_ in any case, a phrase in its place. A message passes it a whole part that is
+// not a name, such as a path, or the text of an error or of a program's error output,
+// so that part never prints any of the eight prefixes. A value with more than one kind
+// of prefix gets the phrase of the first kind in this order: the access key secret's,
+// the run key's, the run code's, then the enrolment code's, for qecn_, qecp_, qecg_,
+// qeci_ and qecd_.
 func ShownValue(v string, quote bool) string {
 	switch {
 	case containsAccessKeySecret(v):
@@ -289,10 +290,10 @@ func ShownValue(v string, quote bool) string {
 }
 
 // ShownName is a name as a message prints it: quoted when quote is true, bare when it is
-// false, and, when it contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any
-// case, a phrase in its place, so a secret pasted where a name belongs never reaches
-// the message. A name with more than one kind of prefix gets the phrase of the first
-// kind in the order [ShownValue] uses.
+// false, and, when it contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_
+// in any case, a phrase in its place, so a secret pasted where a name belongs never
+// reaches the message. A name with more than one kind of prefix gets the phrase of the
+// first kind in the order [ShownValue] uses.
 func ShownName(v string, quote bool) string {
 	switch {
 	case containsAccessKeySecret(v):
@@ -311,7 +312,7 @@ func ShownName(v string, quote bool) string {
 
 // IsNamePhrase reports whether v is one of the phrases [ShownName] gives in place of a
 // name: what a reader of shown names, labels say, gets for a value that contains qak_,
-// qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case.
+// qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case.
 func IsNamePhrase(v string) bool {
 	return v == ShownName(SecretPrefix, false) || v == ShownName(runKeyPrefix, false) ||
 		v == ShownName(CodePrefixRun, false) || v == ShownName(CodePrefixNode, false)
@@ -319,7 +320,7 @@ func IsNamePhrase(v string) bool {
 
 // ShownNames are names as a message or an event lists them: each as [ShownName] shows
 // it bare, in order, with each phrase once, so two names that give one phrase list it
-// once. A name without any of the seven prefixes is listed as it is, as often as it is
+// once. A name without any of the eight prefixes is listed as it is, as often as it is
 // given.
 func ShownNames(names []string) []string {
 	var out []string
@@ -334,9 +335,9 @@ func ShownNames(names []string) []string {
 }
 
 // ShownError is err as a message wraps it: err itself, nil among them, or, when its
-// text contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case, an error
-// that still wraps err and whose text is [ShownValue]'s phrase in place of all of err's
-// text.
+// text contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case, an
+// error that still wraps err and whose text is [ShownValue]'s phrase in place of all of
+// err's text.
 func ShownError(err error) error {
 	if err == nil || !ContainsSecret(err.Error()) {
 		return err
@@ -355,13 +356,13 @@ func (p phrasedError) Unwrap() error { return p.err }
 
 // ContainsSecret reports whether a value contains what starts an access key secret,
 // qak_, a run key, qrk_, a run code, qecr_, or an enrolment code of an access key,
-// qecn_, qecp_, qecg_ or qeci_, in any case. A reader of a document a secret does not
-// belong in, such as the server document or a pin, refuses one that contains it with a
-// fixed message, before a schema or a JSON decoder can quote the value in its error. A
-// run code is a secret until it is redeemed or its 15 minutes pass: whoever first
-// redeems it through its gateway's relay gets the run's run key, under a key of their
-// choosing. An enrolment code is a secret until it is used: whoever first sends it
-// enrols an access key of their choosing.
+// qecn_, qecp_, qecg_, qeci_ or qecd_, in any case. A reader of a document a secret
+// does not belong in, such as the server document or a pin, refuses one that contains
+// it with a fixed message, before a schema or a JSON decoder can quote the value in its
+// error. A run code is a secret until it is redeemed or its 15 minutes pass: whoever
+// first redeems it through its gateway's relay gets the run's run key, under a key of
+// their choosing. An enrolment code is a secret until it is used: whoever first sends
+// it enrols an access key of their choosing.
 func ContainsSecret(v string) bool {
 	return containsAccessKeySecret(v) || containsRunKey(v) || containsRunCode(v) || containsEnrolmentCode(v)
 }
@@ -378,17 +379,17 @@ func containsRunKey(v string) bool { return strings.Contains(strings.ToLower(v),
 func containsRunCode(v string) bool { return strings.Contains(strings.ToLower(v), CodePrefixRun) }
 
 // enrolmentCodePrefixes are the prefixes of an access key's enrolment code.
-var enrolmentCodePrefixes = []string{CodePrefixNode, CodePrefixPool, CodePrefixGateway, CodePrefixAdapter}
+var enrolmentCodePrefixes = []string{CodePrefixNode, CodePrefixPool, CodePrefixGateway, CodePrefixAdapter, CodePrefixDiagnostics}
 
-// containsEnrolmentCode reports whether a value contains qecn_, qecp_, qecg_ or qeci_
-// in any case.
+// containsEnrolmentCode reports whether a value contains qecn_, qecp_, qecg_, qeci_ or
+// qecd_ in any case.
 func containsEnrolmentCode(v string) bool {
 	l := strings.ToLower(v)
 	return slices.ContainsFunc(enrolmentCodePrefixes, func(p string) bool { return strings.Contains(l, p) })
 }
 
 // hasSecretPrefix reports whether a value starts with qak_, qrk_, qecr_, qecn_, qecp_,
-// qecg_ or qeci_ in any case.
+// qecg_, qeci_ or qecd_ in any case.
 func hasSecretPrefix(v string) bool {
 	l := strings.ToLower(v)
 	return slices.ContainsFunc(append([]string{SecretPrefix, runKeyPrefix, CodePrefixRun}, enrolmentCodePrefixes...),
@@ -457,10 +458,10 @@ func documentHas(doc any, has func(string) bool) bool {
 // apiary_public_key in the server document, or empty for a document that is the pin.
 // An entry's public_key is left out when it is one string that [ParsePublicKey] reads
 // and [PublicKey.Check] passes, so a key whose base64url contains qak_, qrk_, qecr_,
-// qecn_, qecp_, qecg_ or qeci_ by chance is not refused. A key that starts with one of
-// the seven, in any case, is checked, since a secret cut to its first 43 characters can
-// read as a key, and so can a run code or an enrolment code typed in groups with
-// hyphens. The entry's alg, its
+// qecn_, qecp_, qecg_, qeci_ or qecd_ by chance is not refused. A key that starts with
+// one of the eight, in any case, is checked, since a secret cut to its first 43
+// characters can read as a key, and so can a run code or an enrolment code typed in
+// groups with hyphens. The entry's alg, its
 // other members and the rest of the document are checked as SecretInDocument checks
 // them.
 //
@@ -490,7 +491,7 @@ func SecretInPinEntry(alg, publicKey string) error {
 
 // pinKey reports whether v is a key a pin may list, [ParsePublicKey] reads it and
 // [PublicKey.Check] passes it, and does not start with qak_, qrk_, qecr_, qecn_, qecp_,
-// qecg_ or qeci_ in any case: about one access key secret in 65 has a first 43
+// qecg_, qeci_ or qecd_ in any case: about one access key secret in 65 has a first 43
 // characters that read as a key.
 func pinKey(v string) bool {
 	if hasSecretPrefix(v) {
@@ -543,8 +544,8 @@ type span struct{ from, to int }
 // outsidePinKeys is the raw bytes of a document as parts, split where its pin writes a
 // key withoutPinKeys leaves out, those bytes left out. Such a span starts and ends with
 // a quote, or is a plain YAML scalar, which a separator bounds; none of qak_, qrk_,
-// qecr_, qecn_, qecp_, qecg_ and qeci_ contains a quote or a separator, so no match runs
-// across the edge of a span.
+// qecr_, qecn_, qecp_, qecg_, qeci_ and qecd_ contains a quote or a separator, so no
+// match runs across the edge of a span.
 func outsidePinKeys(raw, member string) []any {
 	b := []byte(raw)
 	spans, ok := jsonPinKeys(b, member)
@@ -844,15 +845,16 @@ func CheckID(id string) error {
 	return nil
 }
 
-// nodeShape is a node's, a node pool's, a gateway's or an adapter's id.
-var nodeShape = regexp.MustCompile(`^n[dpga]_[0-9a-hjkmnp-tv-z]{16}$`)
+// nodeShape is a node's, a node pool's, a gateway's, an adapter's or a diagnostics
+// key's id.
+var nodeShape = regexp.MustCompile(`^(n[dpga]|dg)_[0-9a-hjkmnp-tv-z]{16}$`)
 
 // CheckNodeID refuses a node id that is not "nd_", for a node, "np_", for a node pool,
-// "ng_", for a gateway, or "na_", for an adapter, and 16 lower-case Crockford base32
-// characters.
+// "ng_", for a gateway, "na_", for an adapter, or "dg_", for a diagnostics key, and 16
+// lower-case Crockford base32 characters.
 func CheckNodeID(id string) error {
 	if !nodeShape.MatchString(id) {
-		return fmt.Errorf("the node id %s is not nd_, np_, ng_ or na_ and 16 lower-case Crockford base32 characters", shown(id))
+		return fmt.Errorf("the node id %s is not nd_, np_, ng_, na_ or dg_ and 16 lower-case Crockford base32 characters", shown(id))
 	}
 	return nil
 }

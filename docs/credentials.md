@@ -35,7 +35,13 @@ Without a wall, Forager gives the run only placeholders, but the agent can read 
 Behind a wall, the container gets only what the run lists of the machine's environment:
 
 - `wall.env` is the whole of the node's environment that goes in, by name.
-- A model credential listed in `wall.env` is the agent's.
+- A model key's variable, such as `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or
+  `CLAUDE_CODE_OAUTH_TOKEN`, and a forge token's, such as `GH_TOKEN` or `GITLAB_TOKEN`,
+  listed in `wall.env` is left out: the built-in deny list,
+  `denied-variables.json`, lists them in `model_keys` and `forge_tokens`, and the run
+  reports `Move <NAME> to the gateway's credentials in forager.yaml: the run leaves out
+  the value that wall.env passes, ...`. Define the credential under
+  `gateway.credentials` instead.
 - A credential defined under `gateway.credentials`, and selected by the run's policy,
   stays outside instead.
 
@@ -73,6 +79,14 @@ A credential's secret comes from one of three sources:
   replaces what the program sends.
 - The record lists each credential the run uses, by name. No event contains a
   credential's secret.
+- When an adapter fails, the gateway reports the first line it wrote to standard error,
+  with `***` in place of text in the shape of a known key (`mask.Shapes`) and, for a
+  renewal, of the token the gateway holds for that credential. When an adapter's output
+  fails `credential.schema.json`, the gateway reports `Fix the output of the adapter
+  <PATH> to match credential.schema.json: /apply/0/header fails pattern; ...`: each
+  failing location and keyword, at most 5 and then how many more, with no value, and no
+  member name other than the schema's. A tool's lines on standard error have `***` in place of
+  the shapes too.
 
 In `qory`, the `gateway.credentials` section of `forager.yaml` defines them. See
 [qory's docs][qory-credentials].
@@ -198,7 +212,9 @@ session's cover passes with no key set and needs no path rule, since a model pro
 is an integration that a policy cannot deny. The proxy sets no value of such a key, and
 replaces each model key's value in the answers from the key's host. With two or more model keys, the run configuration's `model_credential`
 names the start key; without it, the run stops with `run_configuration_invalid`. With
-one, that one is the start key.
+one, that one is the start key. A session joined with no runtime,
+`session.SessionSpec.Runtime` nil, has no start key: its program gets no model key's
+variable, placeholder or endpoint.
 
 A credential without `format` whose `placeholders` list a model key's variable, such as
 `ANTHROPIC_API_KEY`, stops the run with `run_configuration_invalid`. Rewrite it as a

@@ -626,6 +626,65 @@ func TestMaskingCatchesAValueAtEverySplit(t *testing.T) {
 	}
 }
 
+// TestAnAnswerThatEndsInAValueIsMasked pins answers whose last bytes are a whole value
+// that a write could still extend, which the writer keeps back until the answer ends: a
+// value whose last byte is its first, alone and after JSON, and two values where the
+// longer contains the shorter and the answer ends inside the longer. The end of the
+// answer replaces the value in the bytes kept back.
+func TestAnAnswerThatEndsInAValueIsMasked(t *testing.T) {
+	const v = "x1234567890fakex"
+	long, short := "abcdefgh-fake-12345678", "fake-1234"
+	one := func() *masker { return (&Credential{Scheme: "bearer"}).masker([]byte(v)) }
+	two := func() *masker {
+		m := (&Credential{Scheme: "bearer"}).masker([]byte(long))
+		return (&Credential{Scheme: "bearer"}).maskInto(m, []byte(short))
+	}
+	for _, c := range []struct {
+		name, body, want string
+		m                func() *masker
+	}{
+		{"the value", v, link.Placeholder, one},
+		{"JSON that ends in the value", `{"token":"` + v, `{"token":"` + link.Placeholder, one},
+		{"the start of the longer value", "abcdefgh-fake-1234", "abcdefgh-" + link.Placeholder, two},
+	} {
+		body := c.body
+		h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(body)) })
+		rec := httptest.NewRecorder()
+		serveMasked(h, rec, httptest.NewRequest(http.MethodGet, "/", nil), c.m())
+		if got := rec.Body.String(); got != c.want {
+			t.Errorf("%s: the run got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestABasicValueSplitInItsPaddingKeepsThePadding pins a basic credential whose base64
+// forms with and without padding start at the same place, with a put that has padding
+// too: an answer split at every place, inside the padding included, gets the padded
+// put, as the answer in one write does.
+func TestABasicValueSplitInItsPaddingKeepsThePadding(t *testing.T) {
+	c := &Credential{Scheme: "basic", Username: "us"}
+	m := c.masker([]byte("fake-secr1"))
+	padded := base64.StdEncoding.EncodeToString([]byte("us:fake-secr1"))
+	put := base64.StdEncoding.EncodeToString([]byte("us:" + link.Placeholder))
+	if !strings.HasSuffix(padded, "==") || !strings.HasSuffix(put, "==") {
+		t.Fatalf("the padded forms %q and %q end without ==", padded, put)
+	}
+	body, want := "Basic "+padded+" y", "Basic "+put+" y"
+	if got := m.Replace(body); got != want {
+		t.Fatalf("Replace gives %q, want %q", got, want)
+	}
+	for i := 0; i <= len(body); i++ {
+		rec := httptest.NewRecorder()
+		mw := &masking{w: rec, m: m}
+		mw.Write([]byte(body[:i]))
+		mw.Write([]byte(body[i:]))
+		mw.finish()
+		if got := rec.Body.String(); got != want {
+			t.Errorf("split at %d: %q", i, got)
+		}
+	}
+}
+
 // TestAnAbortedAnswerKeepsNoPartOfTheValue pins an answer whose copy ends with a panic,
 // as the reverse proxy's does when the host's connection breaks part way: the bytes
 // kept back, the start of the value, and every find are overwritten.

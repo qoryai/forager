@@ -717,8 +717,8 @@ func readRegistration(body []byte) (*registrationBody, error) {
 			return nil, err
 		}
 		// Kept as run.started sends it, so the attach's answer, and with it the gateway's
-		// run.registered, contains no value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_
-		// or qeci_. An about without one is kept as the body has it.
+		// run.registered, contains no value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_,
+		// qeci_ or qecd_. An about without one is kept as the body has it.
 		if shown := server.ShownAbout(&a); !reflect.DeepEqual(*shown, a) {
 			reg.About = nil
 			if !shown.Empty() {
@@ -1607,8 +1607,8 @@ type File struct {
 
 // OpenFile opens or creates the file and reads the ids it already contains, so a restarted
 // receiver still deduplicates. An error whose text contains qak_, qrk_, qecr_, qecn_,
-// qecp_, qecg_ or qeci_, such as one that quotes the path, prints as accesskey.ShownError
-// prints it.
+// qecp_, qecg_, qeci_ or qecd_, such as one that quotes the path, prints as
+// accesskey.ShownError prints it.
 func OpenFile(path string) (*File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {

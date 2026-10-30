@@ -2,5 +2,6 @@
   "version": 1,
   "passes": [
     "NODE_ENV=test"
-  ]
+  ],
+  "model_key": true
 }

@@ -133,7 +133,7 @@ func TestTheImageIsFetchedThroughTheEngineProxy(t *testing.T) {
 			if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
 				t.Fatal(err)
 			}
-			want := wall.Request{RunID: r.ID(), Image: pinned, RelayImage: "example.com/agent:1", Pull: true}
+			want := wall.Request{RunID: r.ID(), Image: pinned, RelayImage: "example.com/agent:1", Pull: true, NeverPull: true}
 			if len(w.pulls) != 1 || !reflect.DeepEqual(w.pulls[0], want) || !reflect.DeepEqual(w.req, want) {
 				t.Errorf("the wall pulled %+v and was asked for %+v, want one pull of %+v", w.pulls, w.req, want)
 			}
@@ -191,6 +191,29 @@ func TestTheImageIsFetchedOverTheMachinesNetwork(t *testing.T) {
 	}
 	if got := stepOrder(events(t, &session.Result{Dir: closed.Dir})); !slices.Equal(got, []string{"run exited"}) {
 		t.Errorf("an image the machine defines has the steps %q", got)
+	}
+}
+
+// TestAnEngineProxyKeepsTheEngineFromPulling pins NeverPull on the wall's request for a
+// run whose image the machine defines: set when the run has an engine proxy, whose
+// forwarder listens during a run's image step alone, and unset without one.
+func TestAnEngineProxyKeepsTheEngineFromPulling(t *testing.T) {
+	for _, proxied := range []bool{true, false} {
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		selecting(g, "")
+		w := &targetWall{}
+		sp.Wall, sp.Image, sp.Images = w, "base", images
+		if proxied {
+			sp.EngineProxy = &session.EngineProxy{Addr: freeLoopback(t), Password: enginePassword}
+		}
+		res, err := run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := wall.Request{RunID: res.RunID, Image: "example.com/agent:1", NeverPull: proxied}
+		if !reflect.DeepEqual(w.req, want) || len(w.pulls) != 0 {
+			t.Errorf("with an engine proxy %t, the wall was asked for %+v and pulled %+v, want %+v", proxied, w.req, w.pulls, want)
+		}
 	}
 }
 

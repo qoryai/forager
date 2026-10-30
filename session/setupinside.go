@@ -266,7 +266,7 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 		if got.runner {
 			recorded = s.neutral(masked)
 		}
-		s.r.writeLog(got.stream, s.session, s.open.n, []byte(recorded))
+		s.r.writeMasked(got.stream, s.session, s.open.n, []byte(recorded))
 		s.terminal(got.stream, []byte(masked))
 		return
 	case got.event == setupExited && running:

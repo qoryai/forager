@@ -30,7 +30,7 @@ func TestJoinsAreNumberedInTheOrderTheyArrive(t *testing.T) {
 	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
 		t.Fatalf("the first batch: %+v", d)
 	}
-	body := `{"version":1,"passes":["HOME"]}`
+	body := `{"version":1,"passes":["HOME"],"model_key":true}`
 	status, got := rawPost(t, raw(t, h.g.LocalLink()), joinPath(runID), server.LinkContentType, body)
 	if status != http.StatusOK {
 		t.Fatalf("the first join: %d %s", status, got)
@@ -70,14 +70,14 @@ func TestAJoinTheGatewayDoesNotAccept(t *testing.T) {
 	a := h.open(server.LinkRunRequest{})
 	c := raw(t, h.g.LocalLink())
 	for name, req := range map[string]struct{ path, contentType, body string }{
-		"no passes":             {joinPath(a.RunID), server.LinkContentType, `{"version":1}`},
-		"a member undefined":    {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"wall":true}`},
-		"a value in passes":     {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":["HOME=/root"]}`},
-		"another content type":  {joinPath(a.RunID), "text/plain", `{"version":1,"passes":[]}`},
-		"no model key":          {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"model_credential":"backup"}`},
-		"a run of no run here":  {joinPath(event.NewRunID()), server.LinkContentType, `{"version":1,"passes":[]}`},
-		"a member name twice":   {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"passes":["HOME"]}`},
-		"a run id of no format": {"/v1/run-configuration/x/sessions", server.LinkContentType, `{"version":1,"passes":[]}`},
+		"no passes":             {joinPath(a.RunID), server.LinkContentType, `{"version":1,"model_key":true}`},
+		"a member undefined":    {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"model_key":true,"wall":true}`},
+		"a value in passes":     {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":["HOME=/root"],"model_key":true}`},
+		"another content type":  {joinPath(a.RunID), "text/plain", `{"version":1,"passes":[],"model_key":true}`},
+		"no model key":          {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"model_key":true,"model_credential":"backup"}`},
+		"a run of no run here":  {joinPath(event.NewRunID()), server.LinkContentType, `{"version":1,"passes":[],"model_key":true}`},
+		"a member name twice":   {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"passes":["HOME"],"model_key":true}`},
+		"a run id of no format": {"/v1/run-configuration/x/sessions", server.LinkContentType, `{"version":1,"passes":[],"model_key":true}`},
 	} {
 		status, got := rawPost(t, c, req.path, req.contentType, req.body)
 		if r := refusalOf([]byte(got)); status != http.StatusBadRequest || r["error"] != "invalid_request" || r["from"] != "gateway" {

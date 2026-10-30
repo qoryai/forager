@@ -31,9 +31,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/santhosh-tekuri/jsonschema/v6"
+
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/gateway/internal/routine"
+	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
 )
@@ -782,7 +785,7 @@ func (h *held) renewals() {
 		cancel()
 		switch {
 		case err != nil:
-			h.report(fmt.Sprintf("credential %s was not renewed: %v", accesskey.ShownName(h.def.Name, false), err))
+			h.report(h.masked(fmt.Sprintf("credential %s was not renewed: %v", accesskey.ShownName(h.def.Name, false), err)))
 		case a.shape() != h.shape:
 			h.report(fmt.Sprintf("credential %s was not renewed: the adapter answered with other hosts, schemes or paths than when the run started", accesskey.ShownName(h.def.Name, false)))
 		default:
@@ -804,6 +807,123 @@ func (d Definition) prefixError() error {
 	}
 	return fmt.Errorf("give the model key %s a token that starts with %s, its key_prefixes: the token starts with none of them", accesskey.ShownName(d.Name, false), strings.Join(shown, " or "))
 }
+
+// masked is s with *** in place of a match of mask.Shapes and of each token the gateway
+// holds for the credential, such as the one a renewal would replace: an adapter's line
+// may contain a key. The masker's copies are overwritten before it returns.
+func (h *held) masked(s string) string {
+	m := mask.New()
+	defer m.Clear()
+	h.mu.Lock()
+	for _, t := range h.tokens {
+		m.AddSecret([]byte(t))
+	}
+	h.mu.Unlock()
+	return m.Replace(s)
+}
+
+// schemaFailures is where an answer fails credential.schema.json and how, from the
+// validation error's tree: each failing location, a JSON pointer, and the keyword that
+// failed, such as "/apply/0/header fails pattern", sorted, each once, the first
+// maxFailures and then how many more. The schema's text quotes the value it refused,
+// which can be the token, so none of it is printed. The keyword is the first of the
+// error kind's KeywordPath, a keyword of the schema such as pattern, never a value.
+// A location has only array indexes and the member names the schema defines: it stops
+// before any other name, which the answer chose and which can be a token. A
+// failure of additionalProperties is at the object, so the name it refused is never
+// in the location.
+func schemaFailures(err error, schema any) string {
+	known := map[string]bool{}
+	var names func(any)
+	names = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			if props, ok := v["properties"].(map[string]any); ok {
+				for name := range props {
+					known[name] = true
+				}
+			}
+			for _, item := range v {
+				names(item)
+			}
+		case []any:
+			for _, item := range v {
+				names(item)
+			}
+		}
+	}
+	names(schema)
+	var ve *jsonschema.ValidationError
+	if !errors.As(err, &ve) {
+		return "the answer fails it"
+	}
+	var out []failure
+	seen := map[string]bool{}
+	var leaves func(*jsonschema.ValidationError)
+	leaves = func(e *jsonschema.ValidationError) {
+		if len(e.Causes) > 0 {
+			for _, c := range e.Causes {
+				leaves(c)
+			}
+			return
+		}
+		f := failure{keyword: "the schema"}
+		for _, part := range e.InstanceLocation {
+			if !known[part] && !isIndex(part) {
+				break
+			}
+			f.at = append(f.at, part)
+		}
+		if k := e.ErrorKind.KeywordPath(); len(k) > 0 {
+			f.keyword = k[0]
+		}
+		if line := f.line(); !seen[line] {
+			seen[line] = true
+			out = append(out, f)
+		}
+	}
+	leaves(ve)
+	// Array indexes compare as numbers, so hosts/2 comes before hosts/10.
+	slices.SortFunc(out, func(a, b failure) int {
+		for i := 0; i < len(a.at) && i < len(b.at); i++ {
+			x, y := a.at[i], b.at[i]
+			if isIndex(x) && isIndex(y) && len(x) != len(y) {
+				return len(x) - len(y)
+			}
+			if c := strings.Compare(x, y); c != 0 {
+				return c
+			}
+		}
+		if len(a.at) != len(b.at) {
+			return len(a.at) - len(b.at)
+		}
+		return strings.Compare(a.keyword, b.keyword)
+	})
+	lines := make([]string, 0, maxFailures)
+	for _, f := range out[:min(len(out), maxFailures)] {
+		lines = append(lines, f.line())
+	}
+	if len(out) > maxFailures {
+		return fmt.Sprintf("%s and %d more", strings.Join(lines, "; "), len(out)-maxFailures)
+	}
+	return strings.Join(lines, "; ")
+}
+
+// failure is one place an answer fails the schema: its location and the keyword.
+type failure struct {
+	at      []string
+	keyword string
+}
+
+// line is how the error lists f: "/apply/0/header fails pattern".
+func (f failure) line() string { return "/" + strings.Join(f.at, "/") + " fails " + f.keyword }
+
+// isIndex reports whether a location's part is an array index: digits only.
+func isIndex(part string) bool { return part != "" && strings.Trim(part, "0123456789") == "" }
+
+// maxFailures is how many places an error of the answer lists: the answer can have
+// any number, and the error's size stays the same.
+const maxFailures = 5
 
 // ask gets the token from where the definition says.
 func (h *held) ask(ctx context.Context) (*answer, error) {
@@ -844,7 +964,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		// What an adapter prints is its own to word, and a line of it is worth the
 		// reader's time; its output is never the token, which goes to stdout.
 		line, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n")
-		return nil, fmt.Errorf("the adapter %s: %w: %s", path, accesskey.ShownError(err), accesskey.ShownValue(line, false))
+		return nil, fmt.Errorf("the adapter %s: %w: %s", path, accesskey.ShownError(err), accesskey.ShownValue(h.masked(line), false))
 	}
 	doc, err := contracts.Decode("answer.json", stdout.Bytes())
 	if err != nil {
@@ -855,14 +975,16 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		return nil, err
 	}
 	if err := schema.Validate(doc); err != nil {
-		return nil, fmt.Errorf("the adapter %s: %w", path, accesskey.ShownError(err))
+		// The schema's error quotes the value it refused, which can be the token.
+		document, _ := contracts.Document("credential.schema.json")
+		return nil, fmt.Errorf("Fix the output of the adapter %s to match credential.schema.json: %s", path, schemaFailures(err, document))
 	}
 	var a answer
 	if err := json.Unmarshal(stdout.Bytes(), &a); err != nil {
 		return nil, accesskey.ShownError(err)
 	}
 	if d.Format != "" && len(a.Placeholders) > 0 {
-		return nil, fmt.Errorf("remove placeholders from the answer of the adapter %s: the model key %s takes none, since the session gives the runtime the key's variable", path, accesskey.ShownName(d.Name, false))
+		return nil, fmt.Errorf("remove placeholders from the output of the adapter %s: the model key %s takes none, since the session gives the runtime the key's variable", path, accesskey.ShownName(d.Name, false))
 	}
 	for _, u := range a.Apply {
 		if err := u.check(); err != nil {
@@ -875,7 +997,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 			// A model key is set as its definition says, which the session chooses the
 			// runtime's variable by.
 			if u.Scheme != d.Scheme || u.Username != d.Username || !strings.EqualFold(u.Header, d.Header) {
-				return nil, fmt.Errorf("set the model key %s in the answer of the adapter %s with the scheme, header and username of its definition: the answer has others", accesskey.ShownName(d.Name, false), path)
+				return nil, fmt.Errorf("set the model key %s in the output of the adapter %s with the scheme, header and username of its definition: the output has others", accesskey.ShownName(d.Name, false), path)
 			}
 			token := u.Token
 			if token == "" {

@@ -237,7 +237,7 @@ func TestAHostAToolAndACredentialClaimPrintsAPhraseForASecret(t *testing.T) {
 		err := Check(chosen, policy.Observe, nil, claimed)
 		if want := "the tool plain and the credential " + shown + " both claim plain.internal; a host has one"; err == nil || err.Error() != want {
 			t.Errorf("%s:\n got %v\nwant %s", name, err, want)
-		} else if lower := strings.ToLower(err.Error()); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") || strings.Contains(lower, "qecn_") || strings.Contains(lower, "qecp_") || strings.Contains(lower, "qecg_") || strings.Contains(lower, "qeci_") {
+		} else if lower := strings.ToLower(err.Error()); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") || strings.Contains(lower, "qecn_") || strings.Contains(lower, "qecp_") || strings.Contains(lower, "qecg_") || strings.Contains(lower, "qeci_") || strings.Contains(lower, "qecd_") {
 			t.Errorf("%s: a secret's prefix in %v", name, err)
 		}
 	}
@@ -250,11 +250,11 @@ const (
 	runKeyPhrase    = "(a name that contains a run key)"
 )
 
-// noSecretPrefix fails the test when text contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_
-// or qeci_ in any case.
+// noSecretPrefix fails the test when text contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_,
+// qeci_ or qecd_ in any case.
 func noSecretPrefix(t *testing.T, what, text string) {
 	t.Helper()
-	if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") || strings.Contains(lower, "qecn_") || strings.Contains(lower, "qecp_") || strings.Contains(lower, "qecg_") || strings.Contains(lower, "qeci_") {
+	if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") || strings.Contains(lower, "qecr_") || strings.Contains(lower, "qecn_") || strings.Contains(lower, "qecp_") || strings.Contains(lower, "qecg_") || strings.Contains(lower, "qeci_") || strings.Contains(lower, "qecd_") {
 		t.Errorf("%s: a secret's prefix in %s", what, text)
 	}
 }
@@ -587,6 +587,28 @@ func TestAToolsProgramAndOutputPrintAPhraseForASecret(t *testing.T) {
 		if !slices.Contains(said, "tool files: "+want) {
 			t.Errorf("%s: no %q among %q", line, "tool files: "+want, said)
 		}
+	}
+
+	// A line with a match of mask.Shapes has *** in its place, in a report and in the
+	// error of a tool that exits.
+	key := "AKIA" + strings.Repeat("X", 16)
+	t.Setenv(envLine, "the store key is "+key)
+	var shaped []string
+	var shapedMu sync.Mutex
+	set, err := Start(context.Background(), chosen(exe), "the-run", os.Environ(), func(l string) { shapedMu.Lock(); shaped = append(shaped, l); shapedMu.Unlock() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	set.Close()
+	shapedMu.Lock()
+	if !slices.Contains(shaped, "tool files: the store key is ***") {
+		t.Errorf("a line with a key: no masked line among %q", shaped)
+	}
+	shapedMu.Unlock()
+	t.Setenv(envMode, "fail")
+	_, err = Start(context.Background(), chosen(exe), "the-run", os.Environ(), func(string) {})
+	if want := "tool files: " + exe + " exited before it listened: exit status 2: the store key is ***"; err == nil || err.Error() != want {
+		t.Errorf("a tool that exits with a key in its line:\n got %v\nwant %s", err, want)
 	}
 
 	for host, want := range map[string]string{"qak_x.example": ak, "a.QRK_x": rk, "Files.example": `"Files.example"`} {

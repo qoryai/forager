@@ -698,7 +698,7 @@ func (h *harness) tryOpen(req server.LinkRunRequest) (*server.LinkRunAnswer, err
 // join joins a session to a run the harness opened on the local link, with the names
 // it passes.
 func (h *harness) join(runID string, passes ...string) (*server.LinkJoinAnswer, error) {
-	return h.linkOf(runID).Join(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{Passes: passes})
+	return h.linkOf(runID).Join(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{Passes: passes, ModelKey: true})
 }
 
 // joined joins a session to the run and returns its number.

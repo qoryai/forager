@@ -93,7 +93,8 @@ func (r *Refusal) Error() string {
 	}
 	if len(r.Names) > 0 {
 		// Names read from an answer are as the answer gave them; a name that contains
-		// qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in any case prints its phrase.
+		// qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case prints its
+		// phrase.
 		b.WriteString(": " + strings.Join(ShownNames(r.Names), ", "))
 	}
 	return b.String()

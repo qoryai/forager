@@ -659,6 +659,35 @@ func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 			t.Errorf("Setup: %v\nwant %s", err, want)
 		}
 	})
+	for _, name := range []string{"ANTHROPIC_API_KEY", "GH_TOKEN"} {
+		t.Run(name+" from wall.env", func(t *testing.T) {
+			sp := spec(t)
+			w := &setupWall{}
+			sp.Wall, sp.Image = w, "example.com/agent:1"
+			sp.Variables.Machine = []string{name + "=fake-credential-value", "APP_ENV=test"}
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+			env, err := r.AgentEnv(sp.SessionSpec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(env, "APP_ENV=test") || slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
+				t.Errorf("AgentEnv %q, want APP_ENV and no %s", env, name)
+			}
+			w.got.Dir = sp.Dir
+			err = setupRefused(t, r, w, append(env, strings.ToLower(name)+"=fake-credential-value"))
+			want := "Move " + strings.ToLower(name) + " to the gateway's credentials in forager.yaml: denied-variables.json lists it as a forge token or a model key, which the setup's variables may not pass into the wall."
+			if err == nil || err.Error() != want {
+				t.Errorf("Setup: %v\nwant %s", err, want)
+			}
+			if strings.Contains(fmt.Sprint(err), "fake-credential-value") {
+				t.Errorf("Setup: %v has the value", err)
+			}
+		})
+	}
 	t.Run("a QORY_ name", func(t *testing.T) {
 		sp := spec(t)
 		w := &setupWall{}

@@ -736,16 +736,20 @@ An image by reference starts as the default does: under the default's runtime, w
 nested Docker, as the node's user, which must then be given as `uid:gid` in numbers,
 neither 0: the engine would look a name, or a uid's groups, up in the image's
 `/etc/passwd` and `/etc/group`, which the image writes, so a user given by name or as a
-uid alone is refused. The wall pulls it in the run's `image` step, before the first
-container of the image starts, unless the engine holds it by that digest, and refuses
-with `image_user_root` an image
-whose user is root: no user, `root`, uid 0, or a name the image's `/etc/passwd` maps to
+uid alone is refused. In the run's `image` step, before the first container of the
+image starts, the session requests the image's manifest from its registry through the
+run's proxy, with the run's credentials, with or without an engine proxy. A registry
+that does not answer 200 for that digest fails the step, and a 404 is `image_missing`.
+Then the wall pulls the image, also when the engine holds it by that digest, and the
+engine fetches the layers it lacks: through the run's proxy with an engine proxy,
+otherwise over the machine's network with the engine's credentials. The wall refuses
+with `image_user_root` an image whose user is root: no user, `root`, uid 0, or a name the image's `/etc/passwd` maps to
 uid 0. An image whose user is a name its `/etc/passwd` does not map, or that has no
 `/etc/passwd`, is refused the same way, since its user cannot be checked: give the user
 as a uid. The relay always starts from the
 default image, never from the run's, and the authorities the run trusts are read out of
-the run's image. The run's `image` step spans the fetch and the check of the image's
-user, and its `dev.qory.run.step_exited` has how long they took as `duration_ms`
+the run's image. The run's `image` step spans the check of the manifest, the fetch and
+the check of the image's user, and its `dev.qory.run.step_exited` has how long they took as `duration_ms`
 ([the record](events.md)). `(*session.Run).FetchImage` runs that step before the first
 join; without it, `(*session.Run).Setup` runs it first, or else the first join after its
 `dev.qory.session.started`.
@@ -767,9 +771,10 @@ runtime reports from inside, are not that boundary: the image can change or forg
 ## An image pulled through the gateway
 
 On a machine whose only route out is the gateway, the container engine pulls the run's
-image through the run's proxy, under the run's policy. Forager has no registry client:
-the engine pulls, and Forager gives the pull a forwarder to the gateway for the image
-step alone.
+image through the run's proxy, under the run's policy. The engine pulls, and Forager
+gives the pull a forwarder to the gateway for the image step alone. Before the pull,
+the session checks the image's manifest at its registry through the run's proxy, with
+or without the forwarder ([Images](#images)).
 
 1. Before the engine starts, write its proxy setting. For Docker, set `proxies` in
    `/etc/docker/daemon.json`, mode 0600: `http-proxy` and `https-proxy` to
@@ -806,10 +811,26 @@ files from, are created with `--pull=never`, so the engine pulls the image in th
 `image` step alone. Without
 `EngineProxy`, the engine pulls over the machine's network.
 
+With `EngineProxy`, the Docker wall starts no pull outside the run's `image` step, also
+none of an image the machine defines: the session sets `NeverPull` on the
+`wall.Request`, and the relay and every container of the run's image are created with
+`--pull=never`. A pull the wall started outside the step would go through another run's
+forwarder, on that run's token, or fail.
+Pull each image the machine defines, the relay's and every entry of `OpenSpec.Images`,
+before you set the engine's proxy setting. A run whose image the engine does not have
+fails with:
+
+```text
+Pull the image on this machine before you set the engine proxy: the engine has no image example.com/relay:1, and under an engine proxy the wall pulls only in a run's image step.
+```
+
 What to know:
 
 - The machine has no `docker login`. The registry's host needs path rules in the run's
-  policy, and its token endpoint a credential with `basic` auth.
+  policy, and its token endpoint a credential with `basic` auth and `paths` that cover
+  the endpoint's path, such as `/token`. On a host other than the registry's, the
+  session's check of the image refuses a token endpoint whose credential has no such
+  `paths`.
 - On its classic image store, Docker Engine reads no `certs.d` directory for
   `docker.io`, so an image there comes only through a blind relay, with no credential.
   On its containerd image store this is unverified.
@@ -862,7 +883,9 @@ var failed *session.SetupError // a command exited otherwise than 0: no session 
   refuses, before any step, a value for one of the run's placeholders
   (`placeholder_conflict`), any other `QORY_` name, `QORY_RUN_ID` and
   `QORY_RUN_SOCKET` among them, or a name the machine's credentials are read from
-  (`variable_reserved`), and a name of `denied-variables.json`, such as `LD_PRELOAD`.
+  (`variable_reserved`), and a name of `denied-variables.json`, such as `LD_PRELOAD`; for
+  a credential's name of that list, such as `GH_TOKEN`, the error starts with `Move
+  GH_TOKEN to the gateway's credentials in forager.yaml`.
 - It runs until the run closes. The agent reaches a service that setup starts by the
   name `qory-setup`, such as `qory-setup:5432`. Send a service's output to a file, so
   its command returns.

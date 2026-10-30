@@ -444,7 +444,7 @@ func TestTheStackProxyBehindASeparateGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer held.Close()
-	j := r.do(t, key, http.MethodPost, "/qory-link/run-configuration/"+runID+"/sessions", []byte(`{"version":1,"passes":[]}`))
+	j := r.do(t, key, http.MethodPost, "/qory-link/run-configuration/"+runID+"/sessions", []byte(`{"version":1,"passes":[],"model_key":true}`))
 	if j.status != http.StatusOK {
 		t.Fatalf("the join: %d %s", j.status, j.body)
 	}

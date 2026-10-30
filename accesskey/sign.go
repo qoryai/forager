@@ -309,9 +309,9 @@ func (runCodeInDocument) Error() string {
 func (runCodeInDocument) Is(target error) bool { return target == ErrSecretInDocument }
 
 // ErrEnrolmentCodeInDocument is the error of a document that contains an enrolment code
-// of an access key, qecn_, qecp_, qecg_ or qeci_, and no access key secret, no run key
-// and no run code, where none belongs: a fixed message, so the enrolment code appears
-// in no error. errors.Is reports it as [ErrSecretInDocument] as well.
+// of an access key, qecn_, qecp_, qecg_, qeci_ or qecd_, and no access key secret, no
+// run key and no run code, where none belongs: a fixed message, so the enrolment code
+// appears in no error. errors.Is reports it as [ErrSecretInDocument] as well.
 var ErrEnrolmentCodeInDocument error = enrolmentCodeInDocument{}
 
 // enrolmentCodeInDocument is [ErrEnrolmentCodeInDocument].

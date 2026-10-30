@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,6 +17,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
@@ -57,27 +59,31 @@ type Run struct {
 	caVars     []string
 	// bundleErr is why a walled run with an authority has no bundle, which
 	// [Run.HostProxy] returns; nil otherwise.
-	bundleErr   error
-	hosts       hostProxies
-	engine      engineProxies
-	reserved    []string
-	listed      *registration
-	wallOwn     []bindSource
-	openBinds   []bindSource
-	setupBinds  []bindSource
-	files       *sink.File
-	posts       *sink.Server
-	reload      *reloader
-	stopBeat    func()
-	unlock      func()
-	startedAt   time.Time
-	closedBy    ended
-	closing     context.Context
-	markClosed  context.CancelCauseFunc
-	emitMu      sync.Mutex
-	emit        *event.Emitter
-	sinks       sink.Multi
+	bundleErr  error
+	hosts      hostProxies
+	engine     engineProxies
+	reserved   []string
+	listed     *registration
+	wallOwn    []bindSource
+	openBinds  []bindSource
+	setupBinds []bindSource
+	files      *sink.File
+	posts      *sink.Server
+	reload     *reloader
+	stopBeat   func()
+	unlock     func()
+	startedAt  time.Time
+	closedBy   ended
+	closing    context.Context
+	markClosed context.CancelCauseFunc
+	emitMu     sync.Mutex
+	emit       *event.Emitter
+	sinks      sink.Multi
+	// masker is the run's masker, OpenSpec.Masker or one the run made, madeMasker
+	// true then; passwords is the masker of the forwarders' passwords alone.
 	masker      *mask.Masker
+	madeMasker  bool
+	passwords   *mask.Masker
 	joining     sync.Mutex
 	numbered    int
 	maybeJoined bool
@@ -122,8 +128,35 @@ type Run struct {
 // last until [Run.Close]. An error means the run did not open: the spec is refused, the
 // gateway's link could not be reached, the gateway refused the run request, or the wall
 // did not start. A refusal with a code is a [*Refusal]; a failure without one at the
-// gateway is its text as the user is told it.
+// gateway is its text as the user is told it. The run's masker replaces the run's
+// secrets in the error's text and in a refusal's, and errors.As gives a refusal's
+// masked copy with its code.
 func Open(ctx context.Context, spec OpenSpec) (*Run, error) {
+	// The run's masker has the caller's values before the first line is written, and
+	// every Report line and the error pass through it. A run with no masker from the
+	// caller makes one, and overwrites its copies at the close.
+	masker, made := spec.Masker, false
+	if masker == nil {
+		masker, made = mask.New(), true
+	}
+	spec.Masker = nil
+	r, err := open(ctx, spec, masker, made)
+	if err != nil {
+		err = maskError(masker, err)
+		if r != nil {
+			r.clearMaskers()
+		} else if made {
+			masker.Clear()
+		}
+		return nil, err
+	}
+	return r, nil
+}
+
+// open is Open with the run's masker, made true when Open made it. On an error after
+// the run is made it returns the run as well, closed, for Open to clear its maskers
+// once the error is masked.
+func open(ctx context.Context, spec OpenSpec, masker *mask.Masker, made bool) (*Run, error) {
 	spec = openDefaults(spec)
 	local, remote, err := gatewayOf(spec.Gateway)
 	if err != nil {
@@ -172,13 +205,61 @@ func Open(ctx context.Context, spec OpenSpec) (*Run, error) {
 			return nil, err
 		}
 	}
-	r := &Run{open: spec, local: local, remote: remote, id: runID, dir: filepath.Join(spec.RunsDir, runID), lastExit: -1, masker: &mask.Masker{}}
+	report := spec.Report
+	spec.Report = func(line string) { report(masker.Replace(line)) }
+	r := &Run{open: spec, local: local, remote: remote, id: runID, dir: filepath.Join(spec.RunsDir, runID), lastExit: -1, masker: masker, madeMasker: made, passwords: &mask.Masker{}}
 	r.closing, r.markClosed = context.WithCancelCause(context.Background())
 	if err := r.start(ctx); err != nil {
 		r.markClosed(nil)
-		return nil, err
+		return r, err
 	}
 	return r, nil
+}
+
+// clearMaskers overwrites the copies of the run's secrets in the maskers the run made:
+// a masker the caller passed stays the caller's to clear, once its writers are flushed.
+func (r *Run) clearMaskers() {
+	if r.madeMasker {
+		r.masker.Clear()
+	}
+	r.passwords.Clear()
+}
+
+// minServerMask is the length under which the run's masker leaves a server's variable
+// value out: a shorter value, such as a flag or a short name, would replace ordinary
+// text.
+const minServerMask = 8
+
+// addServerValues adds to the run's masker each of values, the server's variables by
+// name, of minServerMask characters or more. A value the masker refuses, past its
+// mask.MaxSecrets different values, is not masked, and is a Report line with its
+// variable's name: the run goes on, since the server's values are not the caller's to
+// change. The names are taken in order, so the values over the count are the same on
+// every run. Each value has at most mask.MaxSecretSize bytes already: the link refuses
+// a run or reload answer with a variable's value of more than server.MaxVariableValue
+// bytes, the same 4096.
+func (r *Run) addServerValues(values map[string]string) {
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		v := values[name]
+		if utf8.RuneCountInString(v) < minServerMask {
+			continue
+		}
+		b := []byte(v)
+		if err := r.masker.AddSecret(b); err != nil {
+			r.open.Report(fmt.Sprintf("the server's variable %s is not masked: the run's masker has %d values already", accesskey.ShownName(name, false), mask.MaxSecrets))
+		}
+		clear(b)
+	}
+}
+
+// addPassword adds a forwarder's password to the run's masker, replaced with
+// mask.ProxyPassword, and to r.passwords, the masker of the forwarders' passwords
+// alone, which [Run.Setup] refuses in its variables. The run's masker replaces the
+// run's secrets in what the run writes and reports: the forwarders' passwords, the
+// caller's values and the server's variable values of minServerMask characters or more.
+func (r *Run) addPassword(password string) {
+	r.masker.AddProxy(proxyUser, password)
+	r.passwords.AddProxy(proxyUser, password)
 }
 
 // start is the open of r once its spec is checked. On an error everything it made is
@@ -329,6 +410,7 @@ func (r *Run) start(ctx context.Context) (err error) {
 		return refused(err, fail, quit, r.own, r.end)
 	}
 	r.answer = answer
+	r.addServerValues(answer.Values())
 	r.reload = newReloader(r.closing, r.link, disc.Run.URL, r.id, lastAnswered(), lastAnswered, spec.Report)
 	// Behind a separate gateway the run directory keeps what the gateway accepted and
 	// what it did not, delivered.log and undelivered/, so a resend knows what it still
@@ -415,10 +497,10 @@ func (r *Run) start(ctx context.Context) (err error) {
 		return fail2(errRunClosed)
 	}
 	r.startedAt = time.Now()
-	// A value of the run's that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_ in
-	// any case is sent as a phrase in its place: accesskey.ShownName's for the host and the
-	// wall, and server.ShownLabels' and server.ShownAbout's for the labels and about. A run
-	// with a run key has no host: each session's line of Report has it.
+	// A value of the run's that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
+	// qecd_ in any case is sent as a phrase in its place: accesskey.ShownName's for the
+	// host and the wall, and server.ShownLabels' and server.ShownAbout's for the labels
+	// and about. A run with a run key has no host: each session's line of Report has it.
 	started := map[string]any{"opened_by": event.OpenedByRun, "forager_version": spec.ForagerVersion}
 	if r.remote == nil {
 		started["host"] = accesskey.ShownName(hostname(), false)
@@ -426,8 +508,8 @@ func (r *Run) start(ctx context.Context) (err error) {
 	if spec.Wall != nil {
 		started["wall"] = accesskey.ShownName(spec.Wall.Name(), false)
 	}
-	// Open checked both: neither contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or qeci_,
-	// since neither contains _.
+	// Open checked both: neither contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
+	// qecd_, since neither contains _.
 	if spec.Machine != "" {
 		started["machine"] = spec.Machine
 	}
@@ -443,11 +525,14 @@ func (r *Run) start(ctx context.Context) (err error) {
 	if about := server.ReportedAbout(spec.About); about != nil && r.remote == nil {
 		started["about"] = server.ShownAbout(about)
 	}
-	r.write(event.RunStarted, started)
+	r.write(event.RunStarted, r.maskedStarted(started))
 	r.write(event.PolicyApplied, r.policyApplied(r.members))
 	// A reload fetches what the gateway put in force and records it, at the sequence
 	// where it takes effect; batches from then on contain its digest.
 	r.reload.start(func(a *server.LinkReloadAnswer, held string) {
+		// The reload's variable values are masked from here on, whether or not its
+		// members are recorded.
+		r.addServerValues(a.Values())
 		members, err := appliedMembers(a.Applied)
 		if err != nil {
 			spec.Report("the reload failed: " + err.Error())
@@ -461,6 +546,35 @@ func (r *Run) start(ctx context.Context) (err error) {
 		r.record(event.PolicyApplied, r.policyApplied(members))
 	}, r.end)
 	return nil
+}
+
+// maskedStarted is the data of dev.qory.run.started with the run's masker applied to
+// every string in it but labels, about's members' keys and values included. labels stay
+// as the gateway registered them, server.ShownLabels of the run answer's: the gateway
+// refuses a batch whose run.started has other labels, and behind a separate gateway it
+// has no run masker to compare a masked copy with. Data the masker changes nothing in
+// is returned as it is; otherwise its copy is decoded from JSON, so about's details keep
+// their members and their keys' order may change.
+func (r *Run) maskedStarted(started map[string]any) map[string]any {
+	rest := make(map[string]any, len(started))
+	for k, v := range started {
+		if k != "labels" {
+			rest[k] = v
+		}
+	}
+	b, err := json.Marshal(rest)
+	if err != nil || r.masker.Replace(string(b)) == string(b) {
+		return started
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		return started
+	}
+	masked := maskedValue(texts{secrets: r.masker}, decoded).(map[string]any)
+	if labels, ok := started["labels"]; ok {
+		masked["labels"] = labels
+	}
+	return masked
 }
 
 // ID is the run's id.
@@ -512,7 +626,8 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 	// As in Join: without a wall the variables the machine's credentials are read from
 	// are left out of what the session inherits. The session starts with
 	// spec.ModelCredential, or with the run's start key when spec has none: the join
-	// answer's model_credential is one of the two, by link-join-answer.schema.json.
+	// answer's model_credential is one of the two, by link-join-answer.schema.json. A
+	// spec with no runtime starts with no key.
 	if s.Wall == nil {
 		s.Env = withoutNames(s.Env, r.reserved)
 	}
@@ -535,7 +650,7 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 	if model == "" {
 		model = r.answer.ModelCredential
 	}
-	credentialHosts, placeholderNames, key, err := chosen(rt, r.answer.CredentialHosts, r.answer.Placeholders, model)
+	credentialHosts, placeholderNames, key, err := chosen(rt, s.Runtime == nil, r.answer.CredentialHosts, r.answer.Placeholders, model)
 	if err != nil {
 		return nil, err
 	}
@@ -680,8 +795,15 @@ func (r *Run) setApplied(m map[string]any) {
 // before the close has its dev.qory.run.exited in the session's record alone, with the
 // state and the reason of the gateway's 410 and the last session's exit code. An error
 // means the outcome is refused, and nothing is written: the run stays open, and Close
-// may be called again; or the run is closed already.
+// may be called again; or the run is closed already. The run's masker replaces the
+// run's secrets in the error's text.
 func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
+	res, err := r.close(ctx, out)
+	return res, maskError(r.masker, err)
+}
+
+// close is Close with its error unmasked.
+func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 	if !r.joining.TryLock() {
 		return nil, errors.New("a session of the run is still running: close the run after Join returns")
 	}
@@ -742,5 +864,6 @@ func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 	}
 	r.link.Close()
 	r.markClosed(nil)
+	r.clearMaskers()
 	return res, nil
 }

@@ -3,5 +3,6 @@
   "passes": [
     "HOME"
   ],
+  "model_key": true,
   "wall": true
 }

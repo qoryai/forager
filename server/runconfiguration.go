@@ -152,9 +152,11 @@ var denied = sync.OnceValue(func() (list struct {
 })
 
 // DeniedPlaceholder reports whether a credential from the server may not have the
-// variable name as a placeholder: an entry of the built-in deny list,
-// denied-variables.json, covers it, case ignored, as the session's deny list does.
-// Forager's names, QORY_, are among its patterns.
+// variable name as a placeholder: an entry of the built-in deny list's names or
+// patterns, denied-variables.json, covers it, case ignored, as the session's deny list
+// does. Forager's names, QORY_, are among its patterns. The list's forge_tokens and
+// model_keys, such as GH_TOKEN, are placeholders a credential may take: the placeholder
+// keeps the value outside.
 func DeniedPlaceholder(name string) bool {
 	n := strings.ToUpper(name)
 	list := denied()

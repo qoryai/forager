@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -35,9 +36,10 @@ type process struct {
 	stderr  io.Writer
 	// logs returns the chunk consumer for a stream.
 	logs func(stream string) func([]byte)
-	// masker replaces the passwords of the run's forwarders in what goes to logs; nil
-	// for a run with no password, such as a walled run. harness then replaces the text
-	// of a hidden harness; nil for a run whose harness is not hidden.
+	// masker replaces the run's secrets in what goes to logs, stdout and stderr: the
+	// passwords of the run's forwarders, OpenSpec.Masker's values and the server's
+	// variable values. harness then replaces the text of a hidden harness in what goes
+	// to logs; nil for a run whose harness is not hidden.
 	masker  *mask.Masker
 	harness *mask.Harness
 	// stop is the signal that asks the process to leave, and grace how long it gets
@@ -172,20 +174,22 @@ func (l *streamLog) Flush() {
 
 // runPipes runs the process on pipes: its input is stdin, its standard output goes to
 // the terminal-less log as stdout, to the output source when there is one, and to
-// stdout; its standard error to the log as stderr and to stderr.
+// stdout through the masker; its standard error to the log as stderr and to stderr
+// through the masker.
 func (p *process) runPipes(ctx context.Context) (exitStatus, error) {
 	cmd := p.newCmd(ctx)
 	cmd.Stdin = p.stdin
 	out := p.logWriter("stdout", false)
 	errs := p.logWriter("stderr", false)
-	writers := []io.Writer{out, p.stdout}
+	stdout, stderr := mask.NewWriter(p.stdout, p.masker), mask.NewWriter(p.stderr, p.masker)
+	writers := []io.Writer{out, stdout}
 	var lines *lineParser
 	if p.output != nil {
 		lines = &lineParser{on: p.output}
 		writers = append(writers, lines)
 	}
 	cmd.Stdout = io.MultiWriter(writers...)
-	cmd.Stderr = io.MultiWriter(errs, p.stderr)
+	cmd.Stderr = io.MultiWriter(errs, stderr)
 	if err := cmd.Start(); err != nil {
 		return exitStatus{}, fmt.Errorf("%w: %v", ErrNotStarted, accesskey.ShownError(err))
 	}
@@ -193,6 +197,8 @@ func (p *process) runPipes(ctx context.Context) (exitStatus, error) {
 	p.observed()
 	out.Flush()
 	errs.Flush()
+	stdout.Flush()
+	stderr.Flush()
 	if lines != nil {
 		lines.flush()
 	}
@@ -200,9 +206,9 @@ func (p *process) runPipes(ctx context.Context) (exitStatus, error) {
 }
 
 // runPTY runs the process on a pseudo-terminal of the process's size: what it writes
-// goes to the log as terminal, cut at the gap, and to stdout; what stdin holds goes to
-// it; and when stdin is a terminal it is put in raw mode and its size is followed, each
-// change reported.
+// goes to the log as terminal, cut at the gap, and to stdout through the masker; what
+// stdin holds goes to it; and when stdin is a terminal it is put in raw mode and its
+// size is followed, each change reported.
 func (p *process) runPTY(ctx context.Context) (exitStatus, error) {
 	cmd := p.newCmd(ctx)
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(p.cols), Rows: uint16(p.rows)})
@@ -229,18 +235,50 @@ func (p *process) runPTY(ctx context.Context) (exitStatus, error) {
 		io.Copy(ptmx, p.stdin)
 	}()
 	done := make(chan struct{})
+	stdout := mask.NewWriter(p.stdout, p.masker)
+	out := &gate{w: io.MultiWriter(log, stdout)}
 	go func() {
 		defer close(done)
-		io.Copy(io.MultiWriter(log, p.stdout), ptmx)
+		io.Copy(out, ptmx)
 	}()
 	err = cmd.Wait()
 	p.observed()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
+		// A process the runtime left behind may keep the terminal open: the copy stops
+		// writing before the log is flushed, so no byte reaches the log after the bytes
+		// the masker keeps back.
+		out.shut()
 	}
 	log.Flush()
+	stdout.Flush()
 	return status(cmd, err)
+}
+
+// gate writes to w until shut, and drops every write after it. shut waits for a write
+// in progress.
+type gate struct {
+	mu     sync.Mutex
+	w      io.Writer
+	closed bool
+}
+
+// Write writes b to w, or drops it once the gate is shut.
+func (g *gate) Write(b []byte) (int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return len(b), nil
+	}
+	return g.w.Write(b)
+}
+
+// shut drops every write from now on, once a write in progress returns.
+func (g *gate) shut() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.closed = true
 }
 
 // attach puts a terminal in raw mode and follows its resizes until the returned

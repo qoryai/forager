@@ -143,10 +143,10 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	}
 	// An image by reference runs with no Docker inside, so the run of the suite with one
 	// leaves its cases to the run without.
-	var reference, rootReference, allow string
+	var reference, rootReference, unpublished, allow string
 	var relayImage func(string) (string, error)
 	if !docker {
-		reference, rootReference, allow = referenceImages(t, command, image)
+		reference, rootReference, unpublished, allow = referenceImages(t, command, image)
 		relayImage = func(runID string) (string, error) {
 			out, err := exec.Command(command, "inspect", "--format", "{{.Config.Image}}", "qory-"+runID+"-relay").Output()
 			return strings.TrimSpace(string(out)), err
@@ -155,6 +155,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	e2e.Run(t, e2e.Options{
 		Reference:     reference,
 		RootReference: rootReference,
+		Unpublished:   unpublished,
 		Allow:         allow,
 		RelayImage:    relayImage,
 		Origin:        "http://" + strings.TrimSpace(string(ip)) + ":8080/",
@@ -194,20 +195,78 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		t.Run("the inside network's IPv6 subnet is isolated", func(t *testing.T) { insideHasIsolatedIPv6(t, command, helper, image, rt) })
 	} else {
 		t.Run("no IPv6 inside but loopback's", func(t *testing.T) { insideHasNoIPv6(t, command, helper, image) })
-		t.Run("an image held by its digest starts with its registry gone", func(t *testing.T) { heldStartsWithoutRegistry(t, command, helper, image) })
+		t.Run("the wall finds an image held by its digest with its registry gone, and Pull fails", func(t *testing.T) { heldWithoutRegistry(t, command, helper, image) })
 		t.Run("Pull fetches an image by reference and its first container finds it", func(t *testing.T) { pullThenPrepare(t, command, helper, image) })
 		t.Run("Pull refuses an image its registry does not have", func(t *testing.T) { pullMissing(t, command, helper, image) })
+		t.Run("under an engine proxy a missing machine's image fails the run", func(t *testing.T) { neverPullsMissing(t, command, helper, image) })
 	}
 }
 
-// heldStartsWithoutRegistry pushes one image, whose user is 1000:1000, to a registry of
-// the test's under two names, removes it from the engine and pulls it by the first
-// name's digest, the way a workflow pulls a private image before a run, and then removes
-// the registry. A run in the image by the name it was pulled by starts and runs, with no
-// registry to ask; the same content by the other name, which the engine does not hold by
-// that name, is refused at the wrap that would start its first container, and its Pull
-// fails with no registry to fetch it from.
-func heldStartsWithoutRegistry(t *testing.T, command, helper, base string) {
+// neverPullsMissing prepares enclosures with NeverPull, as for a run with an engine
+// proxy, and wraps a launch: one whose relay's image the engine does not have, one whose
+// run's image it does not have, and one with both held. The first two fail with the fix
+// first and leave nothing; the engine pulls neither image, which has a name under
+// .invalid, a domain that never resolves. The third wraps a docker run with --pull=never.
+func neverPullsMissing(t *testing.T, command, helper, base string) {
+	missing := fmt.Sprintf("qory-walltest-missing-%d.invalid/agent:none", os.Getpid())
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs}
+	ctx := context.Background()
+	for _, c := range []struct {
+		name, image, relay string
+		fails              bool
+	}{
+		{"the relay's image", base, missing, true},
+		{"the run's image", missing, base, true},
+		{"both held", base, base, false},
+	} {
+		runID := fmt.Sprintf("walltest-never-%d-%d", os.Getpid(), time.Now().UnixNano())
+		e, err := w.Prepare(ctx, wall.Request{RunID: runID, Image: c.image, RelayImage: c.relay, NeverPull: true})
+		if err != nil {
+			t.Fatalf("%s: Prepare: %v", c.name, err)
+		}
+		proxy, err := net.Listen("tcp", e.ProxyAddr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		agent, err := e.Wrap(ctx, wall.Launch{Command: "sh", Args: []string{"-c", "true"}, Dir: dir, Mounts: []wall.Mount{{Path: dir}},
+			Proxy: proxy.Addr().String(), ProxyToken: relaySecret})
+		want := "Pull the image on this machine before you set the engine proxy: the engine has no image " + missing + ", and under an engine proxy the wall pulls only in a run's image step."
+		switch {
+		case c.fails && (err == nil || err.Error() != want):
+			t.Errorf("%s: the wrap: %v, want %s", c.name, err, want)
+		case !c.fails && err != nil:
+			t.Errorf("%s: the wrap: %v", c.name, err)
+		case !c.fails && !slices.Contains(agent.Args, "--pull=never"):
+			t.Errorf("%s: the agent's docker run may pull: %q", c.name, agent.Args)
+		}
+		proxy.Close()
+		if err := e.Close(ctx); err != nil {
+			t.Errorf("%s: Close: %v", c.name, err)
+		}
+		for _, list := range [][]string{{"ps", "--all", "--quiet"}, {"network", "ls", "--quiet"}} {
+			out, err := exec.Command(command, append(list, "--filter", "label=dev.qory.run="+runID)...).CombinedOutput()
+			if err != nil || strings.TrimSpace(string(out)) != "" {
+				t.Errorf("%s: left %q: %v", c.name, out, err)
+			}
+		}
+	}
+	if out, err := exec.Command(command, "image", "inspect", missing).CombinedOutput(); err == nil {
+		t.Errorf("the engine holds %s: %s", missing, out)
+	}
+}
+
+// heldWithoutRegistry pushes one image, whose user is 1000:1000, to a registry of the
+// test's under two names, removes it from the engine and pulls it by the first name's
+// digest, the way a workflow pulls a private image before a run, and then removes the
+// registry. The wall's enclosure, prepared and wrapped with no Pull, starts the image
+// by the name it was pulled by with no registry to ask. Its Pull fails in docker pull,
+// since the engine reaches for the registry on both image stores; that shows contact
+// alone, not a request for the manifest, which the session's check makes before a run
+// (e2e.go, byReference). The same content by the other name, which the engine does not
+// hold by that name, is refused at the wrap that would start its first container, and
+// its Pull fails with no registry to fetch it from.
+func heldWithoutRegistry(t *testing.T, command, helper, base string) {
 	name := fmt.Sprintf("qory-walltest-held-registry-%d", os.Getpid())
 	if out, err := exec.Command(command, "run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5000",
 		"--mount", "type=tmpfs,dst=/var/lib/registry", registry).CombinedOutput(); err != nil {
@@ -274,6 +333,13 @@ func heldStartsWithoutRegistry(t *testing.T, command, helper, base string) {
 	}
 
 	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs}
+	heldReq := wall.Request{RunID: fmt.Sprintf("walltest-held-%d-%d", os.Getpid(), time.Now().UnixNano()), Image: held, RelayImage: base, Pull: true}
+	var refused *accesskey.Refusal
+	if err := w.Pull(context.Background(), heldReq, nil, nil); err == nil {
+		t.Errorf("%s, held, was pulled with no registry to reach", held)
+	} else if errors.As(err, &refused) || !strings.Contains(err.Error(), " pull") {
+		t.Errorf("the pull of %s, held, failed other than in docker pull: %v", held, err)
+	}
 	req := wall.Request{RunID: fmt.Sprintf("walltest-held-%d-%d", os.Getpid(), time.Now().UnixNano()), Image: notHeld, RelayImage: base, Pull: true}
 	unheldWrapIsRefused(t, w, req)
 	if err := w.Pull(context.Background(), req, nil, nil); err == nil {
@@ -439,14 +505,17 @@ const registry = "registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58a
 // pushedDigest is the digest docker push prints for the manifest it pushed.
 var pushedDigest = regexp.MustCompile(`digest: (sha256:[0-9a-f]{64})`)
 
-// referenceImages starts a registry of the test's on this machine and pushes two images
-// to it, built from base: one whose user is 1000:1000, which sets
-// ANTHROPIC_BEDROCK_BASE_URL in its ENV, and one whose user is root. It returns their references pinned by digest and
-// the images.allow prefix that covers both. Everything it made is removed, by name, when the test ends.
-func referenceImages(t *testing.T, command, base string) (nonroot, root, allow string) {
+// referenceImages starts a registry of the test's on this machine and pushes three
+// images to it, built from base: one whose user is 1000:1000, which sets
+// ANTHROPIC_BEDROCK_BASE_URL in its ENV, one whose user is root, and one whose user is
+// 1000:1000 that the engine then pulls by its digest and whose manifest the registry
+// then deletes. It returns their references pinned by digest and the images.allow
+// prefix that covers them. Everything it made is removed, by name, when the test ends.
+func referenceImages(t *testing.T, command, base string) (nonroot, root, unpublished, allow string) {
 	t.Helper()
 	name := fmt.Sprintf("qory-walltest-registry-%d", os.Getpid())
 	if out, err := exec.Command(command, "run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5000",
+		"--env", "REGISTRY_STORAGE_DELETE_ENABLED=true",
 		// The store in memory, not in a volume, which a run's leftovers would count.
 		"--mount", "type=tmpfs,dst=/var/lib/registry", registry).CombinedOutput(); err != nil {
 		t.Fatalf("the registry: %v: %s", err, out)
@@ -487,8 +556,29 @@ func referenceImages(t *testing.T, command, base string) (nonroot, root, allow s
 		t.Cleanup(func() { exec.Command(command, "image", "rm", ref).Run() })
 		return ref
 	}
+	unpublished = push("unpublished", "USER 1000:1000\nLABEL walltest=unpublished\n")
+	if out, err := exec.Command(command, "pull", unpublished).CombinedOutput(); err != nil {
+		t.Fatalf("the pull of %s: %v: %s", unpublished, err, out)
+	}
+	if out, err := exec.Command(command, "image", "inspect", "--format", "{{json .RepoDigests}}", unpublished).CombinedOutput(); err != nil ||
+		!strings.Contains(string(out), unpublished) {
+		t.Fatalf("the engine does not hold %s by its digest: %v: %s", unpublished, err, out)
+	}
+	repository, digest, _ := strings.Cut(strings.TrimPrefix(unpublished, "localhost:"+port+"/"), "@")
+	del, err := http.NewRequest(http.MethodDelete, "http://localhost:"+port+"/v2/"+repository+"/manifests/"+digest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(del)
+	if err != nil {
+		t.Fatalf("the delete of %s: %v", unpublished, err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("the delete of %s: %s", unpublished, resp.Status)
+	}
 	// The non-root image sets a name the runtime denies, which the run sees unset.
-	return push("nonroot", "USER 1000:1000\nENV ANTHROPIC_BEDROCK_BASE_URL=https://image.invalid/\n"), push("root", ""), allow
+	return push("nonroot", "USER 1000:1000\nENV ANTHROPIC_BEDROCK_BASE_URL=https://image.invalid/\n"), push("root", ""), unpublished, allow
 }
 
 // busybox is the image the relay's own tests start from.

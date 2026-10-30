@@ -23,5 +23,19 @@
   "patterns": [
     "*_PROXY",
     "QORY_*"
+  ],
+  "forge_tokens": [
+    "BITBUCKET_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GITHUB_TOKEN",
+    "GITLAB_TOKEN",
+    "GL_TOKEN"
+  ],
+  "model_keys": [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN"
   ]
 }

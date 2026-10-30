@@ -120,6 +120,27 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Use the classic image store
+        # The engine answers a pull of an image it holds from its cache of manifests on
+        # the classic store, and asks the registry on the containerd store. The suite runs
+        # on both, so a run of an image the engine holds is shown to depend on the
+        # session's check of its manifest alone.
+        env:
+          SNAPSHOTTER: "false"
+        run: |
+          sudo mkdir -p /etc/docker
+          [ -f /etc/docker/daemon.json ] || echo '{}' | sudo tee /etc/docker/daemon.json >/dev/null
+          jq --argjson on "$SNAPSHOTTER" '.features["containerd-snapshotter"] = $on' /etc/docker/daemon.json > daemon.json
+          sudo mv daemon.json /etc/docker/daemon.json
+          sudo systemctl restart docker
+          status=$(docker info --format '{{json .DriverStatus}}')
+          echo "$status"
+          if [ "$SNAPSHOTTER" = true ]; then
+            echo "$status" | grep -q io.containerd.snapshotter
+          else
+            ! echo "$status" | grep -q io.containerd.snapshotter
+          fi
+
       - name: Show the engine's version
         # Nested Docker needs Docker Engine 28 or later.
         run: docker version
@@ -134,7 +155,70 @@ jobs:
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
-        # cannot pass by proving nothing. The suite with a Docker inside is the next job's.
+        # cannot pass by proving nothing. The suite with a Docker inside is e2e-docker's.
+        # TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy,
+        # TestTheGatewaySetsTheCredentialOnAHostProxyRequest and
+        # TestAHarnessCredentialReachesItsOriginThroughTheStackProxy need no Docker, but
+        # they skip on a machine with none of the CA bundles, and in the part job a skip
+        # passes. Their names are in this -run, so that a missing bundle fails here: a
+        # step in the part job with QORY_WALL_REQUIRE would run them twice in that job.
+        # TestDockerSealedCredentialThroughTheWall and
+        # TestDockerHarnessCredentialThroughTheStackProxy need Docker and are not subtests
+        # of TestDockerConforms, so their names are in this -run too.
+        env:
+          CGO_ENABLED: "0"
+          QORY_WALL_REQUIRE: "1"
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy)$'
+
+  e2e-containerd:
+    name: Wall conformance, containerd image store
+    # On the machine itself, not in a container: the suite needs the docker command and
+    # an engine it reaches, and a Linux host is where the hook socket crosses a mount, so
+    # this is where an adapter is proven.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Use the containerd image store
+        # The engine answers a pull of an image it holds from its cache of manifests on
+        # the classic store, and asks the registry on the containerd store. The suite runs
+        # on both, so a run of an image the engine holds is shown to depend on the
+        # session's check of its manifest alone.
+        env:
+          SNAPSHOTTER: "true"
+        run: |
+          sudo mkdir -p /etc/docker
+          [ -f /etc/docker/daemon.json ] || echo '{}' | sudo tee /etc/docker/daemon.json >/dev/null
+          jq --argjson on "$SNAPSHOTTER" '.features["containerd-snapshotter"] = $on' /etc/docker/daemon.json > daemon.json
+          sudo mv daemon.json /etc/docker/daemon.json
+          sudo systemctl restart docker
+          status=$(docker info --format '{{json .DriverStatus}}')
+          echo "$status"
+          if [ "$SNAPSHOTTER" = true ]; then
+            echo "$status" | grep -q io.containerd.snapshotter
+          else
+            ! echo "$status" | grep -q io.containerd.snapshotter
+          fi
+
+      - name: Show the engine's version
+        # Nested Docker needs Docker Engine 28 or later.
+        run: docker version
+
+      - name: Log in to ghcr.io
+        # The suite's busybox is a copy of Docker Hub's, by digest, in qoryai's public
+        # package; the machine's engine pulls it with the job's token.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Run the suite against Docker
+        # The test binary is the relay, the forwarder and the probe inside the enclosure,
+        # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
+        # cannot pass by proving nothing. The suite with a Docker inside is e2e-docker's.
         # TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy,
         # TestTheGatewaySetsTheCredentialOnAHostProxyRequest and
         # TestAHarnessCredentialReachesItsOriginThroughTheStackProxy need no Docker, but

@@ -62,11 +62,13 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 			return runtimes.Launch{}, err
 		}
 	}
-	args, err := settingsArgs(events, launch.Args, a.SessionDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.DeniedVariables)
+	var leftOut []string
+	args, err := settingsArgs(events, launch.Args, a.SessionDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.DeniedVariables, &leftOut)
 	if err != nil {
 		return runtimes.Launch{}, err
 	}
-	launch.Args = args
+	slices.Sort(leftOut)
+	launch.Args, launch.LeftOut = args, leftOut
 	return approve(a, launch)
 }
 
@@ -132,7 +134,7 @@ func flagCount(args []string, flag string) int {
 }
 
 func settingsArgs(events []string, args []string, dir string, forwarder []string,
-	readable func(string) (string, error), inside func(string) string, model, denied []string) ([]string, error) {
+	readable func(string) (string, error), inside func(string) string, model, denied []string, leftOut *[]string) ([]string, error) {
 	settings := map[string]any{}
 	at := -1
 	for i, a := range args {
@@ -168,12 +170,10 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		// Claude Code applies the env object to its environment, over the start key's
 		// variable and endpoint the session sets and over the names it leaves out.
 		if env, ok := settings["env"].(map[string]any); ok {
-			for _, name := range model {
-				delete(env, name)
-			}
 			for name := range env {
-				if slices.ContainsFunc(denied, func(d string) bool { return strings.EqualFold(d, name) }) {
+				if slices.Contains(model, name) || slices.ContainsFunc(denied, func(d string) bool { return strings.EqualFold(d, name) }) {
 					delete(env, name)
+					*leftOut = append(*leftOut, name)
 				}
 			}
 		}

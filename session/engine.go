@@ -62,7 +62,9 @@ func (e *engineProxies) close(o *engineOpen) error {
 // OpenSpec.Report.
 func (r *Run) closeEngine() {
 	if err := r.engine.close(nil); err != nil {
-		r.open.Report(accesskey.ShownError(r.maskEngine(err, r.open.EngineProxy)).Error())
+		// OpenSpec.Report passes the line through the run's masker, which has the
+		// engine proxy's password since its forwarder started.
+		r.open.Report(accesskey.ShownError(err).Error())
 	}
 }
 

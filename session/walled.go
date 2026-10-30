@@ -389,12 +389,13 @@ type WalledRun struct {
 // entry cannot be asked, or the entry records no engine, or an entry whose lock is free
 // cannot be read, the error is a *[Refusal] with the code engine_unreachable, whose Names
 // are the run's id and the path of its entry, a path that contains qak_, qrk_, qecr_,
-// qecn_, qecp_, qecg_ or qeci_ in any case printed as [accesskey.ShownName]'s phrase, and
-// whose Detail shows that the run counts as still going; its EntryUnreadable is set for an
-// entry that cannot be read, and for no other. An entry whose lock is held and that cannot
-// be read, and a writable bind of a run still going that cannot be resolved now, are plain
-// errors, in the sentences a run that starts gets, which contain nothing about starting. A
-// relative p, or one that cannot be resolved, is an error.
+// qecn_, qecp_, qecg_, qeci_ or qecd_ in any case printed as [accesskey.ShownName]'s
+// phrase, and whose Detail shows that the run counts as still going; its
+// EntryUnreadable is set for an entry that cannot be read, and for no other. An entry
+// whose lock is held and that cannot be read, and a writable bind of a run still going
+// that cannot be resolved now, are plain errors, in the sentences a run that starts
+// gets, which contain nothing about starting. A relative p, or one that cannot be
+// resolved, is an error.
 //
 // The registry's lock is held for the whole read, and the answer holds when
 // RunsBinding returns: a run may start and bind p right after. A caller that removes or
@@ -748,9 +749,9 @@ func writtenEntry(file string) (walledEntry, bool, error) {
 // what follows from it, [startsNot] for a run that starts. Its names are the earlier run's
 // id and file, the path of its entry, which the registry's directory makes absolute, so
 // the entry can be found and looked at. A path that contains qak_, qrk_, qecr_, qecn_,
-// qecp_, qecg_ or qeci_, in any case, is [accesskey.ShownName]'s phrase in its place in
-// the names, and Detail prints [accesskey.ShownValue]'s phrase in place of an error that
-// contains one.
+// qecp_, qecg_, qeci_ or qecd_, in any case, is [accesskey.ShownName]'s phrase in its
+// place in the names, and Detail prints [accesskey.ShownValue]'s phrase in place of an
+// error that contains one.
 func engineUnreachable(runID, file, so string, err error) *Refusal {
 	return &Refusal{
 		Code:  refusal.EngineUnreachable,

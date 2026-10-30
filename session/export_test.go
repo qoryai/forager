@@ -98,3 +98,28 @@ func HoldJoining(r *Run) func() {
 	r.joining.Lock()
 	return r.joining.Unlock
 }
+
+// SetManifestRoots sets authorities, as PEM, that the check of a run's image at its
+// registry trusts beside the machine's and the run's, nil for none, and returns what
+// they were.
+func SetManifestRoots(pem []byte) []byte {
+	old := manifestRoots
+	manifestRoots = pem
+	return old
+}
+
+// SetManifestCheck sets what checks a run's image by reference at its registry, in
+// place of the request through the run's proxy, and returns a function that restores
+// the request.
+func SetManifestCheck(f func(ctx context.Context, image string) error) (restore func()) {
+	manifestHook = f
+	return func() { manifestHook = nil }
+}
+
+// SetManifestWait sets how long the check of a run's image at its registry may take,
+// and returns what it was.
+func SetManifestWait(d time.Duration) time.Duration {
+	old := manifestWait
+	manifestWait = d
+	return old
+}

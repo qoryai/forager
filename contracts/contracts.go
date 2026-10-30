@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
@@ -142,3 +144,54 @@ func Lines(name string) ([]any, error) {
 	}
 	return out, nil
 }
+
+// Denied is the built-in deny list, denied-variables.json: the names and the patterns,
+// in which * matches any run of characters, of the variables whose value a run leaves
+// out of every source the deny list covers, matched regardless of case; and the names
+// of the variables a credential is read from, which the deny list covers as names and
+// which a credential's placeholder may take: the forge tokens', such as GH_TOKEN, and
+// the model keys', such as ANTHROPIC_API_KEY.
+type Denied struct {
+	Version     int      `json:"version"`
+	Names       []string `json:"names"`
+	Patterns    []string `json:"patterns"`
+	ForgeTokens []string `json:"forge_tokens"`
+	ModelKeys   []string `json:"model_keys"`
+}
+
+// Credentials is the forge tokens' names and then the model keys', a new slice.
+func (d Denied) Credentials() []string { return slices.Concat(d.ForgeTokens, d.ModelKeys) }
+
+// DeniedVariables reads the built-in deny list from the embedded denied-variables.json,
+// a new copy on each call.
+func DeniedVariables() (Denied, error) {
+	var d Denied
+	b, err := fs.ReadFile(FS, "denied-variables.json")
+	if err != nil {
+		return d, err
+	}
+	if err := json.Unmarshal(b, &d); err != nil {
+		return d, fmt.Errorf("denied-variables.json: %w", err)
+	}
+	return d, nil
+}
+
+// denied is the embedded deny list, read once; a test reads the same file, so it
+// reads without an error.
+var denied = sync.OnceValue(func() Denied {
+	d, err := DeniedVariables()
+	if err != nil {
+		panic(err)
+	}
+	return d
+})
+
+// ForgeTokenNames is the forge_tokens of denied-variables.json, the variables a code
+// forge's token is read from, such as GH_TOKEN and GITLAB_TOKEN: a new slice on each
+// call.
+func ForgeTokenNames() []string { return slices.Clone(denied().ForgeTokens) }
+
+// ModelKeyNames is the model_keys of denied-variables.json, the variables a runtime
+// descriptor reads a model key from, such as ANTHROPIC_API_KEY: a new slice on each
+// call.
+func ModelKeyNames() []string { return slices.Clone(denied().ModelKeys) }

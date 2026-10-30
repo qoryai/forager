@@ -4,5 +4,6 @@
     "HOME",
     "NODE_ENV",
     "PATH"
-  ]
+  ],
+  "model_key": true
 }

@@ -99,17 +99,30 @@ func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string,
 	p.term.Store(&terminator{p: p, ca: ca, creds: creds, paths: paths, node: p.node, tools: tools})
 }
 
+// modelKey is the model key the proxy sets: the one named name, or none when none is
+// true. none is apart from name, so no credential's name matches it.
+type modelKey struct {
+	name string
+	none bool
+}
+
 // SetModelKey sets the model key, by its name, that the proxy sets from now on: of the
 // credentials with a Placeholder, the model keys, it sets this one alone and none of
 // the others, whose values it still replaces in every answer. The gateway sets the key
 // of the session that runs, and the run's start key between sessions.
-func (p *Proxy) SetModelKey(name string) { p.model.Store(&name) }
+func (p *Proxy) SetModelKey(name string) { p.model.Store(&modelKey{name: name}) }
+
+// SetNoModelKey makes the proxy set no model key from now on, until [Proxy.SetModelKey]:
+// it still replaces every model key's value in every answer. The gateway calls it for
+// a session that joined with no model key.
+func (p *Proxy) SetNoModelKey() { p.model.Store(&modelKey{none: true}) }
 
 // setsModelKey reports whether the proxy sets the model key of that name: the one
-// [Proxy.SetModelKey] set, or any before it is called.
+// [Proxy.SetModelKey] set, none after [Proxy.SetNoModelKey], or any before either is
+// called.
 func (p *Proxy) setsModelKey(name string) bool {
 	m := p.model.Load()
-	return m == nil || *m == name
+	return m == nil || (!m.none && m.name == name)
 }
 
 // NodePaths sets the sides of path rules beside the policy's, each held apart: the

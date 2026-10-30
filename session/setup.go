@@ -167,7 +167,9 @@ func (r *Run) closeWall(ctx context.Context) {
 // failed with its exit status and returns a [*SetupError]. Any other failure in a step
 // ends the step failed, or cancelled when ctx ended, with -1, after its line, and is the
 // error. After a step that fails no later step starts, and no session joins the run.
-func (r *Run) Setup(ctx context.Context, spec SetupSpec) error {
+// The run's masker replaces the run's secrets in the error, as in Open's.
+func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
+	defer func() { err = maskError(r.masker, err) }()
 	if r.open.Wall == nil {
 		return errors.New("Open the run with a wall to run its setup: setup runs in a container of the run's image.")
 	}
@@ -327,7 +329,8 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) error {
 // first, without the access key's variables and QORY_RUN_KEY. A
 // value is refused when it contains, in a form the run's masker replaces, the password
 // of one of the run's forwarders or of OpenSpec.EngineProxy: the run's masker gets the
-// engine proxy's password only in the image step, which comes after this check.
+// engine proxy's password only in the image step, which comes after this check. A value
+// that contains a value of OpenSpec.Masker or a server's variable value is not refused.
 func (r *Run) setupEnv(env []string) ([]string, error) {
 	if err := checkSetupEnv(env, r.answer.Placeholders, r.reserved); err != nil {
 		return nil, err
@@ -339,7 +342,7 @@ func (r *Run) setupEnv(env []string) ([]string, error) {
 	}
 	for _, kv := range kept {
 		name, value, _ := strings.Cut(kv, "=")
-		if r.masker.Replace(value) != value || engine.Replace(value) != value {
+		if r.passwords.Replace(value) != value || engine.Replace(value) != value {
 			return nil, fmt.Errorf("Leave the host proxy's URL out of the setup's variables: %s contains its password, which the setup container never gets.", accesskey.ShownName(name, false))
 		}
 	}
@@ -354,7 +357,8 @@ func (r *Run) setupEnv(env []string) ([]string, error) {
 // read from, is [refusal.VariableReserved] too, and a value for one of placeholders,
 // the run's placeholders, is [refusal.PlaceholderConflict]. A name the built-in deny
 // list, denied-variables.json, matches is refused with no code, such as LD_PRELOAD or
-// HTTPS_PROXY. The deny entries of a session, Variables.Deny and the runtime's denies,
+// HTTPS_PROXY; a credential's name of that list, such as GH_TOKEN, with the fix of
+// moving it to the gateway's credentials. The deny entries of a session, Variables.Deny and the runtime's denies,
 // apply in [Run.AgentEnv].
 func checkSetupEnv(env, placeholders, reserved []string) error {
 	checked := names(withoutNames(env, []string{envRunSystem, envRunRepositories}))
@@ -394,7 +398,14 @@ func checkSetupEnv(env, placeholders, reserved []string) error {
 	if err != nil {
 		return err
 	}
+	builtin, err := variables.Builtin()
+	if err != nil {
+		return err
+	}
 	for _, name := range checked {
+		if slices.ContainsFunc(builtin.Credentials(), func(c string) bool { return strings.EqualFold(c, name) }) {
+			return fmt.Errorf("Move %s to the gateway's credentials in forager.yaml: denied-variables.json lists it as a forge token or a model key, which the setup's variables may not pass into the wall.", accesskey.ShownName(name, false))
+		}
 		if deny.Matches(name) {
 			return fmt.Errorf("Leave %s out of the setup's variables: denied-variables.json lists it.", accesskey.ShownName(name, false))
 		}

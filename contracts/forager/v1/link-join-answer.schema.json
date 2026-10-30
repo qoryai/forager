@@ -17,7 +17,7 @@
       "minimum": 1
     },
     "model_credential": {
-      "description": "The name of the model key the session starts with, an entry of the run answer's credential_hosts with format: the join request's model_credential, or the run's start key when the request has none. The session gives the runtime the variable and the endpoint of this one alone. Absent when the gateway holds no model key for the run.",
+      "description": "The name of the model key the session starts with, an entry of the run answer's credential_hosts with format: the join request's model_credential, or the run's start key when the request has none. The session gives the runtime the variable and the endpoint of this one alone. Absent when the gateway holds no model key for the run, or when the join request's model_key is false.",
       "$ref": "policy.schema.json#/properties/credentials/items/properties/name"
     }
   }

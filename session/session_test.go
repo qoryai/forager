@@ -91,7 +91,11 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	os.Setenv("XDG_STATE_HOME", state)
+	// A run's image by reference is checked at its registry through the fake gateway's
+	// proxy before the wall's pull.
+	stopRegistry := defaultRegistry()
 	code := m.Run()
+	stopRegistry()
 	os.RemoveAll(state)
 	os.Exit(code)
 }

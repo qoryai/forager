@@ -686,8 +686,9 @@ func (lr *linkRun) joined(ev event.Event) {
 	j := lr.joins[n-1]
 	if ev.Type == event.SessionExited {
 		j.exited = true
-		if held := lr.r.Held(); j.accepted && j.model != "" && held != nil && held.Start != "" {
-			// The session ended: the proxy sets the start key again.
+		if held := lr.r.Held(); j.accepted && (j.model != "" || j.noKey) && held != nil && held.Start != "" {
+			// The session ended: the proxy sets the start key again, after a session's
+			// model key or after none.
 			lr.px.SetModelKey(held.Start)
 		}
 		return
@@ -698,8 +699,8 @@ func (lr *linkRun) joined(ev event.Event) {
 
 // shownStarted phrases each dev.qory.run.started and dev.qory.session.started in evs, a
 // batch [linkRun.check] accepted, as a session phrases one, so a session that sends a
-// value as it is passes no value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_ or
-// qeci_ in any case through the gateway: the members of startedNames as
+// value as it is passes no value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_,
+// qeci_ or qecd_ in any case through the gateway: the members of startedNames as
 // [accesskey.ShownName] shows them, those of startedValues and each entry of startedLists
 // as [accesskey.ShownValue] does, the labels as [server.ShownLabels] returns them and
 // about as [server.ShownAbout] does. Data with no such value is left byte for byte.

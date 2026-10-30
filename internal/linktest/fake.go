@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/qoryai/forager/link"
@@ -90,6 +92,8 @@ type Fake struct {
 	bearers   []string
 	preambles []string
 	proxied   []string
+	connects  []string
+	onConnect Connect
 	joins     []Join
 	answered  int
 	// numbered counts the joins of each run answered 200 or 403, by run id; model is the
@@ -174,8 +178,10 @@ func (f *Fake) OnRun(h func(server.LinkRunRequest) Reply) { f.mu.Lock(); f.onRun
 func (f *Fake) OnReload(h func(runID string) Reply) { f.mu.Lock(); f.onReload = h; f.mu.Unlock() }
 
 // OnJoin replaces the answer to a join request, which by default is 200 with the run's
-// next session number and the request's model_credential, else the run answer's. A
-// reply of 200 or 403 numbers the join.
+// next session number and the request's model_credential, else the run answer's, and
+// none for a request whose model_key is false. A request with model_key false and a
+// model_credential is 400 invalid_request, as the gateway's schema refuses it. A reply
+// of 200 or 403 numbers the join.
 func (f *Fake) OnJoin(h func(Join) Reply) { f.mu.Lock(); f.onJoin = h; f.mu.Unlock() }
 
 // Joins are the join requests received, in order.
@@ -249,11 +255,80 @@ func (f *Fake) Preambles() []string {
 	return slices.Clone(f.preambles)
 }
 
-// Proxied are the request lines the fake proxy answered.
+// Proxied are the request lines the fake proxy answered, CONNECT aside.
 func (f *Fake) Proxied() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.proxied)
+}
+
+// Connects are the host:port of each CONNECT the fake proxy received, in order.
+func (f *Fake) Connects() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.connects)
+}
+
+// Connect decides a CONNECT the fake proxy receives for hostport: the address of the
+// listener the tunnel reaches, or empty to answer 403 with the line a gateway's proxy
+// writes for a host its policy denies.
+type Connect func(hostport string) (addr string)
+
+// defaultConnect decides the CONNECTs of every fake with no OnConnect; nil denies them.
+var defaultConnect atomic.Pointer[Connect]
+
+// SetConnect sets how every fake with no OnConnect decides a CONNECT; nil denies every
+// one.
+func SetConnect(c Connect) { defaultConnect.Store(&c) }
+
+// OnConnect sets how the fake decides a CONNECT, in place of SetConnect's.
+func (f *Fake) OnConnect(c Connect) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onConnect = c
+}
+
+// tunnel answers a CONNECT for hostport, read from r on w: 403 with a gateway's line
+// for a host the fake denies, or 200 and then a tunnel to the address the decision
+// gives, until either side ends.
+func (f *Fake) tunnel(w io.ReadWriter, r *bufio.Reader, hostport string) {
+	f.mu.Lock()
+	f.connects = append(f.connects, hostport)
+	decide := f.onConnect
+	f.mu.Unlock()
+	if decide == nil {
+		if c := defaultConnect.Load(); c != nil {
+			decide = *c
+		}
+	}
+	addr := ""
+	if decide != nil {
+		addr = decide(hostport)
+	}
+	var up net.Conn
+	if addr != "" {
+		up, _ = net.Dial("tcp", addr)
+	}
+	if up == nil {
+		host, port, _ := net.SplitHostPort(hostport)
+		line := "qory: egress to " + host + ":" + port + " denied by policy (mode enforce)\n"
+		io.WriteString(w, "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: "+strconv.Itoa(len(line))+"\r\nConnection: close\r\n\r\n"+line)
+		return
+	}
+	defer up.Close()
+	if _, err := io.WriteString(w, "HTTP/1.1 200 Connection established\r\n\r\n"); err != nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		io.Copy(w, up)
+		close(done)
+	}()
+	io.Copy(up, r)
+	if c, ok := up.(*net.TCPConn); ok {
+		c.CloseWrite()
+	}
+	<-done
 }
 
 // RunAnswer is the fake's default answer to a run request on the local link: the
@@ -364,13 +439,17 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		if f.numbered == nil {
 			f.numbered = map[string]int{}
 		}
-		if h := f.onJoin; h != nil {
+		switch h := f.onJoin; {
+		case !req.ModelKey && req.ModelCredential != "":
+			reply = Reply{Status: 400, Body: map[string]any{"error": "invalid_request", "from": "gateway", "message": "the gateway refused the run: invalid_request"}}
+		case h != nil:
 			f.mu.Unlock()
 			reply = h(j)
 			f.mu.Lock()
-		} else {
+		default:
+			// A join with no model key gets none, as the gateway answers it.
 			model := req.ModelCredential
-			if model == "" {
+			if model == "" && req.ModelKey {
 				model = f.model[id]
 			}
 			a := map[string]any{"version": 1, "session": f.numbered[id] + 1}
@@ -474,11 +553,16 @@ func (f *Fake) serveProxy() {
 
 // answerProxied answers each HTTP request it reads from r, after a connection's
 // preamble, with 200 "ok" on w, and records its request line; after a request with
-// Connection: close it answers no other, as a proxy does.
-func (f *Fake) answerProxied(w io.Writer, r *bufio.Reader) {
+// Connection: close it answers no other, as a proxy does. A CONNECT is answered by
+// [Fake.tunnel], and is the connection's last request.
+func (f *Fake) answerProxied(w io.ReadWriter, r *bufio.Reader) {
 	for {
 		req, err := http.ReadRequest(r)
 		if err != nil {
+			return
+		}
+		if req.Method == http.MethodConnect {
+			f.tunnel(w, r, req.Host)
 			return
 		}
 		io.Copy(io.Discard, req.Body)
