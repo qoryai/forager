@@ -4073,7 +4073,7 @@ The session starts a program, records it and stops it, and contains nothing spec
 one. What is
 particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
 enclosure is behind `wall.Wall`, and Claude Code is one implementation of it. A runtime
-defines seven things: its name and the version of the program it was written against,
+defines seven things: its name and the version of the program it expects,
 reported in `dev.qory.session.started`; how a launch is prepared so the program reports
 to the session and runs with the run's placeholders, which may change the command and
 arguments, add variables and write into the run directory, and nothing else (a script it

@@ -27,9 +27,8 @@ import (
 type Runtime interface {
 	// Name is the runtime's name as events report it: claude, codex.
 	Name() string
-	// Version is the version of the program the adapter was written against, reported
-	// in run.started and not checked against what is installed. Empty when the adapter
-	// was written against none.
+	// Version is the version of the program the adapter expects, reported in run.started
+	// and not checked against what is installed. Empty when the adapter expects none.
 	Version() string
 	// Prepare makes a launch one the session can follow: it installs the forwarder as
 	// the program's hook, writes what that takes into the session's directory, and returns
@@ -268,7 +267,7 @@ type bare string
 // Name is the name it was given.
 func (b bare) Name() string { return string(b) }
 
-// Version is empty: nothing was written against a version.
+// Version is empty: a bare runtime expects no version.
 func (bare) Version() string { return "" }
 
 // Prepare returns the launch as it is.
