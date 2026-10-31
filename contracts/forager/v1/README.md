@@ -4230,8 +4230,9 @@ per event the rules produce from them, in order. A descriptor without fixtures i
 accepted. The tests validate every record and every expected event against the schemas;
 `runtimetest.Replays` replays the records through the runtime and compares.
 
-`runtimes/claude/descriptor.yaml` is the Claude Code descriptor, written against version
-2.1.273 as installed and its published hooks reference. Its hooks are the canonical
+`runtimes/claude/descriptor.yaml` is the Claude Code descriptor for version 2.1.316. Its
+rules were written against 2.1.273 as installed and its published hooks reference, and
+checked against 2.1.316 and that version's published reference. Its hooks are the canonical
 source in both modes; its standard output adds the result line, which only the output
 reports. A descriptor records the version it was written against; Forager
 reports that version and does not check the installed one. Its `secrets` declare no
@@ -4253,8 +4254,9 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,
 after trimming the space around it, under `customApiKeyResponses.approved`. That
-configuration is `.config.json` in `CLAUDE_CONFIG_DIR`, else in `~/.claude`, when the
-file exists, and otherwise `.claude.json` in `CLAUDE_CONFIG_DIR`, else in `~`. When the
+configuration is `.config.json` in `CLAUDE_CONFIG_DIR`, else in `~/.claude`, when that
+regular file has content, or is empty with a write bit set and no `.claude.json` exists,
+and otherwise `.claude.json` in `CLAUDE_CONFIG_DIR`, else in `~`. When the
 session is interactive, the run has a wall and `ANTHROPIC_API_KEY` is a placeholder of
 the run, `claude-settings` writes `approve-key.sh` into the session's directory and starts Claude Code
 through it with `/bin/sh`, so an image for such a run contains `/bin/sh`. The script
@@ -4984,7 +4986,7 @@ Public sources this contract was written from, and nothing else:
   the address the list contains; Kubernetes' [network
   policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/),
   the picture the relay matches: one named peer and nothing else.
-- Claude Code 2.1.273: the [hooks reference](https://code.claude.com/docs/en/hooks) for
+- Claude Code, read at 2.1.273 and again at 2.1.316: the [hooks reference](https://code.claude.com/docs/en/hooks) for
   the event names, the input on standard input and the rule that exit 0 with no output
   is no decision; the [CLI reference](https://code.claude.com/docs/en/cli-reference) and
   [settings](https://code.claude.com/docs/en/settings) for `--settings` and

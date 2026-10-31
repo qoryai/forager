@@ -10,6 +10,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Build run images with Claude Code 2.1.316: `runtime_version` in the Claude Code
+  descriptor is 2.1.316, up from 2.1.273. A qory that pins this Forager fails
+  `qory image check`, with exit status 1, for an image whose `claude --version` is any
+  other version, older or newer, and prints `install @anthropic-ai/claude-code@2.1.316`.
+  Forager itself does not check the installed version.
 - Move a model key or forge token from `wall.env`, `--env`, a harness default or the
   `env` of a `--settings` file to `gateway.credentials` in forager.yaml: a run now leaves
   its value out. The built-in deny list, `denied-variables.json`, has `model_keys`, the
@@ -1513,6 +1518,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- `approve-key.sh` writes to the file Claude Code 2.1.316 reads. With an empty `.config.json`
+  beside a `.claude.json`, it writes the approval to `.claude.json`, and with an empty
+  `.config.json` that has no write bit, it writes to `.claude.json` too. Before, the script
+  wrote to the empty file, and Claude Code 2.1.316 then read that file in place of
+  `.claude.json`, without its onboarding and trust.
 - A join that fails after `dev.qory.session.started` with no refusal code, such as an
   image pull or a wall's start that fails, writes the error's text as a
   `dev.qory.run.log` of the session, with `stream: stderr` and its `session`, before

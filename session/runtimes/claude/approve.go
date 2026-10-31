@@ -31,9 +31,12 @@ func approved() string {
 
 // approveScript adds the entry of approved, written in place of @APPROVED@, to the
 // configuration Claude Code reads, and then starts the command its arguments hold.
-// Claude Code reads ~/.claude/.config.json when that file exists and ~/.claude.json
+// Claude Code 2.1.316 reads ~/.claude/.config.json when that regular file has content,
+// or is empty with a write bit set and no ~/.claude.json exists, and ~/.claude.json
 // otherwise, with CLAUDE_CONFIG_DIR, when set, in place of ~/.claude for the first and
-// of ~ for the second. A missing file becomes one with the entry alone, mode 0600; an
+// of ~ for the second. So an empty .config.json beside a .claude.json stays empty: an
+// entry written there would make Claude Code read that file in place of the one with
+// the onboarding and the trust. A missing file becomes one with the entry alone, mode 0600; an
 // empty one gets the entry and keeps its mode. A JSON object without
 // customApiKeyResponses gets the entry as its first member and keeps every byte before
 // and after its opening brace, ending in one newline. A file with
@@ -51,7 +54,16 @@ approve() {
 	base=${CLAUDE_CONFIG_DIR:-$HOME}
 	[ -n "$base" ] || return 0
 	f=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.config.json
-	[ -f "$f" ] || f=$base/.claude.json
+	main=$base/.claude.json
+	if [ ! -f "$f" ]; then
+		f=$main
+	elif [ ! -s "$f" ]; then
+		bits=$(ls -ldL "$f") || return 0
+		case ${bits%% *} in
+		*w*) [ ! -e "$main" ] || f=$main ;;
+		*) f=$main ;;
+		esac
+	fi
 	[ -f "$f" ] || [ ! -e "$f" ] || return 0
 	entry='"customApiKeyResponses":{"approved":["@APPROVED@"],"rejected":[]}'
 	if [ -s "$f" ]; then

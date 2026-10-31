@@ -1,5 +1,9 @@
-# Claude Code. Written against 2.1.273 and its published hooks reference and headless
-# output; the fixtures beside this file are what the rules were checked on.
+# Claude Code 2.1.316. The rules were written against 2.1.273 and its published hooks
+# reference and headless output, and the fixtures beside this file are what they were
+# checked on. For 2.1.316 the events, input fields and output members below were checked
+# against the published hooks reference, the headless page and the changelog, and on runs
+# of that version against a local stand-in for the Messages API. No fixture beside this
+# file is a recording of 2.1.316.
 #
 # The hooks report the session in both modes, interactive and not, so they are the
 # canonical source. The standard output, JSON lines when the session runs on pipes, adds
@@ -24,7 +28,7 @@
 version: 1
 runtime: claude
 title: Claude Code
-runtime_version: "2.1.273"
+runtime_version: "2.1.316"
 sources:
   output:
     format: jsonl
