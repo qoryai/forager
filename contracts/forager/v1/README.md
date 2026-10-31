@@ -4234,8 +4234,9 @@ accepted. The tests validate every record and every expected event against the s
 rules were written against 2.1.273 as installed and its published hooks reference, and
 checked against 2.1.316 and that version's published reference. Its hooks are the canonical
 source in both modes; its standard output adds the result line, which only the output
-reports. A descriptor records the version it was written against; Forager
-reports that version and does not check the installed one. Its `secrets` declare no
+reports. `runtime_version` is the version of the runtime the descriptor expects, the one
+`qory image check` compares with an image's program; Forager reports that version and
+does not check the installed one. Its `secrets` declare no
 secret, reserve no variable and have no `one_of` group: the run's model key is a model
 key from the server or the machine (§Credentials). Its `model` lists
 `anthropic-messages`; it places the model id as `--model`, the run's effort value as
@@ -4249,7 +4250,8 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
 `ANTHROPIC_DEFAULT_FABLE_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
 `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`,
-`CLAUDE_CODE_AUTO_MODE_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL` and `CLAUDE_CODE_EXTRA_BODY`.
+`CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`, `CLAUDE_CODE_AUTO_MODE_MODEL`,
+`CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_EFFORT` and `CLAUDE_CODE_EXTRA_BODY`.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,

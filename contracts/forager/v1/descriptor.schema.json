@@ -29,7 +29,7 @@
       "maxLength": 128
     },
     "runtime_version": {
-      "description": "The runtime version the rules were written against and the fixtures recorded from. Reported in run.started; Forager never checks the installed version.",
+      "description": "The version of the runtime the descriptor expects, the one qory image check compares with an image's program. Reported in run.started; Forager never checks the installed version.",
       "type": "string",
       "minLength": 1
     },
