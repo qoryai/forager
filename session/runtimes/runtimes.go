@@ -27,8 +27,8 @@ import (
 type Runtime interface {
 	// Name is the runtime's name as events report it: claude, codex.
 	Name() string
-	// Version is the version of the program the adapter expects, reported in run.started
-	// and not checked against what is installed. Empty when the adapter expects none.
+	// Version is the version of the program the adapter expects, reported in
+	// session.started and not checked against what is installed. Empty when the adapter expects none.
 	Version() string
 	// Prepare makes a launch one the session can follow: it installs the forwarder as
 	// the program's hook, writes what that takes into the session's directory, and returns
