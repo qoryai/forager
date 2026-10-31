@@ -17,7 +17,7 @@ import (
 	"github.com/qoryai/forager/session/runtimes/claude"
 )
 
-// approvedEntry is what Claude Code 2.1.273 keeps for an approved key: the key trimmed,
+// approvedEntry is what Claude Code 2.1.316 keeps for an approved key: the key trimmed,
 // then its last 20 characters. The stand-in's are these.
 const approvedEntry = "utside-the-enclosure"
 
@@ -186,6 +186,23 @@ func TestTheScriptApprovesTheStandInAndKeepsTheRest(t *testing.T) {
 			write(t, filepath.Join(home, ".claude.json"), pretty)
 			return filepath.Join(home, ".claude", ".config.json"), decode(t, pretty)
 		}, unchanged: []string{".claude.json"}},
+		{name: "an empty legacy file beside the configuration", setup: func(t *testing.T, home string) (string, map[string]any) {
+			os.MkdirAll(filepath.Join(home, ".claude"), 0o755)
+			write(t, filepath.Join(home, ".claude", ".config.json"), "")
+			write(t, filepath.Join(home, ".claude.json"), pretty)
+			return filepath.Join(home, ".claude.json"), decode(t, pretty)
+		}, unchanged: []string{".claude/.config.json"}},
+		{name: "an empty legacy file alone", setup: func(t *testing.T, home string) (string, map[string]any) {
+			os.MkdirAll(filepath.Join(home, ".claude"), 0o755)
+			write(t, filepath.Join(home, ".claude", ".config.json"), "")
+			return filepath.Join(home, ".claude", ".config.json"), map[string]any{}
+		}},
+		{name: "an empty legacy file with no write bit", setup: func(t *testing.T, home string) (string, map[string]any) {
+			os.MkdirAll(filepath.Join(home, ".claude"), 0o755)
+			write(t, filepath.Join(home, ".claude", ".config.json"), "")
+			os.Chmod(filepath.Join(home, ".claude", ".config.json"), 0o444)
+			return filepath.Join(home, ".claude.json"), map[string]any{}
+		}, unchanged: []string{".claude/.config.json"}},
 		{name: "CLAUDE_CONFIG_DIR", setup: func(t *testing.T, home string) (string, map[string]any) {
 			os.MkdirAll(filepath.Join(home, "config"), 0o755)
 			write(t, filepath.Join(home, ".claude.json"), pretty)

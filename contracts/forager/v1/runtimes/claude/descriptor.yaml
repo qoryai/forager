@@ -1,5 +1,9 @@
-# Claude Code. Written against 2.1.273 and its published hooks reference and headless
-# output; the fixtures beside this file are what the rules were checked on.
+# Claude Code 2.1.316. The rules were written against 2.1.273 and its published hooks
+# reference and headless output, and the fixtures beside this file are what they were
+# checked on. For 2.1.316 the events, input fields and output members below were checked
+# against the published hooks reference, the headless page and the changelog, and on runs
+# of that version against a local stand-in for the Messages API. No fixture beside this
+# file is a recording of 2.1.316.
 #
 # The hooks report the session in both modes, interactive and not, so they are the
 # canonical source. The standard output, JSON lines when the session runs on pipes, adds
@@ -24,7 +28,7 @@
 version: 1
 runtime: claude
 title: Claude Code
-runtime_version: "2.1.273"
+runtime_version: "2.1.316"
 sources:
   output:
     format: jsonl
@@ -93,7 +97,8 @@ model:
               ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL,
               ANTHROPIC_DEFAULT_FABLE_MODEL, ANTHROPIC_SMALL_FAST_MODEL,
               CLAUDE_CODE_SUBAGENT_MODEL, CLAUDE_CODE_SUBAGENT_MODEL_FORCE,
-              CLAUDE_CODE_AUTO_MODE_MODEL, CLAUDE_CODE_EFFORT_LEVEL, CLAUDE_CODE_EXTRA_BODY]
+              CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL, CLAUDE_CODE_AUTO_MODE_MODEL,
+              CLAUDE_CODE_EFFORT_LEVEL, CLAUDE_CODE_SUBAGENT_EFFORT, CLAUDE_CODE_EXTRA_BODY]
 # A subagent's message has its agent_id and, in parent_tool_use_id, the id of the Agent
 # or Skill tool call that started the subagent.
 parent:

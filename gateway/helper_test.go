@@ -845,8 +845,9 @@ func openBody(runID string) string { return `{"version":1,"run_id":"` + runID + 
 
 // closedUnanswered dials the link's socket, writes open and fails the test unless the
 // gateway closes the connection without an answer byte. The gateway may close it
-// before the client has written everything: a write refused with EPIPE or ECONNRESET
-// is that close, as is a read that ends in EOF or a reset before any byte.
+// before the client has written everything: a write refused with EPIPE, ECONNRESET or
+// ENOTCONN (macOS returns ENOTCONN when the close comes first) is that close, as is a
+// read that ends in EOF or one of those errors before any byte. Any answer byte fails.
 func closedUnanswered(t *testing.T, socket, name, open string) {
 	t.Helper()
 	c, err := net.Dial("unix", socket)
@@ -870,9 +871,11 @@ func closedUnanswered(t *testing.T, socket, name, open string) {
 	}
 }
 
-// closedByPeer reports whether err is the peer's close: a broken pipe or a reset.
+// closedByPeer reports whether err is the peer's close: a broken pipe, a reset or a
+// socket that is no longer connected.
 func closedByPeer(err error) bool {
-	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ENOTCONN)
 }
 
 // rawPost posts body to path on the link and returns the status and the body.

@@ -4073,7 +4073,7 @@ The session starts a program, records it and stops it, and contains nothing spec
 one. What is
 particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
 enclosure is behind `wall.Wall`, and Claude Code is one implementation of it. A runtime
-defines seven things: its name and the version of the program it was written against,
+defines seven things: its name and the version of the program it expects,
 reported in `dev.qory.session.started`; how a launch is prepared so the program reports
 to the session and runs with the run's placeholders, which may change the command and
 arguments, add variables and write into the run directory, and nothing else (a script it
@@ -4230,11 +4230,13 @@ per event the rules produce from them, in order. A descriptor without fixtures i
 accepted. The tests validate every record and every expected event against the schemas;
 `runtimetest.Replays` replays the records through the runtime and compares.
 
-`runtimes/claude/descriptor.yaml` is the Claude Code descriptor, written against version
-2.1.273 as installed and its published hooks reference. Its hooks are the canonical
+`runtimes/claude/descriptor.yaml` is the Claude Code descriptor for version 2.1.316. Its
+rules were written against 2.1.273 as installed and its published hooks reference, and
+checked against 2.1.316 and that version's published reference. Its hooks are the canonical
 source in both modes; its standard output adds the result line, which only the output
-reports. A descriptor records the version it was written against; Forager
-reports that version and does not check the installed one. Its `secrets` declare no
+reports. `runtime_version` is the version of the runtime the descriptor expects, the one
+`qory image check` compares with an image's program; Forager reports that version and
+does not check the installed one. Its `secrets` declare no
 secret, reserve no variable and have no `one_of` group: the run's model key is a model
 key from the server or the machine (§Credentials). Its `model` lists
 `anthropic-messages`; it places the model id as `--model`, the run's effort value as
@@ -4248,13 +4250,15 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
 `ANTHROPIC_DEFAULT_FABLE_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
 `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`,
-`CLAUDE_CODE_AUTO_MODE_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL` and `CLAUDE_CODE_EXTRA_BODY`.
+`CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`, `CLAUDE_CODE_AUTO_MODE_MODEL`,
+`CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_EFFORT` and `CLAUDE_CODE_EXTRA_BODY`.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,
 after trimming the space around it, under `customApiKeyResponses.approved`. That
-configuration is `.config.json` in `CLAUDE_CONFIG_DIR`, else in `~/.claude`, when the
-file exists, and otherwise `.claude.json` in `CLAUDE_CONFIG_DIR`, else in `~`. When the
+configuration is `.config.json` in `CLAUDE_CONFIG_DIR`, else in `~/.claude`, when that
+regular file has content, or is empty with a write bit set and no `.claude.json` exists,
+and otherwise `.claude.json` in `CLAUDE_CONFIG_DIR`, else in `~`. When the
 session is interactive, the run has a wall and `ANTHROPIC_API_KEY` is a placeholder of
 the run, `claude-settings` writes `approve-key.sh` into the session's directory and starts Claude Code
 through it with `/bin/sh`, so an image for such a run contains `/bin/sh`. The script
@@ -4984,7 +4988,7 @@ Public sources this contract was written from, and nothing else:
   the address the list contains; Kubernetes' [network
   policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/),
   the picture the relay matches: one named peer and nothing else.
-- Claude Code 2.1.273: the [hooks reference](https://code.claude.com/docs/en/hooks) for
+- Claude Code, read at 2.1.273 and again at 2.1.316: the [hooks reference](https://code.claude.com/docs/en/hooks) for
   the event names, the input on standard input and the rule that exit 0 with no output
   is no decision; the [CLI reference](https://code.claude.com/docs/en/cli-reference) and
   [settings](https://code.claude.com/docs/en/settings) for `--settings` and
