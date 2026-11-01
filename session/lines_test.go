@@ -8,13 +8,14 @@ import (
 	"github.com/qoryai/forager/event"
 )
 
-// stdoutLines is the session's standard output as its dev.qory.run.log events with
-// stream stdout have it, joined in order and split at each line break.
+// stdoutLines is the runtime's standard output as the session's dev.qory.run.log
+// events with stream stdout and no step have it, joined in order and split at each
+// line break: a setup step's stdout lines have their step.
 func stdoutLines(t *testing.T, evs []map[string]any) []string {
 	t.Helper()
 	var b strings.Builder
 	for _, l := range ofType(evs, event.RunLog) {
-		if data(l)["stream"] != "stdout" {
+		if _, step := data(l)["step"]; data(l)["stream"] != "stdout" || step {
 			continue
 		}
 		bytes, err := base64.StdEncoding.DecodeString(data(l)["bytes"].(string))

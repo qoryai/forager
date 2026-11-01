@@ -103,8 +103,9 @@ model:
               CLAUDE_CODE_SUBAGENT_MODEL, CLAUDE_CODE_SUBAGENT_MODEL_FORCE,
               CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL, CLAUDE_CODE_AUTO_MODE_MODEL,
               CLAUDE_CODE_EFFORT_LEVEL, CLAUDE_CODE_SUBAGENT_EFFORT, CLAUDE_CODE_EXTRA_BODY]
-# The tool input member each tool's summary is copied from, as Claude Code 2.1.316 names
-# the tools and their input. Task, the older name, is an alias of Agent.
+# The tool input member each tool's summary is copied from. The table maps both Agent
+# and Task, because the 2.1.316 binary has both names for the tool that starts a
+# subagent and the init line of a recorded 2.1.316 run lists Task.
 tools:
   summary:
     Bash: command

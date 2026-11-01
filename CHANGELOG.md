@@ -767,9 +767,11 @@ release may change what an existing document does, and says so under Upgrading.
 - Update the gateway before the sessions that write `dev.qory.runtime.text`,
   `dev.qory.runtime.tool_result` or `dev.qory.runtime.tool_denied`, or `line`,
   `truncated` and `summary`. A gateway built with an older contract does not have them,
-  and ends the run `failed` with `batch_refused` at the first batch that contains one; a
-  session with Claude Code writes `summary` from its first tool call, on pipes or on a
-  pseudo-terminal, and the rest from its first assistant message on pipes.
+  and ends the run `failed` with `batch_refused` at the first batch that contains one. A
+  session with Claude Code writes `summary` from the first call of a tool that
+  `tools.summary` lists, on pipes or on a pseudo-terminal, and `line`,
+  `dev.qory.runtime.text`, `dev.qory.runtime.tool_result` and
+  `dev.qory.runtime.tool_denied` from the first stdout line that a rule maps, on pipes.
 - List a host that resolves to a private network address by name in the node's allow
   list, or a walled run can no longer reach it.
 - Each run on a gateway now has limits: at most 256 connections open at once, and 50

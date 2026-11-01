@@ -1656,8 +1656,9 @@ the output source contains `line`: the number of the line of the session's stand
 output that the record was read from, from 1, counting every line, a JSON object or
 not. An event from a hook has none. The session sets `line`, whatever the runtime's
 `Map` returns. A reader finds the line in the session's `dev.qory.run.log` events with
-`stream` `stdout`: joined in order, their bytes have line `n` after the line break
-number `n - 1`. The masking of the output (§The record files) writes no line break into
+`stream` `stdout` and no `step`: joined in order, their bytes have line `n` after the
+line break number `n - 1`. A setup command inside the wall writes `stdout` lines of the
+session too, with its `step`, and `line` does not count them. The masking of the output (§The record files) writes no line break into
 `dev.qory.run.log`, and keeps every line break of a line that is a JSON object, since a
 JSON string has its line breaks escaped. It replaces a masked value whole, so in a line
 that is no JSON object, a value with a line break in it becomes one line: a run's
@@ -1692,9 +1693,11 @@ with, and ends the run `failed` with `batch_refused` for a type it does not have
 member a type's schema does not list. Update the gateway first, then the sessions: a
 session with this contract writes `dev.qory.runtime.text`,
 `dev.qory.runtime.tool_result` and `dev.qory.runtime.tool_denied`, and `line`,
-`truncated` and `summary`. With Claude Code, `summary` comes with the first tool call
-of a session on pipes or on a pseudo-terminal, and the rest from the first assistant
-message of a session on pipes.
+`truncated` and `summary`. With Claude Code, a session writes `summary` from the first
+call of a tool that `tools.summary` lists, on pipes or on a pseudo-terminal, and `line`,
+`dev.qory.runtime.text`, `dev.qory.runtime.tool_result` and
+`dev.qory.runtime.tool_denied` from the first line of standard output that a rule maps,
+on pipes. `truncated` comes with the first text or result the session cuts.
 
 **Steps.** A step is one named unit of the run's host work, such as a fetch of a
 repository or a compose of the harness, as a step of a CI job is: it has a start, an
@@ -4321,8 +4324,9 @@ source in both modes; its standard output adds what only the output reports: the
 line, the text and thinking blocks, each tool's result and each denied tool call (§The
 events). Its `tools.summary` lists `Bash: command`, `Read: file_path`,
 `Write: file_path`, `Edit: file_path`, `Glob: pattern`, `Grep: pattern`, `WebFetch: url`,
-`WebSearch: query`, `Skill: skill`, and `Agent: description` and `Task: description`,
-since Claude Code 2.1.316 has Task, the older name, as an alias of its Agent tool.
+`WebSearch: query`, `Skill: skill`, and both `Agent: description` and
+`Task: description`, because the 2.1.316 binary has both names for the tool that starts
+a subagent and the init line of a recorded 2.1.316 run lists `Task`.
 `runtime_version` is the version of the runtime the descriptor expects, the one
 `qory image check` compares with an image's program; Forager reports that version and
 does not check the installed one. Its `secrets` declare no
