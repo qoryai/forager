@@ -39,9 +39,11 @@ import (
 // Claude Code answers with the recorder's text; every request the recorder gets
 // carries the key in the credential's header, no stand-in and not the other
 // credential's header; the record lists one request through the proxy for each the
-// recorder received, each to the recorder with the credential, beside the hosts of its
-// own an interactive Claude Code tries, which the policy refuses; and the run's
-// directory, the agent's home and the output contain no key.
+// recorder received, each to the recorder with the credential; and the run's
+// directory, the agent's home and the output contain no key. With the descriptor's
+// fixed variables, an interactive run of 2.1.316, like a headless one, tries no host
+// but the recorder. The test logs a request of an interactive run to another host that
+// the policy refused, and does not count it.
 //
 // An interactive run starts on a pseudo-terminal with a home of its own, whose
 // configuration has the onboarding done and the workspace trusted, as a person's
@@ -279,8 +281,8 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool, pro
 		if json.Unmarshal([]byte(line), &e) != nil || e.Type != "dev.qory.run.egress" {
 			continue
 		}
-		// An interactive Claude Code also tries hosts of its own, which the policy
-		// refuses: its downloads and github.com, in 2.1.273.
+		// A request of an interactive run to another host that the policy refused is
+		// logged, not counted. With the descriptor's fixed variables, 2.1.316 makes none.
 		if interactive && e.Data["decision"] == "denied" && e.Data["host"] != r.host {
 			t.Logf("the policy refused %v", e.Data)
 			continue
