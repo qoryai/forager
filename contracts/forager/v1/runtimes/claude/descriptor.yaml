@@ -132,9 +132,10 @@ tools:
 # the install: the fetch from downloads.claude.ai and the clone from github.com when that
 # fetch fails. A marketplace already installed in the home still refreshes from
 # downloads.claude.ai, but, with CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC set, as here,
-# only on a person's command: claude plugin marketplace update, claude plugin update,
-# or Update in the /plugin menu. That variable turns off the background refresh, unless
-# FORCE_AUTOUPDATE_PLUGINS is set, and the refreshes when a plugin is installed.
+# only when a command asks for it, run by the agent or by a person:
+# claude plugin marketplace update, claude plugin update, or Update in the /plugin menu.
+# That variable turns off the background refresh, unless FORCE_AUTOUPDATE_PLUGINS is
+# set, and the refreshes when a plugin is installed.
 # Without CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL, an interactive walled
 # run of 2.1.316 in observe mode connected to downloads.claude.ai.
 fixed:

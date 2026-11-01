@@ -45,8 +45,9 @@ import (
 // but the recorder. The test logs a request of an interactive run to another host that
 // the policy refused, and does not count it.
 //
-// An interactive run starts on a pseudo-terminal with a home of its own, whose
-// configuration has the onboarding done and the workspace trusted, as a person's
+// An interactive run starts on a pseudo-terminal with HOME set to a temporary
+// directory that the test makes for that run and mounts into the container. The
+// .claude.json there has the onboarding done and the workspace trusted, as a person's
 // would, and the test types a prompt once Claude Code shows its input. With the API
 // key, Claude Code reaches its input with no approval prompt for the key, because the
 // runtime pre-approved the stand-in: the configuration then holds the stand-in's
