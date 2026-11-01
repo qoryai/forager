@@ -489,8 +489,9 @@ func TestRuntimesJSONIsGenerated(t *testing.T) {
 // one, with formats, model, endpoint with its variable and optionally effort, with run
 // and optionally agent, each place being exactly one of flag, setting and variable, and
 // optionally overrides. The claude runtime has a model with overrides, and its fixed
-// sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC to 1. Every built-in descriptor is one
-// runtime, in name order.
+// sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and
+// CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL to 1, and nothing else. Every
+// built-in descriptor is one runtime, in name order.
 func TestRuntimesJSONShape(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
 	if err != nil {
@@ -590,8 +591,8 @@ func TestRuntimesJSONShape(t *testing.T) {
 				t.Errorf("fixed %s of %v is %v; want a string", name, rt["name"], v)
 			}
 		}
-		if rt["name"] == "claude" && fixed["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] != "1" {
-			t.Errorf("the claude runtime's fixed is %v; want CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC set to 1", fixed)
+		if want := map[string]any{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1"}; rt["name"] == "claude" && !reflect.DeepEqual(fixed, want) {
+			t.Errorf("the claude runtime's fixed is %v; want %v", fixed, want)
 		}
 		for _, k := range []string{"reserves", "denies", "credential_files"} {
 			strs(k, rt[k])

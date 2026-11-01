@@ -79,7 +79,7 @@ func prepareWalled(t *testing.T, dir string, interactive, walled bool, placehold
 }
 
 // fixedEnv is what the Claude Code descriptor's fixed sets in every launch.
-var fixedEnv = []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"}
+var fixedEnv = []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1"}
 
 // TestPrepareApprovesTheAPIKeyStandInAlone pins when the launch goes through the
 // script: interactive, walled, with ANTHROPIC_API_KEY among the stand-ins. With the

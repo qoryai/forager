@@ -30,6 +30,13 @@ release may change what an existing document does, and says so under Upgrading.
   `/api/claude_cli/bootstrap`, and makes no other request that its
   environment-variable reference lists as nonessential. A run of 2.1.316 without it,
   behind a wall in observe mode, connected to `http-intake.logs.us5.datadoghq.com`.
+- Expect `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` in every Claude Code
+  launch as well: the Claude Code descriptor's `fixed` sets it, in the launch and in the
+  `--settings` copy, as it sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. With it, an
+  interactive Claude Code 2.1.316 does not install the official plugin marketplace, so
+  it fetches nothing from `downloads.claude.ai` and does not clone the marketplace from
+  `github.com`. An interactive run of 2.1.316 without it, behind a wall in observe
+  mode, connected to `downloads.claude.ai`.
 - Set the model or effort of a walled run another way than `CLAUDE_CODE_SUBAGENT_EFFORT`
   or `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`: the Claude Code descriptor's `overrides` list
   both, so a run behind a wall leaves out their values and records each as `denied`, like

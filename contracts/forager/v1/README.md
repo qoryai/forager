@@ -4367,13 +4367,17 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`,
 `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`, `CLAUDE_CODE_AUTO_MODE_MODEL`,
 `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_EFFORT` and `CLAUDE_CODE_EXTRA_BODY`.
-Its `fixed` sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` to `1`: with it, Claude Code
-2.1.316 sends no log lines to Datadog, does not call `/api/claude_cli/bootstrap`, and
-makes no other request that its environment-variable reference lists as nonessential.
+Its `fixed` sets two variables to `1`. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
+Claude Code 2.1.316 sends no log lines to Datadog, does not call
+`/api/claude_cli/bootstrap`, and makes no other request that its environment-variable
+reference lists as nonessential. With
+`CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`, an interactive Claude Code
+2.1.316 does not install the official plugin marketplace, so it fetches nothing from
+`downloads.claude.ai` and does not clone the marketplace from `github.com`.
 Claude Code 2.1.316 applies the `env` of its settings sources in the order user,
 project, local, `--settings`, managed, each over the ones before, so the copy's value
 wins over a workspace's `.claude/settings.json` or `.claude/settings.local.json`. A
-managed settings file, which the image or the machine provides, can still set the
+managed settings file, which the image or the machine provides, can still set either
 variable empty.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to

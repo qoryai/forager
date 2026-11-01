@@ -9,8 +9,12 @@ import (
 	"github.com/qoryai/forager/session"
 )
 
-// nonessential is the variable the Claude Code descriptor's fixed sets to 1.
-const nonessential = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
+// nonessential and marketplace are the variables the Claude Code descriptor's fixed
+// sets to 1.
+const (
+	nonessential = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
+	marketplace  = "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL"
+)
 
 // TestEveryClaudeCodeLaunchSetsTheFixedVariables pins the Claude Code descriptor's
 // fixed end to end: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC reaches the agent as 1,
