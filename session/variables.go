@@ -181,6 +181,10 @@ func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, creden
 	if err != nil {
 		return variables.Resolved{}, nil, err
 	}
+	// A value the runtime's preparation sets wins over the harness's computed value of
+	// the name, such as a descriptor's fixed variable: the computed value is left out,
+	// so the launch's environment has the name once.
+	vars.Fixed = withoutNames(vars.Fixed, names(prepared.Env))
 	// Behind a wall, a variable the runtime declares or reserves that nothing sets is
 	// unset inside, so an image's value for it does not reach the runtime, and neither
 	// does an empty one, which a program may read as set. A value the run passes for

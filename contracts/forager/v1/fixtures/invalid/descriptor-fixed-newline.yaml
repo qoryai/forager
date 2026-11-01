@@ -1,0 +1,7 @@
+# A fixed variable's value has no line feed.
+version: 1
+runtime: amp
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]
+fixed: {AMP_QUIET: "a\nb"}

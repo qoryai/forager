@@ -119,6 +119,15 @@ tools:
     Skill: skill
     Agent: description
     Task: description
+# The session sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC to 1 in every launch, walled
+# or not, in place of a value of the server, the run, the machine, the harness or the
+# environment the run inherits, and sets it in the env object of the --settings copy,
+# which Claude Code applies over the env of the workspace's settings files.
+# With it, Claude Code sends no log lines to Datadog and makes no other request the
+# environment-variable reference lists as nonessential. Without it, a walled run of
+# 2.1.316 in observe mode connected to http-intake.logs.us5.datadoghq.com.
+fixed:
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
 # A subagent's message has its agent_id and, in parent_tool_use_id, the id of the Agent
 # or Skill tool call that started the subagent.
 parent:

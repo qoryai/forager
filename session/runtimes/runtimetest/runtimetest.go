@@ -29,7 +29,8 @@ var (
 // Conforms checks what holds of every runtime: a name events can carry, a stop the
 // session can send, and a Prepare that leaves alone what is not its own, the caller's
 // program and arguments when the run has no forwarder, and the machine outside the run
-// directory always.
+// directory always. Without a forwarder, Prepare may add variables, each NAME=value,
+// and writes no file.
 func Conforms(t *testing.T, rt runtimes.Runtime) {
 	t.Helper()
 	if !name.MatchString(rt.Name()) {
@@ -55,8 +56,13 @@ func Conforms(t *testing.T, rt runtimes.Runtime) {
 	if err != nil {
 		t.Fatalf("Prepare with no forwarder: %v", err)
 	}
-	if !reflect.DeepEqual(got, launch) {
+	if got.Command != launch.Command || !reflect.DeepEqual(got.Args, launch.Args) || len(got.LeftOut) != 0 {
 		t.Errorf("Prepare with no forwarder changed the launch: %+v", got)
+	}
+	for _, kv := range got.Env {
+		if n, _, ok := strings.Cut(kv, "="); !ok || n == "" {
+			t.Errorf("Prepare with no forwarder names the variable %q, which is not NAME=value", kv)
+		}
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Errorf("Prepare with no forwarder wrote %d files", len(entries))

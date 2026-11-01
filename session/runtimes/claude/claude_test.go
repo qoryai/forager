@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -333,5 +334,67 @@ func TestSettingsThatAreNoJSONObjectComeWithAFix(t *testing.T) {
 				t.Errorf("got %v, want the prefix %q", err, prefix)
 			}
 		})
+	}
+}
+
+// TestEveryLaunchTurnsOffNonessentialTraffic pins the descriptor's fixed variable:
+// Prepare sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC to 1, walled or not, and so
+// does the env of the run's copy of the --settings file, in place of the file's value
+// of the name in any case, which the launch lists as left out. A launch that passes no
+// --settings, or one whose env is no object, gets a copy whose env sets it too.
+func TestEveryLaunchTurnsOffNonessentialTraffic(t *testing.T) {
+	rt, err := claude.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	passed := `{"env":{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"0","claude_code_disable_nonessential_traffic":"","KEEP":"yes"}}`
+	for _, walled := range []bool{true, false} {
+		dir := t.TempDir()
+		got, err := rt.Prepare(runtimes.Attach{
+			Launch: runtimes.Launch{Command: "claude", Args: []string{"-p", "hi", "--settings", passed}}, SessionDir: dir,
+			Forwarder: []string{"/opt/q"}, Walled: walled,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"}; !slices.Equal(got.Env, want) {
+			t.Errorf("walled %v: Env %q; want %q", walled, got.Env, want)
+		}
+		if want := []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "claude_code_disable_nonessential_traffic"}; !slices.Equal(got.LeftOut, want) {
+			t.Errorf("walled %v: LeftOut %q; want %q", walled, got.LeftOut, want)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Env map[string]string `json:"env"`
+		}
+		if err := json.Unmarshal(b, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]string{"KEEP": "yes", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}; !reflect.DeepEqual(doc.Env, want) {
+			t.Errorf("walled %v: the copy's env is %v; want %v", walled, doc.Env, want)
+		}
+	}
+	for name, args := range map[string][]string{"no --settings": {"-p", "hi"}, "an env that is no object": {"--settings", `{"env":"x"}`}} {
+		dir := t.TempDir()
+		got, err := rt.Prepare(runtimes.Attach{Launch: runtimes.Launch{Command: "claude", Args: args}, SessionDir: dir, Forwarder: []string{"/opt/q"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Env map[string]string `json:"env"`
+		}
+		if err := json.Unmarshal(b, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}; !reflect.DeepEqual(doc.Env, want) || len(got.LeftOut) != 0 {
+			t.Errorf("%s: the copy's env is %v, LeftOut %q; want %v and nothing left out", name, doc.Env, got.LeftOut, want)
+		}
 	}
 }
