@@ -15,6 +15,15 @@ release may change what an existing document does, and says so under Upgrading.
   `qory image check`, with exit status 1, for an image whose `claude --version` is any
   other version, older or newer, and prints `install @anthropic-ai/claude-code@2.1.316`.
   Forager itself does not check the installed version.
+- Expect `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in every Claude Code launch,
+  walled or not: the Claude Code descriptor's `fixed` sets it. A value of it from the
+  server, `--env`, `wall.env`, a harness default or the environment the run inherits
+  no longer applies; `dev.qory.run.policy_applied` lists such a value with `why`
+  `fixed`, and the run's copy of the `--settings` file leaves the name out of its `env`.
+  With it, Claude Code 2.1.316 sends no log lines to Datadog, does not call
+  `/api/claude_cli/bootstrap`, and makes no other request that its
+  environment-variable reference lists as nonessential. A run of 2.1.316 without it,
+  behind a wall in observe mode, connected to `http-intake.logs.us5.datadoghq.com`.
 - Set the model or effort of a walled run another way than `CLAUDE_CODE_SUBAGENT_EFFORT`
   or `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`: the Claude Code descriptor's `overrides` list
   both, so a run behind a wall leaves out their values and records each as `denied`, like
@@ -180,6 +189,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `fixed` in a runtime descriptor: variables the session sets for the runtime in every
+  launch, by name, such as `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`. The
+  session counts each among the run's fixed names, so no value of the server, the run,
+  the machine, the harness or the environment the run inherits applies to one, and
+  `claude-settings` leaves the names out of the `env` of the `--settings` copy. The
+  session refuses a descriptor whose `fixed` has a name that `denied-variables.json`
+  lists, `fixed: remove PATH: denied-variables.json lists it, and a descriptor sets no
+  such variable`, or a name of the descriptor's other lists, `fixed: remove AMP_MODEL
+  from fixed or from model.overrides: a variable that fixed sets is in no other list of
+  the descriptor`. `runtimes.json` lists `fixed` for every runtime, an empty object when
+  the descriptor has none.
 - `parent_agent_id` in `dev.qory.runtime.subagent_started`: the subagent that started
   this one, when the runtime reports it. Claude Code 2.1.292 and later reports it in a
   session on pipes with `--output-format stream-json --verbose`. A descriptor sets where
@@ -1694,6 +1714,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A variable the runtime's preparation sets is in the launch's environment once: the
+  harness's computed value of the name is left out. Before, both were in it, and the
+  preparation's, the later one, applied.
+- `runtimetest.Conforms` lets a runtime's Prepare add variables to a launch without a
+  forwarder; the command and arguments stay as given.
 - Each session that starts has a directory in the run directory, `sessions/<n>/`, with
   `<n>` its number: its `output.log`, the bytes of its `dev.qory.run.log` chunks, its
   `preparation.sh` and the files its runtime writes, such as Claude Code's
@@ -1742,6 +1767,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- `TestDockerClaudeCodeThroughTheWall` no longer sets
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in the launch: the descriptor's `fixed`
+  sets it.
 - The conformance suite passes the launch's settings file from outside the workspace,
   since the session refuses a settings file in it.
 - CI's Wall conformance job runs the e2e test

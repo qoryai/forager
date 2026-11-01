@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path"
 	"sort"
 
@@ -12,7 +13,7 @@ import (
 )
 
 // RuntimesFile is the path, in the contract directory, of the file that lists the
-// secrets and the model section of every runtime the contract ships a descriptor for,
+// secrets, the model section and the fixed variables of every runtime the contract ships a descriptor for,
 // the file a server vendors.
 const RuntimesFile = "runtimes.json"
 
@@ -23,8 +24,9 @@ type runtimesFile struct {
 }
 
 // runtimeEntry is one runtime of [RuntimesFile]. Every list is present, empty when the
-// descriptor has none, so a reader finds the same members for every runtime. Model is
-// the one member that is absent when the descriptor has none.
+// descriptor has none, so a reader finds the same members for every runtime, and so is
+// fixed, an empty object when the descriptor has none. Model is the one member that is
+// absent when the descriptor has none.
 type runtimeEntry struct {
 	Name            string             `json:"name"`
 	Title           string             `json:"title"`
@@ -34,6 +36,7 @@ type runtimeEntry struct {
 	Declares        []declarationEntry `json:"declares"`
 	OneOf           []groupEntry       `json:"one_of"`
 	Model           *modelEntry        `json:"model,omitempty"`
+	Fixed           map[string]string  `json:"fixed"`
 }
 
 // modelEntry is the model section of a runtime in [RuntimesFile], in the descriptor's
@@ -70,8 +73,8 @@ type groupEntry struct {
 
 // Runtimes renders [RuntimesFile] from the descriptors of a contract directory, such as
 // contracts.FS: every runtimes/<name>/descriptor.yaml, sorted by name, with its name,
-// its title, its secrets, the lists in the descriptor's order, and its model section
-// when it has one. The output is
+// its title, its secrets, the lists in the descriptor's order, its model section
+// when it has one, and its fixed variables, by name. The output is
 // indented JSON ending in a newline, the same bytes for the same descriptors. A
 // descriptor without a title, or whose runtime is not its directory's name, is an
 // error.
@@ -127,7 +130,9 @@ func entry(d *Descriptor) runtimeEntry {
 		CredentialFiles: list(s.CredentialFiles),
 		Declares:        []declarationEntry{},
 		OneOf:           []groupEntry{},
+		Fixed:           map[string]string{},
 	}
+	maps.Copy(e.Fixed, d.Fixed)
 	for _, dc := range s.Declares {
 		e.Declares = append(e.Declares, declarationEntry{
 			ID: dc.ID, Title: dc.Title, Name: dc.Name, Hosts: list(dc.Hosts), Auth: dc.Auth, Paths: dc.Paths,

@@ -241,6 +241,14 @@
         }
       }
     },
+    "fixed": {
+      "description": "The variables the session sets for the runtime in every launch, walled or not, by name: no value of the server, the run, the machine, the harness or the environment the run inherits applies to one, the record lists such a value as fixed, and the session leaves the name out of a file it copies whose values reach the runtime's environment. A name is no name denied-variables.json lists, and none of the descriptor's other variables: a declared or reserved secret's, a denied one, a model key's, the model endpoint's or an override.",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00\\r\\n]*$"}
+    },
     "parent": {
       "description": "Where the runtime reports which tool call started a subagent, for parent_agent_id on dev.qory.runtime.subagent_started. A record from `source` that matches the rule contains a subagent's id and the id of the tool call that started it. The agent that made that call, in the session's dev.qory.runtime.tool_started, is the subagent's parent. Absent, the session sets no parent.",
       "type": "object",

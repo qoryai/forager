@@ -13,6 +13,7 @@ package runtimes
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"syscall"
@@ -99,9 +100,10 @@ type Attach struct {
 	// DeniedVariables are the runtime's denies, the names of forge_tokens and
 	// model_keys of denied-variables.json and, behind a wall, the runtime's model
 	// overrides: names the session leaves out of the values of the server, the run, the
-	// machine and the harness's defaults, with or without a start key. A runtime that
-	// copies a file whose values reach the program's environment leaves these names out
-	// of the copy, regardless of case.
+	// machine and the harness's defaults, with or without a start key. A described
+	// runtime adds the names of its descriptor's fixed variables before it calls its
+	// installer. A runtime that copies a file whose values reach the program's
+	// environment leaves these names out of the copy, regardless of case.
 	DeniedVariables []string
 	// Inside, when not nil, writes a path of this machine's as the enclosure sees it,
 	// in a string that may hold one: a runtime applies it to what it copies into
@@ -362,12 +364,36 @@ func namesHeadless(named, args []string) bool {
 }
 
 // Prepare has the installer the descriptor names install the forwarder for the events
-// it lists, when it has a hooks source and the run a forwarder.
+// it lists, when it has a hooks source and the run a forwarder, and then sets the
+// descriptor's fixed variables in the launch's Env, sorted by name, in place of a value
+// the installer set for one. The installer gets the fixed names among
+// [Attach.DeniedVariables], so a file it copies whose values reach the program's
+// environment keeps no value of them. The session counts every name of the launch's
+// Env among the run's fixed names, so no other source's value of one applies.
 func (r *described) Prepare(a Attach) (Launch, error) {
-	if r.install == nil || len(a.Forwarder) == 0 {
-		return a.Launch, nil
+	fixed := slices.Sorted(maps.Keys(r.d.Fixed))
+	launch := a.Launch
+	if r.install != nil && len(a.Forwarder) > 0 {
+		a.DeniedVariables = slices.Concat(a.DeniedVariables, fixed)
+		var err error
+		if launch, err = r.install(r.d.Sources.Hooks.Events, a); err != nil {
+			return Launch{}, err
+		}
 	}
-	return r.install(r.d.Sources.Hooks.Events, a)
+	if len(fixed) == 0 {
+		return launch, nil
+	}
+	env := make([]string, 0, len(launch.Env)+len(fixed))
+	for _, kv := range launch.Env {
+		if name, _, _ := strings.Cut(kv, "="); !slices.Contains(fixed, name) {
+			env = append(env, kv)
+		}
+	}
+	for _, name := range fixed {
+		env = append(env, name+"="+r.d.Fixed[name])
+	}
+	launch.Env = env
+	return launch, nil
 }
 
 // Map applies the descriptor's rules.

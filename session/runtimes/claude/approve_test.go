@@ -78,6 +78,9 @@ func prepareWalled(t *testing.T, dir string, interactive, walled bool, placehold
 	return got
 }
 
+// fixedEnv is what the Claude Code descriptor's fixed sets in every launch.
+var fixedEnv = []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"}
+
 // TestPrepareApprovesTheAPIKeyStandInAlone pins when the launch goes through the
 // script: interactive, walled, with ANTHROPIC_API_KEY among the stand-ins. With the
 // OAuth credential's stand-in, with none, or headless, Claude Code shows no approval
@@ -107,7 +110,7 @@ func TestPrepareApprovesTheAPIKeyStandInAlone(t *testing.T) {
 			script := filepath.Join(dir, claude.ApproveScript)
 			_, err := os.Stat(script)
 			if !c.through {
-				if got.Command != "claude" || !reflect.DeepEqual(got.Args, settings) || len(got.Env) != 0 {
+				if got.Command != "claude" || !reflect.DeepEqual(got.Args, settings) || !reflect.DeepEqual(got.Env, fixedEnv) {
 					t.Errorf("the launch is %+v, want claude %v", got, settings)
 				}
 				if err == nil {
@@ -115,7 +118,7 @@ func TestPrepareApprovesTheAPIKeyStandInAlone(t *testing.T) {
 				}
 				return
 			}
-			if want := append([]string{script, "claude"}, settings...); got.Command != "/bin/sh" || !reflect.DeepEqual(got.Args, want) || len(got.Env) != 0 {
+			if want := append([]string{script, "claude"}, settings...); got.Command != "/bin/sh" || !reflect.DeepEqual(got.Args, want) || !reflect.DeepEqual(got.Env, fixedEnv) {
 				t.Errorf("the launch is %+v, want /bin/sh %v", got, want)
 			}
 			b, err := os.ReadFile(script)

@@ -20,14 +20,16 @@
 // A descriptor's [Secrets] defines the secrets the runtime reads and the variables it
 // keeps for itself, and its [Model] the API formats the runtime sends, where a composer
 // writes a run's model id, effort value and model endpoint, and the variables it reads
-// a model key from. [Runtimes] renders
-// both, for every descriptor the contract ships, as runtimes.json, the file a server
+// a model key from. Its Fixed is the variables the session sets for the runtime in
+// every launch, over every other source. [Runtimes] renders
+// the three, for every descriptor the contract ships, as runtimes.json, the file a server
 // vendors.
 package descriptor
 
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -36,6 +38,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/session/internal/variables"
 )
 
 // Descriptor is one runtime's descriptor.
@@ -49,8 +52,12 @@ type Descriptor struct {
 	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
 	Secrets        *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
 	Model          *Model    `yaml:"model" json:"model,omitempty"`
-	Parent         *Parent   `yaml:"parent" json:"parent,omitempty"`
-	Rules          []Rule    `yaml:"rules" json:"rules"`
+	// Fixed is the variables the session sets for the runtime in every launch, by name,
+	// walled or not: no other source's value of one applies. Nil when the descriptor
+	// sets none.
+	Fixed  map[string]string `yaml:"fixed" json:"fixed,omitempty"`
+	Parent *Parent           `yaml:"parent" json:"parent,omitempty"`
+	Rules  []Rule            `yaml:"rules" json:"rules"`
 }
 
 // Parent is where the runtime reports which tool call started a subagent: a record of
@@ -279,7 +286,55 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	if err := d.Model.check(d.Secrets); err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
+	if err := d.checkFixed(); err != nil {
+		return nil, fmt.Errorf("%s: %w", shown, err)
+	}
 	return &d, nil
+}
+
+// checkFixed holds the fixed variables to what the schema cannot express: no name of
+// fixed matches the built-in deny list, denied-variables.json, whose names Forager, the
+// wall and the gateway set or leave out; and none is a variable that secrets declares,
+// reserves or denies, or that model reads a key or its endpoint from or lists in
+// overrides. Names are compared regardless of case.
+func (d *Descriptor) checkFixed() error {
+	if len(d.Fixed) == 0 {
+		return nil
+	}
+	deny, err := variables.List(nil)
+	if err != nil {
+		return err
+	}
+	var listed []struct{ name, where string }
+	add := func(where string, names ...string) {
+		for _, n := range names {
+			listed = append(listed, struct{ name, where string }{n, where})
+		}
+	}
+	if s := d.Secrets; s != nil {
+		for _, dc := range s.Declares {
+			add("secrets.declares", dc.Name)
+		}
+		add("secrets.reserves", s.Reserves...)
+		add("secrets.denies", s.Denies...)
+	}
+	if m := d.Model; m != nil {
+		for _, k := range m.Keys {
+			add("model.keys", k.Variable)
+		}
+		add("model.endpoint", m.Endpoint.Variable)
+		add("model.overrides", m.Overrides...)
+	}
+	for _, name := range slices.Sorted(maps.Keys(d.Fixed)) {
+		shown := accesskey.ShownName(name, false)
+		if deny.Matches(name) {
+			return fmt.Errorf("fixed: remove %s: denied-variables.json lists it, and a descriptor sets no such variable", shown)
+		}
+		if i := slices.IndexFunc(listed, func(l struct{ name, where string }) bool { return strings.EqualFold(l.name, name) }); i >= 0 {
+			return fmt.Errorf("fixed: remove %s from fixed or from %s: a variable that fixed sets is in no other list of the descriptor", shown, listed[i].where)
+		}
+	}
+	return nil
 }
 
 // keyless are the variables a key may not be read from, compared without case: each

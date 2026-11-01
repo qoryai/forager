@@ -302,6 +302,73 @@ func TestModelKeysAreChecked(t *testing.T) {
 	}
 }
 
+// TestFixedIsChecked pins what a descriptor's fixed variables are held to: the
+// schema's bounds, each fixture under fixtures/invalid named descriptor-fixed-* being
+// refused; and beyond it, each refusal starting with its fix, no name the built-in
+// deny list matches, in any case, and no name the descriptor lists elsewhere. A
+// descriptor with fixed variables decodes them, and runtimes.json lists them.
+func TestFixedIsChecked(t *testing.T) {
+	const head = "version: 1\nruntime: amp\ntitle: Amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
+	const rest = "secrets:\n  denies: [AMP_URL]\n  declares: [{id: key, title: Key, name: AMP_SECRET, hosts: [api.example.com], auth: {scheme: bearer}}]\n  reserves: [AMP_OTHER]\n" +
+		"model:\n  formats: [openai-chat]\n  model: {flag: --model}\n  endpoint: {variable: AMP_BASE_URL}\n  overrides: [AMP_MODEL]\n" +
+		"  keys: [{format: openai-chat, auth: {scheme: bearer}, variable: AMP_API_KEY}]\n"
+	ok := head + rest + "fixed: {AMP_QUIET: \"1\", AMP_EMPTY: \"\"}\n"
+	d, err := descriptor.Parse("amp.yaml", []byte(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"AMP_QUIET": "1", "AMP_EMPTY": ""}; !reflect.DeepEqual(d.Fixed, want) {
+		t.Errorf("fixed = %v; want %v", d.Fixed, want)
+	}
+	rendered, err := descriptor.Runtimes(fstest.MapFS{"runtimes/amp/descriptor.yaml": {Data: []byte(ok)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rendered), `"fixed": {
+        "AMP_EMPTY": "",
+        "AMP_QUIET": "1"
+      }`) {
+		t.Errorf("runtimes.json does not list the fixed variables by name:\n%s", rendered)
+	}
+	for _, tc := range []struct{ what, fixed, want string }{
+		{"a name of the deny list", "{PATH: /bin}", "amp.yaml: fixed: remove PATH: denied-variables.json lists it, and a descriptor sets no such variable"},
+		{"a pattern of the deny list, lower case", "{https_proxy: x}", "amp.yaml: fixed: remove https_proxy: denied-variables.json lists it, and a descriptor sets no such variable"},
+		{"a denied name", "{AMP_URL: x}", "amp.yaml: fixed: remove AMP_URL from fixed or from secrets.denies: a variable that fixed sets is in no other list of the descriptor"},
+		{"a declared secret", "{AMP_SECRET: x}", "amp.yaml: fixed: remove AMP_SECRET from fixed or from secrets.declares: a variable that fixed sets is in no other list of the descriptor"},
+		{"a reserved name", "{AMP_OTHER: x}", "amp.yaml: fixed: remove AMP_OTHER from fixed or from secrets.reserves: a variable that fixed sets is in no other list of the descriptor"},
+		{"a key, lower case", "{amp_api_key: x}", "amp.yaml: fixed: remove amp_api_key from fixed or from model.keys: a variable that fixed sets is in no other list of the descriptor"},
+		{"the endpoint", "{AMP_BASE_URL: x}", "amp.yaml: fixed: remove AMP_BASE_URL from fixed or from model.endpoint: a variable that fixed sets is in no other list of the descriptor"},
+		{"an override", "{AMP_MODEL: x}", "amp.yaml: fixed: remove AMP_MODEL from fixed or from model.overrides: a variable that fixed sets is in no other list of the descriptor"},
+	} {
+		_, err := descriptor.Parse("amp.yaml", []byte(head+rest+"fixed: "+tc.fixed+"\n"))
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("%s: %v; want %q", tc.what, err, tc.want)
+		}
+	}
+	entries, err := fs.ReadDir(contracts.FS, "fixtures/invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "descriptor-fixed-") {
+			continue
+		}
+		n++
+		b, err := fs.ReadFile(contracts.FS, "fixtures/invalid/"+e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := descriptor.Parse(e.Name(), b); err == nil {
+			t.Errorf("%s was accepted", e.Name())
+		}
+	}
+	if n < 4 {
+		t.Errorf("%d invalid fixed fixtures; want one per bound: empty, a name that is no name, a line feed and a number", n)
+	}
+}
+
 // TestSecretsAreChecked pins what a descriptor's secrets are held to, by the schema and
 // beyond it: exact hosts, a scheme of the closed set with its header, no secret of its
 // own in a declaration's auth, and groups of declared ids, each in one group at most.
@@ -415,13 +482,15 @@ func TestRuntimesJSONIsGenerated(t *testing.T) {
 }
 
 // TestRuntimesJSONShape pins the members of runtimes.json a server reads: version and
-// runtimes; per runtime its name, title, reserves, denies, credential_files, declares
-// and one_of, every one present; per declaration id, title, name, hosts, auth with its
+// runtimes; per runtime its name, title, reserves, denies, credential_files, declares,
+// one_of and fixed, every one present, fixed an object of strings; per declaration id, title, name, hosts, auth with its
 // scheme, the header of a header scheme and the username of a basic scheme, and paths
 // when it has some; per group id, required and of; and model when the descriptor has
 // one, with formats, model, endpoint with its variable and optionally effort, with run
 // and optionally agent, each place being exactly one of flag, setting and variable, and
-// optionally overrides. The claude runtime has a model with overrides. Every built-in descriptor is one runtime, in name order.
+// optionally overrides. The claude runtime has a model with overrides, and its fixed
+// sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC to 1. Every built-in descriptor is one
+// runtime, in name order.
 func TestRuntimesJSONShape(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
 	if err != nil {
@@ -508,9 +577,21 @@ func TestRuntimesJSONShape(t *testing.T) {
 		t.Fatalf("%d runtimes for %d descriptors", len(runtimes), len(dirs))
 	}
 	for i, r := range runtimes {
-		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of"}, "model")
+		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of", "fixed"}, "model")
 		if rt["name"] != dirs[i].Name() || rt["title"] == "" {
 			t.Errorf("runtime %d is %v, %v; want %s and a title", i, rt["name"], rt["title"], dirs[i].Name())
+		}
+		fixed, ok := rt["fixed"].(map[string]any)
+		if !ok {
+			t.Errorf("fixed of %v is not an object", rt["name"])
+		}
+		for name, v := range fixed {
+			if _, ok := v.(string); !ok {
+				t.Errorf("fixed %s of %v is %v; want a string", name, rt["name"], v)
+			}
+		}
+		if rt["name"] == "claude" && fixed["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] != "1" {
+			t.Errorf("the claude runtime's fixed is %v; want CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC set to 1", fixed)
 		}
 		for _, k := range []string{"reserves", "denies", "credential_files"} {
 			strs(k, rt[k])

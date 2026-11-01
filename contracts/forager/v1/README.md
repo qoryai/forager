@@ -1229,7 +1229,7 @@ of the highest source that sets it:
 
 | Source, highest first | What it is | In the launch spec, Go |
 |---|---|---|
-| `fixed` | Forager's names, `QORY_RUN_ID`, `QORY_RUN_SOCKET` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime); the placeholders (§Credentials, §Tools); the start key's endpoint in the runtime's model endpoint variable (§Credentials, The variable of a model key); and the values the harness computes itself | `SessionSpec.HarnessHome`, `SessionSpec.LaunchFixed` |
+| `fixed` | Forager's names, `QORY_RUN_ID`, `QORY_RUN_SOCKET` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime), a descriptor's `fixed` among them (§The descriptor); the placeholders (§Credentials, §Tools); the start key's endpoint in the runtime's model endpoint variable (§Credentials, The variable of a model key); and the values the harness computes itself | `SessionSpec.HarnessHome`, `SessionSpec.LaunchFixed` |
 | `apiary` | the server's: the run configuration's `variables` | |
 | `run` | the run's variables, `qory run --env` | `SessionSpec.Variables.Run` |
 | `machine` | the machine's variables, the `wall.env` of `forager.yaml` | `SessionSpec.Variables.Machine` |
@@ -1340,7 +1340,8 @@ applies the `env` object of a settings file. The session copies the `env` of the
 `--settings` file into the run's `settings.json` without these names: in every run the
 runtime's `denies`, the names of `forge_tokens` and `model_keys` of
 `denied-variables.json` and, behind a wall, the runtime's model `overrides`, matched
-regardless of case, and in a run with a start key the endpoint variable and the
+regardless of case, the names of the descriptor's `fixed`, matched regardless of case
+too, and in a run with a start key the endpoint variable and the
 variables of `model.keys`, the start key's included, matched by exact name. It keeps
 every other member. For a name of `forge_tokens` or `model_keys` the copy leaves out,
 other than a placeholder of the run and a variable the start key sets or leaves out,
@@ -4107,7 +4108,7 @@ exactly the recorded events and that each passes this contract's schema.
 
 ### The descriptor
 
-`descriptor.schema.json`. One YAML file per runtime. It has seven parts, beside
+`descriptor.schema.json`. One YAML file per runtime. It has eight parts, beside
 `runtime`, the name, a lower-case letter and then up to 63 lower-case letters, digits
 and dashes, and an optional `title`, the name a person reads: `Claude Code`.
 
@@ -4224,6 +4225,22 @@ behind a wall, and without a wall for a run whose answer has `credential_hosts`,
 endpoint rule sets whether a value of the endpoint's variable reaches the runtime,
 in place of `denies` (§Variables, The model endpoint); otherwise `denies` applies.
 
+**Fixed**, optional: variables the session sets for the runtime in every launch, by
+name, walled or not, `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`: 1 to 64 names,
+each a variable's name, each value a string of at most 4096 characters with no NUL,
+carriage return or line feed. The runtime's preparation sets them (§The runtime), so
+each is one of the run's fixed names (§Variables, The order): a value of the server,
+the run, the machine, the harness's defaults or the environment the run inherits is
+left out and recorded as `fixed`, and the harness's computed value of one is left out
+too. `claude-settings` leaves the names out of the `env` of its copy of the
+`--settings` file, regardless of case, and the launch's `LeftOut` lists each it left
+out. The session refuses a descriptor whose `fixed` has a name, in any letter case,
+that `denied-variables.json` lists, `fixed: remove PATH: denied-variables.json lists
+it, and a descriptor sets no such variable`, or that the descriptor lists in
+`secrets.declares`, `secrets.reserves`, `secrets.denies`, `model.keys`,
+`model.endpoint` or `model.overrides`, `fixed: remove AMP_MODEL from fixed or from
+model.overrides: a variable that fixed sets is in no other list of the descriptor`.
+
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
 per event the rules produce from them, in order. A descriptor without fixtures is not
@@ -4252,6 +4269,12 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`,
 `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`, `CLAUDE_CODE_AUTO_MODE_MODEL`,
 `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_EFFORT` and `CLAUDE_CODE_EXTRA_BODY`.
+Its `fixed` sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` to `1`: with it, Claude Code
+2.1.316 sends no log lines to Datadog, does not call `/api/claude_cli/bootstrap`, and
+makes no other request that its environment-variable reference lists as nonessential.
+Claude Code reads its other settings files, such as `.claude/settings.json` in the
+workspace, which the session does not read, so a value of the variable in the `env` of
+one of them reaches Claude Code.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,
@@ -4286,12 +4309,13 @@ directory, `preparation.sh`, which then starts the launch as the runtime prepare
 
 **`runtimes.json`** lists, for a server to vendor, every descriptor this contract ships,
 in name order: `version`, 1, and `runtimes`, each with its `name`, `title`, `reserves`,
-`denies`, `credential_files`, `declares` with `id`, `title`, `name`, `hosts`, `auth`
+`denies`, `credential_files`, `fixed`, the descriptor's fixed variables by name,
+`declares` with `id`, `title`, `name`, `hosts`, `auth`
 (`scheme`, and `header` for the `header` scheme, `username` for the `basic` scheme and
 `oauth` when it is set), `paths` when the declaration has some, `one_of` with `id`,
 `required` and `of`, and `model`, the descriptor's model section in the same shape,
 `keys` with each key's `auth` in the same shape, when it has one. Every list is
-present, empty when the descriptor has none; `model` is absent when the descriptor has
+present, empty when the descriptor has none, and so is `fixed`, an empty object; `model` is absent when the descriptor has
 none, and so are `keys` and `overrides` in a `model` that has none of them. `go generate ./contracts`
 writes it from the descriptors, and a test fails while the file differs from what that
 writes.

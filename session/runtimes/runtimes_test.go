@@ -287,3 +287,48 @@ func TestOnlyADescriptorWithParentIsParents(t *testing.T) {
 		t.Error("a descriptor with parent is no Secrets")
 	}
 }
+
+// TestADescriptorSetsItsFixedVariablesInEveryLaunch pins that Prepare sets a
+// descriptor's fixed variables in the launch's Env, sorted by name, with or without a
+// forwarder: in place of the installer's value of one, after the installer's other
+// variables. The installer gets the fixed names after the caller's denied variables,
+// and the caller's list is not changed.
+func TestADescriptorSetsItsFixedVariablesInEveryLaunch(t *testing.T) {
+	doc := strings.Replace(other, "  output: {format: jsonl}\n", "  hooks: {install: claude-settings, events: [Stop]}\n", 1) +
+		"fixed: {OTHER_QUIET: \"1\", OTHER_ALSO: \"a=b\"}\n"
+	var denied []string
+	rt, err := runtimes.Described("other-agent.yaml", []byte(doc), map[string]runtimes.Installer{
+		"claude-settings": func(_ []string, a runtimes.Attach) (runtimes.Launch, error) {
+			denied = a.DeniedVariables
+			l := a.Launch
+			l.Env = []string{"OTHER_QUIET=0", "OTHER_SET=x"}
+			return l, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	callers := []string{"OTHER_DENIED"}
+	launch := runtimes.Launch{Command: "other", Args: []string{"run"}}
+	got, err := rt.Prepare(runtimes.Attach{Launch: launch, SessionDir: t.TempDir(), Forwarder: []string{"q"}, DeniedVariables: callers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"OTHER_SET=x", "OTHER_ALSO=a=b", "OTHER_QUIET=1"}; !reflect.DeepEqual(got.Env, want) {
+		t.Errorf("with a forwarder, Env %q; want %q", got.Env, want)
+	}
+	if want := []string{"OTHER_DENIED", "OTHER_ALSO", "OTHER_QUIET"}; !reflect.DeepEqual(denied, want) {
+		t.Errorf("the installer got DeniedVariables %q; want %q", denied, want)
+	}
+	if !reflect.DeepEqual(callers, []string{"OTHER_DENIED"}) {
+		t.Errorf("the caller's DeniedVariables became %q", callers)
+	}
+	got, err = rt.Prepare(runtimes.Attach{Launch: launch, SessionDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"OTHER_ALSO=a=b", "OTHER_QUIET=1"}; got.Command != "other" || !reflect.DeepEqual(got.Args, []string{"run"}) || !reflect.DeepEqual(got.Env, want) {
+		t.Errorf("without a forwarder, the launch %+v; want Env %q", got, want)
+	}
+	runtimetest.Conforms(t, rt)
+}

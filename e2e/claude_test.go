@@ -33,6 +33,8 @@ import (
 // interactive. The variables Claude Code reads a
 // model credential from that the run does not set a stand-in in are set empty, so each
 // run also checks that Claude Code reads an empty one as unset and uses the stand-in.
+// The launch's environment does not set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: the
+// descriptor's fixed sets it, so a headless run reaches no host but the recorder.
 // Claude Code answers with the recorder's text; every request the recorder gets
 // carries the key in the credential's header, no stand-in and not the other
 // credential's header; the record lists one request through the proxy for each the
@@ -156,7 +158,6 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 			Args:    []string{"-p", "Reply with one word."},
 			Env: []string{
 				"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-				"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 				"DISABLE_AUTOUPDATER=1",
 				// Empty means unset: Claude Code reads ANTHROPIC_AUTH_TOKEN first and the
 				// other credential's variable beside the stand-in's.
