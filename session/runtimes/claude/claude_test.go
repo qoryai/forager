@@ -338,9 +338,10 @@ func TestSettingsThatAreNoJSONObjectComeWithAFix(t *testing.T) {
 }
 
 // TestEveryLaunchTurnsOffNonessentialTraffic pins the descriptor's fixed variable:
-// Prepare sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC to 1, walled or not, and the
-// run's copy of the --settings file keeps no value of it in its env, in any case,
-// which the launch then lists as left out.
+// Prepare sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC to 1, walled or not, and so
+// does the env of the run's copy of the --settings file, in place of the file's value
+// of the name in any case, which the launch lists as left out. A launch that passes no
+// --settings, or one whose env is no object, gets a copy whose env sets it too.
 func TestEveryLaunchTurnsOffNonessentialTraffic(t *testing.T) {
 	rt, err := claude.New()
 	if err != nil {
@@ -372,8 +373,28 @@ func TestEveryLaunchTurnsOffNonessentialTraffic(t *testing.T) {
 		if err := json.Unmarshal(b, &doc); err != nil {
 			t.Fatal(err)
 		}
-		if want := map[string]string{"KEEP": "yes"}; !reflect.DeepEqual(doc.Env, want) {
+		if want := map[string]string{"KEEP": "yes", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}; !reflect.DeepEqual(doc.Env, want) {
 			t.Errorf("walled %v: the copy's env is %v; want %v", walled, doc.Env, want)
+		}
+	}
+	for name, args := range map[string][]string{"no --settings": {"-p", "hi"}, "an env that is no object": {"--settings", `{"env":"x"}`}} {
+		dir := t.TempDir()
+		got, err := rt.Prepare(runtimes.Attach{Launch: runtimes.Launch{Command: "claude", Args: args}, SessionDir: dir, Forwarder: []string{"/opt/q"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Env map[string]string `json:"env"`
+		}
+		if err := json.Unmarshal(b, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}; !reflect.DeepEqual(doc.Env, want) || len(got.LeftOut) != 0 {
+			t.Errorf("%s: the copy's env is %v, LeftOut %q; want %v and nothing left out", name, doc.Env, got.LeftOut, want)
 		}
 	}
 }

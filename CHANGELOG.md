@@ -19,7 +19,9 @@ release may change what an existing document does, and says so under Upgrading.
   walled or not: the Claude Code descriptor's `fixed` sets it. A value of it from the
   server, `--env`, `wall.env`, a harness default or the environment the run inherits
   no longer applies; `dev.qory.run.policy_applied` lists such a value with `why`
-  `fixed`, and the run's copy of the `--settings` file leaves the name out of its `env`.
+  `fixed`. The run's copy of the `--settings` file sets it in its `env` too, and Claude
+  Code applies that `env` over a workspace's `.claude/settings.json` and
+  `.claude/settings.local.json`, so neither can set it empty.
   With it, Claude Code 2.1.316 sends no log lines to Datadog, does not call
   `/api/claude_cli/bootstrap`, and makes no other request that its
   environment-variable reference lists as nonessential. A run of 2.1.316 without it,
@@ -193,7 +195,8 @@ release may change what an existing document does, and says so under Upgrading.
   launch, by name, such as `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`. The
   session counts each among the run's fixed names, so no value of the server, the run,
   the machine, the harness or the environment the run inherits applies to one, and
-  `claude-settings` leaves the names out of the `env` of the `--settings` copy. The
+  `claude-settings` sets each in the `env` of the `--settings` copy, in place of the
+  file's value of the name. The
   session refuses a descriptor whose `fixed` has a name that `denied-variables.json`
   lists, `fixed: remove PATH: denied-variables.json lists it, and a descriptor sets no
   such variable`, or a name of the descriptor's other lists, `fixed: remove AMP_MODEL
@@ -1769,7 +1772,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `TestDockerClaudeCodeThroughTheWall` no longer sets
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in the launch: the descriptor's `fixed`
-  sets it.
+  sets it. A third headless run has a workspace `.claude/settings.json` that sets the
+  variable empty, and reaches no host but the recorder.
+- The interactive runs of `TestDockerClaudeCodeThroughTheWall` wait for `for agents`
+  in the footer under Claude Code's input, which 2.1.273 and 2.1.316 both show, in place
+  of `for shortcuts`, which 2.1.316 does not show while auto mode is on.
 - The conformance suite passes the launch's settings file from outside the workspace,
   since the session refuses a settings file in it.
 - CI's Wall conformance job runs the e2e test

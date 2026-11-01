@@ -34,7 +34,11 @@ const maxSettings = 1 << 20
 // it, its last part is no link, it is a regular file, it is the file Readable judged
 // and it holds at most 1 MiB. Of its "env" object, the copy keeps no member whose
 // name is in [runtimes.Attach.ModelVariables], nor one whose name is in
-// [runtimes.Attach.DeniedVariables], regardless of case. In a run with a start key,
+// [runtimes.Attach.DeniedVariables] or [runtimes.Attach.Fixed], regardless of case.
+// The copy's "env" then sets each variable of Fixed, with or without a file; an "env"
+// that is no object is replaced. Claude Code applies the env of --settings over the
+// env of its user, project and local settings, so a workspace's .claude/settings.json
+// cannot change a fixed variable. In a run with a start key,
 // the copy keeps no top-level member whose name is in [credentialSettings]. In a
 // launch whose last argument is a bare --settings, that flag is given the path of the
 // run's settings. A launch whose arguments pass --settings more than once is refused
@@ -63,7 +67,7 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 		}
 	}
 	var leftOut []string
-	args, err := settingsArgs(events, launch.Args, a.SessionDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.DeniedVariables, &leftOut)
+	args, err := settingsArgs(events, launch.Args, a.SessionDir, a.Forwarder, a.Readable, a.Inside, a.ModelVariables, a.DeniedVariables, a.Fixed, &leftOut)
 	if err != nil {
 		return runtimes.Launch{}, err
 	}
@@ -134,7 +138,7 @@ func flagCount(args []string, flag string) int {
 }
 
 func settingsArgs(events []string, args []string, dir string, forwarder []string,
-	readable func(string) (string, error), inside func(string) string, model, denied []string, leftOut *[]string) ([]string, error) {
+	readable func(string) (string, error), inside func(string) string, model, denied, fixed []string, leftOut *[]string) ([]string, error) {
 	settings := map[string]any{}
 	at := -1
 	for i, a := range args {
@@ -171,7 +175,7 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		// variable and endpoint the session sets and over the names it leaves out.
 		if env, ok := settings["env"].(map[string]any); ok {
 			for name := range env {
-				if slices.Contains(model, name) || slices.ContainsFunc(denied, func(d string) bool { return strings.EqualFold(d, name) }) {
+				if slices.Contains(model, name) || slices.ContainsFunc(slices.Concat(denied, names(fixed)), func(d string) bool { return strings.EqualFold(d, name) }) {
 					delete(env, name)
 					*leftOut = append(*leftOut, name)
 				}
@@ -183,6 +187,17 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 				delete(settings, name)
 			}
 		}
+	}
+	if len(fixed) > 0 {
+		env, _ := settings["env"].(map[string]any)
+		if env == nil {
+			env = map[string]any{}
+		}
+		for _, kv := range fixed {
+			name, value, _ := strings.Cut(kv, "=")
+			env[name] = value
+		}
+		settings["env"] = env
 	}
 	groups, _ := settings["hooks"].(map[string]any)
 	if groups == nil {
@@ -287,4 +302,14 @@ func shellQuote(w string) string {
 		return w
 	}
 	return "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
+}
+
+// names are the names of NAME=value entries.
+func names(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		out = append(out, name)
+	}
+	return out
 }

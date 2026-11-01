@@ -34,7 +34,8 @@ import (
 // model credential from that the run does not set a stand-in in are set empty, so each
 // run also checks that Claude Code reads an empty one as unset and uses the stand-in.
 // The launch's environment does not set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: the
-// descriptor's fixed sets it, so a headless run reaches no host but the recorder.
+// descriptor's fixed sets it, so a headless run reaches no host but the recorder, also
+// when the workspace's .claude/settings.json sets it empty.
 // Claude Code answers with the recorder's text; every request the recorder gets
 // carries the key in the credential's header, no stand-in and not the other
 // credential's header; the record lists one request through the proxy for each the
@@ -87,11 +88,18 @@ func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 	apiKey := claudeCredential{scheme: "header", header: apiKeyHeader, standIn: apiKeyStandIn, unset: claudeOAuthVariable, key: "sk-ant-test" + keyMark + "0001-" + pid}
 	oauth := claudeCredential{scheme: "bearer", oauth: true, header: "Authorization", prefix: "Bearer ", standIn: claudeOAuthVariable, unset: apiKeyStandIn, key: "sk-ant-oat01-test" + keyMark + "0002-" + pid}
 	run := claudeRun{command: command, recorder: name, host: host, helper: helper, image: image}
-	t.Run("api key in x-api-key", func(t *testing.T) { run.check(t, apiKey, false) })
-	t.Run("oauth as a bearer", func(t *testing.T) { run.check(t, oauth, false) })
-	t.Run("interactive api key", func(t *testing.T) { run.check(t, apiKey, true) })
-	t.Run("interactive oauth", func(t *testing.T) { run.check(t, oauth, true) })
+	t.Run("api key in x-api-key", func(t *testing.T) { run.check(t, apiKey, false, "") })
+	t.Run("oauth as a bearer", func(t *testing.T) { run.check(t, oauth, false, "") })
+	t.Run("workspace settings empty the fixed variable", func(t *testing.T) { run.check(t, apiKey, false, emptiedNonessential) })
+	t.Run("interactive api key", func(t *testing.T) { run.check(t, apiKey, true, "") })
+	t.Run("interactive oauth", func(t *testing.T) { run.check(t, oauth, true, "") })
 }
+
+// emptiedNonessential is a workspace's .claude/settings.json that sets
+// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC empty. Claude Code applies the env of the
+// run's --settings copy, which sets it to 1, over the env of project settings, so a
+// headless run with it still reaches no host but the recorder.
+const emptiedNonessential = `{"env":{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":""}}`
 
 // claudeOAuthVariable is the variable Claude Code reads an OAuth token from.
 const claudeOAuthVariable = "CLAUDE_CODE_OAUTH_TOKEN"
@@ -125,11 +133,20 @@ func (r claudeRun) modelKey(c claudeCredential) gateway.Credential {
 }
 
 // check runs Claude Code once with the credential, headless or interactive, and checks
-// the run as TestDockerClaudeCodeThroughTheWall describes.
-func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
+// the run as TestDockerClaudeCodeThroughTheWall describes. A project that is not empty
+// is the workspace's .claude/settings.json.
+func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool, project string) {
 	t.Setenv(apiKeyVar, c.key)
 	before, _ := exec.Command(r.command, "exec", r.recorder, "cat", RecorderFile).Output()
 	dir, runs := t.TempDir(), filepath.Join(t.TempDir(), "runs")
+	if project != "" {
+		if err := os.MkdirAll(filepath.Join(dir, ".claude"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte(project), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	rt, err := claude.New()
 	if err != nil {
 		t.Fatal(err)
@@ -377,7 +394,11 @@ func (r claudeRun) drive(t *testing.T, ctx context.Context, cancel context.Cance
 		t.Errorf("no %s within two minutes:\n%s", what, tail(screen(out.String()), 600))
 		return false
 	}
-	if wait("input", func(s string) bool { return strings.Contains(s, "for shortcuts") }) {
+	// The footer under Claude Code's input shows "← for agents" once the input is
+	// ready, in 2.1.273 and 2.1.316 alike. 2.1.316 hides it 10 seconds after the
+	// session opens; the screen the test reads contains every byte Claude Code printed,
+	// so the hint stays in it.
+	if wait("input", func(s string) bool { return strings.Contains(s, "for agents") }) {
 		keys.Write([]byte("Reply with one word."))
 		time.Sleep(time.Second)
 		keys.Write([]byte("\r"))

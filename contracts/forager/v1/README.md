@@ -1343,7 +1343,7 @@ runtime's `denies`, the names of `forge_tokens` and `model_keys` of
 regardless of case, the names of the descriptor's `fixed`, matched regardless of case
 too, and in a run with a start key the endpoint variable and the
 variables of `model.keys`, the start key's included, matched by exact name. It keeps
-every other member. For a name of `forge_tokens` or `model_keys` the copy leaves out,
+every other member, and then sets the descriptor's `fixed` variables in it. For a name of `forge_tokens` or `model_keys` the copy leaves out,
 other than a placeholder of the run and a variable the start key sets or leaves out,
 the run reports `Move <NAME> to the gateway's credentials in forager.yaml: the run
 leaves out the value that the env of --settings passes, ...` (Denied names). In a run with a start key the copy also leaves out the file's top-level
@@ -4232,9 +4232,12 @@ carriage return or line feed. The runtime's preparation sets them (§The runtime
 each is one of the run's fixed names (§Variables, The order): a value of the server,
 the run, the machine, the harness's defaults or the environment the run inherits is
 left out and recorded as `fixed`, and the harness's computed value of one is left out
-too. `claude-settings` leaves the names out of the `env` of its copy of the
-`--settings` file, regardless of case, and the launch's `LeftOut` lists each it left
-out. The session refuses a descriptor whose `fixed` has a name, in any letter case,
+too. `claude-settings` sets each in the `env` of its copy of the `--settings` file, in
+place of the file's value of the name in any letter case, and the launch's `LeftOut`
+lists each file's value it replaced; a launch that passes no `--settings` gets a copy
+whose `env` sets them too. A launch without a forwarder gets no copy: the session
+passes its `--settings` file as it is, and sets the fixed variables in the process
+environment alone. The session refuses a descriptor whose `fixed` has a name, in any letter case,
 that `denied-variables.json` lists, `fixed: remove PATH: denied-variables.json lists
 it, and a descriptor sets no such variable`, or that the descriptor lists in
 `secrets.declares`, `secrets.reserves`, `secrets.denies`, `model.keys`,
@@ -4272,9 +4275,11 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 Its `fixed` sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` to `1`: with it, Claude Code
 2.1.316 sends no log lines to Datadog, does not call `/api/claude_cli/bootstrap`, and
 makes no other request that its environment-variable reference lists as nonessential.
-Claude Code reads its other settings files, such as `.claude/settings.json` in the
-workspace, which the session does not read, so a value of the variable in the `env` of
-one of them reaches Claude Code.
+Claude Code 2.1.316 applies the `env` of its settings sources in the order user,
+project, local, `--settings`, managed, each over the ones before, so the copy's value
+wins over a workspace's `.claude/settings.json` or `.claude/settings.local.json`. A
+managed settings file, which the image or the machine provides, can still set the
+variable empty.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,

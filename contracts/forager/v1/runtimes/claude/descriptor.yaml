@@ -101,7 +101,8 @@ model:
               CLAUDE_CODE_EFFORT_LEVEL, CLAUDE_CODE_SUBAGENT_EFFORT, CLAUDE_CODE_EXTRA_BODY]
 # The session sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC to 1 in every launch, walled
 # or not, in place of a value of the server, the run, the machine, the harness or the
-# environment the run inherits, and drops it from the env object of the --settings file.
+# environment the run inherits, and sets it in the env object of the --settings copy,
+# which Claude Code applies over the env of the workspace's settings files.
 # With it, Claude Code sends no log lines to Datadog and makes no other request the
 # environment-variable reference lists as nonessential. Without it, a walled run of
 # 2.1.316 in observe mode connected to http-intake.logs.us5.datadoghq.com.

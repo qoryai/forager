@@ -291,15 +291,15 @@ func TestOnlyADescriptorWithParentIsParents(t *testing.T) {
 // TestADescriptorSetsItsFixedVariablesInEveryLaunch pins that Prepare sets a
 // descriptor's fixed variables in the launch's Env, sorted by name, with or without a
 // forwarder: in place of the installer's value of one, after the installer's other
-// variables. The installer gets the fixed names after the caller's denied variables,
-// and the caller's list is not changed.
+// variables. The installer gets them in Fixed, NAME=value and sorted, and the caller's
+// denied variables as they are.
 func TestADescriptorSetsItsFixedVariablesInEveryLaunch(t *testing.T) {
 	doc := strings.Replace(other, "  output: {format: jsonl}\n", "  hooks: {install: claude-settings, events: [Stop]}\n", 1) +
 		"fixed: {OTHER_QUIET: \"1\", OTHER_ALSO: \"a=b\"}\n"
-	var denied []string
+	var denied, fixed []string
 	rt, err := runtimes.Described("other-agent.yaml", []byte(doc), map[string]runtimes.Installer{
 		"claude-settings": func(_ []string, a runtimes.Attach) (runtimes.Launch, error) {
-			denied = a.DeniedVariables
+			denied, fixed = a.DeniedVariables, a.Fixed
 			l := a.Launch
 			l.Env = []string{"OTHER_QUIET=0", "OTHER_SET=x"}
 			return l, nil
@@ -317,11 +317,11 @@ func TestADescriptorSetsItsFixedVariablesInEveryLaunch(t *testing.T) {
 	if want := []string{"OTHER_SET=x", "OTHER_ALSO=a=b", "OTHER_QUIET=1"}; !reflect.DeepEqual(got.Env, want) {
 		t.Errorf("with a forwarder, Env %q; want %q", got.Env, want)
 	}
-	if want := []string{"OTHER_DENIED", "OTHER_ALSO", "OTHER_QUIET"}; !reflect.DeepEqual(denied, want) {
-		t.Errorf("the installer got DeniedVariables %q; want %q", denied, want)
+	if !reflect.DeepEqual(denied, callers) || !reflect.DeepEqual(callers, []string{"OTHER_DENIED"}) {
+		t.Errorf("the installer got DeniedVariables %q; want the caller's %q", denied, callers)
 	}
-	if !reflect.DeepEqual(callers, []string{"OTHER_DENIED"}) {
-		t.Errorf("the caller's DeniedVariables became %q", callers)
+	if want := []string{"OTHER_ALSO=a=b", "OTHER_QUIET=1"}; !reflect.DeepEqual(fixed, want) {
+		t.Errorf("the installer got Fixed %q; want %q", fixed, want)
 	}
 	got, err = rt.Prepare(runtimes.Attach{Launch: launch, SessionDir: t.TempDir()})
 	if err != nil {
