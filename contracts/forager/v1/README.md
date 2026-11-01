@@ -4375,11 +4375,13 @@ reference lists as nonessential. With
 2.1.316 does not auto-install the official plugin marketplace, so it makes neither
 request of the install: the fetch from `downloads.claude.ai` and the clone from
 `github.com` when that fetch fails. A marketplace already installed in the home still
-refreshes from `downloads.claude.ai`, but, with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
-set, as in every Claude Code launch, only when a command asks for it, run by the agent
-or by a person: `claude plugin marketplace update`, `claude plugin update`, or
-**Update** in the `/plugin` menu. That variable turns off the background refresh, unless
-`FORCE_AUTOUPDATE_PLUGINS` is set, and the refreshes when a plugin is installed.
+refreshes from `downloads.claude.ai`. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+set, as in every Claude Code launch, and `FORCE_AUTOUPDATE_PLUGINS` unset, it refreshes
+only when a command asks for it, run by the agent or by a person:
+`claude plugin marketplace update`, `claude plugin update`, or **Update** in the
+`/plugin` menu. `FORCE_AUTOUPDATE_PLUGINS` turns on the background refresh again, and
+the refreshes for a plugin missing from the marketplace's cached catalog: when that
+plugin is installed, and at start when it is enabled.
 Claude Code 2.1.316 applies the `env` of its settings sources in the order user,
 project, local, `--settings`, managed, each over the ones before, so the copy's value
 wins over a workspace's `.claude/settings.json` or `.claude/settings.local.json`. A

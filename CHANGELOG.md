@@ -36,14 +36,15 @@ release may change what an existing document does, and says so under Upgrading.
   interactive Claude Code 2.1.316 does not auto-install the official plugin marketplace,
   so it makes neither request of the install: the fetch from `downloads.claude.ai` and
   the clone from `github.com` when that fetch fails. A marketplace already installed in
-  the home still refreshes from `downloads.claude.ai`, but, with
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` set, only when a command asks for it, run
-  by the agent or by a person: `claude plugin marketplace update`,
-  `claude plugin update`, or **Update** in the `/plugin` menu. That variable turns off
-  the background refresh, unless `FORCE_AUTOUPDATE_PLUGINS` is set, and the refreshes
-  when a plugin is installed. An interactive run of 2.1.316 without
-  `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`, behind a wall in observe mode,
-  connected to `downloads.claude.ai`.
+  the home still refreshes from `downloads.claude.ai`. With
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` set and `FORCE_AUTOUPDATE_PLUGINS` unset,
+  it refreshes only when a command asks for it, run by the agent or by a person:
+  `claude plugin marketplace update`, `claude plugin update`, or **Update** in the
+  `/plugin` menu. `FORCE_AUTOUPDATE_PLUGINS` turns on the background refresh again, and
+  the refreshes for a plugin missing from the marketplace's cached catalog: when that
+  plugin is installed, and at start when it is enabled. An interactive run of 2.1.316
+  without `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`, behind a wall in
+  observe mode, connected to `downloads.claude.ai`.
 - Set the model or effort of a walled run another way than `CLAUDE_CODE_SUBAGENT_EFFORT`
   or `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`: the Claude Code descriptor's `overrides` list
   both, so a run behind a wall leaves out their values and records each as `denied`, like
