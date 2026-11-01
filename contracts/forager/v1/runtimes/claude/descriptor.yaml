@@ -128,9 +128,11 @@ tools:
 # nonessential. Without it, a walled run of 2.1.316 in observe mode connected to
 # http-intake.logs.us5.datadoghq.com.
 # With CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL, an interactive Claude Code
-# does not install the official plugin marketplace, so it fetches nothing from
-# downloads.claude.ai and does not clone it from github.com. Without it, an interactive
-# walled run of 2.1.316 in observe mode connected to downloads.claude.ai.
+# does not auto-install the official plugin marketplace, so it makes neither request of
+# the install: the fetch from downloads.claude.ai and the clone from github.com when that
+# fetch fails. A marketplace already installed in the home still refreshes from
+# downloads.claude.ai. Without the variable, an interactive walled run of 2.1.316 in
+# observe mode connected to downloads.claude.ai.
 fixed:
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
   CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: "1"

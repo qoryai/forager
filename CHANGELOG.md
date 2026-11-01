@@ -33,9 +33,10 @@ release may change what an existing document does, and says so under Upgrading.
 - Expect `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` in every Claude Code
   launch as well: the Claude Code descriptor's `fixed` sets it, in the launch and in the
   `--settings` copy, as it sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. With it, an
-  interactive Claude Code 2.1.316 does not install the official plugin marketplace, so
-  it fetches nothing from `downloads.claude.ai` and does not clone the marketplace from
-  `github.com`. An interactive run of 2.1.316 without it, behind a wall in observe
+  interactive Claude Code 2.1.316 does not auto-install the official plugin marketplace,
+  so it makes neither request of the install: the fetch from `downloads.claude.ai` and
+  the clone from `github.com` when that fetch fails. A marketplace already installed in
+  the home still refreshes from `downloads.claude.ai`. An interactive run of 2.1.316 without it, behind a wall in observe
   mode, connected to `downloads.claude.ai`.
 - Set the model or effort of a walled run another way than `CLAUDE_CODE_SUBAGENT_EFFORT`
   or `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`: the Claude Code descriptor's `overrides` list

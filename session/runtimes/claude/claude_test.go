@@ -342,7 +342,9 @@ func TestSettingsThatAreNoJSONObjectComeWithAFix(t *testing.T) {
 // CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL to 1, walled or not, and so
 // does the env of the run's copy of the --settings file, in place of the file's value
 // of each name in any case, which the launch lists as left out. A launch that passes no
-// --settings, or one whose env is no object, gets a copy whose env sets it too.
+// --settings, or one whose env is no object, gets a copy whose env sets
+// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and
+// CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL too.
 func TestEveryLaunchTurnsOffNonessentialTraffic(t *testing.T) {
 	rt, err := claude.New()
 	if err != nil {

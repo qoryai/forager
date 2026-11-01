@@ -17,7 +17,8 @@ const (
 )
 
 // TestEveryClaudeCodeLaunchSetsTheFixedVariables pins the Claude Code descriptor's
-// fixed end to end: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC reaches the agent as 1,
+// fixed end to end, through each source, for the first of its variables:
+// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC reaches the agent as 1,
 // walled or not, though the image sets it empty. Behind a wall, a value of it from the
 // server, the run (--env), the machine (wall.env) or the harness's defaults is left
 // out, and the record lists the name as fixed with that source lost as fixed; so is
