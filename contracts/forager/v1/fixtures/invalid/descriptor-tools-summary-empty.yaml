@@ -1,0 +1,17 @@
+# tools.summary lists one tool at least.
+version: 1
+runtime: example
+runtime_version: "1.0.0"
+sources:
+  output: {format: jsonl}
+tools:
+  summary: {}
+rules:
+  - source: output
+    match: {type: assistant, each.type: text}
+    each: message.content
+    type: dev.qory.runtime.text
+    data:
+      session_id: session_id
+      text: each.text
+      kind: each.type
