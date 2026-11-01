@@ -4232,7 +4232,8 @@ carriage return or line feed. The runtime's preparation sets them (§The runtime
 each is one of the run's fixed names (§Variables, The order): a value of the server,
 the run, the machine, the harness's defaults or the environment the run inherits is
 left out, and so is the harness's computed value of one. `dev.qory.run.policy_applied`
-lists each value that lost and why (§Variables, The record of the variables).
+lists the values that lost, and why, by the rules in §Variables, The record of the
+variables.
 `claude-settings` sets each in the `env` of its copy of the `--settings` file, in
 place of the file's value of the name in any letter case, and the launch's `LeftOut`
 lists each file's value it replaced; a launch that passes no `--settings` gets a copy

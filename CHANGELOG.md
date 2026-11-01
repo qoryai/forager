@@ -18,10 +18,10 @@ release may change what an existing document does, and says so under Upgrading.
 - Expect `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in every Claude Code launch,
   walled or not: the Claude Code descriptor's `fixed` sets it. A value of it from the
   server, `--env`, `wall.env`, a harness default or the environment the run inherits
-  no longer applies. `dev.qory.run.policy_applied` lists each value that lost and
-  why, as the contract's README describes in §Variables, The record of the variables.
-  In a launch with a forwarder, the run's copy of the `--settings` file sets the
-  variable in its `env` too, and Claude Code applies that `env` over a workspace's
+  no longer applies. `dev.qory.run.policy_applied` lists the values that lost,
+  and why, by the rules in the contract's README, §Variables, The record of the
+  variables. In a launch with a forwarder, the run's copy of the `--settings` file sets
+  the variable in its `env` too, and Claude Code applies that `env` over a workspace's
   `.claude/settings.json` and `.claude/settings.local.json`, so neither can set it
   empty. A launch without a forwarder gets no `--settings` copy.
   With it, Claude Code 2.1.316 sends no log lines to Datadog, does not call

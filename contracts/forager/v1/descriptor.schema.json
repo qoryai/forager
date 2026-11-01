@@ -242,7 +242,7 @@
       }
     },
     "fixed": {
-      "description": "The variables the session sets for the runtime in every launch, walled or not, by name: no value of the server, the run, the machine, the harness or the environment the run inherits applies to one. dev.qory.run.policy_applied lists each value that lost and why, as the contract's README describes in Variables, The record of the variables. In a launch with a forwarder, the session sets each in a file it copies whose values reach the runtime's environment, in place of the file's value. A name is no name denied-variables.json lists, and none of the descriptor's other variables: a declared or reserved secret's, a denied one, a model key's, the model endpoint's or an override.",
+      "description": "The variables the session sets for the runtime in every launch, walled or not, by name: no value of the server, the run, the machine, the harness or the environment the run inherits applies to one. dev.qory.run.policy_applied lists the values that lost, and why, by the rules in the contract's README, Variables, The record of the variables. In a launch with a forwarder, the session sets each in a file it copies whose values reach the runtime's environment, in place of the file's value. A name is no name denied-variables.json lists, and none of the descriptor's other variables: a declared or reserved secret's, a denied one, a model key's, the model endpoint's or an override.",
       "type": "object",
       "minProperties": 1,
       "maxProperties": 64,
