@@ -632,9 +632,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), neutral, hidden)
 	// The mapper is reached from the socket's goroutine and the output's: it sets
 	// parent_agent_id on a subagent's start, which it may keep back for a while, and
-	// writes every event of the session's runtime in order.
+	// writes every event of the session's runtime in order. Each event is masked first,
+	// then cut and given its summary (shapedRecord), so a cut never splits a secret
+	// before the masker sees it whole.
+	summaries, _ := rt.(runtimes.Summaries)
 	mapper := parents.New(rt, func(e runtimes.Event) {
-		r.write(e.Type, withSession(neutralRecord(e.Type, maskedRecord(texts{secrets: masker, harness: hidden}, e.Data), neutralText), n))
+		masked := maskedRecord(texts{secrets: masker, harness: hidden}, e.Data)
+		r.write(e.Type, withSession(neutralRecord(e.Type, shapedRecord(e.Type, masked, summaries), neutralText), n))
 	}, parents.Real)
 	records := func(rec runtimes.Record) {
 		if rec.Source == runtimes.SourceSetup {
@@ -716,7 +720,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			r.write(event.RunLog, map[string]any{"stream": stream, "bytes": encode(b), "session": n})
 		}
 	}
-	output := func(m map[string]any) { records(runtimes.Record{Source: runtimes.SourceOutput, Record: m}) }
+	output := func(m map[string]any, line int) {
+		records(runtimes.Record{Source: runtimes.SourceOutput, Record: m, Line: line})
+	}
 	if !rt.ReadsOutput() {
 		output = nil
 	}

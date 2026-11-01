@@ -236,6 +236,16 @@ type Parents interface {
 	Link(Record) (agentID, toolUseID string, ok bool)
 }
 
+// Summaries is implemented by a runtime that has a tool's summary to copy from a tool's
+// input, a descriptor's tools.summary. It is optional and checked by type assertion, so
+// [Runtime] keeps its methods: the session sets no summary for a runtime without it.
+type Summaries interface {
+	// Summary returns the member of input that is the summary of a call of tool, when
+	// the runtime lists the tool and that member is a string, and true. The session cuts
+	// the value at 1 KiB and writes it as the event's summary.
+	Summary(tool string, input map[string]any) (string, bool)
+}
+
 // The sources of a record. A runtime maps records of SourceOutput and SourceHooks;
 // the session reads the records of SourceSetup, a setup command's, and passes none of
 // them to a runtime.
@@ -372,6 +382,11 @@ func (r *described) Prepare(a Attach) (Launch, error) {
 
 // Map applies the descriptor's rules.
 func (r *described) Map(rec Record) []Event { return r.d.Map(rec) }
+
+// Summary applies the descriptor's tools.summary.
+func (r *described) Summary(tool string, input map[string]any) (string, bool) {
+	return r.d.Summary(tool, input)
+}
 
 // parented is the runtime of a descriptor with a parent member, the one kind of
 // described runtime that is [Parents].

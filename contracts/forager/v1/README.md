@@ -1692,7 +1692,9 @@ with, and ends the run `failed` with `batch_refused` for a type it does not have
 member a type's schema does not list. Update the gateway first, then the sessions: a
 session with this contract writes `dev.qory.runtime.text`,
 `dev.qory.runtime.tool_result` and `dev.qory.runtime.tool_denied`, and `line`,
-`truncated` and `summary`, from the first line Claude Code prints on pipes.
+`truncated` and `summary`. With Claude Code, `summary` comes with the first tool call
+of a session on pipes or on a pseudo-terminal, and the rest from the first assistant
+message of a session on pipes.
 
 **Steps.** A step is one named unit of the run's host work, such as a fetch of a
 repository or a compose of the harness, as a step of a CI job is: it has a start, an
@@ -4315,8 +4317,13 @@ accepted. The tests validate every record and every expected event against the s
 `runtimes/claude/descriptor.yaml` is the Claude Code descriptor for version 2.1.316. Its
 rules were written against 2.1.273 as installed and its published hooks reference, and
 checked against 2.1.316 and that version's published reference. Its hooks are the canonical
-source in both modes; its standard output adds the result line, which only the output
-reports. `runtime_version` is the version of the runtime the descriptor expects, the one
+source in both modes; its standard output adds what only the output reports: the result
+line, the text and thinking blocks, each tool's result and each denied tool call (§The
+events). Its `tools.summary` lists `Bash: command`, `Read: file_path`,
+`Write: file_path`, `Edit: file_path`, `Glob: pattern`, `Grep: pattern`, `WebFetch: url`,
+`WebSearch: query`, `Skill: skill`, and `Agent: description` and `Task: description`,
+since Claude Code 2.1.316 has Task, the older name, as an alias of its Agent tool.
+`runtime_version` is the version of the runtime the descriptor expects, the one
 `qory image check` compares with an image's program; Forager reports that version and
 does not check the installed one. Its `secrets` declare no
 secret, reserve no variable and have no `one_of` group: the run's model key is a model

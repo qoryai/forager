@@ -451,3 +451,24 @@ func TestAStartFromTheOutputIsNotHeld(t *testing.T) {
 		t.Errorf("%d timers set, want none", n)
 	}
 }
+
+// goRuntime is a runtime written in Go whose Map sets line to 99 on each event.
+type goRuntime struct{}
+
+func (goRuntime) Map(r descriptor.Record) []descriptor.Event {
+	return []descriptor.Event{{Type: "dev.qory.runtime.result", Data: map[string]any{"session_id": "s1", "line": 99}}}
+}
+
+// TestTheMapperSetsTheLineOfAnOutputRecord pins line: an event of a record of the
+// output source has the record's line, and an event of a hook has none, whatever the
+// runtime's Map returned.
+func TestTheMapperSetsTheLineOfAnOutputRecord(t *testing.T) {
+	var got []descriptor.Event
+	m := parents.New(goRuntime{}, func(e descriptor.Event) { got = append(got, e) }, &clock{})
+	m.Handle(descriptor.Record{Source: descriptor.SourceOutput, Record: map[string]any{}, Line: 4})
+	m.Handle(descriptor.Record{Source: descriptor.SourceHooks, Record: map[string]any{}})
+	m.Close()
+	if len(got) != 2 || got[0].Data["line"] != 4 || got[1].Data["line"] != nil {
+		t.Errorf("events %v; want line 4 on the output's and none on the hook's", got)
+	}
+}

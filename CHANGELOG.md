@@ -10,6 +10,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Remove `session`, `line`, `truncated` and `summary` from the `data` of a descriptor's
+  rules: the descriptor schema refuses a rule that maps one, since the session sets them.
 - Build run images with Claude Code 2.1.316: `runtime_version` in the Claude Code
   descriptor is 2.1.316, up from 2.1.273. A qory that pins this Forager fails
   `qory image check`, with exit status 1, for an image whose `claude --version` is any
@@ -184,9 +186,30 @@ release may change what an existing document does, and says so under Upgrading.
   this one, when the runtime reports it. Claude Code 2.1.292 and later reports it in a
   session on pipes with `--output-format stream-json --verbose`. A descriptor sets where
   in the member `parent`.
-- `dev.qory.runtime.message`: one text or thinking block of a subagent, with `agent_id`,
-  `role`, `text` and `kind`, from a session on pipes. Claude Code 2.1.292 and later
-  prints them with `--output-format stream-json --verbose --forward-subagent-text`.
+- `dev.qory.runtime.text`: one text or thinking block of the main conversation or of a
+  subagent, with `text`, `kind` (`text` or `thinking`), `role`, `message_id`, and
+  `agent_id` and `agent_type` for a subagent's, from a session on pipes. Claude Code
+  prints them with `--output-format stream-json --verbose`, and a subagent's, 2.1.292
+  and later, with `--forward-subagent-text` as well. The Claude Code descriptor maps no
+  user message of the main conversation, so a skill's expanded prompt is no text event.
+- `dev.qory.runtime.tool_result`: what the runtime gave the model as a tool call's
+  result, with `tool_use_id`, `content` as the runtime printed it, a string or an array
+  of blocks, `is_error` and `agent_id`, from a session on pipes.
+- `dev.qory.runtime.tool_denied`: a tool call the runtime denied without a prompt, with
+  `tool`, `tool_use_id`, `message`, `agent_id` and `agent_type`, from a session on pipes.
+  No `tool_finished` or `tool_failed` follows it. Claude Code prints it as the line
+  `{"type":"system","subtype":"permission_denied",...}`.
+- `line` in every runtime event mapped from the runtime's standard output: the number of
+  the stdout line the record was read from, from 1, counting every line, a JSON object
+  or not. An event from a hook has none.
+- `truncated` in `dev.qory.runtime.text` and `dev.qory.runtime.tool_result`: the session
+  cuts `text` and a string `content` at 64 KiB of UTF-8, at a character boundary, and an
+  array `content` to a JSON encoding of at most 64 KiB, and sets `truncated: true`.
+- `summary` in `dev.qory.runtime.tool_started`, `tool_finished` and `tool_failed`: one
+  member of `input`, copied as the descriptor's `tools.summary` selects it. The
+  session cuts each summary at 1 KiB of UTF-8, at a character boundary. The Claude Code
+  descriptor lists `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`,
+  `WebSearch`, `Skill`, `Agent` and `Task`.
 - A descriptor rule may have `each`, a path to an array: each element that a rule with
   that `each` matches then produces one event, of the first such rule it matches, and an
   element that no such rule matches produces none.
@@ -741,6 +764,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Update the gateway before the sessions that write `dev.qory.runtime.text`,
+  `dev.qory.runtime.tool_result` or `dev.qory.runtime.tool_denied`, or `line`,
+  `truncated` and `summary`. A gateway built with an older contract does not have them,
+  and ends the run `failed` with `batch_refused` at the first batch that contains one; a
+  session with Claude Code writes `summary` from its first tool call, on pipes or on a
+  pseudo-terminal, and the rest from its first assistant message on pipes.
 - List a host that resolves to a private network address by name in the node's allow
   list, or a walled run can no longer reach it.
 - Each run on a gateway now has limits: at most 256 connections open at once, and 50
@@ -1275,6 +1304,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The session sets `line` on each runtime event it maps from the runtime's standard
+  output, cuts `text` and `content` at 64 KiB with `truncated`, and sets `summary` on a
+  tool event. It masks each event before it cuts it, so a cut never splits a secret
+  before the masker sees it. `runtimes.Summaries` is the optional interface of a runtime
+  that has summaries, which a descriptor's runtime implements from `tools.summary`, and
+  `runtimes.Record.Line` the line of a record of the output source.
 - `runtimes.Launch.LeftOut`, the names of the variables a runtime left out of a file it
   copied whose values reach the program's environment, such as the `env` of Claude
   Code's `--settings`; the session reports a forge token's or a model key's name of

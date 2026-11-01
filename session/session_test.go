@@ -468,7 +468,7 @@ func waitFor(t *testing.T, cond func() bool) {
 // TestASubagentsParentIsSetAndAWaitingStartComesBeforeTheExit pins the session's
 // mapper end to end on pipes: after the runtime's first JSON line, a subagent's start
 // waits for the line that links it to its call; a nested subagent's start gets its
-// parent; each subagent's thinking and text block is a runtime.message, in order; a start whose link never
+// parent; each subagent's thinking and text block is a runtime.text, in order; a start whose link never
 // comes is written, without a parent, in its order before the session's exit.
 func TestASubagentsParentIsSetAndAWaitingStartComesBeforeTheExit(t *testing.T) {
 	hooks := strings.Join([]string{
@@ -495,7 +495,7 @@ func TestASubagentsParentIsSetAndAWaitingStartComesBeforeTheExit(t *testing.T) {
 		switch typ {
 		case "dev.qory.runtime.subagent_started":
 			got = append(got, fmt.Sprintf("start %v:%v", d["agent_id"], d["parent_agent_id"]))
-		case "dev.qory.runtime.message":
+		case "dev.qory.runtime.text":
 			got = append(got, fmt.Sprintf("message %v %v %v", d["agent_id"], d["role"], d["text"]))
 		case "dev.qory.runtime.ended", "dev.qory.session.exited":
 			got = append(got, typ)

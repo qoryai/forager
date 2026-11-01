@@ -37,8 +37,8 @@ var nestedRecords = strings.Join([]string{
 const nestedEvents = `{"type":"dev.qory.runtime.tool_started","data":{` + sid + `,"tool":"Agent","tool_use_id":"toolu_A","input":{"prompt":"Look for TODO markers","subagent_type":"Explore"}}}
 {"type":"dev.qory.runtime.subagent_started","data":{` + sid + `,"agent_id":"a1","agent_type":"Explore"}}
 {"type":"dev.qory.runtime.tool_started","data":{` + sid + `,"tool":"Agent","tool_use_id":"toolu_B","input":{"prompt":"Read go.mod","subagent_type":"general-purpose"},"agent_id":"a1","agent_type":"Explore"}}
-{"type":"dev.qory.runtime.message","data":{` + sid + `,"agent_id":"a1","role":"user","text":"Look for TODO markers","kind":"text"}}
-{"type":"dev.qory.runtime.message","data":{` + sid + `,"agent_id":"a2","role":"user","text":"Read go.mod","kind":"text"}}
+{"type":"dev.qory.runtime.text","data":{` + sid + `,"agent_id":"a1","role":"user","text":"Look for TODO markers","kind":"text"}}
+{"type":"dev.qory.runtime.text","data":{` + sid + `,"agent_id":"a2","role":"user","text":"Read go.mod","kind":"text"}}
 {"type":"dev.qory.runtime.subagent_started","data":{` + sid + `,"agent_id":"a2","agent_type":"general-purpose","parent_agent_id":"a1"}}
 `
 
@@ -52,15 +52,17 @@ var messageRecords = strings.Join([]string{
 	out + `"type":"assistant","parent_tool_use_id":null,"message":{"id":"msg_2","role":"assistant","content":[{"type":"text","text":"Done."}]}}}`,
 }, "\n")
 
-const messageEvents = `{"type":"dev.qory.runtime.message","data":{` + sid + `,"agent_id":"a1","role":"assistant","text":"go.mod first","kind":"thinking"}}
-{"type":"dev.qory.runtime.message","data":{` + sid + `,"agent_id":"a1","role":"assistant","text":"I read go.mod.","kind":"text"}}
+const messageEvents = `{"type":"dev.qory.runtime.text","data":{` + sid + `,"agent_id":"a1","role":"assistant","message_id":"msg_1","text":"go.mod first","kind":"thinking"}}
+{"type":"dev.qory.runtime.text","data":{` + sid + `,"agent_id":"a1","role":"assistant","message_id":"msg_1","text":"I read go.mod.","kind":"text"}}
+{"type":"dev.qory.runtime.tool_result","data":{` + sid + `,"agent_id":"a1","tool_use_id":"toolu_C","content":"module example.com/app"}}
+{"type":"dev.qory.runtime.text","data":{` + sid + `,"role":"assistant","message_id":"msg_2","text":"Done.","kind":"text"}}
 `
 
-// TestSubagentStreamLinesFromTheReference pins the parent member and the message rules
-// on lines of the reference's shape: a nested subagent's start has its parent in both
-// orders of start and link, a thinking block then a text block are two messages in that
-// order, and neither a redacted thinking block, a tool result nor the main
-// conversation's text is a message.
+// TestSubagentStreamLinesFromTheReference pins the parent member and the text rules on
+// lines of the reference's shape: a nested subagent's start has its parent in both
+// orders of start and link, a thinking block then a text block are two text events in
+// that order, a redacted thinking block is none, a subagent's tool result is a
+// tool_result, and the main conversation's text is a text event without agent_id.
 func TestSubagentStreamLinesFromTheReference(t *testing.T) {
 	rt, err := claude.New()
 	if err != nil {

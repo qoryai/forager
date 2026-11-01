@@ -24,7 +24,7 @@ rules:
   - source: output
     match: {type: assistant, agent_id: {present: true}, each.type: text}
     each: message.content
-    type: dev.qory.runtime.message
+    type: dev.qory.runtime.text
     data: {session_id: session_id, agent_id: agent_id, role: message.role, text: each.text, kind: each.type}
   - source: output
     match: {type: assistant}
@@ -64,8 +64,8 @@ func TestEachProducesAnEventPerElementThatMatches(t *testing.T) {
 			{"type":"tool_use","id":"toolu_2","name":"Read","input":{}},
 			{"type":"text","text":"two"}]}}`))
 	want := []descriptor.Event{
-		{Type: "dev.qory.runtime.message", Data: map[string]any{"session_id": "s1", "agent_id": "a1", "role": "assistant", "text": "one", "kind": "text"}},
-		{Type: "dev.qory.runtime.message", Data: map[string]any{"session_id": "s1", "agent_id": "a1", "role": "assistant", "text": "two", "kind": "text"}},
+		{Type: "dev.qory.runtime.text", Data: map[string]any{"session_id": "s1", "agent_id": "a1", "role": "assistant", "text": "one", "kind": "text"}},
+		{Type: "dev.qory.runtime.text", Data: map[string]any{"session_id": "s1", "agent_id": "a1", "role": "assistant", "text": "two", "kind": "text"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Map =\n %+v\nwant\n %+v", got, want)
@@ -151,7 +151,7 @@ rules:
   - source: output
     match: {type: assistant, agent_id: {present: true}, each.type: text}
     each: message.content
-    type: dev.qory.runtime.message
+    type: dev.qory.runtime.text
     data: {agent_id: agent_id, text: each.text, kind: each.type}
   - source: output
     match: {type: assistant, main: true}
@@ -160,7 +160,7 @@ rules:
   - source: output
     match: {type: assistant, agent_id: {present: true}, each.type: thinking}
     each: message.content
-    type: dev.qory.runtime.message
+    type: dev.qory.runtime.text
     data: {agent_id: agent_id, text: each.thinking, kind: each.type}
 `
 
@@ -177,9 +177,9 @@ func TestEachChoosesARulePerElement(t *testing.T) {
 		{"type":"redacted_thinking","data":"opaque"},
 		{"type":"thinking","thinking":"then I answer","signature":"sig"}]}}`))
 	want := []descriptor.Event{
-		{Type: "dev.qory.runtime.message", Data: map[string]any{"agent_id": "a1", "text": "first I look", "kind": "thinking"}},
-		{Type: "dev.qory.runtime.message", Data: map[string]any{"agent_id": "a1", "text": "one", "kind": "text"}},
-		{Type: "dev.qory.runtime.message", Data: map[string]any{"agent_id": "a1", "text": "then I answer", "kind": "thinking"}},
+		{Type: "dev.qory.runtime.text", Data: map[string]any{"agent_id": "a1", "text": "first I look", "kind": "thinking"}},
+		{Type: "dev.qory.runtime.text", Data: map[string]any{"agent_id": "a1", "text": "one", "kind": "text"}},
+		{Type: "dev.qory.runtime.text", Data: map[string]any{"agent_id": "a1", "text": "then I answer", "kind": "thinking"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Map =\n %+v\nwant\n %+v", got, want)
@@ -215,7 +215,7 @@ rules:
   - source: output
     match: {each.type: text}
     each: message.content
-    type: dev.qory.runtime.message
+    type: dev.qory.runtime.text
     data: {text: each.text, kind: each.type}
   - source: output
     match: {each.type: text}
@@ -235,7 +235,7 @@ rules:
 func TestAnElementTakesTheFirstRuleOfItsSource(t *testing.T) {
 	d := parse(t, pickDoc)
 	got := d.Map(output(t, `{"message":{"content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"one"}]}}`))
-	want := []descriptor.Event{{Type: "dev.qory.runtime.message", Data: map[string]any{"text": "one", "kind": "text"}}}
+	want := []descriptor.Event{{Type: "dev.qory.runtime.text", Data: map[string]any{"text": "one", "kind": "text"}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Map =\n %+v\nwant\n %+v", got, want)
 	}

@@ -49,8 +49,33 @@ type Descriptor struct {
 	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
 	Secrets        *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
 	Model          *Model    `yaml:"model" json:"model,omitempty"`
+	Tools          *Tools    `yaml:"tools" json:"tools,omitempty"`
 	Parent         *Parent   `yaml:"parent" json:"parent,omitempty"`
 	Rules          []Rule    `yaml:"rules" json:"rules"`
+}
+
+// Tools is what the session copies from a tool's input onto the runtime's tool events.
+// Nil when the descriptor has no tools member.
+type Tools struct {
+	// Summary maps a tool's name, as the runtime reports it in tool, to the dotted path
+	// of the input member the session copies as the event's summary.
+	Summary map[string]string `yaml:"summary" json:"summary"`
+}
+
+// Summary is the member of input at the path tools.summary gives for tool, when it is
+// a string, and true; "" and false when the descriptor lists no such tool or input has
+// no string there. The value is copied, not cut: the session cuts it.
+func (d *Descriptor) Summary(tool string, input map[string]any) (string, bool) {
+	if d.Tools == nil {
+		return "", false
+	}
+	path, ok := d.Tools.Summary[tool]
+	if !ok {
+		return "", false
+	}
+	v, _ := lookup(input, path)
+	s, ok := v.(string)
+	return s, ok
 }
 
 // Parent is where the runtime reports which tool call started a subagent: a record of
@@ -237,6 +262,11 @@ type Record struct {
 	Source string `json:"source"`
 	// Record is the JSON object the runtime produced, decoded with encoding/json.
 	Record map[string]any `json:"record"`
+	// Line is the number of the line of the runtime's standard output a record of the
+	// output source was read from, from 1, counting every line; 0 for a record of
+	// another source, and for one a fixture or a caller made. No rule reads it: the
+	// session writes it as the events' line.
+	Line int `json:"-"`
 }
 
 // The sources of a record. A descriptor's rules map records of SourceOutput and
