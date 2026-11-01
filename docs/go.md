@@ -873,7 +873,10 @@ res, err := session.Resend(ctx, session.ResendSpec{
 - the secrets it declares, through the optional `runtimes.Secrets`; a runtime without
   it declares nothing,
 - which tool call started a subagent, through the optional `runtimes.Parents`, so the
-  session sets `parent_agent_id`; a runtime without it sets no parent.
+  session sets `parent_agent_id`; a runtime without it sets no parent,
+- the input member that is a tool's summary, through the optional `runtimes.Summaries`,
+  so the session sets `summary` on its tool events; a descriptor's runtime has it from
+  `tools.summary`, and a runtime without it has no summary.
 
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:
 
