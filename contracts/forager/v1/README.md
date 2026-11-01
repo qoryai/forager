@@ -1556,11 +1556,13 @@ The runtime's, produced by a descriptor from what the runtime reports:
 | `dev.qory.runtime.tool_started` | the runtime is about to run a tool | `session_id`, `tool`, `tool_use_id`, `input` |
 | `dev.qory.runtime.tool_finished` | a tool ran and returned | the same, `response`, `duration_ms` |
 | `dev.qory.runtime.tool_failed` | a tool ran and failed | the same, `error`, `interrupted`, `duration_ms` |
+| `dev.qory.runtime.tool_result` | the runtime gave the model a tool's result, read from the runtime's standard output | `session_id`, `tool_use_id`, `content`, `is_error`, `agent_id`, `truncated` |
+| `dev.qory.runtime.tool_denied` | the runtime denied a tool call without a prompt, read from the runtime's standard output | `session_id`, `tool`, `tool_use_id`, `message`, `agent_id`, `agent_type` |
 | `dev.qory.runtime.turn_finished` | the runtime finished responding | `session_id`, `message`, `background_tasks` |
 | `dev.qory.runtime.turn_failed` | a turn ended on an API error | `session_id`, `error`, `details`, `message` |
 | `dev.qory.runtime.subagent_started` | a subagent was spawned | `session_id`, `agent_id`, `agent_type`, `parent_agent_id` |
 | `dev.qory.runtime.subagent_finished` | a subagent finished | the same, `message`, `background_tasks` |
-| `dev.qory.runtime.message` | a subagent wrote a message, read from the runtime's standard output | `session_id`, `agent_id`, `role`, `text`, `kind` |
+| `dev.qory.runtime.text` | the runtime printed a text or thinking block, of the main conversation or of a subagent, on its standard output | `session_id`, `text`, `kind`, `role`, `agent_id`, `agent_type`, `message_id`, `truncated` |
 | `dev.qory.runtime.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
 | `dev.qory.runtime.ended` | the runtime closed its session | `session_id`, `reason` |
 | `dev.qory.runtime.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
@@ -1590,12 +1592,15 @@ the record, as every `dev.qory.run.log` and `dev.qory.run.resized` of a session 
 `session` is optional in each of their schemas: a record that Forager wrote before
 `session` was added has none and validates.
 
-Every runtime event that comes from a hook may contain `agent_id` and `agent_type` when
-it happened inside a subagent; `dev.qory.runtime.result`, read from the runtime's
-output, contains neither. The schema of each type, under `events/`, defines which fields
-are required and what each contains. Values are copied from the runtime unchanged:
-`input` and `response` have the tool's shape, `error` is display text, and the
-enumerations in `source`, `reason`, `kind`, `outcome` are the runtime's words.
+Every runtime event may contain `agent_id` when it happened inside a subagent, and
+every one but `dev.qory.runtime.tool_result` `agent_type` too; absent means the main
+conversation. `dev.qory.runtime.result` contains neither. The schema of each type, under
+`events/`, defines which fields are required and what each contains. Values are copied
+from the runtime unchanged: `input`, `response` and `content` have the tool's shape,
+`error` and a denial's `message` are display text, and the enumerations in `source`,
+`reason`, `kind`, `outcome` are the runtime's words. Four members are the session's to
+set, and the descriptor schema refuses a rule that maps one: `session`, `line`,
+`truncated` and `summary` (below).
 
 **A subagent's parent.** `dev.qory.runtime.subagent_started` contains `parent_agent_id`
 when another subagent started this one and the runtime reported it. Claude Code 2.1.292
@@ -1613,13 +1618,81 @@ comes. When no such message arrives within 5 seconds, `parent_agent_id` is absen
 Absent `parent_agent_id` means the main agent started the subagent, or the runtime did
 not report the parent.
 
-**A subagent's messages.** `dev.qory.runtime.message` is one text block or thinking
-block of a subagent, as the runtime printed it on its standard output, with `kind`
-`text` or `thinking`. Claude Code 2.1.292 and later prints them with
-`--output-format stream-json --verbose --forward-subagent-text`. An interactive session
-has none, and the main conversation's messages are not events. The session masks a
-message as it masks every runtime event. The same line is also in the session's
+**Text.** `dev.qory.runtime.text` is one text block or thinking block that the runtime
+printed on its standard output, of the main conversation or of a subagent: `text`, the
+block's text unchanged; `kind`, `text` for a reply and `thinking` for the model's
+reasoning; `role`, who wrote the message, in the runtime's words; `message_id`, the
+runtime's id of the message, the same for each block of one message; and `agent_id`
+and `agent_type`, absent for the main conversation. Only a session on pipes has it.
+Claude Code prints the blocks with `--output-format stream-json --verbose`, and a
+subagent's blocks with `--forward-subagent-text` as well, 2.1.292 and later. Its
+descriptor maps each text and thinking block of an assistant message, and each text
+block of a subagent's user message, the prompt that drives the subagent. It maps no user
+message of the main conversation, so a skill's expanded prompt is no text event. Claude
+Code 2.1.316 prints a thinking block with empty text, and its event has `text` `""`. An
+interactive session has no text events. The text is also in the session's
 `dev.qory.run.log`.
+
+**A tool's result.** `dev.qory.runtime.tool_result` is what the runtime gave the model
+as the result of a tool call: `tool_use_id`, the call's id, as in its
+`dev.qory.runtime.tool_started`; `content`, the runtime's value unchanged, a string or
+an array of blocks such as `{"type": "text", "text": "README.md"}`; `is_error` when the
+runtime reports it; and `agent_id` for a subagent's call. `content` is the text the
+model read, where `response` of `dev.qory.runtime.tool_finished` is the tool's
+structured value, of a shape for each tool. A reader joins the two by `tool_use_id`.
+Only a session on pipes has it: Claude Code's descriptor maps each `tool_result` block
+with `content` of a user message.
+
+**A denied tool.** `dev.qory.runtime.tool_denied` is a tool call that the runtime
+denied without a prompt, by a rule, a mode or a check of the call: `tool`,
+`tool_use_id`, `message`, the reason the runtime gave the model, and `agent_id` and
+`agent_type`. The tool did not run, so no `dev.qory.runtime.tool_finished` or
+`dev.qory.runtime.tool_failed` follows the call's `dev.qory.runtime.tool_started`; a
+reader takes the denial as the call's end. Only a session on pipes has it: Claude Code
+prints the line `{"type":"system","subtype":"permission_denied",...}`.
+
+**The line of an event.** Every runtime event that the session maps from a record of
+the output source contains `line`: the number of the line of the session's standard
+output that the record was read from, from 1, counting every line, a JSON object or
+not. An event from a hook has none. The session sets `line`, whatever the runtime's
+`Map` returns. A reader finds the line in the session's `dev.qory.run.log` events with
+`stream` `stdout`: joined in order, their bytes have line `n` after the line break
+number `n - 1`. The masking of the output (§The record files) writes no line break into
+`dev.qory.run.log`, and keeps every line break of a line that is a JSON object, since a
+JSON string has its line breaks escaped. It replaces a masked value whole, so in a line
+that is no JSON object, a value with a line break in it becomes one line: a run's
+secret with a line break, or a hidden harness's text of several lines. The lines of
+`dev.qory.run.log` after such a value are then fewer than `line` counts. Claude Code on
+pipes prints JSON objects alone.
+
+**Cut text.** The session cuts `text` of `dev.qory.runtime.text` and a string `content`
+of `dev.qory.runtime.tool_result` to their first 65536 bytes (64 KiB) of UTF-8, at the
+end of the last whole character, and sets `truncated: true`. For an array `content`,
+it keeps the JSON encoding of `content`, as the event contains it, at 65536 bytes or
+less: it keeps the array's elements in order while the encoding fits; it cuts the first
+element that does not fit, a string or the `text` of a block, at a character boundary
+to the longest that fits, and leaves out the elements after it; an element of another
+shape that does not fit is left out with the elements after it. An event the session
+did not cut has no `truncated`. The session masks every string of a runtime event,
+`text`, `content` and `summary` included, before it cuts one. `dev.qory.run.log` keeps
+every byte.
+
+**A tool's summary.** `dev.qory.runtime.tool_started`, `dev.qory.runtime.tool_finished`
+and `dev.qory.runtime.tool_failed` contain `summary` when the descriptor's
+`tools.summary` lists the event's `tool`: one member of `input`, the one at the path the
+table gives for the tool, copied as `tools.summary` selects it and not computed. The
+1 KiB limit applies to each summary value, not to the tools.summary table: the session
+cuts each summary at 1 KiB (1024 bytes) of UTF-8, at a character boundary. No member
+marks a cut summary. A tool the table does not list, and an `input` with no string at
+the path, give no `summary`. `dev.qory.runtime.tool_denied` has none: a reader takes
+the summary from the call's `dev.qory.runtime.tool_started`.
+
+**Rollout.** A gateway checks every event of a batch against the schemas it was built
+with, and ends the run `failed` with `batch_refused` for a type it does not have or a
+member a type's schema does not list. Update the gateway first, then the sessions: a
+session with this contract writes `dev.qory.runtime.text`,
+`dev.qory.runtime.tool_result` and `dev.qory.runtime.tool_denied`, and `line`,
+`truncated` and `summary`, from the first line Claude Code prints on pipes.
 
 **Steps.** A step is one named unit of the run's host work, such as a fetch of a
 repository or a compose of the harness, as a step of a CI job is: it has a start, an
@@ -4107,7 +4180,7 @@ exactly the recorded events and that each passes this contract's schema.
 
 ### The descriptor
 
-`descriptor.schema.json`. One YAML file per runtime. It has seven parts, beside
+`descriptor.schema.json`. One YAML file per runtime. It has eight parts, beside
 `runtime`, the name, a lower-case letter and then up to 63 lower-case letters, digits
 and dashes, and an optional `title`, the name a person reads: `Claude Code`.
 
@@ -4140,6 +4213,15 @@ the first rule from this one on with the same `source` and `each` that the eleme
 matches. One line's elements may so produce events of different rules, such as a
 thinking block's and then a text block's; an element no such rule matches produces
 nothing.
+
+**Tools**, optional: `summary`, a map of a tool's name, as the runtime reports it in
+`tool`, to one dotted path inside the tool's `input`, such as `Bash: command`. The session
+sets `summary` on each `dev.qory.runtime.tool_started`, `dev.qory.runtime.tool_finished`
+and `dev.qory.runtime.tool_failed` of a listed tool to the member of `input` at that
+path, when it is a string: one input member, copied as `tools.summary` selects it, not
+computed. The 1 KiB limit applies to each summary value, not to the tools.summary table:
+the session cuts each summary at 1 KiB (1024 bytes) of UTF-8, at a character boundary.
+A reader shows it beside the tool's name, as `Bash(make test)`.
 
 **Parent**, optional: where the runtime reports which tool call started a subagent.
 `source`, `match` as in a rule, and two paths, `agent_id` and `tool_use_id`. A record

@@ -211,11 +211,13 @@ records come from outside. A **descriptor** maps those reports to events:
 | `dev.qory.runtime.tool_started`      | The runtime is about to run a tool    |
 | `dev.qory.runtime.tool_finished`     | A tool ran and returned               |
 | `dev.qory.runtime.tool_failed`       | A tool ran and failed                 |
+| `dev.qory.runtime.tool_result`       | The model got a tool's result         |
+| `dev.qory.runtime.tool_denied`       | The runtime denied a tool call        |
 | `dev.qory.runtime.turn_finished`     | The runtime finished responding       |
 | `dev.qory.runtime.turn_failed`       | A turn ended on an API error          |
 | `dev.qory.runtime.subagent_started`  | A subagent was spawned                |
 | `dev.qory.runtime.subagent_finished` | A subagent finished                   |
-| `dev.qory.runtime.message`           | A subagent wrote a message            |
+| `dev.qory.runtime.text`              | The runtime printed a text block      |
 | `dev.qory.runtime.notification`      | The runtime notified its user         |
 | `dev.qory.runtime.ended`             | The runtime closed its session        |
 | `dev.qory.runtime.result`            | A headless session printed its result |

@@ -231,7 +231,7 @@ rules:
   - source: output
     match: {type: assistant, agent_id: {present: true}, each.type: text}
     each: message.content
-    type: dev.qory.runtime.message
+    type: dev.qory.runtime.text
     data:
       session_id: session_id
       agent_id: agent_id
@@ -241,7 +241,7 @@ rules:
   - source: output
     match: {type: user, agent_id: {present: true}, each.type: text}
     each: message.content
-    type: dev.qory.runtime.message
+    type: dev.qory.runtime.text
     data:
       session_id: session_id
       agent_id: agent_id
@@ -251,7 +251,7 @@ rules:
   - source: output
     match: {type: assistant, agent_id: {present: true}, each.type: thinking}
     each: message.content
-    type: dev.qory.runtime.message
+    type: dev.qory.runtime.text
     data:
       session_id: session_id
       agent_id: agent_id
