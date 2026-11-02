@@ -11,11 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/server"
@@ -38,45 +38,145 @@ const (
 	RunAPIRate = 10
 	// RunAPIInFlight is the most requests one run has in flight through the route.
 	RunAPIInFlight = 4
-	// RunAPIPostsInFlight is the most POSTs one gateway has in flight through the route.
-	RunAPIPostsInFlight = 8
-	runAPIPostWait      = 60 * time.Second
-	runAPIFileWait      = 10 * time.Minute
+	// RunAPIPostsPerRun is the most POSTs one run has in flight through the route, among
+	// its [RunAPIInFlight].
+	RunAPIPostsPerRun = 1
+	// RunAPIArtifactSends is the most POST artifacts one gateway sends to Qory Apiary at
+	// once: from the body read whole to the answer read.
+	RunAPIArtifactSends = 8
+	// RunAPIGatewayRate is the most requests of the route one gateway signs in a second,
+	// beyond a burst of as many. Qory Apiary's bucket for one key refills 50 a second, so
+	// a run's start on the same key keeps its tokens.
+	RunAPIGatewayRate = 20
+	// runAPIQueueWait is how long a request waits for a send slot, and for a token of the
+	// gateway's bucket.
+	runAPIQueueWait = 5 * time.Second
+	runAPIPostWait  = 60 * time.Second
+	runAPIFileWait  = 10 * time.Minute
 )
 
-// maxRunAPIShown is the most bytes of a request's method or path a decision contains.
+// maxRunAPIShown is the most bytes of a request's method a decision contains. A
+// decision's path is one of the five shapes, under [maxRunAPITarget].
 const maxRunAPIShown = 2048
+
+// maxRunAPITarget is the longest request target the route takes, as sent.
+const maxRunAPITarget = 4 << 10
+
+// runAPIOutside is the path of the decision of a request outside the five shapes, whose
+// path is the caller's choice.
+const runAPIOutside = "outside"
 
 // runAPIHeaders are the headers of Qory Apiary's answer the route passes, beside
 // Content-Length.
 var runAPIHeaders = []string{"Content-Type", "Content-Disposition", "X-Content-Type-Options", "Content-Security-Policy", "Retry-After"}
 
-// RunAPIPosts counts the POSTs in flight through the route of every run of one gateway.
-type RunAPIPosts struct{ n atomic.Int32 }
+// errRunAPIBusy is the error of a request that waited [runAPIQueueWait] for a send slot
+// or a token of the gateway's bucket and got none.
+var errRunAPIBusy = errors.New("the gateway's run API limits refused the request")
 
-// enter counts one more POST, and returns false, counting nothing, at
-// [RunAPIPostsInFlight].
-func (c *RunAPIPosts) enter() bool {
-	if c.n.Add(1) > RunAPIPostsInFlight {
-		c.n.Add(-1)
-		return false
-	}
-	return true
+// RunAPILimits are the limits of the route that one gateway shares across its runs: the
+// send slots of POST artifacts and the bucket of signed requests. The zero value is
+// ready to use.
+type RunAPILimits struct {
+	// now, sleep and queueWait, when set, replace the clock, the timer and the 5 seconds
+	// a request waits. Tests set them.
+	now       func() time.Time
+	sleep     func(ctx context.Context, d time.Duration) bool
+	queueWait time.Duration
+
+	once  sync.Once
+	slots chan struct{}
+
+	mu sync.Mutex
+	// tokens is below zero while requests wait: each waiting request took one ahead, so
+	// requests get their tokens in the order they came.
+	tokens float64
+	at     time.Time
 }
 
-// leave counts one POST fewer.
-func (c *RunAPIPosts) leave() { c.n.Add(-1) }
+// start sets what the zero value leaves unset.
+func (l *RunAPILimits) start() {
+	l.once.Do(func() {
+		l.slots = make(chan struct{}, RunAPIArtifactSends)
+		l.tokens = RunAPIGatewayRate
+		if l.now == nil {
+			l.now = time.Now
+		}
+		if l.sleep == nil {
+			l.sleep = sleep
+		}
+		if l.queueWait == 0 {
+			l.queueWait = runAPIQueueWait
+		}
+		l.at = l.now()
+	})
+}
+
+// enter takes one send slot, and waits for one up to the queue wait. Requests get slots
+// in the order they came. It returns [errRunAPIBusy] after the wait, or ctx's error; a
+// nil error is followed by one leave.
+func (l *RunAPILimits) enter(ctx context.Context) error {
+	l.start()
+	select {
+	case l.slots <- struct{}{}:
+		return nil
+	default:
+	}
+	t := time.NewTimer(l.queueWait)
+	defer t.Stop()
+	select {
+	case l.slots <- struct{}{}:
+		return nil
+	case <-t.C:
+		return errRunAPIBusy
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// leave gives one send slot back.
+func (l *RunAPILimits) leave() { <-l.slots }
+
+// take takes one token of the gateway's bucket, which holds [RunAPIGatewayRate] tokens at
+// most and gains that many a second, and waits for its token up to the queue wait. It
+// returns [errRunAPIBusy] when the wait would be longer, at once, or ctx's error.
+func (l *RunAPILimits) take(ctx context.Context) error {
+	l.start()
+	l.mu.Lock()
+	now := l.now()
+	if d := now.Sub(l.at); d > 0 {
+		l.tokens = min(l.tokens+d.Seconds()*RunAPIGatewayRate, RunAPIGatewayRate)
+		l.at = now
+	}
+	wait := time.Duration((1 - l.tokens) / RunAPIGatewayRate * float64(time.Second))
+	if l.tokens >= 1 {
+		wait = 0
+	}
+	if wait > l.queueWait {
+		l.mu.Unlock()
+		return errRunAPIBusy
+	}
+	l.tokens--
+	l.mu.Unlock()
+	if wait > 0 && !l.sleep(ctx, wait) {
+		l.mu.Lock()
+		l.tokens = min(l.tokens+1, RunAPIGatewayRate)
+		l.mu.Unlock()
+		return ctx.Err()
+	}
+	return nil
+}
 
 // RunAPI is the route of one run's proxy to Qory Apiary's run API: the run's id, how a
-// request is sent, signed, and the gateway's count of POSTs. The gateway makes one for
-// a run with a control plane ([Proxy.SetRunAPI]); a stack proxy has none.
+// request is sent, signed, and the gateway's limits. The gateway makes one for a run
+// with a control plane ([Proxy.SetRunAPI]); a stack proxy has none.
 type RunAPI struct {
 	RunID string
 	// Send signs one request and sends it, as [server.Client.RunAPI] does. path is
 	// escaped and starts after the run's id.
 	Send func(ctx context.Context, method, path string, body []byte, file bool) (*server.RunAPIAnswer, error)
-	// Posts counts the gateway's POSTs in flight.
-	Posts *RunAPIPosts
+	// Limits are the limits the run shares with the gateway's other runs.
+	Limits *RunAPILimits
 
 	// postWait and fileWait, when set, replace the 60 seconds and the 10 minutes; now,
 	// when set, is the clock of the rate limit. Tests set them.
@@ -85,6 +185,7 @@ type RunAPI struct {
 
 	mu       sync.Mutex
 	inFlight int
+	posting  bool
 	tokens   float64
 	at       time.Time
 }
@@ -114,11 +215,15 @@ func forRunAPI(r *http.Request) bool {
 
 // runAPITarget is one request inside the five shapes.
 type runAPITarget struct {
-	// path is the path after the run's id, each segment decoded and escaped again.
-	path string
+	// path is the path after the run's id, each segment decoded and escaped again, and
+	// shown the same with a segment that contains a secret in [accesskey.ShownValue]'s
+	// form, read from the decoded segment: what a decision contains.
+	path, shown string
 	// post is true for a POST, and limit is its largest body.
 	post  bool
 	limit int64
+	// slot is true for a request that takes a send slot: POST artifacts.
+	slot bool
 	// file is true for a request for a file of an artifact's version.
 	file bool
 }
@@ -133,19 +238,38 @@ func segmentClean(s string) bool {
 	return !strings.ContainsFunc(s, func(c rune) bool { return c == '/' || c == '\\' || unicode.IsControl(c) })
 }
 
+// shownSegment is the decoded segment s as a decision contains it.
+func shownSegment(s string) string {
+	if accesskey.ContainsSecret(s) {
+		return accesskey.ShownValue(s, false)
+	}
+	return url.PathEscape(s)
+}
+
 // target reads r as one of the five shapes of the route, and reports whether it is one:
 // GET work-item, GET artifacts, GET artifacts/<version_id>/files/<filename>, POST
 // artifacts and POST verdict, under /v1/runs/ and the run's id. A request outside them
-// reaches nothing: a query, a fragment, user information, a scheme other than http, a
-// port other than 80, a segment that fails [segmentClean], another run's id, another
-// method, and HTTP/1.0, which has no way to end a file's stream with a read error.
+// reaches nothing: a target over [maxRunAPITarget], a query, a fragment, user
+// information, a scheme other than http, a port other than 80, a segment that fails
+// [segmentClean], another run's id, another method, and an HTTP/1.0 request that reaches
+// the proxy, which has no way to end a file's stream with a read error. A forwarder
+// without a wall sends every plain request as HTTP/1.1, so only a walled program's
+// HTTP/1.0 reaches the proxy as it is.
 func (a *RunAPI) target(r *http.Request) (runAPITarget, bool) {
-	if port := r.URL.Port(); r.URL.Scheme != "http" || r.URL.User != nil || (port != "" && port != "80") || !r.ProtoAtLeast(1, 1) {
+	port := r.URL.Port()
+	if len(r.RequestURI) > maxRunAPITarget || r.URL.Scheme != "http" || r.URL.User != nil || (port != "" && port != "80") ||
+		r.URL.RawQuery != "" || r.URL.ForceQuery || !r.ProtoAtLeast(1, 1) {
 		return runAPITarget{}, false
 	}
 	_, rest, _ := strings.Cut(r.RequestURI, "://")
-	_, raw, found := strings.Cut(rest, "/")
-	if !found || strings.ContainsAny(raw, "?#") {
+	// The path starts at the authority's end. A query or a fragment there may contain
+	// anything, a whole path of the five shapes among it.
+	end := strings.IndexAny(rest, "/?#")
+	if end < 0 || rest[end] != '/' {
+		return runAPITarget{}, false
+	}
+	raw := rest[end+1:]
+	if strings.ContainsAny(raw, "?#") {
 		return runAPITarget{}, false
 	}
 	var parts []string
@@ -163,15 +287,16 @@ func (a *RunAPI) target(r *http.Request) (runAPITarget, bool) {
 	get, post := r.Method == http.MethodGet, r.Method == http.MethodPost
 	switch {
 	case len(parts) == 1 && parts[0] == "work-item" && get:
-		return runAPITarget{path: "/work-item"}, true
+		return runAPITarget{path: "/work-item", shown: "/work-item"}, true
 	case len(parts) == 1 && parts[0] == "artifacts" && get:
-		return runAPITarget{path: "/artifacts"}, true
+		return runAPITarget{path: "/artifacts", shown: "/artifacts"}, true
 	case len(parts) == 1 && parts[0] == "artifacts" && post:
-		return runAPITarget{path: "/artifacts", post: true, limit: maxRunAPIArtifacts}, true
+		return runAPITarget{path: "/artifacts", shown: "/artifacts", post: true, limit: maxRunAPIArtifacts, slot: true}, true
 	case len(parts) == 1 && parts[0] == "verdict" && post:
-		return runAPITarget{path: "/verdict", post: true, limit: maxRunAPIVerdict}, true
+		return runAPITarget{path: "/verdict", shown: "/verdict", post: true, limit: maxRunAPIVerdict}, true
 	case len(parts) == 4 && parts[0] == "artifacts" && parts[2] == "files" && get:
-		return runAPITarget{path: "/artifacts/" + url.PathEscape(parts[1]) + "/files/" + url.PathEscape(parts[3]), file: true}, true
+		return runAPITarget{path: "/artifacts/" + url.PathEscape(parts[1]) + "/files/" + url.PathEscape(parts[3]),
+			shown: "/artifacts/" + shownSegment(parts[1]) + "/files/" + shownSegment(parts[3]), file: true}, true
 	}
 	return runAPITarget{}, false
 }
@@ -212,7 +337,46 @@ func (a *RunAPI) leave() {
 	a.mu.Unlock()
 }
 
-// wait is how long t's request has, from the first byte of its body read.
+// enterPost takes the run's one POST slot, and returns false when another POST of the
+// run holds it. The slot counts among the run's [RunAPIInFlight], so a stalled body
+// holds this run's slot and no slot of the gateway.
+func (a *RunAPI) enterPost() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.posting {
+		return false
+	}
+	a.posting = true
+	return true
+}
+
+// leavePost gives the run's POST slot back.
+func (a *RunAPI) leavePost() {
+	a.mu.Lock()
+	a.posting = false
+	a.mu.Unlock()
+}
+
+// send signs and sends one request, once the gateway's limits allow it: POST artifacts
+// holds a send slot until its answer is read, which [RunAPI.Send] does for a POST, and
+// every request takes a token of the gateway's bucket. sent is false when nothing was
+// signed: err is [errRunAPIBusy] when a limit had no room, or ctx's error.
+func (a *RunAPI) send(ctx context.Context, method string, t runAPITarget, body []byte) (ans *server.RunAPIAnswer, sent bool, err error) {
+	if t.slot {
+		if err := a.Limits.enter(ctx); err != nil {
+			return nil, false, err
+		}
+		defer a.Limits.leave()
+	}
+	if err := a.Limits.take(ctx); err != nil {
+		return nil, false, err
+	}
+	ans, err = a.Send(ctx, method, t.path, body, t.file)
+	return ans, true, err
+}
+
+// wait is how long t's request has from the moment the route admits it: the read of a
+// POST's body, any wait for a slot or a token, and the send all count.
 func (a *RunAPI) wait(t runAPITarget) time.Duration {
 	switch {
 	case t.file && a.fileWait != 0:
@@ -246,7 +410,15 @@ const (
 	runAPIBucket      = "Retry in 1 second: the run's requests came faster than gateway.run_limits.requests_per_second allows."
 	runAPIConnections = "Retry once one of this run's connections closes: the run has as many open as gateway.run_limits.connections allows."
 	runAPIUnverified  = "Check the gateway's pin, apiary_public_key, against the keys of Qory Apiary: the answer to this request failed verification under it, and the gateway dropped the answer."
+	runAPITooLarge    = "Check the size of the work item's data in Qory Apiary: the answer is over the bound the gateway reads, 16 MiB for a 200 and 64 KiB for any other status, and the gateway dropped the answer."
 	runAPIUnavailable = "Retry the request: the gateway did not reach Qory Apiary, or the request timed out."
+)
+
+// The texts of a 403 to the host: on a proxy with the route, which a CONNECT reaches, and
+// on a proxy with none.
+const (
+	runAPIDenied  = "qory: send run API requests as plain http:// requests to QORY_RUN_API through the run's proxy: a CONNECT to this host opens no tunnel.\n"
+	runAPINoRoute = "qory: use QORY_RUN_API in a run with a control plane: this proxy has no route to the run API.\n"
 )
 
 // tooLarge is the text of a body over limit.
@@ -254,23 +426,30 @@ func tooLarge(limit int64) string {
 	return fmt.Sprintf("Shrink the body to at most %d bytes: the run API takes no more on this path.", limit)
 }
 
-// shownRunAPI is s as a decision contains it, at most [maxRunAPIShown] bytes.
-func shownRunAPI(s string) string { return s[:min(len(s), maxRunAPIShown)] }
+// runAPIBusy is the text of a request that found the gateway's limits full.
+func runAPIBusy() string {
+	return fmt.Sprintf("Retry in 1 second: the gateway signs at most %d run API requests a second and sends %d artifacts at once.", RunAPIGatewayRate, RunAPIArtifactSends)
+}
 
-// serveRunAPI serves one request of the route: it takes a token of the run's bucket,
-// reads the five shapes ([RunAPI.target]), checks the limits, and sends the request
-// built from the parsed parts, so no header of the caller's crosses. A request that
-// fails a check gets a JSON error, and nothing is signed or sent. The answer passes once
-// it verifies, with its status, its body and the headers [runAPIHeaders] lists. Every
-// request writes one decision, with no body and no header value in it; a 429 of the
-// run's bucket, which spends no token, is recorded as [limiter.recordable] allows.
+// shownMethod is a method as a decision contains it, at most [maxRunAPIShown] bytes.
+func shownMethod(s string) string { return s[:min(len(s), maxRunAPIShown)] }
+
+// serveRunAPI serves one request of the route: it reads the five shapes
+// ([RunAPI.target]), takes a token of the run's bucket, checks the limits, and sends the
+// request built from the parsed parts, so no header of the caller's crosses. A request
+// that fails a check gets a JSON error, and nothing is signed or sent. The answer passes
+// once it verifies, with its status, its body and the headers [runAPIHeaders] lists.
+// Every request writes one decision, with no body and no header value in it: a request
+// inside the shapes with its canonical path, and one outside them with
+// [runAPIOutside]. A 429 of the run's bucket, which spends no token, is recorded as
+// [limiter.recordable] allows.
 func (p *Proxy) serveRunAPI(w http.ResponseWriter, r *http.Request, a *RunAPI) {
-	shown, ok := policy.CleanPath(r.URL.EscapedPath())
-	if !ok {
-		shown = r.URL.EscapedPath()
-	}
+	t, inside := a.target(r)
 	d := Decision{Host: link.RunAPIHost, Port: 80, Method: "HTTP", Mode: p.rules.Load().mode, Rule: RunAPIRule, Outcome: Refused, Channel: ChannelRunAPI,
-		RequestMethod: shownRunAPI(r.Method), Path: shownRunAPI(shown), RequestID: newRequestID()}
+		RequestMethod: shownMethod(r.Method), Path: runAPIOutside, RequestID: newRequestID()}
+	if inside {
+		d.Path = "/v1/runs/" + a.RunID + t.shown
+	}
 	refuse := func(status int, code, message string) {
 		d.Status = status
 		p.observe(d)
@@ -284,8 +463,7 @@ func (p *Proxy) serveRunAPI(w http.ResponseWriter, r *http.Request, a *RunAPI) {
 		runAPIError(w, http.StatusTooManyRequests, "rate_limited", runAPIBucket)
 		return
 	}
-	t, ok := a.target(r)
-	if !ok {
+	if !inside {
 		refuse(http.StatusNotFound, "not_found", runAPINotFound)
 		return
 	}
@@ -308,11 +486,11 @@ func (p *Proxy) serveRunAPI(w http.ResponseWriter, r *http.Request, a *RunAPI) {
 	}
 	defer a.leave()
 	if t.post {
-		if !a.Posts.enter() {
-			refuse(http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("Retry in 1 second: the gateway has %d run API POST requests in flight, the most it takes.", RunAPIPostsInFlight))
+		if !a.enterPost() {
+			refuse(http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("Retry in 1 second: the run has %d run API POST request in flight, the most it may have.", RunAPIPostsPerRun))
 			return
 		}
-		defer a.Posts.leave()
+		defer a.leavePost()
 	}
 	wait := a.wait(t)
 	deadline := time.Now().Add(wait)
@@ -340,13 +518,26 @@ func (p *Proxy) serveRunAPI(w http.ResponseWriter, r *http.Request, a *RunAPI) {
 		}
 		rc.SetReadDeadline(time.Time{})
 	}
-	ans, err := a.Send(ctx, r.Method, t.path, body, t.file)
+	ans, sent, err := a.send(ctx, r.Method, t, body)
+	if !sent {
+		if errors.Is(err, errRunAPIBusy) {
+			refuse(http.StatusTooManyRequests, "rate_limited", runAPIBusy())
+			return
+		}
+		refuse(http.StatusServiceUnavailable, "unavailable", runAPIUnavailable)
+		return
+	}
 	d.Allowed = true
 	switch {
 	case errors.Is(err, server.ErrRunAPIUnverified):
 		d.Outcome, d.Status = Connected, http.StatusBadGateway
 		p.observe(d)
 		runAPIError(w, http.StatusBadGateway, "answer_unverified", runAPIUnverified)
+		return
+	case errors.Is(err, server.ErrRunAPITooLarge):
+		d.Outcome, d.Status = Connected, http.StatusBadGateway
+		p.observe(d)
+		runAPIError(w, http.StatusBadGateway, "answer_too_large", runAPITooLarge)
 		return
 	case err != nil:
 		d = failed(d, err)

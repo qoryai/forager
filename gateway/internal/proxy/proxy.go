@@ -1381,8 +1381,9 @@ func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 }
 
 // deny answers a refused connection as [deny] does, with the body [Proxy.Unlisted] set
-// for a host no allow entry matches under enforce, and the body [Proxy.GuardRefused]
-// set for a host the guard refuses.
+// for a host no allow entry matches under enforce, the body [Proxy.GuardRefused] set
+// for a host the guard refuses, and for a denial with [RunAPIRule] the text of a proxy
+// with the route or of one with none.
 func (p *Proxy) deny(w http.ResponseWriter, d Decision) {
 	text := ""
 	if body := p.unlisted.Load(); body != nil && d.Rule == "" && !d.Allowed && d.Mode == policy.Enforce {
@@ -1390,6 +1391,12 @@ func (p *Proxy) deny(w http.ResponseWriter, d Decision) {
 	}
 	if body := p.guardBody.Load(); body != nil && d.Rule == GuardRule {
 		text = (*body)(d.Host, d.Port, d.Never)
+	}
+	if d.Rule == RunAPIRule {
+		text = runAPIDenied
+		if p.runAPI.Load() == nil {
+			text = runAPINoRoute
+		}
 	}
 	if text == "" {
 		deny(w, d)
@@ -1417,10 +1424,6 @@ func deny(w http.ResponseWriter, d Decision) {
 		fmt.Fprintf(w, "qory: send requests to this host as https:// through CONNECT.\n"+
 			"qory: %s %s%s denied by the gateway: the gateway sets this host's credential, and masks it in answers, only on https:// requests through CONNECT\n",
 			accesskey.ShownValue(d.RequestMethod, false), d.Host, accesskey.ShownValue(d.Path, false))
-		return
-	}
-	if d.Rule == RunAPIRule {
-		fmt.Fprintf(w, "qory: send run API requests as plain http:// requests to QORY_RUN_API through the run's proxy: the gateway dials nothing for %s.\n", d.Host)
 		return
 	}
 	if d.Rule == GuardRule {

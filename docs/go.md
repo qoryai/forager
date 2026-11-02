@@ -518,6 +518,8 @@ follows no redirect.
 `RunAPI` returns an error that starts with the fix in a closed run and in a run with no
 control plane. A request of the client fails once the run is closed.
 
+Qory Apiary serves only a run of a work item; any other run gets `404` `not_found`.
+
 Inside a session, read the same base URL from `session.EnvRunAPI`, `QORY_RUN_API`, and
 send the request through `HTTP_PROXY`. A setup container gets the variable too. Behind a
 wall, a value a caller passes for the name is `variable_reserved`.
@@ -525,6 +527,12 @@ wall, a value a caller passes for the name is `variable_reserved`.
 A file's `200` is chunked. Treat its bytes as unverified until the read ends cleanly: a
 file that fails its signed digest ends in a read error. The contract's README, §The run
 API, lists the five requests, each status and the limits.
+
+Plan the gateway's memory for the route: at most 32 MiB per run for a POST body, plus
+4 × 16 MiB per run for answers. Each run has 1 POST in flight, among its 4 requests in
+flight. A gateway signs 20 requests a second across its runs, with a burst of 20, and
+sends 8 `POST /artifacts` at once. The gateway reads an answer of at most 16 MiB, and a
+larger one is a `502` `answer_too_large`.
 
 ### The engine proxy
 

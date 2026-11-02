@@ -209,6 +209,9 @@ func TestTheRunAnswerNamesTheRunAPI(t *testing.T) {
 	}
 }
 
+// noRoute is the text of a denial on a proxy with no route to the run API.
+const noRoute = "this proxy has no route to the run API"
+
 // TestARunWithNoControlPlaneHasNoRoute pins a gateway with no server: the run answer
 // has no run_api, and a request to the host gets the proxy's ordinary denial, with no
 // channel in its record.
@@ -220,7 +223,7 @@ func TestARunWithNoControlPlaneHasNoRoute(t *testing.T) {
 		t.Errorf("run_api %q", a.RunAPI)
 	}
 	resp, b, _ := o.send(line(http.MethodGet, runAPIOrigin+"/v1/runs/"+a.RunID+"/work-item"), nil)
-	if resp.StatusCode != http.StatusForbidden || strings.HasPrefix(string(b), "{") {
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(b), noRoute) || strings.Contains(string(b), "plain http://") {
 		t.Errorf("%d %s", resp.StatusCode, b)
 	}
 	if got := o.egressOf(); len(got) != 0 {
@@ -285,6 +288,12 @@ func TestOnlyTheFiveShapesReachTheRunAPI(t *testing.T) {
 		{"another port", http.MethodGet, "http://" + link.RunAPIHost + ":8080" + strings.TrimPrefix(base, runAPIOrigin) + "/work-item"},
 		{"user information", http.MethodGet, "http://user@" + link.RunAPIHost + strings.TrimPrefix(base, runAPIOrigin) + "/work-item"},
 		{"another scheme", http.MethodGet, "https://" + link.RunAPIHost + strings.TrimPrefix(base, runAPIOrigin) + "/work-item"},
+		{"a query before the path", http.MethodPost, runAPIOrigin + "?" + strings.TrimPrefix(base, runAPIOrigin) + "/verdict"},
+		{"a query before the path, GET", http.MethodGet, runAPIOrigin + "?" + strings.TrimPrefix(base, runAPIOrigin) + "/work-item"},
+		{"a query with a name before the path", http.MethodPost, runAPIOrigin + "?x=" + strings.TrimPrefix(base, runAPIOrigin) + "/verdict"},
+		{"port 80 and a query before the path", http.MethodPost, runAPIOrigin + ":80?x=" + strings.TrimPrefix(base, runAPIOrigin) + "/verdict"},
+		{"an empty query before the path", http.MethodGet, runAPIOrigin + "?/"},
+		{"a query after the path", http.MethodGet, base + "/work-item?" + strings.TrimPrefix(base, runAPIOrigin) + "/artifacts"},
 	} {
 		resp, b, _ := o.send(line(c.method, c.target), nil)
 		if c.method == http.MethodHead {
@@ -300,9 +309,15 @@ func TestOnlyTheFiveShapesReachTheRunAPI(t *testing.T) {
 	}
 	resp, b, _ := o.send(o.requestLine10(), nil)
 	routeError(t, "HTTP/1.0", resp, b, http.StatusNotFound, "not_found")
-	// net/http takes no target with a broken escape: the proxy's server returns its 400.
-	if resp, _, _ := o.send(line(http.MethodGet, base+"/artifacts/v/files/a%zz"), nil); resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("a broken escape: %d", resp.StatusCode)
+	// net/http takes no target with a broken escape or a fragment in its authority: the
+	// proxy's server returns its 400.
+	for what, target := range map[string]string{
+		"a broken escape":            base + "/artifacts/v/files/a%zz",
+		"a fragment before the path": runAPIOrigin + "#" + strings.TrimPrefix(base, runAPIOrigin) + "/verdict",
+	} {
+		if resp, _, _ := o.send(line(http.MethodPost, target), nil); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d", what, resp.StatusCode)
+		}
 	}
 	if got := o.f.requests(); len(got) != 0 {
 		t.Fatalf("a request reached the run API: %+v", got)
@@ -335,7 +350,7 @@ func (o *runAPIRun) requestLine10() string {
 	return http.MethodGet + " " + o.url("/work-item") + " HTTP/1.0\r\n"
 }
 
-// TestNoHeaderOfTheCallerCrosses pins what the run API gets: a GET has none of the
+// TestNoHeaderOfTheCallerCrosses pins what the run API gets: a POST has none of the
 // caller's headers, and the request's signature verifies under the gateway's access key
 // over the exact target. A signed answer's headers reach the caller from a short list.
 func TestNoHeaderOfTheCallerCrosses(t *testing.T) {
@@ -347,17 +362,17 @@ func TestNoHeaderOfTheCallerCrosses(t *testing.T) {
 		o.f.sign(w, r, http.StatusOK, []byte(`{"version":1}`))
 	})
 	caller := map[string]string{
-		"Authorization":       "Bearer fake-caller-bearer",
-		"Proxy-Authorization": "Basic fake-caller-basic",
-		"Cookie":              "fake-caller-cookie=1",
-		"X-Qory-Signature":    "fake-caller-signature",
-		"X-Qory-Key-Id":       "ak_fakecallerkey",
-		"X-Qory-Instance-Id":  "i_fakecaller",
-		"X-Qory-Timestamp":    "1000",
-		"X-Qory-Other":        "fake-caller-other",
-		"X-Forwarded-For":     "203.0.113.1",
-		"Content-Type":        "text/fake",
-		"User-Agent":          "fake-caller-agent",
+		"Authorization":          "Bearer fake-caller-bearer",
+		"Proxy-Authorization":    "Basic fake-caller-basic",
+		"Cookie":                 "fake-caller-cookie=1",
+		server.HeaderSignature:   "fake-caller-signature",
+		server.HeaderAccessKeyID: "ak_fakecallerkey",
+		server.HeaderInstanceID:  "i_fakecaller",
+		server.HeaderTimestamp:   "fake-caller-timestamp",
+		"X-Qory-Other":           "fake-caller-other",
+		"X-Forwarded-For":        "203.0.113.1",
+		"Content-Type":           "text/fake",
+		"User-Agent":             "fake-caller-agent",
 	}
 	head := line(http.MethodPost, o.url("/verdict"))
 	body := []byte(`{"verdict":"pass"}`)
@@ -459,6 +474,35 @@ func (f *fakeRunAPI) fileAnswer(content []byte, digest string) func(w http.Respo
 func sha256Hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// TestAnAnswerOverTheBoundIsDropped pins an answer the gateway reads no further than its
+// bound: a 502 with the code answer_too_large, whose text states the bound and no pin,
+// and no body.
+func TestAnAnswerOverTheBoundIsDropped(t *testing.T) {
+	o := openRunAPIRun(t)
+	const secret = "fake-answer-over-the-bound"
+	for what, c := range map[string]struct {
+		status int
+		size   int
+	}{
+		"a 200":          {http.StatusOK, server.MaxRunAPIAnswer + 1},
+		"another status": {http.StatusConflict, server.MaxRefusal + 1},
+	} {
+		o.f.answers(func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+			w.WriteHeader(c.status)
+			w.Write(append([]byte(secret), make([]byte, c.size)...))
+		})
+		resp, b, _ := o.send(line(http.MethodGet, o.url("/work-item")), nil)
+		routeError(t, what, resp, b, http.StatusBadGateway, "answer_too_large")
+		if bytes.Contains(b, []byte(secret)) || bytes.Contains(b, []byte("pin")) || !bytes.Contains(b, []byte("16 MiB")) {
+			t.Errorf("%s: %s", what, b)
+		}
+	}
+	got := o.egress(2)
+	if len(got) != 2 || got[0]["status"] != float64(http.StatusBadGateway) || got[0]["decision"] != "allowed" {
+		t.Errorf("the record: %v", got)
+	}
 }
 
 // TestAFileStreamsChunkedAndEndsInItsDigest pins a file: chunked, with no
@@ -620,6 +664,9 @@ func TestAConnectToTheRunAPIHostIsDenied(t *testing.T) {
 				if resp.StatusCode != http.StatusForbidden {
 					t.Errorf("CONNECT %s: %d %s", target, resp.StatusCode, b)
 				}
+				if what != "enforce" && (!strings.Contains(string(b), "plain http://") || strings.Contains(string(b), noRoute)) {
+					t.Errorf("CONNECT %s: the denial's text: %s", target, b)
+				}
 			}
 			if got := f.requests(); len(got) != 0 {
 				t.Errorf("%d requests reached the run API", len(got))
@@ -638,7 +685,7 @@ func TestAConnectToTheRunAPIHostIsDenied(t *testing.T) {
 }
 
 // TestTheStackProxyHasNoRunAPIRoute pins the stack proxy: a request to the host through
-// it gets the proxy's ordinary denial, and no request reaches the run API.
+// it gets a denial that says the proxy has no route, and no request reaches the run API.
 func TestTheStackProxyHasNoRunAPIRoute(t *testing.T) {
 	c := newControl(t)
 	c.serveDocument(harnessGatewayDoc(false), 'a')
@@ -664,6 +711,9 @@ func TestTheStackProxyHasNoRunAPIRoute(t *testing.T) {
 	resp, b, _ := o.send(line(http.MethodGet, a.RunAPI+"/work-item"), nil)
 	if resp.StatusCode != http.StatusForbidden || strings.HasPrefix(string(b), "{") {
 		t.Errorf("the GET: %d %s", resp.StatusCode, b)
+	}
+	if strings.Contains(string(b), "plain http://") {
+		t.Errorf("the GET's denial: %s", b)
 	}
 	if resp, b, _ = o.send(line(http.MethodConnect, link.RunAPIHost+":443"), nil); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("the CONNECT: %d %s", resp.StatusCode, b)
@@ -700,7 +750,7 @@ func TestEachRequestIsOneEvent(t *testing.T) {
 	}{
 		{http.MethodPost, path + "/verdict", "allowed", 200},
 		{http.MethodGet, path + "/work-item", "allowed", 200},
-		{http.MethodGet, path + "/reload", "denied", 404},
+		{http.MethodGet, "outside", "denied", 404},
 		{http.MethodPost, path + "/verdict", "denied", 413},
 	} {
 		d := got[i]

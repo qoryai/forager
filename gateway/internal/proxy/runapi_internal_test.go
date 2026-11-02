@@ -5,17 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/server"
@@ -53,8 +54,8 @@ func startRoute(t *testing.T, a *RunAPI, send func(ctx context.Context, method, 
 	t.Cleanup(func() { p.Close() })
 	r.p = p
 	a.RunID = routeRun
-	if a.Posts == nil {
-		a.Posts = &RunAPIPosts{}
+	if a.Limits == nil {
+		a.Limits = &RunAPILimits{}
 	}
 	a.Send = func(ctx context.Context, method, path string, body []byte, file bool) (*server.RunAPIAnswer, error) {
 		r.sent.Add(1)
@@ -129,6 +130,37 @@ func (r *route) hold(t *testing.T, wg *sync.WaitGroup, entered <-chan struct{}, 
 	}
 }
 
+// TestTheTargetReadsTheRawTargetAndTheParsedOne pins the two checks of a query apart:
+// target refuses a raw target with a query where the path starts, whatever the parsed URL
+// contains, and a parsed URL with a query, whatever the raw target contains.
+func TestTheTargetReadsTheRawTargetAndTheParsedOne(t *testing.T) {
+	a := &RunAPI{RunID: routeRun}
+	path := strings.TrimPrefix(routeURL("/work-item"), "http://"+link.RunAPIHost)
+	request := func(raw string, u url.URL) *http.Request {
+		u.Scheme, u.Host = "http", link.RunAPIHost
+		return &http.Request{Method: http.MethodGet, RequestURI: raw, URL: &u, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1}
+	}
+	if _, ok := a.target(request(routeURL("/work-item"), url.URL{Path: path})); !ok {
+		t.Fatal("the request of a shape is outside")
+	}
+	for what, r := range map[string]*http.Request{
+		"a raw query before the path":     request("http://"+link.RunAPIHost+"?"+path, url.URL{Path: path}),
+		"a raw fragment before the path":  request("http://"+link.RunAPIHost+"#"+path, url.URL{Path: path}),
+		"port 80 and a raw query":         request("http://"+link.RunAPIHost+":80?x="+path, url.URL{Path: path}),
+		"no path":                         request("http://"+link.RunAPIHost, url.URL{Path: path}),
+		"a raw query that is the path":    request("http://"+link.RunAPIHost+"?"+strings.TrimPrefix(path, "/"), url.URL{Path: path}),
+		"a raw fragment that is the path": request("http://"+link.RunAPIHost+"#"+strings.TrimPrefix(path, "/"), url.URL{Path: path}),
+		"a parsed query":                  request(routeURL("/work-item"), url.URL{Path: path, RawQuery: "x=1"}),
+		"a parsed empty query":            request(routeURL("/work-item"), url.URL{Path: path, ForceQuery: true}),
+		"a raw query after the path":      request(routeURL("/work-item?x=1"), url.URL{Path: path}),
+		"a raw fragment after the path":   request(routeURL("/work-item#x"), url.URL{Path: path}),
+	} {
+		if _, ok := a.target(r); ok {
+			t.Errorf("%s reached a shape", what)
+		}
+	}
+}
+
 // TestTheRoutesRate pins 10 requests a second for a run: the eleventh in a second is a
 // 429 with Retry-After: 1 and nothing sent, and the tokens come back with time.
 func TestTheRoutesRate(t *testing.T) {
@@ -181,27 +213,412 @@ func TestFourInFlightPerRun(t *testing.T) {
 	}
 }
 
-// TestEightPostsInFlightPerGateway pins the gateway's limit across its runs: a ninth POST
-// from a third run is a 429 with nothing sent, while a GET passes.
-func TestEightPostsInFlightPerGateway(t *testing.T) {
-	posts := &RunAPIPosts{}
-	entered, release := make(chan struct{}, RunAPIPostsInFlight), make(chan struct{})
-	first := startRoute(t, &RunAPI{Posts: posts}, heldSends(entered, release))
-	second := startRoute(t, &RunAPI{Posts: posts}, heldSends(entered, release))
-	third := startRoute(t, &RunAPI{Posts: posts}, nil)
+// heldPosts is a Send that holds a POST as [heldSends] does and answers any other request.
+func heldPosts(entered chan<- struct{}, release <-chan struct{}) func(ctx context.Context, method, path string, body []byte, file bool) (*server.RunAPIAnswer, error) {
+	held := heldSends(entered, release)
+	return func(ctx context.Context, method, path string, body []byte, file bool) (*server.RunAPIAnswer, error) {
+		if method == http.MethodPost {
+			return held(ctx, method, path, body, file)
+		}
+		return &server.RunAPIAnswer{Status: http.StatusOK, Header: http.Header{}}, nil
+	}
+}
+
+// TestOnePostInFlightPerRun pins the run's limit of POSTs: a second POST of the run is a
+// 429 with nothing sent, a GET passes, and the next POST passes once the first ends.
+func TestOnePostInFlightPerRun(t *testing.T) {
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	r := startRoute(t, &RunAPI{}, heldPosts(entered, release))
+	var wg sync.WaitGroup
+	r.hold(t, &wg, entered, 1, http.MethodPost, "/artifacts")
+	r.limited(t, "the second POST", http.MethodPost, "/verdict")
+	if status, _, _ := r.status(t, http.MethodGet, "/work-item"); status != http.StatusOK {
+		t.Errorf("a GET: %d", status)
+	}
+	if got := r.sent.Load(); got != 2 {
+		t.Errorf("%d requests sent", got)
+	}
+	close(release)
+	wg.Wait()
+	if status, _, _ := r.status(t, http.MethodPost, "/verdict"); status != http.StatusOK {
+		t.Errorf("after the first POST: %d", status)
+	}
+}
+
+// TestEightArtifactSendsPerGateway pins the gateway's send slots across its runs: a ninth
+// POST artifacts waits, then gets a 429 with nothing sent, while a POST verdict and a GET
+// pass, since neither takes a slot.
+func TestEightArtifactSendsPerGateway(t *testing.T) {
+	const wait = 100 * time.Millisecond
+	limits := &RunAPILimits{queueWait: wait}
+	entered, release := make(chan struct{}, RunAPIArtifactSends), make(chan struct{})
 	var wg sync.WaitGroup
 	defer func() {
 		close(release)
 		wg.Wait()
 	}()
-	first.hold(t, &wg, entered, RunAPIInFlight, http.MethodPost, "/artifacts")
-	second.hold(t, &wg, entered, RunAPIInFlight, http.MethodPost, "/verdict")
-	third.limited(t, "the ninth POST", http.MethodPost, "/verdict")
-	if got := third.sent.Load(); got != 0 {
+	for range RunAPIArtifactSends {
+		startRoute(t, &RunAPI{Limits: limits}, heldSends(entered, release)).hold(t, &wg, entered, 1, http.MethodPost, "/artifacts")
+	}
+	ninth := startRoute(t, &RunAPI{Limits: limits}, nil)
+	start := time.Now()
+	ninth.limited(t, "the ninth", http.MethodPost, "/artifacts")
+	if d := time.Since(start); d < wait {
+		t.Errorf("the ninth waited %v", d)
+	}
+	if got := ninth.sent.Load(); got != 0 {
 		t.Errorf("%d requests sent", got)
 	}
-	if status, _, _ := third.status(t, http.MethodGet, "/work-item"); status != http.StatusOK {
+	if status, _, _ := ninth.status(t, http.MethodPost, "/verdict"); status != http.StatusOK {
+		t.Errorf("a POST verdict: %d", status)
+	}
+	if status, _, _ := ninth.status(t, http.MethodGet, "/work-item"); status != http.StatusOK {
 		t.Errorf("a GET: %d", status)
+	}
+}
+
+// TestAPostGetsASendSlotThatEnds pins the wait for a slot: a ninth POST artifacts passes
+// when a slot ends inside the wait.
+func TestAPostGetsASendSlotThatEnds(t *testing.T) {
+	limits := &RunAPILimits{}
+	entered, release := make(chan struct{}, RunAPIArtifactSends), make(chan struct{})
+	var wg sync.WaitGroup
+	for range RunAPIArtifactSends {
+		startRoute(t, &RunAPI{Limits: limits}, heldSends(entered, release)).hold(t, &wg, entered, 1, http.MethodPost, "/artifacts")
+	}
+	ninth := startRoute(t, &RunAPI{Limits: limits}, nil)
+	done := make(chan int, 1)
+	go func() {
+		status, _, _ := ninth.status(t, http.MethodPost, "/artifacts")
+		done <- status
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if status := <-done; status != http.StatusOK {
+		t.Errorf("the ninth: %d", status)
+	}
+}
+
+// TestAStalledBodyHoldsOnlyItsRun pins what a stalled body costs: its run's POST and none
+// of the gateway's slots, so another run's verdict and artifacts pass during the stall,
+// with more runs stalled than the gateway has slots.
+func TestAStalledBodyHoldsOnlyItsRun(t *testing.T) {
+	limits := &RunAPILimits{}
+	var stalled []*route
+	for range RunAPIArtifactSends + 1 {
+		r := startRoute(t, &RunAPI{Limits: limits}, nil)
+		c, err := net.Dial("tcp", r.p.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		fmt.Fprintf(c, "POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 1000\r\n\r\n{", routeURL("/artifacts"), link.RunAPIHost)
+		stalled = append(stalled, r)
+	}
+	for _, r := range stalled {
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+			r.a.mu.Lock()
+			posting := r.a.posting
+			r.a.mu.Unlock()
+			if posting {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("no stalled POST reached the route")
+			}
+		}
+	}
+	if got := len(limits.slots); got != 0 {
+		t.Errorf("the stalled bodies hold %d send slots", got)
+	}
+	other := startRoute(t, &RunAPI{Limits: limits}, nil)
+	for _, path := range []string{"/verdict", "/artifacts"} {
+		if status, _, _ := other.status(t, http.MethodPost, path); status != http.StatusOK {
+			t.Errorf("another run's POST %s: %d", path, status)
+		}
+	}
+	if got := other.sent.Load(); got != 2 {
+		t.Errorf("%d requests sent", got)
+	}
+	stalled[0].limited(t, "the stalled run's second POST", http.MethodPost, "/verdict")
+}
+
+// TestTheGatewaysBucket pins the bucket: the burst passes with no wait, each next request
+// waits longer than the one before, up to 5 seconds, and the one after that is refused
+// with nothing taken.
+func TestTheGatewaysBucket(t *testing.T) {
+	f := newFakeTime()
+	l := &RunAPILimits{now: f.now, sleep: f.wait}
+	take := func() error { return l.take(context.Background()) }
+	for range RunAPIGatewayRate {
+		if err := take(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := f.waited(); len(got) != 0 {
+		t.Fatalf("the burst waited: %v", got)
+	}
+	const waiters = 5 * RunAPIGatewayRate
+	for range waiters {
+		if err := take(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := f.waited()
+	if len(got) != waiters {
+		t.Fatalf("%d waits", len(got))
+	}
+	for i, d := range got {
+		if want := time.Duration(i+1) * time.Second / RunAPIGatewayRate; (d - want).Abs() > time.Microsecond {
+			t.Errorf("wait %d is %v, want %v", i, d, want)
+		}
+	}
+	if err := take(); !errors.Is(err, errRunAPIBusy) {
+		t.Errorf("past the wait: %v", err)
+	}
+	f.advance(time.Second)
+	if err := take(); err != nil {
+		t.Errorf("a second later: %v", err)
+	}
+}
+
+// TestAWaitForAGatewayTokenEndsWithItsContext pins a request that stops waiting: it gives
+// its token back.
+func TestAWaitForAGatewayTokenEndsWithItsContext(t *testing.T) {
+	f := newFakeTime()
+	l := &RunAPILimits{now: f.now, sleep: func(context.Context, time.Duration) bool { return false }}
+	for range RunAPIGatewayRate {
+		if err := l.take(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := l.take(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("%v", err)
+	}
+	if l.tokens != 0 {
+		t.Errorf("%v tokens", l.tokens)
+	}
+}
+
+// TestTheGatewayCapsSignedRequests pins the cap across runs: 13 runs at their 10 requests
+// a second sign the burst and 5 seconds of tokens and no more, and past that every one of
+// the five requests is the route's 429, with nothing sent and no send slot kept.
+func TestTheGatewayCapsSignedRequests(t *testing.T) {
+	f := newFakeTime()
+	limits := &RunAPILimits{now: f.now, sleep: f.wait}
+	total := int32(0)
+	for range 13 {
+		r := startRoute(t, &RunAPI{Limits: limits, now: f.now}, nil)
+		for range RunAPIRate {
+			r.status(t, http.MethodGet, "/work-item")
+		}
+		total += r.sent.Load()
+	}
+	if want := int32(6 * RunAPIGatewayRate); total != want {
+		t.Errorf("%d requests signed, want %d", total, want)
+	}
+	got := f.waited()
+	if len(got) != 5*RunAPIGatewayRate || (got[len(got)-1]-5*time.Second).Abs() > time.Microsecond {
+		t.Errorf("%d waits, the last %v", len(got), got[len(got)-1])
+	}
+	r := startRoute(t, &RunAPI{Limits: limits, now: f.now}, nil)
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/work-item"},
+		{http.MethodGet, "/artifacts"},
+		{http.MethodGet, "/artifacts/v/files/f"},
+		{http.MethodPost, "/artifacts"},
+		{http.MethodPost, "/verdict"},
+	} {
+		r.limited(t, c.method+" "+c.path, c.method, c.path)
+	}
+	if got := r.sent.Load(); got != 0 {
+		t.Errorf("%d requests sent", got)
+	}
+	if got := len(limits.slots); got != 0 {
+		t.Errorf("%d send slots kept", got)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, d := range r.decisions {
+		if d.Allowed || d.Outcome != Refused || d.Status != http.StatusTooManyRequests || d.Rule != RunAPIRule {
+			t.Errorf("a decision: %+v", d)
+		}
+	}
+}
+
+// rawStatus writes req on one connection and returns the status line.
+func rawStatus(t *testing.T, r *route, req string) string {
+	t.Helper()
+	c, err := net.Dial("tcp", r.p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(c, req)
+	line, _ := bufio.NewReader(c).ReadString('\n')
+	return strings.TrimSpace(line)
+}
+
+// TestNothingOutlivesARequest pins every slot's end: after each way a request ends, the
+// run's count, its POST, the gateway's send slot and the run's one connection are free,
+// so one more request passes.
+func TestNothingOutlivesARequest(t *testing.T) {
+	f := newFakeTime()
+	limits := &RunAPILimits{now: f.now, sleep: f.wait}
+	mode := make(chan func() (*server.RunAPIAnswer, error), 1)
+	a := &RunAPI{Limits: limits, now: f.now, postWait: 50 * time.Millisecond}
+	r := startRoute(t, a, func(context.Context, string, string, []byte, bool) (*server.RunAPIAnswer, error) {
+		select {
+		case m := <-mode:
+			return m()
+		default:
+			return &server.RunAPIAnswer{Status: http.StatusOK, Header: http.Header{}}, nil
+		}
+	})
+	limit(r.p, Limits{Connections: 1}, f)
+	free := func(what string) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+			f.advance(time.Second)
+			a.mu.Lock()
+			idle := a.inFlight == 0 && !a.posting
+			a.mu.Unlock()
+			if !idle || len(limits.slots) != 0 {
+				continue
+			}
+			if status, _, _ := r.status(t, http.MethodGet, "/work-item"); status == http.StatusOK {
+				return
+			}
+		}
+		t.Errorf("%s: a slot outlives the request", what)
+	}
+	fails := func(err error) func() (*server.RunAPIAnswer, error) {
+		return func() (*server.RunAPIAnswer, error) { return nil, err }
+	}
+	post := func(path string) string {
+		return "POST " + routeURL(path) + " HTTP/1.1\r\nHost: " + link.RunAPIHost + "\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{}"
+	}
+	get := func(path string) string {
+		return "GET " + routeURL(path) + " HTTP/1.1\r\nHost: " + link.RunAPIHost + "\r\nConnection: close\r\n\r\n"
+	}
+	for _, c := range []struct {
+		what, request string
+		answer        func() (*server.RunAPIAnswer, error)
+	}{
+		{what: "a POST artifacts", request: post("/artifacts")},
+		{what: "a POST verdict", request: post("/verdict")},
+		{what: "a POST artifacts with no answer", request: post("/artifacts"), answer: fails(errors.New("no answer"))},
+		{what: "an unverified POST", request: post("/artifacts"), answer: fails(server.ErrRunAPIUnverified)},
+		{what: "a POST over the bound", request: post("/verdict"), answer: fails(server.ErrRunAPITooLarge)},
+		{what: "a GET with no answer", request: get("/work-item"), answer: fails(errors.New("no answer"))},
+		{what: "a body that ends early", request: "POST " + routeURL("/verdict") + " HTTP/1.1\r\nHost: " + link.RunAPIHost + "\r\nContent-Length: 10\r\n\r\n{"},
+		{what: "a body over its limit", request: "POST " + routeURL("/verdict") + " HTTP/1.1\r\nHost: " + link.RunAPIHost + "\r\nTransfer-Encoding: chunked\r\n\r\n20000\r\n" + strings.Repeat("a", 0x20000) + "\r\n0\r\n\r\n"},
+		{what: "a file that fails", request: get("/artifacts/v/files/f"), answer: func() (*server.RunAPIAnswer, error) {
+			return &server.RunAPIAnswer{Status: http.StatusOK, Header: http.Header{}, File: io.NopCloser(failing{errors.New("cut")})}, nil
+		}},
+	} {
+		if c.answer != nil {
+			mode <- c.answer
+		}
+		if line := rawStatus(t, r, c.request); line == "" {
+			t.Errorf("%s: no status", c.what)
+		}
+		free(c.what)
+	}
+}
+
+// endless is a file with no end, whose Close closes closed.
+type endless struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (e *endless) Read(p []byte) (int, error) { return len(p), nil }
+
+func (e *endless) Close() error {
+	e.once.Do(func() { close(e.closed) })
+	return nil
+}
+
+// TestAStalledReaderOfAFileTimesOut pins the write deadline: a caller that stops reading
+// a file ends at the file's time, with a 503 in the record and the file closed.
+func TestAStalledReaderOfAFileTimesOut(t *testing.T) {
+	file := &endless{closed: make(chan struct{})}
+	r := startRoute(t, &RunAPI{fileWait: 100 * time.Millisecond}, func(context.Context, string, string, []byte, bool) (*server.RunAPIAnswer, error) {
+		return &server.RunAPIAnswer{Status: http.StatusOK, Header: http.Header{}, File: file}, nil
+	})
+	c, err := net.Dial("tcp", r.p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", routeURL("/artifacts/v/files/f"), link.RunAPIHost)
+	select {
+	case <-file.closed:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the stream outlived its write deadline")
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		r.mu.Lock()
+		n := len(r.decisions)
+		var status int
+		if n == 1 {
+			status = r.decisions[0].Status
+		}
+		r.mu.Unlock()
+		if n == 1 && status != http.StatusServiceUnavailable {
+			t.Fatalf("status %d", status)
+		}
+		if n == 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d decisions", n)
+		}
+	}
+}
+
+// TestARefusalOfTheRunsBucketIsRecordedOnceASecond pins the record of a request the run's
+// bucket refuses: every such request gets the 429, and one decision a second is written.
+func TestARefusalOfTheRunsBucketIsRecordedOnceASecond(t *testing.T) {
+	f := newFakeTime()
+	r := startRoute(t, &RunAPI{now: f.now, Limits: &RunAPILimits{now: f.now, sleep: f.wait}}, nil)
+	limit(r.p, Limits{Connections: 16, RequestsPerSecond: 1, Burst: 1}, f)
+	refusals := func() int {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		n := 0
+		for _, d := range r.decisions {
+			if d.Status == http.StatusTooManyRequests {
+				n++
+			}
+		}
+		return n
+	}
+	for range 6 {
+		if status, _, _ := r.status(t, http.MethodGet, "/work-item"); status != http.StatusOK {
+			t.Fatalf("%d", status)
+		}
+	}
+	for range 3 {
+		r.limited(t, "past the bucket", http.MethodGet, "/work-item")
+	}
+	if got := refusals(); got != 1 {
+		t.Errorf("%d refusals recorded in a second", got)
+	}
+	f.advance(time.Second)
+	if status, _, _ := r.status(t, http.MethodGet, "/work-item"); status != http.StatusOK {
+		t.Fatalf("a second later: %d", status)
+	}
+	for range 3 {
+		r.limited(t, "past the bucket again", http.MethodGet, "/work-item")
+	}
+	if got := refusals(); got != 2 {
+		t.Errorf("%d refusals recorded in two seconds", got)
 	}
 }
 
@@ -374,23 +791,64 @@ func TestTheRouteSignsNothingOutsideTheShapes(t *testing.T) {
 	}
 }
 
-// TestADecisionKeepsThePathBounded pins the bound on what a decision contains.
-func TestADecisionKeepsThePathBounded(t *testing.T) {
+// TestALongTargetIsOutside pins the bound on a target: 4 KiB passes, and one byte more is
+// the route's 404, with nothing signed and no path of the caller's in the decision.
+func TestALongTargetIsOutside(t *testing.T) {
 	r := startRoute(t, &RunAPI{}, nil)
-	c, err := net.Dial("tcp", r.p.Addr())
-	if err != nil {
-		t.Fatal(err)
+	get := func(target string) string {
+		return rawStatus(t, r, "GET "+target+" HTTP/1.1\r\nHost: "+link.RunAPIHost+"\r\nConnection: close\r\n\r\n")
 	}
-	defer c.Close()
-	io.WriteString(c, "GET "+routeURL("/"+strings.Repeat("a", 8192))+" HTTP/1.1\r\nHost: "+link.RunAPIHost+"\r\nConnection: close\r\n\r\n")
-	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodGet})
-	if err != nil {
-		t.Fatal(err)
+	prefix := routeURL("/artifacts/v/files/")
+	fits := prefix + strings.Repeat("a", maxRunAPITarget-len(prefix))
+	if line := get(fits); !strings.Contains(line, "200") {
+		t.Fatalf("a target of 4 KiB: %s", line)
 	}
-	resp.Body.Close()
+	for _, target := range []string{fits + "a", prefix + strings.Repeat("a", 900_000)} {
+		if line := get(target); !strings.Contains(line, "404") {
+			t.Errorf("a target of %d bytes: %s", len(target), line)
+		}
+	}
+	if got := r.sent.Load(); got != 1 {
+		t.Errorf("%d requests sent", got)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.decisions) != 1 || len(r.decisions[0].Path) != maxRunAPIShown || resp.StatusCode != http.StatusNotFound {
-		t.Errorf("%d, %d decisions: %s", resp.StatusCode, len(r.decisions), strconv.Itoa(len(r.decisions[0].Path)))
+	if len(r.decisions) != 3 || r.decisions[1].Path != runAPIOutside || r.decisions[2].Path != runAPIOutside {
+		t.Fatalf("%d decisions", len(r.decisions))
+	}
+	if want := "/v1/runs/" + routeRun + "/artifacts/v/files/" + strings.Repeat("a", maxRunAPITarget-len(prefix)); r.decisions[0].Path != want {
+		t.Errorf("the accepted path %q", r.decisions[0].Path)
+	}
+}
+
+// TestARecordHasNoEncodedSecret pins the mask over decoded segments: a secret that a
+// percent escape hides is in its phrase in an accepted request's path, and a refused
+// request's path is the fixed word.
+func TestARecordHasNoEncodedSecret(t *testing.T) {
+	r := startRoute(t, &RunAPI{}, nil)
+	const zeros = "00000000000000000000000000000000"
+	encoded := "q%61k_" + zeros
+	get := func(target string) {
+		rawStatus(t, r, "GET "+target+" HTTP/1.1\r\nHost: "+link.RunAPIHost+"\r\nConnection: close\r\n\r\n")
+	}
+	get(routeURL("/artifacts/v%201/files/" + encoded))
+	get(routeURL("/artifacts/" + encoded + "/files/f"))
+	get("http://" + link.RunAPIHost + "/anything/" + encoded)
+	get(routeURL("/" + encoded))
+	shown := accesskey.ShownValue("qak_"+zeros, false)
+	base := "/v1/runs/" + routeRun
+	want := []string{base + "/artifacts/v%201/files/" + shown, base + "/artifacts/" + shown + "/files/f", runAPIOutside, runAPIOutside}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.decisions) != len(want) {
+		t.Fatalf("%d decisions", len(r.decisions))
+	}
+	for i, d := range r.decisions {
+		if d.Path != want[i] {
+			t.Errorf("decision %d: %q, want %q", i, d.Path, want[i])
+		}
+		if decoded, err := url.PathUnescape(d.Path); err != nil || accesskey.ContainsSecret(decoded) {
+			t.Errorf("decision %d decodes to %q, %v", i, decoded, err)
+		}
 	}
 }

@@ -37,7 +37,7 @@
       "port": 80,
       "method": "HTTP",
       "request_method": "POST",
-      "path": "/v1/runs/0193b1c2-8d3e-7f40-9b5c-6d7e8f9a0b1c/outcome",
+      "path": "outside",
       "request_id": "0123456789abcdef0123456789abcde1",
       "status": 404,
       "channel": "run_api",

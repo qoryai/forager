@@ -459,7 +459,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	lr.px.ReportPanics(routine.ForRun(g.report, req.RunID))
 	lr.px.AllowFirst(pol.Policy.Egress.AllowFirst)
 	if g.client != nil {
-		lr.px.SetRunAPI(&proxy.RunAPI{RunID: req.RunID, Posts: &g.runAPIPosts, Send: func(ctx context.Context, method, path string, body []byte, file bool) (*server.RunAPIAnswer, error) {
+		lr.px.SetRunAPI(&proxy.RunAPI{RunID: req.RunID, Limits: &g.runAPILimits, Send: func(ctx context.Context, method, path string, body []byte, file bool) (*server.RunAPIAnswer, error) {
 			conf, _ := g.config()
 			return g.client.RunAPI(ctx, conf.Run.URL, req.RunID, method, path, body, file)
 		}})

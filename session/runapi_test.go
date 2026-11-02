@@ -247,6 +247,14 @@ func TestQoryRunAPIReachesTheAgent(t *testing.T) {
 			t.Errorf("%v %+v", err, res)
 		}
 	})
+	t.Run("without a wall or a control plane, from the run's variables", func(t *testing.T) {
+		sp, _ := specGateway(t)
+		sp.Variables.Run = []string{forged}
+		sp.Command, sp.Args = "/bin/sh", []string{"-c", `test -z "${` + session.EnvRunAPI + `+set}"`}
+		if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+			t.Errorf("%v %+v", err, res)
+		}
+	})
 	t.Run("behind a wall", func(t *testing.T) {
 		sp, g := specGateway(t, "FAKE_EXIT=0")
 		hasRunAPI(g)
@@ -347,6 +355,35 @@ func TestACallersQoryRunAPIIsReserved(t *testing.T) {
 		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
 		_, err = r.AgentEnv(sp.SessionSpec)
 		reserved(t, "AgentEnv", err)
+	})
+	t.Run("AgentEnv with an inherited value", func(t *testing.T) {
+		sp, g := specGateway(t)
+		hasRunAPI(g)
+		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		sp.Env = append(sp.Env, forged)
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+		_, err = r.AgentEnv(sp.SessionSpec)
+		reserved(t, "AgentEnv", err)
+	})
+	t.Run("AgentEnv with an inherited value and no wall", func(t *testing.T) {
+		sp, _ := specGateway(t)
+		sp.Env = append(sp.Env, forged)
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+		env, err := r.AgentEnv(sp.SessionSpec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := entriesOf(env, session.EnvRunAPI); len(got) != 0 {
+			t.Errorf("the agent's environment has %v", got)
+		}
 	})
 	t.Run("Setup", func(t *testing.T) {
 		sp, g := specGateway(t)

@@ -13,7 +13,7 @@ import (
 )
 
 // MaxRunAPIAnswer is the largest body of a 200 of the run API other than a file that
-// the gateway reads: a larger one counts as unverified. A file has no such bound, since
+// the gateway reads: a larger one is [ErrRunAPITooLarge]. A file has no such bound, since
 // it streams.
 const MaxRunAPIAnswer = 16 << 20
 
@@ -22,6 +22,11 @@ const MaxRunAPIAnswer = 16 << 20
 // signed, so it is this error too. A file returns it from [RunAPIAnswer.File]'s Read at
 // the end of the body, in place of [io.EOF].
 var ErrRunAPIUnverified = errors.New("the answer failed verification under the pin")
+
+// ErrRunAPITooLarge is the error of an answer of the run API over the bound the gateway
+// reads: [MaxRunAPIAnswer] for a 200, [MaxRefusal] otherwise. The gateway dropped it
+// unverified. A file has no bound.
+var ErrRunAPITooLarge = errors.New("the answer is over the bound the gateway reads")
 
 // RunAPIAnswer is a verified answer of the run API: its status and headers, and Body, or
 // File for the 200 of a file.
@@ -71,7 +76,8 @@ func (f *runAPIFile) Close() error { return f.body.Close() }
 //
 // The time a request has is ctx's, not [Timeout], since a file takes minutes, and a
 // file's ctx must outlive its read. An answer that fails verification under the pin is
-// [ErrRunAPIUnverified], and any other error is a transport failure: no answer. A POST
+// [ErrRunAPIUnverified], one over the bound is [ErrRunAPITooLarge], and any other error
+// is a transport failure: no answer. A POST
 // goes out once: net/http does not send it again on a connection that failed.
 func (c *Client) RunAPI(ctx context.Context, runURL, runID, method, path string, body []byte, file bool) (*RunAPIAnswer, error) {
 	var set func(http.Header)
@@ -102,6 +108,9 @@ func (c *Client) RunAPI(ctx context.Context, runURL, runID, method, path string,
 	a, err := c.read(resp, sig, MaxRunAPIAnswer)
 	if err != nil {
 		return nil, err
+	}
+	if a.over {
+		return nil, ErrRunAPITooLarge
 	}
 	if !a.signed {
 		return nil, ErrRunAPIUnverified

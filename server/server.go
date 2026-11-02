@@ -501,6 +501,8 @@ type answer struct {
 	body   []byte
 	signed bool
 	header http.Header
+	// over is true for a body over the bound, which is left unverified: signed is false.
+	over bool
 }
 
 // send signs one request and sends it, then reads the answer and verifies its
@@ -530,7 +532,11 @@ func (c *Client) read(resp *http.Response, sig string, max int) (*answer, error)
 		return nil, accesskey.ShownError(err)
 	}
 	a := &answer{status: resp.StatusCode, body: b}
-	if resp.StatusCode == http.StatusUnauthorized || len(b) > max || (resp.StatusCode != http.StatusOK && len(b) > MaxRefusal) {
+	if resp.StatusCode == http.StatusUnauthorized {
+		return a, nil
+	}
+	if len(b) > max || (resp.StatusCode != http.StatusOK && len(b) > MaxRefusal) {
+		a.over = true
 		return a, nil
 	}
 	if c.verifies(resp, sig, accesskey.Answer{Body: b}) {

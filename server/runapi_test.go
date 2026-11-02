@@ -116,6 +116,29 @@ func TestRunAPIChecksTheAnswer(t *testing.T) {
 	}
 }
 
+// TestRunAPITellsAnAnswerOverTheBound pins that an answer over the bound the gateway reads
+// is ErrRunAPITooLarge and no answer: the gateway verifies nothing, so the error differs
+// from a failed verification.
+func TestRunAPITellsAnAnswerOverTheBound(t *testing.T) {
+	for name, c := range map[string]struct {
+		status int
+		size   int
+	}{
+		"a 200":          {http.StatusOK, server.MaxRunAPIAnswer + 1},
+		"another status": {http.StatusConflict, server.MaxRefusal + 1},
+	} {
+		h := func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(c.status)
+			w.Write(make([]byte, c.size))
+		}
+		cl, _, runURL := runAPIClient(t, generate(t), h)
+		a, err := cl.RunAPI(context.Background(), runURL, runAPIRun, http.MethodGet, "/work-item", nil, false)
+		if !errors.Is(err, server.ErrRunAPITooLarge) || errors.Is(err, server.ErrRunAPIUnverified) || a != nil {
+			t.Errorf("%s: %+v, %v", name, a, err)
+		}
+	}
+}
+
 // TestRunAPIPassesARefusalThatVerifies pins that a signed refusal comes back as an
 // answer: only an answer that fails verification is an error.
 func TestRunAPIPassesARefusalThatVerifies(t *testing.T) {
