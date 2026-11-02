@@ -1871,6 +1871,10 @@ release may change what an existing document does, and says so under Upgrading.
   one, and a link to such a file or to a regular file, now get the same text. Before,
   they were refused with "that file is not a regular file" or "that file is a link".
 
+- `(*session.Run).HostProxy` returns the join's error when a session's wall could not
+  be removed and may still run: `Open a new run. The wall of session <n> could not be
+  removed and may still run, so this run takes no more sessions.` Before, it started a
+  forwarder, so a push could run beside the agent's container.
 - A step's name and lines keep the server's values of `QORY_RUN_SYSTEM` and
   `QORY_RUN_REPOSITORIES`: the run's masker leaves both out by name, at the open and at
   a reload, because neither is a secret. Before, `github.com` read `***` in the name of

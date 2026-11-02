@@ -220,7 +220,10 @@ for every run, walled or not, and returns a `session.HostProxy`:
   closes. `Join` closes every open host proxy before its join request, and `Close` does
   too, so the password opens nothing while a session runs. `HostProxy` returns an error
   while a `Join` runs, after `Close`, for a walled run with no bundle, and when the port
-  cannot be opened.
+  cannot be opened. It also returns an error when a session's wall could not be removed
+  and may still run, so a push does not run beside the agent's container: `Open a new
+  run. The wall of session 1 could not be removed and may still run, so this run takes
+  no more sessions.`
 
 Set `ProxyURL` and `CABundle` in the environment of the program that needs them, such
 as git's, and not in the calling process's environment, which every child inherits, the

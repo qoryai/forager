@@ -4145,7 +4145,9 @@ apply to its requests, so the gateway sets a fetch's token, and no token is on t
 machine. The programs trust the run's certificate through `ca-bundle.pem` in the run
 directory (§Credentials, Termination). The host proxy ends when its caller closes it,
 before each join request and at the run's close; from then on its port takes no
-connection. The session writes its password into no event and no file.
+connection. It does not start in a run with a session whose wall could not be removed
+and may still run, so a push does not run beside the agent's container. The session
+writes its password into no event and no file.
 
 **The engine's host work.** In a run with no wall, the machine's container engine
 reaches the run's proxy during host work, such as a build's pulls and push, through the

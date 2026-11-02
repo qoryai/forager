@@ -112,8 +112,8 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	}
 	// A wall whose removal failed may still run, with the places its entry lists: a
 	// join would rewrite that entry with the join's places alone.
-	if r.keptBy > 0 {
-		return nil, fmt.Errorf("Open a new run. The wall of session %d could not be removed and may still run, so this run takes no more sessions.", r.keptBy)
+	if err := r.wallKept(); err != nil {
+		return nil, err
 	}
 	// A run whose setup failed is not set up as its sessions need.
 	if r.setupFailed > 0 {
@@ -256,6 +256,18 @@ func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.L
 	}
 	step.end(event.StateFailed, -1)
 	return nil, 0, err
+}
+
+// wallKept is the error of a call that must not run beside the wall of a session whose
+// removal failed, nil for a run with no such wall: [Run.Join], since the wall may still
+// run, and [Run.HostProxy], since the agent's container may still change what a push
+// sends. A timed-out or cancelled session ends by killing the docker client, which does
+// not prove the container stopped.
+func (r *Run) wallKept() error {
+	if r.keptBy > 0 {
+		return fmt.Errorf("Open a new run. The wall of session %d could not be removed and may still run, so this run takes no more sessions.", r.keptBy)
+	}
+	return nil
 }
 
 // refusedJoin writes the dev.qory.session.exited of a join that did not start, n:
