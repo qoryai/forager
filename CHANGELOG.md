@@ -1291,24 +1291,29 @@ release may change what an existing document does, and says so under Upgrading.
   `StartSetup` and `ExecSetup`. Without it `Run.Setup` returns `Run the setup behind the
   Docker wall: the <name> wall does not implement StartSetup, ExecSetup and RemoveSetup.`
   The method returns nil only once the setup container is gone and every process in it
-  has ended, bounds its wait, and accepts a second call after an error.
+  has ended, bounds its wait, and accepts a second call after an error. The session
+  calls it before the run's first `Wrap` or after a session's `Unwrap`, and a later
+  `Wrap` may follow, so it leaves the rest of the enclosure as it is.
 
 #### Added
 
-- `(*session.Run).RemoveSetup`: between `Run.Setup` and the first `Join`, it removes the
-  setup container with `docker rm --force --volumes` and returns once the container is
-  gone, so no process of it runs beside the agent and the name `qory-setup` no longer
-  resolves. Call it for a read run, so that no process in the run's containers can write
-  the workspace that `SessionSpec.WorkspaceReadOnly` binds read-only for the agent. It
+- `(*session.Run).RemoveSetup`: when no session is running and no host step is open, it
+  removes the setup container with `docker rm --force --volumes` and returns once the
+  container is gone, so no process of it runs beside the agent or the host work that
+  follows, and the name `qory-setup` no longer resolves. Call it between `Run.Setup` and
+  the first `Join` for a read run, so that no process in the run's containers can write
+  the workspace that `SessionSpec.WorkspaceReadOnly` binds read-only for the agent. Call
+  it after a session ended and before a `push` step when the agent needs the setup
+  container, so no process of it changes the working folder during the push. It
   writes the `wall` step `remove the setup container`, returns nil and writes nothing
   in an open run with no setup container, which includes a run where it removed that
   container, and returns an error that starts with the fix, with nothing removed, while
-  another call of the run runs, after the close, and, while the setup container runs,
-  after a session joined or during a host step. A `docker rm` that fails with
-  `no such container` is no failure. Any other failed removal, such as one with no
-  engine socket, ends the step `failed`, and no
-  session joins the run. A run that does not call it keeps the setup container until
-  the run closes, as before.
+  a session or another call of the run runs, after the close, and, while the setup
+  container runs, during a host step or when an agent's container could not be removed
+  and may still run. A `docker rm` that fails with `no such container` is no failure.
+  Any other failed removal, such as one with no engine socket, ends the step `failed`,
+  and no session joins the run: close the run, and run no `push` step after it. A run
+  that does not call it keeps the setup container until the run closes, as before.
 - `wall.Request.Pull` and `wall.Puller`: before a run uses an image by reference, the
   session checks its manifest at the registry with the run's credentials, through the
   run's proxy, with or without an engine proxy; a 404 is `image_missing`, and any other

@@ -571,6 +571,7 @@ func Run(t *testing.T, o Options) {
 	setupOutside(t, o, origin, outside)
 	readOnlyWorkspace(t, o, origin, outside)
 	setupRemoved(t, o, origin, outside)
+	setupRemovedAfterSession(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
 
 	t.Run("the terminal crosses and a named host on this machine is reached", func(t *testing.T) {
@@ -1289,6 +1290,105 @@ func setupRemoved(t *testing.T, o Options, h hosts, outside string) {
 	})
 }
 
+// setupRemovedAfterSession checks (*session.Run).RemoveSetup for a write run: the setup
+// starts a service and a process that adds to writerFile every second, the agent reaches
+// the service by the name qory-setup, and once the session ended RemoveSetup removes the
+// one container, the setup container: writerFile keeps its size, no process of it
+// remains, and a push step follows. The gateway's record has the wall step after
+// dev.qory.session.exited and before the push step, and the run ends with the close.
+func setupRemovedAfterSession(t *testing.T, o Options, h hosts, outside string) {
+	const name = "after a session RemoveSetup removes the setup container before a push step"
+	if !o.Setup {
+		t.Run(name, func(t *testing.T) { t.Skip("the adapter starts no setup container") })
+		return
+	}
+	t.Run(name, func(t *testing.T) {
+		runID := event.NewRunID()
+		var setupErr error
+		service := net.JoinHostPort("qory-setup", setupServicePort)
+		commands := []session.SetupCommand{
+			{Name: "start the service", Args: []string{"sh", "-c", o.Probe + " " + modeService + " >/tmp/service.log 2>&1 &"}},
+			{Name: "start the writer", Args: []string{"sh", "-c", "(while :; do echo tick >> " + writerFile + "; sleep 1; done) >/dev/null 2>&1 & until [ -s " + writerFile + " ]; do sleep 1; done"}},
+		}
+		afterSession := func(run *session.Run, workspace string) {
+			ctx := context.Background()
+			var before []string
+			if o.Leftovers != nil {
+				var err error
+				if before, err = o.Leftovers(runID); err != nil {
+					t.Error(err)
+				}
+			}
+			if err := run.RemoveSetup(ctx); err != nil {
+				t.Errorf("RemoveSetup: %v", err)
+			}
+			if o.Leftovers != nil {
+				after, err := o.Leftovers(runID)
+				if err != nil {
+					t.Error(err)
+				}
+				removed := slices.DeleteFunc(slices.Clone(before), func(s string) bool { return slices.Contains(after, s) })
+				if len(removed) != 1 || len(after) != len(before)-1 {
+					t.Errorf("before RemoveSetup the run had %q, and after it %q; want the setup container gone alone", before, after)
+				}
+			}
+			size := func() int64 {
+				info, err := os.Stat(filepath.Join(workspace, writerFile))
+				if err != nil {
+					t.Error(err)
+					return -1
+				}
+				return info.Size()
+			}
+			was := size()
+			time.Sleep(writerWait)
+			if now := size(); was <= 0 || now != was {
+				t.Errorf("%s's size: %d after RemoveSetup, %d after %s; want one size above 0", writerFile, was, now, writerWait)
+			}
+			step, err := run.StartStep(event.StepPush, "push work to github.com/example-org/app")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := step.Exit(event.StateSucceeded, 0); err != nil {
+				t.Error(err)
+			}
+		}
+		r, err := runIn(t, o, variant{runID: runID, setup: commands, onSetup: func(err error) { setupErr = err },
+			afterSession: afterSession,
+			env:          []string{"PROBE_SETUP_SERVICE=http://" + service + "/"}}, false, h, outside)
+		if err != nil || setupErr != nil {
+			t.Fatalf("the setup: %v; the run: %v", setupErr, err)
+		}
+		if r.probe.SetupService != setupServiceLine {
+			t.Errorf("the agent's request to qory-setup: %q, want %q", r.probe.SetupService, setupServiceLine)
+		}
+		var order []string
+		for _, e := range r.events {
+			d, _ := e["data"].(map[string]any)
+			switch e["type"] {
+			case "dev.qory.session.exited":
+				order = append(order, "session exited")
+			case "dev.qory.run.step_started":
+				if d["kind"] == event.StepPush || d["name"] == "remove the setup container" {
+					order = append(order, fmt.Sprintf("%v %v", d["kind"], d["name"]))
+				}
+			case "dev.qory.run.exited":
+				order = append(order, fmt.Sprintf("run exited %v", d["reason"]))
+			}
+		}
+		want := []string{"session exited", "wall remove the setup container", "push push work to github.com/example-org/app", "run exited <nil>"}
+		if !slices.Equal(order, want) {
+			t.Errorf("the gateway's record %q, want %q", order, want)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the run left %v (%v)", left, err)
+			}
+		}
+	})
+}
+
 // stackFetch fetches the stack host through a stack proxy of the run, as qory fetches
 // the harness definition before the first join, and returns the status.
 func stackFetch(r *session.Run) (int, error) {
@@ -1328,6 +1428,9 @@ type variant struct {
 	env         []string
 	// opened, when set, is called with the run once it opens.
 	opened func(*session.Run)
+	// afterSession, when set, is called with the run and its workspace after its session,
+	// before the close.
+	afterSession func(run *session.Run, workspace string)
 	// readOnly binds the workspace read-only for the join, SessionSpec.WorkspaceReadOnly,
 	// with no setup commands inside.
 	readOnly bool
@@ -1475,6 +1578,9 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			WorkspaceReadOnly: v.readOnly,
 		},
 		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup, removeSetup: v.removeSetup, opened: v.opened,
+	}
+	if v.afterSession != nil {
+		spec.afterSession = func(r *session.Run) { v.afterSession(r, dir) }
 	}
 	// The setup runner reports on the run socket, so a run has its setup command where
 	// the socket crosses into the enclosure.

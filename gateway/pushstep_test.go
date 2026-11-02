@@ -59,6 +59,63 @@ func TestAPushStepAfterTheSessionExitedIsAccepted(t *testing.T) {
 	}
 }
 
+// removalStep is the batch of the wall step of (*session.Run).RemoveSetup, numbered step:
+// succeeded, or failed with its line.
+func removalStep(runID string, step int, failed bool) []map[string]any {
+	evs := []map[string]any{ev(runID, event.StepStarted, map[string]any{"step": step, "name": "remove the setup container", "kind": event.StepWall})}
+	state := event.StateSucceeded
+	if failed {
+		state = event.StateFailed
+		line := base64.StdEncoding.EncodeToString([]byte("Close the run: the setup container may still run, so no session can join: told to fail\n"))
+		evs = append(evs, ev(runID, event.RunLog, map[string]any{"stream": "stderr", "bytes": line, "step": step}))
+	}
+	return append(evs, ev(runID, event.StepExited, map[string]any{"step": step, "state": state, "exit_code": -1, "duration_ms": 5}))
+}
+
+// TestARemovalStepAfterTheSessionExitedIsAccepted pins a batch of the setup container's
+// removal after dev.qory.session.exited, outside every session: the link's schema and
+// its checks accept the wall step, and the run does not end batch_refused. After a
+// removal that succeeds the push step follows; one that fails has its line and no push.
+func TestARemovalStepAfterTheSessionExitedIsAccepted(t *testing.T) {
+	for what, c := range map[string]struct {
+		batch func(runID string) []map[string]any
+		want  []string
+	}{
+		"a removal, then a push": {
+			func(runID string) []map[string]any {
+				return slices.Concat(removalStep(runID, 1, false), pushStep(runID, 2))
+			},
+			[]string{event.StepStarted, event.StepExited, event.StepStarted, event.StepExited},
+		},
+		"a removal that fails": {
+			func(runID string) []map[string]any { return removalStep(runID, 1, true) },
+			[]string{event.StepStarted, event.RunLog, event.StepExited},
+		},
+	} {
+		t.Run(what, func(t *testing.T) {
+			h := start(t, gateway.Config{})
+			a := h.open(server.LinkRunRequest{})
+			runID := a.RunID
+			if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+				t.Fatalf("the first batch: %+v", d)
+			}
+			if n := h.joined(runID); n != 1 {
+				t.Fatalf("the join is session %d", n)
+			}
+			if d := h.post(sessionStarted(runID, 1), sessionExited(runID, 1)); !d.Accepted() {
+				t.Fatalf("the session's batch: %+v", d)
+			}
+			if d := h.post(append(c.batch(runID), exited(runID))...); !d.Accepted() {
+				t.Fatalf("the removal's batch: %+v", d)
+			}
+			want := slices.Concat([]string{event.RunStarted, event.PolicyApplied, event.SessionStarted, event.SessionExited}, c.want, []string{event.RunExited})
+			if got := types(h.record(runID)); !slices.Equal(got, want) {
+				t.Errorf("record %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 // TestTheProxySetsACredentialAfterTheSessionExited pins the run's proxy after a run's
 // last session, on a connection the run's proxy secret opens, as the host proxy's are:
 // a request with no credential, as git sends, reaches the HTTPS origin with the token in

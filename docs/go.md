@@ -420,21 +420,24 @@ if err := step.Exit(state, code); err != nil {
 A walled run's `(*session.Run).Setup` writes its steps itself, and
 `(*session.Run).RemoveSetup(ctx)` removes its setup container: see
 [setup in a separate container](wall.md#setup-in-a-separate-container). Call
-`RemoveSetup` between `Setup` and the first `Join`, outside every host step. It returns
-once the setup container is gone: every process in it has ended, and the name
-`qory-setup` no longer resolves. It writes the `wall` step `remove the setup container`.
+`RemoveSetup` when no session is running and no host step is open: between `Setup` and
+the first `Join` for a read run, or after a session ended and before a `push` step when
+the agent needs the setup container. It returns once the setup container is gone: every
+process in it has ended, and the name `qory-setup` no longer resolves, for a later `Join`
+too. It writes the `wall` step `remove the setup container`.
 In an open run with no setup container, which includes a run where it removed that
 container, it returns nil and writes nothing, also after a join or during a host step, so
 you need no condition around it.
 Each error before the step starts with the fix, and removes and writes nothing. A removal
 that fails ends the step `failed`, or `cancelled` when `ctx` ended, and the setup
-container may still run: stop the run before the join. No session joins the run after
-it, also when a later `RemoveSetup` succeeds, and `Close` tries the removal again.
+container may still run and change the working folder: close the run, and run no `push`
+or other host step that reads the folder after this error. No session joins the run
+after it, also when a later `RemoveSetup` succeeds, and `Close` tries the removal again.
 
 | When | Error |
 |---|---|
-| while a `Join`, a `Setup` or another call of the run runs | `Call RemoveSetup after the run's other call returns: another call of the run is running.` |
-| the setup container runs, after a session joined | `Remove the setup container before the first join: session 1 joined the run.` |
+| while a `Join`, with its session, a `Setup` or another call of the run runs | `Call RemoveSetup after the run's other call returns: another call of the run is running.` |
+| the setup container runs, and the agent's container of session 1 could not be removed | `Close the run: the agent's container of session 1 could not be removed and may still run, so the setup container stays until the close.` |
 | the setup container runs, while step 1 is open | `Exit step 1 before you remove the setup container: one host step is open at a time.` |
 | after `Close` | `Remove the setup container before the close: the run is closed.` |
 | the removal fails | `Close the run: the setup container may still run, so no session can join: ` and the wall's error |

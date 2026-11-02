@@ -21,6 +21,9 @@ type runSpec struct {
 	removeSetup bool
 	// opened, when set, is called with the run once it opens, before anything else.
 	opened func(*session.Run)
+	// afterSession, when set, is called with the run after a join that returned no error,
+	// before the close.
+	afterSession func(*session.Run)
 }
 
 // runOne opens a run, fetches its image when sp.fetch is set, runs its setup commands
@@ -56,6 +59,9 @@ func runOne(ctx context.Context, sp runSpec) (*session.Result, error) {
 		}
 	}
 	res, err := r.Join(ctx, sp.SessionSpec)
+	if err == nil && sp.afterSession != nil {
+		sp.afterSession(r)
+	}
 	out := session.Outcome{State: event.StateFailed, ExitCode: -1}
 	switch {
 	case err != nil || res.RunClosed:

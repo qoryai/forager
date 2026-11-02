@@ -1746,8 +1746,10 @@ before the first join, between joins, or after the last join and before the clos
 (`(*session.Run).StartStep`), the image's, `image`
 (`(*session.Run).FetchImage`, §Images), the setup's, `wall` and `setup`
 (`(*session.Run).Setup`, §The wall, Setup), and the removal of the setup container, `wall`
-(`(*session.Run).RemoveSetup`, §The wall, Setup). The `wall` steps of the setup and of
-the removal lie outside every session, before the first join. Each join writes its steps:
+(`(*session.Run).RemoveSetup`, §The wall, Setup). The `wall` steps of the setup lie
+outside every session, before the first join. The `wall` step of the removal lies outside
+every session, before the first join, between joins, or after the last join and before
+the close. Each join writes its steps:
 
 1. **The join step**, `join`, with the name `join session <n>`, the number the gateway
    gives the next join. It spans the join request and the session's checks, and ends right
@@ -5125,26 +5127,29 @@ the setup container and the agent's run code from the working folder as the wall
 
 **Removing the setup container.** `(*session.Run).RemoveSetup` removes the setup
 container and returns once it is gone: every process in it has ended, and the name
-`qory-setup` no longer resolves, so a connection to `qory-setup:5432` fails. Call it after
-`Setup` and before the first join, outside every host step. For `docker` it runs `docker
-rm --force --volumes`. It writes one `wall` step after the run's last step, `remove the
+`qory-setup` no longer resolves, so a connection to `qory-setup:5432` fails, a later
+join's too. Call it after `Setup`, when no session is running and no host step is open:
+before the first join, between joins, or after a session ended and before a `push` step.
+For `docker` it runs `docker rm --force --volumes`, which leaves the relay and the
+networks. It writes one `wall` step after the run's last step, `remove the
 setup container`, which ends `succeeded` with `-1`. What the setup commands wrote in the
 working folder stays. The folder stays in the run's entry among the walled runs still
 going, and a settings file in it stays unread (§Sequence), because a setup command may
 have written the file. `Setup` does not run again. In an open run with no setup
 container the call returns nil and writes no step, also after a join or during a host
 step: a run with no wall, a setup that never ran, a setup container that did not start,
-and a setup container that the call removed already. Another call of the run that is
-running or a closed run is an error before the step, with nothing removed, and so is a
-join or an open host step while the setup container runs. A removal that fails ends the
-step `failed`, or `cancelled` when the caller's context ended, with `-1`, after the
-failure's text as a `dev.qory.run.log` line on `stderr` with the step's `step` and no
+and a setup container that the call removed already. A session or another call of the
+run that is running, or a closed run, is an error before the step, with nothing removed.
+While the setup container runs, an open host step is such an error too, and so is an
+agent's container that could not be removed and may still run. A removal that fails
+ends the step `failed`, or `cancelled` when the caller's context ended, with `-1`, after
+the failure's text as a `dev.qory.run.log` line on `stderr` with the step's `step` and no
 `session`, and is the error. A `docker rm` that fails with `no such container` is no
 failure; any other output, such as a missing engine socket's, leaves the container's
-state unknown and fails the step. The setup container may then still run: the caller
-stops the run, no session joins it, also when a later call succeeds, and the close tries
-the removal again. After a setup that failed the call still removes the container, and
-no session joins.
+state unknown and fails the step. The setup container may then still run and change the
+working folder: the caller closes the run and runs no `push` step, no session joins it,
+also when a later call succeeds, and the close tries the removal again. After a setup
+that failed the call still removes the container, and no session joins.
 
 **Setup inside the wall.** With `wall.setup: inside`, a walled session may have setup
 commands, `SessionSpec.Setup`: each a name, such as `install` or `start services`, and

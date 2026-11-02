@@ -899,12 +899,16 @@ if err := run.RemoveSetup(ctx); err != nil {
   reaches a service that setup starts by the name `qory-setup`, such as
   `qory-setup:5432`, and that service can write the working folder. Send a service's
   output to a file, so its command returns.
-- `RemoveSetup` removes the setup container and returns once it is gone. Call it after
-  `Setup` and before the first `Join`, as for a join with `WorkspaceReadOnly`. After it
-  the name `qory-setup` no longer resolves and no service of the setup container remains,
+- `RemoveSetup` removes the setup container and returns once it is gone. Call it when no
+  session is running and no host step is open: after `Setup` and before the first
+  `Join`, as for a join with `WorkspaceReadOnly`, or after a session ended and before a
+  `push` step, when the agent needs the setup container. After it the name `qory-setup`
+  no longer resolves and no service of the setup container remains,
   so a connection to `qory-setup:5432` fails. What setup wrote in the working folder
   stays. It writes the `wall` step `remove the setup container`. In an open run with no
   setup container it returns nil and writes no step, so you need no condition around it.
+  If the removal fails, close the run: the setup container may still run and change the
+  working folder, so run no `push` step after this error.
 - Packages that setup installs outside the working folder stay in the setup container,
   and go with it.
 

@@ -1356,7 +1356,8 @@ func (e *dockerEnclosure) setupRuns(ctx context.Context) error {
 // --force --volumes, and returns once the engine removed it: every process in it has
 // ended, and the name qory-setup no longer resolves on the internal network. A docker rm
 // that fails with [noSuchContainer]'s text is not an error. Every other failure is, and
-// the container stays for a later call or Close to remove.
+// the container stays for a later call or Close to remove. It touches the setup
+// container alone, so it may follow an Unwrap, and a later Wrap may follow it.
 func (e *dockerEnclosure) RemoveSetup(ctx context.Context) error {
 	return e.removeContainer(ctx, e.setup(), noSuchContainer)
 }

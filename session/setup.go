@@ -79,7 +79,10 @@ type unwrapper interface {
 // ends or the container does not end in time, so the call never blocks the run without
 // limit. After an error the container may still run: accept a second call of RemoveSetup,
 // which tries again, and Close tries the removal again too. The session calls
-// RemoveSetup before the run's first Wrap, after a StartSetup that returned nil.
+// RemoveSetup after a StartSetup that returned nil, while no launch of Wrap runs: before
+// the run's first Wrap, or after a session's launch ended and, for an enclosure with
+// Unwrap, its Unwrap returned nil. A later Wrap may follow, so RemoveSetup leaves
+// everything else of the enclosure as it is.
 type setupContainer interface {
 	StartSetup(ctx context.Context, l wall.Launch) error
 	ExecSetup(ctx context.Context, args []string, stdout, stderr io.Writer) (int, error)
@@ -341,15 +344,17 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 }
 
 // RemoveSetup removes the run's setup container and returns once it is gone: every
-// process in it has ended, and the name qory-setup no longer resolves. Call it between
-// [Run.Setup] and the first [Run.Join], outside every host step. With it, a service that
-// a setup command started does not run beside the agent, so a join with
-// SessionSpec.WorkspaceReadOnly has no process in the run's containers that can write
-// the workspace, and a request to qory-setup fails. What the setup commands wrote in the
-// working folder stays. The run's entry among the walled runs still going lists the
-// setup container's places until the run closes, and a settings file in them still stops
-// a join, because a setup command may have written it. [Run.Setup] does not run again:
-// it runs once per run.
+// process in it has ended, and the name qory-setup no longer resolves. Call it when no
+// session is running and no host step is open: between [Run.Setup] and the first
+// [Run.Join], so a service that a setup command started does not run beside the agent
+// and a join with SessionSpec.WorkspaceReadOnly has no process in the run's containers
+// that can write the workspace; or after a session ended, before a host step that reads
+// the working folder, such as a push, when the agent needed the setup container. A
+// request to qory-setup fails from then on, a later join's too. What the setup commands
+// wrote in the working folder stays. The run's entry among the walled runs still going
+// lists the setup container's places until the run closes, and a settings file in them
+// still stops a join, because a setup command may have written it. [Run.Setup] does not
+// run again: it runs once per run.
 //
 // In an open run with no setup container RemoveSetup returns nil and writes nothing, also
 // after a join or during a host step, so a caller needs no condition: a run with no
@@ -362,12 +367,15 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 // keeps its failure: RemoveSetup removes the container, and still no session joins.
 //
 // An error before the step means nothing is removed and nothing is written: another call
-// of the run is running, the run is closed, or the setup container runs and a session
-// joined the run or a host step is open. A removal that fails ends the step failed, or
+// of the run is running, a [Run.Join] with its session among them; the run is closed; or
+// the setup container runs and a host step is open, or the agent's container of a session
+// could not be removed and may still run. A removal that fails ends the step failed, or
 // cancelled when ctx ended, with -1, after its line, and is the error. The setup
-// container may then still run, so stop the run before the join: no session joins the
-// run after it, also when a later RemoveSetup succeeds, and [Run.Close] tries the removal
-// again. The run's masker replaces the run's secrets in the error, as in Open's.
+// container may then still run and change the working folder, so close the run, and run
+// no push or other host step that reads the working folder after this error: no session
+// joins the run after it, also when a later RemoveSetup succeeds, and [Run.Close] tries
+// the removal again. The run's masker replaces the run's secrets in the error, as in
+// Open's.
 func (r *Run) RemoveSetup(ctx context.Context) (err error) {
 	defer func() { err = maskError(r.masker, err) }()
 	if !r.joining.TryLock() {
@@ -379,10 +387,12 @@ func (r *Run) RemoveSetup(ctx context.Context) (err error) {
 		return errors.New("Remove the setup container before the close: the run is closed.")
 	case r.setupUp == nil:
 		return nil
-	case r.numbered > 0:
-		return fmt.Errorf("Remove the setup container before the first join: session %d joined the run.", r.numbered)
 	case r.hostStep != nil:
 		return fmt.Errorf("Exit step %d before you remove the setup container: one host step is open at a time.", r.hostStep.n)
+	// A session runs while Join holds r.joining, and Join removes the agent's container
+	// before it lets go: only a removal that failed leaves that container behind.
+	case r.keptBy > 0:
+		return fmt.Errorf("Close the run: the agent's container of session %d could not be removed and may still run, so the setup container stays until the close.", r.keptBy)
 	}
 	step := r.startStep(event.StepWall, "remove the setup container")
 	// A panic that a caller recovers leaves no step open, and no session joins.

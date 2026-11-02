@@ -141,6 +141,61 @@ func TestDockerRemoveSetup(t *testing.T) {
 	}
 }
 
+// TestDockerRemoveSetupAfterUnwrap pins the removal after a session: the setup container
+// runs through the session, RemoveSetup after Unwrap runs its one docker rm and leaves
+// the relay and the networks, a later Wrap starts the agent's container, and Close
+// removes the rest without the setup container.
+func TestDockerRemoveSetupAfterUnwrap(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, HoldArgs: []string{"run", "hold"}, sys: rec}
+	enc, err := d.Prepare(ctx, Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := enc.(*dockerEnclosure)
+	l := setupLaunch()
+	l.Proxy = "172.30.0.1:50123"
+	if err := e.StartSetup(ctx, l); err != nil {
+		t.Fatal(err)
+	}
+	agent := l
+	agent.Command = "agent"
+	if _, err := e.Wrap(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Unwrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	made := slices.Clone(e.made)
+	before := len(rec.lines)
+	if err := e.RemoveSetup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rm := "docker rm --force --volumes qory-" + runID + "-setup"
+	if got := rec.lines[before:]; len(got) != 1 || got[0] != rm {
+		t.Errorf("the commands %q, want %q alone", got, rm)
+	}
+	entry := []string{"rm", "--force", "--volumes", "qory-" + runID + "-setup"}
+	want := slices.DeleteFunc(made, func(m []string) bool { return slices.Equal(m, entry) })
+	if !slices.EqualFunc(e.made, want, slices.Equal[[]string]) {
+		t.Errorf("e.made %q, want %q", e.made, want)
+	}
+	if _, err := e.Wrap(ctx, agent); err != nil {
+		t.Errorf("a later Wrap: %v", err)
+	}
+	if err := e.Unwrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before = len(rec.lines)
+	if err := e.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(rec.lines[before:], "\n"); strings.Contains(got, "-setup") {
+		t.Errorf("Close touched the setup container:\n%s", got)
+	}
+}
+
 // TestDockerUnwrapKeepsItsCheck pins Unwrap's reading of a docker rm that fails: output
 // with "no such" or "not found" counts as gone, and any other failure is an error.
 func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
