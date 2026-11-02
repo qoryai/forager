@@ -1946,15 +1946,15 @@ outcome kept: the run has no reason, but for a `cancelled` run, whose reason is 
 `stopped`, as when its starter gave none (§The gateway's link, The end member). The
 close writes `timeout`, `interrupted` and `no_session`, the resend of a record writes
 `gateway_lost` (§The server), and the gateway writes the others, on a session's run on
-its link. The close writes `image_missing`, the refusal code of `refusal.Decides`, when
-its caller gives it: after `(*session.Run).FetchImage` returned that refusal, `failed`
-with `exit_code` `-1`, in a run with no join, so a control plane can tell a missing
-image from another failure; `(*session.Run).Close` refuses `image_missing` with
-another state or exit code, or after a join. The close writes `image_user_root`, the
-refusal code of an image whose user is root, and `workflow_not_in_harness`, with which
-qory closes a run whose workflow is not in the harness, as it writes a caller's code;
-the gateway accepts either only `failed` with `exit_code` `-1`, in a run with no join.
-The state of each of Forager's endings:
+its link. The close writes `image_missing` or `image_user_root`, refusal codes of
+`refusal.Decides`, when its caller gives one: after `(*session.Run).FetchImage`
+returned that refusal, `failed` with `exit_code` `-1`, in a run with no join, so a
+control plane can tell a missing image, or an image whose user is root, from another
+failure. qory closes a run with no join whose workflow is not in the harness with
+`workflow_not_in_harness`, `failed` with `exit_code` `-1`. `(*session.Run).Close`
+refuses each of the three codes with another state or exit code, or after a join, and
+the gateway refuses a batch with such a `dev.qory.run.exited`. The state of each of
+Forager's endings:
 
 | Ending | `state` | `reason` |
 |---|---|---|

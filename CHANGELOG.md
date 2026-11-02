@@ -210,11 +210,6 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
-- `workflow_not_in_harness` and `image_user_root` as the reason of a session's
-  `dev.qory.run.exited`, as `image_missing`: the gateway accepts the batch for a run
-  with no join, `failed` with `exit_code` `-1`, and refuses it with another state or
-  exit code, or after a join. qory closes a run with these reasons, so such a run no
-  longer ends `batch_refused`.
 - `fixed` in a runtime descriptor: variables the session sets for the runtime in every
   launch, by name, such as `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`. The
   session counts each among the run's fixed names, so no value of the server, the run,
@@ -1063,6 +1058,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- The gateway refused a batch with a session's `dev.qory.run.exited` whose reason is
+  `workflow_not_in_harness` or `image_user_root`, so a run that qory closed with one of
+  them ended `batch_refused`. The gateway now accepts both as it accepts
+  `image_missing`: for a run with no join, `failed` with `exit_code` `-1`. It refuses
+  them with another state or exit code, or after a join, and `(*session.Run).Close`
+  refuses the same outcomes before it writes anything.
 - `gateway.Start` and `gateway.HardenProcess` stopped at the first call that failed.
   On macOS, a failed `setrlimit(RLIMIT_CORE)` skipped `ptrace(PT_DENY_ATTACH)`, so a
   debugger could still attach to the process. On Linux, a failed

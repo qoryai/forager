@@ -473,10 +473,6 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// reasonWorkflowNotInHarness is the reason qory gives the close of a run with no join
-// whose workflow is not in the harness. It is qory's code, not one of Forager's.
-const reasonWorkflowNotInHarness = "workflow_not_in_harness"
-
 // closeRule is why the link refuses a session's dev.qory.run.exited, its data, empty
 // when it accepts it: the close's, with no reason or with timeout, interrupted,
 // no_session, image_missing, image_user_root or workflow_not_in_harness, the last four
@@ -494,7 +490,7 @@ func closeRule(data map[string]any, joined bool) string {
 		if joined {
 			return "a run.exited no_session of a run with a join"
 		}
-	case why == refusal.ImageMissing, why == refusal.ImageUserRoot, why == reasonWorkflowNotInHarness:
+	case why == refusal.ImageMissing, why == refusal.ImageUserRoot, why == event.ReasonWorkflowNotInHarness:
 		code, _ := data["exit_code"].(float64)
 		switch {
 		case joined:

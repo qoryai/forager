@@ -216,27 +216,64 @@ func TestARunNoSessionJoinedIsNoSession(t *testing.T) {
 // that the gateway does not accept.
 const imageMissingOutcome = "an outcome with the reason image_missing is failed with the exit code -1, of a run no session joined"
 
-// TestImageMissingClosesOnlyARunNoSessionJoined pins the close's image_missing: failed
-// with -1 after a join is refused before anything is written, and the run closes with
-// another outcome after.
+// noJoinReasons are the reasons Close takes only failed with -1, for a run no session
+// joined, as the gateway does.
+var noJoinReasons = []string{"image_missing", "image_user_root", "workflow_not_in_harness"}
+
+// noJoinOutcome is Close's text for an outcome with one of noJoinReasons that the
+// gateway does not accept.
+func noJoinOutcome(reason string) string {
+	return "an outcome with the reason " + reason + " is failed with the exit code -1, of a run no session joined"
+}
+
+// TestImageMissingClosesOnlyARunNoSessionJoined pins the close's image_missing,
+// image_user_root and workflow_not_in_harness: failed with -1 after a join is refused
+// before anything is written, and the run closes with another outcome after.
 func TestImageMissingClosesOnlyARunNoSessionJoined(t *testing.T) {
-	sp, g := specGateway(t, "FAKE_EXIT=0")
-	ctx := context.Background()
-	r, err := session.Open(ctx, opened(sp))
-	if err != nil {
-		t.Fatal(err)
+	for _, reason := range noJoinReasons {
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Close(ctx, session.Outcome{State: "failed", Reason: reason, ExitCode: -1}); err == nil || err.Error() != noJoinOutcome(reason) {
+			t.Errorf("%s after a join: %v, want %s", reason, err, noJoinOutcome(reason))
+		}
+		if got := ofType(g.Events(), "dev.qory.run.exited"); len(got) != 0 {
+			t.Errorf("%s: a refused outcome wrote %v", reason, got)
+		}
+		if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Close(ctx, session.Outcome{State: "failed", Reason: "image_missing", ExitCode: -1}); err == nil || err.Error() != imageMissingOutcome {
-		t.Errorf("image_missing after a join: %v, want %s", err, imageMissingOutcome)
-	}
-	if got := ofType(g.Events(), "dev.qory.run.exited"); len(got) != 0 {
-		t.Errorf("a refused outcome wrote %v", got)
-	}
-	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
-		t.Fatal(err)
+}
+
+// TestANoJoinReasonClosesARunNoSessionJoined pins the close's image_missing,
+// image_user_root and workflow_not_in_harness, failed with -1 in a run no session
+// joined: Close writes the outcome as given and posts it.
+func TestANoJoinReasonClosesARunNoSessionJoined(t *testing.T) {
+	for _, reason := range noJoinReasons {
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		closed, err := r.Close(ctx, session.Outcome{State: "failed", Reason: reason, ExitCode: -1})
+		if err != nil {
+			t.Fatalf("%s: %v", reason, err)
+		}
+		if closed.State != "failed" || closed.Reason != reason || closed.ExitCode != -1 {
+			t.Errorf("%s: closed %+v", reason, closed)
+		}
+		exited := ofType(g.Events(), "dev.qory.run.exited")
+		if len(exited) != 1 || data(exited[0])["reason"] != reason || data(exited[0])["state"] != "failed" || data(exited[0])["exit_code"] != float64(-1) {
+			t.Errorf("%s: the link got %v", reason, exited)
+		}
 	}
 }
 
@@ -300,6 +337,10 @@ func TestCloseChecksTheOutcome(t *testing.T) {
 		{session.Outcome{State: "failed", Reason: "session_lost", ExitCode: -1}, `the outcome's reason "session_lost" is not a code of the caller's: a lower-case letter, then up to 63 lower-case letters, digits and _, and none of Forager's reserved codes`},
 		{session.Outcome{State: "failed", Reason: "image_missing", ExitCode: 0}, imageMissingOutcome},
 		{session.Outcome{State: "succeeded", Reason: "image_missing", ExitCode: -1}, imageMissingOutcome},
+		{session.Outcome{State: "failed", Reason: "image_user_root", ExitCode: 0}, noJoinOutcome("image_user_root")},
+		{session.Outcome{State: "cancelled", Reason: "image_user_root", ExitCode: -1}, noJoinOutcome("image_user_root")},
+		{session.Outcome{State: "failed", Reason: "workflow_not_in_harness", ExitCode: 1}, noJoinOutcome("workflow_not_in_harness")},
+		{session.Outcome{State: "succeeded", Reason: "workflow_not_in_harness", ExitCode: -1}, noJoinOutcome("workflow_not_in_harness")},
 	} {
 		if _, err := r.Close(ctx, c.out); err == nil || err.Error() != c.want {
 			t.Errorf("%+v: %v, want %s", c.out, err, c.want)

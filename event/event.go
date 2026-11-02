@@ -106,6 +106,12 @@ const (
 	ReasonNoSession = "no_session"
 )
 
+// ReasonWorkflowNotInHarness is the reason qory gives the close of a run with no join
+// whose workflow is not in the harness, failed with exit code -1. It is a caller's
+// code, not one of Forager's reserved codes; the close and the gateway accept it only
+// failed with exit code -1, for a run with no join.
+const ReasonWorkflowNotInHarness = "workflow_not_in_harness"
+
 // The states of dev.qory.run.exited, how a run ended: it ended well, it ended badly, or
 // it was stopped before it said how it went. They are the outcomes a run's starter may
 // give too.
