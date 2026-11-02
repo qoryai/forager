@@ -1264,6 +1264,11 @@ release may change what an existing document does, and says so under Upgrading.
   Before, an open tunnel to the host kept reaching the address, and a new tunnel's
   request reused a pooled connection to it with no new dial.
 
+- The run API route's `502` `answer_unverified` starts with the clock: "Check the clock
+  of the gateway's host, its access key in Qory Apiary, and its pin, apiary_public_key."
+  Qory Apiary signs no `401`, so a gateway whose clock is off gets this code. Before, the
+  message pointed to the pin alone.
+
 #### Security
 
 - Build Forager with Go 1.27.3 or above: go.mod requires `go 1.27.3`. Go 1.27.3 has

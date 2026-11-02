@@ -523,7 +523,7 @@ const (
 	runAPINotFound    = "Send the request over HTTP/1.1 to one of the five run API paths under QORY_RUN_API, with no query: this request is outside them."
 	runAPIBucket      = "Retry in 1 second: the run's requests came faster than gateway.run_limits.requests_per_second allows."
 	runAPIConnections = "Retry once one of this run's connections closes: the run has as many open as gateway.run_limits.connections allows."
-	runAPIUnverified  = "Check the gateway's pin, apiary_public_key, against the keys of Qory Apiary: the answer to this request failed verification under it, and the gateway dropped the answer."
+	runAPIUnverified  = "Check the clock of the gateway's host, its access key in Qory Apiary, and its pin, apiary_public_key. The answer to this request was a 401 or failed verification under the pin, and the gateway dropped it."
 	runAPITooLarge    = "Check the size of the work item's data in Qory Apiary: the answer is over the bound the gateway reads, 16 MiB for a 200 and 64 KiB for any other status, and the gateway dropped the answer."
 	runAPIUnavailable = "Retry the request: the gateway did not reach Qory Apiary, or the request timed out."
 )

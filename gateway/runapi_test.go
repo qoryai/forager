@@ -459,6 +459,27 @@ func TestAnAnswerThatFailsVerificationIsDropped(t *testing.T) {
 	}
 }
 
+// TestAnUnsigned401NamesTheClockFirst pins what the caller gets for a 401 of Qory Apiary,
+// which is never signed: a gateway whose clock is off gets it, so the 502
+// answer_unverified has the clock first, and the rest of the checks after it.
+func TestAnUnsigned401NamesTheClockFirst(t *testing.T) {
+	const want = "Check the clock of the gateway's host, its access key in Qory Apiary, and its pin, apiary_public_key. " +
+		"The answer to this request was a 401 or failed verification under the pin, and the gateway dropped it."
+	o := openRunAPIRun(t)
+	o.f.answers(func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"unauthorized"}`))
+	})
+	resp, b, _ := o.send(line(http.MethodGet, o.url("/work-item")), nil)
+	routeError(t, "an unsigned 401", resp, b, http.StatusBadGateway, "answer_unverified")
+	var doc struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil || doc.Message != want {
+		t.Errorf("the message %q (%v), want %q", doc.Message, err, want)
+	}
+}
+
 // fileAnswer answers with content under the signature of digest, sent with a
 // Content-Length as Qory Apiary sends a file.
 func (f *fakeRunAPI) fileAnswer(content []byte, digest string) func(w http.ResponseWriter, r *http.Request, _ []byte) {
