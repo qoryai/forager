@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -78,12 +79,16 @@ func TestDockerSetupCommandLines(t *testing.T) {
 
 // TestDockerRemoveSetup pins the removal of the setup container: the one command is
 // docker rm --force --volumes with the container's name, Close does not run it again
-// and works, and a setup container that is gone already is not an error. A removal that
-// fails returns docker's error, and Close then runs the command again.
+// and works, and a docker rm that fails with "no such container" is not an error. Any
+// other failure returns docker's error, keeps the container's entry in e.made, and Close
+// runs the command again: a missing engine socket and a container runtime that fails
+// leave the container up, though their text has "no such" or "not found".
 func TestDockerRemoveSetup(t *testing.T) {
 	ctx := context.Background()
 	rm := "docker rm --force --volumes qory-" + runID + "-setup"
 	const noSuch = "Error response from daemon: No such container: qory-x-setup"
+	const socket = "failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+	const runtime = "Error response from daemon: Could not kill running container, cannot remove: OCI runtime kill failed: runtime \"runsc\": executable file not found in $PATH"
 	for _, c := range []struct {
 		name, failOut, wantErr string
 		fail                   string
@@ -93,6 +98,10 @@ func TestDockerRemoveSetup(t *testing.T) {
 		{name: "gone already", fail: rm, failOut: noSuch, atClose: 0},
 		{name: "fails", fail: rm, atClose: 1,
 			wantErr: "wall docker: docker rm --force: exit status 1: Error response from daemon: told to fail"},
+		{name: "no engine socket", fail: rm, failOut: socket, atClose: 1,
+			wantErr: "wall docker: docker rm --force: exit status 1: " + socket},
+		{name: "a runtime that fails", fail: rm, failOut: runtime, atClose: 1,
+			wantErr: "wall docker: docker rm --force: exit status 1: " + runtime},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
@@ -116,6 +125,10 @@ func TestDockerRemoveSetup(t *testing.T) {
 			if got := rec.lines[before:]; len(got) != 1 || got[0] != rm {
 				t.Errorf("the commands %q, want %q alone", got, rm)
 			}
+			entry := []string{"rm", "--force", "--volumes", "qory-" + runID + "-setup"}
+			if got := slices.ContainsFunc(e.made, func(m []string) bool { return slices.Equal(m, entry) }); got != (c.atClose == 1) {
+				t.Errorf("the entry in e.made: %v, want %v", got, c.atClose == 1)
+			}
 			rec.fail, rec.failOut = "", ""
 			before = len(rec.lines)
 			if err := e.Close(ctx); err != nil {
@@ -125,6 +138,35 @@ func TestDockerRemoveSetup(t *testing.T) {
 				t.Errorf("Close ran %q %d times, want %d:\n%s", rm, got, c.atClose, strings.Join(rec.lines[before:], "\n"))
 			}
 		})
+	}
+}
+
+// TestDockerUnwrapKeepsItsCheck pins Unwrap's reading of a docker rm that fails: output
+// with "no such" or "not found" counts as gone, and any other failure is an error.
+func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		failOut string
+		wantErr bool
+	}{
+		{"Error response from daemon: No such container: qory-x-agent", false},
+		{"dial unix /var/run/docker.sock: connect: no such file or directory", false},
+		{"executable file not found in $PATH", false},
+		{"Error response from daemon: told to fail", true},
+	} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+		enc, err := d.Prepare(ctx, Request{RunID: runID, Image: "i"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := enc.(*dockerEnclosure)
+		rec.fail, rec.failOut = "-agent", c.failOut
+		if err := e.Unwrap(ctx); (err != nil) != c.wantErr {
+			t.Errorf("%q: %v, want an error: %v", c.failOut, err, c.wantErr)
+		}
+		rec.fail, rec.failOut = "", ""
+		e.Close(ctx)
 	}
 }
 

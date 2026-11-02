@@ -51,8 +51,8 @@ const (
 
 // The kinds of a step, the kind of dev.qory.run.step_started: a fetch of a source, a
 // compose of the harness, a fetch of the run's image, a setup command, the join of a
-// session, the start of a wall, a build of an image, and host work that sends the run's
-// commits.
+// session, the start of a wall or the start or the removal of a setup container, a build
+// of an image, and host work that sends the run's commits.
 const (
 	StepFetch   = "fetch"
 	StepCompose = "compose"

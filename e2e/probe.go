@@ -180,7 +180,7 @@ func fileSize(p string) int64 {
 }
 
 // reach is a setup command: it exits 0 once the service at the URL it is given returns
-// setupServiceLine, asked with no proxy.
+// setupServiceLine, fetched with no proxy.
 func reach(args []string) int {
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "reach: give one URL")

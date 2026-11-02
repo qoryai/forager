@@ -351,8 +351,9 @@ type SessionSpec struct {
 	// Docker this is unverified: the enclosure's root, which the agent reaches through
 	// the inner Docker daemon, may remount the workspace writable (contract §The wall,
 	// Nested Docker). Dir keeps the checks of a writable place, and stays among the
-	// places a file the Runtime reads is checked against (Written), since the setup
-	// container and the host steps still write it: [Run.Setup] binds it writable. A
+	// places a file the Runtime reads is checked against (Written), since the host steps
+	// still write it, and a setup command may have written it: [Run.Setup] binds it
+	// writable until [Run.RemoveSetup] removes the setup container. A
 	// writable mount that contains Dir is a refused join, mount_mode_conflict; a
 	// read-only one is the one bind. Join and
 	// AgentEnv return an error before the join request, and write nothing, for

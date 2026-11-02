@@ -421,17 +421,18 @@ A walled run's `(*session.Run).Setup` writes its steps itself, and
 `RemoveSetup` between `Setup` and the first `Join`, outside every host step. It returns
 once the setup container is gone: every process in it has ended, and the name
 `qory-setup` no longer resolves. It writes the `wall` step `remove the setup container`.
-In a run with no setup container, or a second time, it returns nil and writes nothing,
-so you need no condition around it. Each error before the step starts with the fix, and
-removes and writes nothing. A removal that fails ends the step `failed`, or `cancelled`
-when `ctx` ended, and the setup container may still run: stop the run before the join.
-No session joins the run after it, and `Close` tries the removal again.
+In an open run with no setup container, or a second time, it returns nil and writes
+nothing, also after a join or during a host step, so you need no condition around it.
+Each error before the step starts with the fix, and removes and writes nothing. A removal
+that fails ends the step `failed`, or `cancelled` when `ctx` ended, and the setup
+container may still run: stop the run before the join. No session joins the run after
+it, also when a later `RemoveSetup` succeeds, and `Close` tries the removal again.
 
 | When | Error |
 |---|---|
-| while a `Join` runs | `Remove the setup container before the first join: a session of the run is still running.` |
-| after a session joined | `Remove the setup container before the first join: session 1 joined the run.` |
-| while step 1 is open | `Exit step 1 before you remove the setup container: one host step is open at a time.` |
+| while a `Join`, a `Setup` or another call of the run runs | `Call RemoveSetup after the run's other call returns: another call of the run is running.` |
+| the setup container runs, after a session joined | `Remove the setup container before the first join: session 1 joined the run.` |
+| the setup container runs, while step 1 is open | `Exit step 1 before you remove the setup container: one host step is open at a time.` |
 | after `Close` | `Remove the setup container before the close: the run is closed.` |
 | the removal fails | `Close the run: the setup container may still run, so no session can join: ` and the wall's error |
 

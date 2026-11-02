@@ -5125,16 +5125,20 @@ rm --force --volumes`. It writes one `wall` step after the run's last step, `rem
 setup container`, which ends `succeeded` with `-1`. What the setup commands wrote in the
 working folder stays. The folder stays in the run's entry among the walled runs still
 going, and a settings file in it stays unread (§Sequence), because a setup command may
-have written the file. `Setup` does not run again. In a run with no setup container the
-call returns nil and writes no step: a run with no wall, a setup that never ran, a setup
-container that did not start, and a setup container that the call removed already. A
-session running or joined, an open host step or a closed run is an error before the step,
-with nothing removed. A removal that fails ends the step `failed`, or `cancelled` when
-the caller's context ended, with `-1`, after the failure's text as a `dev.qory.run.log`
-line on `stderr` with the step's `step` and no `session`, and is the error. The setup
-container may then still run: the caller stops the run, no session joins it, and the
-close tries the removal again. After a setup that failed the call still removes the
-container, and no session joins.
+have written the file. `Setup` does not run again. In an open run with no setup
+container the call returns nil and writes no step, also after a join or during a host
+step: a run with no wall, a setup that never ran, a setup container that did not start,
+and a setup container that the call removed already. Another call of the run that is
+running or a closed run is an error before the step, with nothing removed, and so is a
+join or an open host step while the setup container runs. A removal that fails ends the
+step `failed`, or `cancelled` when the caller's context ended, with `-1`, after the
+failure's text as a `dev.qory.run.log` line on `stderr` with the step's `step` and no
+`session`, and is the error. A `docker rm` that fails with `no such container` is no
+failure; any other output, such as a missing engine socket's, leaves the container's
+state unknown and fails the step. The setup container may then still run: the caller
+stops the run, no session joins it, also when a later call succeeds, and the close tries
+the removal again. After a setup that failed the call still removes the container, and
+no session joins.
 
 **Setup inside the wall.** With `wall.setup: inside`, a walled session may have setup
 commands, `SessionSpec.Setup`: each a name, such as `install` or `start services`, and

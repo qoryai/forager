@@ -15,8 +15,9 @@ import (
 // them, the writable binds of the other walled runs in the registry and, behind a wall,
 // the run's writable binds: the workspace, the places of the plan the enclosure binds
 // writable, and own, the wall's writable binds and the setup container's. The workspace
-// is among them whatever its bind: the setup container writes it, and so does the agent
-// unless SessionSpec.WorkspaceReadOnly binds it read-only.
+// is among them whatever its bind: the host steps write it, a setup command may have
+// written it, and the agent writes it unless SessionSpec.WorkspaceReadOnly binds it
+// read-only.
 func writtenPlaces(spec runSpec, runID string, plan mountPlan, own []bindSource) ([]string, error) {
 	others, err := othersWritable(runID)
 	if err != nil {

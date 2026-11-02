@@ -74,8 +74,11 @@ type unwrapper interface {
 // RemoveSetup removes the setup container, and returns nil only once it is gone: every
 // process in it has ended, by force when it does not end by itself, and the name
 // qory-setup no longer resolves inside the enclosure. What the container wrote to its
-// mounts stays. A container that is gone already is not an error. After an error the
-// container may still run, and Close tries the removal again. The session calls
+// mounts stays. A container that is gone already is not an error, but a failure that
+// leaves its state unknown is. RemoveSetup bounds its wait and returns an error when ctx
+// ends or the container does not end in time, so the call never blocks the run without
+// limit. After an error the container may still run: accept a second call of RemoveSetup,
+// which tries again, and Close tries the removal again too. The session calls
 // RemoveSetup before the run's first Wrap, after a StartSetup that returned nil.
 type setupContainer interface {
 	StartSetup(ctx context.Context, l wall.Launch) error
@@ -208,7 +211,7 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 	}
 	container, ok := r.enclosure.(setupContainer)
 	if !ok {
-		return fmt.Errorf("Run the setup behind the Docker wall: the %s wall starts no setup container.", accesskey.ShownName(r.open.Wall.Name(), false))
+		return fmt.Errorf("Run the setup behind the Docker wall: the %s wall does not implement StartSetup, ExecSetup and RemoveSetup.", accesskey.ShownName(r.open.Wall.Name(), false))
 	}
 	puller, pulls := r.open.Wall.(wall.Puller)
 	pulls = pulls && r.byReference && r.imageStep == 0
@@ -347,35 +350,38 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 // a join, because a setup command may have written it. [Run.Setup] does not run again:
 // it runs once per run.
 //
-// In a run with no setup container RemoveSetup returns nil and writes nothing, so a
-// caller needs no condition: a run with no wall, a run whose setup container did not
-// start, and a run whose setup container RemoveSetup removed already.
+// In an open run with no setup container RemoveSetup returns nil and writes nothing, also
+// after a join or during a host step, so a caller needs no condition: a run with no
+// wall, a run whose setup container did not start, and a run whose setup container
+// RemoveSetup removed already. After a join a run gets no setup container: Setup does
+// not run after a join.
 //
 // RemoveSetup writes one step, numbered on from the run's last step: the wall step
 // "remove the setup container", which ends succeeded with -1. A run whose setup failed
 // keeps its failure: RemoveSetup removes the container, and still no session joins.
 //
-// An error before the step means nothing is removed and nothing is written: a session of
-// the run is running or joined it, a host step is open, or the run is closed. A removal
-// that fails ends the step failed, or cancelled when ctx ended, with -1, after its line,
-// and is the error. The setup container may then still run, so stop the run before the
-// join: no session joins the run after it, and [Run.Close] tries the removal again. The
-// run's masker replaces the run's secrets in the error, as in Open's.
+// An error before the step means nothing is removed and nothing is written: another call
+// of the run is running, the run is closed, or the setup container runs and a session
+// joined the run or a host step is open. A removal that fails ends the step failed, or
+// cancelled when ctx ended, with -1, after its line, and is the error. The setup
+// container may then still run, so stop the run before the join: no session joins the
+// run after it, also when a later RemoveSetup succeeds, and [Run.Close] tries the removal
+// again. The run's masker replaces the run's secrets in the error, as in Open's.
 func (r *Run) RemoveSetup(ctx context.Context) (err error) {
 	defer func() { err = maskError(r.masker, err) }()
 	if !r.joining.TryLock() {
-		return errors.New("Remove the setup container before the first join: a session of the run is still running.")
+		return errors.New("Call RemoveSetup after the run's other call returns: another call of the run is running.")
 	}
 	defer r.joining.Unlock()
 	switch {
 	case r.closed:
 		return errors.New("Remove the setup container before the close: the run is closed.")
+	case r.setupUp == nil:
+		return nil
 	case r.numbered > 0:
 		return fmt.Errorf("Remove the setup container before the first join: session %d joined the run.", r.numbered)
 	case r.hostStep != nil:
 		return fmt.Errorf("Exit step %d before you remove the setup container: one host step is open at a time.", r.hostStep.n)
-	case r.setupUp == nil:
-		return nil
 	}
 	step := r.startStep(event.StepWall, "remove the setup container")
 	// A panic that a caller recovers leaves no step open, and no session joins.

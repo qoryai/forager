@@ -1276,8 +1276,9 @@ release may change what an existing document does, and says so under Upgrading.
   when the enclosure has it, at the session's end.
 - Add `RemoveSetup(ctx context.Context) error` to an enclosure outside Forager that has
   `StartSetup` and `ExecSetup`. Without it `Run.Setup` returns `Run the setup behind the
-  Docker wall: the <name> wall starts no setup container.` The method returns nil only
-  once the setup container is gone and every process in it has ended.
+  Docker wall: the <name> wall does not implement StartSetup, ExecSetup and RemoveSetup.`
+  The method returns nil only once the setup container is gone and every process in it
+  has ended, bounds its wait, and accepts a second call after an error.
 
 #### Added
 
@@ -1287,11 +1288,13 @@ release may change what an existing document does, and says so under Upgrading.
   resolves. Call it for a read run, so that no process in the run's containers can write
   the workspace that `SessionSpec.WorkspaceReadOnly` binds read-only for the agent. It
   writes the `wall` step `remove the setup container`, returns nil and writes nothing
-  in a run with no setup container or a second time, and returns an error that starts
-  with the fix, with nothing removed, while a session runs, after a session joined,
-  during a host step and after the close. A removal that fails ends the step `failed`,
-  and no session joins the run. A run that does not call it keeps the setup container
-  until the run closes, as before.
+  in an open run with no setup container or a second time, and returns an error that
+  starts with the fix, with nothing removed, while another call of the run runs, after
+  the close, and, while the setup container runs, after a session joined or during a
+  host step. A `docker rm` that fails with `no such container` is no failure. Any other
+  failed removal, such as one with no engine socket, ends the step `failed`, and no
+  session joins the run. A run that does not call it keeps the setup container until
+  the run closes, as before.
 - `wall.Request.Pull` and `wall.Puller`: before a run uses an image by reference, the
   session checks its manifest at the registry with the run's credentials, through the
   run's proxy, with or without an engine proxy; a 404 is `image_missing`, and any other

@@ -164,6 +164,32 @@ func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 		}
 		r.Close(ctx, outcomeOf(res, err))
 	})
+	t.Run("the setup's folder after RemoveSetup", func(t *testing.T) {
+		w := &setupWall{}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image, sp.WorkspaceReadOnly = w, "example.com/agent:1", true
+		folder := t.TempDir()
+		settingsIn(t, &sp, folder)
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Setup(ctx, session.SetupSpec{Dir: folder, Commands: twoCommands[:1]}); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.RemoveSetup(ctx); err != nil {
+			t.Fatal(err)
+		}
+		res, err := r.Join(ctx, sp.SessionSpec)
+		if err == nil || !strings.Contains(err.Error(), ", which lies in "+folder+", a place a walled run can write,") {
+			t.Errorf("the join: %v", err)
+		}
+		if w.wrapped {
+			t.Errorf("the wall was wrapped: %+v", w.got)
+		}
+		r.Close(ctx, outcomeOf(res, err))
+	})
 	t.Run("a place of Spec.Written without a wall", func(t *testing.T) {
 		sp := spec(t, "FAKE_EXIT=0")
 		place := t.TempDir()

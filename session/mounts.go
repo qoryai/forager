@@ -373,8 +373,8 @@ type shown struct {
 	path, what string
 	// writable says a walled process can write the place: it gets the checks of a
 	// writable place. readOnly says the enclosure binds such a place read-only all the
-	// same: the workspace of a join with SessionSpec.WorkspaceReadOnly, which the setup
-	// container and the host steps still write.
+	// same: the workspace of a join with SessionSpec.WorkspaceReadOnly, which the host
+	// steps still write, and the setup container until [Run.RemoveSetup] removes it.
 	writable, readOnly bool
 	at                 splitPath
 	looks              []lookup

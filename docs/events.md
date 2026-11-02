@@ -144,6 +144,10 @@ a time:
 - Each join writes a `join` step, `join session <n>`, around its join request and the
   session's checks. It ends before `dev.qory.session.started`, or `failed` before the
   `dev.qory.session.exited` of a refused join.
+- Behind a wall, before the first join, `(*session.Run).Setup` writes a `wall` step,
+  `start the setup container`, and a `setup` step for each command, and
+  `(*session.Run).RemoveSetup` writes a `wall` step, `remove the setup container`. These
+  `wall` steps lie outside every session.
 - Behind a wall, after `dev.qory.session.started`, the join writes an `image` step,
   with the image's reference as its name, when the policy's image is a reference that
   no step fetched yet, and a `wall` step, `start the wall`, up to the launch's start.
