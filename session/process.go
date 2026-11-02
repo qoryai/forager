@@ -38,8 +38,9 @@ type process struct {
 	logs func(stream string) func([]byte)
 	// masker replaces the run's secrets in what goes to logs, stdout and stderr: the
 	// passwords of the run's forwarders, OpenSpec.Masker's values and the server's
-	// variable values. harness then replaces the text of a hidden harness in what goes
-	// to logs; nil for a run whose harness is not hidden.
+	// variable values, apart from QORY_RUN_SYSTEM's and QORY_RUN_REPOSITORIES'. harness
+	// then replaces the text of a hidden harness in what goes to logs; nil for a run whose
+	// harness is not hidden.
 	masker  *mask.Masker
 	harness *mask.Harness
 	// stop is the signal that asks the process to leave, and grace how long it gets

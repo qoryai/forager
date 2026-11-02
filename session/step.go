@@ -41,10 +41,12 @@ type Step struct {
 //
 // The name must contain no URL userinfo, token or other credential. The masker replaces
 // only the forwarders' passwords, OpenSpec.Masker's values, the server's variable
-// values and text in the shape of a known key (mask.Shapes), and accesskey.ShownValue
-// replaces only a name that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
-// qecd_; any other secret in name is written as given. The run's masker replaces the
-// run's secrets in the errors of StartStep, [Step.Log] and [Step.Exit], as in Open's.
+// values of 8 characters or more, apart from QORY_RUN_SYSTEM's and
+// QORY_RUN_REPOSITORIES', and text in the shape of a known key (mask.Shapes), and
+// accesskey.ShownValue replaces only a name that contains qak_, qrk_, qecr_, qecn_,
+// qecp_, qecg_, qeci_ or qecd_; any other secret in name is written as given. The run's
+// masker replaces the run's secrets in the errors of StartStep, [Step.Log] and
+// [Step.Exit], as in Open's.
 func (r *Run) StartStep(kind, name string) (_ *Step, err error) {
 	defer func() { err = maskError(r.masker, err) }()
 	if kind != event.StepFetch && kind != event.StepCompose && kind != event.StepBuild && kind != event.StepPush {

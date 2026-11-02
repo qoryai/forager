@@ -1041,8 +1041,9 @@ server's value past the count is not masked, and the run reports `the server's v
 <name> is not masked: the run's masker has 1024 values already`. `AddSecret` does not
 filter by length, so leave out a value that would replace ordinary text. `Close` leaves
 a masker you pass as it is: call its `Clear` once your writers are flushed. With no
-`Masker`, the run makes one with `mask.New()`, which masks the server's values and the
-forwarders' passwords, and `Close` overwrites its copies.
+`Masker`, the run makes one with `mask.New()`, which masks the server's values, apart
+from `QORY_RUN_SYSTEM`'s and `QORY_RUN_REPOSITORIES`', and the forwarders' passwords, and
+`Close` overwrites its copies.
 
 A masker from `mask.New()` also replaces text in the shape of a known key with a bare
 `***`, its prefix included, whether or not anyone added the key's value. `mask.Shapes()`

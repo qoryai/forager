@@ -196,18 +196,24 @@ func TestDockerRemoveSetupAfterUnwrap(t *testing.T) {
 	}
 }
 
-// TestDockerUnwrapKeepsItsCheck pins Unwrap's reading of a docker rm that fails: output
-// with "no such" or "not found" counts as gone, and any other failure is an error.
+// TestDockerUnwrapKeepsItsCheck pins Unwrap's reading of a docker rm that fails: only "no
+// such container", which docker run --rm leaves for a container that exits, counts as
+// gone, in any case. Any other failure is an error and keeps the container's entry in
+// e.made: a missing engine socket and a missing docker command leave the container's
+// state unknown, though their text has "no such" or "not found". Close still reads
+// those two as gone, with goneAlready, and any other failure as an error.
 func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {
-		failOut string
-		wantErr bool
+		failOut           string
+		wantErr, closeErr bool
 	}{
-		{"Error response from daemon: No such container: qory-x-agent", false},
-		{"dial unix /var/run/docker.sock: connect: no such file or directory", false},
-		{"executable file not found in $PATH", false},
-		{"Error response from daemon: told to fail", true},
+		{"Error response from daemon: No such container: qory-x-agent", false, false},
+		{"Error: no container with name or ID \"qory-x-agent\" found: no such container", false, false},
+		{"dial unix /var/run/docker.sock: connect: no such file or directory", true, false},
+		{"failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory", true, false},
+		{"executable file not found in $PATH", true, false},
+		{"Error response from daemon: told to fail", true, true},
 	} {
 		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
 		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
@@ -217,11 +223,18 @@ func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
 		}
 		e := enc.(*dockerEnclosure)
 		rec.fail, rec.failOut = "-agent", c.failOut
+		entry := []string{"rm", "--force", "--volumes", e.agent()}
+		e.made = append(e.made, entry)
 		if err := e.Unwrap(ctx); (err != nil) != c.wantErr {
 			t.Errorf("%q: %v, want an error: %v", c.failOut, err, c.wantErr)
 		}
+		if kept := slices.ContainsFunc(e.made, func(m []string) bool { return slices.Equal(m, entry) }); kept != c.wantErr {
+			t.Errorf("%q: the container's entry in e.made: %v, want %v", c.failOut, kept, c.wantErr)
+		}
+		if err := e.Close(ctx); (err != nil) != c.closeErr {
+			t.Errorf("%q: Close with the failure still there: %v, want an error: %v", c.failOut, err, c.closeErr)
+		}
 		rec.fail, rec.failOut = "", ""
-		e.Close(ctx)
 	}
 }
 

@@ -1,7 +1,8 @@
 // Package mask replaces secret values in bytes and strings with a fixed text in the same
 // form. The gateway's proxy masks a credential's value in what a host answers; the
 // session masks the passwords of a run's forwarders, the values its caller gives and
-// the server's variables in the runtime's output and in the records it maps to events.
+// the server's variables, apart from the run's system and repositories, in the runtime's
+// output and in the records it maps to events.
 //
 // A [Masker] is a set of finds, each with what replaces it. [Writer] masks a stream
 // that arrives in writes, keeping back the end of each write that a find could start

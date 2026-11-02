@@ -1372,7 +1372,12 @@ release may change what an existing document does, and says so under Upgrading.
   forward. The engine command's error and the start of a command's output print the
   value's phrase too, and so do the errors of making, writing and removing the
   directory of a run's environment files.
-
+- The Docker wall's `Unwrap` counts only `no such container` as gone, as `RemoveSetup`
+  does. An engine that cannot be reached, such as one whose socket went while
+  live-restore keeps the agent's container running, now fails `Unwrap`: the run keeps its
+  entry among the walled runs still going, takes no further joins, and `HostProxy`
+  returns an error. Before, `no such file or directory` counted as gone, and a push could
+  run beside the agent's container. `Close` keeps its reading.
 
 ### Session
 

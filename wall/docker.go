@@ -1206,11 +1206,13 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 }
 
 // Unwrap removes the agent's container that Wrap's launch started, within closeWait,
-// as its session ends, so the next session's container can take its name. A container
-// that is gone already, as docker run --rm removes one that exits, is not an error.
-// Everything else the enclosure made stays until Close.
+// as its session ends, so the next session's container can take its name. A docker rm
+// that fails with [noSuchContainer]'s text is not an error: docker run --rm removes a
+// container that exits. Every other failure is, and the container stays for Close to
+// remove: an engine that cannot be reached leaves its state unknown, and under
+// live-restore it still runs. Everything else the enclosure made stays until Close.
 func (e *dockerEnclosure) Unwrap(ctx context.Context) error {
-	return e.removeContainer(ctx, e.agent(), goneAlready)
+	return e.removeContainer(ctx, e.agent(), noSuchContainer)
 }
 
 // removeContainer removes one container of e.made with docker rm --force --volumes,

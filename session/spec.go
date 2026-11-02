@@ -176,8 +176,9 @@ type OpenSpec struct {
 	// runtime to read, such as the setup script in the session's directory, which has
 	// the setup commands as given. [Run.Close] leaves a masker you pass as it is: clear
 	// it with mask.Masker.Clear once your writers are flushed. Nil makes the run make
-	// one with mask.New, which masks the server's values and the forwarders' passwords,
-	// and which [Run.Close] overwrites.
+	// one with mask.New, which masks the server's values, apart from QORY_RUN_SYSTEM's and
+	// QORY_RUN_REPOSITORIES', and the forwarders' passwords, and which [Run.Close]
+	// overwrites.
 	Masker *mask.Masker
 }
 

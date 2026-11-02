@@ -7,8 +7,9 @@ import (
 )
 
 // texts masks the strings of a session's events: the run's masker replaces the run's
-// secrets first, the forwarders' passwords, OpenSpec.Masker's values and the server's variable
-// values, then the harness masker the harness's text. Either is nil for none.
+// secrets first, the forwarders' passwords, OpenSpec.Masker's values and the server's
+// variable values, apart from QORY_RUN_SYSTEM's and QORY_RUN_REPOSITORIES', then the
+// harness masker the harness's text. Either is nil for none.
 type texts struct {
 	secrets *mask.Masker
 	harness *mask.Harness

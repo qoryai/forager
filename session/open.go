@@ -538,8 +538,8 @@ func (r *Run) start(ctx context.Context) (err error) {
 	// A reload fetches what the gateway put in force and records it, at the sequence
 	// where it takes effect; batches from then on contain its digest.
 	r.reload.start(func(a *server.LinkReloadAnswer, held string) {
-		// The reload's variable values are masked from here on, whether or not its
-		// members are recorded.
+		// The reload's variable values that addServerValues adds are masked from here on,
+		// whether or not its members are recorded.
 		r.addServerValues(a.Values())
 		members, err := appliedMembers(a.Applied)
 		if err != nil {

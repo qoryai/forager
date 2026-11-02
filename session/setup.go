@@ -389,8 +389,8 @@ func (r *Run) RemoveSetup(ctx context.Context) (err error) {
 		return nil
 	case r.hostStep != nil:
 		return fmt.Errorf("Exit step %d before you remove the setup container: one host step is open at a time.", r.hostStep.n)
-	// A session runs while Join holds r.joining, and Join removes the agent's container
-	// before it lets go: only a removal that failed leaves that container behind.
+	// A session runs while Join holds r.joining, and the enclosure's Unwrap returned
+	// before Join lets go: only an Unwrap that failed leaves the agent's container behind.
 	case r.keptBy > 0:
 		return fmt.Errorf("Close the run: the agent's container of session %d could not be removed and may still run, so the setup container stays until the close.", r.keptBy)
 	}

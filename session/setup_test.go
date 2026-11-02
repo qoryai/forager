@@ -1065,7 +1065,7 @@ func TestRemoveSetupThatCannotStartRemovesNothing(t *testing.T) {
 		check(t, w, r, got, "Call RemoveSetup after the run's other call returns: another call of the run is running.")
 	})
 	t.Run("the agent's container may still run", func(t *testing.T) {
-		kept := &keptSetupWall{}
+		kept := &keptSetupWall{unwrapErr: errors.New("wall docker: rm: exit status 1")}
 		sp := walledSpec(t, kept)
 		r, err := session.Open(ctx, opened(sp))
 		if err != nil {
@@ -1128,15 +1128,71 @@ func TestRemoveSetupThatCannotStartRemovesNothing(t *testing.T) {
 
 // keptSetupWall is a setupWall whose Unwrap fails, as an engine's that could not remove
 // the agent's container.
-type keptSetupWall struct{ setupWall }
+type keptSetupWall struct {
+	setupWall
+	unwrapErr error
+}
 
 func (w *keptSetupWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
 	w.openWall.Prepare(ctx, req)
 	return w, nil
 }
 
-func (*keptSetupWall) Unwrap(context.Context) error {
-	return errors.New("wall docker: rm: exit status 1")
+func (w *keptSetupWall) Unwrap(context.Context) error { return w.unwrapErr }
+
+// TestAnEngineThatCannotBeReachedEndsTheRunsHostWork pins what the run does with the
+// error the Docker wall's Unwrap returns once its engine cannot be reached, as when the
+// socket goes and live-restore keeps the agent's container running: the run keeps its
+// entry among the walled runs still going, a report line has the error, a later join and
+// HostProxy return the join's error, and RemoveSetup leaves the setup container.
+func TestAnEngineThatCannotBeReachedEndsTheRunsHostWork(t *testing.T) {
+	const gone = "wall docker: docker rm --force: exit status 1: failed to connect to the docker API at unix:///var/run/docker.sock: dial unix /var/run/docker.sock: connect: no such file or directory"
+	w := &keptSetupWall{unwrapErr: errors.New(gone)}
+	sp := walledSpec(t, w)
+	var mu sync.Mutex
+	var reports []string
+	sp.Report = func(l string) {
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, l)
+	}
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := filepath.Join(registry(t), r.ID())
+	t.Cleanup(func() { os.Remove(entry) })
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
+		t.Fatal(err)
+	}
+	const want = "Open a new run. The wall of session 1 could not be removed and may still run, so this run takes no more sessions."
+	if _, err := r.Join(ctx, sp.SessionSpec); err == nil || err.Error() != want {
+		t.Errorf("a later join: %v, want %q", err, want)
+	}
+	if _, err := r.HostProxy(); err == nil || err.Error() != want {
+		t.Errorf("HostProxy: %v, want %q", err, want)
+	}
+	if err := r.RemoveSetup(ctx); err == nil {
+		t.Error("RemoveSetup returned nil beside the agent's container")
+	}
+	if w.removes != 0 {
+		t.Errorf("the wall removed %d setup containers", w.removes)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(entry); err != nil {
+		t.Errorf("the run's entry after the close: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := "removing the wall: " + gone; !slices.Contains(reports, want) {
+		t.Errorf("the Report lines %q have no %q", reports, want)
+	}
 }
 
 // heldRemoveWall is a heldSetupWall that counts its removals in removed.
