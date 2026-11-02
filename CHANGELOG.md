@@ -1288,7 +1288,8 @@ release may change what an existing document does, and says so under Upgrading.
   resolves. Call it for a read run, so that no process in the run's containers can write
   the workspace that `SessionSpec.WorkspaceReadOnly` binds read-only for the agent. It
   writes the `wall` step `remove the setup container`, returns nil and writes nothing
-  in an open run with no setup container or a second time, and returns an error that
+  in an open run with no setup container or after it removed the setup container, and
+  returns an error that
   starts with the fix, with nothing removed, while another call of the run runs, after
   the close, and, while the setup container runs, after a session joined or during a
   host step. A `docker rm` that fails with `no such container` is no failure. Any other

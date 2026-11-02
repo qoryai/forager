@@ -176,7 +176,7 @@ func (r *Run) closeWall(ctx context.Context) {
 // An error before the steps means nothing is written: the run has no wall, a session of
 // the run is running or joined it, the setup ran already, a host step is open, the run
 // is closed, the commands or Env are refused, Dir fails a check, or the run's wall
-// starts no setup container. A setup command that exits otherwise than 0 ends its step
+// does not implement the setup container's calls. A setup command that exits otherwise than 0 ends its step
 // failed with its exit status and returns a [*SetupError]. Any other failure in a step
 // ends the step failed, or cancelled when ctx ended, with -1, after its line, and is the
 // error. After a step that fails no later step starts, and no session joins the run.
