@@ -119,7 +119,8 @@ const (
 // readOnlyReport is what the probe found in a workspace bound read-only: the text of
 // setupFile or why it could not read it, the exit status and standard error of a shell
 // that writes agentFile and, with a Docker inside, the exit status and output of a
-// container the agent starts with the workspace bound that writes agentFile there.
+// container the agent starts with the workspace bound that writes agentFile there, and
+// of a privileged one that first remounts the workspace writable.
 type readOnlyReport struct {
 	Setup       string `json:"setup"`
 	SetupErr    string `json:"setup_err"`
@@ -127,6 +128,8 @@ type readOnlyReport struct {
 	WriteStderr string `json:"write_stderr"`
 	InnerExit   int    `json:"inner_exit"`
 	InnerOutput string `json:"inner_output"`
+	PrivExit    int    `json:"priv_exit"`
+	PrivOutput  string `json:"priv_output"`
 }
 
 // probeReadOnly reads setupFile and tries to write agentFile, with the image's shell and,
@@ -144,7 +147,8 @@ func probeReadOnly() *readOnlyReport {
 	r.WriteExit = exitCode(cmd.Run(), &stderr)
 	r.WriteStderr = strings.TrimSpace(stderr.String())
 	if os.Getenv("PROBE_DOCKER") == "1" {
-		r.InnerExit, r.InnerOutput = innerWrite()
+		r.InnerExit, r.InnerOutput = innerWrite(false)
+		r.PrivExit, r.PrivOutput = innerWrite(true)
 	}
 	return &r
 }
@@ -164,11 +168,24 @@ func exitCode(err error, out *bytes.Buffer) int {
 }
 
 // writeFile is the probe in a container the agent started: it writes the file its
-// argument names, and exits 1 with the error when the write fails.
+// argument names, and exits 1 with the error when the write fails. With --remount
+// first, it bind-remounts the file's directory writable before the write, and prints
+// the remount's result.
 func writeFile(args []string) int {
+	remount := len(args) == 2 && args[0] == "--remount"
+	if remount {
+		args = args[1:]
+	}
 	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "write-file: give one path")
+		fmt.Fprintln(os.Stderr, "write-file: give one path, after --remount or alone")
 		return 2
+	}
+	if remount {
+		if err := remountWritable(filepath.Dir(args[0])); err != nil {
+			fmt.Fprintln(os.Stderr, "write-file: the remount:", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "write-file: the remount succeeded")
+		}
 	}
 	if err := os.WriteFile(args[0], []byte("agent\n"), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "write-file:", err)

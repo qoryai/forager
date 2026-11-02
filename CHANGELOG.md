@@ -1363,11 +1363,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `SessionSpec.WorkspaceReadOnly`, which binds the workspace read-only in the agent's
   container for that session, so a write into it inside fails with `Read-only file
-  system`. The setup container of `Run.Setup` still binds the working folder writable,
-  and the workspace keeps the checks of a writable place. A writable mount that holds
-  the workspace is `mount_mode_conflict`. `Join` returns an error before the join
-  request, and writes nothing, for the field in a run with no wall and for the field
-  beside `SessionSpec.Setup`, which runs in the agent's container.
+  system`. Under nested Docker this is unverified: the enclosure's root, which the
+  agent reaches through the inner Docker daemon, may remount the workspace writable.
+  The setup container of `Run.Setup` still binds the working folder writable, and the
+  workspace keeps the checks of a writable place. A writable mount that holds the
+  workspace is `mount_mode_conflict`. `Join` and `AgentEnv` return an error before the
+  join request, and write nothing, for the field in a run with no wall and for the
+  field beside `SessionSpec.Setup`, which runs in the agent's container.
+- A settings file, or another file Claude Code's runtime reads from the machine, in the
+  folder of the run's setup container is refused, as one in the workspace is.
 - The session sets `line` on each runtime event it maps from the runtime's standard
   output, cuts `text` and `content` at 64 KiB with `truncated`, and sets `summary` on a
   tool event. It masks each event before it cuts it, so a cut never splits a secret
@@ -1843,6 +1847,12 @@ release may change what an existing document does, and says so under Upgrading.
 - The Docker test of a sealed credential runs a third time with a value that expires 5
   minutes 20 seconds after the start: the recorder gets the first value, then the
   renewed one.
+- The conformance suite checks a join with `SessionSpec.WorkspaceReadOnly` after
+  `Run.Setup`: the setup container writes `setup.txt`, the agent reads it, and its write
+  of `agent.txt` fails with `Read-only file system`. With nested Docker, the same write
+  from a container the agent starts fails too, and so does the write from a privileged
+  one whose root first bind-remounts the workspace writable. After the close the folder
+  has `setup.txt` and no `agent.txt`.
 
 #### Changed
 

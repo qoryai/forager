@@ -347,10 +347,14 @@ type SessionSpec struct {
 	// Wall they mean nothing.
 	Mounts []wall.Mount
 	// WorkspaceReadOnly says the enclosure binds Dir read-only for this session, so a
-	// write into the workspace inside fails with "Read-only file system". Dir keeps the
-	// checks of a writable place, since the setup container and the host steps still
-	// write it: [Run.Setup] binds it writable. A writable mount that contains Dir is a
-	// refused join, mount_mode_conflict; a read-only one is the one bind. Join and
+	// write into the workspace inside fails with "Read-only file system". Under nested
+	// Docker this is unverified: the enclosure's root, which the agent reaches through
+	// the inner Docker daemon, may remount the workspace writable (contract §The wall,
+	// Nested Docker). Dir keeps the checks of a writable place, and stays among the
+	// places a file the Runtime reads is checked against (Written), since the setup
+	// container and the host steps still write it: [Run.Setup] binds it writable. A
+	// writable mount that contains Dir is a refused join, mount_mode_conflict; a
+	// read-only one is the one bind. Join and
 	// AgentEnv return an error before the join request, and write nothing, for
 	// WorkspaceReadOnly in a run with no Wall and beside Setup, which runs in the
 	// agent's container.
@@ -366,8 +370,9 @@ type SessionSpec struct {
 	// it starts. A file the Runtime reads from this machine as the session starts, the
 	// settings Claude Code is passed say, is refused when its path is or lies inside one
 	// of them, as given or through links, or is reached through one; so is one in a
-	// writable bind of another walled run in the registry and, behind a Wall, one in a
-	// writable bind of this session's, Dir among them. Behind a Wall, a mount or Dir whose
+	// writable bind of another walled run in the registry and, behind a Wall, one in Dir,
+	// read-only or not, in a writable bind of this session's or in the folder of the
+	// run's setup container. Behind a Wall, a mount or Dir whose
 	// path goes through a link inside one of them and does not resolve into it is a
 	// refused join, mount_through_link. A relative path is taken from the working
 	// directory.

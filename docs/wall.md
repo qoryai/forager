@@ -366,7 +366,8 @@ up in its parent, so two binds of one root are allowed.
   directory inside (`--workdir` for Docker), reached through the mount that holds it.
   `qory` passes the checkout's root as a mount and the current directory as `Dir`:
   one bind, the checkout's root, and the working directory below it. A workspace that no
-  mount holds is bound at the same path as on the machine, writable. The session passes
+  mount holds is bound at the same path as on the machine, writable, or read-only for a
+  session with `SessionSpec.WorkspaceReadOnly`. The session passes
   every bind to the enclosure, each path clean, and the working directory lies in one of
   them, by its names, or the run fails; `wall.Docker` binds nothing of the caller's the
   launch does not list, and refuses a launch whose `Dir` no mount holds.
@@ -531,8 +532,9 @@ chooses what a later run is given:
 - the writable binds of the other walled runs of this user's in the registry, by the
   paths they resolved to, with or without a wall for this run. An entry whose session is
   gone counts too, until a walled run finds its containers gone and removes it;
-- behind a wall, this run's writable binds: the workspace, or the mount that holds it,
-  the writable mounts and the wall's writable binds.
+- behind a wall, the workspace, read-only or not, and this run's writable binds: the
+  mount that holds the workspace, the writable mounts, the wall's writable binds and the
+  folder of the run's setup container.
 
 A path with a `..` name is refused first, "the path has a ".." part": the system applies `..`
 after the link before it, so the path made clean would name another file than the one

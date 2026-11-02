@@ -822,11 +822,11 @@ func shared(own bindSource, otherID string, other bindSource) error {
 		}
 		if entry, ok := inside(other, own.at, true); ok && own.Writable {
 			if entry != "" {
-				return refuse("%s (writable) contains %s, on the way to %s%s%sthis run's "+
-					"agent could change it", own.what, pathShown(entry), what, pathShown(other.Path), still)
+				return refuse("%s (%s) contains %s, on the way to %s%s%s%s could change it",
+					own.what, own.shownMode(), pathShown(entry), what, pathShown(other.Path), still, own.writer())
 			}
-			return refuse("%s (writable) contains %s%s%sthis run's agent could change it",
-				own.what, what, pathShown(other.Path), still)
+			return refuse("%s (%s) contains %s%s%s%s could change it",
+				own.what, own.shownMode(), what, pathShown(other.Path), still, own.writer())
 		}
 		if entry, ok := inside(own, other.at, true); ok && other.Writable {
 			how := "lies inside"
@@ -834,7 +834,7 @@ func shared(own bindSource, otherID string, other bindSource) error {
 				how = "is reached through " + pathShown(entry) + ", which lies inside"
 			}
 			return refuse("%s (%s) %s %s%s%sa walled agent of that run can change it",
-				own.what, mode(own.Writable), how, what, pathShown(other.Path), still)
+				own.what, own.shownMode(), how, what, pathShown(other.Path), still)
 		}
 		return nil
 	}
@@ -853,7 +853,7 @@ func shared(own bindSource, otherID string, other bindSource) error {
 				theirs = "the run directory " + pathShown(other.Resolved)
 			}
 			return refuse("%s (%s) %s %s%sa run directory is its session's alone",
-				own.what, mode(own.Writable), how, theirs, still)
+				own.what, own.shownMode(), how, theirs, still)
 		}
 	}
 	if other.Writable {
@@ -863,7 +863,7 @@ func shared(own bindSource, otherID string, other bindSource) error {
 				how = "is reached through " + pathShown(entry) + ", which lies inside"
 			}
 			return refuse("%s (%s) %s the writable bind %s%sa walled agent of that run can "+
-				"change it", own.what, mode(own.Writable), how, pathShown(other.Path), still)
+				"change it", own.what, own.shownMode(), how, pathShown(other.Path), still)
 		}
 	}
 	if own.Writable {
@@ -872,8 +872,8 @@ func shared(own bindSource, otherID string, other bindSource) error {
 			if entry != "" {
 				what = pathShown(entry) + ", on the way to " + what
 			}
-			return refuse("%s (writable) contains %s%sthis run's agent could change it",
-				own.what, what, still)
+			return refuse("%s (%s) contains %s%s%s could change it",
+				own.what, own.shownMode(), what, still, own.writer())
 		}
 	}
 	return nil

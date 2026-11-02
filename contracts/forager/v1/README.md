@@ -222,8 +222,8 @@ One run, on a developer machine, with a server configured:
    name, that is a link or that is not a regular file of at most 1 MiB is not read, and
    the run does not start. The
    places are the ones the caller records as written by walled runs, the writable binds
-   of the other walled runs in the registry and, behind a wall, the run's writable
-   binds.
+   of the other walled runs in the registry and, behind a wall, the workspace, read-only
+   or not, the run's writable binds and the folder of the run's setup container.
    A walled launch's `--mcp-config`, `--agents`, `--plugin-dir`, `--plugin-dir-no-mcp`
    and `--add-dir` values are checked against the same places, and the run does not
    start when one fails. A value that starts with `~`, is relative or has a `..` part is
@@ -4785,11 +4785,15 @@ up in its parent, so two binds of one root are allowed:
   part of a read-only one writes what the run shows read-only;
 - a session with `SessionSpec.WorkspaceReadOnly` binds the workspace read-only for its
   container alone, so a write into the workspace inside fails with `Read-only file
-  system`. The setup container still binds the working folder writable (Setup, below),
-  and the host steps still write it, so the workspace keeps every check of a writable
-  place, the links and the way to Forager's files among them, and the registry lists
-  the workspace as writable when no mount holds it. A writable mount that holds the workspace, is the
-  same place or lies inside it is `mount_mode_conflict`; a read-only mount that holds it
+  system`. Under nested Docker this is unverified: the enclosure's root, which the agent
+  reaches through the inner Docker daemon, may remount the workspace writable (Nested
+  Docker, below). The setup container still binds the working folder writable (Setup,
+  below), and the host steps still write it, so the workspace keeps every check of a
+  writable place, the links and the way to Forager's files among them; the registry
+  lists the workspace as writable when no mount holds it; and a settings file that lies
+  in the workspace or in the setup container's folder is not read (§Sequence). A
+  writable mount that holds the
+  workspace, is the same place or lies inside it is `mount_mode_conflict`; a read-only mount that holds it
   is its one bind. Such a session needs a wall and no `SessionSpec.Setup`, which runs in
   the agent's container: `Run.Join` returns an error before the join request, and
   writes nothing, for either;

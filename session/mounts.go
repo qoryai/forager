@@ -419,10 +419,30 @@ type bindSource struct {
 	// its own: it stands for them until the run lists the one it made.
 	Pattern bool `json:"pattern,omitempty"`
 	// what names the bind in a refusal's sentence, at is where it resolved and looks
-	// are its lookups: for this run's own checks alone.
-	what  string
-	at    splitPath
-	looks []lookup
+	// are its lookups: for this run's own checks alone. readOnly says the agent's
+	// container binds a writable place read-only: the workspace of a join with
+	// SessionSpec.WorkspaceReadOnly, which the setup container and the host steps write.
+	what     string
+	at       splitPath
+	looks    []lookup
+	readOnly bool
+}
+
+// shownMode is how a refusal words the mode of this run's bind: read-only for the
+// workspace the agent sees read-only, otherwise writable or read-only.
+func (b bindSource) shownMode() string {
+	if b.readOnly {
+		return "read-only"
+	}
+	return mode(b.Writable)
+}
+
+// writer is who of this run can change a writable bind, in a refusal's sentence.
+func (b bindSource) writer() string {
+	if b.readOnly {
+		return "this run's setup container or host steps"
+	}
+	return "this run's agent"
 }
 
 // source is the bind source of a path, resolved now.
@@ -749,7 +769,7 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 		}
 		plan.Mounts = append(plan.Mounts, wall.Mount{Path: p.bound, ReadOnly: !p.bindsWritable()})
 		b := bindSource{Path: p.path, Resolved: p.at.String(), Writable: p.writable,
-			what: p.what + " " + pathShown(p.path), at: p.at, looks: p.looks}
+			what: p.what + " " + pathShown(p.path), at: p.at, looks: p.looks, readOnly: p.readOnly}
 		for _, l := range p.looks {
 			b.Lookups = append(b.Lookups, l.entry())
 		}

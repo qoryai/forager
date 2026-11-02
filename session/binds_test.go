@@ -470,6 +470,28 @@ func TestABindInsideAnotherWalledRunsIsNoRun(t *testing.T) {
 	}
 }
 
+// TestAReadOnlyWorkspaceOverAnotherWalledRunsBindIsNoRun pins mount_shared_with_run for
+// a workspace with SessionSpec.WorkspaceReadOnly that holds a bind of a walled run still
+// going: the agent sees the workspace read-only, and the setup container or the host
+// steps of this run could change the other run's bind.
+func TestAReadOnlyWorkspaceOverAnotherWalledRunsBindIsNoRun(t *testing.T) {
+	root := t.TempDir()
+	sub := mkdirs(t, filepath.Join(root, "sub"))
+	first, _ := hold(t, []wall.Mount{{Path: sub}}, sub)
+	sp := walledSpec(t, &openWall{})
+	sp.Dir, sp.WorkspaceReadOnly = root, true
+	r := refusalOf(t, "mount_shared_with_run", runErr(sp))
+	if want := []string{root, first.RunID, sub}; !slices.Equal(r.Names, want) {
+		t.Errorf("names %q, want %q", r.Names, want)
+	}
+	want := "the workspace " + root + " (read-only) contains the writable bind " + sub +
+		" of the walled run " + first.RunID +
+		", which is still going: this run's setup container or host steps could change it"
+	if r.Detail != want {
+		t.Errorf("detail %q\nwant   %q", r.Detail, want)
+	}
+}
+
 // TestTheEntryOfAWalledRunLastsAsLongAsTheRun pins the registry's entry: the run's id,
 // its process and its binds, each as passed, as resolved and whether writable, in a
 // file only its user reads, removed when the run ends, so the run that was refused

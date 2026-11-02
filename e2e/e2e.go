@@ -1142,7 +1142,8 @@ func setupOutside(t *testing.T, o Options, h hosts, outside string) {
 // readOnlyWorkspace checks a join with SessionSpec.WorkspaceReadOnly after
 // (*session.Run).Setup: the setup container writes setupFile into the workspace; the
 // agent reads it, and its write of agentFile fails with "Read-only file system", as
-// does the same write from a container the agent starts when it has a Docker inside;
+// does the same write from a container the agent starts when it has a Docker inside,
+// and from a privileged one whose root first bind-remounts the workspace writable;
 // after the close the folder on this machine has setupFile and no agentFile.
 func readOnlyWorkspace(t *testing.T, o Options, h hosts, outside string) {
 	const name = "the agent reads the workspace the setup wrote and cannot write it"
@@ -1172,6 +1173,9 @@ func readOnlyWorkspace(t *testing.T, o Options, h hosts, outside string) {
 		}
 		if o.Docker && (ro.InnerExit == 0 || !strings.Contains(strings.ToLower(ro.InnerOutput), "read-only file system")) {
 			t.Errorf("the write of %s from a container the agent started exited %d with %q, want a failure with %q", agentFile, ro.InnerExit, ro.InnerOutput, "read-only file system")
+		}
+		if o.Docker && (ro.PrivExit == 0 || !strings.Contains(strings.ToLower(ro.PrivOutput), "read-only file system")) {
+			t.Errorf("the write of %s from a privileged container the agent started, after a remount, exited %d with %q, want a failure with %q", agentFile, ro.PrivExit, ro.PrivOutput, "read-only file system")
 		}
 		if b, err := os.ReadFile(filepath.Join(r.dir, setupFile)); err != nil || string(b) != "setup\n" {
 			t.Errorf("%s on this machine: %q, %v", setupFile, b, err)

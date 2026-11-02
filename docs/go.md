@@ -1060,8 +1060,8 @@ request asks the gateway for, for this session.
   them: the workspaces and the writable mounts of the walled runs it starts. A settings
   file the runtime reads from this machine, the one Claude Code is passed with
   `--settings`, is refused when it lies in one of them or in a writable bind of another
-  walled run, and behind a `Wall` when it lies in a writable bind of this run's, the
-  workspace among them. Behind a `Wall`, Claude Code's `--mcp-config`, `--agents`,
+  walled run, and behind a `Wall` when it lies in the workspace, read-only or not, in a
+  writable bind of this run's or in the folder of the run's setup container. Behind a `Wall`, Claude Code's `--mcp-config`, `--agents`,
   `--plugin-dir`, `--plugin-dir-no-mcp` and `--add-dir` values are checked against the
   same places. An `--mcp-config` or `--agents` file is passed as a copy in the run
   directory. A directory may not lie in or contain one of them, nor hold a link that
@@ -1070,9 +1070,13 @@ request asks the gateway for, for this session.
   resolve into it is no run, `mount_through_link`. See
   [no file read from a place an agent can write](wall.md#no-file-read-from-a-place-an-agent-can-write).
 - `WorkspaceReadOnly` binds the workspace, `Dir`, read-only in the agent's container
-  for this session, so a write into it inside fails with `Read-only file system`. The
-  setup container of `(*session.Run).Setup` still binds the working folder writable, and
-  the host steps still write it, so the workspace keeps the checks of a writable place.
+  for this session, so a write into it inside fails with `Read-only file system`. Under
+  nested Docker this is unverified: the enclosure's root, which the agent reaches
+  through the inner Docker daemon, may remount the workspace writable (see the
+  contract's §The wall, Nested Docker). The setup container of `(*session.Run).Setup`
+  still binds the working folder writable, and the host steps still write it, so the
+  workspace keeps the checks of a writable place, and a settings file in it is refused
+  as in a writable one.
   A writable mount that holds `Dir` is `mount_mode_conflict`; a read-only one is the one
   bind. `Join` and `AgentEnv` return an error before the join request, and write
   nothing, in a run with no `Wall`: `Open the run with a wall to mount the workspace

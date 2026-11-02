@@ -457,10 +457,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// not its to read. The runtime learns whether the run is walled, and the
 	// placeholders the run sets, with or without a wall. A file the runtime reads from this machine is refused
 	// when a walled run could have written it: one in a place of SessionSpec.Written, in
-	// a writable bind of another walled run in the registry or, behind a wall, in a
-	// writable bind of this session's. A directory the runtime passes is refused as well
-	// when it contains such a place. The places are worked out once, for both.
-	written := sync.OnceValues(func() ([]string, error) { return writtenPlaces(spec, r.id, plan, r.wallOwn) })
+	// a writable bind of another walled run in the registry or, behind a wall, in the
+	// workspace, in a writable bind of this session's or in one of the setup container's.
+	// A directory the runtime passes is refused as well when it contains such a place. The places are worked out once, for both.
+	written := sync.OnceValues(func() ([]string, error) {
+		return writtenPlaces(spec, r.id, plan, slices.Concat(r.wallOwn, r.setupBinds))
+	})
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	denied, err := deniedVariables(rt, spec.Wall != nil)
 	if err != nil {

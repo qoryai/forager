@@ -251,8 +251,9 @@ const probeImage = "walltest-probe:inner"
 
 // innerWrite starts a container of the probe with the image's docker command, as the
 // agent does, with the agent's working directory bound at the same path, and has it
-// write agentFile there. It returns the container's exit status and output.
-func innerWrite() (int, string) {
+// write agentFile there. A privileged container first bind-remounts the directory
+// writable, as its root can try. It returns the container's exit status and output.
+func innerWrite(privileged bool) (int, string) {
 	if err := importSelf(dockerClient(30 * time.Second)); err != nil {
 		return -1, "the probe's image: " + err.Error()
 	}
@@ -267,8 +268,12 @@ func innerWrite() (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var out bytes.Buffer
-	cmd := exec.CommandContext(ctx, docker, "run", "--rm", "--mount", "type=bind,src="+wd+",dst="+wd,
-		probeImage, "/probe", modeWrite, filepath.Join(wd, agentFile))
+	args := []string{"run", "--rm", "--mount", "type=bind,src=" + wd + ",dst=" + wd, probeImage, "/probe", modeWrite}
+	if privileged {
+		args = append([]string{"run", "--rm", "--privileged"}, args[2:]...)
+		args = append(args, "--remount")
+	}
+	cmd := exec.CommandContext(ctx, docker, append(args, filepath.Join(wd, agentFile))...)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := exitCode(cmd.Run(), &out)
 	return code, strings.TrimSpace(out.String())
