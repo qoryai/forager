@@ -117,6 +117,46 @@ func TestTheImageIsTheOneTheGatewayAnswers(t *testing.T) {
 	}
 }
 
+// TestTheRunGivesTheImageTheGatewayAnswers pins Run.Image: the image of a walled run's
+// answer from the open on, the same after the close, and the zero Image without a wall.
+func TestTheRunGivesTheImageTheGatewayAnswers(t *testing.T) {
+	ctx := context.Background()
+	for name, c := range map[string]struct {
+		selected string
+		wall     bool
+		want     session.Image
+	}{
+		"with Docker":    {"with-docker", true, images[1]},
+		"without Docker": {"", true, images[0]},
+		"no wall":        {"", false, session.Image{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			selecting(g, c.selected)
+			sp.Image, sp.Images = "base", images
+			if c.wall {
+				sp.Wall = &openWall{}
+			}
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Image(); got != c.want {
+				t.Errorf("after the open the image is %+v, want %+v", got, c.want)
+			}
+			if got := r.Image(); got != c.want {
+				t.Errorf("a second call returns %+v, want %+v", got, c.want)
+			}
+			if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Image(); got != c.want {
+				t.Errorf("after the close the image is %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
 // orNil is what a field absent from an event decodes to when want is empty.
 func orNil(want string) any {
 	if want == "" {

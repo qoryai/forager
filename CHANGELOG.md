@@ -1625,6 +1625,9 @@ release may change what an existing document does, and says so under Upgrading.
   `variable_reserved` or `placeholder_conflict`, gets the same refusal. The result has
   `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup`
   accepts both.
+- `(*session.Run).Image`, the image of the run answer with its `Docker`, so a caller can
+  close a read-only run in an image with nested Docker before its first join. It is the
+  zero `session.Image` in a run with no wall or when the run answer has no image.
 
 #### Fixed
 

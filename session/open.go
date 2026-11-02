@@ -591,6 +591,10 @@ func (r *Run) System() string { return r.answer.Values()[envRunSystem] }
 // variables, the repositories the run may fetch; empty when the server sets none.
 func (r *Run) Repositories() string { return r.answer.Values()[envRunRepositories] }
 
+// Image is the image of the run answer, the one the agent's enclosure starts from; the
+// zero Image in a run with no wall or when the run answer has no image.
+func (r *Run) Image() Image { return r.img }
+
 // AgentEnv is the environment a session of spec gets from the server's variables,
 // Variables.Run, Variables.Machine, LaunchDefaults and SessionSpec.Env, as [Run.Join]
 // resolves it for spec: NAME=value, sorted by name, in a new slice on every call. The

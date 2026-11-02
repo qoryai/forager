@@ -35,6 +35,11 @@ The module is a library with two entry points: the gateway and the session.
   run's id. The session holds no policy, no credential and no server. It speaks to the
   gateway alone, over the gateway's local link (the contract's
   [§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)).
+- From the open on, `(*session.Run).Image` returns the image of the run answer, the one
+  the agent's enclosure starts from: its `Name`, `Ref`, `Runtime` and `Docker`. It is
+  the zero `session.Image` in a run with no wall or when the run answer has no image.
+  It reads no file and sends no request, so a caller can read `Docker` before the
+  first join and after the close.
 - Before a session joins, programs on the host, such as a fetch of the run's
   repositories or a compose of the harness, reach the run's proxy through
   `(*session.Run).HostProxy`, a forwarder on loopback with a password, for every run,
@@ -1216,7 +1221,8 @@ the refusal `image_missing` or `image_user_root`, close a run no session joined 
 the harness with `failed`, `workflow_not_in_harness` and `-1`. Close a run no session
 joined of a read-only workflow with `failed` and `-1`, and `read_needs_wall` when the
 run has no wall, `read_needs_setup_outside` when its setup is set to run inside the
-agent's container, or `read_needs_no_nested_docker` when its image runs nested Docker.
+agent's container, or `read_needs_no_nested_docker` when its image runs nested Docker,
+which is when `Docker` is true in the image `(*session.Run).Image` returns.
 `Close` refuses each of the six codes with another state or exit
 code, or after a join, as the gateway does.
 `Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
