@@ -813,6 +813,11 @@ release may change what an existing document does, and says so under Upgrading.
   other members, a key that starts with `qak_` or `qrk_` in any case, and the rest of
   the document. `accesskey.SecretInPinDocument` and `accesskey.SecretInPinEntry` hold
   the rule.
+- The contract's texts for `read_needs_wall`, `read_needs_setup_outside`,
+  `read_needs_no_nested_docker` and `read_needs_setup_removed` use the term read run, a
+  run whose workspace qory binds read-only for the agent. Before, they said the run's
+  workflow is read-only, which is false for a run of a `write` workflow that qory binds
+  read-only. The codes stay.
 
 ### Gateway
 

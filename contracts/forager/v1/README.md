@@ -1964,13 +1964,13 @@ its link. The close writes `image_missing` or `image_user_root`, refusal codes o
 returned that refusal, `failed` with `exit_code` `-1`, in a run with no join, so a
 control plane can tell a missing image, or an image whose user is root, from another
 failure. qory closes a run with no join whose workflow is not in the harness with
-`workflow_not_in_harness`, `failed` with `exit_code` `-1`. qory closes a run with no
-join of a read-only workflow that has no wall with `read_needs_wall`, a read-only
-workflow's run whose setup is set to run inside the agent's container with
-`read_needs_setup_outside`, a read-only workflow's run whose image runs nested Docker
-with `read_needs_no_nested_docker`, and a read-only workflow's run whose setup container
-could not be removed with `read_needs_setup_removed`, each `failed` with `exit_code`
-`-1`. `(*session.Run).Close` refuses each of the seven codes with another state or exit
+`workflow_not_in_harness`, `failed` with `exit_code` `-1`. A read run is a run whose
+workspace qory binds read-only for the agent, `SessionSpec.WorkspaceReadOnly`. qory
+closes a read run with no join that has no wall with `read_needs_wall`, a read run whose
+setup is set to run inside the agent's container with `read_needs_setup_outside`, a read
+run whose image runs nested Docker with `read_needs_no_nested_docker`, and a read run
+whose setup container could not be removed with `read_needs_setup_removed`, each
+`failed` with `exit_code` `-1`. `(*session.Run).Close` refuses each of the seven codes with another state or exit
 code, or after a join, and the gateway refuses a batch with such a
 `dev.qory.run.exited`. The state of each of Forager's endings:
 
@@ -1984,10 +1984,10 @@ code, or after a join, and the gateway refuses a batch with such a
 | the run was closed with no join, after the fetch of the run's image found that its registry, or the registry's mirror, does not have it; `exit_code` is `-1` | `failed` | `image_missing` |
 | the run was closed with no join, after the fetch of the run's image found that its user is root; `exit_code` is `-1` | `failed` | `image_user_root` |
 | the run was closed with no join, by qory, because the run's workflow is not in the harness; `exit_code` is `-1` | `failed` | `workflow_not_in_harness` |
-| the run was closed with no join, by qory, because the run's workflow is read-only and the run has no wall; `exit_code` is `-1` | `failed` | `read_needs_wall` |
-| the run was closed with no join, by qory, because the run's workflow is read-only and its setup is set to run inside the agent's container; `exit_code` is `-1` | `failed` | `read_needs_setup_outside` |
-| the run was closed with no join, by qory, because the run's workflow is read-only and its image runs nested Docker; `exit_code` is `-1` | `failed` | `read_needs_no_nested_docker` |
-| the run was closed with no join, by qory, because the run's workflow is read-only and its setup container could not be removed; `exit_code` is `-1` | `failed` | `read_needs_setup_removed` |
+| the run was closed with no join, by qory, because the run is a read run and has no wall; `exit_code` is `-1` | `failed` | `read_needs_wall` |
+| the run was closed with no join, by qory, because the run is a read run and its setup is set to run inside the agent's container; `exit_code` is `-1` | `failed` | `read_needs_setup_outside` |
+| the run was closed with no join, by qory, because the run is a read run and its image runs nested Docker; `exit_code` is `-1` | `failed` | `read_needs_no_nested_docker` |
+| the run was closed with no join, by qory, because the run is a read run and its setup container could not be removed; `exit_code` is `-1` | `failed` | `read_needs_setup_removed` |
 | the gateway heard nothing from the session for 3 × its heartbeat interval | `failed` | `session_lost` |
 | the gateway was lost before the run's exit was recorded, because Forager died; written when the record is sent again, `duration_ms` to the last event recorded | `failed` | `gateway_lost` |
 | the gateway refused a batch from the run's session (§The gateway's link) | `failed` | `batch_refused` |
@@ -3889,8 +3889,7 @@ its events:
   time limit, its stop from where it was started, a close with no join, a close with no
   join after the fetch of an image its registry, or the registry's mirror, does not
   have, or whose user is root, a close with no join of a run whose workflow is not
-  in the harness, or a close with no join of a read-only workflow's run that has no
-  wall, whose setup is set to run inside the agent's container, whose image runs nested
+  in the harness, or a close with no join of a read run that has no wall, whose setup is set to run inside the agent's container, whose image runs nested
   Docker or whose setup container could not be removed, and the gateway writes the
   event of every other reason itself (The end of a run at the gateway, below); or is a
   `dev.qory.run.exited` while a join is open, from the gateway's `200` to it until the

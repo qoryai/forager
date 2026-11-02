@@ -469,8 +469,8 @@ func checkMachine(spec OpenSpec) error {
 // returned that refusal, workflow_not_in_harness, failed with -1 for a run no session
 // joined whose workflow is not in the harness, read_needs_wall,
 // read_needs_setup_outside, read_needs_no_nested_docker and read_needs_setup_removed,
-// failed with -1 for a run of a read-only workflow no session joined that has no wall,
-// whose setup is set to run inside the agent's container, whose image runs nested
+// failed with -1 for a read run (the contract's §The events, How a run ends) no session
+// joined that has no wall, whose setup is set to run inside the agent's container, whose image runs nested
 // Docker, or whose setup container could not be removed, or a code of the caller's,
 // which is none of Forager's reserved codes; and
 // ExitCode, the run's exit code: the last session's, 124 at the run's time limit, -1

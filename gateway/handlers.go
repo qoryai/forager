@@ -481,12 +481,11 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 // failed with exit_code -1: image_missing and image_user_root the close after a fetch of
 // the run's image that its registry did not have or whose user is root,
 // workflow_not_in_harness the close of a run whose workflow is not in the harness,
-// read_needs_wall the close of a run of a read-only workflow that has no wall,
-// read_needs_setup_outside the close of a read-only workflow's run whose setup is set to
-// run inside the agent's container, read_needs_no_nested_docker the close of a read-only
-// workflow's run whose image runs nested Docker, and read_needs_setup_removed the close
-// of a read-only workflow's run whose setup container could not be removed. The gateway
-// writes the event of every other end itself. joined is true when the gateway numbered a
+// read_needs_wall the close of a read run (the contract's §The events, How a run ends)
+// that has no wall, read_needs_setup_outside the close of a read run whose setup is set
+// to run inside the agent's container, read_needs_no_nested_docker the close of a read
+// run whose image runs nested Docker, and read_needs_setup_removed the close of a read
+// run whose setup container could not be removed. The gateway writes the event of every other end itself. joined is true when the gateway numbered a
 // join of the run.
 func closeRule(data map[string]any, joined bool) string {
 	given, hasReason := data["reason"]
