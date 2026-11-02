@@ -533,8 +533,8 @@ chooses what a later run is given:
   paths they resolved to, with or without a wall for this run. An entry whose session is
   gone counts too, until a walled run finds its containers gone and removes it;
 - behind a wall, the workspace, read-only or not, and this run's writable binds: the
-  mount that holds the workspace, the writable mounts, the wall's writable binds and the
-  folder of the run's setup container.
+  writable mounts, the mount that holds the workspace among them when it is writable,
+  the wall's writable binds and the folder of the run's setup container.
 
 A path with a `..` name is refused first, "the path has a ".." part": the system applies `..`
 after the link before it, so the path made clean would name another file than the one

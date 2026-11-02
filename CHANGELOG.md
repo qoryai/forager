@@ -1851,7 +1851,8 @@ release may change what an existing document does, and says so under Upgrading.
   `Run.Setup`: the setup container writes `setup.txt`, the agent reads it, and its write
   of `agent.txt` fails with `Read-only file system`. With nested Docker, the same write
   from a container the agent starts fails too, and so does the write from a privileged
-  one whose root first bind-remounts the workspace writable. After the close the folder
+  one whose root first tries a bind-remount and `mount_setattr` to make the workspace
+  writable; the failure text has each call's result. After the close the folder
   has `setup.txt` and no `agent.txt`.
 
 #### Changed
