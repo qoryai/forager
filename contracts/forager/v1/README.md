@@ -4243,7 +4243,7 @@ with the fix.
 |---|---|---|
 | `404` | `not_found` | the request is outside the five |
 | `413` | `payload_too_large` | a POST's body is over its limit; nothing is sent |
-| `429` | `rate_limited` | a limit below; with `Retry-After: 1` |
+| `429` | `rate_limited` | a limit below, or a body or answer over 1 MiB while the gateway's 512 MiB are full; with `Retry-After: 1` |
 | `502` | `answer_unverified` | the answer fails verification under the pin, an unsigned `401` among them; its body does not reach the caller |
 | `502` | `answer_too_large` | the answer is over the bound the gateway reads, 16 MiB for a `200` other than a file and 64 KiB for any status other than `200` and `401`; a `401` over 64 KiB is `answer_unverified`. The gateway verifies nothing, and the body does not reach the caller |
 | `503` | `unavailable` | the gateway did not reach Qory Apiary, the caller cut a POST's body, or the request ran out of time |
@@ -4259,12 +4259,22 @@ bytes of a file as unverified until the read ends cleanly.
 1 of the 4 at most is a POST. A body that stalls holds that run's POST and nothing of any
 other run's. Each gateway, across its runs, signs 20 requests a second with a burst of 20,
 and sends 8 `POST /artifacts` at once, each from the end of its body's read to the end of
-the read of its answer. It also reads at most 512 MiB of `POST /artifacts` bodies at once.
-The 512 MiB count bytes as they arrive, until the request ends, so a head with a
-`Content-Length` and no bytes costs nothing, and a body that stalls costs what it sent. A
-read that would pass 512 MiB ends: the caller gets the `429` on a closed connection, and
-nothing is sent. `POST /verdict` takes none of the 8 and none of the 512 MiB. Every
-request also takes a token of the run's rate limit, and every request inside the five is
+the read of its answer.
+
+Each gateway also keeps at most 512 MiB of `POST /artifacts` bodies and of answers other
+than files, counting the bytes of each past its first 1 MiB. A body counts as its bytes
+arrive, until the request ends, so a head with a `Content-Length` and no bytes costs
+nothing, and a body that stalls costs what it sent past 1 MiB, at most 31 MiB. A read that
+would pass 512 MiB ends: the caller gets the `429` on a closed connection, and nothing is
+sent. A caller still writing its body can get a connection error in place of the `429`. A
+verified answer counts after its read, until its write to the caller ends. An answer that
+would pass 512 MiB gets the `429`, and the gateway drops it. While stalled bodies fill the
+512 MiB, other runs' bodies and answers over 1 MiB get the `429` until the stalled reads
+end, within 60 seconds, and a retry after that passes. A verdict, and a body or an answer
+of 1 MiB or less, pass whatever other runs do. `POST /verdict` takes none of the 8 and none
+of the 512 MiB, and a file, which streams, takes none of the 512 MiB.
+
+Every request also takes a token of the run's rate limit, and every request inside the five is
 a connection of the run (§The policy). A request over any of these limits gets the
 `429`, at once, except that a request waits up to 5 seconds for a token of the run's rate
 limit, for one of the 8, and, in order, for a token of the gateway's 20 a second. One

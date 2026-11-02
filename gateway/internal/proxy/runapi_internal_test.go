@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -305,6 +307,7 @@ func TestAPostGetsASendSlotThatEnds(t *testing.T) {
 // with more runs stalled than the gateway has slots.
 func TestAStalledBodyHoldsOnlyItsRun(t *testing.T) {
 	limits := &RunAPILimits{}
+	limits.start()
 	var stalled []*route
 	for range RunAPIArtifactSends + 1 {
 		r := startRoute(t, &RunAPI{Limits: limits}, nil)
@@ -504,34 +507,91 @@ func TestThirtyRunsLeaveRoomInTheBucketsQueue(t *testing.T) {
 	}
 }
 
-// TestTheBodyBudget pins the gateway's budget of bodies: runs stalled near 32 MiB fill it,
-// a head with no bytes costs nothing, the next body ends with a 429 and nothing sent, a
-// verdict passes, and the budget returns to zero after the runs end.
-func TestTheBodyBudget(t *testing.T) {
-	const near = maxRunAPIArtifacts - 1
-	limits := &RunAPILimits{budget: 2*near + 10}
-	used := func(want int64) {
-		t.Helper()
-		for deadline := time.Now().Add(10 * time.Second); limits.used.Load() != want; time.Sleep(time.Millisecond) {
-			if time.Now().After(deadline) {
-				t.Fatalf("%d bytes charged, want %d", limits.used.Load(), want)
-			}
+// waitUsed waits for limits to have want bytes of the memory budget taken.
+func waitUsed(t *testing.T, limits *RunAPILimits, want int64) {
+	t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); limits.used.Load() != want; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d bytes charged, want %d", limits.used.Load(), want)
 		}
 	}
-	head := func(r *route, length int64) net.Conn {
-		t.Helper()
-		c, err := net.Dial("tcp", r.p.Addr())
-		if err != nil {
+}
+
+// postHead sends the head of a POST artifacts with the Content-Length length, and returns
+// the connection.
+func postHead(t *testing.T, r *route, length int64) net.Conn {
+	t.Helper()
+	c, err := net.Dial("tcp", r.p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	fmt.Fprintf(c, "POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\n\r\n", routeURL("/artifacts"), link.RunAPIHost, length)
+	return c
+}
+
+// postBody sends a POST of n bytes to path and returns the status, 0 for a connection
+// that ended before one.
+func postBody(t *testing.T, r *route, path string, n int) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, routeURL(path), bytes.NewReader(make([]byte, n)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := r.client().Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
+// answering is a Send that returns a body of n bytes.
+func answering(n int) func(context.Context, string, string, []byte, bool) (*server.RunAPIAnswer, error) {
+	return func(context.Context, string, string, []byte, bool) (*server.RunAPIAnswer, error) {
+		return &server.RunAPIAnswer{Status: http.StatusOK, Header: http.Header{}, Body: make([]byte, n)}, nil
+	}
+}
+
+// TestTheFirstMiBOfABodyIsFree pins what a body charges: nothing up to 1 MiB, and each
+// byte past it.
+func TestTheFirstMiBOfABodyIsFree(t *testing.T) {
+	const free = int(runAPIFreeBytes)
+	for _, c := range []struct {
+		size int
+		want int64
+	}{{0, 0}, {1, 0}, {free, 0}, {free + 1, 1}, {free + 4096, 4096}} {
+		limits := &RunAPILimits{}
+		b := &chargedBody{r: iotest.OneByteReader(bytes.NewReader(make([]byte, c.size))), limits: limits}
+		if c.size > 4096 {
+			b.r = bytes.NewReader(make([]byte, c.size))
+		}
+		if _, err := io.Copy(io.Discard, b); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { c.Close() })
-		fmt.Fprintf(c, "POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\n\r\n", routeURL("/artifacts"), link.RunAPIHost, length)
-		return c
+		if got := limits.used.Load(); got != c.want {
+			t.Errorf("%d bytes charge %d, want %d", c.size, got, c.want)
+		}
+		b.release()
+		if got := limits.used.Load(); got != 0 {
+			t.Errorf("%d bytes: %d left after the release", c.size, got)
+		}
 	}
+}
+
+// TestAFullBudgetLeavesWhatAnyRunNeeds pins the goal of the budget: runs stalled near
+// 32 MiB fill it, and each holds at most 31 MiB of it. A verdict and a push and an answer
+// of 1 MiB pass. A larger body and a larger answer get a 429, and a retry passes after the
+// stalled runs end.
+func TestAFullBudgetLeavesWhatAnyRunNeeds(t *testing.T) {
+	const near = maxRunAPIArtifacts - 1
+	const full = 2 * (near - runAPIFreeBytes)
+	limits := &RunAPILimits{budget: full}
 	chunk := make([]byte, 1<<20)
 	var conns []net.Conn
 	for range 2 {
-		c := head(startRoute(t, &RunAPI{Limits: limits}, nil), maxRunAPIArtifacts)
+		c := postHead(t, startRoute(t, &RunAPI{Limits: limits}, nil), maxRunAPIArtifacts)
 		for range 31 {
 			if _, err := c.Write(chunk); err != nil {
 				t.Fatal(err)
@@ -542,10 +602,10 @@ func TestTheBodyBudget(t *testing.T) {
 		}
 		conns = append(conns, c)
 	}
-	used(2 * near)
+	waitUsed(t, limits, full)
 
 	silent := startRoute(t, &RunAPI{Limits: limits}, nil)
-	head(silent, maxRunAPIArtifacts)
+	postHead(t, silent, maxRunAPIArtifacts)
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
 		silent.a.mu.Lock()
 		posting := silent.a.posting
@@ -557,40 +617,156 @@ func TestTheBodyBudget(t *testing.T) {
 			t.Fatal("the head did not reach the route")
 		}
 	}
-	if got := limits.used.Load(); got != 2*near {
-		t.Errorf("a head with no bytes costs %d bytes", got-2*near)
+	if got := limits.used.Load(); got != full {
+		t.Errorf("a head with no bytes costs %d bytes", got-full)
 	}
 
-	over := startRoute(t, &RunAPI{Limits: limits}, nil)
-	c := head(over, maxRunAPIArtifacts)
-	go c.Write(chunk)
-	c.SetReadDeadline(time.Now().Add(10 * time.Second))
-	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodPost})
+	free := int(runAPIFreeBytes)
+	v := startRoute(t, &RunAPI{Limits: limits}, answering(free))
+	for what, c := range map[string]struct {
+		path string
+		size int
+	}{
+		"a push of 64 KiB": {"/artifacts", 64 << 10},
+		"a push of 1 MiB":  {"/artifacts", free},
+		"a verdict":        {"/verdict", 64 << 10},
+	} {
+		if got := postBody(t, v, c.path, c.size); got != http.StatusOK {
+			t.Errorf("%s: %d", what, got)
+		}
+	}
+	if status, _, _ := v.status(t, http.MethodGet, "/artifacts"); status != http.StatusOK {
+		t.Errorf("an answer of 1 MiB: %d", status)
+	}
+	sent := v.sent.Load()
+	if got := postBody(t, v, "/artifacts", free+1<<16); got != http.StatusTooManyRequests && got != 0 {
+		t.Errorf("a larger push: %d", got)
+	}
+	if got := v.sent.Load(); got != sent {
+		t.Errorf("the larger push was sent")
+	}
+	large := startRoute(t, &RunAPI{Limits: limits}, answering(free+1))
+	large.limited(t, "a larger answer", http.MethodGet, "/artifacts")
+	waitUsed(t, limits, full)
+
+	for _, c := range conns {
+		c.Close()
+	}
+	waitUsed(t, limits, 0)
+	if got := postBody(t, v, "/artifacts", free+1<<16); got != http.StatusOK {
+		t.Errorf("the push's retry: %d", got)
+	}
+	if status, _, _ := large.status(t, http.MethodGet, "/artifacts"); status != http.StatusOK {
+		t.Errorf("the answer's retry: %d", status)
+	}
+	waitUsed(t, limits, 0)
+	if l := (&RunAPILimits{}); l.charge(512<<20) && l.charge(1) {
+		t.Error("the default budget has room past 512 MiB")
+	}
+}
+
+// TestRunsThatRefillTheBudgetLeaveAPush pins the budget over time: runs that send their
+// bodies again as each read ends keep it full, and every push of 1 MiB and every verdict
+// of another run passes.
+func TestRunsThatRefillTheBudgetLeaveAPush(t *testing.T) {
+	const hostile = 2
+	over := runAPIFreeBytes
+	limits := &RunAPILimits{budget: hostile * over}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer close(stop)
+	body := make([]byte, runAPIFreeBytes+over)
+	for range hostile {
+		r := startRoute(t, &RunAPI{Limits: limits, postWait: 100 * time.Millisecond}, nil)
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				c, err := net.Dial("tcp", r.p.Addr())
+				if err != nil {
+					return
+				}
+				fmt.Fprintf(c, "POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\n\r\n", routeURL("/artifacts"), link.RunAPIHost, len(body)+1)
+				c.Write(body)
+				io.Copy(io.Discard, c)
+				c.Close()
+			}
+		})
+	}
+	waitUsed(t, limits, hostile*over)
+	v := startRoute(t, &RunAPI{Limits: limits}, nil)
+	for end := time.Now().Add(time.Second); time.Now().Before(end); time.Sleep(250 * time.Millisecond) {
+		if got := postBody(t, v, "/artifacts", int(runAPIFreeBytes)); got != http.StatusOK {
+			t.Errorf("a push: %d", got)
+		}
+		if got := postBody(t, v, "/verdict", 1024); got != http.StatusOK {
+			t.Errorf("a verdict: %d", got)
+		}
+	}
+}
+
+// TestTheAnswerBudget pins what an answer charges, between its read and the end of its
+// write: stalled readers of answers fill the budget, the next large answer is a 429 with
+// the answer dropped, and used returns to zero when a write ends, by the caller's close,
+// by the write's deadline and by the end of a read.
+func TestTheAnswerBudget(t *testing.T) {
+	size := server.MaxRunAPIAnswer - 1
+	over := int64(size) - runAPIFreeBytes
+	limits := &RunAPILimits{budget: 2 * over}
+	r := startRoute(t, &RunAPI{Limits: limits, postWait: time.Second}, answering(size))
+	stall := func() net.Conn {
+		t.Helper()
+		c, err := net.Dial("tcp", r.p.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", routeURL("/artifacts"), link.RunAPIHost)
+		return c
+	}
+	closed := stall()
+	stall()
+	waitUsed(t, limits, 2*over)
+
+	dropped := startRoute(t, &RunAPI{Limits: limits}, answering(size))
+	dropped.limited(t, "an answer past the budget", http.MethodGet, "/artifacts")
+	req, err := http.NewRequest(http.MethodGet, routeURL("/artifacts"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := dropped.client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(string(b), `"rate_limited"`) || !strings.Contains(string(b), runAPIBudgetFull) {
-		t.Errorf("the body past the budget: %d %s", resp.StatusCode, b)
+	if resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(string(b), runAPIAnswerFull[:40]) || len(b) > 1024 {
+		t.Errorf("%d, %d bytes", resp.StatusCode, len(b))
 	}
-	if got := over.sent.Load(); got != 0 {
-		t.Errorf("%d requests sent", got)
+	dropped.mu.Lock()
+	d := dropped.decisions[0]
+	dropped.mu.Unlock()
+	if !d.Allowed || d.Outcome != Connected || d.Status != http.StatusTooManyRequests {
+		t.Errorf("the decision of a dropped answer: %+v", d)
 	}
-	used(2 * near)
 
-	other := startRoute(t, &RunAPI{Limits: limits}, nil)
-	verdict := strings.Repeat("v", 1024)
-	if line := rawStatus(t, other, fmt.Sprintf("POST %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s", routeURL("/verdict"), link.RunAPIHost, len(verdict), verdict)); !strings.Contains(line, "200") {
-		t.Errorf("a verdict: %s", line)
+	free := startRoute(t, &RunAPI{Limits: limits}, answering(int(runAPIFreeBytes)))
+	if status, _, _ := free.status(t, http.MethodGet, "/artifacts"); status != http.StatusOK {
+		t.Errorf("an answer of 1 MiB: %d", status)
 	}
-	for _, c := range conns {
-		c.Close()
+
+	closed.Close()
+	waitUsed(t, limits, over)
+	waitUsed(t, limits, 0)
+
+	if status, _, _ := dropped.status(t, http.MethodGet, "/artifacts"); status != http.StatusOK {
+		t.Errorf("a retry: %d", status)
 	}
-	used(0)
-	if l := (&RunAPILimits{}); l.charge(RunAPIBodyBudget) && l.charge(1) {
-		t.Errorf("the default budget has room past %d bytes", RunAPIBodyBudget)
-	}
+	waitUsed(t, limits, 0)
 }
 
 // TestAFailedBodyReadClosesTheConnection pins Connection: close after a read that ended
@@ -603,7 +779,7 @@ func TestAFailedBodyReadClosesTheConnection(t *testing.T) {
 		status  int
 	}{
 		"a malformed chunk":      {&RunAPILimits{}, "POST " + routeURL("/verdict") + host + "Transfer-Encoding: chunked\r\n\r\nzz\r\n", http.StatusServiceUnavailable},
-		"a body over the budget": {&RunAPILimits{budget: 1}, "POST " + routeURL("/artifacts") + host + "Content-Length: 100\r\n\r\n{{{{", http.StatusTooManyRequests},
+		"a body over the budget": {&RunAPILimits{budget: 1}, "POST " + routeURL("/artifacts") + host + fmt.Sprintf("Content-Length: %d\r\n\r\n", runAPIFreeBytes+100) + strings.Repeat("{", int(runAPIFreeBytes)+4), http.StatusTooManyRequests},
 	} {
 		t.Run(what, func(t *testing.T) {
 			r := startRoute(t, &RunAPI{Limits: c.limits}, nil)

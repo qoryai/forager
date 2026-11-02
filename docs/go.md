@@ -528,13 +528,22 @@ A file's `200` is chunked. Treat its bytes as unverified until the read ends cle
 file that fails its signed digest ends in a read error. The contract's README, §The run
 API, lists the five requests, each status and the limits.
 
-Plan the gateway's memory for the route:
+Plan the gateway's memory for the route. A budget of 512 MiB per gateway counts the
+bytes of `POST /artifacts` bodies and of answers other than files, past the first 1 MiB of
+each. A body or answer over the budget's room gets a `429` `rate_limited`, and a retry
+passes once the room is back, within 60 s. These figures are what the heap takes:
 
-- A budget of 512 MiB per gateway covers `POST /artifacts` bodies being read. A body
-  over the budget's room gets a `429` `rate_limited`, with nothing sent.
-- A POST body takes up to about 64 MiB per run while it signs: 32 MiB for the body and
-  32 MiB for the copy that `accesskey.Request.Message` makes.
-- Answers take up to 4 × 16 MiB per run.
+- During a read, the heap holds up to 1.6 times the bytes the budget counts: about
+  665 MiB for 32 MiB bodies, and up to about 820 MiB for other sizes.
+- A 32 MiB POST body takes up to about 74 MiB at the end of its read, then about 64 MiB
+  while it signs, 32 MiB of it the copy that `accesskey.Request.Message` makes. At most 8
+  sign at once.
+- A 16 MiB answer takes up to about 35 MiB at the end of its read and 16 MiB after it.
+- Each run also holds up to 1 MiB uncharged per POST and 1 MiB per answer.
+
+The budget does not cover the read buffer's room past the bytes it counts, the signing
+copy, an answer during its read, `POST /verdict` bodies, or the first 1 MiB of each body
+and answer. A file streams, so it takes no budget.
 
 Each run has 1 POST in flight, among its 4 requests in flight, and 1 request waiting for
 a token of the gateway's rate limit. A gateway signs 20 requests a second across its

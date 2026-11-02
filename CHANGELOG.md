@@ -869,7 +869,9 @@ release may change what an existing document does, and says so under Upgrading.
   request writes one `dev.qory.run.egress`, with the path `outside` for any other. A
   run has 10 requests a second and 4 in flight, 1 of them a POST, and 1 request waiting
   for a token of the gateway's rate limit. A gateway signs 20 requests a second across
-  its runs, sends 8 `POST /artifacts` at once and reads 512 MiB of their bodies at once.
+  its runs, sends 8 `POST /artifacts` at once and keeps 512 MiB of bodies and answers,
+  past the first 1 MiB of each, so a verdict and a body or answer of 1 MiB or less pass
+  whatever other runs do.
   A target over 4 KiB, or a path over 1 KiB once escaped, is a `404`. An answer over the
   bound the gateway reads is a `502` `answer_too_large`. A `CONNECT` to the host is
   denied in either mode, and the stack proxy has no route.
