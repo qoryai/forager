@@ -313,7 +313,7 @@ release may change what an existing document does, and says so under Upgrading.
   run's host work, such as a fetch or a compose, with a start, an end, an outcome and
   its log lines, so a reader shows each step and the step that failed.
   `dev.qory.run.step_started` has `step`, the step's number from 1, `name` and `kind`:
-  `fetch`, `compose`, `image`, `setup`, `join`, `wall` or `build`.
+  `fetch`, `compose`, `image`, `setup`, `join`, `wall`, `build` or `push`.
   `dev.qory.run.step_exited` has `step`, `state` (`succeeded`, `failed` or
   `cancelled`), `exit_code`, -1 when no process exit status exists, and
   `duration_ms`. Steps come after
@@ -322,9 +322,14 @@ release may change what an existing document does, and says so under Upgrading.
   run's stream. `setup` is the kind of a setup command.
   A step's `name` has `qory-proxy-password` in place of a forwarder's password, and a
   phrase in place of a name that contains `qak_` or `qrk_`. `event.StepStarted`,
-  `event.StepExited` and the seven kinds, `event.StepFetch` to `event.StepBuild`, are
+  `event.StepExited` and the eight kinds, `event.StepFetch` to `event.StepPush`, are
   the names in Go. `image` is a fetch of the run's image, and `build` a build of an
   image.
+- `push`, a kind of `dev.qory.run.step_started`, `event.StepPush`: host work that sends
+  the run's commits. `(*session.Run).StartStep` accepts it as it accepts `fetch`,
+  `compose` and `build`. A host step runs before the first join, between joins, or
+  after the last join and before the close, and the run's host proxy and credentials
+  apply at each of these times.
 - `step` in `dev.qory.run.log`: the number of the step whose line the chunk is,
   between that step's `dev.qory.run.step_started` and `dev.qory.run.step_exited`. The
   member is optional, and a line outside every step has none. A session's chunk has
@@ -675,8 +680,9 @@ release may change what an existing document does, and says so under Upgrading.
   each join with that session's `variables`, `credential_variables` and
   `harness_hosts`, and at each reload, as before.
 - `dev.qory.run.log` is one chunk of a session's output, with the session's number as
-  `session`, or of the run's host work before the first join or between two joins,
-  which the caller writes with `stream: stderr` and no `session`.
+  `session`, or of the run's host work before the first join, between joins, or after
+  the last join and before the close, which the caller writes with `stream: stderr`
+  and no `session`.
 - The run answer's `model_credential` is the run's start key, the key a session starts
   with when its join request contains none; the join answer's `model_credential` is the
   key each session starts with.

@@ -199,7 +199,8 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // with timeout, two with interrupted, one of a refused join, two of a failure at the join
 // after its session.started, with no reason and with the wall's refusal's code, and one
 // of a run closed with no session, a batch of a setup step after a run.started with
-// machine and setup, a batch of a build step and the run's run.built, a join request
+// machine and setup, a batch of a build step and the run's run.built, a batch of a push
+// step after a session.exited and before the run.exited, a join request
 // with and without model_credential, a join answer with and
 // without model_credential, and refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.

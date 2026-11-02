@@ -128,7 +128,7 @@ and the log lines of each step.
 
 - `dev.qory.run.step_started` has `step`, the step's number in the run from 1, `name`,
   a readable name such as `fetch github.com/example-org/app`, and `kind`: `fetch`,
-  `compose`, `image`, `setup`, `join`, `wall` or `build`.
+  `compose`, `image`, `setup`, `join`, `wall`, `build` or `push`.
 - `dev.qory.run.step_exited` has the same `step`, `state` (`succeeded`, `failed` or
   `cancelled`), `exit_code`, -1 when no process exit status exists, and `duration_ms`.
 - Each host line of a step is a `dev.qory.run.log` with the step's number in `step`,
@@ -137,9 +137,10 @@ and the log lines of each step.
 The steps come after `dev.qory.run.started`, numbered in the order they start, one at
 a time:
 
-- The caller writes the `fetch`, `compose` and `build` steps of its host work with
-  `(*session.Run).StartStep`, before the first join or between two joins, and the
-  `image` step of an image by reference with `(*session.Run).FetchImage`.
+- The caller writes the `fetch`, `compose`, `build` and `push` steps of its host work
+  with `(*session.Run).StartStep`, before the first join, between joins, or after the
+  last join and before the close, and the `image` step of an image by reference with
+  `(*session.Run).FetchImage`. `push` is host work that sends the run's commits.
 - Each join writes a `join` step, `join session <n>`, around its join request and the
   session's checks. It ends before `dev.qory.session.started`, or `failed` before the
   `dev.qory.session.exited` of a refused join.

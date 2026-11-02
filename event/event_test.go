@@ -101,7 +101,7 @@ func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
 		schema, member string
 		want           []string
 	}{
-		{"events/run.step_started.schema.json", "kind", []string{event.StepFetch, event.StepCompose, event.StepImage, event.StepSetup, event.StepJoin, event.StepWall, event.StepBuild}},
+		{"events/run.step_started.schema.json", "kind", []string{event.StepFetch, event.StepCompose, event.StepImage, event.StepSetup, event.StepJoin, event.StepWall, event.StepBuild, event.StepPush}},
 		{"events/run.step_exited.schema.json", "state", []string{event.StateSucceeded, event.StateFailed, event.StateCancelled}},
 	} {
 		doc, err := contracts.Document(c.schema)
