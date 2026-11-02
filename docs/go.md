@@ -40,8 +40,9 @@ The module is a library with two entry points: the gateway and the session.
   the zero `session.Image` in a run with no wall or when the run answer has no image.
   It reads no file and sends no request, so a caller can read `Docker` before the
   first join and after the close.
-- Before a session joins, programs on the host, such as a fetch of the run's
-  repositories or a compose of the harness, reach the run's proxy through
+- While no session runs, programs on the host, such as a fetch of the run's
+  repositories, a compose of the harness or a push of the run's commits, reach the
+  run's proxy through
   `(*session.Run).HostProxy`, a forwarder on loopback with a password, for every run,
   walled or not: see [the host proxy](#the-host-proxy). qory fetches the run's harness
   definition through `(*session.Run).StackProxy` instead, which reaches the hosts of
@@ -365,7 +366,8 @@ failed and its lines:
 
 - `(*session.Run).StartStep(kind, name)` writes `dev.qory.run.step_started` with the
   run's next step number, shared with each join's steps, and returns a `*session.Step`.
-  `kind` is `event.StepFetch`, `event.StepCompose` or `event.StepBuild`. The run's
+  `kind` is `event.StepFetch`, `event.StepCompose`, `event.StepBuild` or
+  `event.StepPush`, host work that sends the run's commits. The run's
   masker replaces each forwarder's password, each value of `OpenSpec.Masker` and each
   server's variable value of 8 characters or more in `name`, and a `name` that contains
   `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` is a phrase in
@@ -386,12 +388,12 @@ failed and its lines:
   from `StartStep`.
 - `Close` ends a step still open `cancelled` with `-1` before `dev.qory.run.exited`.
 
-Start a step before the first `Join` or after a `Join` returns. Each error starts with
-the fix, and writes nothing:
+Start a step before the first `Join`, between two `Join`s, or after the last `Join`
+returns and before `Close`. Each error starts with the fix, and writes nothing:
 
 | Call | When | Error |
 |---|---|---|
-| `StartStep` | a kind other than fetch, compose and build | `start a host step of kind fetch, compose or build, not "setup": Join writes the join, image and wall steps` |
+| `StartStep` | a kind other than fetch, compose, build and push | `start a host step of kind fetch, compose, build or push, not "setup": Join writes the join, image and wall steps` |
 | `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
 | `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
 | `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |

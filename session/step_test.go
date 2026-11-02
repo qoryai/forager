@@ -109,6 +109,12 @@ func TestTheStepsOfARunWithHostStepsAJoinAndARefusedJoin(t *testing.T) {
 			t.Errorf("%s:\n%q\nwant\n%q", where, got, want)
 		}
 	}
+	batchesValid(t, g)
+}
+
+// batchesValid fails the test when a batch g received fails the link's schema.
+func batchesValid(t *testing.T, g *linktest.Fake) {
+	t.Helper()
 	batch, err := contracts.Compile("link-batch.schema.json")
 	if err != nil {
 		t.Fatal(err)
@@ -122,6 +128,39 @@ func TestTheStepsOfARunWithHostStepsAJoinAndARefusedJoin(t *testing.T) {
 			t.Errorf("batch %d: %v", i, err)
 		}
 	}
+}
+
+// TestAPushStepRunsAfterTheLastJoinAndBeforeTheClose pins a host step of kind push after
+// the run's last join: StartStep accepts it once Join returned, it has the next step
+// number, and its start, its line and its exit lie between the session's exit and
+// run.exited. The record and the link have the same steps, and every batch passes the
+// link's schema.
+func TestAPushStepRunsAfterTheLastJoinAndBeforeTheClose(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Join(ctx, sp.SessionSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostStep(t, r, event.StepPush, "push work to github.com/example-org/app", "To https://github.com/example-org/app.git\n")
+	if _, err := r.Close(ctx, outcomeOf(res, nil)); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"step 1 join join session 1", "step 1 succeeded -1", "session 1 started", "session 1 exited",
+		"step 2 push push work to github.com/example-org/app", "log <nil> 2 To https://github.com/example-org/app.git", "step 2 succeeded 0",
+		"run exited",
+	}
+	for where, evs := range map[string][]map[string]any{"the record": events(t, &session.Result{Dir: r.Dir()}), "the link": g.Events()} {
+		if got := stepOrder(evs); !slices.Equal(got, want) {
+			t.Errorf("%s:\n%q\nwant\n%q", where, got, want)
+		}
+	}
+	batchesValid(t, g)
 }
 
 // TestCloseEndsAnOpenHostStep pins a host step the caller leaves open: the close writes
@@ -160,8 +199,8 @@ func TestCloseEndsAnOpenHostStep(t *testing.T) {
 }
 
 // TestAStepsErrorsStartWithTheFix pins what a host step refuses, each with an error
-// that starts with the fix and with nothing written: a kind other than fetch, compose
-// and build, an empty name, a state outside the three, an exit code below -1, a second
+// that starts with the fix and with nothing written: a kind other than fetch, compose,
+// build and push, an empty name, a state outside the three, an exit code below -1, a second
 // host step while one is open, a join while one is open, a line or an exit after the
 // step exited, and a step while a session runs.
 func TestAStepsErrorsStartWithTheFix(t *testing.T) {
@@ -178,9 +217,9 @@ func TestAStepsErrorsStartWithTheFix(t *testing.T) {
 		}
 	}
 	_, err = r.StartStep(event.StepSetup, "make setup")
-	refused("a setup step", err, "start a host step of kind fetch, compose or build, not \"setup\"")
+	refused("a setup step", err, "start a host step of kind fetch, compose, build or push, not \"setup\"")
 	_, err = r.StartStep(event.StepJoin, "join")
-	refused("a join step", err, "start a host step of kind fetch, compose or build")
+	refused("a join step", err, "start a host step of kind fetch, compose, build or push")
 	_, err = r.StartStep(event.StepFetch, "")
 	refused("an empty name", err, "give the step a name")
 	s, err := r.StartStep(event.StepFetch, "fetch github.com/example-org/app")

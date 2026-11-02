@@ -259,11 +259,13 @@ const (
 
 // TestTheGatewaySetsTheCredentialOnAHostProxyRequest opens a real run without a wall
 // against a real gateway on its local link, without Docker, and sends a request through
-// the run's host proxy, as a fetch on the host does before any session joins. The
-// machine's policy selects the credential forge for the HTTPS origin on 127.0.0.1,
-// basic with the user x-access-token. The request carries no credential: the origin
-// gets the token in Authorization, once, and the token and the host proxy's password
-// are in no variable of HostProxy.Env and no file of the run directory.
+// the run's host proxy, as a fetch on the host does before any session joins. A session
+// then joins and exits, and a push step sends a second request through a second host
+// proxy, as a push on the host does after the last session. The machine's policy selects
+// the credential forge for the HTTPS origin on 127.0.0.1, basic with the user
+// x-access-token. Neither request carries a credential: the origin gets the token in
+// Authorization on each, once, and the token and each host proxy's password are in no
+// variable of HostProxy.Env and no file of the run directory.
 //
 // The proxy verifies the origin against this machine's roots, as in
 // TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy, so the test runs on Linux
@@ -314,6 +316,55 @@ func TestTheGatewaySetsTheCredentialOnAHostProxyRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	password := throughHostProxy(t, h, http.MethodGet, "https://"+o.host+"/example-org/product.git/info/refs")
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Join(ctx, session.SessionSpec{Command: "/bin/sh", Args: []string{"-c", "exit 0"}, Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, err := r.StartStep(event.StepPush, "push work to 127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := r.HostProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordAfter := throughHostProxy(t, after, http.MethodPost, "https://"+o.host+"/example-org/product.git/git-receive-pack")
+	if err := step.Exit(event.StateSucceeded, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := after.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: res.State, ExitCode: res.ExitCode}); err != nil {
+		t.Fatal(err)
+	}
+	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+hostValue))
+	if want := []string{"GET /example-org/product.git/info/refs " + basic, "POST /example-org/product.git/git-receive-pack " + basic}; !slices.Equal(o.requests(), want) {
+		t.Errorf("the origin got %q; want %q", o.requests(), want)
+	}
+	for _, v := range append(slices.Clone(h.Env), after.Env...) {
+		if strings.Contains(v, hostValue) {
+			t.Errorf("HostProxy.Env contains the token: %q", v)
+		}
+	}
+	filepath.WalkDir(r.Dir(), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if b, _ := os.ReadFile(p); bytes.Contains(b, []byte(hostValue)) || bytes.Contains(b, []byte(password)) || bytes.Contains(b, []byte(passwordAfter)) {
+				t.Errorf("%s contains the token or a host proxy's password", p)
+			}
+		}
+		return nil
+	})
+}
+
+// throughHostProxy sends a request with the method to target through h, trusting h's
+// bundle, fails the test unless it gets a 200, and returns h's password.
+func throughHostProxy(t *testing.T, h session.HostProxy, method, target string) string {
+	t.Helper()
 	proxyURL, err := url.Parse(h.ProxyURL)
 	if err != nil {
 		t.Fatal(err)
@@ -332,7 +383,11 @@ func TestTheGatewaySetsTheCredentialOnAHostProxyRequest(t *testing.T) {
 	}
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
 		Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots}}}
-	resp, err := client.Get("https://" + o.host + "/example-org/product.git/info/refs")
+	req, err := http.NewRequest(method, target, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("the request through the host proxy: %v", err)
 	}
@@ -341,27 +396,5 @@ func TestTheGatewaySetsTheCredentialOnAHostProxyRequest(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("the request through the host proxy got %d, want 200", resp.StatusCode)
 	}
-	if err := h.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
-		t.Fatal(err)
-	}
-	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+hostValue))
-	if want := []string{"GET /example-org/product.git/info/refs " + basic}; !slices.Equal(o.requests(), want) {
-		t.Errorf("the origin got %q; want %q", o.requests(), want)
-	}
-	for _, v := range h.Env {
-		if strings.Contains(v, hostValue) {
-			t.Errorf("HostProxy.Env contains the token: %q", v)
-		}
-	}
-	filepath.WalkDir(r.Dir(), func(p string, d fs.DirEntry, err error) error {
-		if err == nil && d.Type().IsRegular() {
-			if b, _ := os.ReadFile(p); bytes.Contains(b, []byte(hostValue)) || bytes.Contains(b, []byte(password)) {
-				t.Errorf("%s contains the token or the host proxy's password", p)
-			}
-		}
-		return nil
-	})
+	return password
 }

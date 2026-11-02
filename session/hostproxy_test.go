@@ -25,8 +25,8 @@ import (
 )
 
 // The tests of this file open a run and start its host proxy, the forwarder on loopback
-// that programs on the host, such as a fetch or a compose, reach the run's proxy
-// through before a session joins.
+// that programs on the host, such as a fetch, a compose or a push, reach the run's proxy
+// through while no session runs.
 
 // hostProxyURL is a host proxy's URL: the user qory, its password and its address.
 var hostProxyURL = regexp.MustCompile(`^http://qory:([A-Za-z0-9_-]{43})@(127\.0\.0\.1:[0-9]+)$`)
@@ -168,6 +168,68 @@ func TestTheHostProxyReachesTheRunsProxy(t *testing.T) {
 				t.Fatal(err)
 			}
 			noSecretIn(t, password, r.Dir(), g, reports())
+		})
+	}
+}
+
+// TestTheHostProxyStartsAfterAJoinReturned pins the host proxy of a host step after a
+// join, on one machine, walled or not, and behind a separate gateway: HostProxy starts a
+// forwarder during a push step, a request through it reaches the gateway's proxy on a
+// connection opened with the run's proxy secret or the run key, and the close ends it.
+// The gateway sets credentials: gateway's TestTheProxySetsACredentialAfterTheSessionExited
+// pins that side, and e2e's TestTheGatewaySetsTheCredentialOnAHostProxyRequest runs both.
+func TestTheHostProxyStartsAfterAJoinReturned(t *testing.T) {
+	for _, c := range []struct {
+		name             string
+		walled, separate bool
+	}{{name: "one machine"}, {name: "one machine, walled", walled: true}, {name: "separate gateway", separate: true}} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t, "FAKE_EXIT=0")
+			preamble := link.RelayPreamble + " " + linktest.ProxySecret
+			if c.separate {
+				g = startRemote(t)
+				g.SetInterval(30)
+				key := g.RunKey(t, event.NewRunID())
+				sp.Gateway = remoteGateway(g, key)
+				preamble = link.RelayPreamble + " " + key
+			}
+			if c.walled {
+				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			}
+			ctx := context.Background()
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := r.Join(ctx, sp.SessionSpec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := r.StartStep(event.StepPush, "push work to api.example")
+			if err != nil {
+				t.Fatal(err)
+			}
+			h, err := r.HostProxy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, addr := hostParts(t, h)
+			if status, body := throughHost(t, h.ProxyURL, "http://api.example/push"); status != http.StatusOK || body != "ok" {
+				t.Errorf("the request through the host proxy got %d %q", status, body)
+			}
+			if got := g.Preambles(); !slices.Contains(got, preamble) {
+				t.Errorf("the gateway's proxy saw %q, want %q among them", got, preamble)
+			}
+			if got := g.Proxied(); !slices.Contains(got, "GET http://api.example/push") {
+				t.Errorf("the gateway's proxy answered %q", got)
+			}
+			if err := s.Exit(event.StateSucceeded, 0); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Close(ctx, outcomeOf(res, nil)); err != nil {
+				t.Fatal(err)
+			}
+			refused(t, addr, "after the run's close")
 		})
 	}
 }
