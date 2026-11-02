@@ -23,9 +23,10 @@ type Built struct {
 	Commit string
 	// EnvironmentRef is the reference to the environment the image is for, not empty. The
 	// run's masker replaces each forwarder's password, each value of OpenSpec.Masker and each
-	// server's variable value of 8 characters or more in it, and a reference that contains
-	// qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case is a phrase in
-	// its place, as in a step's name.
+	// server's variable value of 8 characters or more, apart from QORY_RUN_SYSTEM's and
+	// QORY_RUN_REPOSITORIES', in it, and a reference that contains qak_, qrk_, qecr_,
+	// qecn_, qecp_, qecg_, qeci_ or qecd_ in any case is a phrase in its place, as in a
+	// step's name.
 	EnvironmentRef string
 	// EnvironmentImage is the environment image the build pushed, or the one it started
 	// from, of the form of Image. Empty means not reported: Built then writes no
@@ -49,7 +50,8 @@ type Built struct {
 //
 // EnvironmentRef must contain no credential. The masker replaces only the forwarders'
 // passwords, the values of OpenSpec.Masker and the server's variable values of 8
-// characters or more, and accesskey.ShownValue replaces only a reference that contains
+// characters or more, apart from QORY_RUN_SYSTEM's and QORY_RUN_REPOSITORIES', and
+// accesskey.ShownValue replaces only a reference that contains
 // qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_; any other secret in
 // EnvironmentRef is written as the caller passes it. Image, EnvironmentImage, Base and
 // Commit are written as the caller passes them, without the masker.

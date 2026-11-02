@@ -69,11 +69,12 @@ URL in the session's bytes and in the events made from the runtime's output and 
 records.
 
 `***` replaces each secret the run knows: the values `qory` passes, such as those of
-`--env` and `wall.env`, the server's variable values of 8 characters or more, and text in
-the shape of an Anthropic, GitHub or AWS key or of an HTTP bearer token. It does so in
-the session's bytes, the events, the copy of the output on your terminal, and the
-errors that opening, joining and closing the run, its setup, its image's fetch and its
-steps return. See [docs/go.md](docs/go.md) for the shapes.
+`--env` and `wall.env`, the server's variable values of 8 characters or more, apart from
+`QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, which are not secrets, and text in the
+shape of an Anthropic, GitHub or AWS key or of an HTTP bearer token. It does so in the
+session's bytes, the events, the copy of the output on your terminal, and the errors
+that opening, joining and closing the run, its setup, its image's fetch and its steps
+return. See [docs/go.md](docs/go.md) for the shapes.
 
 Forager writes its events: the start, the policy, each connection, each chunk of output,
 a heartbeat every 30 seconds, and the exit. The agent's hooks and output add the

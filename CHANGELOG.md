@@ -1856,6 +1856,11 @@ release may change what an existing document does, and says so under Upgrading.
   one, and a link to such a file or to a regular file, now get the same text. Before,
   they were refused with "that file is not a regular file" or "that file is a link".
 
+- A step's name and lines keep the server's values of `QORY_RUN_SYSTEM` and
+  `QORY_RUN_REPOSITORIES`: the run's masker leaves both out by name, at the open and at
+  a reload, because neither is a secret. Before, `github.com` read `***` in the name of
+  a fetch or a push step. Another server variable with the same value still masks it.
+
 #### Changed
 
 - A variable the runtime's preparation sets is in the launch's environment once: the

@@ -1414,6 +1414,10 @@ by these names exactly, in upper case: a name that only begins with one, such as
 `denies` and the node's entries still apply to them, and an unwalled run takes them as
 it takes any server variable. A value of either from any other source is held to the
 rules of any `QORY_` name: `variable_reserved` behind a wall, denied without one.
+Neither value is a secret, so the run's masker leaves both out by name, and a step's
+`name` keeps them, as in `fetch github.com/example-org/app`. The masker replaces every
+other server variable's value of 8 characters or more, so a variable with the same value
+as one of these two still masks it.
 
 **Also left out.** A value of any source below the fixed names for a fixed name is left
 out and recorded as `fixed`: the fixed value applies. The server's value of a variable

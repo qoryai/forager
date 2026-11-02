@@ -146,14 +146,15 @@ type OpenSpec struct {
 	// code, a run key and the query values of a harness URL, and wrap your writers
 	// with mask.NewWriter on the same masker, so your output and the run's are masked
 	// with one set of values. The run adds to it the server's variable values of 8
-	// characters or more, the run answer's at the open and each reload's from that
-	// reload on, and each forwarder's password, replaced with mask.ProxyPassword,
-	// before the forwarder starts. AddSecret refuses a value of more than
-	// mask.MaxSecretSize bytes, and a new value once the masker has mask.MaxSecrets
-	// different values: a server's value it refuses is a Report line with its
-	// variable's name, and is not masked. AddSecret does not filter by length: leave
-	// out a value that would replace ordinary text. The run's masker covers the
-	// dev.qory.run.log chunks of the runtime's output, of the host steps and of the
+	// characters or more, apart from QORY_RUN_SYSTEM's and QORY_RUN_REPOSITORIES', which
+	// are not secrets, the run answer's at the open and each reload's from that reload
+	// on, and each forwarder's password, replaced with mask.ProxyPassword, before the
+	// forwarder starts. Another variable with the same value still adds it. AddSecret
+	// refuses a value of more than mask.MaxSecretSize bytes, and a new value once the
+	// masker has mask.MaxSecrets different values: a server's value it refuses is a Report
+	// line with its variable's name, and is not masked. AddSecret does not filter by
+	// length: leave out a value that would replace ordinary text. The run's masker covers
+	// the dev.qory.run.log chunks of the runtime's output, of the host steps and of the
 	// setup steps, and so output.log; every event the descriptor maps from an output or
 	// hook record; every string of dev.qory.session.started; each step's name; the
 	// environment_ref of dev.qory.run.built; every string of dev.qory.run.started but

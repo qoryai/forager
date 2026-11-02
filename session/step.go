@@ -27,10 +27,11 @@ type Step struct {
 // with the run's next step number as step, name as name and kind as kind: event.StepFetch,
 // event.StepCompose, event.StepBuild or event.StepPush. Join numbers its steps from the same counter. The
 // run's masker replaces each forwarder's password, each value of OpenSpec.Masker and each
-// server's variable value of 8 characters or more in name, and a name that contains qak_,
-// qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case is a phrase in its place,
-// as accesskey.ShownValue gives it. Write the step's lines with [Step.Log], and end it
-// with [Step.Exit].
+// server's variable value of 8 characters or more, apart from QORY_RUN_SYSTEM's and
+// QORY_RUN_REPOSITORIES', in name, and a name that contains qak_, qrk_, qecr_, qecn_,
+// qecp_, qecg_, qeci_ or qecd_ in any case is a phrase in its place, as
+// accesskey.ShownValue gives it. Write the step's lines with [Step.Log], and end it with
+// [Step.Exit].
 //
 // An error means nothing is written: the kind is not fetch, compose, build or push, the
 // name is empty, a session of the run is running, another host step is open, or the run
@@ -70,11 +71,12 @@ func (r *Run) StartStep(kind, name string) (_ *Step, err error) {
 // stderr, the step's number as step and no session member: one chunk per line, and a
 // line longer than 4096 bytes in chunks of 4096, as a session's chunks on pipes. The
 // run's masker replaces the password of each forwarder of the run, each value of
-// OpenSpec.Masker and each server's variable value of 8 characters or more in b first,
-// within this call alone: a value split across two calls stays as written, so pass whole
-// lines. The chunks go to output.log in the run directory. A last line without a line
-// break is a chunk too, and an empty b writes nothing. A run the gateway closed has the
-// chunks in session.jsonl alone.
+// OpenSpec.Masker and each server's variable value of 8 characters or more, apart from
+// QORY_RUN_SYSTEM's and QORY_RUN_REPOSITORIES', in b first, within this call alone: a
+// value split across two calls stays as written, so pass whole lines. The chunks go to
+// output.log in the run directory. A last line without a line break is a chunk too, and
+// an empty b writes nothing. A run the gateway closed has the chunks in session.jsonl
+// alone.
 //
 // An error means nothing is written: the step exited, a session of the run is running,
 // or the run is closed.

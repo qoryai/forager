@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -267,6 +268,113 @@ func TestAReloadsVariableValueIsMaskedFromThenOn(t *testing.T) {
 	}
 	if sent := noneSent(t, g, reloaded); sent != want {
 		t.Errorf("the gateway's run.log chunks %q, want %q", sent, want)
+	}
+}
+
+// TestTheRunsSystemAndRepositoriesAreNotMasked pins QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES at the open: the masker leaves both out by name, so a fetch
+// step's name and line keep them, and the push step's. Another variable with the same
+// value still masks it.
+func TestTheRunsSystemAndRepositoriesAreNotMasked(t *testing.T) {
+	const name, line = "fetch github.com/example-org/app", "from github.com/example-org/app\n"
+	cases := []struct {
+		name               string
+		variables          map[string]any
+		wantName, wantLine string
+	}{
+		{"alone", map[string]any{}, name, line},
+		{"beside a variable with the system's value", map[string]any{"EXAMPLE_HOST": map[string]any{"value": "github.com"}},
+			"fetch ***/example-org/app", "from ***/example-org/app\n"},
+		{"beside a variable with the repositories' value", map[string]any{"EXAMPLE_REPOSITORY": map[string]any{"value": "example-org/app"}},
+			"fetch github.com/***", "from github.com/***\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+				a := linktest.RunAnswer(req)
+				c.variables["QORY_RUN_SYSTEM"] = map[string]any{"value": "github.com"}
+				c.variables["QORY_RUN_REPOSITORIES"] = map[string]any{"value": "example-org/app"}
+				a["variables"] = c.variables
+				return linktest.Reply{Status: 200, Body: a}
+			})
+			ctx := context.Background()
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			hostStep(t, r, event.StepFetch, name, line)
+			hostStep(t, r, event.StepPush, "push "+strings.TrimPrefix(name, "fetch "), line)
+			if _, err := r.Close(ctx, session.Outcome{State: event.StateFailed, ExitCode: -1}); err != nil {
+				t.Fatal(err)
+			}
+			started := ofType(g.Events(), event.StepStarted)
+			if len(started) != 2 || started[0]["data"].(map[string]any)["name"] != c.wantName ||
+				started[1]["data"].(map[string]any)["name"] != strings.Replace(c.wantName, "fetch", "push", 1) {
+				t.Errorf("the steps %v, want the name %q and its push", started, c.wantName)
+			}
+			if sent := runLogText(t, g.Events()); sent != c.wantLine+c.wantLine {
+				t.Errorf("the gateway's run.log chunks %q, want %q twice", sent, c.wantLine)
+			}
+		})
+	}
+}
+
+// TestAReloadLeavesTheRunsSystemAndRepositoriesOut pins the reload path: a reload's
+// QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES stay out of the masker, and its other
+// variable with the system's value masks it from then on.
+func TestAReloadLeavesTheRunsSystemAndRepositoriesOut(t *testing.T) {
+	first, second := "sha256="+strings.Repeat("1", 64), "sha256="+strings.Repeat("2", 64)
+	third := "sha256=" + strings.Repeat("3", 64)
+	sp, g := specGateway(t)
+	g.SetRunDigest(first)
+	reload := func(variables map[string]any) linktest.Reply {
+		variables["QORY_RUN_SYSTEM"] = map[string]any{"value": "github.com"}
+		variables["QORY_RUN_REPOSITORIES"] = map[string]any{"value": "example-org/app"}
+		return linktest.Reply{Status: 200, Body: map[string]any{"version": 1, "variables": variables,
+			"applied": map[string]any{"mode": "observe", "allow": []string{}, "deny": []string{}, "source": "none"}}}
+	}
+	var withHost atomic.Bool
+	g.OnReload(func(string) linktest.Reply {
+		if withHost.Load() {
+			return reload(map[string]any{"EXAMPLE_HOST": map[string]any{"value": "github.com"}})
+		}
+		return reload(map[string]any{})
+	})
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitReloads := func(n int) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for len(ofType(g.Events(), event.PolicyApplied)) < n {
+			if time.Now().After(deadline) {
+				t.Fatalf("no reload was recorded; reloads %q", g.Reloads())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	g.SetRunDigest(second)
+	hostStep(t, r, event.StepFetch, "fetch", "before the reload\n")
+	waitReloads(2)
+	hostStep(t, r, event.StepFetch, "fetch github.com/example-org/app", "after the first reload\n")
+	withHost.Store(true)
+	g.SetRunDigest(third)
+	hostStep(t, r, event.StepFetch, "fetch", "before the second reload\n")
+	waitReloads(3)
+	hostStep(t, r, event.StepFetch, "fetch github.com/example-org/app", "after the second reload\n")
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateFailed, ExitCode: -1}); err != nil {
+		t.Fatal(err)
+	}
+	var names []any
+	for _, e := range ofType(g.Events(), event.StepStarted) {
+		names = append(names, e["data"].(map[string]any)["name"])
+	}
+	want := []any{"fetch", "fetch github.com/example-org/app", "fetch", "fetch ***/example-org/app"}
+	if !slices.Equal(names, want) {
+		t.Errorf("the steps' names %q, want %q", names, want)
 	}
 }
 

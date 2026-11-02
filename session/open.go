@@ -237,17 +237,19 @@ func (r *Run) clearMaskers() {
 const minServerMask = 8
 
 // addServerValues adds to the run's masker each of values, the server's variables by
-// name, of minServerMask characters or more. A value the masker refuses, past its
-// mask.MaxSecrets different values, is not masked, and is a Report line with its
-// variable's name: the run goes on, since the server's values are not the caller's to
-// change. The names are taken in order, so the values over the count are the same on
-// every run. Each value has at most mask.MaxSecretSize bytes already: the link refuses
-// a run or reload answer with a variable's value of more than server.MaxVariableValue
-// bytes, the same 4096.
+// name, of minServerMask characters or more. It leaves out QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES by name: they are not secrets, and a step's name contains them,
+// such as fetch github.com/example-org/app. Another variable with the same value still
+// adds it. A value the masker refuses, past its mask.MaxSecrets different values, is not
+// masked, and is a Report line with its variable's name: the run goes on, since the
+// server's values are not the caller's to change. The names are taken in order, so the
+// values over the count are the same on every run. Each value has at most
+// mask.MaxSecretSize bytes already: the link refuses a run or reload answer with a
+// variable's value of more than server.MaxVariableValue bytes, the same 4096.
 func (r *Run) addServerValues(values map[string]string) {
 	for _, name := range slices.Sorted(maps.Keys(values)) {
 		v := values[name]
-		if utf8.RuneCountInString(v) < minServerMask {
+		if name == envRunSystem || name == envRunRepositories || utf8.RuneCountInString(v) < minServerMask {
 			continue
 		}
 		b := []byte(v)
@@ -262,7 +264,7 @@ func (r *Run) addServerValues(values map[string]string) {
 // mask.ProxyPassword, and to r.passwords, the masker of the forwarders' passwords
 // alone, which [Run.Setup] refuses in its variables. The run's masker replaces the
 // run's secrets in what the run writes and reports: the forwarders' passwords, the
-// caller's values and the server's variable values of minServerMask characters or more.
+// caller's values and the server's variable values that addServerValues adds.
 func (r *Run) addPassword(password string) {
 	r.masker.AddProxy(proxyUser, password)
 	r.passwords.AddProxy(proxyUser, password)

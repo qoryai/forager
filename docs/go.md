@@ -369,17 +369,19 @@ failed and its lines:
   `kind` is `event.StepFetch`, `event.StepCompose`, `event.StepBuild` or
   `event.StepPush`, host work that sends the run's commits. The run's
   masker replaces each forwarder's password, each value of `OpenSpec.Masker` and each
-  server's variable value of 8 characters or more in `name`, and a `name` that contains
-  `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` is a phrase in
-  its place. Pass a `name` with no URL userinfo, token or other credential: `StartStep`
-  writes any other secret in `name` as given.
+  server's variable value of 8 characters or more, apart from `QORY_RUN_SYSTEM`'s and
+  `QORY_RUN_REPOSITORIES`', in `name`, and a `name` that contains `qak_`, `qrk_`,
+  `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` is a phrase in its place. Pass
+  a `name` with no URL userinfo, token or other credential: `StartStep` writes any other
+  secret in `name` as given.
 - `(*session.Step).Log(b)` writes the step's lines, such as what the fetch or the
   compose prints: each line is a `dev.qory.run.log` with `stream` `stderr`, the step's
   number as `step` and no `session`, cut at 4096 bytes as a session's lines on pipes
   are, and goes to `output.log`. The run's masker replaces each forwarder's password,
   the host proxy's included, and each value of `OpenSpec.Masker` and each server's
-  variable value of 8 characters or more in the lines, within one call: pass whole
-  lines, because a value split across two calls stays as written. Pass an error's text through
+  variable value of 8 characters or more, apart from `QORY_RUN_SYSTEM`'s and
+  `QORY_RUN_REPOSITORIES`', in the lines, within one call: pass whole lines, because a
+  value split across two calls stays as written. Pass an error's text through
   `accesskey.ShownError`, which replaces a text that contains an access key secret, a
   run key, a run code or an enrolment code.
 - `(*session.Step).Exit(state, exitCode)` writes `dev.qory.run.step_exited` with
@@ -449,10 +451,11 @@ with the members of `session.Built`:
   hexadecimal characters in lower case.
 - `EnvironmentRef` as `environment_ref`: your reference to the environment the image is
   for, not empty. The run's masker replaces each forwarder's password, each value of
-  `OpenSpec.Masker` and each server's variable value of 8 characters or more in it, and a
-  reference that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or
-  `qecd_` is a phrase in its place, as in a step's `name`. Pass no other credential in
-  it: `Built` writes any other secret as you pass it.
+  `OpenSpec.Masker` and each server's variable value of 8 characters or more, apart from
+  `QORY_RUN_SYSTEM`'s and `QORY_RUN_REPOSITORIES`', in it, and a reference that contains
+  `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` is a phrase in
+  its place, as in a step's `name`. Pass no other credential in it: `Built` writes any
+  other secret as you pass it.
 - `EnvironmentImage` as `environment_image`: the environment image the build pushed,
   or the one it started from, of the form of `Image`. Leave it empty if you do not
   report it: `Built` then writes no `environment_image`.
@@ -1021,8 +1024,11 @@ however long the chain of them and however the writes split it.
 The run adds to the masker the server's variable values of 8 characters or more, the
 run answer's at the open and each reload's from that reload on, and each forwarder's
 password, replaced with `qory-proxy-password`, before the forwarder starts, so your
-writers mask them too. `AddSecret` adds at most `mask.MaxSecrets` (1024) different
-values to one masker, each of at most `mask.MaxSecretSize` (4096) bytes, and returns an
+writers mask them too. The run leaves out the values of `QORY_RUN_SYSTEM` and
+`QORY_RUN_REPOSITORIES` by name: they are not secrets, and a step's name contains them,
+such as `fetch github.com/example-org/app`. Another variable with the same value still
+adds it. `AddSecret` adds at most `mask.MaxSecrets` (1024) different values to one
+masker, each of at most `mask.MaxSecretSize` (4096) bytes, and returns an
 error that starts with the fix and contains no value past either bound: `add at most
 1024 values to the masker: it has 1024 already, and this value is not masked`. A
 server's value past the count is not masked, and the run reports `the server's variable
