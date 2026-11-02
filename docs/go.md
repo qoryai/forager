@@ -530,16 +530,18 @@ API, lists the five requests, each status and the limits.
 
 Plan the gateway's memory for the route. A budget of 512 MiB per gateway counts the
 bytes of `POST /artifacts` bodies and of answers other than files, past the first 1 MiB of
-each. A body or answer over the budget's room gets a `429` `rate_limited`, and a retry
-passes once the room is back, within 60 s. These figures are what the heap takes:
+each. A body or answer over the budget's room gets a `429` `rate_limited`. A retry can
+pass once a stalled read ends; runs that stall again can keep the 512 MiB full. These
+figures are what the heap takes:
 
-- During a read, the heap holds up to 1.6 times the bytes the budget counts: about
-  665 MiB for 32 MiB bodies, and up to about 820 MiB for other sizes.
+- During a read, the heap holds up to 1.6 times the bytes read: about 685 MiB for 32 MiB
+  bodies that fill the budget. For other sizes, plan up to about 820 MiB plus 1.6 MiB per
+  run with a POST.
 - A 32 MiB POST body takes up to about 74 MiB at the end of its read, then about 64 MiB
   while it signs, 32 MiB of it the copy that `accesskey.Request.Message` makes. At most 8
   sign at once.
 - A 16 MiB answer takes up to about 35 MiB at the end of its read and 16 MiB after it.
-- Each run also holds up to 1 MiB uncharged per POST and 1 MiB per answer.
+- Each run also holds up to 1 MiB uncharged per answer.
 
 The budget does not cover the read buffer's room past the bytes it counts, the signing
 copy, an answer during its read, `POST /verdict` bodies, or the first 1 MiB of each body
@@ -547,8 +549,9 @@ and answer. A file streams, so it takes no budget.
 
 Each run has 1 POST in flight, among its 4 requests in flight, and 1 request waiting for
 a token of the gateway's rate limit. A gateway signs 20 requests a second across its
-runs, with a burst of 20, and sends 8 `POST /artifacts` at once. The gateway reads an
-answer of at most 16 MiB, and a larger one is a `502` `answer_too_large`.
+runs, with a burst of 20, and sends 8 `POST /artifacts` with a body over 1 MiB at once. A
+smaller body takes no send slot. The gateway reads an answer of at most 16 MiB, and a
+larger one is a `502` `answer_too_large`.
 
 ### The engine proxy
 

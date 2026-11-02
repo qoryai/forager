@@ -247,9 +247,25 @@ func TestOnePostInFlightPerRun(t *testing.T) {
 	}
 }
 
+// largeBody is the size of the smallest body that takes a send slot.
+const largeBody = int(runAPIFreeBytes) + 1
+
+// holdLarge starts one POST artifacts with a body that takes a send slot, on a run of
+// limits whose Send holds it, and returns once it is in Send.
+func holdLarge(t *testing.T, wg *sync.WaitGroup, limits *RunAPILimits, entered chan struct{}, release <-chan struct{}) {
+	t.Helper()
+	r := startRoute(t, &RunAPI{Limits: limits}, heldSends(entered, release))
+	wg.Go(func() { postBody(t, r, "/artifacts", largeBody) })
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a request did not reach Send")
+	}
+}
+
 // TestEightArtifactSendsPerGateway pins the gateway's send slots across its runs: a ninth
-// POST artifacts waits, then gets a 429 with nothing sent, while a POST verdict and a GET
-// pass, since neither takes a slot.
+// body over 1 MiB waits, then gets a 429 with nothing sent, while a POST verdict, a push
+// of 1 MiB and a GET pass, since none of them takes a slot.
 func TestEightArtifactSendsPerGateway(t *testing.T) {
 	const wait = 100 * time.Millisecond
 	limits := &RunAPILimits{queueWait: wait}
@@ -260,11 +276,13 @@ func TestEightArtifactSendsPerGateway(t *testing.T) {
 		wg.Wait()
 	}()
 	for range RunAPIArtifactSends {
-		startRoute(t, &RunAPI{Limits: limits}, heldSends(entered, release)).hold(t, &wg, entered, 1, http.MethodPost, "/artifacts")
+		holdLarge(t, &wg, limits, entered, release)
 	}
 	ninth := startRoute(t, &RunAPI{Limits: limits}, nil)
 	start := time.Now()
-	ninth.limited(t, "the ninth", http.MethodPost, "/artifacts")
+	if got := postBody(t, ninth, "/artifacts", largeBody); got != http.StatusTooManyRequests {
+		t.Errorf("the ninth: %d", got)
+	}
 	if d := time.Since(start); d < wait {
 		t.Errorf("the ninth waited %v", d)
 	}
@@ -274,31 +292,91 @@ func TestEightArtifactSendsPerGateway(t *testing.T) {
 	if status, _, _ := ninth.status(t, http.MethodPost, "/verdict"); status != http.StatusOK {
 		t.Errorf("a POST verdict: %d", status)
 	}
+	if got := postBody(t, ninth, "/artifacts", int(runAPIFreeBytes)); got != http.StatusOK {
+		t.Errorf("a push of 1 MiB: %d", got)
+	}
 	if status, _, _ := ninth.status(t, http.MethodGet, "/work-item"); status != http.StatusOK {
 		t.Errorf("a GET: %d", status)
 	}
 }
 
-// TestAPostGetsASendSlotThatEnds pins the wait for a slot: a ninth POST artifacts passes
+// TestAPostGetsASendSlotThatEnds pins the wait for a slot: a ninth body over 1 MiB passes
 // when a slot ends inside the wait.
 func TestAPostGetsASendSlotThatEnds(t *testing.T) {
 	limits := &RunAPILimits{}
 	entered, release := make(chan struct{}, RunAPIArtifactSends), make(chan struct{})
 	var wg sync.WaitGroup
 	for range RunAPIArtifactSends {
-		startRoute(t, &RunAPI{Limits: limits}, heldSends(entered, release)).hold(t, &wg, entered, 1, http.MethodPost, "/artifacts")
+		holdLarge(t, &wg, limits, entered, release)
 	}
 	ninth := startRoute(t, &RunAPI{Limits: limits}, nil)
 	done := make(chan int, 1)
-	go func() {
-		status, _, _ := ninth.status(t, http.MethodPost, "/artifacts")
-		done <- status
-	}()
+	go func() { done <- postBody(t, ninth, "/artifacts", largeBody) }()
 	time.Sleep(50 * time.Millisecond)
 	close(release)
 	wg.Wait()
 	if status := <-done; status != http.StatusOK {
 		t.Errorf("the ninth: %d", status)
+	}
+}
+
+// TestSmallPushesLeaveTheSendSlots pins what hostile runs that read and push small bodies
+// cost: they wait in the bucket's queue and hold no send slot, so another run's push of
+// 1 KiB, its verdict and its read pass.
+func TestSmallPushesLeaveTheSendSlots(t *testing.T) {
+	const pushers, readers = 2 * RunAPIArtifactSends, 2 * RunAPIArtifactSends
+	f := newFakeTime()
+	var parked atomic.Int32
+	var victim atomic.Bool
+	release := make(chan struct{})
+	limits := &RunAPILimits{now: f.now, sleep: func(ctx context.Context, _ time.Duration) bool {
+		if victim.Load() {
+			return true
+		}
+		parked.Add(1)
+		select {
+		case <-release:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}}
+	for range RunAPIGatewayRate {
+		if _, err := limits.reserve(func() bool { return true }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	defer func() {
+		close(release)
+		wg.Wait()
+	}()
+	for range pushers {
+		r := startRoute(t, &RunAPI{Limits: limits, now: f.now}, nil)
+		wg.Go(func() { postBody(t, r, "/artifacts", 2) })
+	}
+	for range readers {
+		r := startRoute(t, &RunAPI{Limits: limits, now: f.now}, nil)
+		wg.Go(func() { r.status(t, http.MethodGet, "/work-item") })
+	}
+	for deadline := time.Now().Add(10 * time.Second); parked.Load() != pushers+readers; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d requests wait for a token", parked.Load(), pushers+readers)
+		}
+	}
+	if got := len(limits.slots); got != 0 {
+		t.Errorf("small pushes hold %d send slots", got)
+	}
+	victim.Store(true)
+	v := startRoute(t, &RunAPI{Limits: limits, now: f.now}, nil)
+	if got := postBody(t, v, "/artifacts", 1<<10); got != http.StatusOK {
+		t.Errorf("a push of 1 KiB: %d", got)
+	}
+	if got := postBody(t, v, "/verdict", 1<<10); got != http.StatusOK {
+		t.Errorf("a verdict: %d", got)
+	}
+	if status, _, _ := v.status(t, http.MethodGet, "/work-item"); status != http.StatusOK {
+		t.Errorf("a read: %d", status)
 	}
 }
 
@@ -424,7 +502,7 @@ func TestACancelledRequestSignsNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	target := runAPITarget{path: "/artifacts", post: true, artifacts: true}
-	if _, sent, err := r.a.send(ctx, http.MethodPost, target, []byte("{}")); sent || !errors.Is(err, context.Canceled) {
+	if _, sent, err := r.a.send(ctx, http.MethodPost, target, make([]byte, largeBody)); sent || !errors.Is(err, context.Canceled) {
 		t.Errorf("sent %v, %v", sent, err)
 	}
 	if got := r.sent.Load(); got != 0 {
@@ -557,6 +635,9 @@ func answering(n int) func(context.Context, string, string, []byte, bool) (*serv
 // TestTheFirstMiBOfABodyIsFree pins what a body charges: nothing up to 1 MiB, and each
 // byte past it.
 func TestTheFirstMiBOfABodyIsFree(t *testing.T) {
+	if runAPIFreeBytes != 1048576 {
+		t.Fatalf("the free part is %d bytes, want 1 MiB", runAPIFreeBytes)
+	}
 	const free = int(runAPIFreeBytes)
 	for _, c := range []struct {
 		size int
@@ -914,12 +995,15 @@ func TestNothingOutlivesARequest(t *testing.T) {
 	get := func(path string) string {
 		return "GET " + routeURL(path) + " HTTP/1.1\r\nHost: " + link.RunAPIHost + "\r\nConnection: close\r\n\r\n"
 	}
+	large := fmt.Sprintf("POST %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s", routeURL("/artifacts"), link.RunAPIHost, largeBody, strings.Repeat("a", largeBody))
 	for _, c := range []struct {
 		what, request string
 		answer        func() (*server.RunAPIAnswer, error)
 	}{
 		{what: "a POST artifacts", request: post("/artifacts")},
 		{what: "a POST verdict", request: post("/verdict")},
+		{what: "a POST over 1 MiB", request: large},
+		{what: "a POST over 1 MiB with no answer", request: large, answer: fails(errors.New("no answer"))},
 		{what: "a POST artifacts with no answer", request: post("/artifacts"), answer: fails(errors.New("no answer"))},
 		{what: "an unverified POST", request: post("/artifacts"), answer: fails(server.ErrRunAPIUnverified)},
 		{what: "a POST over the bound", request: post("/verdict"), answer: fails(server.ErrRunAPITooLarge)},

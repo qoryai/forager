@@ -42,8 +42,8 @@ const (
 	// RunAPIPostsPerRun is the most POSTs one run has in flight through the route, among
 	// its [RunAPIInFlight].
 	RunAPIPostsPerRun = 1
-	// RunAPIArtifactSends is the most POST artifacts one gateway sends to Qory Apiary at
-	// once: from the body read whole to the answer read.
+	// RunAPIArtifactSends is the most POST artifacts with a body over [runAPIFreeBytes] one
+	// gateway sends to Qory Apiary at once: from the body read whole to the answer read.
 	RunAPIArtifactSends = 8
 	// RunAPIGatewayRate is the most requests of the route one gateway signs in a second,
 	// beyond a burst of as many. Qory Apiary's bucket for one key refills 50 a second, so
@@ -53,8 +53,9 @@ const (
 	// answers, beyond [runAPIFreeBytes] of each, that one gateway keeps at once. POST
 	// verdict is outside it, and so is a file, which streams.
 	RunAPIMemoryBudget int64 = 512 << 20
-	// runAPIFreeBytes is the part of each body and answer that no budget counts, so
-	// whatever other runs do, a verdict and a body or answer of this size pass.
+	// runAPIFreeBytes is the part of each body and answer that no budget counts. The
+	// memory budget and the send slots hold back no verdict, and no body or answer of
+	// this size. The gateway's bucket applies to every request.
 	runAPIFreeBytes int64 = 1 << 20
 	// runAPIQueueWait is how long a request waits for a send slot, and for a token of the
 	// gateway's bucket.
@@ -290,8 +291,8 @@ type runAPITarget struct {
 	// post is true for a POST, and limit is its largest body.
 	post  bool
 	limit int64
-	// artifacts is true for POST artifacts, which takes a send slot and is charged to the
-	// gateway's memory budget.
+	// artifacts is true for POST artifacts, which is charged to the gateway's memory
+	// budget, and takes a send slot for a body over [runAPIFreeBytes].
 	artifacts bool
 	// file is true for a request for a file of an artifact's version.
 	file bool
@@ -465,12 +466,14 @@ func (a *RunAPI) take(ctx context.Context) error {
 }
 
 // send signs and sends one request, once the gateway's limits allow it: POST artifacts
-// holds a send slot until its answer is read, which [RunAPI.Send] does for a POST, and
-// every request takes a token of the gateway's bucket. sent is false when nothing was
-// signed: err is [errRunAPIBusy] or [errRunAPIWaiting] when a limit had no room, or ctx's
-// error, for a wait that ended early or a context that ended after it.
+// with a body over [runAPIFreeBytes] holds a send slot until its answer is read, which
+// [RunAPI.Send] does for a POST, and every request takes a token of the gateway's bucket.
+// A small push takes no slot, so pushes that wait for a token keep no other run's push
+// from its send. sent is false when nothing was signed: err is [errRunAPIBusy] or
+// [errRunAPIWaiting] when a limit had no room, or ctx's error, for a wait that ended
+// early or a context that ended after it.
 func (a *RunAPI) send(ctx context.Context, method string, t runAPITarget, body []byte) (ans *server.RunAPIAnswer, sent bool, err error) {
-	if t.artifacts {
+	if t.artifacts && int64(len(body)) > runAPIFreeBytes {
 		if err := a.Limits.enter(ctx); err != nil {
 			return nil, false, err
 		}
@@ -546,7 +549,7 @@ const (
 
 // runAPIBusy is the text of a request that found the gateway's limits full.
 func runAPIBusy() string {
-	return fmt.Sprintf("Retry in 1 second: the gateway signs at most %d run API requests a second and sends %d artifacts at once.", RunAPIGatewayRate, RunAPIArtifactSends)
+	return fmt.Sprintf("Retry in 1 second: the gateway signs at most %d run API requests a second and sends %d artifacts bodies over 1 MiB at once.", RunAPIGatewayRate, RunAPIArtifactSends)
 }
 
 // shownMethod is a method as a decision contains it: a standard method, and

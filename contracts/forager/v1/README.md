@@ -4256,10 +4256,10 @@ closed connection, so the caller gets a read error, never a clean end of body. T
 bytes of a file as unverified until the read ends cleanly.
 
 **The limits.** Each run has 10 requests a second and 4 in flight through the route, and
-1 of the 4 at most is a POST. A body that stalls holds that run's POST and nothing of any
-other run's. Each gateway, across its runs, signs 20 requests a second with a burst of 20,
-and sends 8 `POST /artifacts` at once, each from the end of its body's read to the end of
-the read of its answer.
+1 of the 4 at most is a POST. A body that stalls holds that run's POST and its part of the
+512 MiB. Each gateway, across its runs, signs 20 requests a second with a burst of 20, and
+sends 8 `POST /artifacts` with a body over 1 MiB at once, each from the end of its body's
+read to the end of the read of its answer. A smaller body takes none of the 8.
 
 Each gateway also keeps at most 512 MiB of `POST /artifacts` bodies and of answers other
 than files, counting the bytes of each past its first 1 MiB. A body counts as its bytes
@@ -4270,9 +4270,11 @@ sent. A caller still writing its body can get a connection error in place of the
 verified answer counts after its read, until its write to the caller ends. An answer that
 would pass 512 MiB gets the `429`, and the gateway drops it. While stalled bodies fill the
 512 MiB, other runs' bodies and answers over 1 MiB get the `429` until the stalled reads
-end, within 60 seconds, and a retry after that passes. A verdict, and a body or an answer
-of 1 MiB or less, pass whatever other runs do. `POST /verdict` takes none of the 8 and none
-of the 512 MiB, and a file, which streams, takes none of the 512 MiB.
+end, within 60 seconds. A retry can pass once a stalled read ends; runs that stall again
+can keep the 512 MiB full. The 512 MiB and the 8 sends hold back no verdict, and no body or
+answer of 1 MiB or less. The gateway's bucket applies to every request. `POST /verdict`
+takes none of the 8 and none of the 512 MiB, and a file, which streams, takes none of the
+512 MiB.
 
 Every request also takes a token of the run's rate limit, and every request inside the five is
 a connection of the run (§The policy). A request over any of these limits gets the
