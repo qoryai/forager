@@ -184,10 +184,11 @@ a run with no session whose workflow is not in the harness with
 `workflow_not_in_harness`, `failed` with exit code `-1`. qory closes a run with no
 session of a read-only workflow that has no wall with `read_needs_wall`, a read-only
 workflow's run whose setup is set to run inside the agent's container with
-`read_needs_setup_outside`, and a read-only workflow's run whose image runs nested
-Docker with `read_needs_no_nested_docker`, each `failed` with exit code `-1`. The gateway
-writes the others: `session_lost`, `failed`, the session was silent; `batch_refused`,
-`failed`, the gateway refused a batch from the run's session
+`read_needs_setup_outside`, a read-only workflow's run whose image runs nested Docker
+with `read_needs_no_nested_docker`, and a read-only workflow's run whose setup container
+could not be removed with `read_needs_setup_removed`, each `failed` with exit code `-1`.
+The gateway writes the others: `session_lost`, `failed`, the session was silent;
+`batch_refused`, `failed`, the gateway refused a batch from the run's session
 (see the contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
 gave no outcome, or the starter's outcome and reason when it gave one; and sending a
 record again writes `gateway_lost`, `failed`. Forager's codes are reserved, and so are
