@@ -882,19 +882,19 @@ release may change what an existing document does, and says so under Upgrading.
   bound the gateway reads is a `502` `answer_too_large`. A `CONNECT` to the host is
   denied in either mode, and the stack proxy has no route.
 - The gateway accepts a session's `dev.qory.run.exited` with the reason
-  `read_needs_wall`, which qory gives the close of a run of a read-only workflow that
-  has no wall, or `read_needs_setup_outside`, which qory gives the close of a read-only
-  workflow's run whose setup is set to run inside the agent's container. It accepts
-  both as it accepts `image_missing`: for a run with no join, `failed` with
-  `exit_code` `-1`. It refuses them with another state or exit code, or after a join,
-  and `(*session.Run).Close` refuses the same outcomes before it writes anything.
+  `read_needs_wall`, which qory gives the close of a read run that has no wall, or
+  `read_needs_setup_outside`, which qory gives the close of a read run whose setup is
+  set to run inside the agent's container. It accepts both as it accepts
+  `image_missing`: for a run with no join, `failed` with `exit_code` `-1`. It refuses
+  them with another state or exit code, or after a join, and `(*session.Run).Close`
+  refuses the same outcomes before it writes anything.
   `event.ReasonReadNeedsWall` and `event.ReasonReadNeedsSetupOutside` are the two
   codes.
-  `read_needs_no_nested_docker`, which qory gives the close of a read-only workflow's
-  run whose image runs nested Docker, follows the same rule, as
+  `read_needs_no_nested_docker`, which qory gives the close of a read run whose image
+  runs nested Docker, follows the same rule, as
   `event.ReasonReadNeedsNoNestedDocker`.
-  `read_needs_setup_removed`, which qory gives the close of a read-only workflow's run
-  whose setup container could not be removed, follows the same rule, as
+  `read_needs_setup_removed`, which qory gives the close of a read run whose setup
+  container could not be removed, follows the same rule, as
   `event.ReasonReadNeedsSetupRemoved`.
 - The gateway replaces text in the shape of a known key (`mask.Shapes`) with `***` in
   the line of an adapter that fails, in the error of a run's start and in a renewal's

@@ -1798,17 +1798,20 @@ and the resend of a record that ends with `gateway_lost` does the same. So the r
 stream has no `dev.qory.run.step_exited` for that step. The session writes that
 step's `dev.qory.run.step_exited` in `session.jsonl` alone, with the step's outcome.
 
-The run's masker replaces each forwarder's password in a step's `name`, and a `name`
-that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` in
-any case is `(a value that contains an access key secret)` in its place, `(a value that
-contains a run key)` when it contains `qrk_` and no `qak_`, `(a value that contains a
-run code)` when it contains `qecr_` and neither of the others, or `(a value that
-contains an enrolment code)` when it contains `qecn_`, `qecp_`, `qecg_`, `qeci_` or
-`qecd_` and none of the others, as `dir` of `dev.qory.session.started` is. The caller's
+The run's masker replaces the run's secrets in a step's `name`: each forwarder's
+password, each value of `OpenSpec.Masker`, each server's variable value of 8 characters
+or more, apart from `QORY_RUN_SYSTEM`'s and `QORY_RUN_REPOSITORIES`', and text in the
+shape of a known key (`mask.Shapes`). A `name` that contains `qak_`, `qrk_`, `qecr_`,
+`qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` in any case is `(a value that contains an
+access key secret)` in its place, `(a value that contains a run key)` when it contains
+`qrk_` and no `qak_`, `(a value that contains a run code)` when it contains `qecr_` and
+neither of the others, or `(a value that contains an enrolment code)` when it contains
+`qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` and none of the others, as `dir` of
+`dev.qory.session.started` is. The caller's
 `name` must contain no URL userinfo, token or other credential: the masker replaces only
-the forwarders' passwords, and the phrase replaces only a `name` that contains `qak_`,
-`qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_`, so any other secret in a
-`name` is written as given.
+these secrets, and the phrase replaces only a `name` that contains `qak_`, `qrk_`,
+`qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_`, so any other secret in a `name`
+is written as given.
 
 ```json
 {"step": 1, "name": "fetch github.com/example-org/app", "kind": "fetch"}
