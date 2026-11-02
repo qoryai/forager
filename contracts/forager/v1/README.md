@@ -1725,7 +1725,7 @@ the two events is required.
 | `image` | a fetch of the run's image |
 | `setup` | a setup command, on the machine or inside the wall |
 | `join` | the join of a session |
-| `wall` | the start of a wall |
+| `wall` | the start of a wall, or the start or the removal of a setup container |
 | `build` | a build of an image |
 | `push` | host work that sends the run's commits |
 
@@ -1740,8 +1740,10 @@ command of `(*session.Run).Setup` and of `SessionSpec.Setup`.
 The caller writes the steps of its host work, `fetch`, `compose`, `build` and `push`,
 before the first join, between joins, or after the last join and before the close
 (`(*session.Run).StartStep`), the image's, `image`
-(`(*session.Run).FetchImage`, §Images), and the setup's, `wall` and `setup`
-(`(*session.Run).Setup`, §The wall, Setup). Each join writes its steps:
+(`(*session.Run).FetchImage`, §Images), the setup's, `wall` and `setup`
+(`(*session.Run).Setup`, §The wall, Setup), and the removal of the setup container, `wall`
+(`(*session.Run).RemoveSetup`, §The wall, Setup). The `wall` steps of the setup and of
+the removal lie outside every session, before the first join. Each join writes its steps:
 
 1. **The join step**, `join`, with the name `join session <n>`, the number the gateway
    gives the next join. It spans the join request and the session's checks, and ends right
@@ -4932,10 +4934,12 @@ up in its parent, so two binds of one root are allowed:
   container alone, so a write into the workspace inside fails with `Read-only file
   system`. Under nested Docker this is unverified: the enclosure's root, which the agent
   reaches through the inner Docker daemon, may remount the workspace writable (Nested
-  Docker, below). The setup container still binds the working folder writable (Setup,
-  below) until the run closes, so a service a setup command starts there, such as one at
-  `qory-setup:5432`, can still write the workspace, for example when the agent asks it
-  to. The host steps still write it too, so the workspace keeps every check of a
+  Docker, below). In a run that does not call `(*session.Run).RemoveSetup`, the setup
+  container still binds the working folder writable (Setup, below) until the run closes,
+  so a service a setup command starts there, such as one at `qory-setup:5432`, can still
+  write the workspace, for example when the agent asks it to. After `RemoveSetup` the
+  name `qory-setup` no longer resolves and no service of the setup container remains. The
+  host steps still write the workspace, so it keeps every check of a
   writable place, the links and the way to Forager's files among them; the registry
   lists the workspace as writable when no mount holds it; and a settings file that lies
   in the workspace or in the setup container's folder is not read (§Sequence). A
@@ -5098,19 +5102,39 @@ other than `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, or a reserved name, wi
 value that contains the password of one of the run's forwarders or of the engine proxy,
 as it is, in a proxy URL or as the base64 of `qory:<password>`, is refused. The helper keeps the container
 running (`Docker.HoldArgs`), and each command runs in it through `docker exec`, as the
-wall's user, in the working folder, with no input. The container runs until the run
-closes, so a service a setup command starts is reachable from the agent's container by
-the name `qory-setup`, such as `qory-setup:5432`; such a service writes its output to a
-file, so its command returns. A command that exits otherwise than 0 ends its step
+wall's user, in the working folder, with no input. The container runs until
+`RemoveSetup` removes it, or else until the run closes. While it runs, a service a setup
+command starts is reachable from the agent's container by the name `qory-setup`, such
+as `qory-setup:5432`; such a service writes its output to a file, so its command
+returns. A command that exits otherwise than 0 ends its step
 `failed` with its exit status, and `Setup` returns a `*session.SetupError`. Any other
 failure in a step of the setup, such as a setup container that does not start or that
 stopped, ends the step `failed` with `-1`, or `cancelled` when the caller's context
 ended, after the failure's text as a `dev.qory.run.log` line on `stderr` with the
 step's `step` and no `session`, and is the error `Setup` returns. After a step
 of the setup that does not end `succeeded`, no later step of it starts and no session
-joins the run. The setup container has no Docker daemon. Its services run through every
-session on the same relay, so a request recorded during a session may be a service's;
+joins the run. The setup container has no Docker daemon. While it runs, its services
+use the relay of every session, so a request recorded during a session may be a service's;
 the setup container and the agent's run code from the working folder as the wall's user.
+
+**Removing the setup container.** `(*session.Run).RemoveSetup` removes the setup
+container and returns once it is gone: every process in it has ended, and the name
+`qory-setup` no longer resolves, so a connection to `qory-setup:5432` fails. Call it after
+`Setup` and before the first join, outside every host step. For `docker` it runs `docker
+rm --force --volumes`. It writes one `wall` step after the run's last step, `remove the
+setup container`, which ends `succeeded` with `-1`. What the setup commands wrote in the
+working folder stays. The folder stays in the run's entry among the walled runs still
+going, and a settings file in it stays unread (§Sequence), because a setup command may
+have written the file. `Setup` does not run again. In a run with no setup container the
+call returns nil and writes no step: a run with no wall, a setup that never ran, a setup
+container that did not start, and a setup container that the call removed already. A
+session running or joined, an open host step or a closed run is an error before the step,
+with nothing removed. A removal that fails ends the step `failed`, or `cancelled` when
+the caller's context ended, with `-1`, after the failure's text as a `dev.qory.run.log`
+line on `stderr` with the step's `step` and no `session`, and is the error. The setup
+container may then still run: the caller stops the run, no session joins it, and the
+close tries the removal again. After a setup that failed the call still removes the
+container, and no session joins.
 
 **Setup inside the wall.** With `wall.setup: inside`, a walled session may have setup
 commands, `SessionSpec.Setup`: each a name, such as `install` or `start services`, and

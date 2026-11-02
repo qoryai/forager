@@ -543,6 +543,26 @@ func TestTheErrorsOfSetupFetchImageAndStepsAreMasked(t *testing.T) {
 		}
 	})
 
+	t.Run("RemoveSetup", func(t *testing.T) {
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Masker = maskerOf(t, token)
+		sp.Wall, sp.Image = &setupWall{removeErr: errors.New(failure)}, "example.com/agent:1"
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+			t.Fatal(err)
+		}
+		err = r.RemoveSetup(ctx)
+		r.Close(ctx, session.Outcome{State: event.StateFailed, ExitCode: -1})
+		const want = "Close the run: the setup container may still run, so no session can join: fails with *** and ***"
+		check(t, "RemoveSetup", err, want)
+		if out, _ := os.ReadFile(filepath.Join(r.Dir(), sink.OutputFile)); !strings.Contains(string(out), want+"\n") {
+			t.Errorf("output.log %q", out)
+		}
+	})
+
 	t.Run("a setup command that fails", func(t *testing.T) {
 		sp := spec(t, "FAKE_EXIT=0")
 		sp.Masker = maskerOf(t, token)

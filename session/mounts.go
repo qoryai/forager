@@ -421,8 +421,8 @@ type bindSource struct {
 	// what names the bind in a refusal's sentence, at is where it resolved and looks
 	// are its lookups: for this run's own checks alone. readOnly says the agent's
 	// container binds a writable place read-only: the workspace of a join with
-	// SessionSpec.WorkspaceReadOnly, which the host steps write, and setup says the run
-	// has a setup container, which writes it too.
+	// SessionSpec.WorkspaceReadOnly, which the host steps write, and setup is true while
+	// the setup container runs, which writes it too.
 	what            string
 	at              splitPath
 	looks           []lookup
@@ -449,8 +449,8 @@ func (b bindSource) writer() string {
 	return "this run's agent"
 }
 
-// markSetup marks each of sources, the binds of a join's plan, with whether the run
-// has a setup container, for [bindSource.writer].
+// markSetup marks each of sources, the binds of a join's plan, with whether the run's
+// setup container runs, for [bindSource.writer].
 func markSetup(sources []bindSource, setup bool) {
 	for i := range sources {
 		sources[i].setup = setup

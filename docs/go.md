@@ -415,6 +415,26 @@ if err := step.Exit(state, code); err != nil {
 }
 ```
 
+A walled run's `(*session.Run).Setup` writes its steps itself, and
+`(*session.Run).RemoveSetup(ctx)` removes its setup container: see
+[setup in a separate container](wall.md#setup-in-a-separate-container). Call
+`RemoveSetup` between `Setup` and the first `Join`, outside every host step. It returns
+once the setup container is gone: every process in it has ended, and the name
+`qory-setup` no longer resolves. It writes the `wall` step `remove the setup container`.
+In a run with no setup container, or a second time, it returns nil and writes nothing,
+so you need no condition around it. Each error before the step starts with the fix, and
+removes and writes nothing. A removal that fails ends the step `failed`, or `cancelled`
+when `ctx` ended, and the setup container may still run: stop the run before the join.
+No session joins the run after it, and `Close` tries the removal again.
+
+| When | Error |
+|---|---|
+| while a `Join` runs | `Remove the setup container before the first join: a session of the run is still running.` |
+| after a session joined | `Remove the setup container before the first join: session 1 joined the run.` |
+| while step 1 is open | `Exit step 1 before you remove the setup container: one host step is open at a time.` |
+| after `Close` | `Remove the setup container before the close: the run is closed.` |
+| the removal fails | `Close the run: the setup container may still run, so no session can join: ` and the wall's error |
+
 After a build of an image, write the build as a step of kind `event.StepBuild`, then
 write its result with `(*session.Run).Built(b)`. `Built` writes `dev.qory.run.built`
 with the members of `session.Built`:
@@ -986,8 +1006,8 @@ the `environment_ref` of `dev.qory.run.built`; in every string of `dev.qory.run.
 but its `labels`, its `host`, `wall` and `about`'s members among them; in each `Report`
 line, once; in the copy of the runtime's output to `SessionSpec.Stdout` and
 `SessionSpec.Stderr`, flushed when the runtime's process ends; and in the text of the
-errors that `session.Open`, `Join`, `Close`, `Setup`, `FetchImage`, `StartStep`,
-`Step.Log` and `Step.Exit` return. `errors.Is` still reaches what such an error wraps,
+errors that `session.Open`, `Join`, `Close`, `Setup`, `RemoveSetup`, `FetchImage`,
+`StartStep`, `Step.Log` and `Step.Exit` return. `errors.Is` still reaches what such an error wraps,
 and `errors.As` gives a refusal's copy with its text, detail and names masked and its
 `Code` kept. The session writes its setup lines to `Stdout` and `Stderr` masked as well,
 so pass writers that do not mask again: a second pass may replace text inside a
@@ -1137,11 +1157,13 @@ request asks the gateway for, for this session.
   for this session, so a write into it inside fails with `Read-only file system`. Under
   nested Docker this is unverified: the enclosure's root, which the agent reaches
   through the inner Docker daemon, may remount the workspace writable (see the
-  contract's §The wall, Nested Docker). The setup container of `(*session.Run).Setup`
-  still binds the working folder writable until the run closes, so a service a setup
-  command starts there can still write the workspace, for example when the agent asks
-  it to. The host steps still write it too, so the workspace keeps the checks of a
-  writable place, and a settings file in it is refused as in a writable one. A writable
+  contract's §The wall, Nested Docker). In a run that does not call
+  `(*session.Run).RemoveSetup`, the setup container of `(*session.Run).Setup` still
+  binds the working folder writable until the run closes, so a service a setup command
+  starts there can still write the workspace, for example when the agent asks it to.
+  After `RemoveSetup` the name `qory-setup` no longer resolves and no service of the
+  setup container remains. The host steps still write the workspace, so it keeps the
+  checks of a writable place, and a settings file in it is refused as in a writable one. A writable
   mount that holds `Dir` is `mount_mode_conflict`; a read-only one is the one
   bind. `Join` and `AgentEnv` return an error before the join request, and write
   nothing, in a run with no `Wall`: `Open the run with a wall to mount the workspace

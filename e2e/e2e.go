@@ -74,10 +74,12 @@ const (
 	modeNeighbours = "neighbours"
 	// modeSealed is the probe of a run whose credential Qory Apiary seals.
 	modeSealed = "sealed"
-	// modeHold keeps the setup container running, and modeService is the service a setup
-	// command starts in it, which answers setupServiceLine on setupServicePort.
+	// modeHold keeps the setup container running, modeService is the service a setup
+	// command starts in it, which returns setupServiceLine on setupServicePort, and
+	// modeReach is the setup command that exits 0 once that service returns that line.
 	modeHold    = "hold"
 	modeService = "service"
+	modeReach   = "reach"
 	// modeWrite is the probe in a container the agent started that writes a file into
 	// the workspace bound read-only.
 	modeWrite = "write-file"
@@ -176,7 +178,8 @@ const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 // forwarder, the setup runner, the run's setup command, the probe, the start of a Docker
 // daemon inside the agent's container, the probe in a container the agent started, the search for
 // neighbours in one, a recorder, the probe of a sealed credential, the hold of the setup
-// container or the service a setup command starts in it. It returns at once otherwise.
+// container, the service a setup command starts in it or the setup command that reaches
+// that service. It returns at once otherwise.
 func Main() {
 	if len(os.Args) < 2 {
 		return
@@ -226,6 +229,8 @@ func Main() {
 		os.Exit(0)
 	case modeWrite:
 		os.Exit(writeFile(os.Args[2:]))
+	case modeReach:
+		os.Exit(reach(os.Args[2:]))
 	case modeService:
 		err := http.ListenAndServe(":"+setupServicePort, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			io.WriteString(w, setupServiceLine)
@@ -565,6 +570,7 @@ func Run(t *testing.T, o Options) {
 	byReference(t, o, origin, outside)
 	setupOutside(t, o, origin, outside)
 	readOnlyWorkspace(t, o, origin, outside)
+	setupRemoved(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
 
 	t.Run("the terminal crosses and a named host on this machine is reached", func(t *testing.T) {
@@ -1197,6 +1203,92 @@ func readOnlyWorkspace(t *testing.T, o Options, h hosts, outside string) {
 	})
 }
 
+// setupRemoved checks (*session.Run).RemoveSetup before a join with
+// SessionSpec.WorkspaceReadOnly. The setup writes setupFile, starts a service and a
+// process that adds to writerFile every second, and reaches the service by the name
+// qory-setup from the setup container. RemoveSetup's wall step follows the setup's steps.
+// The agent then cannot resolve or connect to qory-setup, reads setupFile, and cannot
+// write the workspace; writerFile keeps the size it has as the agent starts, through the
+// agent's wait and until after the close, so no process of the setup container remains.
+func setupRemoved(t *testing.T, o Options, h hosts, outside string) {
+	const name = "after RemoveSetup no process of the setup container remains and the agent cannot reach qory-setup"
+	if !o.Setup {
+		t.Run(name, func(t *testing.T) { t.Skip("the adapter starts no setup container") })
+		return
+	}
+	t.Run(name, func(t *testing.T) {
+		runID := event.NewRunID()
+		var setupErr error
+		service := net.JoinHostPort("qory-setup", setupServicePort)
+		commands := []session.SetupCommand{
+			{Name: "write " + setupFile, Args: []string{"sh", "-c", "echo setup > " + setupFile}},
+			{Name: "start the service", Args: []string{"sh", "-c", o.Probe + " " + modeService + " >/tmp/service.log 2>&1 &"}},
+			{Name: "start the writer", Args: []string{"sh", "-c", "(while :; do echo tick >> " + writerFile + "; sleep 1; done) >/dev/null 2>&1 & until [ -s " + writerFile + " ]; do sleep 1; done"}},
+			{Name: "reach the service", Args: []string{o.Probe, modeReach, "http://" + service + "/"}},
+		}
+		r, err := runIn(t, o, variant{runID: runID, setup: commands, removeSetup: true,
+			onSetup: func(err error) { setupErr = err }, readOnly: true,
+			env: []string{"PROBE_READ_ONLY=1", "PROBE_SETUP_ADDR=" + service, "PROBE_WRITER_FILE=" + writerFile}}, false, h, outside)
+		if err != nil || setupErr != nil {
+			t.Fatalf("the setup: %v; the run: %v", setupErr, err)
+		}
+		var steps []string
+		for _, e := range r.events {
+			d, _ := e["data"].(map[string]any)
+			switch e["type"] {
+			case "dev.qory.run.step_started":
+				steps = append(steps, fmt.Sprintf("%v %v %v", d["step"], d["kind"], d["name"]))
+			case "dev.qory.run.step_exited":
+				steps = append(steps, fmt.Sprintf("%v %v %v", d["step"], d["state"], d["exit_code"]))
+			}
+		}
+		want := []string{"1 wall start the setup container", "1 succeeded -1",
+			"2 setup write " + setupFile, "2 succeeded 0",
+			"3 setup start the service", "3 succeeded 0",
+			"4 setup start the writer", "4 succeeded 0",
+			"5 setup reach the service", "5 succeeded 0",
+			"6 wall remove the setup container", "6 succeeded -1",
+			"7 join join session 1", "7 succeeded -1", "8 wall start the wall"}
+		if len(steps) < len(want) || !slices.Equal(steps[:len(want)], want) {
+			t.Errorf("the steps %q, want them to start with %q", steps, want)
+		}
+		ro := r.probe.ReadOnly
+		if ro == nil {
+			t.Fatal("the probe reported nothing of the read-only workspace")
+		}
+		if len(ro.SetupAddrs) != 0 || ro.SetupLookupErr == "" {
+			t.Errorf("the agent's lookup of qory-setup: %q, %q; want an error and no address", ro.SetupAddrs, ro.SetupLookupErr)
+		}
+		if ro.SetupDialErr == "" {
+			t.Errorf("the agent's connection to %s opened", service)
+		}
+		if ro.Setup != "setup\n" || ro.SetupErr != "" {
+			t.Errorf("the agent read %q from %s (%s), want %q", ro.Setup, setupFile, ro.SetupErr, "setup\n")
+		}
+		if ro.WriteExit == 0 || !strings.Contains(ro.WriteStderr, "Read-only file system") {
+			t.Errorf("the agent's write of %s exited %d with %q, want a failure with %q", agentFile, ro.WriteExit, ro.WriteStderr, "Read-only file system")
+		}
+		info, err := os.Stat(filepath.Join(r.dir, writerFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ro.WriterBefore <= 0 || ro.WriterAfter != ro.WriterBefore || info.Size() != ro.WriterBefore {
+			t.Errorf("%s's size: %d as the agent started, %d after %s, %d after the close; want one size above 0", writerFile, ro.WriterBefore, ro.WriterAfter, writerWait, info.Size())
+		}
+		if b, err := os.ReadFile(filepath.Join(r.dir, setupFile)); err != nil || string(b) != "setup\n" {
+			t.Errorf("%s on this machine: %q, %v", setupFile, b, err)
+		}
+		if _, err := os.Stat(filepath.Join(r.dir, agentFile)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s on this machine: %v, want none", agentFile, err)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the run left %v (%v)", left, err)
+			}
+		}
+	})
+}
+
 // stackFetch fetches the stack host through a stack proxy of the run, as qory fetches
 // the harness definition before the first join, and returns the status.
 func stackFetch(r *session.Run) (int, error) {
@@ -1221,17 +1313,19 @@ func stackFetch(r *session.Run) (int, error) {
 // variant is what a run of the suite changes: the image its policy selects or names,
 // the machine's images.allow, the run's id, what to do while the run goes, whether
 // the run fetches its image before the join, the run's setup commands outside, before
-// the join, with what to do with Setup's error, variables the probe gets besides
-// the suite's, and what to do with the run once it opens.
+// the join, with what to do with Setup's error, whether the run then removes the setup
+// container, variables the probe gets besides the suite's, and what to do with the run
+// once it opens.
 type variant struct {
-	image   string
-	allow   []string
-	runID   string
-	started func(ctx context.Context)
-	fetch   bool
-	setup   []session.SetupCommand
-	onSetup func(error)
-	env     []string
+	image       string
+	allow       []string
+	runID       string
+	started     func(ctx context.Context)
+	fetch       bool
+	setup       []session.SetupCommand
+	onSetup     func(error)
+	removeSetup bool
+	env         []string
 	// opened, when set, is called with the run once it opens.
 	opened func(*session.Run)
 	// readOnly binds the workspace read-only for the join, SessionSpec.WorkspaceReadOnly,
@@ -1380,7 +1474,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			SetupRunner:       []string{o.Probe, modeSetupCommand},
 			WorkspaceReadOnly: v.readOnly,
 		},
-		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup, opened: v.opened,
+		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup, removeSetup: v.removeSetup, opened: v.opened,
 	}
 	// The setup runner reports on the run socket, so a run has its setup command where
 	// the socket crosses into the enclosure.

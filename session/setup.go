@@ -70,9 +70,17 @@ type unwrapper interface {
 // the run's image apart from the agent's, the setup container: the Docker wall's.
 // StartSetup starts it with l's Dir, Env, CA, Mounts, Limits, Proxy and ProxyToken, and
 // ExecSetup runs one command in it and returns its exit status.
+//
+// RemoveSetup removes the setup container, and returns nil only once it is gone: every
+// process in it has ended, by force when it does not end by itself, and the name
+// qory-setup no longer resolves inside the enclosure. What the container wrote to its
+// mounts stays. A container that is gone already is not an error. After an error the
+// container may still run, and Close tries the removal again. The session calls
+// RemoveSetup before the run's first Wrap, after a StartSetup that returned nil.
 type setupContainer interface {
 	StartSetup(ctx context.Context, l wall.Launch) error
 	ExecSetup(ctx context.Context, args []string, stdout, stderr io.Writer) (int, error)
+	RemoveSetup(ctx context.Context) error
 }
 
 // openWall builds the run's wall as the run opens: the wall's preparation, the run's
@@ -129,11 +137,12 @@ func (r *Run) closeWall(ctx context.Context) {
 }
 
 // Setup runs the run's setup commands in the setup container: a separate container of
-// the run's image on the wall's internal network, which runs until [Run.Close]. It runs
-// once per walled run, before the first join and outside every host step. The agent
-// reaches the setup container by the name qory-setup, so a service that a setup command
-// starts stays reachable by that name, such as qory-setup:5432. A service sends its
-// output to a file, so its command returns.
+// the run's image on the wall's internal network, which runs until [Run.RemoveSetup]
+// removes it, or else until [Run.Close]. It runs once per walled run, before the first
+// join and outside every host step. While the setup container runs, the agent reaches it
+// by the name qory-setup, so a service that a setup command starts stays reachable by
+// that name, such as qory-setup:5432. A service sends its output to a file, so its
+// command returns.
 //
 // Setup writes its steps, numbered on from the run's last step: the image step, when the
 // policy's image is a reference that no step fetched yet, as [Run.FetchImage] writes it;
@@ -289,8 +298,9 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 		if err := r.listed.update(all); err != nil {
 			return fail(err)
 		}
-		// The setup container runs until the run closes: each join lists its binds with
-		// the session's, and each session's end rewrites the run's entry with them.
+		// What the setup container writes stays after RemoveSetup removes it, so each join
+		// lists its binds with the session's, and each session's end rewrites the run's
+		// entry with them, until the run closes.
 		r.openBinds = all
 		r.setupBinds = slices.Concat(again.sources, binds)
 	}
@@ -301,6 +311,7 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 	if err != nil {
 		return fail(accesskey.ShownError(err))
 	}
+	r.setupUp = container
 	end(event.StateSucceeded, -1)
 	for _, c := range commands {
 		begin(event.StepSetup, c.Name)
@@ -322,6 +333,71 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 		}
 		end(event.StateSucceeded, 0)
 	}
+	return nil
+}
+
+// RemoveSetup removes the run's setup container and returns once it is gone: every
+// process in it has ended, and the name qory-setup no longer resolves. Call it between
+// [Run.Setup] and the first [Run.Join], outside every host step. With it, a service that
+// a setup command started does not run beside the agent, so a join with
+// SessionSpec.WorkspaceReadOnly has no process in the run's containers that can write
+// the workspace, and a request to qory-setup fails. What the setup commands wrote in the
+// working folder stays. The run's entry among the walled runs still going lists the
+// setup container's places until the run closes, and a settings file in them still stops
+// a join, because a setup command may have written it. [Run.Setup] does not run again:
+// it runs once per run.
+//
+// In a run with no setup container RemoveSetup returns nil and writes nothing, so a
+// caller needs no condition: a run with no wall, a run whose setup container did not
+// start, and a run whose setup container RemoveSetup removed already.
+//
+// RemoveSetup writes one step, numbered on from the run's last step: the wall step
+// "remove the setup container", which ends succeeded with -1. A run whose setup failed
+// keeps its failure: RemoveSetup removes the container, and still no session joins.
+//
+// An error before the step means nothing is removed and nothing is written: a session of
+// the run is running or joined it, a host step is open, or the run is closed. A removal
+// that fails ends the step failed, or cancelled when ctx ended, with -1, after its line,
+// and is the error. The setup container may then still run, so stop the run before the
+// join: no session joins the run after it, and [Run.Close] tries the removal again. The
+// run's masker replaces the run's secrets in the error, as in Open's.
+func (r *Run) RemoveSetup(ctx context.Context) (err error) {
+	defer func() { err = maskError(r.masker, err) }()
+	if !r.joining.TryLock() {
+		return errors.New("Remove the setup container before the first join: a session of the run is still running.")
+	}
+	defer r.joining.Unlock()
+	switch {
+	case r.closed:
+		return errors.New("Remove the setup container before the close: the run is closed.")
+	case r.numbered > 0:
+		return fmt.Errorf("Remove the setup container before the first join: session %d joined the run.", r.numbered)
+	case r.hostStep != nil:
+		return fmt.Errorf("Exit step %d before you remove the setup container: one host step is open at a time.", r.hostStep.n)
+	case r.setupUp == nil:
+		return nil
+	}
+	step := r.startStep(event.StepWall, "remove the setup container")
+	// A panic that a caller recovers leaves no step open, and no session joins.
+	defer func() {
+		if !step.exited {
+			r.setupFailed = step.n
+			step.end(event.StateFailed, -1)
+		}
+	}()
+	if err := r.setupUp.RemoveSetup(ctx); err != nil {
+		err = fmt.Errorf("Close the run: the setup container may still run, so no session can join: %w", accesskey.ShownError(err))
+		r.writeLog("stderr", 0, step.n, failureLine(err))
+		state := event.StateFailed
+		if ctx.Err() != nil {
+			state = event.StateCancelled
+		}
+		r.setupFailed = step.n
+		step.end(state, -1)
+		return err
+	}
+	r.setupUp = nil
+	step.end(event.StateSucceeded, -1)
 	return nil
 }
 

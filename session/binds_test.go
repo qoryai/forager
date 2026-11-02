@@ -473,8 +473,8 @@ func TestABindInsideAnotherWalledRunsIsNoRun(t *testing.T) {
 // TestAReadOnlyWorkspaceOverAnotherWalledRunsBindIsNoRun pins mount_shared_with_run for
 // a workspace with SessionSpec.WorkspaceReadOnly that holds a bind of a walled run still
 // going: the agent sees the workspace read-only, so the text names who of this run
-// could change the other run's bind: the host steps, and the setup container too when
-// the run has one.
+// could change the other run's bind: the host steps, and the setup container too while
+// it runs.
 func TestAReadOnlyWorkspaceOverAnotherWalledRunsBindIsNoRun(t *testing.T) {
 	root := t.TempDir()
 	sub := mkdirs(t, filepath.Join(root, "sub"))
@@ -509,6 +509,24 @@ func TestAReadOnlyWorkspaceOverAnotherWalledRunsBindIsNoRun(t *testing.T) {
 		}
 		res, err := r.Join(ctx, sp.SessionSpec)
 		check(t, err, "this run's setup container or host steps")
+		r.Close(ctx, outcomeOf(res, err))
+	})
+	t.Run("a setup container that RemoveSetup removed", func(t *testing.T) {
+		sp := walledSpec(t, &setupWall{})
+		sp.Dir, sp.WorkspaceReadOnly = root, true
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Setup(ctx, session.SetupSpec{Dir: t.TempDir(), Commands: twoCommands[:1]}); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.RemoveSetup(ctx); err != nil {
+			t.Fatal(err)
+		}
+		res, err := r.Join(ctx, sp.SessionSpec)
+		check(t, err, "this run's host steps")
 		r.Close(ctx, outcomeOf(res, err))
 	})
 }

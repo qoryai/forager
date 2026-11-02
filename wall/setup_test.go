@@ -76,6 +76,58 @@ func TestDockerSetupCommandLines(t *testing.T) {
 	golden(t, "setup", lines+"\n\nsetup environment:\n"+string(env))
 }
 
+// TestDockerRemoveSetup pins the removal of the setup container: the one command is
+// docker rm --force --volumes with the container's name, Close does not run it again
+// and works, and a setup container that is gone already is not an error. A removal that
+// fails returns docker's error, and Close then runs the command again.
+func TestDockerRemoveSetup(t *testing.T) {
+	ctx := context.Background()
+	rm := "docker rm --force --volumes qory-" + runID + "-setup"
+	const noSuch = "Error response from daemon: No such container: qory-x-setup"
+	for _, c := range []struct {
+		name, failOut, wantErr string
+		fail                   string
+		atClose                int
+	}{
+		{name: "removed", atClose: 0},
+		{name: "gone already", fail: rm, failOut: noSuch, atClose: 0},
+		{name: "fails", fail: rm, atClose: 1,
+			wantErr: "wall docker: docker rm --force: exit status 1: Error response from daemon: told to fail"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, HoldArgs: []string{"run", "hold"}, sys: rec}
+			enc, err := d.Prepare(ctx, Request{RunID: runID, Image: "example.com/agent:1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := enc.(*dockerEnclosure)
+			l := setupLaunch()
+			l.Proxy = "172.30.0.1:50123"
+			if err := e.StartSetup(ctx, l); err != nil {
+				t.Fatal(err)
+			}
+			before := len(rec.lines)
+			rec.fail, rec.failOut = c.fail, c.failOut
+			err = e.RemoveSetup(ctx)
+			if (err == nil) != (c.wantErr == "") || (err != nil && err.Error() != c.wantErr) {
+				t.Errorf("RemoveSetup: %v, want %q", err, c.wantErr)
+			}
+			if got := rec.lines[before:]; len(got) != 1 || got[0] != rm {
+				t.Errorf("the commands %q, want %q alone", got, rm)
+			}
+			rec.fail, rec.failOut = "", ""
+			before = len(rec.lines)
+			if err := e.Close(ctx); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+			if got := strings.Count(strings.Join(rec.lines[before:], "\n")+"\n", rm+"\n"); got != c.atClose {
+				t.Errorf("Close ran %q %d times, want %d:\n%s", rm, got, c.atClose, strings.Join(rec.lines[before:], "\n"))
+			}
+		})
+	}
+}
+
 // TestDockerSetupRefuses pins what stops the setup container before anything starts: no
 // HoldArgs, and a second start; and a command before the start.
 func TestDockerSetupRefuses(t *testing.T) {

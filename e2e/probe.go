@@ -113,11 +113,17 @@ type report struct {
 }
 
 // The files of the case of a workspace bound read-only: the setup container writes
-// setupFile, and the agent tries to write agentFile.
+// setupFile, and the agent tries to write agentFile. A process in the setup container
+// adds a line to writerFile every second until the container goes.
 const (
-	setupFile = "setup.txt"
-	agentFile = "agent.txt"
+	setupFile  = "setup.txt"
+	agentFile  = "agent.txt"
+	writerFile = "writer.txt"
 )
+
+// writerWait is how long the probe waits between its two reads of the size of the file
+// at PROBE_WRITER_FILE: longer than two of the writer's intervals.
+const writerWait = 2500 * time.Millisecond
 
 // readOnlyReport is what the probe found in a workspace bound read-only: the text of
 // setupFile or why it could not read it, the exit status and standard error of a shell
@@ -126,7 +132,10 @@ const (
 // of a privileged one that first tries to make the workspace writable: PrivRemount is
 // the result of a bind-remount without the read-only flag, and PrivSetattr that of a
 // mount_setattr that clears it, each "ok" or the error; empty when the call did not
-// run.
+// run. SetupAddrs and SetupLookupErr are what a lookup of the host of PROBE_SETUP_ADDR
+// returned, and SetupDialErr why a connection to that address did not open, or empty
+// when it opened. WriterBefore and WriterAfter are the sizes of the file at
+// PROBE_WRITER_FILE, read writerWait apart, -1 for no such file.
 type readOnlyReport struct {
 	Setup       string `json:"setup"`
 	SetupErr    string `json:"setup_err"`
@@ -138,6 +147,12 @@ type readOnlyReport struct {
 	PrivOutput  string `json:"priv_output"`
 	PrivRemount string `json:"priv_remount"`
 	PrivSetattr string `json:"priv_setattr"`
+
+	SetupAddrs     []string `json:"setup_addrs"`
+	SetupLookupErr string   `json:"setup_lookup_err"`
+	SetupDialErr   string   `json:"setup_dial_err"`
+	WriterBefore   int64    `json:"writer_before"`
+	WriterAfter    int64    `json:"writer_after"`
 }
 
 // The prefixes of the lines with which a privileged container the agent started
@@ -155,8 +170,33 @@ func callResult(err error) string {
 	return "ok"
 }
 
+// fileSize is the size of the file at p, or -1 when it has none.
+func fileSize(p string) int64 {
+	info, err := os.Stat(p)
+	if err != nil {
+		return -1
+	}
+	return info.Size()
+}
+
+// reach is a setup command: it exits 0 once the service at the URL it is given returns
+// setupServiceLine, asked with no proxy.
+func reach(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "reach: give one URL")
+		return 2
+	}
+	if got := direct(args[0]); got != setupServiceLine {
+		fmt.Fprintln(os.Stderr, "reach:", got)
+		return 1
+	}
+	return 0
+}
+
 // probeReadOnly reads setupFile and tries to write agentFile, with the image's shell and,
-// when the enclosure has a Docker, from a container the agent starts.
+// when the enclosure has a Docker, from a container the agent starts. With
+// PROBE_SETUP_ADDR it looks the address up and connects to it, and with
+// PROBE_WRITER_FILE it reads that file's size twice.
 func probeReadOnly() *readOnlyReport {
 	var r readOnlyReport
 	if b, err := os.ReadFile(setupFile); err != nil {
@@ -180,6 +220,20 @@ func probeReadOnly() *readOnlyReport {
 				r.PrivSetattr = rest
 			}
 		}
+	}
+	if addr := os.Getenv("PROBE_SETUP_ADDR"); addr != "" {
+		host, _, _ := net.SplitHostPort(addr)
+		addrs, err := net.LookupHost(host)
+		r.SetupAddrs = addrs
+		if err != nil {
+			r.SetupLookupErr = err.Error()
+		}
+		r.SetupDialErr = dial(addr)
+	}
+	if f := os.Getenv("PROBE_WRITER_FILE"); f != "" {
+		r.WriterBefore = fileSize(f)
+		time.Sleep(writerWait)
+		r.WriterAfter = fileSize(f)
 	}
 	return &r
 }

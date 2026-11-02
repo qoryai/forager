@@ -870,6 +870,13 @@ err = run.Setup(ctx, session.SetupSpec{
 	Limits:       wall.Limits{Memory: "4g"},      // the setup container's limits, as the agent's
 })
 var failed *session.SetupError // a command exited otherwise than 0: no session joins the run
+if err != nil {
+	return err
+}
+// For a read run: no process of the setup container runs beside the agent.
+if err := run.RemoveSetup(ctx); err != nil {
+	return err                                    // close the run: no session joins it
+}
 ```
 
 - `Setup` writes the `image` step when no step fetched the image yet, the `wall` step
@@ -888,10 +895,18 @@ var failed *session.SetupError // a command exited otherwise than 0: no session 
   (`variable_reserved`), and a name of `denied-variables.json`, such as `LD_PRELOAD`; for
   a credential's name of that list, such as `GH_TOKEN`, the error starts with `Move
   GH_TOKEN to the gateway's credentials in forager.yaml`.
-- It runs until the run closes. The agent reaches a service that setup starts by the
-  name `qory-setup`, such as `qory-setup:5432`. Send a service's output to a file, so
-  its command returns.
-- Packages that setup installs outside the working folder stay in the setup container.
+- It runs until the run closes, unless you call `RemoveSetup`. While it runs, the agent
+  reaches a service that setup starts by the name `qory-setup`, such as
+  `qory-setup:5432`, and that service can write the working folder. Send a service's
+  output to a file, so its command returns.
+- `RemoveSetup` removes the setup container and returns once it is gone. Call it after
+  `Setup` and before the first `Join`, as for a join with `WorkspaceReadOnly`. After it
+  the name `qory-setup` no longer resolves and no service of the setup container remains,
+  so a connection to `qory-setup:5432` fails. What setup wrote in the working folder
+  stays. It writes the `wall` step `remove the setup container`. In a run with no setup
+  container it returns nil and writes no step, so you need no condition around it.
+- Packages that setup installs outside the working folder stay in the setup container,
+  and go with it.
 
 The setup container has no Docker daemon, so a setup command that calls docker fails
 with Docker's error in its step's log. With wall.setup: inside, the setup commands run

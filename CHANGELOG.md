@@ -1274,9 +1274,24 @@ release may change what an existing document does, and says so under Upgrading.
 - A wall outside Forager: the session calls `Prepare` in `session.Open`, once per run,
   and `Wrap` once per session on the one enclosure `Prepare` returned, with `Unwrap`,
   when the enclosure has it, at the session's end.
+- Add `RemoveSetup(ctx context.Context) error` to an enclosure outside Forager that has
+  `StartSetup` and `ExecSetup`. Without it `Run.Setup` returns `Run the setup behind the
+  Docker wall: the <name> wall starts no setup container.` The method returns nil only
+  once the setup container is gone and every process in it has ended.
 
 #### Added
 
+- `(*session.Run).RemoveSetup`: between `Run.Setup` and the first `Join`, it removes the
+  setup container with `docker rm --force --volumes` and returns once the container is
+  gone, so no process of it runs beside the agent and the name `qory-setup` no longer
+  resolves. Call it for a read run, so that no process in the run's containers can write
+  the workspace that `SessionSpec.WorkspaceReadOnly` binds read-only for the agent. It
+  writes the `wall` step `remove the setup container`, returns nil and writes nothing
+  in a run with no setup container or a second time, and returns an error that starts
+  with the fix, with nothing removed, while a session runs, after a session joined,
+  during a host step and after the close. A removal that fails ends the step `failed`,
+  and no session joins the run. A run that does not call it keeps the setup container
+  until the run closes, as before.
 - `wall.Request.Pull` and `wall.Puller`: before a run uses an image by reference, the
   session checks its manifest at the registry with the run's credentials, through the
   run's proxy, with or without an engine proxy; a 404 is `image_missing`, and any other

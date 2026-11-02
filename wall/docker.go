@@ -61,12 +61,12 @@ const (
 //
 // A run gets two networks and the relay's container when it opens, the agent's
 // container for each session, and, with setup outside, the setup container, which runs
-// until the run closes. When the relay starts from another image, the wall reads the
-// run's image's files out of a container of that image, never started and on no
-// network. The agent's container and the setup container are on a network created with
-// --internal and on nothing else, so they have no route out and their resolver knows
-// only that network; the network's bridge gets no address, so the engine's host is not
-// on it either. For any image the network has no IPv6 subnet, and the agent's container
+// until the session removes it or the run closes. When the relay starts from another
+// image, the wall reads the run's image's files out of a container of that image, never
+// started and on no network. The agent's container and the setup container are on a
+// network created with --internal and on nothing else, so they have no route out and
+// their resolver knows only that network; the network's bridge gets no address, so the
+// engine's host is not on it either. For any image the network has no IPv6 subnet, and the agent's container
 // starts with no IPv6 address but loopback's. With nested Docker, which needs the
 // docker command and Docker Engine 28 or later, the network has an IPv6 subnet, the
 // engine's choice, in Docker's isolated gateway mode: the bridge has IPv6 off and no
@@ -90,7 +90,7 @@ type Docker struct {
 	// image is refused. Experimental: see contracts/forager/v1/README.md §The wall.
 	NestArgs []string
 	// HoldArgs are the arguments that make Helper run [Hold], the entrypoint of a run's
-	// setup container, which keeps the container running until the run closes. Without
+	// setup container, which keeps the container running until it is removed. Without
 	// them the setup container does not start.
 	HoldArgs []string
 	// CAEnv names the variables that point a program at [BundlePath] when the run has
@@ -1202,9 +1202,17 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 // that is gone already, as docker run --rm removes one that exits, is not an error.
 // Everything else the enclosure made stays until Close.
 func (e *dockerEnclosure) Unwrap(ctx context.Context) error {
+	return e.removeContainer(ctx, e.agent())
+}
+
+// removeContainer removes one container of e.made with docker rm --force --volumes,
+// within closeWait, and returns once the engine removed it: the engine kills what still
+// runs in it. A container that is gone already is not an error. When the command fails
+// the entry stays in e.made, so Close tries again.
+func (e *dockerEnclosure) removeContainer(ctx context.Context, name string) error {
 	ctx, cancel := context.WithTimeout(ctx, closeWait)
 	defer cancel()
-	rm := []string{"rm", "--force", "--volumes", e.agent()}
+	rm := []string{"rm", "--force", "--volumes", name}
 	if err := e.remove(ctx, rm); err != nil {
 		return err
 	}
@@ -1218,11 +1226,11 @@ func (e *dockerEnclosure) Unwrap(ctx context.Context) error {
 // their Targets, the workspace as its working directory, the helper and, with l.CA, the
 // bundle read-only. Its environment, through a file, is the relay's proxy variables,
 // with l.CA the variables that point a program at the bundle, and then l.Env. Its
-// entrypoint is the helper with HoldArgs, [Hold], so it runs until Close removes it. It
-// starts the relay first when it has not started, [dockerEnclosure.StartRelay], and
-// runs the run's first use of the enclosure when no container of the run's image ran
-// it, as Wrap does. l.Command, l.Args, l.Interactive and l.Socket are not read: the
-// setup container gets no hook socket.
+// entrypoint is the helper with HoldArgs, [Hold], so it runs until
+// [dockerEnclosure.RemoveSetup] or Close removes it. It starts the relay first when it
+// has not started, [dockerEnclosure.StartRelay], and runs the run's first use of the
+// enclosure when no container of the run's image ran it, as Wrap does. l.Command, l.Args,
+// l.Interactive and l.Socket are not read: the setup container gets no hook socket.
 func (e *dockerEnclosure) StartSetup(ctx context.Context, l Launch) error {
 	if len(e.d.HoldArgs) == 0 {
 		return errors.New("wall docker: setup needs the helper's arguments that keep the setup container running, HoldArgs")
@@ -1334,6 +1342,15 @@ func (e *dockerEnclosure) setupRuns(ctx context.Context) error {
 	}
 	out, _ := e.docker(ctx, "logs", e.setup())
 	return fmt.Errorf("wall docker: the setup container stopped: %s", accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
+}
+
+// RemoveSetup removes the setup container within closeWait, with Close's docker rm
+// --force --volumes, and returns once the engine removed it: every process in it has
+// ended, and the name qory-setup no longer resolves on the internal network. A setup
+// container that is gone already is not an error, and one that remains stays for Close
+// to remove.
+func (e *dockerEnclosure) RemoveSetup(ctx context.Context) error {
+	return e.removeContainer(ctx, e.setup())
 }
 
 // Binds lists the adapter's own binds before an enclosure is prepared: the helper,

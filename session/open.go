@@ -116,9 +116,12 @@ type Run struct {
 	wallFwd    *forwarder
 	relayToken string
 	// setupFirst and setupLast are the numbers of the first and the last step of
-	// [Run.Setup], 0 until it wrote one, and setupFailed the number of its step that
-	// failed, 0 for none: no session joins after it.
+	// [Run.Setup], 0 until it wrote one, and setupFailed the number of the step of
+	// [Run.Setup] or [Run.RemoveSetup] that failed, 0 for none: no session joins after it.
 	setupFirst, setupLast, setupFailed int
+	// setupUp is the run's setup container from its start until [Run.RemoveSetup]
+	// removes it, nil otherwise.
+	setupUp setupContainer
 }
 
 // Open opens a run at its gateway and returns it once dev.qory.run.started and the
@@ -834,7 +837,8 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 		r.hostStep.end(event.StateCancelled, -1)
 	}
 	// The run's wall goes before run.exited: its containers, the setup container's
-	// among them, its networks and its private directory, then the run's forwarder.
+	// among them unless RemoveSetup removed it, its networks and its private directory,
+	// then the run's forwarder.
 	r.closeWall(context.WithoutCancel(ctx))
 	// Nothing of a reload goes after run.exited, and the heartbeats stop before it.
 	r.reload.stop()
