@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -48,6 +49,9 @@ const (
 	// beyond a burst of as many. Qory Apiary's bucket for one key refills 50 a second, so
 	// a run's start on the same key keeps its tokens.
 	RunAPIGatewayRate = 20
+	// RunAPIBodyBudget is the most bytes of POST artifacts bodies one gateway reads at
+	// once. POST verdict is outside it: at 64 KiB a body, it stays small.
+	RunAPIBodyBudget int64 = 512 << 20
 	// runAPIQueueWait is how long a request waits for a send slot, and for a token of the
 	// gateway's bucket.
 	runAPIQueueWait = 5 * time.Second
@@ -55,37 +59,50 @@ const (
 	runAPIFileWait  = 10 * time.Minute
 )
 
-// maxRunAPIShown is the most bytes of a request's method a decision contains. A
-// decision's path is one of the five shapes, under [maxRunAPITarget].
-const maxRunAPIShown = 2048
-
-// maxRunAPITarget is the longest request target the route takes, as sent.
+// maxRunAPITarget is the longest request target the route takes, as sent. Escaping can
+// lengthen a target: [maxRunAPIPath] bounds what Qory Apiary gets.
 const maxRunAPITarget = 4 << 10
 
-// runAPIOutside is the path of the decision of a request outside the five shapes, whose
-// path is the caller's choice.
+// maxRunAPIPath is the longest path the route sends after the run's id, escaped. Raw
+// UTF-8 or a semicolon grows three times or more in escaping, and a decision's path is
+// under the same bound.
+const maxRunAPIPath = 1 << 10
+
+// runAPIOutside is the path of the decision of a request outside the five shapes, and
+// the method of a decision of a method that is not a standard one: the caller chose both.
 const runAPIOutside = "outside"
 
 // runAPIHeaders are the headers of Qory Apiary's answer the route passes, beside
 // Content-Length.
 var runAPIHeaders = []string{"Content-Type", "Content-Disposition", "X-Content-Type-Options", "Content-Security-Policy", "Retry-After"}
 
-// errRunAPIBusy is the error of a request that waited [runAPIQueueWait] for a send slot
-// or a token of the gateway's bucket and got none.
-var errRunAPIBusy = errors.New("the gateway's run API limits refused the request")
+// The errors of a request that a limit of the gateway keeps from its send.
+var (
+	// errRunAPIBusy is the error of a request that got no send slot in [runAPIQueueWait],
+	// or whose token of the gateway's bucket is further away than that.
+	errRunAPIBusy = errors.New("a limit of the gateway's run API route has no room")
+	// errRunAPIWaiting is the error of a request whose run has one request waiting for a
+	// token of the gateway's bucket.
+	errRunAPIWaiting = errors.New("the run has a request waiting for a token of the gateway's bucket")
+	// errRunAPIBudget is the read error of a body that would pass [RunAPIBodyBudget].
+	errRunAPIBudget = errors.New("the body would pass the gateway's budget of bodies")
+)
 
 // RunAPILimits are the limits of the route that one gateway shares across its runs: the
-// send slots of POST artifacts and the bucket of signed requests. The zero value is
-// ready to use.
+// send slots of POST artifacts, the bucket of signed requests and the budget of bodies.
+// The zero value is ready to use.
 type RunAPILimits struct {
-	// now, sleep and queueWait, when set, replace the clock, the timer and the 5 seconds
-	// a request waits. Tests set them.
+	// now, sleep, queueWait and budget, when set, replace the clock, the timer, the 5
+	// seconds a request waits and [RunAPIBodyBudget]. Tests set them.
 	now       func() time.Time
 	sleep     func(ctx context.Context, d time.Duration) bool
 	queueWait time.Duration
+	budget    int64
 
 	once  sync.Once
 	slots chan struct{}
+	// used is the bytes of POST artifacts bodies read and not yet given back.
+	used atomic.Int64
 
 	mu sync.Mutex
 	// tokens is below zero while requests wait: each waiting request took one ahead, so
@@ -107,6 +124,9 @@ func (l *RunAPILimits) start() {
 		}
 		if l.queueWait == 0 {
 			l.queueWait = runAPIQueueWait
+		}
+		if l.budget == 0 {
+			l.budget = RunAPIBodyBudget
 		}
 		l.at = l.now()
 	})
@@ -137,12 +157,14 @@ func (l *RunAPILimits) enter(ctx context.Context) error {
 // leave gives one send slot back.
 func (l *RunAPILimits) leave() { <-l.slots }
 
-// take takes one token of the gateway's bucket, which holds [RunAPIGatewayRate] tokens at
-// most and gains that many a second, and waits for its token up to the queue wait. It
-// returns [errRunAPIBusy] when the wait would be longer, at once, or ctx's error.
-func (l *RunAPILimits) take(ctx context.Context) error {
+// reserve takes one token of the gateway's bucket, which holds [RunAPIGatewayRate] tokens
+// at most and gains that many a second, and returns how long to wait for it. A wait over
+// the queue wait is [errRunAPIBusy], and takes nothing. For a wait, place takes the
+// run's place in the queue, and false is [errRunAPIWaiting], which takes nothing either.
+func (l *RunAPILimits) reserve(place func() bool) (time.Duration, error) {
 	l.start()
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	now := l.now()
 	if d := now.Sub(l.at); d > 0 {
 		l.tokens = min(l.tokens+d.Seconds()*RunAPIGatewayRate, RunAPIGatewayRate)
@@ -153,19 +175,55 @@ func (l *RunAPILimits) take(ctx context.Context) error {
 		wait = 0
 	}
 	if wait > l.queueWait {
-		l.mu.Unlock()
-		return errRunAPIBusy
+		return 0, errRunAPIBusy
+	}
+	if wait > 0 && !place() {
+		return 0, errRunAPIWaiting
 	}
 	l.tokens--
-	l.mu.Unlock()
-	if wait > 0 && !l.sleep(ctx, wait) {
-		l.mu.Lock()
-		l.tokens = min(l.tokens+1, RunAPIGatewayRate)
-		l.mu.Unlock()
-		return ctx.Err()
-	}
-	return nil
+	return wait, nil
 }
+
+// giveBack returns the token of a request that stopped waiting for it.
+func (l *RunAPILimits) giveBack() {
+	l.mu.Lock()
+	l.tokens = min(l.tokens+1, RunAPIGatewayRate)
+	l.mu.Unlock()
+}
+
+// charge counts n more bytes of bodies, and returns false, counting nothing, when they
+// would pass the budget.
+func (l *RunAPILimits) charge(n int64) bool {
+	l.start()
+	if l.used.Add(n) > l.budget {
+		l.used.Add(-n)
+		return false
+	}
+	return true
+}
+
+// chargedBody reads a POST artifacts body and charges [RunAPILimits] for each byte as it
+// arrives, so a head with a Content-Length and no bytes costs nothing. A read that would
+// pass the budget ends in [errRunAPIBudget]. release gives every byte back.
+type chargedBody struct {
+	r       io.Reader
+	limits  *RunAPILimits
+	charged int64
+}
+
+func (b *chargedBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if n > 0 {
+		if !b.limits.charge(int64(n)) {
+			return 0, errRunAPIBudget
+		}
+		b.charged += int64(n)
+	}
+	return n, err
+}
+
+// release gives back what the body was charged.
+func (b *chargedBody) release() { b.limits.used.Add(-b.charged) }
 
 // RunAPI is the route of one run's proxy to Qory Apiary's run API: the run's id, how a
 // request is sent, signed, and the gateway's limits. The gateway makes one for a run
@@ -186,8 +244,11 @@ type RunAPI struct {
 	mu       sync.Mutex
 	inFlight int
 	posting  bool
-	tokens   float64
-	at       time.Time
+	// waiting is true while a request of the run waits for a token of the gateway's
+	// bucket. One place per run keeps a few runs from filling the bucket's queue.
+	waiting bool
+	tokens  float64
+	at      time.Time
 }
 
 // SetRunAPI gives p the route a. The gateway calls it once, after [New] and before the
@@ -222,8 +283,9 @@ type runAPITarget struct {
 	// post is true for a POST, and limit is its largest body.
 	post  bool
 	limit int64
-	// slot is true for a request that takes a send slot: POST artifacts.
-	slot bool
+	// artifacts is true for POST artifacts, which takes a send slot and is charged to the
+	// gateway's budget of bodies.
+	artifacts bool
 	// file is true for a request for a file of an artifact's version.
 	file bool
 }
@@ -249,8 +311,8 @@ func shownSegment(s string) string {
 // target reads r as one of the five shapes of the route, and reports whether it is one:
 // GET work-item, GET artifacts, GET artifacts/<version_id>/files/<filename>, POST
 // artifacts and POST verdict, under /v1/runs/ and the run's id. A request outside them
-// reaches nothing: a target over [maxRunAPITarget], a query, a fragment, user
-// information, a scheme other than http, a port other than 80, a segment that fails
+// reaches nothing: a target over [maxRunAPITarget], a path over [maxRunAPIPath] once
+// escaped, a query, a fragment, user information, a scheme other than http, a port other than 80, a segment that fails
 // [segmentClean], another run's id, another method, and an HTTP/1.0 request that reaches
 // the proxy, which has no way to end a file's stream with a read error. A forwarder
 // without a wall sends every plain request as HTTP/1.1, so only a walled program's
@@ -291,12 +353,15 @@ func (a *RunAPI) target(r *http.Request) (runAPITarget, bool) {
 	case len(parts) == 1 && parts[0] == "artifacts" && get:
 		return runAPITarget{path: "/artifacts", shown: "/artifacts"}, true
 	case len(parts) == 1 && parts[0] == "artifacts" && post:
-		return runAPITarget{path: "/artifacts", shown: "/artifacts", post: true, limit: maxRunAPIArtifacts, slot: true}, true
+		return runAPITarget{path: "/artifacts", shown: "/artifacts", post: true, limit: maxRunAPIArtifacts, artifacts: true}, true
 	case len(parts) == 1 && parts[0] == "verdict" && post:
 		return runAPITarget{path: "/verdict", shown: "/verdict", post: true, limit: maxRunAPIVerdict}, true
 	case len(parts) == 4 && parts[0] == "artifacts" && parts[2] == "files" && get:
-		return runAPITarget{path: "/artifacts/" + url.PathEscape(parts[1]) + "/files/" + url.PathEscape(parts[3]),
-			shown: "/artifacts/" + shownSegment(parts[1]) + "/files/" + shownSegment(parts[3]), file: true}, true
+		path := "/artifacts/" + url.PathEscape(parts[1]) + "/files/" + url.PathEscape(parts[3])
+		if len(path) > maxRunAPIPath {
+			return runAPITarget{}, false
+		}
+		return runAPITarget{path: path, shown: "/artifacts/" + shownSegment(parts[1]) + "/files/" + shownSegment(parts[3]), file: true}, true
 	}
 	return runAPITarget{}, false
 }
@@ -357,18 +422,57 @@ func (a *RunAPI) leavePost() {
 	a.mu.Unlock()
 }
 
+// enterQueue takes the run's one place among the requests that wait for a token of the
+// gateway's bucket, and returns false when another request of the run has it.
+func (a *RunAPI) enterQueue() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.waiting {
+		return false
+	}
+	a.waiting = true
+	return true
+}
+
+// leaveQueue gives the run's place in the queue back.
+func (a *RunAPI) leaveQueue() {
+	a.mu.Lock()
+	a.waiting = false
+	a.mu.Unlock()
+}
+
+// take takes a token of the gateway's bucket, and waits for it up to the queue wait,
+// with the run's one place in the queue. It returns the errors of
+// [RunAPILimits.reserve], or ctx's error for a wait that ended early.
+func (a *RunAPI) take(ctx context.Context) error {
+	wait, err := a.Limits.reserve(a.enterQueue)
+	if err != nil || wait == 0 {
+		return err
+	}
+	defer a.leaveQueue()
+	if !a.Limits.sleep(ctx, wait) {
+		a.Limits.giveBack()
+		return ctx.Err()
+	}
+	return nil
+}
+
 // send signs and sends one request, once the gateway's limits allow it: POST artifacts
 // holds a send slot until its answer is read, which [RunAPI.Send] does for a POST, and
 // every request takes a token of the gateway's bucket. sent is false when nothing was
-// signed: err is [errRunAPIBusy] when a limit had no room, or ctx's error.
+// signed: err is [errRunAPIBusy] or [errRunAPIWaiting] when a limit had no room, or ctx's
+// error, for a wait that ended early or a context that ended after it.
 func (a *RunAPI) send(ctx context.Context, method string, t runAPITarget, body []byte) (ans *server.RunAPIAnswer, sent bool, err error) {
-	if t.slot {
+	if t.artifacts {
 		if err := a.Limits.enter(ctx); err != nil {
 			return nil, false, err
 		}
 		defer a.Limits.leave()
 	}
-	if err := a.Limits.take(ctx); err != nil {
+	if err := a.take(ctx); err != nil {
+		return nil, false, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
 	ans, err = a.Send(ctx, method, t.path, body, t.file)
@@ -426,13 +530,27 @@ func tooLarge(limit int64) string {
 	return fmt.Sprintf("Shrink the body to at most %d bytes: the run API takes no more on this path.", limit)
 }
 
+// The texts of the gateway's limits that have no number to fill in.
+const (
+	runAPIWaiting    = "Retry in 1 second: the run has a run API request waiting for the gateway's rate limit, the most it may have."
+	runAPIBudgetFull = "Retry in 1 second: the gateway reads at most 512 MiB of artifacts bodies at once, and this body would pass that."
+)
+
 // runAPIBusy is the text of a request that found the gateway's limits full.
 func runAPIBusy() string {
 	return fmt.Sprintf("Retry in 1 second: the gateway signs at most %d run API requests a second and sends %d artifacts at once.", RunAPIGatewayRate, RunAPIArtifactSends)
 }
 
-// shownMethod is a method as a decision contains it, at most [maxRunAPIShown] bytes.
-func shownMethod(s string) string { return s[:min(len(s), maxRunAPIShown)] }
+// shownMethod is a method as a decision contains it: a standard method, and
+// [runAPIOutside] for any other, which the caller wrote.
+func shownMethod(s string) string {
+	switch s {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace:
+		return s
+	}
+	return runAPIOutside
+}
 
 // serveRunAPI serves one request of the route: it reads the five shapes
 // ([RunAPI.target]), takes a token of the run's bucket, checks the limits, and sends the
@@ -503,12 +621,25 @@ func (p *Proxy) serveRunAPI(w http.ResponseWriter, r *http.Request, a *RunAPI) {
 	var body []byte
 	if t.post {
 		rc.SetReadDeadline(deadline)
+		src := io.Reader(http.MaxBytesReader(w, r.Body, t.limit))
+		if t.artifacts {
+			charged := &chargedBody{r: src, limits: a.Limits}
+			defer charged.release()
+			src = charged
+		}
 		var err error
-		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, t.limit))
+		body, err = io.ReadAll(src)
 		var over *http.MaxBytesError
 		switch {
 		case errors.As(err, &over):
 			refuse(http.StatusRequestEntityTooLarge, "payload_too_large", tooLarge(t.limit))
+			return
+		case errors.Is(err, errRunAPIBudget):
+			// The connection cannot serve another request: part of the body is unread. The
+			// server reads the rest when the handler returns, up to this deadline.
+			w.Header().Set("Connection", "close")
+			rc.SetReadDeadline(time.Now())
+			refuse(http.StatusTooManyRequests, "rate_limited", runAPIBudgetFull)
 			return
 		case err != nil:
 			// The connection cannot serve another request: part of the body is unread.
@@ -520,11 +651,14 @@ func (p *Proxy) serveRunAPI(w http.ResponseWriter, r *http.Request, a *RunAPI) {
 	}
 	ans, sent, err := a.send(ctx, r.Method, t, body)
 	if !sent {
-		if errors.Is(err, errRunAPIBusy) {
+		switch {
+		case errors.Is(err, errRunAPIBusy):
 			refuse(http.StatusTooManyRequests, "rate_limited", runAPIBusy())
-			return
+		case errors.Is(err, errRunAPIWaiting):
+			refuse(http.StatusTooManyRequests, "rate_limited", runAPIWaiting)
+		default:
+			refuse(http.StatusServiceUnavailable, "unavailable", runAPIUnavailable)
 		}
-		refuse(http.StatusServiceUnavailable, "unavailable", runAPIUnavailable)
 		return
 	}
 	d.Allowed = true

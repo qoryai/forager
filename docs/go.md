@@ -518,7 +518,7 @@ follows no redirect.
 `RunAPI` returns an error that starts with the fix in a closed run and in a run with no
 control plane. A request of the client fails once the run is closed.
 
-Qory Apiary serves only a run of a work item; any other run gets `404` `not_found`.
+Qory Apiary serves only a run of a work item through a gateway's access key. Any other run gets a `404`, and a POST body over 64 KiB on a node's key gets `502` `answer_unverified`.
 
 Inside a session, read the same base URL from `session.EnvRunAPI`, `QORY_RUN_API`, and
 send the request through `HTTP_PROXY`. A setup container gets the variable too. Behind a
@@ -528,11 +528,18 @@ A file's `200` is chunked. Treat its bytes as unverified until the read ends cle
 file that fails its signed digest ends in a read error. The contract's README, §The run
 API, lists the five requests, each status and the limits.
 
-Plan the gateway's memory for the route: at most 32 MiB per run for a POST body, plus
-4 × 16 MiB per run for answers. Each run has 1 POST in flight, among its 4 requests in
-flight. A gateway signs 20 requests a second across its runs, with a burst of 20, and
-sends 8 `POST /artifacts` at once. The gateway reads an answer of at most 16 MiB, and a
-larger one is a `502` `answer_too_large`.
+Plan the gateway's memory for the route:
+
+- A budget of 512 MiB per gateway covers `POST /artifacts` bodies being read. A body
+  over the budget's room gets a `429` `rate_limited`, with nothing sent.
+- A POST body takes up to about 64 MiB per run while it signs: 32 MiB for the body and
+  32 MiB for the copy that `accesskey.Request.Message` makes.
+- Answers take up to 4 × 16 MiB per run.
+
+Each run has 1 POST in flight, among its 4 requests in flight, and 1 request waiting for
+a token of the gateway's rate limit. A gateway signs 20 requests a second across its
+runs, with a burst of 20, and sends 8 `POST /artifacts` at once. The gateway reads an
+answer of at most 16 MiB, and a larger one is a `502` `answer_too_large`.
 
 ### The engine proxy
 

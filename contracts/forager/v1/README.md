@@ -3725,7 +3725,7 @@ document:
 - `run_api`: the base URL of the run API for the run, the value of `QORY_RUN_API`,
   `http://run-api.qory.invalid/v1/runs/<run_id>` (§The run API). Present for a run with
   a control plane, on the local link and behind a separate gateway, and absent otherwise.
-  Qory Apiary serves only a run of a work item; any other run gets `404` `not_found`.
+  Qory Apiary serves only a run of a work item through a gateway's access key. Any other run gets a `404`, and a POST body over 64 KiB on a node's key gets `502` `answer_unverified`.
 
 **Joining a session.** The run answer opens the run; each session then joins it with a
 `POST` to `<run.url>/<run_id>/sessions`, the path of `run.url`, a slash, the `run_id`
@@ -4219,7 +4219,8 @@ The gateway decodes each segment of the path and escapes it again. It sends noth
 signs nothing for a request outside the five: another path of the run, such as `attach`,
 `outcome`, `reload` or `diagnostics`, the run's path with nothing after it, another
 run's id, another method, an HTTP/1.0 request that reaches the proxy, a target over
-4 KiB, a query, even an empty one, a fragment, a port other than 80, an empty segment,
+4 KiB as sent, a path after the run's id over 1 KiB once escaped, a query, even an empty
+one, a fragment, a port other than 80, an empty segment,
 `.` or `..`, or a segment that decodes to a slash, a backslash, a control character or
 bytes that are not UTF-8. The forwarder of a run with no wall sends every plain request
 as HTTP/1.1, so only a program behind a wall reaches the proxy with HTTP/1.0.
@@ -4244,8 +4245,8 @@ with the fix.
 | `413` | `payload_too_large` | a POST's body is over its limit; nothing is sent |
 | `429` | `rate_limited` | a limit below; with `Retry-After: 1` |
 | `502` | `answer_unverified` | the answer fails verification under the pin, an unsigned `401` among them; its body does not reach the caller |
-| `502` | `answer_too_large` | the answer is over the bound the gateway reads, 16 MiB for a `200` other than a file and 64 KiB for any other status; the gateway verifies nothing, and the body does not reach the caller |
-| `503` | `unavailable` | the gateway did not reach Qory Apiary, or the request ran out of time |
+| `502` | `answer_too_large` | the answer is over the bound the gateway reads, 16 MiB for a `200` other than a file and 64 KiB for any status other than `200` and `401`; a `401` over 64 KiB is `answer_unverified`. The gateway verifies nothing, and the body does not reach the caller |
+| `503` | `unavailable` | the gateway did not reach Qory Apiary, the caller cut a POST's body, or the request ran out of time |
 
 **A file.** A `200` of `GET /artifacts/<version_id>/files/<filename>` streams, chunked, with
 no `Content-Length`. Qory Apiary signs the digest of the file's bytes, so the gateway
@@ -4258,30 +4259,39 @@ bytes of a file as unverified until the read ends cleanly.
 1 of the 4 at most is a POST. A body that stalls holds that run's POST and nothing of any
 other run's. Each gateway, across its runs, signs 20 requests a second with a burst of 20,
 and sends 8 `POST /artifacts` at once, each from the end of its body's read to the end of
-the read of its answer. `POST /verdict` takes none of the 8. Every request also takes a
-token of the run's rate limit, and every request inside the five is a connection of the
-run (§The policy). A request over any of these limits gets the `429`, at once, except
-that a request waits up to 5 seconds for a token of the run's rate limit, for one of the
-8, and, in order, for a token of the gateway's 20 a second.
+the read of its answer. It also reads at most 512 MiB of `POST /artifacts` bodies at once.
+The 512 MiB count bytes as they arrive, until the request ends, so a head with a
+`Content-Length` and no bytes costs nothing, and a body that stalls costs what it sent. A
+read that would pass 512 MiB ends: the caller gets the `429` on a closed connection, and
+nothing is sent. `POST /verdict` takes none of the 8 and none of the 512 MiB. Every
+request also takes a token of the run's rate limit, and every request inside the five is
+a connection of the run (§The policy). A request over any of these limits gets the
+`429`, at once, except that a request waits up to 5 seconds for a token of the run's rate
+limit, for one of the 8, and, in order, for a token of the gateway's 20 a second. One
+request of a run at a time waits for a token of the gateway's 20: a second one gets the
+`429` at once.
 
 **The record.** Each request writes one `dev.qory.run.egress` with `method: HTTP`,
 `channel: run_api`, `request_method`, `path`, `status` and the rule `wall:run-api`, in
 either mode. `decision` is `allowed` for a request the gateway sent, and `denied` for a
 request it kept. For a request inside the five, `path` is `/v1/runs/<run_id>` and the
 path after it, each segment decoded and escaped again, with a phrase in place of a
-segment that decodes to a secret. For a request outside the five, `path` is the word
-`outside`, so no path the caller chose reaches the record. `status` is the status the
-caller got; for a file whose stream ended early, `502` when its bytes
+segment that decodes to a secret. A file request's `path` has the version id and the
+filename the caller chose, percent-escaped. For a request outside the five, `path` is
+the word `outside`, and no part of the path it sent reaches the record. `request_method`
+is the method when it is a standard one, and `outside` for any other. `status` is the
+status the caller got; for a file whose stream ended early, `502` when its bytes
 failed the digest and `503` otherwise. The event has no body and no header value. A
 `429` of the run's rate limit, which spends no token, is recorded at most once a second.
 The gateway writes no signature, key or answer into a record or a log line.
 
 **No tunnel.** A `CONNECT` to `run-api.qory.invalid` is denied with a `403` and, where the
-policy would allow it, the rule `wall:run-api`, in either mode, and a text that says to
-send plain `http://` requests to `QORY_RUN_API`. A proxy with no route, a run's stack
-proxy or the proxy of a run with no control plane, denies a plain request to the host
-the same way, with a text that says the proxy has no route to the run API. Where the
-policy would not allow the host, the denial is the proxy's ordinary one.
+policy would allow it, the rule `wall:run-api`, in either mode. On a proxy with the
+route, the `403`'s body contains the fix: send plain `http://` requests to
+`QORY_RUN_API`. A proxy with no route, a run's stack proxy or the proxy of a run with no
+control plane, denies a `CONNECT` or a plain request to the host the same way, and the
+`403`'s body contains `this proxy has no route to the run API`. Where the policy would
+not allow the host, the denial is the proxy's ordinary one.
 
 ## The runtime
 

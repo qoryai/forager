@@ -867,10 +867,12 @@ release may change what an existing document does, and says so under Upgrading.
   a plain `http://` request to `run-api.qory.invalid` reaches Qory Apiary, signed with
   the gateway's access key, so no key enters the run. Only five requests pass, and each
   request writes one `dev.qory.run.egress`, with the path `outside` for any other. A
-  run has 10 requests a second and 4 in flight, 1 of them a POST. A gateway signs 20
-  requests a second across its runs and sends 8 `POST /artifacts` at once. An answer
-  over the bound the gateway reads is a `502` `answer_too_large`. A `CONNECT` to the host
-  is denied in either mode, and the stack proxy has no route.
+  run has 10 requests a second and 4 in flight, 1 of them a POST, and 1 request waiting
+  for a token of the gateway's rate limit. A gateway signs 20 requests a second across
+  its runs, sends 8 `POST /artifacts` at once and reads 512 MiB of their bodies at once.
+  A target over 4 KiB, or a path over 1 KiB once escaped, is a `404`. An answer over the
+  bound the gateway reads is a `502` `answer_too_large`. A `CONNECT` to the host is
+  denied in either mode, and the stack proxy has no route.
 - The gateway accepts a session's `dev.qory.run.exited` with the reason
   `read_needs_wall`, which qory gives the close of a run of a read-only workflow that
   has no wall, or `read_needs_setup_outside`, which qory gives the close of a read-only
