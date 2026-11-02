@@ -903,8 +903,8 @@ if err := run.RemoveSetup(ctx); err != nil {
   `Setup` and before the first `Join`, as for a join with `WorkspaceReadOnly`. After it
   the name `qory-setup` no longer resolves and no service of the setup container remains,
   so a connection to `qory-setup:5432` fails. What setup wrote in the working folder
-  stays. It writes the `wall` step `remove the setup container`. In a run with no setup
-  container it returns nil and writes no step, so you need no condition around it.
+  stays. It writes the `wall` step `remove the setup container`. In an open run with no
+  setup container it returns nil and writes no step, so you need no condition around it.
 - Packages that setup installs outside the working folder stay in the setup container,
   and go with it.
 

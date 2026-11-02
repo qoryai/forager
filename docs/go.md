@@ -421,8 +421,9 @@ A walled run's `(*session.Run).Setup` writes its steps itself, and
 `RemoveSetup` between `Setup` and the first `Join`, outside every host step. It returns
 once the setup container is gone: every process in it has ended, and the name
 `qory-setup` no longer resolves. It writes the `wall` step `remove the setup container`.
-In an open run with no setup container, or after it removed the setup container, it
-returns nil and writes nothing, also after a join or during a host step, so you need no condition around it.
+In an open run with no setup container, which includes a run where it removed that
+container, it returns nil and writes nothing, also after a join or during a host step, so
+you need no condition around it.
 Each error before the step starts with the fix, and removes and writes nothing. A removal
 that fails ends the step `failed`, or `cancelled` when `ctx` ended, and the setup
 container may still run: stop the run before the join. No session joins the run after
