@@ -460,8 +460,10 @@ func checkMachine(spec OpenSpec) error {
 // timeout or interrupted with cancelled, timeout with ExitCode 124, image_missing or
 // image_user_root, failed with -1 for a run no session joined, after [Run.FetchImage]
 // returned that refusal, workflow_not_in_harness, failed with -1 for a run no session
-// joined whose workflow is not in the harness, or a code of the caller's, which is none
-// of Forager's reserved codes; and
+// joined whose workflow is not in the harness, read_needs_wall and
+// read_needs_setup_outside, failed with -1 for a run of a read-only workflow no session
+// joined that has no wall, or whose setup is set to run inside the agent's container,
+// or a code of the caller's, which is none of Forager's reserved codes; and
 // ExitCode, the run's exit code: the last session's, 124 at the run's time limit, -1
 // when no session ran. A failed run with no reason that no session joined is closed as
 // failed with no_session and -1.
@@ -474,8 +476,9 @@ type Outcome struct {
 // checkOutcome refuses an outcome the close cannot write: a state outside the three, an
 // exit code under -1, a reason outside the pattern or one of Forager's reserved codes
 // other than timeout, interrupted and no_session, those three with another state or
-// exit code than they take, and image_missing, image_user_root and
-// workflow_not_in_harness other than failed with -1 for a run no session joined, the
+// exit code than they take, and image_missing, image_user_root,
+// workflow_not_in_harness, read_needs_wall and read_needs_setup_outside other than
+// failed with -1 for a run no session joined, the
 // one outcome with each of them that the gateway accepts. joined is true when a join of
 // the run was numbered, or may have been.
 func checkOutcome(o Outcome, joined bool) error {
@@ -484,7 +487,8 @@ func checkOutcome(o Outcome, joined bool) error {
 		return fmt.Errorf("the outcome's state %q is none of succeeded, failed and cancelled", o.State)
 	case o.ExitCode < -1:
 		return fmt.Errorf("the outcome's exit code %d is under -1", o.ExitCode)
-	case o.Reason == refusal.ImageMissing, o.Reason == refusal.ImageUserRoot, o.Reason == event.ReasonWorkflowNotInHarness:
+	case o.Reason == refusal.ImageMissing, o.Reason == refusal.ImageUserRoot, o.Reason == event.ReasonWorkflowNotInHarness,
+		o.Reason == event.ReasonReadNeedsWall, o.Reason == event.ReasonReadNeedsSetupOutside:
 		if o.State != event.StateFailed || o.ExitCode != -1 || joined {
 			return fmt.Errorf("an outcome with the reason %s is failed with the exit code -1, of a run no session joined", o.Reason)
 		}

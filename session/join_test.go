@@ -218,7 +218,7 @@ const imageMissingOutcome = "an outcome with the reason image_missing is failed 
 
 // noJoinReasons are the reasons Close takes only failed with -1, for a run no session
 // joined, as the gateway does.
-var noJoinReasons = []string{"image_missing", "image_user_root", "workflow_not_in_harness"}
+var noJoinReasons = []string{"image_missing", "image_user_root", "workflow_not_in_harness", "read_needs_wall", "read_needs_setup_outside"}
 
 // noJoinOutcome is Close's text for an outcome with one of noJoinReasons that the
 // gateway does not accept.
@@ -227,7 +227,8 @@ func noJoinOutcome(reason string) string {
 }
 
 // TestImageMissingClosesOnlyARunNoSessionJoined pins the close's image_missing,
-// image_user_root and workflow_not_in_harness: failed with -1 after a join is refused
+// image_user_root, workflow_not_in_harness, read_needs_wall and
+// read_needs_setup_outside: failed with -1 after a join is refused
 // before anything is written, and the run closes with another outcome after.
 func TestImageMissingClosesOnlyARunNoSessionJoined(t *testing.T) {
 	for _, reason := range noJoinReasons {
@@ -253,7 +254,8 @@ func TestImageMissingClosesOnlyARunNoSessionJoined(t *testing.T) {
 }
 
 // TestANoJoinReasonClosesARunNoSessionJoined pins the close's image_missing,
-// image_user_root and workflow_not_in_harness, failed with -1 in a run no session
+// image_user_root, workflow_not_in_harness, read_needs_wall and
+// read_needs_setup_outside, failed with -1 in a run no session
 // joined: Close writes the outcome as given and posts it.
 func TestANoJoinReasonClosesARunNoSessionJoined(t *testing.T) {
 	for _, reason := range noJoinReasons {
@@ -341,6 +343,10 @@ func TestCloseChecksTheOutcome(t *testing.T) {
 		{session.Outcome{State: "cancelled", Reason: "image_user_root", ExitCode: -1}, noJoinOutcome("image_user_root")},
 		{session.Outcome{State: "failed", Reason: "workflow_not_in_harness", ExitCode: 1}, noJoinOutcome("workflow_not_in_harness")},
 		{session.Outcome{State: "succeeded", Reason: "workflow_not_in_harness", ExitCode: -1}, noJoinOutcome("workflow_not_in_harness")},
+		{session.Outcome{State: "failed", Reason: "read_needs_wall", ExitCode: 0}, noJoinOutcome("read_needs_wall")},
+		{session.Outcome{State: "cancelled", Reason: "read_needs_wall", ExitCode: -1}, noJoinOutcome("read_needs_wall")},
+		{session.Outcome{State: "failed", Reason: "read_needs_setup_outside", ExitCode: 1}, noJoinOutcome("read_needs_setup_outside")},
+		{session.Outcome{State: "succeeded", Reason: "read_needs_setup_outside", ExitCode: -1}, noJoinOutcome("read_needs_setup_outside")},
 	} {
 		if _, err := r.Close(ctx, c.out); err == nil || err.Error() != c.want {
 			t.Errorf("%+v: %v, want %s", c.out, err, c.want)

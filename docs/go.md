@@ -1208,8 +1208,11 @@ closed `failed` with no reason, is `failed` with `no_session` and `-1`. A `timeo
 `cancelled` with `124`, and an `interrupted` is `cancelled`. After `FetchImage` returns
 the refusal `image_missing` or `image_user_root`, close a run no session joined with
 `failed`, that code and `-1`. Close a run no session joined whose workflow is not in
-the harness with `failed`, `workflow_not_in_harness` and `-1`. `Close` refuses each of
-the three codes with another state or exit code, or after a join, as the gateway does.
+the harness with `failed`, `workflow_not_in_harness` and `-1`. Close a run no session
+joined of a read-only workflow with `failed` and `-1`, and `read_needs_wall` when the
+run has no wall, or `read_needs_setup_outside` when its setup is set to run inside the
+agent's container. `Close` refuses each of the five codes with another state or exit
+code, or after a join, as the gateway does.
 `Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
 `session.Closed` is what the run came to:
 

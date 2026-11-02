@@ -475,11 +475,14 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 
 // closeRule is why the link refuses a session's dev.qory.run.exited, its data, empty
 // when it accepts it: the close's, with no reason or with timeout, interrupted,
-// no_session, image_missing, image_user_root or workflow_not_in_harness, the last four
-// only for a run with no join the gateway numbered, and the last three only failed with
-// exit_code -1: image_missing and image_user_root the close after a fetch of the run's
-// image that its registry did not have or whose user is root, workflow_not_in_harness
-// the close of a run whose workflow is not in the harness. The gateway writes the event
+// no_session, image_missing, image_user_root, workflow_not_in_harness, read_needs_wall
+// or read_needs_setup_outside, the last six only for a run with no join the gateway
+// numbered, and the last five only failed with exit_code -1: image_missing and
+// image_user_root the close after a fetch of the run's image that its registry did not
+// have or whose user is root, workflow_not_in_harness the close of a run whose workflow
+// is not in the harness, read_needs_wall the close of a run of a read-only workflow that
+// has no wall, and read_needs_setup_outside the close of a read-only workflow's run
+// whose setup is set to run inside the agent's container. The gateway writes the event
 // of every other end itself. joined is true when the gateway numbered a join of the run.
 func closeRule(data map[string]any, joined bool) string {
 	given, hasReason := data["reason"]
@@ -490,7 +493,8 @@ func closeRule(data map[string]any, joined bool) string {
 		if joined {
 			return "a run.exited no_session of a run with a join"
 		}
-	case why == refusal.ImageMissing, why == refusal.ImageUserRoot, why == event.ReasonWorkflowNotInHarness:
+	case why == refusal.ImageMissing, why == refusal.ImageUserRoot, why == event.ReasonWorkflowNotInHarness,
+		why == event.ReasonReadNeedsWall, why == event.ReasonReadNeedsSetupOutside:
 		code, _ := data["exit_code"].(float64)
 		switch {
 		case joined:
