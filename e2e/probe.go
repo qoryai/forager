@@ -2,11 +2,13 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -102,6 +104,77 @@ type report struct {
 	// SetupService is what the service at PROBE_SETUP_SERVICE answered, asked with no
 	// proxy, or why it did not answer; empty when the variable is not set.
 	SetupService string `json:"setup_service"`
+	// ReadOnly is what the probe found in a workspace bound read-only, when
+	// PROBE_READ_ONLY is 1: the probe then tries nothing else.
+	ReadOnly *readOnlyReport `json:"read_only,omitempty"`
+}
+
+// The files of the case of a workspace bound read-only: the setup container writes
+// setupFile, and the agent tries to write agentFile.
+const (
+	setupFile = "setup.txt"
+	agentFile = "agent.txt"
+)
+
+// readOnlyReport is what the probe found in a workspace bound read-only: the text of
+// setupFile or why it could not read it, the exit status and standard error of a shell
+// that writes agentFile and, with a Docker inside, the exit status and output of a
+// container the agent starts with the workspace bound that writes agentFile there.
+type readOnlyReport struct {
+	Setup       string `json:"setup"`
+	SetupErr    string `json:"setup_err"`
+	WriteExit   int    `json:"write_exit"`
+	WriteStderr string `json:"write_stderr"`
+	InnerExit   int    `json:"inner_exit"`
+	InnerOutput string `json:"inner_output"`
+}
+
+// probeReadOnly reads setupFile and tries to write agentFile, with the image's shell and,
+// when the enclosure has a Docker, from a container the agent starts.
+func probeReadOnly() *readOnlyReport {
+	var r readOnlyReport
+	if b, err := os.ReadFile(setupFile); err != nil {
+		r.SetupErr = err.Error()
+	} else {
+		r.Setup = string(b)
+	}
+	var stderr bytes.Buffer
+	cmd := exec.Command("sh", "-c", "echo agent > "+agentFile)
+	cmd.Stderr = &stderr
+	r.WriteExit = exitCode(cmd.Run(), &stderr)
+	r.WriteStderr = strings.TrimSpace(stderr.String())
+	if os.Getenv("PROBE_DOCKER") == "1" {
+		r.InnerExit, r.InnerOutput = innerWrite()
+	}
+	return &r
+}
+
+// exitCode is the exit status of a command that ran with err, or -1 with err written to
+// out when it did not run.
+func exitCode(err error, out *bytes.Buffer) int {
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &exit):
+		return exit.ExitCode()
+	}
+	out.WriteString(err.Error())
+	return -1
+}
+
+// writeFile is the probe in a container the agent started: it writes the file its
+// argument names, and exits 1 with the error when the write fails.
+func writeFile(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "write-file: give one path")
+		return 2
+	}
+	if err := os.WriteFile(args[0], []byte("agent\n"), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "write-file:", err)
+		return 1
+	}
+	return 0
 }
 
 // preparedFile is where in the workspace the run's setup command leaves its report.
@@ -150,6 +223,12 @@ const wait = 3 * time.Second
 // as told.
 func probe(args []string) int {
 	var r report
+	if os.Getenv("PROBE_READ_ONLY") == "1" {
+		r.ReadOnly = probeReadOnly()
+		b, _ := json.Marshal(r)
+		fmt.Println(probePrefix + string(b))
+		return 0
+	}
 	// First, so what the setup command left is what it left before the probe started.
 	if b, err := os.ReadFile(preparedFile); err != nil {
 		r.PreparedErr = err.Error()

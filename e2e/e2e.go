@@ -78,6 +78,9 @@ const (
 	// command starts in it, which answers setupServiceLine on setupServicePort.
 	modeHold    = "hold"
 	modeService = "service"
+	// modeWrite is the probe in a container the agent started that writes a file into
+	// the workspace bound read-only.
+	modeWrite = "write-file"
 )
 
 // HoldArgs are the arguments that make the helper keep the setup container running.
@@ -221,6 +224,8 @@ func Main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	case modeWrite:
+		os.Exit(writeFile(os.Args[2:]))
 	case modeService:
 		err := http.ListenAndServe(":"+setupServicePort, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			io.WriteString(w, setupServiceLine)
@@ -559,6 +564,7 @@ func Run(t *testing.T, o Options) {
 
 	byReference(t, o, origin, outside)
 	setupOutside(t, o, origin, outside)
+	readOnlyWorkspace(t, o, origin, outside)
 
 	t.Run("the terminal crosses and a named host on this machine is reached", func(t *testing.T) {
 		origin.named = true
@@ -1133,6 +1139,54 @@ func setupOutside(t *testing.T, o Options, h hosts, outside string) {
 	})
 }
 
+// readOnlyWorkspace checks a join with SessionSpec.WorkspaceReadOnly after
+// (*session.Run).Setup: the setup container writes setupFile into the workspace; the
+// agent reads it, and its write of agentFile fails with "Read-only file system", as
+// does the same write from a container the agent starts when it has a Docker inside;
+// after the close the folder on this machine has setupFile and no agentFile.
+func readOnlyWorkspace(t *testing.T, o Options, h hosts, outside string) {
+	const name = "the agent reads the workspace the setup wrote and cannot write it"
+	if !o.Setup {
+		t.Run(name, func(t *testing.T) { t.Skip("the adapter starts no setup container") })
+		return
+	}
+	t.Run(name, func(t *testing.T) {
+		runID := event.NewRunID()
+		var setupErr error
+		write := session.SetupCommand{Name: "write " + setupFile, Args: []string{"sh", "-c", "echo setup > " + setupFile}}
+		r, err := runIn(t, o, variant{runID: runID, setup: []session.SetupCommand{write},
+			onSetup: func(err error) { setupErr = err }, readOnly: true,
+			env: []string{"PROBE_READ_ONLY=1"}}, false, h, outside)
+		if err != nil || setupErr != nil {
+			t.Fatalf("the setup: %v; the run: %v", setupErr, err)
+		}
+		ro := r.probe.ReadOnly
+		if ro == nil {
+			t.Fatal("the probe reported nothing of the read-only workspace")
+		}
+		if ro.Setup != "setup\n" || ro.SetupErr != "" {
+			t.Errorf("the agent read %q from %s (%s), want %q", ro.Setup, setupFile, ro.SetupErr, "setup\n")
+		}
+		if ro.WriteExit == 0 || !strings.Contains(ro.WriteStderr, "Read-only file system") {
+			t.Errorf("the agent's write of %s exited %d with %q, want a failure with %q", agentFile, ro.WriteExit, ro.WriteStderr, "Read-only file system")
+		}
+		if o.Docker && (ro.InnerExit == 0 || !strings.Contains(strings.ToLower(ro.InnerOutput), "read-only file system")) {
+			t.Errorf("the write of %s from a container the agent started exited %d with %q, want a failure with %q", agentFile, ro.InnerExit, ro.InnerOutput, "read-only file system")
+		}
+		if b, err := os.ReadFile(filepath.Join(r.dir, setupFile)); err != nil || string(b) != "setup\n" {
+			t.Errorf("%s on this machine: %q, %v", setupFile, b, err)
+		}
+		if _, err := os.Stat(filepath.Join(r.dir, agentFile)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s on this machine: %v, want none", agentFile, err)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the run left %v (%v)", left, err)
+			}
+		}
+	})
+}
+
 // stackFetch fetches the stack host through a stack proxy of the run, as qory fetches
 // the harness definition before the first join, and returns the status.
 func stackFetch(r *session.Run) (int, error) {
@@ -1170,6 +1224,9 @@ type variant struct {
 	env     []string
 	// opened, when set, is called with the run once it opens.
 	opened func(*session.Run)
+	// readOnly binds the workspace read-only for the join, SessionSpec.WorkspaceReadOnly,
+	// with no setup commands inside.
+	readOnly bool
 }
 
 // run runs the probe as the runtime of a session behind the wall and reads what it
@@ -1296,24 +1353,25 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		Report:         report,
 	},
 		SessionSpec: session.SessionSpec{
-			Runtime:     rt,
-			Command:     o.Probe,
-			Args:        []string{modeProbe, "--settings", settings},
-			Env:         env,
-			Dir:         dir,
-			Interactive: interactive,
-			Stdin:       strings.NewReader(""),
-			Stdout:      &out,
-			Stderr:      &errs,
-			Forwarder:   o.Forwarder,
-			Exec:        o.Exec,
-			SetupRunner: []string{o.Probe, modeSetupCommand},
+			Runtime:           rt,
+			Command:           o.Probe,
+			Args:              []string{modeProbe, "--settings", settings},
+			Env:               env,
+			Dir:               dir,
+			Interactive:       interactive,
+			Stdin:             strings.NewReader(""),
+			Stdout:            &out,
+			Stderr:            &errs,
+			Forwarder:         o.Forwarder,
+			Exec:              o.Exec,
+			SetupRunner:       []string{o.Probe, modeSetupCommand},
+			WorkspaceReadOnly: v.readOnly,
 		},
 		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup, opened: v.opened,
 	}
 	// The setup runner reports on the run socket, so a run has its setup command where
 	// the socket crosses into the enclosure.
-	if o.Hooks {
+	if o.Hooks && !v.readOnly {
 		spec.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: append([]string{o.Probe, modePrepare}, preparationWords...)}}
 	}
 	if v.started != nil {

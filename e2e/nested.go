@@ -249,6 +249,31 @@ func post(c *http.Client, u string, body io.Reader, contentType string) ([]byte,
 // probeImage is the image the probe builds of itself inside the enclosure.
 const probeImage = "walltest-probe:inner"
 
+// innerWrite starts a container of the probe with the image's docker command, as the
+// agent does, with the agent's working directory bound at the same path, and has it
+// write agentFile there. It returns the container's exit status and output.
+func innerWrite() (int, string) {
+	if err := importSelf(dockerClient(30 * time.Second)); err != nil {
+		return -1, "the probe's image: " + err.Error()
+	}
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		return -1, "the image contains no docker command: " + err.Error()
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return -1, err.Error()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var out bytes.Buffer
+	cmd := exec.CommandContext(ctx, docker, "run", "--rm", "--mount", "type=bind,src="+wd+",dst="+wd,
+		probeImage, "/probe", modeWrite, filepath.Join(wd, agentFile))
+	cmd.Stdout, cmd.Stderr = &out, &out
+	code := exitCode(cmd.Run(), &out)
+	return code, strings.TrimSpace(out.String())
+}
+
 // importSelf builds an image holding nothing but the probe, at /probe: the probe is
 // static, so it needs no registry and no base image.
 func importSelf(c *http.Client) error {
