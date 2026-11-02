@@ -4761,7 +4761,8 @@ up in its parent, so two binds of one root are allowed:
 
 - the enclosure binds the outermost of the places the run lists, the mounts and the
   workspace, each once, and the session's directory, `sessions/<n>/` in the run
-  directory, read-only. The workspace is writable and
+  directory, read-only. The workspace is writable, or read-only for a session with
+  `SessionSpec.WorkspaceReadOnly`, and
   is the working directory inside, through the bind that holds it, or bound at the same
   path as on the machine when no mount holds it; a run whose policy names its image by
   reference sees the bind that holds it at `/workspace` (§Images), and a wall binds a
@@ -4774,6 +4775,16 @@ up in its parent, so two binds of one root are allowed:
   `mount_mode_conflict`, with the inner place and the outer one as its names, in that
   order: a read-only part of a writable bind is one the agent replaces, and a writable
   part of a read-only one writes what the run shows read-only;
+- a session with `SessionSpec.WorkspaceReadOnly` binds the workspace read-only for its
+  container alone, so a write into the workspace inside fails with `Read-only file
+  system`. The setup container still binds the working folder writable (Setup, below),
+  and the host steps still write it, so the workspace keeps every check of a writable
+  place, the links and the way to Forager's files among them, and the registry lists
+  the workspace as writable when no mount holds it. A writable mount that holds the workspace, is the
+  same place or lies inside it is `mount_mode_conflict`; a read-only mount that holds it
+  is its one bind. Such a session needs a wall and no `SessionSpec.Setup`, which runs in
+  the agent's container: `Run.Join` returns an error before the join request, and
+  writes nothing, for either;
 - a place, of either mode, whose path goes through a link inside a writable place of
   the run's and that does not resolve into it is no run, `mount_through_link`: the
   agent that writes the link would choose what is bound. Its names are the place as

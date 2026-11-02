@@ -157,8 +157,8 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 
 // checkSession is the spec of a session of the run with its defaults filled, and its
 // runtime, after the checks a join runs before the join request: the variables, the
-// harness's home and sources, the setup, the helper's exec and the stop signal and
-// grace. It writes nothing and sends nothing.
+// harness's home and sources, the read-only workspace, the setup, the helper's exec and
+// the stop signal and grace. It writes nothing and sends nothing.
 func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) {
 	spec = sessionDefaults(spec, r.open.Wall != nil)
 	s := runSpec{OpenSpec: r.open, SessionSpec: spec}
@@ -177,6 +177,9 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 		}
 	}
 	if err := checkHarness(spec.Harness); err != nil {
+		return runSpec{}, nil, err
+	}
+	if err := checkWorkspaceReadOnly(s); err != nil {
 		return runSpec{}, nil, err
 	}
 	if err := checkSetup(s); err != nil {

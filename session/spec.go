@@ -337,8 +337,8 @@ type SessionSpec struct {
 	// one of the same mode is reached through the outer one, which alone is bound; one of
 	// the other mode is a refused join, mount_mode_conflict. One whose path goes through a
 	// link inside a writable one, and that does not resolve into it, is a refused join,
-	// whatever its mode, mount_through_link. Dir is writable, and is bound at its path
-	// when no mount contains it. The session adds the session's directory in the run
+	// whatever its mode, mount_through_link. Dir is writable, or read-only with
+	// WorkspaceReadOnly, and is bound at its path when no mount contains it. The session adds the session's directory in the run
 	// directory, sessions/<n>/, read-only. A walled
 	// session refuses a bind that lies inside, or is reached through, a writable bind of
 	// another walled run of this user's still going, apart from the same root, a writable
@@ -346,6 +346,15 @@ type SessionSpec struct {
 	// contains or lies inside that run's run directory: mount_shared_with_run. Without a
 	// Wall they mean nothing.
 	Mounts []wall.Mount
+	// WorkspaceReadOnly says the enclosure binds Dir read-only for this session, so a
+	// write into the workspace inside fails with "Read-only file system". Dir keeps the
+	// checks of a writable place, since the setup container and the host steps still
+	// write it: [Run.Setup] binds it writable. A writable mount that contains Dir is a
+	// refused join, mount_mode_conflict; a read-only one is the one bind. Join and
+	// AgentEnv return an error before the join request, and write nothing, for
+	// WorkspaceReadOnly in a run with no Wall and beside Setup, which runs in the
+	// agent's container.
+	WorkspaceReadOnly bool
 	// ForagerFiles are the absolute paths of the caller's files that are Forager's,
 	// such as the directory of qory's forager.yaml with the access key secret. A walled
 	// session refuses a mount, or a workspace, that is, contains or lies inside one of

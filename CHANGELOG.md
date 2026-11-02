@@ -1352,6 +1352,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `SessionSpec.WorkspaceReadOnly`, which binds the workspace read-only in the agent's
+  container for that session, so a write into it inside fails with `Read-only file
+  system`. The setup container of `Run.Setup` still binds the working folder writable,
+  and the workspace keeps the checks of a writable place. A writable mount that holds
+  the workspace is `mount_mode_conflict`. `Join` returns an error before the join
+  request, and writes nothing, for the field in a run with no wall and for the field
+  beside `SessionSpec.Setup`, which runs in the agent's container.
 - The session sets `line` on each runtime event it maps from the runtime's standard
   output, cuts `text` and `content` at 64 KiB with `truncated`, and sets `summary` on a
   tool event. It masks each event before it cuts it, so a cut never splits a secret

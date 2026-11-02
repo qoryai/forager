@@ -74,6 +74,21 @@ func checkSetup(spec runSpec) error {
 	return checkSetupCommands(setup)
 }
 
+// checkWorkspaceReadOnly refuses SessionSpec.WorkspaceReadOnly in a run with no wall,
+// which has no binds, and beside SessionSpec.Setup, which runs in the agent's container
+// and so would see the workspace read-only.
+func checkWorkspaceReadOnly(spec runSpec) error {
+	switch {
+	case !spec.WorkspaceReadOnly:
+		return nil
+	case spec.Wall == nil:
+		return errors.New("Open the run with a wall to mount the workspace read-only: a run with no wall starts the agent on this machine.")
+	case len(spec.SessionSpec.Setup) > 0:
+		return errors.New("Run the setup with Run.Setup, or leave SessionSpec.WorkspaceReadOnly unset: SessionSpec.Setup runs in the agent's container, which sees the workspace read-only.")
+	}
+	return nil
+}
+
 // checkSetupCommands refuses a setup command with no name, an empty program or a NUL,
 // inside the wall or in the setup container.
 func checkSetupCommands(setup []SetupCommand) error {

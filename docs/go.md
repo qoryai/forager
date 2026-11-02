@@ -1069,6 +1069,18 @@ request asks the gateway for, for this session.
   `Wall`, a place whose path goes through a link inside one of them and does not
   resolve into it is no run, `mount_through_link`. See
   [no file read from a place an agent can write](wall.md#no-file-read-from-a-place-an-agent-can-write).
+- `WorkspaceReadOnly` binds the workspace, `Dir`, read-only in the agent's container
+  for this session, so a write into it inside fails with `Read-only file system`. The
+  setup container of `(*session.Run).Setup` still binds the working folder writable, and
+  the host steps still write it, so the workspace keeps the checks of a writable place.
+  A writable mount that holds `Dir` is `mount_mode_conflict`; a read-only one is the one
+  bind. `Join` and `AgentEnv` return an error before the join request, and write
+  nothing, in a run with no `Wall`: `Open the run with a wall to mount the workspace
+  read-only: a run with no wall starts the agent on this machine.` They do the same
+  beside `Setup`, which runs in the agent's container: `Run the setup with Run.Setup, or
+  leave SessionSpec.WorkspaceReadOnly unset: SessionSpec.Setup runs in the agent's
+  container, which sees the workspace read-only.` See
+  [the contract](../contracts/forager/v1/README.md#the-wall).
 - `Setup` is the session's setup commands for `wall.setup: inside`, each a
   `session.SetupCommand` with a `Name`, such as `install` or `start services`, and
   `Args`, the program and then its arguments. The session runs them inside the wall

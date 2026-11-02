@@ -151,6 +151,37 @@ func TestTheSetupRunsInTheSetupContainer(t *testing.T) {
 	}
 }
 
+// TestTheSetupWritesTheWorkspaceTheAgentReads pins Setup beside a join with
+// SessionSpec.WorkspaceReadOnly: the setup container binds the working folder writable,
+// and the agent's container binds it read-only.
+func TestTheSetupWritesTheWorkspaceTheAgentReads(t *testing.T) {
+	sp, _ := specGateway(t, "FAKE_EXIT=0")
+	w := &setupWall{}
+	sp.Wall, sp.Image, sp.WorkspaceReadOnly = w, "example.com/agent:1", true
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Join(ctx, sp.SessionSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(w.setup.Mounts, []wall.Mount{{Path: sp.Dir}}) {
+		t.Errorf("the setup container's mounts %v, want %s writable", w.setup.Mounts, sp.Dir)
+	}
+	want := []wall.Mount{{Path: sp.Dir, ReadOnly: true}, {Path: res.SessionDir, ReadOnly: true}}
+	if !slices.Equal(w.got.Mounts, want) {
+		t.Errorf("the agent's mounts %v, want %v", w.got.Mounts, want)
+	}
+}
+
 // TestTheSetupFetchesTheImageFirst pins Setup in a run whose image is a reference no
 // step fetched: its image step comes first, then the wall step and the setup steps, and
 // the join that follows fetches nothing.
