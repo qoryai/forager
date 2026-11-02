@@ -503,7 +503,16 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// session inherits either, walled or not: it would send their values to the start
 	// key's endpoint.
 	spec.Env = withoutNames(spec.Env, key.Others)
+	// A session without a wall may inherit QORY_RUN_API from another run: this run's value
+	// replaces it, and a run with no control plane has none. Behind a wall the value is
+	// variable_reserved, when the variables are resolved.
+	if spec.Wall == nil {
+		spec.Env = withoutNames(spec.Env, []string{EnvRunAPI})
+	}
 	ownEnv := []string{EnvRunID + "=" + r.id}
+	if r.answer.RunAPI != "" {
+		ownEnv = append(ownEnv, EnvRunAPI+"="+r.answer.RunAPI)
+	}
 	if spec.HarnessHome != "" {
 		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
 	}

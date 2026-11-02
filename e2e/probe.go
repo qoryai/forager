@@ -107,6 +107,9 @@ type report struct {
 	// ReadOnly is what the probe found in a workspace bound read-only, when
 	// PROBE_READ_ONLY is 1: the probe then tries nothing else.
 	ReadOnly *readOnlyReport `json:"read_only,omitempty"`
+	// RunAPI is what the probe found of the run API, when PROBE_RUN_API is 1: the probe
+	// then tries nothing else.
+	RunAPI *runAPIReport `json:"run_api,omitempty"`
 }
 
 // The files of the case of a workspace bound read-only: the setup container writes
@@ -268,6 +271,12 @@ func probe(args []string) int {
 	var r report
 	if os.Getenv("PROBE_READ_ONLY") == "1" {
 		r.ReadOnly = probeReadOnly()
+		b, _ := json.Marshal(r)
+		fmt.Println(probePrefix + string(b))
+		return 0
+	}
+	if os.Getenv("PROBE_RUN_API") == "1" {
+		r.RunAPI = probeRunAPI()
 		b, _ := json.Marshal(r)
 		fmt.Println(probePrefix + string(b))
 		return 0

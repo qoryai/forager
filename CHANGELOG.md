@@ -210,6 +210,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The run API's route in the contract: the run answer's `run_api`, the base URL of a run
+  with a control plane; `QORY_RUN_API`, one of Forager's names; and the `channel`
+  `run_api` of `dev.qory.run.egress`, with the rule `wall:run-api`. The README's §The run
+  API lists the five requests, each status and the limits.
+- `accesskey.Answer.Digest`, which signs a file's answer over the digest of its bytes,
+  and `(*server.Client).RunAPI`, which signs one request of the run API and verifies its
+  answer, a file's at the end of its stream.
 - `fixed` in a runtime descriptor: variables the session sets for the runtime in every
   launch, by name, such as `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`. The
   session counts each among the run's fixed names, so no value of the server, the run,
@@ -849,6 +856,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The gateway's route to the run API, on a run's proxy, for a run with a control plane:
+  a plain `http://` request to `run-api.qory.invalid` reaches Qory Apiary, signed with
+  the gateway's access key, so no key enters the run. Only five requests pass, and each
+  request writes one `dev.qory.run.egress`. A `CONNECT` to the host is denied in either
+  mode, and the stack proxy has no route.
 - The gateway accepts a session's `dev.qory.run.exited` with the reason
   `read_needs_wall`, which qory gives the close of a run of a read-only workflow that
   has no wall, or `read_needs_setup_outside`, which qory gives the close of a read-only
@@ -1364,6 +1376,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `QORY_RUN_API` in the agent's environment and in a setup container, with a wall and
+  without, for a run with a control plane, and `(*session.Run).RunAPI`, which returns a
+  client for host work and the base URL. `RunAPI` works from `Open` to `Close`, while a
+  `Join` runs too, on one machine and behind a separate gateway. The session has no key
+  for it: the gateway signs each request. Behind a wall, a caller's value of the name is
+  `variable_reserved`.
 - `SessionSpec.WorkspaceReadOnly`, which binds the workspace read-only in the agent's
   container for that session, so a write into it inside fails with `Read-only file
   system`. Under nested Docker this is unverified: the enclosure's root, which the

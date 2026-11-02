@@ -1289,6 +1289,11 @@ func Egress(d proxy.Decision) map[string]any {
 	if d.Status != 0 {
 		data["status"] = d.Status
 	}
+	// The run API's route has no path rules, so its record has no path_rule.
+	if d.Channel != "" {
+		data["channel"] = d.Channel
+		delete(data, "path_rule")
+	}
 	return data
 }
 

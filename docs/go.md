@@ -494,6 +494,36 @@ below to Forager's maintainers", with the stack, and the next batch is sent. Nei
 report nor any log contains the panic's value, which may contain a request's header or
 a credential.
 
+### The run API
+
+`(*session.Run).RunAPI` gives host work a client of Qory Apiary's run API, with no key
+on the machine and in the run: the gateway signs each request with its access key. It
+returns an `*http.Client` and the base URL, `http://run-api.qory.invalid/v1/runs/<run id>`:
+
+```go
+client, base, err := run.RunAPI()
+if err != nil {
+	return err
+}
+resp, err := client.Get(base + "/work-item")
+```
+
+Call `RunAPI` at any time from `Open` to `Close`, from any goroutine, while a `Join` runs
+too. The client works in this process alone: it needs no port and no password, and it
+dials the run's proxy for each request, on one machine and behind a separate gateway. It
+follows no redirect.
+
+`RunAPI` returns an error that starts with the fix in a closed run and in a run with no
+control plane. A request of the client fails once the run is closed.
+
+Inside a session, read the same base URL from `session.EnvRunAPI`, `QORY_RUN_API`, and
+send the request through `HTTP_PROXY`. A setup container gets the variable too. Behind a
+wall, a value a caller passes for the name is `variable_reserved`.
+
+A file's `200` is chunked. Treat its bytes as unverified until the read ends cleanly: a
+file that fails its signed digest ends in a read error. The contract's README, §The run
+API, lists the five requests, each status and the limits.
+
 ### The engine proxy
 
 `(*session.Run).EngineProxy(hosts)` sends the requests of the machine's container

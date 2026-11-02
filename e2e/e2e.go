@@ -565,6 +565,7 @@ func Run(t *testing.T, o Options) {
 	byReference(t, o, origin, outside)
 	setupOutside(t, o, origin, outside)
 	readOnlyWorkspace(t, o, origin, outside)
+	runAPIThroughTheWall(t, o, origin, outside)
 
 	t.Run("the terminal crosses and a named host on this machine is reached", func(t *testing.T) {
 		origin.named = true
@@ -1236,6 +1237,8 @@ type variant struct {
 	// readOnly binds the workspace read-only for the join, SessionSpec.WorkspaceReadOnly,
 	// with no setup commands inside.
 	readOnly bool
+	// server, when set, is the gateway's control plane.
+	server *gateway.Server
 }
 
 // run runs the probe as the runtime of a session behind the wall and reads what it
@@ -1347,6 +1350,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		Tools:       []gateway.Tool{{Name: "suite-tool", Command: []string{exe, modeTool}, Serves: []string{toolHost}}},
 		Credentials: creds,
 		StackHosts:  []string{stackHost},
+		Server:      v.server,
 		Version:     "walltest",
 		Report:      report,
 	}, runs)

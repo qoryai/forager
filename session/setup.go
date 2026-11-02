@@ -149,7 +149,8 @@ func (r *Run) closeWall(ctx context.Context) {
 // SessionSpec.Limits. It gets Dir, writable, and the helper and, for a run
 // with an authority, the bundle, read-only: no harness home, run directory, hook socket
 // or engine socket. Its environment is the relay's proxy variables, the bundle's
-// variables, the run's placeholders, and then Env, which a caller fills from
+// variables, QORY_RUN_API for a run with a control plane, the run's placeholders, and
+// then Env, which a caller fills from
 // [Run.AgentEnv]. Env is refused before any step when it has a value for one of the
 // run's placeholders, [refusal.PlaceholderConflict]; a QORY_ name other than
 // QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, or a name the machine's credentials are
@@ -325,8 +326,9 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 }
 
 // setupEnv is the part of the setup container's environment that comes after the
-// wall's variables: the run's placeholders, then env, which [checkSetupEnv] checks
-// first, without the access key's variables and QORY_RUN_KEY. A
+// wall's variables: QORY_RUN_API for a run with a control plane, the run's placeholders,
+// then env, which [checkSetupEnv] checks first, without the access key's variables and
+// QORY_RUN_KEY. A
 // value is refused when it contains, in a form the run's masker replaces, the password
 // of one of the run's forwarders or of OpenSpec.EngineProxy: the run's masker gets the
 // engine proxy's password only in the image step, which comes after this check. A value
@@ -346,7 +348,11 @@ func (r *Run) setupEnv(env []string) ([]string, error) {
 			return nil, fmt.Errorf("Leave the host proxy's URL out of the setup's variables: %s contains its password, which the setup container never gets.", accesskey.ShownName(name, false))
 		}
 	}
-	return append(placeholders(r.answer.Placeholders, keyed{}), kept...), nil
+	var runAPI []string
+	if r.answer.RunAPI != "" {
+		runAPI = []string{EnvRunAPI + "=" + r.answer.RunAPI}
+	}
+	return slices.Concat(runAPI, placeholders(r.answer.Placeholders, keyed{}), kept), nil
 }
 
 // checkSetupEnv refuses a setup variable of env by the rules that hold for every

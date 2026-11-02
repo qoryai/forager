@@ -251,6 +251,9 @@ type LinkRunAnswer struct {
 	RelayImage string `json:"relay_image,omitempty"`
 	// Labels are the run's labels as the gateway holds them, which run.started reports.
 	Labels map[string]string `json:"labels,omitempty"`
+	// RunAPI is the base URL of the run API, [link.RunAPIURL] of the run, which the
+	// session sets in QORY_RUN_API; empty for a run with no control plane.
+	RunAPI string `json:"run_api,omitempty"`
 	// Applied are the members of dev.qory.run.policy_applied the gateway decides for
 	// the policy in force, a JSON object: every member but harness_hosts, variables and
 	// credential_variables, which the session adds. The gateway refuses a policy_applied whose other members

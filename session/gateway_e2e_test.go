@@ -242,6 +242,8 @@ type control struct {
 	gone atomic.Int32
 	// goneOnFetch answers every registration a signed 410 run_closed.
 	goneOnFetch atomic.Bool
+	// runAPI serves the paths of [runAPIAnswers].
+	runAPI atomic.Bool
 
 	mu  sync.Mutex
 	run []byte
@@ -286,6 +288,9 @@ func newControl(t *testing.T) *control {
 		},
 	}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if c.runAPI.Load() && runAPIAnswers(signer, w, r) {
+			return
+		}
 		if r.URL.Path == receiver.DefaultRunPath && c.closeOnFetch.Load() {
 			c.closed.Store(true)
 		}

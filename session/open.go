@@ -92,6 +92,9 @@ type Run struct {
 	// stack proxy then, and [Run.StackProxy] starts none from then on. It is read
 	// without the joining lock too, by a StackProxy that finds the lock taken.
 	joinAsked atomic.Bool
+	// ending is true once Close began: [Run.RunAPI] reads it without the joining lock,
+	// which a Join holds.
+	ending atomic.Bool
 	// keptBy is the number of the session whose wall's removal failed, 0 for none:
 	// its entry among the walled runs still going stays, and no session joins after it.
 	keptBy         int
@@ -823,6 +826,7 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 		out.Reason, out.ExitCode = event.ReasonNoSession, -1
 	}
 	r.closed = true
+	r.ending.Store(true)
 	r.hosts.closeAll()
 	r.closeEngine()
 	// A host step still open ends before run.exited, as one the caller stopped.

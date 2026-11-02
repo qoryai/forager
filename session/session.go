@@ -34,11 +34,12 @@ import (
 type Refusal = accesskey.Refusal
 
 // The environment variables the session gets from Forager. EnvHarnessHome is set
-// when the spec has a HarnessHome.
+// when the spec has a HarnessHome, and EnvRunAPI when the run has a control plane.
 const (
 	EnvRunID       = "QORY_RUN_ID"
 	EnvSocket      = link.EnvRunSocket
 	EnvHarnessHome = "QORY_HARNESS_HOME"
+	EnvRunAPI      = link.EnvRunAPI
 )
 
 // MaxLabels is how many labels a run may carry.

@@ -510,19 +510,52 @@ type answer struct {
 // unsigned. An error is a transport failure: no answer. With Via set, the request goes
 // to Via's origin with its target, and so its signature, unchanged.
 func (c *Client) send(ctx context.Context, method, u string, body []byte, max int, set func(http.Header)) (*answer, error) {
+	hc, req, sig, err := c.signed(ctx, method, u, body, set)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, accesskey.ShownError(err)
+	}
+	defer resp.Body.Close()
+	return c.read(resp, sig, max)
+}
+
+// read reads the answer resp to a request whose signature is sig, the body up to max,
+// and verifies it, as [Client.send] documents.
+func (c *Client) read(resp *http.Response, sig string, max int) (*answer, error) {
+	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(max)+1))
+	if err != nil {
+		return nil, accesskey.ShownError(err)
+	}
+	a := &answer{status: resp.StatusCode, body: b}
+	if resp.StatusCode == http.StatusUnauthorized || len(b) > max || (resp.StatusCode != http.StatusOK && len(b) > MaxRefusal) {
+		return a, nil
+	}
+	if c.verifies(resp, sig, accesskey.Answer{Body: b}) {
+		a.signed, a.header = true, resp.Header
+	}
+	return a, nil
+}
+
+// signed is one request signed under the access key, the client it goes through, and
+// its signature. With Via set, the request goes to Via's origin with its target
+// unchanged.
+func (c *Client) signed(ctx context.Context, method, u string, body []byte, set func(http.Header)) (*http.Client, *http.Request, string, error) {
 	if v := c.Config.Via; v != nil {
 		var err error
 		if u, err = v.rebase(u); err != nil {
-			return nil, accesskey.ShownError(err)
+			return nil, nil, "", accesskey.ShownError(err)
 		}
 	}
 	hc, err := c.http()
 	if err != nil {
-		return nil, accesskey.ShownError(err)
+		return nil, nil, "", accesskey.ShownError(err)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(body))
 	if err != nil {
-		return nil, accesskey.ShownError(err)
+		return nil, nil, "", accesskey.ShownError(err)
 	}
 	if body == nil {
 		req.Body, req.ContentLength = nil, 0
@@ -546,22 +579,16 @@ func (c *Client) send(ctx context.Context, method, u string, body []byte, max in
 	}
 	sig, err := c.Key.SignRequest(signed)
 	if err != nil {
-		return nil, err
+		return nil, nil, "", err
 	}
 	req.Header.Set(HeaderSignature, sig)
-	resp, err := hc.Do(req)
-	if err != nil {
-		return nil, accesskey.ShownError(err)
-	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(max)+1))
-	if err != nil {
-		return nil, accesskey.ShownError(err)
-	}
-	a := &answer{status: resp.StatusCode, body: b}
-	if resp.StatusCode == http.StatusUnauthorized || len(b) > max || (resp.StatusCode != http.StatusOK && len(b) > MaxRefusal) {
-		return a, nil
-	}
+	return hc, req, sig, nil
+}
+
+// verifies reports whether resp, an answer to a request whose signature is sig, verifies
+// under the pin, with a's Body or Digest as its body. A header the signature covers sent
+// twice does not verify.
+func (c *Client) verifies(resp *http.Response, sig string, a accesskey.Answer) bool {
 	one := func(name string) (string, bool) {
 		v := resp.Header.Values(name)
 		return strings.Join(v, ""), len(v) <= 1
@@ -569,10 +596,8 @@ func (c *Client) send(ctx context.Context, method, u string, body []byte, max in
 	signature, ok1 := one(HeaderSignature)
 	conf, ok2 := one(HeaderConfiguration)
 	run, ok3 := one(HeaderRunConfiguration)
-	if ok1 && ok2 && ok3 && c.Config.ApiaryPublicKey.VerifyAnswer(accesskey.Answer{Status: resp.StatusCode, RequestSignature: sig, Body: b, Configuration: conf, RunConfiguration: run}, signature) {
-		a.signed, a.header = true, resp.Header
-	}
-	return a, nil
+	a.Status, a.RequestSignature, a.Configuration, a.RunConfiguration = resp.StatusCode, sig, conf, run
+	return ok1 && ok2 && ok3 && c.Config.ApiaryPublicKey.VerifyAnswer(a, signature)
 }
 
 // refusal is the error of an answer at run start that is not the one wanted: a 401 is

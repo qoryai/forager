@@ -411,6 +411,30 @@ func TestAnswerKnownAnswers(t *testing.T) {
 	}
 }
 
+// TestAnAnswerWithADigest pins Digest: the fourth line of the message holds it in place
+// of the hash of Body, so a signature over a file verifies under the digest of its bytes
+// with no body to hash, and only under that digest.
+func TestAnAnswerWithADigest(t *testing.T) {
+	signer := keys(t).SigningKey.key(t)
+	pin := keys(t).SigningKey.pin()
+	body := []byte("the bytes of a file")
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+	whole := accesskey.Answer{Status: 200, RequestSignature: "request", Body: body}
+	file := accesskey.Answer{Status: 200, RequestSignature: "request", Digest: digest}
+	if !bytes.Equal(whole.Message(), file.Message()) {
+		t.Errorf("the messages differ:\n%s\n%s", whole.Message(), file.Message())
+	}
+	sig := signer.SignAnswer(file)
+	if !pin.VerifyAnswer(whole, sig) {
+		t.Error("a signature over the digest does not verify over the body")
+	}
+	file.Digest = strings.Repeat("0", 64)
+	if pin.VerifyAnswer(file, sig) {
+		t.Error("the signature verifies under another digest")
+	}
+}
+
 // TestEnrolmentKnownAnswers builds the published enrolment requests from the fixture
 // access key, or for the gateway's request the fixture gateway key, the code, the name
 // and the timestamp, and checks each body and proof; then verifies the published
