@@ -66,8 +66,9 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 // TestTheRunExitedIsTheClosesOutcome pins a session's dev.qory.run.exited, the
 // close's: any state, with no reason, timeout or interrupted, no_session only in a run
 // with no join, and image_missing, image_user_root and workflow_not_in_harness only
-// failed with exit_code -1 in a run with no join, are taken; a reason the gateway decides, or a starter's, is refused, and the run ends
-// failed, batch_refused, its reason in the report.
+// failed with exit_code -1 in a run with no join, are taken; a reason the gateway
+// decides, or a starter's, is refused, and the run ends failed, batch_refused, its
+// reason in the report.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
