@@ -858,6 +858,9 @@ release may change what an existing document does, and says so under Upgrading.
   and `(*session.Run).Close` refuses the same outcomes before it writes anything.
   `event.ReasonReadNeedsWall` and `event.ReasonReadNeedsSetupOutside` are the two
   codes.
+  `read_needs_no_nested_docker`, which qory gives the close of a read-only workflow's
+  run whose image runs nested Docker, follows the same rule, as
+  `event.ReasonReadNeedsNoNestedDocker`.
 - The gateway replaces text in the shape of a known key (`mask.Shapes`) with `***` in
   the line of an adapter that fails, in the error of a run's start and in a renewal's
   report, and in each line a tool writes to standard error, in its report and in the

@@ -113,14 +113,16 @@ const (
 const ReasonWorkflowNotInHarness = "workflow_not_in_harness"
 
 // ReasonReadNeedsWall is the reason qory gives the close of a run with no join of a
-// read-only workflow that has no wall, and ReasonReadNeedsSetupOutside the close of a
-// read-only workflow's run whose setup is set to run inside the agent's container, each
-// failed with exit code -1. They are caller's codes, not Forager's reserved codes; the
-// close and the gateway accept them only failed with exit code -1, for a run with no
-// join.
+// read-only workflow that has no wall, ReasonReadNeedsSetupOutside the close of a
+// read-only workflow's run whose setup is set to run inside the agent's container, and
+// ReasonReadNeedsNoNestedDocker the close of a read-only workflow's run whose image runs
+// nested Docker, each failed with exit code -1. They are caller's codes, not Forager's
+// reserved codes; the close and the gateway accept them only failed with exit code -1,
+// for a run with no join.
 const (
-	ReasonReadNeedsWall         = "read_needs_wall"
-	ReasonReadNeedsSetupOutside = "read_needs_setup_outside"
+	ReasonReadNeedsWall           = "read_needs_wall"
+	ReasonReadNeedsSetupOutside   = "read_needs_setup_outside"
+	ReasonReadNeedsNoNestedDocker = "read_needs_no_nested_docker"
 )
 
 // The states of dev.qory.run.exited, how a run ended: it ended well, it ended badly, or

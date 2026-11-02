@@ -1952,10 +1952,11 @@ returned that refusal, `failed` with `exit_code` `-1`, in a run with no join, so
 control plane can tell a missing image, or an image whose user is root, from another
 failure. qory closes a run with no join whose workflow is not in the harness with
 `workflow_not_in_harness`, `failed` with `exit_code` `-1`. qory closes a run with no
-join of a read-only workflow that has no wall with `read_needs_wall`, and a read-only
+join of a read-only workflow that has no wall with `read_needs_wall`, a read-only
 workflow's run whose setup is set to run inside the agent's container with
-`read_needs_setup_outside`, each `failed` with `exit_code` `-1`.
-`(*session.Run).Close` refuses each of the five codes with another state or exit code,
+`read_needs_setup_outside`, and a read-only workflow's run whose image runs nested
+Docker with `read_needs_no_nested_docker`, each `failed` with `exit_code` `-1`.
+`(*session.Run).Close` refuses each of the six codes with another state or exit code,
 or after a join, and the gateway refuses a batch with such a `dev.qory.run.exited`. The state of each of
 Forager's endings:
 
@@ -1971,6 +1972,7 @@ Forager's endings:
 | the run was closed with no join, by qory, because the run's workflow is not in the harness; `exit_code` is `-1` | `failed` | `workflow_not_in_harness` |
 | the run was closed with no join, by qory, because the run's workflow is read-only and the run has no wall; `exit_code` is `-1` | `failed` | `read_needs_wall` |
 | the run was closed with no join, by qory, because the run's workflow is read-only and its setup is set to run inside the agent's container; `exit_code` is `-1` | `failed` | `read_needs_setup_outside` |
+| the run was closed with no join, by qory, because the run's workflow is read-only and its image runs nested Docker; `exit_code` is `-1` | `failed` | `read_needs_no_nested_docker` |
 | the gateway heard nothing from the session for 3 × its heartbeat interval | `failed` | `session_lost` |
 | the gateway was lost before the run's exit was recorded, because Forager died; written when the record is sent again, `duration_ms` to the last event recorded | `failed` | `gateway_lost` |
 | the gateway refused a batch from the run's session (§The gateway's link) | `failed` | `batch_refused` |
@@ -3855,18 +3857,20 @@ its events:
   `dev.qory.run.refused` after the run's `dev.qory.run.started`, whose place it takes;
 - is a `dev.qory.run.exited` other than the close's: one with a `reason` other than
   `timeout`, `interrupted`, `no_session`, `image_missing`, `image_user_root`,
-  `workflow_not_in_harness`, `read_needs_wall` and `read_needs_setup_outside`; one
-  with `no_session`, `image_missing`, `image_user_root`, `workflow_not_in_harness`,
-  `read_needs_wall` or `read_needs_setup_outside` after the gateway numbered a join of
-  the run; or one with `image_missing`, `image_user_root`, `workflow_not_in_harness`,
-  `read_needs_wall` or `read_needs_setup_outside` that is not `failed` with
-  `exit_code` `-1`. A session's
+  `workflow_not_in_harness`, `read_needs_wall`, `read_needs_setup_outside` and
+  `read_needs_no_nested_docker`; one with `no_session`, `image_missing`,
+  `image_user_root`, `workflow_not_in_harness`, `read_needs_wall`,
+  `read_needs_setup_outside` or `read_needs_no_nested_docker` after the gateway
+  numbered a join of the run; or one with `image_missing`, `image_user_root`,
+  `workflow_not_in_harness`, `read_needs_wall`, `read_needs_setup_outside` or
+  `read_needs_no_nested_docker` that is not `failed` with `exit_code` `-1`. A session's
   batch contains only the close's `dev.qory.run.exited`, with the caller's outcome, its
   time limit, its stop from where it was started, a close with no join, a close with no
   join after the fetch of an image its registry, or the registry's mirror, does not
   have, or whose user is root, a close with no join of a run whose workflow is not
   in the harness, or a close with no join of a read-only workflow's run that has no
-  wall or whose setup is set to run inside the agent's container, and the gateway writes the event of every other reason itself (The
+  wall, whose setup is set to run inside the agent's container or whose image runs
+  nested Docker, and the gateway writes the event of every other reason itself (The
   end of a run at the gateway, below); or is a
   `dev.qory.run.exited` while a join is open, from the gateway's `200` to it until the
   gateway numbers its `dev.qory.session.exited`;
