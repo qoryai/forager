@@ -381,6 +381,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if err != nil {
 		return fail(err)
 	}
+	markSetup(plan.sources, len(r.setupBinds) > 0)
 	if r.listed != nil {
 		if err := r.listed.update(slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
@@ -688,6 +689,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err != nil {
 			return fail(err)
 		}
+		markSetup(again.sources, len(r.setupBinds) > 0)
 		if err := samePlan(plan, again); err != nil {
 			return fail(err)
 		}

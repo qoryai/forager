@@ -1074,10 +1074,11 @@ request asks the gateway for, for this session.
   nested Docker this is unverified: the enclosure's root, which the agent reaches
   through the inner Docker daemon, may remount the workspace writable (see the
   contract's §The wall, Nested Docker). The setup container of `(*session.Run).Setup`
-  still binds the working folder writable, and the host steps still write it, so the
-  workspace keeps the checks of a writable place, and a settings file in it is refused
-  as in a writable one.
-  A writable mount that holds `Dir` is `mount_mode_conflict`; a read-only one is the one
+  still binds the working folder writable until the run closes, so a service a setup
+  command starts there can still write the workspace, for example when the agent asks
+  it to. The host steps still write it too, so the workspace keeps the checks of a
+  writable place, and a settings file in it is refused as in a writable one. A writable
+  mount that holds `Dir` is `mount_mode_conflict`; a read-only one is the one
   bind. `Join` and `AgentEnv` return an error before the join request, and write
   nothing, in a run with no `Wall`: `Open the run with a wall to mount the workspace
   read-only: a run with no wall starts the agent on this machine.` They do the same

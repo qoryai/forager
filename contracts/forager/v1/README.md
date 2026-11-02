@@ -4788,13 +4788,14 @@ up in its parent, so two binds of one root are allowed:
   system`. Under nested Docker this is unverified: the enclosure's root, which the agent
   reaches through the inner Docker daemon, may remount the workspace writable (Nested
   Docker, below). The setup container still binds the working folder writable (Setup,
-  below), and the host steps still write it, so the workspace keeps every check of a
+  below) until the run closes, so a service a setup command starts there, such as one at
+  `qory-setup:5432`, can still write the workspace, for example when the agent asks it
+  to. The host steps still write it too, so the workspace keeps every check of a
   writable place, the links and the way to Forager's files among them; the registry
   lists the workspace as writable when no mount holds it; and a settings file that lies
   in the workspace or in the setup container's folder is not read (§Sequence). A
-  writable mount that holds the
-  workspace, is the same place or lies inside it is `mount_mode_conflict`; a read-only mount that holds it
-  is its one bind. Such a session needs a wall and no `SessionSpec.Setup`, which runs in
+  writable mount that holds the workspace, is the same place or lies inside it is
+  `mount_mode_conflict`; a read-only mount that holds it is its one bind. Such a session needs a wall and no `SessionSpec.Setup`, which runs in
   the agent's container: `Run.Join` returns an error before the join request, and
   writes nothing, for either;
 - a place, of either mode, whose path goes through a link inside a writable place of
