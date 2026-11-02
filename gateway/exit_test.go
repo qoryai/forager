@@ -65,8 +65,8 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 
 // TestTheRunExitedIsTheClosesOutcome pins a session's dev.qory.run.exited, the
 // close's: any state, with no reason, timeout or interrupted, no_session only in a run
-// with no join, and image_missing only failed with exit_code -1 in a run with no join,
-// are taken; a reason the gateway decides, or a starter's, is refused, and the run ends
+// with no join, and image_missing, image_user_root and workflow_not_in_harness only
+// failed with exit_code -1 in a run with no join, are taken; a reason the gateway decides, or a starter's, is refused, and the run ends
 // failed, batch_refused, its reason in the report.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
@@ -89,6 +89,15 @@ func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 		{map[string]any{"state": "failed", "exit_code": 0, "reason": "image_missing"}, false, "a run.exited image_missing that is not failed with exit_code -1"},
 		{map[string]any{"state": "succeeded", "exit_code": -1, "reason": "image_missing"}, false, "a run.exited image_missing that is not failed with exit_code -1"},
 		{map[string]any{"state": "failed", "reason": "image_missing"}, false, "a run.exited image_missing that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_user_root"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_user_root"}, true, "a run.exited image_user_root of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "image_user_root"}, false, "a run.exited image_user_root that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "image_user_root"}, false, "a run.exited image_user_root that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "workflow_not_in_harness"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "workflow_not_in_harness"}, true, "a run.exited workflow_not_in_harness of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 1, "reason": "workflow_not_in_harness"}, false, "a run.exited workflow_not_in_harness that is not failed with exit_code -1"},
+		{map[string]any{"state": "succeeded", "exit_code": -1, "reason": "workflow_not_in_harness"}, false, "a run.exited workflow_not_in_harness that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "reason": "workflow_not_in_harness"}, false, "a run.exited workflow_not_in_harness that is not failed with exit_code -1"},
 		{map[string]any{"state": "failed", "exit_code": 130, "reason": "interrupted"}, false, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "timeout"}, false, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "session_lost"}, false, "one link-batch.schema.json refuses"},

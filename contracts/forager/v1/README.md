@@ -1946,10 +1946,13 @@ outcome kept: the run has no reason, but for a `cancelled` run, whose reason is 
 `stopped`, as when its starter gave none (§The gateway's link, The end member). The
 close writes `timeout`, `interrupted` and `no_session`, the resend of a record writes
 `gateway_lost` (§The server), and the gateway writes the others, on a session's run on
-its link. The close writes `image_missing`, the refusal code of `refusal.Decides`, when
-its caller gives it: after `(*session.Run).FetchImage` returned that refusal, `failed`
-with `exit_code` `-1`, in a run with no join, so a control plane can tell a missing
-image from another failure. The state of each of Forager's endings:
+its link. The close writes `image_missing` or `image_user_root`, refusal codes of
+`refusal.Decides`, when its caller gives one: after `(*session.Run).FetchImage`
+returned that refusal, `failed` with `exit_code` `-1`, in a run with no join, so a
+control plane can tell a missing image, or an image whose user is root, from another
+failure. qory closes a run with no join whose workflow is not in the harness with
+`workflow_not_in_harness`, `failed` with `exit_code` `-1`. The state of each of
+Forager's endings:
 
 | Ending | `state` | `reason` |
 |---|---|---|
@@ -1959,6 +1962,8 @@ image from another failure. The state of each of Forager's endings:
 | the run was stopped from where it was started (a Ctrl-C) before its close; `exit_code` is the last session's, `-1` when no session ran | `cancelled` | `interrupted` |
 | the run was closed with no join, after its host work failed, such as a fetch or a compose; `exit_code` is `-1` | `failed` | `no_session` |
 | the run was closed with no join, after the fetch of the run's image found that its registry, or the registry's mirror, does not have it; `exit_code` is `-1` | `failed` | `image_missing` |
+| the run was closed with no join, after the fetch of the run's image found that its user is root; `exit_code` is `-1` | `failed` | `image_user_root` |
+| the run was closed with no join, by qory, because the run's workflow is not in the harness; `exit_code` is `-1` | `failed` | `workflow_not_in_harness` |
 | the gateway heard nothing from the session for 3 × its heartbeat interval | `failed` | `session_lost` |
 | the gateway was lost before the run's exit was recorded, because Forager died; written when the record is sent again, `duration_ms` to the last event recorded | `failed` | `gateway_lost` |
 | the gateway refused a batch from the run's session (§The gateway's link) | `failed` | `batch_refused` |
@@ -3842,14 +3847,17 @@ its events:
   `dev.qory.run.exited` or `dev.qory.run.refused`: nothing follows either; or is a
   `dev.qory.run.refused` after the run's `dev.qory.run.started`, whose place it takes;
 - is a `dev.qory.run.exited` other than the close's: one with a `reason` other than
-  `timeout`, `interrupted`, `no_session` and `image_missing`; one with `no_session` or
-  `image_missing` after the gateway numbered a join of the run; or one with
-  `image_missing` that is not `failed` with `exit_code` `-1`. A session's batch
-  contains only the close's `dev.qory.run.exited`, with the caller's outcome, its time
-  limit, its stop from where it was started, a close with no join, or a close with no
+  `timeout`, `interrupted`, `no_session`, `image_missing`, `image_user_root` and
+  `workflow_not_in_harness`; one with `no_session`, `image_missing`,
+  `image_user_root` or `workflow_not_in_harness` after the gateway numbered a join of
+  the run; or one with `image_missing`, `image_user_root` or
+  `workflow_not_in_harness` that is not `failed` with `exit_code` `-1`. A session's
+  batch contains only the close's `dev.qory.run.exited`, with the caller's outcome, its
+  time limit, its stop from where it was started, a close with no join, a close with no
   join after the fetch of an image its registry, or the registry's mirror, does not
-  have, and the gateway writes the event of every other reason itself (The end of a
-  run at the gateway, below); or is a
+  have, or whose user is root, or a close with no join of a run whose workflow is not
+  in the harness, and the gateway writes the event of every other reason itself (The
+  end of a run at the gateway, below); or is a
   `dev.qory.run.exited` while a join is open, from the gateway's `200` to it until the
   gateway numbers its `dev.qory.session.exited`;
 - is a `dev.qory.session.started` whose `session` is not the number of a join the

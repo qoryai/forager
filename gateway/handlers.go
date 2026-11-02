@@ -473,12 +473,18 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// reasonWorkflowNotInHarness is the reason qory gives the close of a run with no join
+// whose workflow is not in the harness. It is qory's code, not one of Forager's.
+const reasonWorkflowNotInHarness = "workflow_not_in_harness"
+
 // closeRule is why the link refuses a session's dev.qory.run.exited, its data, empty
 // when it accepts it: the close's, with no reason or with timeout, interrupted,
-// no_session or image_missing, the last two only for a run with no join the gateway
-// numbered, and image_missing only failed with exit_code -1, the close after a fetch of
-// the run's image that its registry did not have. The gateway writes the event of every
-// other end itself. joined is true when the gateway numbered a join of the run.
+// no_session, image_missing, image_user_root or workflow_not_in_harness, the last four
+// only for a run with no join the gateway numbered, and the last three only failed with
+// exit_code -1: image_missing and image_user_root the close after a fetch of the run's
+// image that its registry did not have or whose user is root, workflow_not_in_harness
+// the close of a run whose workflow is not in the harness. The gateway writes the event
+// of every other end itself. joined is true when the gateway numbered a join of the run.
 func closeRule(data map[string]any, joined bool) string {
 	given, hasReason := data["reason"]
 	why, _ := given.(string)
@@ -488,13 +494,13 @@ func closeRule(data map[string]any, joined bool) string {
 		if joined {
 			return "a run.exited no_session of a run with a join"
 		}
-	case why == refusal.ImageMissing:
+	case why == refusal.ImageMissing, why == refusal.ImageUserRoot, why == reasonWorkflowNotInHarness:
 		code, _ := data["exit_code"].(float64)
 		switch {
 		case joined:
-			return "a run.exited image_missing of a run with a join"
+			return "a run.exited " + why + " of a run with a join"
 		case data["state"] != event.StateFailed || code != -1:
-			return "a run.exited image_missing that is not failed with exit_code -1"
+			return "a run.exited " + why + " that is not failed with exit_code -1"
 		}
 	default:
 		return "a run.exited with a reason the gateway decides"

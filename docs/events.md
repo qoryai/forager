@@ -173,7 +173,10 @@ starter's, carried as given. The close writes `timeout`, `cancelled`, `interrupt
 `failed`, a run closed with no session after its host work failed, such as a fetch,
 and posts them. The close writes and posts `image_missing`, `failed` with exit code
 `-1`, when its caller gives it for a run with no session after the fetch of the run's
-image found that its registry, or the registry's mirror, does not have it. The gateway
+image found that its registry, or the registry's mirror, does not have it, and the same
+for `image_user_root`, after the fetch found that the image's user is root. qory closes
+a run with no session whose workflow is not in the harness with
+`workflow_not_in_harness`, `failed` with exit code `-1`. The gateway
 writes the others: `session_lost`, `failed`, the session was silent; `batch_refused`,
 `failed`, the gateway refused a batch from the run's session
 (see the contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
