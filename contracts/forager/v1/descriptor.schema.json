@@ -265,6 +265,14 @@
       "propertyNames": {"$ref": "#/$defs/name"},
       "additionalProperties": {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00\\r\\n]*$"}
     },
+    "egress_hosts": {
+      "description": "The hosts the runtime needs to reach: exact DNS names, no wildcard, no IP literal. A server allows them for a run; a machine's policy can still block them. runtimes.json lists them for every descriptor the contract ships. This list differs from secrets.declares[].hosts, which is where a secret's value is set.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/exact_host"}
+    },
     "parent": {
       "description": "Where the runtime reports which tool call started a subagent, for parent_agent_id on dev.qory.runtime.subagent_started. A record from `source` that matches the rule contains a subagent's id and the id of the tool call that started it. The agent that made that call, in the session's dev.qory.runtime.tool_started, is the subagent's parent. Absent, the session sets no parent.",
       "type": "object",

@@ -329,7 +329,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // overrides that are empty, list a name twice or list something other than a
 // variable's name, or keys that are empty, read from HOME, of a format outside the
 // list, without a variable or with oauth beside a header, a descriptor that declares a
-// secret read from LD_PRELOAD, a link run request
+// secret read from LD_PRELOAD, a descriptor whose egress_hosts are empty, list a host
+// twice or list a wildcard or an IP literal, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that has passes, a member only a join request has, or whose image has no
 // reference, a link run

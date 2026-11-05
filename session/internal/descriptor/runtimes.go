@@ -13,8 +13,8 @@ import (
 )
 
 // RuntimesFile is the path, in the contract directory, of the file that lists the
-// secrets, the model section and the fixed variables of every runtime the contract ships a descriptor for,
-// the file a server vendors.
+// secrets, the model section, the fixed variables and the egress hosts of every runtime the contract
+// ships a descriptor for, the file a server vendors.
 const RuntimesFile = "runtimes.json"
 
 // runtimesFile is the document of [RuntimesFile].
@@ -37,6 +37,7 @@ type runtimeEntry struct {
 	OneOf           []groupEntry       `json:"one_of"`
 	Model           *modelEntry        `json:"model,omitempty"`
 	Fixed           map[string]string  `json:"fixed"`
+	EgressHosts     []string           `json:"egress_hosts"`
 }
 
 // modelEntry is the model section of a runtime in [RuntimesFile], in the descriptor's
@@ -74,7 +75,7 @@ type groupEntry struct {
 // Runtimes renders [RuntimesFile] from the descriptors of a contract directory, such as
 // contracts.FS: every runtimes/<name>/descriptor.yaml, sorted by name, with its name,
 // its title, its secrets, the lists in the descriptor's order, its model section
-// when it has one, and its fixed variables, by name. The output is
+// when it has one, its fixed variables, by name, and its egress hosts. The output is
 // indented JSON ending in a newline, the same bytes for the same descriptors. A
 // descriptor without a title, or whose runtime is not its directory's name, is an
 // error.
@@ -131,6 +132,7 @@ func entry(d *Descriptor) runtimeEntry {
 		Declares:        []declarationEntry{},
 		OneOf:           []groupEntry{},
 		Fixed:           map[string]string{},
+		EgressHosts:     list(d.EgressHosts),
 	}
 	maps.Copy(e.Fixed, d.Fixed)
 	for _, dc := range s.Declares {

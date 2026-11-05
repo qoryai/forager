@@ -21,9 +21,9 @@
 // keeps for itself, and its [Model] the API formats the runtime sends, where a composer
 // writes a run's model id, effort value and model endpoint, and the variables it reads
 // a model key from. Its Fixed is the variables the session sets for the runtime in
-// every launch, over every other source. [Runtimes] renders
-// the three, for every descriptor the contract ships, as runtimes.json, the file a server
-// vendors.
+// every launch, over every other source, and its EgressHosts the hosts the runtime
+// needs to reach. [Runtimes] renders the four, for every descriptor the contract ships,
+// as runtimes.json, the file a server vendors.
 package descriptor
 
 import (
@@ -56,9 +56,13 @@ type Descriptor struct {
 	// Fixed is the variables the session sets for the runtime in every launch, by name,
 	// walled or not: no other source's value of one applies. Nil when the descriptor
 	// sets none.
-	Fixed  map[string]string `yaml:"fixed" json:"fixed,omitempty"`
-	Parent *Parent           `yaml:"parent" json:"parent,omitempty"`
-	Rules  []Rule            `yaml:"rules" json:"rules"`
+	Fixed map[string]string `yaml:"fixed" json:"fixed,omitempty"`
+	// EgressHosts is the hosts the runtime needs to reach, which [Runtimes] lists for a
+	// server to allow for a run. No code of this module applies them to a run's policy.
+	// Nil when the descriptor has none.
+	EgressHosts []string `yaml:"egress_hosts" json:"egress_hosts,omitempty"`
+	Parent      *Parent  `yaml:"parent" json:"parent,omitempty"`
+	Rules       []Rule   `yaml:"rules" json:"rules"`
 }
 
 // Tools is what the session copies from a tool's input onto the runtime's tool events.
