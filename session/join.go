@@ -924,8 +924,8 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = accesskey.ShownValue(v, false)
 	}
-	// rt is a bare runtime for a nil Runtime and for a bare one the caller set: only the
-	// nil Runtime has this member.
+	// rt is a bare runtime for a nil Runtime and for a bare one the caller set. A session
+	// whose runtime the caller set has no bare.
 	if spec.SessionSpec.Runtime == nil {
 		started["bare"] = true
 	}

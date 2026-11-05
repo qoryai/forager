@@ -676,8 +676,8 @@ release may change what an existing document does, and says so under Upgrading.
   package's errors, and no error contains a value.
 - `dev.qory.session.started` contains `bare`, `true`, when `SessionSpec.Runtime` is nil,
   so a reader can leave a session with no runtime out of what it records as the run's
-  runtime. A runtime the caller sets has no `bare`, even a bare one. The command may
-  still be an agent, because Forager does not inspect it.
+  runtime. A session whose runtime the caller sets has no `bare`, even a bare runtime.
+  The command may still be an agent, because Forager does not inspect it.
 
 #### Changed
 
@@ -860,6 +860,10 @@ release may change what an existing document does, and says so under Upgrading.
   `tools.summary` lists, on pipes or on a pseudo-terminal, and `line`,
   `dev.qory.runtime.text`, `dev.qory.runtime.tool_result` and
   `dev.qory.runtime.tool_denied` from the first stdout line that a rule maps, on pipes.
+- Update a separate gateway before the sessions that use it. A session with no runtime
+  writes `bare` in `dev.qory.session.started`. A gateway built with an older contract
+  refuses a batch with `bare`, because the event's schema has
+  `additionalProperties: false`.
 - List a host that resolves to a private network address by name in the node's allow
   list, or a walled run can no longer reach it.
 - Each run on a gateway now has limits: at most 256 connections open at once, and 50

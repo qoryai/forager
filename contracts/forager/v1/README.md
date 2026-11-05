@@ -1916,9 +1916,9 @@ caller that passes no source leaves `harness` out, and a run with a run key has 
 **A session with no runtime.** `dev.qory.session.started` contains `bare`, `true`, when
 the caller starts the session with no runtime: `session.SessionSpec.Runtime` is nil, and
 `runtime` is the command's base name. Otherwise `bare` is absent, and it is never
-`false`. A bare runtime the caller sets, such as the one a name with no descriptor
-resolves to, has no `bare`. The command may still be an agent, because Forager does not
-inspect it.
+`false`. A session whose runtime the caller sets has no `bare`, even a bare runtime
+such as the one a name with no descriptor resolves to. The command may still be an
+agent, because Forager does not inspect it.
 
 **How a session ends.** Every `dev.qory.session.exited` contains `session`, `state`,
 `exit_code` and `duration_ms`, from the session's `dev.qory.session.started`. The
