@@ -1402,7 +1402,13 @@ release may change what an existing document does, and says so under Upgrading.
   live-restore keeps the agent's container running, now fails `Unwrap`: the run keeps its
   entry among the walled runs still going, takes no further joins, and `HostProxy`
   returns an error. Before, `no such file or directory` counted as gone, and a push could
-  run beside the agent's container. `Close` keeps its reading.
+  run beside the agent's container.
+- The Docker wall's `Close` counts only `no such container` as gone for a container, as
+  `Unwrap` and `RemoveSetup` do. An engine that cannot be reached fails `Close`: the run
+  reports the failure, keeps its entry among the walled runs still going, and sets
+  `session.Closed.WallKept`. Before, `no such file or directory` counted as gone while
+  the containers might still run. A failed `docker network rm` still counts `no such`
+  and `not found` as gone.
 
 ### Session
 
@@ -1761,6 +1767,11 @@ release may change what an existing document does, and says so under Upgrading.
 - `(*session.Run).Image`, the image of the run answer with its `Docker`, so a caller can
   close a read-only run in an image with nested Docker before its first join. It is the
   zero `session.Image` in a run with no wall or when the run answer has no image.
+- `session.Closed.WallKept`, true when removing a part of the run's wall failed at some
+  point of the run: the agent's container at a session's end, the setup container in
+  `RemoveSetup`, or anything at the close. A process may have kept writing the run's
+  binds after its session ended, so do not trust what is in them. It stays true when a
+  later removal succeeded.
 
 #### Fixed
 

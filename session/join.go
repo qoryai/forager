@@ -626,6 +626,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 					// is the run's while one of the run's containers exists.
 					r.listed.keep()
 					r.keptBy = n
+					r.wallFailed = true
 				}
 			}()
 		}

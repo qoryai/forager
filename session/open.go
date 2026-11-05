@@ -102,7 +102,10 @@ type Run struct {
 	checkShut error
 	// keptBy is the number of the session whose wall's removal failed, 0 for none:
 	// its entry among the walled runs still going stays, and no session joins after it.
-	keptBy         int
+	keptBy int
+	// wallFailed is true once removing a part of the run's wall failed, and stays true:
+	// the close copies it to [Closed.WallKept].
+	wallFailed     bool
 	closed         bool
 	sessionApplied map[string]any
 	// steps is the number of the run's last step, host steps and Join's alike, and
@@ -852,7 +855,7 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 	r.reload.stop()
 	r.stopBeat()
 	closed := r.closing.Err() != nil
-	res := &Closed{RunID: r.id, Dir: r.dir, State: out.State, Reason: out.Reason, ExitCode: out.ExitCode}
+	res := &Closed{RunID: r.id, Dir: r.dir, State: out.State, Reason: out.Reason, ExitCode: out.ExitCode, WallKept: r.wallFailed}
 	if closed {
 		e := r.closedBy.get()
 		res.State, res.Reason = recorded(e)

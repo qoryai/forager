@@ -484,7 +484,8 @@ up in its parent, so two binds of one root are allowed.
   The check of the run directory and of Forager's directories comes at the open, before
   the gateway is contacted, and the check of a session's places at its join. The run
   leaves the registry when it closes, however it ends, unless a session's wall could not
-  be removed. Then the run's entry keeps that session's places, and a later join returns
+  be removed or the close could not remove the run's wall. After a session's wall could
+  not be removed, the run's entry keeps that session's places, and a later join returns
   "Open a new run. The wall of session 1 could not be removed and may still run, so this
   run takes no more sessions."
 

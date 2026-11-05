@@ -600,6 +600,13 @@ type Closed struct {
 	RunClosed bool
 	// ClosedReason is the 410's code when RunClosed, as [Result.ClosedReason] is.
 	ClosedReason string
+	// WallKept is true when removing a part of the run's wall failed at some point of
+	// the run: a session's Unwrap, RemoveSetup, or the close. A process may have kept
+	// writing the run's binds after its session ended, so do not trust what is in them.
+	// WallKept stays true when a later removal succeeded. It is also true when the close
+	// failed only on a network or the wall's private directory, because
+	// [wall.Enclosure.Close] returns one error.
+	WallKept bool
 }
 
 // runSpec is a session's spec with the open's spec of its run, as the checks and the
