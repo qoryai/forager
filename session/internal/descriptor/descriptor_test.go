@@ -484,7 +484,7 @@ func TestRuntimesJSONIsGenerated(t *testing.T) {
 
 // TestEgressHostsAreListed pins that a descriptor's egress_hosts decode and that
 // runtimes.json lists them in the descriptor's order, as [] for a descriptor with none,
-// and what the schema holds them to: 1 to 16 exact DNS names, each once. A declaration's
+// and what the schema accepts: 1 to 16 exact DNS names, each once. A declaration's
 // hosts are not in the list.
 func TestEgressHostsAreListed(t *testing.T) {
 	const head = "version: 1\nruntime: amp\ntitle: Amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
@@ -543,6 +543,7 @@ func TestEgressHostsAreListed(t *testing.T) {
 		"upper case":      "[API.example.com]",
 		"a port":          "['api.example.com:443']",
 		"a single label":  "[localhost]",
+		"a trailing dot":  "[api.example.com.]",
 	} {
 		if _, err := descriptor.Parse("amp.yaml", []byte(head+"egress_hosts: "+list+"\n")); err == nil {
 			t.Errorf("%s: passed; want a schema failure", name)
