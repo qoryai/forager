@@ -674,6 +674,10 @@ release may change what an existing document does, and says so under Upgrading.
   any format verb, also as a field of a struct printed by reflection; `sealed.Seal`
   seals and signs an answer, for a receiver and the tests. Each refusal is one of the
   package's errors, and no error contains a value.
+- `dev.qory.session.started` contains `bare`, `true`, when `SessionSpec.Runtime` is nil,
+  so a reader can leave a session with no runtime out of what it records as the run's
+  runtime. A runtime the caller sets has no `bare`, even a bare one. The command may
+  still be an agent, because Forager does not inspect it.
 
 #### Changed
 

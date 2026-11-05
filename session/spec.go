@@ -242,7 +242,8 @@ type SessionSpec struct {
 	// records mean and how it is asked to leave. The catalog package resolves a name to
 	// one. Nil means a bare runtime named after the Command: the session is recorded,
 	// the runtime's session inside it is not. A session with no runtime has no start
-	// key: the program gets no model key's variable, placeholder or endpoint.
+	// key: the program gets no model key's variable, placeholder or endpoint. Only a nil
+	// Runtime sets bare in dev.qory.session.started.
 	Runtime runtimes.Runtime
 	// Command, Args and Dir are what to start; an empty Dir is the working directory.
 	Command string

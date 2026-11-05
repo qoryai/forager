@@ -1,0 +1,37 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000189",
+    "source": "urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+    "type": "dev.qory.session.started",
+    "subject": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+    "time": "2026-09-16T12:00:04.000Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/session.started.schema.json",
+    "data": {
+      "session": 2,
+      "runtime": "git",
+      "bare": true,
+      "command": "git",
+      "args": [
+        "status"
+      ],
+      "dir": "/home/dev/app",
+      "interactive": false
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000190",
+    "source": "urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+    "type": "dev.qory.session.exited",
+    "subject": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+    "time": "2026-09-16T12:00:05.800Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/session.exited.schema.json",
+    "data": {
+      "session": 2,
+      "state": "succeeded",
+      "exit_code": 0,
+      "duration_ms": 1800
+    }
+  }
+]

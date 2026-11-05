@@ -201,7 +201,7 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // of a run closed with no session, a batch of a setup step after a run.started with
 // machine and setup, a batch of a build step and the run's run.built, a batch of a push
 // step after a session.exited and before the run.exited, a batch of a machine step right
-// after the run.started, a join request
+// after the run.started, a batch of a session with no runtime, with bare, a join request
 // with and without model_credential, a join answer with and
 // without model_credential, and refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.
@@ -308,8 +308,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // interval is over 300 seconds or without its workspace, an event with an unpadded sequence, a run.started without opened_by,
 // with an unknown one, opened by a session, with a runtime member, with a machine in
 // upper case or with a setup other than outside and inside, a session.started
-// without its command, numbered 0, with preparation, whose setup_commands is empty, or
-// whose harness is empty, has a member it does not define or a commit of 39 characters, a session.exited without its session, failed
+// without its command, numbered 0, with preparation, whose bare is false, whose
+// setup_commands is empty, or whose harness is empty, has a member it does not define or a commit of 39 characters, a session.exited without its session, failed
 // with exit status 0 and no reason, cancelled with stopped and an exit status, cancelled
 // with gateway_lost, or of a refused join with an exit status other than -1, a run.log
 // whose step is 0, a run.step_started with an unknown kind, without its name or numbered

@@ -1063,8 +1063,9 @@ res, err := session.Resend(ctx, session.ResendSpec{
 
 A session whose `SessionSpec.Runtime` is nil runs a bare runtime named after its
 command, and has no start key: its program gets no model key's variable, placeholder or
-endpoint, whatever model keys the run has. A runtime set in the spec without a `model`
-section, even a bare one, fails in a run with a model key.
+endpoint, whatever model keys the run has. Its `dev.qory.session.started` contains
+`bare`, `true`; a runtime set in the spec has no `bare`, even a bare one. A runtime set
+in the spec without a `model` section, even a bare one, fails in a run with a model key.
 
 A program that needs custom code implements the interface.
 `session/runtimes/runtimetest` runs the same checks on it.
