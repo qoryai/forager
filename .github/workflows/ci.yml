@@ -322,4 +322,4 @@ jobs:
         if: failure()
         run: |
           sudo journalctl -u sysbox -u sysbox-fs -u sysbox-mgr --no-pager | tail -n 100 || true
-          sudo dmesg | grep -i apparmor | tail -n 50 || true
+          sudo dmesg | grep 'apparmor="DENIED"' | tail -n 50 || true
