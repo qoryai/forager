@@ -1328,15 +1328,16 @@ func setupRemovedAfterSession(t *testing.T, o Options, h hosts, outside string) 
 					t.Error(err)
 				}
 				removed := slices.DeleteFunc(slices.Clone(before), func(s string) bool { return slices.Contains(after, s) })
-				// With a Docker inside, the image declares a volume for the daemon's store,
-				// and docker rm --volumes removes the setup container's copy of it too.
+				// The suite's dind image declares VOLUME /var/lib/docker. The setup container
+				// runs it with no mount there, so docker rm --volumes also removes the
+				// container's anonymous volume.
 				volumes := slices.DeleteFunc(slices.Clone(removed), func(s string) bool { return !strings.HasPrefix(s, "volume ") })
-				maxVolumes := 0
+				maxVolumes, want := 0, "the setup container gone alone"
 				if o.Docker {
-					maxVolumes = 1
+					maxVolumes, want = 1, "the setup container gone, with at most its one anonymous volume"
 				}
 				if len(removed)-len(volumes) != 1 || len(volumes) > maxVolumes || len(after) != len(before)-len(removed) {
-					t.Errorf("before RemoveSetup the run had %q, and after it %q; want the setup container gone, with at most %d volume of it, and nothing else", before, after, maxVolumes)
+					t.Errorf("before RemoveSetup the run had %q, and after it %q; want %s", before, after, want)
 				}
 			}
 			size := func() int64 {
