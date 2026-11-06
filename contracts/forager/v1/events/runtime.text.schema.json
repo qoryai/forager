@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.text.schema.json",
+  "title": "dev.qory.runtime.text",
+  "description": "One text block or thinking block the runtime printed on its standard output, of the main conversation or of a subagent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "text", "kind"],
+  "properties": {
+    "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
+    "session": {"description": "The number of the session whose runtime wrote the record, from 1: the session of its dev.qory.session.started.", "type": "integer", "minimum": 1},
+    "text": {"description": "The block's text, unchanged, cut to its first 65536 bytes of UTF-8 at a character boundary when it is longer, with truncated set. A thinking block may have empty text.", "type": "string", "maxLength": 65536},
+    "kind": {"description": "text for a reply, thinking for the model's reasoning.", "enum": ["text", "thinking"]},
+    "role": {"description": "Who wrote the message the block belongs to, in the runtime's words: assistant, user.", "type": "string", "minLength": 1},
+    "agent_id": {"description": "The subagent the block belongs to; absent for the main conversation.", "type": "string", "minLength": 1},
+    "agent_type": {"description": "The subagent's type.", "type": "string", "minLength": 1},
+    "message_id": {"description": "The runtime's id of the message the block belongs to, when it reports one. Blocks of one message have the same id.", "type": "string", "minLength": 1},
+    "line": {"description": "The number of the line of the session's standard output the record was read from, from 1, counting every line, whether it is a JSON object or not. The session sets it on an event of the output source; an event of a hook has none.", "type": "integer", "minimum": 1},
+    "truncated": {"description": "true when the session cut text; absent otherwise.", "const": true}
+  }
+}

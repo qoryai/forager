@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.tool_result.schema.json",
+  "title": "dev.qory.runtime.tool_result",
+  "description": "What the runtime gave the model as the result of a tool call, as it printed it on its standard output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "tool_use_id", "content"],
+  "properties": {
+    "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
+    "session": {"description": "The number of the session whose runtime wrote the record, from 1: the session of its dev.qory.session.started.", "type": "integer", "minimum": 1},
+    "tool_use_id": {"description": "The id of the tool call, as in its dev.qory.runtime.tool_started.", "type": "string", "minLength": 1},
+    "content": {
+      "description": "The result, the runtime's value unchanged: a string, or an array of blocks such as {\"type\": \"text\", \"text\": \"...\"}. A string is cut to its first 65536 bytes of UTF-8 at a character boundary, and an array to a JSON encoding of at most 65536 bytes, with truncated set.",
+      "anyOf": [
+        {"type": "string", "maxLength": 65536},
+        {"type": "array"}
+      ]
+    },
+    "is_error": {"description": "true when the runtime reported the result as an error.", "type": "boolean"},
+    "agent_id": {"description": "The subagent this happened in, when it did not happen in the main conversation.", "type": "string", "minLength": 1},
+    "line": {"description": "The number of the line of the session's standard output the record was read from, from 1, counting every line, whether it is a JSON object or not. The session sets it on an event of the output source; an event of a hook has none.", "type": "integer", "minimum": 1},
+    "truncated": {"description": "true when the session cut content; absent otherwise.", "const": true}
+  }
+}

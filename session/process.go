@@ -38,17 +38,18 @@ type process struct {
 	logs func(stream string) func([]byte)
 	// masker replaces the run's secrets in what goes to logs, stdout and stderr: the
 	// passwords of the run's forwarders, OpenSpec.Masker's values and the server's
-	// variable values. harness then replaces the text of a hidden harness in what goes
-	// to logs; nil for a run whose harness is not hidden.
+	// variable values, apart from QORY_RUN_SYSTEM's and QORY_RUN_REPOSITORIES'. harness
+	// then replaces the text of a hidden harness in what goes to logs; nil for a run whose
+	// harness is not hidden.
 	masker  *mask.Masker
 	harness *mask.Harness
 	// stop is the signal that asks the process to leave, and grace how long it gets
 	// after it before SIGKILL.
 	stop  syscall.Signal
 	grace time.Duration
-	// output takes each JSON object the runtime prints as a line; nil when the
-	// runtime has no output source.
-	output func(map[string]any)
+	// output takes each JSON object the runtime prints as a line, with the line's
+	// number on standard output from 1; nil when the runtime has no output source.
+	output func(record map[string]any, line int)
 	// cols and rows size the pseudo-terminal, and resized is told each time that size
 	// changes while the runtime runs. Neither means anything on pipes.
 	cols, rows int
@@ -374,10 +375,13 @@ func signalName(s syscall.Signal) string {
 	return fmt.Sprintf("%d", int(s))
 }
 
-// lineParser hands every line that is a JSON object to on, and ignores the rest.
+// lineParser hands every line that is a JSON object to on, with its number, and ignores
+// the rest. It numbers every line from 1, a JSON object or not, as a line break ends
+// it; the bytes after the last line break are the last line.
 type lineParser struct {
-	on  func(map[string]any)
+	on  func(record map[string]any, line int)
 	buf bytes.Buffer
+	n   int
 }
 
 func (l *lineParser) Write(p []byte) (int, error) {
@@ -402,13 +406,14 @@ func (l *lineParser) flush() {
 }
 
 func (l *lineParser) line(b []byte) {
+	l.n++
 	b = bytes.TrimSpace(b)
 	if len(b) == 0 || b[0] != '{' {
 		return
 	}
 	var m map[string]any
 	if err := json.Unmarshal(b, &m); err == nil && m != nil {
-		l.on(m)
+		l.on(m, l.n)
 	}
 }
 

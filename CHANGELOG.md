@@ -10,11 +10,41 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Remove `session`, `line`, `truncated` and `summary` from the `data` of a descriptor's
+  rules: the descriptor schema refuses a rule that maps one, since the session sets them.
 - Build run images with Claude Code 2.1.316: `runtime_version` in the Claude Code
   descriptor is 2.1.316, up from 2.1.273. A qory that pins this Forager fails
   `qory image check`, with exit status 1, for an image whose `claude --version` is any
   other version, older or newer, and prints `install @anthropic-ai/claude-code@2.1.316`.
   Forager itself does not check the installed version.
+- Expect `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in every Claude Code launch,
+  walled or not: the Claude Code descriptor's `fixed` sets it. A value of it from the
+  server, `--env`, `wall.env`, a harness default or the environment the run inherits
+  no longer applies. `dev.qory.run.policy_applied` lists the values that lost,
+  and why, by the rules in the contract's README, §Variables, The record of the
+  variables. In a launch with a forwarder, the run's copy of the `--settings` file sets
+  the variable in its `env` too, and Claude Code applies that `env` over a workspace's
+  `.claude/settings.json` and `.claude/settings.local.json`, so neither can set it
+  empty. A launch without a forwarder gets no `--settings` copy.
+  With it, Claude Code 2.1.316 sends no log lines to Datadog, does not call
+  `/api/claude_cli/bootstrap`, and makes no other request that its
+  environment-variable reference lists as nonessential. A run of 2.1.316 without it,
+  behind a wall in observe mode, connected to `http-intake.logs.us5.datadoghq.com`.
+- Expect `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` in every Claude Code
+  launch as well: the Claude Code descriptor's `fixed` sets it, in the launch and in the
+  `--settings` copy, as it sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. With it, an
+  interactive Claude Code 2.1.316 does not auto-install the official plugin marketplace,
+  so it makes neither request of the install: the fetch from `downloads.claude.ai` and
+  the clone from `github.com` when that fetch fails. A marketplace already installed in
+  the home still refreshes from `downloads.claude.ai`. With
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` set and `FORCE_AUTOUPDATE_PLUGINS` unset,
+  it refreshes only when a command asks for it, run by the agent or by a person:
+  `claude plugin marketplace update`, `claude plugin update`, or **Update** in the
+  `/plugin` menu. `FORCE_AUTOUPDATE_PLUGINS` turns on the background refresh again, and
+  the refreshes for a plugin missing from the marketplace's cached catalog: when that
+  plugin is installed, and at start when it is enabled. An interactive run of 2.1.316
+  without `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`, behind a wall in
+  observe mode, connected to `downloads.claude.ai`.
 - Set the model or effort of a walled run another way than `CLAUDE_CODE_SUBAGENT_EFFORT`
   or `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`: the Claude Code descriptor's `overrides` list
   both, so a run behind a wall leaves out their values and records each as `denied`, like
@@ -180,13 +210,54 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The run API's route in the contract: the run answer's `run_api`, the base URL of a run
+  with a control plane; `QORY_RUN_API`, one of Forager's names; and the `channel`
+  `run_api` of `dev.qory.run.egress`, with the rule `wall:run-api`. The README's §The run
+  API lists the five requests, each status and the limits.
+- `accesskey.Answer.Digest`, which signs a file's answer over the digest of its bytes,
+  and `(*server.Client).RunAPI`, which signs one request of the run API and verifies its
+  answer, a file's at the end of its stream. An answer over the bound the gateway reads
+  is `server.ErrRunAPITooLarge`.
+- `fixed` in a runtime descriptor: variables the session sets for the runtime in every
+  launch, by name, such as `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`. The
+  session counts each among the run's fixed names, so no value of the server, the run,
+  the machine, the harness or the environment the run inherits applies to one, and
+  `claude-settings` sets each in the `env` of the `--settings` copy, in place of the
+  file's value of the name. The
+  session refuses a descriptor whose `fixed` has a name that `denied-variables.json`
+  lists, `fixed: remove PATH: denied-variables.json lists it, and a descriptor sets no
+  such variable`, or a name of the descriptor's other lists, `fixed: remove AMP_MODEL
+  from fixed or from model.overrides: a variable that fixed sets is in no other list of
+  the descriptor`. `runtimes.json` lists `fixed` for every runtime, an empty object when
+  the descriptor has none.
 - `parent_agent_id` in `dev.qory.runtime.subagent_started`: the subagent that started
   this one, when the runtime reports it. Claude Code 2.1.292 and later reports it in a
   session on pipes with `--output-format stream-json --verbose`. A descriptor sets where
   in the member `parent`.
-- `dev.qory.runtime.message`: one text or thinking block of a subagent, with `agent_id`,
-  `role`, `text` and `kind`, from a session on pipes. Claude Code 2.1.292 and later
-  prints them with `--output-format stream-json --verbose --forward-subagent-text`.
+- `dev.qory.runtime.text`: one text or thinking block of the main conversation or of a
+  subagent, with `text`, `kind` (`text` or `thinking`), `role`, `message_id`, and
+  `agent_id` and `agent_type` for a subagent's, from a session on pipes. Claude Code
+  prints them with `--output-format stream-json --verbose`, and a subagent's, 2.1.292
+  and later, with `--forward-subagent-text` as well. The Claude Code descriptor maps no
+  user message of the main conversation, so a skill's expanded prompt is no text event.
+- `dev.qory.runtime.tool_result`: what the runtime gave the model as a tool call's
+  result, with `tool_use_id`, `content` as the runtime printed it, a string or an array
+  of blocks, `is_error` and `agent_id`, from a session on pipes.
+- `dev.qory.runtime.tool_denied`: a tool call the runtime denied without a prompt, with
+  `tool`, `tool_use_id`, `message`, `agent_id` and `agent_type`, from a session on pipes.
+  No `tool_finished` or `tool_failed` follows it. Claude Code prints it as the line
+  `{"type":"system","subtype":"permission_denied",...}`.
+- `line` in every runtime event mapped from the runtime's standard output: the number of
+  the stdout line the record was read from, from 1, counting every line, a JSON object
+  or not. An event from a hook has none.
+- `truncated` in `dev.qory.runtime.text` and `dev.qory.runtime.tool_result`: the session
+  cuts `text` and a string `content` at 64 KiB of UTF-8, at a character boundary, and an
+  array `content` to a JSON encoding of at most 64 KiB, and sets `truncated: true`.
+- `summary` in `dev.qory.runtime.tool_started`, `tool_finished` and `tool_failed`: one
+  member of `input`, copied as the descriptor's `tools.summary` selects it. The
+  session cuts each summary at 1 KiB of UTF-8, at a character boundary. The Claude Code
+  descriptor lists `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`,
+  `WebSearch`, `Skill`, `Agent` and `Task`.
 - A descriptor rule may have `each`, a path to an array: each element that a rule with
   that `each` matches then produces one event, of the first such rule it matches, and an
   element that no such rule matches produces none.
@@ -250,7 +321,7 @@ release may change what an existing document does, and says so under Upgrading.
   run's host work, such as a fetch or a compose, with a start, an end, an outcome and
   its log lines, so a reader shows each step and the step that failed.
   `dev.qory.run.step_started` has `step`, the step's number from 1, `name` and `kind`:
-  `fetch`, `compose`, `image`, `setup`, `join`, `wall` or `build`.
+  `fetch`, `compose`, `image`, `setup`, `join`, `wall`, `build`, `push` or `machine`.
   `dev.qory.run.step_exited` has `step`, `state` (`succeeded`, `failed` or
   `cancelled`), `exit_code`, -1 when no process exit status exists, and
   `duration_ms`. Steps come after
@@ -259,9 +330,22 @@ release may change what an existing document does, and says so under Upgrading.
   run's stream. `setup` is the kind of a setup command.
   A step's `name` has `qory-proxy-password` in place of a forwarder's password, and a
   phrase in place of a name that contains `qak_` or `qrk_`. `event.StepStarted`,
-  `event.StepExited` and the seven kinds, `event.StepFetch` to `event.StepBuild`, are
+  `event.StepExited` and the nine kinds, `event.StepFetch` to `event.StepMachine`, are
   the names in Go. `image` is a fetch of the run's image, and `build` a build of an
   image.
+- `push`, a kind of `dev.qory.run.step_started`, `event.StepPush`: host work that sends
+  the run's commits. `(*session.Run).StartStep` accepts it as it accepts `fetch`,
+  `compose` and `build`. A host step runs before the first join, between joins, or
+  after the last join and before the close, and the run's host proxy and credentials
+  apply at each of these times.
+- `machine`, a kind of `dev.qory.run.step_started`, `event.StepMachine`: the start of
+  the machine the run runs on. `(*session.Run).StartStep` accepts it as it accepts
+  `fetch`, `compose`, `build` and `push`. The caller writes the step's lines from a
+  file the machine wrote, one line per entry of that file, such as
+  `start Docker  3.2 s`.
+  The step's events have the times at which Forager writes them, as every other step's
+  events do. `fixtures/link/link-batch-machine-step.json` is a batch with a `machine`
+  step right after `dev.qory.run.started`.
 - `step` in `dev.qory.run.log`: the number of the step whose line the chunk is,
   between that step's `dev.qory.run.step_started` and `dev.qory.run.step_exited`. The
   member is optional, and a line outside every step has none. A session's chunk has
@@ -612,8 +696,9 @@ release may change what an existing document does, and says so under Upgrading.
   each join with that session's `variables`, `credential_variables` and
   `harness_hosts`, and at each reload, as before.
 - `dev.qory.run.log` is one chunk of a session's output, with the session's number as
-  `session`, or of the run's host work before the first join or between two joins,
-  which the caller writes with `stream: stderr` and no `session`.
+  `session`, or of the run's host work before the first join, between joins, or after
+  the last join and before the close, which the caller writes with `stream: stderr`
+  and no `session`.
 - The run answer's `model_credential` is the run's start key, the key a session starts
   with when its join request contains none; the join answer's `model_credential` is the
   key each session starts with.
@@ -736,11 +821,24 @@ release may change what an existing document does, and says so under Upgrading.
   other members, a key that starts with `qak_` or `qrk_` in any case, and the rest of
   the document. `accesskey.SecretInPinDocument` and `accesskey.SecretInPinEntry` hold
   the rule.
+- The contract's texts for `read_needs_wall`, `read_needs_setup_outside`,
+  `read_needs_no_nested_docker` and `read_needs_setup_removed` use the term read run, a
+  run whose workspace qory binds read-only for the agent. Before, they said the run's
+  workflow is read-only, which is false for a run of a `write` workflow that qory binds
+  read-only. The codes stay.
 
 ### Gateway
 
 #### Upgrading
 
+- Update the gateway before the sessions that write `dev.qory.runtime.text`,
+  `dev.qory.runtime.tool_result` or `dev.qory.runtime.tool_denied`, or `line`,
+  `truncated` and `summary`. A gateway built with an older contract does not have them,
+  and ends the run `failed` with `batch_refused` at the first batch that contains one. A
+  session with Claude Code writes `summary` from the first call of a tool that
+  `tools.summary` lists, on pipes or on a pseudo-terminal, and `line`,
+  `dev.qory.runtime.text`, `dev.qory.runtime.tool_result` and
+  `dev.qory.runtime.tool_denied` from the first stdout line that a rule maps, on pipes.
 - List a host that resolves to a private network address by name in the node's allow
   list, or a walled run can no longer reach it.
 - Each run on a gateway now has limits: at most 256 connections open at once, and 50
@@ -778,6 +876,34 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The gateway's route to the run API, on a run's proxy, for a run with a control plane:
+  a plain `http://` request to `run-api.qory.invalid` reaches Qory Apiary, signed with
+  the gateway's access key, so no key enters the run. Only five requests pass, and each
+  request writes one `dev.qory.run.egress`, with the path `outside` for any other. A
+  run has 10 requests a second and 4 in flight, 1 of them a POST, and 1 request waiting
+  for a token of the gateway's rate limit. A gateway signs 20 requests a second across
+  its runs, sends 8 `POST /artifacts` with a body over 1 MiB at once and keeps 512 MiB of
+  bodies and answers, past the first 1 MiB of each. The 512 MiB and the send slots hold
+  back no verdict, and no body or answer of 1 MiB or less. The gateway's bucket applies to
+  every request.
+  A target over 4 KiB, or a path over 1 KiB once escaped, is a `404`. An answer over the
+  bound the gateway reads is a `502` `answer_too_large`. A `CONNECT` to the host is
+  denied in either mode, and the stack proxy has no route.
+- The gateway accepts a session's `dev.qory.run.exited` with the reason
+  `read_needs_wall`, which qory gives the close of a read run that has no wall, or
+  `read_needs_setup_outside`, which qory gives the close of a read run whose setup is
+  set to run inside the agent's container. It accepts both as it accepts
+  `image_missing`: for a run with no join, `failed` with `exit_code` `-1`. It refuses
+  them with another state or exit code, or after a join, and `(*session.Run).Close`
+  refuses the same outcomes before it writes anything.
+  `event.ReasonReadNeedsWall` and `event.ReasonReadNeedsSetupOutside` are the two
+  codes.
+  `read_needs_no_nested_docker`, which qory gives the close of a read run whose image
+  runs nested Docker, follows the same rule, as
+  `event.ReasonReadNeedsNoNestedDocker`.
+  `read_needs_setup_removed`, which qory gives the close of a read run whose setup
+  container could not be removed, follows the same rule, as
+  `event.ReasonReadNeedsSetupRemoved`.
 - The gateway replaces text in the shape of a known key (`mask.Shapes`) with `***` in
   the line of an adapter that fails, in the error of a run's start and in a renewal's
   report, and in each line a tool writes to standard error, in its report and in the
@@ -987,6 +1113,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- The gateway refused a batch with a session's `dev.qory.run.exited` whose reason is
+  `workflow_not_in_harness` or `image_user_root`, so a run that qory closed with one of
+  them ended `batch_refused`. The gateway now accepts both as it accepts
+  `image_missing`: for a run with no join, `failed` with `exit_code` `-1`. It refuses
+  them with another state or exit code, or after a join, and `(*session.Run).Close`
+  refuses the same outcomes before it writes anything.
 - `gateway.Start` and `gateway.HardenProcess` stopped at the first call that failed.
   On macOS, a failed `setrlimit(RLIMIT_CORE)` skipped `ptrace(PT_DENY_ATTACH)`, so a
   debugger could still attach to the process. On Linux, a failed
@@ -1145,6 +1277,11 @@ release may change what an existing document does, and says so under Upgrading.
   Before, an open tunnel to the host kept reaching the address, and a new tunnel's
   request reused a pooled connection to it with no new dial.
 
+- The run API route's `502` `answer_unverified` starts with the clock: "Check the clock
+  of the gateway's host, its access key in Qory Apiary, and its pin, apiary_public_key."
+  Qory Apiary signs no `401`, so a gateway whose clock is off gets this code. Before, the
+  message pointed to the pin alone.
+
 #### Security
 
 - Build Forager with Go 1.27.3 or above: go.mod requires `go 1.27.3`. Go 1.27.3 has
@@ -1158,9 +1295,33 @@ release may change what an existing document does, and says so under Upgrading.
 - A wall outside Forager: the session calls `Prepare` in `session.Open`, once per run,
   and `Wrap` once per session on the one enclosure `Prepare` returned, with `Unwrap`,
   when the enclosure has it, at the session's end.
+- Add `RemoveSetup(ctx context.Context) error` to an enclosure outside Forager that has
+  `StartSetup` and `ExecSetup`. Without it `Run.Setup` returns `Run the setup behind the
+  Docker wall: the <name> wall does not implement StartSetup, ExecSetup and RemoveSetup.`
+  The method returns nil only once the setup container is gone and every process in it
+  has ended, bounds its wait, and accepts a second call after an error. The session
+  calls it before the run's first `Wrap` or after a session's `Unwrap`, and a later
+  `Wrap` may follow, so it leaves the rest of the enclosure as it is.
 
 #### Added
 
+- `(*session.Run).RemoveSetup`: when no session is running and no host step is open, it
+  removes the setup container with `docker rm --force --volumes` and returns once the
+  container is gone, so no process of it runs beside the agent or the host work that
+  follows, and the name `qory-setup` no longer resolves. Call it between `Run.Setup` and
+  the first `Join` for a read run, so that no process in the run's containers can write
+  the workspace that `SessionSpec.WorkspaceReadOnly` binds read-only for the agent. Call
+  it after a session ended and before a `push` step when the agent needs the setup
+  container, so no process of it changes the working folder during the push. It
+  writes the `wall` step `remove the setup container`, returns nil and writes nothing
+  in an open run with no setup container, which includes a run where it removed that
+  container, and returns an error that starts with the fix, with nothing removed, while
+  a session or another call of the run runs, after the close, and, while the setup
+  container runs, during a host step or when an agent's container could not be removed
+  and may still run. A `docker rm` that fails with `no such container` is no failure.
+  Any other failed removal, such as one with no engine socket, ends the step `failed`,
+  and no session joins the run: close the run, and run no `push` step after it. A run
+  that does not call it keeps the setup container until the run closes, as before.
 - `wall.Request.Pull` and `wall.Puller`: before a run uses an image by reference, the
   session checks its manifest at the registry with the run's credentials, through the
   run's proxy, with or without an engine proxy; a 404 is `image_missing`, and any other
@@ -1219,7 +1380,12 @@ release may change what an existing document does, and says so under Upgrading.
   forward. The engine command's error and the start of a command's output print the
   value's phrase too, and so do the errors of making, writing and removing the
   directory of a run's environment files.
-
+- The Docker wall's `Unwrap` counts only `no such container` as gone, as `RemoveSetup`
+  does. An engine that cannot be reached, such as one whose socket went while
+  live-restore keeps the agent's container running, now fails `Unwrap`: the run keeps its
+  entry among the walled runs still going, takes no further joins, and `HostProxy`
+  returns an error. Before, `no such file or directory` counted as gone, and a push could
+  run beside the agent's container. `Close` keeps its reading.
 
 ### Session
 
@@ -1275,6 +1441,29 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `QORY_RUN_API` in the agent's environment and in a setup container, with a wall and
+  without, for a run with a control plane, and `(*session.Run).RunAPI`, which returns a
+  client for host work and the base URL. `RunAPI` works from `Open` to `Close`, while a
+  `Join` runs too, on one machine and behind a separate gateway. The session has no key
+  for it: the gateway signs each request. Behind a wall, a caller's value of the name is
+  `variable_reserved`.
+- `SessionSpec.WorkspaceReadOnly`, which binds the workspace read-only in the agent's
+  container for that session, so a write into it inside fails with `Read-only file
+  system`. Under nested Docker this is unverified: the enclosure's root, which the
+  agent reaches through the inner Docker daemon, may remount the workspace writable.
+  The setup container of `Run.Setup` still binds the working folder writable, and the
+  workspace keeps the checks of a writable place. A writable mount that holds the
+  workspace is `mount_mode_conflict`. `Join` and `AgentEnv` return an error before the
+  join request, and write nothing, for the field in a run with no wall and for the
+  field beside `SessionSpec.Setup`, which runs in the agent's container.
+- A settings file, or another file Claude Code's runtime reads from the machine, in the
+  folder of the run's setup container is refused, as one in the workspace is.
+- The session sets `line` on each runtime event it maps from the runtime's standard
+  output, cuts `text` and `content` at 64 KiB with `truncated`, and sets `summary` on a
+  tool event. It masks each event before it cuts it, so a cut never splits a secret
+  before the masker sees it. `runtimes.Summaries` is the optional interface of a runtime
+  that has summaries, which a descriptor's runtime implements from `tools.summary`, and
+  `runtimes.Record.Line` the line of a record of the output source.
 - `runtimes.Launch.LeftOut`, the names of the variables a runtime left out of a file it
   copied whose values reach the program's environment, such as the `env` of Claude
   Code's `--settings`; the session reports a forge token's or a model key's name of
@@ -1393,14 +1582,14 @@ release may change what an existing document does, and says so under Upgrading.
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
 - `(*session.Run).StartStep(kind, name)` starts a step of the run's host work, `fetch`,
-  `compose` or `build`, and returns a `*session.Step`: `Log` writes its lines as
-  `dev.qory.run.log` with `stream: stderr`, its `step` and no `session`, after the run's
-  masker, to the record and `output.log`, and `Exit(state, exitCode)` writes its
-  `dev.qory.run.step_exited` with the `duration_ms` Forager measures. `Close` ends a
-  step still open `cancelled` with `-1`. Each call returns an error that starts with
-  the fix, and writes nothing, while a `Join` runs, after `Close`, while another host
-  step is open, for a state outside the three and after the step exited; `Join`
-  returns one while a host step is open.
+  `compose`, `build`, `push` or `machine`, and returns a `*session.Step`: `Log` writes
+  its lines as `dev.qory.run.log` with `stream: stderr`, its `step` and no `session`,
+  after the run's masker, to the record and `output.log`, and `Exit(state, exitCode)`
+  writes its `dev.qory.run.step_exited` with the `duration_ms` Forager measures.
+  `Close` ends a step still open `cancelled` with `-1`. Each call returns an error that
+  starts with the fix, and writes nothing, while a `Join` runs, after `Close`, while
+  another host step is open, for a state outside the three and after the step exited;
+  `Join` returns one while a host step is open.
 - `(*session.Run).Built(session.Built)` writes the run's `dev.qory.run.built`, with
   `Image`, `Size`, `Commit` and `EnvironmentRef` as its members, once per run. It
   returns an error that starts with the fix, and writes nothing, for a member that is
@@ -1519,6 +1708,9 @@ release may change what an existing document does, and says so under Upgrading.
   `variable_reserved` or `placeholder_conflict`, gets the same refusal. The result has
   `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup`
   accepts both.
+- `(*session.Run).Image`, the image of the run answer with its `Docker`, so a caller can
+  close a read-only run in an image with nested Docker before its first join. It is the
+  zero `session.Image` in a run with no wall or when the run answer has no image.
 
 #### Fixed
 
@@ -1692,8 +1884,22 @@ release may change what an existing document does, and says so under Upgrading.
   one, and a link to such a file or to a regular file, now get the same text. Before,
   they were refused with "that file is not a regular file" or "that file is a link".
 
+- `(*session.Run).HostProxy` returns the join's error when a session's wall could not
+  be removed and may still run: `Open a new run. The wall of session <n> could not be
+  removed and may still run, so this run takes no more sessions.` Before, it started a
+  forwarder, so a push could run beside the agent's container.
+- A step's name and lines keep the server's values of `QORY_RUN_SYSTEM` and
+  `QORY_RUN_REPOSITORIES`: the run's masker leaves both out by name, at the open and at
+  a reload, because neither is a secret. Before, `github.com` read `***` in the name of
+  a fetch or a push step. Another server variable with the same value still masks it.
+
 #### Changed
 
+- A variable the runtime's preparation sets is in the launch's environment once: the
+  harness's computed value of the name is left out. Before, both were in it, and the
+  preparation's, the later one, applied.
+- `runtimetest.Conforms` lets a runtime's Prepare add variables to a launch without a
+  forwarder; the command and arguments stay as given.
 - Each session that starts has a directory in the run directory, `sessions/<n>/`, with
   `<n>` its number: its `output.log`, the bytes of its `dev.qory.run.log` chunks, its
   `preparation.sh` and the files its runtime writes, such as Claude Code's
@@ -1739,9 +1945,23 @@ release may change what an existing document does, and says so under Upgrading.
 - The Docker test of a sealed credential runs a third time with a value that expires 5
   minutes 20 seconds after the start: the recorder gets the first value, then the
   renewed one.
+- The conformance suite checks a join with `SessionSpec.WorkspaceReadOnly` after
+  `Run.Setup`: the setup container writes `setup.txt`, the agent reads it, and its write
+  of `agent.txt` fails with `Read-only file system`. With nested Docker, the same write
+  from a container the agent starts fails too, and so does the write from a privileged
+  one whose root first tries a bind-remount and `mount_setattr` to make the workspace
+  writable; the failure text has each call's result. After the close the folder
+  has `setup.txt` and no `agent.txt`.
 
 #### Changed
 
+- `TestDockerClaudeCodeThroughTheWall` no longer sets
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in the launch: the descriptor's `fixed`
+  sets it. A third headless run has a workspace `.claude/settings.json` that sets the
+  variable empty, and reaches no host but the recorder.
+- The interactive runs of `TestDockerClaudeCodeThroughTheWall` wait for `for agents`
+  in the footer under Claude Code's input, which 2.1.273 and 2.1.316 both show, in place
+  of `for shortcuts`, which 2.1.316 does not show while auto mode is on.
 - The conformance suite passes the launch's settings file from outside the workspace,
   since the session refuses a settings file in it.
 - CI's Wall conformance job runs the e2e test

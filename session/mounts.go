@@ -371,12 +371,19 @@ func lookedUpIn(dir splitPath, ls []lookup) (lookup, bool) {
 // workspace, its path exactly as the caller passed it, which is what a refusal names.
 type shown struct {
 	path, what string
-	writable   bool
-	at         splitPath
-	looks      []lookup
+	// writable says a walled process can write the place: it gets the checks of a
+	// writable place. readOnly says the enclosure binds such a place read-only all the
+	// same: the workspace of a join with SessionSpec.WorkspaceReadOnly, which the host
+	// steps still write, and the setup container until [Run.RemoveSetup] removes it.
+	writable, readOnly bool
+	at                 splitPath
+	looks              []lookup
 	// bound is the path the enclosure binds the place at: its own, clean.
 	bound string
 }
+
+// bindsWritable reports whether the enclosure binds the place writable.
+func (s shown) bindsWritable() bool { return s.writable && !s.readOnly }
 
 // mode is how a refusal words whether the enclosure can write a place.
 func mode(writable bool) string {
@@ -412,10 +419,42 @@ type bindSource struct {
 	// its own: it stands for them until the run lists the one it made.
 	Pattern bool `json:"pattern,omitempty"`
 	// what names the bind in a refusal's sentence, at is where it resolved and looks
-	// are its lookups: for this run's own checks alone.
-	what  string
-	at    splitPath
-	looks []lookup
+	// are its lookups: for this run's own checks alone. readOnly says the agent's
+	// container binds a writable place read-only: the workspace of a join with
+	// SessionSpec.WorkspaceReadOnly, which the host steps write, and setup is true while
+	// the setup container runs, which writes it too.
+	what            string
+	at              splitPath
+	looks           []lookup
+	readOnly, setup bool
+}
+
+// shownMode is how a refusal words the mode of this run's bind: read-only for the
+// workspace the agent sees read-only, otherwise writable or read-only.
+func (b bindSource) shownMode() string {
+	if b.readOnly {
+		return "read-only"
+	}
+	return mode(b.Writable)
+}
+
+// writer is who of this run can change a writable bind, in a refusal's sentence.
+func (b bindSource) writer() string {
+	switch {
+	case b.readOnly && b.setup:
+		return "this run's setup container or host steps"
+	case b.readOnly:
+		return "this run's host steps"
+	}
+	return "this run's agent"
+}
+
+// markSetup marks each of sources, the binds of a join's plan, with whether the run's
+// setup container runs, for [bindSource.writer].
+func markSetup(sources []bindSource, setup bool) {
+	for i := range sources {
+		sources[i].setup = setup
+	}
 }
 
 // source is the bind source of a path, resolved now.
@@ -615,8 +654,10 @@ func replacePaths(s string, pairs []pathPair, rule pathRule) string {
 //
 // A place inside another one of the same mode is no bind of its own: the enclosure
 // reaches it through the outer one, at the same path. So no bound place is reached
-// through a directory another bound place lets the agent write. The workspace is
-// writable, and is the working directory inside, in one of the binds.
+// through a directory another bound place lets the agent write. The workspace gets the
+// checks of a writable place, and is the working directory inside, in one of the binds.
+// Its mode is writable, or read-only with SessionSpec.WorkspaceReadOnly, and
+// mount_mode_conflict compares that mode with the other places' modes.
 func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 	for _, p := range spec.ForagerFiles {
 		if strings.ContainsRune(p, 0) {
@@ -633,7 +674,7 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 	for _, m := range spec.Mounts {
 		places = append(places, shown{path: m.Path, what: "the mount", writable: !m.ReadOnly})
 	}
-	places = append(places, shown{path: spec.Dir, what: "the workspace", writable: true})
+	places = append(places, shown{path: spec.Dir, what: "the workspace", writable: true, readOnly: spec.WorkspaceReadOnly})
 	files := foragerFiles(spec)
 	fileLooks := make([][]lookup, len(files))
 	for i, f := range files {
@@ -725,7 +766,7 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 			if !ok || (same && j > i) {
 				continue
 			}
-			if in.writable != out.writable {
+			if in.bindsWritable() != out.bindsWritable() {
 				return mountPlan{}, modeConflict(in, out, same)
 			}
 			if outer[i] < 0 {
@@ -738,9 +779,9 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 		if outer[i] >= 0 {
 			continue
 		}
-		plan.Mounts = append(plan.Mounts, wall.Mount{Path: p.bound, ReadOnly: !p.writable})
+		plan.Mounts = append(plan.Mounts, wall.Mount{Path: p.bound, ReadOnly: !p.bindsWritable()})
 		b := bindSource{Path: p.path, Resolved: p.at.String(), Writable: p.writable,
-			what: p.what + " " + pathShown(p.path), at: p.at, looks: p.looks}
+			what: p.what + " " + pathShown(p.path), at: p.at, looks: p.looks, readOnly: p.readOnly}
 		for _, l := range p.looks {
 			b.Lookups = append(b.Lookups, l.entry())
 		}
@@ -844,7 +885,7 @@ func modeConflict(in, out shown, same bool) *Refusal {
 		noun = "place"
 	}
 	how, why := "lies inside", "a part of a writable "+noun+" can't be read-only"
-	if in.writable {
+	if in.bindsWritable() {
 		why = "a part of a read-only " + noun + " can't be writable"
 	}
 	if same {
@@ -854,7 +895,7 @@ func modeConflict(in, out shown, same bool) *Refusal {
 		Code:  refusal.MountModeConflict,
 		Names: pathsShown(in.path, out.path),
 		Detail: fmt.Sprintf("%s %s (%s) %s %s %s (%s): %s", in.what, pathShown(in.path),
-			mode(in.writable), how, out.what, pathShown(out.path), mode(out.writable), why),
+			mode(in.bindsWritable()), how, out.what, pathShown(out.path), mode(out.bindsWritable()), why),
 	}
 }
 

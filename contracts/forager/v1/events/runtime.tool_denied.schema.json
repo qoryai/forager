@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/runtime.tool_denied.schema.json",
+  "title": "dev.qory.runtime.tool_denied",
+  "description": "The runtime denied a tool call without a prompt, by a rule, a mode or a check of the call: the tool did not run, and no dev.qory.runtime.tool_finished or dev.qory.runtime.tool_failed follows. A reader takes it as the end of the call.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "tool", "tool_use_id"],
+  "properties": {
+    "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
+    "session": {"description": "The number of the session whose runtime wrote the record, from 1: the session of its dev.qory.session.started.", "type": "integer", "minimum": 1},
+    "tool": {"type": "string", "minLength": 1},
+    "tool_use_id": {"description": "The id of the tool call, as in its dev.qory.runtime.tool_started.", "type": "string", "minLength": 1},
+    "message": {"description": "Why, as the runtime gave it to the model; display text, not a stable format.", "type": "string"},
+    "agent_id": {"description": "The subagent this happened in, when it did not happen in the main conversation.", "type": "string", "minLength": 1},
+    "agent_type": {"description": "The subagent's type.", "type": "string", "minLength": 1},
+    "line": {"description": "The number of the line of the session's standard output the record was read from, from 1, counting every line, whether it is a JSON object or not. The session sets it on an event of the output source; an event of a hook has none.", "type": "integer", "minimum": 1}
+  }
+}

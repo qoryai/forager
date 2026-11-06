@@ -35,6 +35,25 @@ func TestTheRunMasksServerValuesUpToTheMaskersCap(t *testing.T) {
 	}
 }
 
+// TestTheRunLeavesItsSystemAndRepositoriesOutOfTheMasker pins addServerValues by name:
+// QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES add no value and no Report line, a name that
+// differs from them adds its value, and the same value under another name is masked.
+func TestTheRunLeavesItsSystemAndRepositoriesOutOfTheMasker(t *testing.T) {
+	var lines []string
+	r := &Run{masker: mask.New(), madeMasker: true, passwords: &mask.Masker{}, open: OpenSpec{Report: func(l string) { lines = append(lines, l) }}}
+	r.addServerValues(map[string]string{envRunSystem: "github.com", envRunRepositories: "example-org/app"})
+	if got := r.masker.Replace("github.com example-org/app"); got != "github.com example-org/app" {
+		t.Errorf("Replace with the two names alone: %q", got)
+	}
+	r.addServerValues(map[string]string{"qory_run_system": "fake-host.example", "EXAMPLE_HOST": "github.com"})
+	if got := r.masker.Replace("github.com example-org/app fake-host.example"); got != "*** example-org/app ***" {
+		t.Errorf("Replace with other names: %q", got)
+	}
+	if len(lines) != 0 {
+		t.Errorf("the Report lines %q", lines)
+	}
+}
+
 // TestClearMaskersLeavesTheCallersMasker pins a run with OpenSpec.Masker: clearMaskers
 // clears the forwarders' passwords alone, and the caller's masker keeps its values.
 func TestClearMaskersLeavesTheCallersMasker(t *testing.T) {

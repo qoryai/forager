@@ -1,0 +1,5 @@
+{"type":"dev.qory.runtime.text","data":{"session_id":"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90","role":"assistant","message_id":"msg_01fixture0000000000000001","text":"","kind":"thinking"}}
+{"type":"dev.qory.runtime.text","data":{"session_id":"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90","role":"assistant","message_id":"msg_01fixture0000000000000001","text":"# Hello, Dana\n\nThe build is green.","kind":"text"}}
+{"type":"dev.qory.runtime.text","data":{"session_id":"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90","agent_id":"agent-fixture01","agent_type":"Explore","role":"assistant","message_id":"msg_01fixture0000000000000002","text":"Look in go.mod first.","kind":"thinking"}}
+{"type":"dev.qory.runtime.text","data":{"session_id":"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90","agent_id":"agent-fixture01","agent_type":"Explore","role":"assistant","message_id":"msg_01fixture0000000000000002","text":"The module is example.com/app.","kind":"text"}}
+{"type":"dev.qory.runtime.text","data":{"session_id":"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90","agent_id":"agent-fixture01","agent_type":"Explore","role":"user","text":"Find the module path","kind":"text"}}

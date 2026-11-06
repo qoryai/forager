@@ -2,11 +2,13 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -102,6 +104,177 @@ type report struct {
 	// SetupService is what the service at PROBE_SETUP_SERVICE answered, asked with no
 	// proxy, or why it did not answer; empty when the variable is not set.
 	SetupService string `json:"setup_service"`
+	// ReadOnly is what the probe found in a workspace bound read-only, when
+	// PROBE_READ_ONLY is 1: the probe then tries nothing else.
+	ReadOnly *readOnlyReport `json:"read_only,omitempty"`
+	// RunAPI is what the probe found of the run API, when PROBE_RUN_API is 1: the probe
+	// then tries nothing else.
+	RunAPI *runAPIReport `json:"run_api,omitempty"`
+}
+
+// The files of the case of a workspace bound read-only: the setup container writes
+// setupFile, and the agent tries to write agentFile. A process in the setup container
+// adds a line to writerFile every second until the container goes.
+const (
+	setupFile  = "setup.txt"
+	agentFile  = "agent.txt"
+	writerFile = "writer.txt"
+)
+
+// writerWait is how long the probe waits between its two reads of the size of the file
+// at PROBE_WRITER_FILE: longer than two of the writer's intervals.
+const writerWait = 2500 * time.Millisecond
+
+// readOnlyReport is what the probe found in a workspace bound read-only: the text of
+// setupFile or why it could not read it, the exit status and standard error of a shell
+// that writes agentFile and, with a Docker inside, the exit status and output of a
+// container the agent starts with the workspace bound that writes agentFile there, and
+// of a privileged one that first tries to make the workspace writable: PrivRemount is
+// the result of a bind-remount without the read-only flag, and PrivSetattr that of a
+// mount_setattr that clears it, each "ok" or the error; empty when the call did not
+// run. SetupAddrs and SetupLookupErr are what a lookup of the host of PROBE_SETUP_ADDR
+// returned, and SetupDialErr why a connection to that address did not open, or empty
+// when it opened. WriterBefore and WriterAfter are the sizes of the file at
+// PROBE_WRITER_FILE, read writerWait apart, -1 for no such file.
+type readOnlyReport struct {
+	Setup       string `json:"setup"`
+	SetupErr    string `json:"setup_err"`
+	WriteExit   int    `json:"write_exit"`
+	WriteStderr string `json:"write_stderr"`
+	InnerExit   int    `json:"inner_exit"`
+	InnerOutput string `json:"inner_output"`
+	PrivExit    int    `json:"priv_exit"`
+	PrivOutput  string `json:"priv_output"`
+	PrivRemount string `json:"priv_remount"`
+	PrivSetattr string `json:"priv_setattr"`
+
+	SetupAddrs     []string `json:"setup_addrs"`
+	SetupLookupErr string   `json:"setup_lookup_err"`
+	SetupDialErr   string   `json:"setup_dial_err"`
+	WriterBefore   int64    `json:"writer_before"`
+	WriterAfter    int64    `json:"writer_after"`
+}
+
+// The prefixes of the lines with which a privileged container the agent started
+// reports its calls that try to make the workspace writable.
+const (
+	remountPrefix = "walltest-remount: "
+	setattrPrefix = "walltest-setattr: "
+)
+
+// callResult is how the probe reports a call: ok, or its error.
+func callResult(err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return "ok"
+}
+
+// fileSize is the size of the file at p, or -1 when it has none.
+func fileSize(p string) int64 {
+	info, err := os.Stat(p)
+	if err != nil {
+		return -1
+	}
+	return info.Size()
+}
+
+// reach is a setup command: it exits 0 once the service at the URL it is given returns
+// setupServiceLine, fetched with no proxy.
+func reach(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "reach: give one URL")
+		return 2
+	}
+	if got := direct(args[0]); got != setupServiceLine {
+		fmt.Fprintln(os.Stderr, "reach:", got)
+		return 1
+	}
+	return 0
+}
+
+// probeReadOnly reads setupFile and tries to write agentFile, with the image's shell and,
+// when the enclosure has a Docker, from a container the agent starts. With
+// PROBE_SETUP_ADDR it looks the address up and connects to it, and with
+// PROBE_WRITER_FILE it reads that file's size twice.
+func probeReadOnly() *readOnlyReport {
+	var r readOnlyReport
+	if b, err := os.ReadFile(setupFile); err != nil {
+		r.SetupErr = err.Error()
+	} else {
+		r.Setup = string(b)
+	}
+	var stderr bytes.Buffer
+	cmd := exec.Command("sh", "-c", "echo agent > "+agentFile)
+	cmd.Stderr = &stderr
+	r.WriteExit = exitCode(cmd.Run(), &stderr)
+	r.WriteStderr = strings.TrimSpace(stderr.String())
+	if os.Getenv("PROBE_DOCKER") == "1" {
+		r.InnerExit, r.InnerOutput = innerWrite(false)
+		r.PrivExit, r.PrivOutput = innerWrite(true)
+		for _, line := range strings.Split(r.PrivOutput, "\n") {
+			if rest, ok := strings.CutPrefix(line, remountPrefix); ok {
+				r.PrivRemount = rest
+			}
+			if rest, ok := strings.CutPrefix(line, setattrPrefix); ok {
+				r.PrivSetattr = rest
+			}
+		}
+	}
+	if addr := os.Getenv("PROBE_SETUP_ADDR"); addr != "" {
+		host, _, _ := net.SplitHostPort(addr)
+		addrs, err := net.LookupHost(host)
+		r.SetupAddrs = addrs
+		if err != nil {
+			r.SetupLookupErr = err.Error()
+		}
+		r.SetupDialErr = dial(addr)
+	}
+	if f := os.Getenv("PROBE_WRITER_FILE"); f != "" {
+		r.WriterBefore = fileSize(f)
+		time.Sleep(writerWait)
+		r.WriterAfter = fileSize(f)
+	}
+	return &r
+}
+
+// exitCode is the exit status of a command that ran with err, or -1 with err written to
+// out when it did not run.
+func exitCode(err error, out *bytes.Buffer) int {
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &exit):
+		return exit.ExitCode()
+	}
+	out.WriteString(err.Error())
+	return -1
+}
+
+// writeFile is the probe in a container the agent started: it writes the file its
+// argument names, and exits 1 with the error when the write fails. With --remount
+// first, it tries to make the file's directory writable before the write, by a
+// bind-remount and then by mount_setattr, and prints each call's result.
+func writeFile(args []string) int {
+	remount := len(args) == 2 && args[0] == "--remount"
+	if remount {
+		args = args[1:]
+	}
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "write-file: give one path, after --remount or alone")
+		return 2
+	}
+	if remount {
+		dir := filepath.Dir(args[0])
+		fmt.Fprintln(os.Stderr, remountPrefix+callResult(remountWritable(dir)))
+		fmt.Fprintln(os.Stderr, setattrPrefix+callResult(clearReadOnly(dir)))
+	}
+	if err := os.WriteFile(args[0], []byte("agent\n"), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "write-file:", err)
+		return 1
+	}
+	return 0
 }
 
 // preparedFile is where in the workspace the run's setup command leaves its report.
@@ -150,6 +323,18 @@ const wait = 3 * time.Second
 // as told.
 func probe(args []string) int {
 	var r report
+	if os.Getenv("PROBE_READ_ONLY") == "1" {
+		r.ReadOnly = probeReadOnly()
+		b, _ := json.Marshal(r)
+		fmt.Println(probePrefix + string(b))
+		return 0
+	}
+	if os.Getenv("PROBE_RUN_API") == "1" {
+		r.RunAPI = probeRunAPI()
+		b, _ := json.Marshal(r)
+		fmt.Println(probePrefix + string(b))
+		return 0
+	}
 	// First, so what the setup command left is what it left before the probe started.
 	if b, err := os.ReadFile(preparedFile); err != nil {
 		r.PreparedErr = err.Error()

@@ -241,6 +241,30 @@
         }
       }
     },
+    "tools": {
+      "description": "What the session copies from a tool's input onto the runtime's tool events.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "summary": {
+          "description": "A tool's name, as the runtime reports it in tool, mapped to one dotted path inside the tool's input. On dev.qory.runtime.tool_started, tool_finished and tool_failed of a listed tool, the session sets summary to the member of input at that path when it is a string, copied and not computed. The 1 KiB limit applies to each summary value, not to the tools.summary table: the session cuts each summary at 1 KiB (1024 bytes) of UTF-8, at a character boundary.",
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 256,
+          "propertyNames": {"minLength": 1, "maxLength": 256},
+          "additionalProperties": {"$ref": "#/$defs/path"}
+        }
+      }
+    },
+    "fixed": {
+      "description": "The variables the session sets for the runtime in every launch, walled or not, by name: no value of the server, the run, the machine, the harness or the environment the run inherits applies to one. dev.qory.run.policy_applied lists the values that lost, and why, by the rules in the contract's README, Variables, The record of the variables. In a launch with a forwarder, the session sets each in a file it copies whose values reach the runtime's environment, in place of the file's value. A name is no name denied-variables.json lists, and none of the descriptor's other variables: a declared or reserved secret's, a denied one, a model key's, the model endpoint's or an override.",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00\\r\\n]*$"}
+    },
     "parent": {
       "description": "Where the runtime reports which tool call started a subagent, for parent_agent_id on dev.qory.runtime.subagent_started. A record from `source` that matches the rule contains a subagent's id and the id of the tool call that started it. The agent that made that call, in the session's dev.qory.runtime.tool_started, is the subagent's parent. Absent, the session sets no parent.",
       "type": "object",
@@ -288,22 +312,25 @@
               "dev.qory.runtime.tool_started",
               "dev.qory.runtime.tool_finished",
               "dev.qory.runtime.tool_failed",
+              "dev.qory.runtime.tool_result",
+              "dev.qory.runtime.tool_denied",
               "dev.qory.runtime.turn_finished",
               "dev.qory.runtime.turn_failed",
               "dev.qory.runtime.subagent_started",
               "dev.qory.runtime.subagent_finished",
-              "dev.qory.runtime.message",
+              "dev.qory.runtime.text",
               "dev.qory.runtime.notification",
               "dev.qory.runtime.ended",
               "dev.qory.runtime.result"
             ]
           },
           "data": {
-            "description": "The event's data: each key is a field of the type's data, each value a dotted path into the record whose value is copied there unchanged. A path that does not exist leaves the field out. In a rule with each, a path that starts with each. reads the element.",
+            "description": "The event's data: each key is a field of the type's data, each value a dotted path into the record whose value is copied there unchanged. A path that does not exist leaves the field out. In a rule with each, a path that starts with each. reads the element. session, line, truncated and summary are the session's to set, and no rule sets them.",
             "type": "object",
             "minProperties": 1,
             "propertyNames": {
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "not": {"enum": ["session", "line", "truncated", "summary"]}
             },
             "additionalProperties": {
               "type": "string",

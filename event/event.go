@@ -51,7 +51,9 @@ const (
 
 // The kinds of a step, the kind of dev.qory.run.step_started: a fetch of a source, a
 // compose of the harness, a fetch of the run's image, a setup command, the join of a
-// session, the start of a wall, and a build of an image.
+// session, the start of a wall or the start or the removal of a setup container, a build
+// of an image, host work that sends the run's commits, and the start of the machine the
+// run runs on.
 const (
 	StepFetch   = "fetch"
 	StepCompose = "compose"
@@ -60,6 +62,8 @@ const (
 	StepJoin    = "join"
 	StepWall    = "wall"
 	StepBuild   = "build"
+	StepPush    = "push"
+	StepMachine = "machine"
 )
 
 // OpenedByRun is the opened_by of dev.qory.run.started that the contract accepts:
@@ -104,6 +108,27 @@ const (
 	// ReasonNoSession is a run closed with no join, failed with exit code -1: its host
 	// work, such as a fetch or a compose, failed before the first session.
 	ReasonNoSession = "no_session"
+)
+
+// ReasonWorkflowNotInHarness is the reason qory gives the close of a run with no join
+// whose workflow is not in the harness, failed with exit code -1. It is a caller's
+// code, not one of Forager's reserved codes; the close and the gateway accept it only
+// failed with exit code -1, for a run with no join.
+const ReasonWorkflowNotInHarness = "workflow_not_in_harness"
+
+// ReasonReadNeedsWall is the reason qory gives the close of a read run (the contract's
+// §The events, How a run ends) with no join that has no wall,
+// ReasonReadNeedsSetupOutside the close of a read run whose setup is set to run inside
+// the agent's container, ReasonReadNeedsNoNestedDocker the close of a read run whose
+// image runs nested Docker, and ReasonReadNeedsSetupRemoved the close of a read run whose
+// setup container could not be removed, each failed with exit code -1. They are
+// caller's codes, not Forager's reserved codes; the close and the gateway accept them
+// only failed with exit code -1, for a run with no join.
+const (
+	ReasonReadNeedsWall           = "read_needs_wall"
+	ReasonReadNeedsSetupOutside   = "read_needs_setup_outside"
+	ReasonReadNeedsNoNestedDocker = "read_needs_no_nested_docker"
+	ReasonReadNeedsSetupRemoved   = "read_needs_setup_removed"
 )
 
 // The states of dev.qory.run.exited, how a run ended: it ended well, it ended badly, or

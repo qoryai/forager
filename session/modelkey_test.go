@@ -916,8 +916,9 @@ func (p *preparesKeys) Model() (runtimes.ModelPlaces, bool) {
 // value of a Claude Code model-key variable, of a forge token's variable or of
 // ANTHROPIC_BASE_URL from the env object of the --settings file, which Claude Code
 // applies over its environment, and keeps the other members and the hooks, with or
-// without a start key. The run reports a line for each forge token's or model key's
-// name it leaves out, apart from the start key's variables.
+// without a start key, and that the env sets the descriptor's fixed variable. The run
+// reports a line for each forge token's or model key's name it
+// leaves out, apart from the start key's variables.
 func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 	env := map[string]any{
 		authTokenVariable:    "sk-fake-auth-token",
@@ -967,7 +968,7 @@ func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 			if err := json.Unmarshal(b, &doc); err != nil {
 				t.Fatal(err)
 			}
-			if got, want := must(json.Marshal(doc.Env)), `{"QORY_TEST_KEPT":"kept"}`; string(got) != want {
+			if got, want := must(json.Marshal(doc.Env)), `{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"1","CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL":"1","QORY_TEST_KEPT":"kept"}`; string(got) != want {
 				t.Errorf("env is %s, want %s", got, want)
 			}
 			if !slices.Equal(reported, c.lines) {
@@ -1042,7 +1043,8 @@ func TestTheSettingsCopyKeepsNoCredentialHelper(t *testing.T) {
 // value of a variable Claude Code's descriptor denies, in any case, from the env object
 // of the --settings file, walled or not, and behind a wall none of a variable of its
 // model overrides either, as the session leaves those names out of the process
-// environment. Without a wall an override's value is kept.
+// environment. Without a wall an override's value is kept. The env also sets the
+// descriptor's fixed variables.
 func TestTheSettingsEnvSetsNoDeniedVariable(t *testing.T) {
 	env := map[string]any{
 		"CLAUDE_CONFIG_DIR":        "/settings/config",
@@ -1055,8 +1057,8 @@ func TestTheSettingsEnvSetsNoDeniedVariable(t *testing.T) {
 		walled bool
 		want   map[string]any
 	}{
-		{"walled", true, map[string]any{"QORY_TEST_KEPT": "kept"}},
-		{"unwalled", false, map[string]any{"ANTHROPIC_MODEL": "fake-model", "QORY_TEST_KEPT": "kept"}},
+		{"walled", true, map[string]any{nonessential: "1", marketplace: "1", "QORY_TEST_KEPT": "kept"}},
+		{"unwalled", false, map[string]any{"ANTHROPIC_MODEL": "fake-model", nonessential: "1", marketplace: "1", "QORY_TEST_KEPT": "kept"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sp, g := specGateway(t)

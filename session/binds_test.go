@@ -174,6 +174,89 @@ func TestNestedMountsOfTwoModesAreNoRun(t *testing.T) {
 	}
 }
 
+// TestAReadOnlyWorkspaceIsBoundReadOnly pins SessionSpec.WorkspaceReadOnly: a workspace
+// no mount holds is bound read-only with the field and writable without it; inside a
+// read-only mount it is reached through that mount, the one bind, and a read-only mount
+// inside it is reached through it; inside a writable mount, at the path of one, or
+// around one, it is mount_mode_conflict, the inner place first.
+func TestAReadOnlyWorkspaceIsBoundReadOnly(t *testing.T) {
+	ctx := context.Background()
+	for _, readOnly := range []bool{true, false} {
+		w := &openWall{}
+		sp := walledSpec(t, w)
+		sp.WorkspaceReadOnly = readOnly
+		res, err := run(ctx, sp)
+		if err != nil || res.ExitCode != 0 {
+			t.Fatalf("read-only %v: %+v, %v", readOnly, res, err)
+		}
+		want := []wall.Mount{{Path: sp.Dir, ReadOnly: readOnly}, {Path: res.SessionDir, ReadOnly: true}}
+		if !slices.Equal(w.got.Mounts, want) || w.got.Dir != sp.Dir {
+			t.Errorf("read-only %v: mounts %v, working directory %q; want %v", readOnly, w.got.Mounts, w.got.Dir, want)
+		}
+	}
+
+	root := t.TempDir()
+	sub := mkdirs(t, filepath.Join(root, "src", "app"))
+	w := &openWall{}
+	sp := walledSpec(t, w)
+	sp.Mounts, sp.Dir, sp.WorkspaceReadOnly = []wall.Mount{{Path: root, ReadOnly: true}}, sub, true
+	res, err := run(ctx, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []wall.Mount{{Path: root, ReadOnly: true}, {Path: res.SessionDir, ReadOnly: true}}
+	if !slices.Equal(w.got.Mounts, want) || w.got.Dir != sub {
+		t.Errorf("in a read-only mount: mounts %v, working directory %q; want %v", w.got.Mounts, w.got.Dir, want)
+	}
+
+	vendor := filepath.Join(root, "src")
+	w = &openWall{}
+	sp = walledSpec(t, w)
+	sp.Mounts, sp.Dir, sp.WorkspaceReadOnly = []wall.Mount{{Path: vendor, ReadOnly: true}}, root, true
+	res, err = run(ctx, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []wall.Mount{{Path: root, ReadOnly: true}, {Path: res.SessionDir, ReadOnly: true}}
+	if !slices.Equal(w.got.Mounts, want) {
+		t.Errorf("around a read-only mount: mounts %v, want %v", w.got.Mounts, want)
+	}
+
+	for _, c := range []struct {
+		name   string
+		mounts []wall.Mount
+		dir    string
+		names  []string
+		detail string
+	}{
+		{"inside a writable mount", []wall.Mount{{Path: root}}, sub,
+			[]string{sub, root},
+			"the workspace " + sub + " (read-only) lies inside the mount " + root +
+				" (writable): a part of a writable mount can't be read-only"},
+		{"at the path of a writable mount", []wall.Mount{{Path: root}}, root,
+			[]string{root, root},
+			"the workspace " + root + " (read-only) is the mount " + root +
+				" (writable): one place can't be both writable and read-only"},
+		{"around a writable mount", []wall.Mount{{Path: vendor}}, root,
+			[]string{vendor, root},
+			"the mount " + vendor + " (writable) lies inside the workspace " + root +
+				" (read-only): a part of a read-only place can't be writable"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := &openWall{}
+			sp := walledSpec(t, w)
+			sp.Mounts, sp.Dir, sp.WorkspaceReadOnly = c.mounts, c.dir, true
+			r := refusalOf(t, "mount_mode_conflict", runErr(sp))
+			if !slices.Equal(r.Names, c.names) || r.Detail != c.detail {
+				t.Errorf("names %q, detail %q\nwant names %q, detail %q", r.Names, r.Detail, c.names, c.detail)
+			}
+			if w.wrapped {
+				t.Error("the wall was wrapped")
+			}
+		})
+	}
+}
+
 // TestTheRunsDirectoryIsOneOfTheForagersFiles pins that a walled run's mount, or its
 // workspace, that is, holds or lies inside the runs directory is no run, the default
 // one inside the workspace included, and that a run without a wall keeps its default.
@@ -385,6 +468,67 @@ func TestABindInsideAnotherWalledRunsIsNoRun(t *testing.T) {
 	if got := session.Overlap(r.Names[0], r.Names[2]); got != "contains" {
 		t.Errorf("Overlap = %q", got)
 	}
+}
+
+// TestAReadOnlyWorkspaceOverAnotherWalledRunsBindIsNoRun pins mount_shared_with_run for
+// a workspace with SessionSpec.WorkspaceReadOnly that holds a bind of a walled run still
+// going: the agent sees the workspace read-only, so the text names who of this run
+// could change the other run's bind: the host steps, and the setup container too while
+// it runs.
+func TestAReadOnlyWorkspaceOverAnotherWalledRunsBindIsNoRun(t *testing.T) {
+	root := t.TempDir()
+	sub := mkdirs(t, filepath.Join(root, "sub"))
+	first, _ := hold(t, []wall.Mount{{Path: sub}}, sub)
+	check := func(t *testing.T, err error, who string) {
+		t.Helper()
+		r := refusalOf(t, "mount_shared_with_run", err)
+		if want := []string{root, first.RunID, sub}; !slices.Equal(r.Names, want) {
+			t.Errorf("names %q, want %q", r.Names, want)
+		}
+		want := "the workspace " + root + " (read-only) contains the writable bind " + sub +
+			" of the walled run " + first.RunID + ", which is still going: " + who + " could change it"
+		if r.Detail != want {
+			t.Errorf("detail %q\nwant   %q", r.Detail, want)
+		}
+	}
+	t.Run("no setup container", func(t *testing.T) {
+		sp := walledSpec(t, &openWall{})
+		sp.Dir, sp.WorkspaceReadOnly = root, true
+		check(t, runErr(sp), "this run's host steps")
+	})
+	t.Run("a setup container", func(t *testing.T) {
+		sp := walledSpec(t, &setupWall{})
+		sp.Dir, sp.WorkspaceReadOnly = root, true
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Setup(ctx, session.SetupSpec{Dir: t.TempDir(), Commands: twoCommands[:1]}); err != nil {
+			t.Fatal(err)
+		}
+		res, err := r.Join(ctx, sp.SessionSpec)
+		check(t, err, "this run's setup container or host steps")
+		r.Close(ctx, outcomeOf(res, err))
+	})
+	t.Run("a setup container that RemoveSetup removed", func(t *testing.T) {
+		sp := walledSpec(t, &setupWall{})
+		sp.Dir, sp.WorkspaceReadOnly = root, true
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Setup(ctx, session.SetupSpec{Dir: t.TempDir(), Commands: twoCommands[:1]}); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.RemoveSetup(ctx); err != nil {
+			t.Fatal(err)
+		}
+		res, err := r.Join(ctx, sp.SessionSpec)
+		check(t, err, "this run's host steps")
+		r.Close(ctx, outcomeOf(res, err))
+	})
 }
 
 // TestTheEntryOfAWalledRunLastsAsLongAsTheRun pins the registry's entry: the run's id,

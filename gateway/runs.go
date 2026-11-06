@@ -24,6 +24,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/gateway/internal/tool"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/sealed"
@@ -457,6 +458,12 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	}
 	lr.px.ReportPanics(routine.ForRun(g.report, req.RunID))
 	lr.px.AllowFirst(pol.Policy.Egress.AllowFirst)
+	if g.client != nil {
+		lr.px.SetRunAPI(&proxy.RunAPI{RunID: req.RunID, Limits: &g.runAPILimits, Send: func(ctx context.Context, method, path string, body []byte, file bool) (*server.RunAPIAnswer, error) {
+			conf, _ := g.config()
+			return g.client.RunAPI(ctx, conf.Run.URL, req.RunID, method, path, body, file)
+		}})
+	}
 	// Every run's counters are its own, at the limits Start checked.
 	lr.px.SetLimits(proxy.Limits{Connections: g.cfg.RunLimits.Connections, RequestsPerSecond: g.cfg.RunLimits.RequestsPerSecond, Burst: g.cfg.RunLimits.Burst})
 	if g.cfg.upstreamRoots != nil {
@@ -950,6 +957,7 @@ type runAnswerDoc struct {
 	ModelCredential      string                       `json:"model_credential,omitempty"`
 	Image                *server.LinkImage            `json:"image,omitempty"`
 	RelayImage           string                       `json:"relay_image,omitempty"`
+	RunAPI               string                       `json:"run_api,omitempty"`
 	Applied              map[string]any               `json:"applied"`
 }
 
@@ -1015,6 +1023,9 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	}
 	if lr.wall {
 		a.RelayImage = lr.r.RelayImage()
+	}
+	if lr.g.client != nil {
+		a.RunAPI = link.RunAPIURL(lr.id)
 	}
 	if lr.remote {
 		a.Labels = nil

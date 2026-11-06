@@ -146,14 +146,15 @@ type OpenSpec struct {
 	// code, a run key and the query values of a harness URL, and wrap your writers
 	// with mask.NewWriter on the same masker, so your output and the run's are masked
 	// with one set of values. The run adds to it the server's variable values of 8
-	// characters or more, the run answer's at the open and each reload's from that
-	// reload on, and each forwarder's password, replaced with mask.ProxyPassword,
-	// before the forwarder starts. AddSecret refuses a value of more than
-	// mask.MaxSecretSize bytes, and a new value once the masker has mask.MaxSecrets
-	// different values: a server's value it refuses is a Report line with its
-	// variable's name, and is not masked. AddSecret does not filter by length: leave
-	// out a value that would replace ordinary text. The run's masker covers the
-	// dev.qory.run.log chunks of the runtime's output, of the host steps and of the
+	// characters or more, apart from QORY_RUN_SYSTEM's and QORY_RUN_REPOSITORIES', which
+	// are not secrets, the run answer's at the open and each reload's from that reload
+	// on, and each forwarder's password, replaced with mask.ProxyPassword, before the
+	// forwarder starts. Another variable with the same value still adds it. AddSecret
+	// refuses a value of more than mask.MaxSecretSize bytes, and a new value once the
+	// masker has mask.MaxSecrets different values: a server's value it refuses is a Report
+	// line with its variable's name, and is not masked. AddSecret does not filter by
+	// length: leave out a value that would replace ordinary text. The run's masker covers
+	// the dev.qory.run.log chunks of the runtime's output, of the host steps and of the
 	// setup steps, and so output.log; every event the descriptor maps from an output or
 	// hook record; every string of dev.qory.session.started; each step's name; the
 	// environment_ref of dev.qory.run.built; every string of dev.qory.run.started but
@@ -175,8 +176,9 @@ type OpenSpec struct {
 	// runtime to read, such as the setup script in the session's directory, which has
 	// the setup commands as given. [Run.Close] leaves a masker you pass as it is: clear
 	// it with mask.Masker.Clear once your writers are flushed. Nil makes the run make
-	// one with mask.New, which masks the server's values and the forwarders' passwords,
-	// and which [Run.Close] overwrites.
+	// one with mask.New, which masks the server's values, apart from QORY_RUN_SYSTEM's and
+	// QORY_RUN_REPOSITORIES', and the forwarders' passwords, and which [Run.Close]
+	// overwrites.
 	Masker *mask.Masker
 }
 
@@ -337,8 +339,8 @@ type SessionSpec struct {
 	// one of the same mode is reached through the outer one, which alone is bound; one of
 	// the other mode is a refused join, mount_mode_conflict. One whose path goes through a
 	// link inside a writable one, and that does not resolve into it, is a refused join,
-	// whatever its mode, mount_through_link. Dir is writable, and is bound at its path
-	// when no mount contains it. The session adds the session's directory in the run
+	// whatever its mode, mount_through_link. Dir is writable, or read-only with
+	// WorkspaceReadOnly, and is bound at its path when no mount contains it. The session adds the session's directory in the run
 	// directory, sessions/<n>/, read-only. A walled
 	// session refuses a bind that lies inside, or is reached through, a writable bind of
 	// another walled run of this user's still going, apart from the same root, a writable
@@ -346,6 +348,20 @@ type SessionSpec struct {
 	// contains or lies inside that run's run directory: mount_shared_with_run. Without a
 	// Wall they mean nothing.
 	Mounts []wall.Mount
+	// WorkspaceReadOnly says the enclosure binds Dir read-only for this session, so a
+	// write into the workspace inside fails with "Read-only file system". Under nested
+	// Docker this is unverified: the enclosure's root, which the agent reaches through
+	// the inner Docker daemon, may remount the workspace writable (contract §The wall,
+	// Nested Docker). Dir keeps the checks of a writable place, and stays among the
+	// places a file the Runtime reads is checked against (Written), since the host steps
+	// still write it, and a setup command may have written it: [Run.Setup] binds it
+	// writable until [Run.RemoveSetup] removes the setup container. A
+	// writable mount that contains Dir is a refused join, mount_mode_conflict; a
+	// read-only one is the one bind. Join and
+	// AgentEnv return an error before the join request, and write nothing, for
+	// WorkspaceReadOnly in a run with no Wall and beside Setup, which runs in the
+	// agent's container.
+	WorkspaceReadOnly bool
 	// ForagerFiles are the absolute paths of the caller's files that are Forager's,
 	// such as the directory of qory's forager.yaml with the access key secret. A walled
 	// session refuses a mount, or a workspace, that is, contains or lies inside one of
@@ -357,8 +373,9 @@ type SessionSpec struct {
 	// it starts. A file the Runtime reads from this machine as the session starts, the
 	// settings Claude Code is passed say, is refused when its path is or lies inside one
 	// of them, as given or through links, or is reached through one; so is one in a
-	// writable bind of another walled run in the registry and, behind a Wall, one in a
-	// writable bind of this session's, Dir among them. Behind a Wall, a mount or Dir whose
+	// writable bind of another walled run in the registry and, behind a Wall, one in Dir,
+	// read-only or not, in a writable bind of this session's or in the folder of the
+	// run's setup container. Behind a Wall, a mount or Dir whose
 	// path goes through a link inside one of them and does not resolve into it is a
 	// refused join, mount_through_link. A relative path is taken from the working
 	// directory.
@@ -448,9 +465,15 @@ func checkMachine(spec OpenSpec) error {
 
 // Outcome is how the caller says the run ended, which [Run.Close] writes in
 // dev.qory.run.exited: State, succeeded, failed or cancelled; Reason, empty for none,
-// timeout or interrupted with cancelled, timeout with ExitCode 124, image_missing,
-// failed with -1 for a run no session joined, after [Run.FetchImage] returned that
-// refusal, or a code of the caller's, which is none of Forager's reserved codes; and
+// timeout or interrupted with cancelled, timeout with ExitCode 124, image_missing or
+// image_user_root, failed with -1 for a run no session joined, after [Run.FetchImage]
+// returned that refusal, workflow_not_in_harness, failed with -1 for a run no session
+// joined whose workflow is not in the harness, read_needs_wall,
+// read_needs_setup_outside, read_needs_no_nested_docker and read_needs_setup_removed,
+// failed with -1 for a read run (the contract's §The events, How a run ends) no session
+// joined that has no wall, whose setup is set to run inside the agent's container, whose image runs nested
+// Docker, or whose setup container could not be removed, or a code of the caller's,
+// which is none of Forager's reserved codes; and
 // ExitCode, the run's exit code: the last session's, 124 at the run's time limit, -1
 // when no session ran. A failed run with no reason that no session joined is closed as
 // failed with no_session and -1.
@@ -463,18 +486,22 @@ type Outcome struct {
 // checkOutcome refuses an outcome the close cannot write: a state outside the three, an
 // exit code under -1, a reason outside the pattern or one of Forager's reserved codes
 // other than timeout, interrupted and no_session, those three with another state or
-// exit code than they take, and image_missing other than failed with -1 for a run no
-// session joined, the one image_missing the gateway accepts. joined is true when a join
-// of the run was numbered, or may have been.
+// exit code than they take, and image_missing, image_user_root,
+// workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
+// read_needs_no_nested_docker and read_needs_setup_removed other than failed with -1 for
+// a run no session joined, the one outcome with each of them that the gateway accepts.
+// joined is true when a join of the run was numbered, or may have been.
 func checkOutcome(o Outcome, joined bool) error {
 	switch {
 	case !event.IsState(o.State):
 		return fmt.Errorf("the outcome's state %q is none of succeeded, failed and cancelled", o.State)
 	case o.ExitCode < -1:
 		return fmt.Errorf("the outcome's exit code %d is under -1", o.ExitCode)
-	case o.Reason == refusal.ImageMissing:
+	case o.Reason == refusal.ImageMissing, o.Reason == refusal.ImageUserRoot, o.Reason == event.ReasonWorkflowNotInHarness,
+		o.Reason == event.ReasonReadNeedsWall, o.Reason == event.ReasonReadNeedsSetupOutside,
+		o.Reason == event.ReasonReadNeedsNoNestedDocker, o.Reason == event.ReasonReadNeedsSetupRemoved:
 		if o.State != event.StateFailed || o.ExitCode != -1 || joined {
-			return errors.New("an outcome with the reason image_missing is failed with the exit code -1, of a run no session joined")
+			return fmt.Errorf("an outcome with the reason %s is failed with the exit code -1, of a run no session joined", o.Reason)
 		}
 	case o.Reason == "", event.StarterReason(o.Reason):
 		return nil

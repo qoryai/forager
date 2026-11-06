@@ -119,6 +119,9 @@ type Decision struct {
 	// zero when nothing answered.
 	RequestID string
 	Status    int
+	// Channel is [ChannelRunAPI] for a decision of the run API's route, and empty for
+	// any other.
+	Channel string
 	// Never is true when the guard refused a link-local or cloud metadata address, by
 	// its number or at dial time: no name opens one.
 	Never bool
@@ -196,6 +199,8 @@ type Proxy struct {
 	// guardBody, when set, is the body of the 403 of a host the guard refuses
 	// ([Proxy.GuardRefused]).
 	guardBody atomic.Pointer[func(host string, port int, never bool) string]
+	// runAPI, when set, is the route to the run API ([Proxy.SetRunAPI]).
+	runAPI atomic.Pointer[RunAPI]
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
@@ -924,6 +929,11 @@ func (p *Proxy) decide(method, host string, port int) Decision {
 		return d
 	}
 	d.Allowed, d.Rule = ok || r.mode == policy.Observe, rule
+	// The host of the run API never resolves, and no list opens it: a CONNECT to it, and a
+	// request to it on a proxy with no route, dials nothing.
+	if d.Allowed && host == link.RunAPIHost {
+		d.Allowed, d.Rule = false, RunAPIRule
+	}
 	if !d.Allowed {
 		d.Outcome = Refused
 	}
@@ -947,11 +957,15 @@ func failed(d Decision, err error) Decision {
 	return d
 }
 
-// ServeHTTP handles one proxy request: a CONNECT, or a plain request with an
-// absolute-form target. Anything else is a 400.
+// ServeHTTP handles one proxy request: a CONNECT, a request of the run API's route, or
+// a plain request with an absolute-form target. Anything else is a 400.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		p.connect(w, r)
+		return
+	}
+	if a := p.runAPI.Load(); a != nil && forRunAPI(r) {
+		p.serveRunAPI(w, r, a)
 		return
 	}
 	if r.URL.Host == "" || r.URL.Scheme == "" {
@@ -970,14 +984,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// A host is decided as sent: one percent-encoded is taken undecoded, and so has no
 	// form.
-	authority := r.RequestURI
-	if _, rest, ok := strings.Cut(authority, "://"); ok {
-		authority = rest
-	}
-	if i := strings.IndexAny(authority, "/?#"); i >= 0 {
-		authority = authority[:i]
-	}
-	if h := sent(authority); strings.Contains(h, "%") {
+	if h := sent(authorityOf(r.RequestURI)); strings.Contains(h, "%") {
 		host = h
 	}
 	// Every request takes a token first, one the policy denies too, so the policy it is
@@ -1203,6 +1210,17 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	relay(p.reportPanic, client, upstream, buf.Reader.Buffered(), buf.Reader)
 }
 
+// authorityOf is the authority of an absolute-form request target, as sent.
+func authorityOf(target string) string {
+	if _, rest, ok := strings.Cut(target, "://"); ok {
+		target = rest
+	}
+	if i := strings.IndexAny(target, "/?#"); i >= 0 {
+		target = target[:i]
+	}
+	return target
+}
+
 // sent is the host of an authority as sent: without user information, port and
 // brackets, and not decoded.
 func sent(authority string) string {
@@ -1363,8 +1381,9 @@ func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 }
 
 // deny answers a refused connection as [deny] does, with the body [Proxy.Unlisted] set
-// for a host no allow entry matches under enforce, and the body [Proxy.GuardRefused]
-// set for a host the guard refuses.
+// for a host no allow entry matches under enforce, the body [Proxy.GuardRefused] set
+// for a host the guard refuses, and for a denial with [RunAPIRule] the text of a proxy
+// with the route or of one with none.
 func (p *Proxy) deny(w http.ResponseWriter, d Decision) {
 	text := ""
 	if body := p.unlisted.Load(); body != nil && d.Rule == "" && !d.Allowed && d.Mode == policy.Enforce {
@@ -1372,6 +1391,12 @@ func (p *Proxy) deny(w http.ResponseWriter, d Decision) {
 	}
 	if body := p.guardBody.Load(); body != nil && d.Rule == GuardRule {
 		text = (*body)(d.Host, d.Port, d.Never)
+	}
+	if d.Rule == RunAPIRule {
+		text = runAPIDenied
+		if p.runAPI.Load() == nil {
+			text = runAPINoRoute
+		}
 	}
 	if text == "" {
 		deny(w, d)

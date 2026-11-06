@@ -13,6 +13,7 @@ package runtimes
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"syscall"
@@ -103,6 +104,12 @@ type Attach struct {
 	// copies a file whose values reach the program's environment leaves these names out
 	// of the copy, regardless of case.
 	DeniedVariables []string
+	// Fixed is the variables of the runtime's descriptor's fixed, NAME=value, sorted by
+	// name, which the launch's Env sets too. A runtime that copies a file whose values
+	// reach the program's environment sets each in the copy, in place of the file's
+	// value of the name in any letter case. A described runtime sets it before it calls
+	// its installer; empty for a runtime without fixed variables.
+	Fixed []string
 	// Inside, when not nil, writes a path of this machine's as the enclosure sees it,
 	// in a string that may hold one: a runtime applies it to what it copies into
 	// SessionDir from the caller's files, so a path it names still leads where it led. The
@@ -236,6 +243,16 @@ type Parents interface {
 	Link(Record) (agentID, toolUseID string, ok bool)
 }
 
+// Summaries is implemented by a runtime that has a tool's summary to copy from a tool's
+// input, a descriptor's tools.summary. It is optional and checked by type assertion, so
+// [Runtime] keeps its methods: the session sets no summary for a runtime without it.
+type Summaries interface {
+	// Summary returns the member of input that is the summary of a call of tool, when
+	// the runtime lists the tool and that member is a string, and true. The session cuts
+	// the value at 1 KiB and writes it as the event's summary.
+	Summary(tool string, input map[string]any) (string, bool)
+}
+
 // The sources of a record. A runtime maps records of SourceOutput and SourceHooks;
 // the session reads the records of SourceSetup, a setup command's, and passes none of
 // them to a runtime.
@@ -362,16 +379,48 @@ func namesHeadless(named, args []string) bool {
 }
 
 // Prepare has the installer the descriptor names install the forwarder for the events
-// it lists, when it has a hooks source and the run a forwarder.
+// it lists, when it has a hooks source and the run a forwarder, and then sets the
+// descriptor's fixed variables in the launch's Env, sorted by name, in place of a value
+// the installer set for one. The installer gets them in [Attach.Fixed], so a file it
+// copies whose values reach the program's environment sets them too. The session counts
+// every name of the launch's Env among the run's fixed names, so no other source's
+// value of one applies.
 func (r *described) Prepare(a Attach) (Launch, error) {
-	if r.install == nil || len(a.Forwarder) == 0 {
-		return a.Launch, nil
+	fixed := slices.Sorted(maps.Keys(r.d.Fixed))
+	launch := a.Launch
+	if r.install != nil && len(a.Forwarder) > 0 {
+		a.Fixed = nil
+		for _, name := range fixed {
+			a.Fixed = append(a.Fixed, name+"="+r.d.Fixed[name])
+		}
+		var err error
+		if launch, err = r.install(r.d.Sources.Hooks.Events, a); err != nil {
+			return Launch{}, err
+		}
 	}
-	return r.install(r.d.Sources.Hooks.Events, a)
+	if len(fixed) == 0 {
+		return launch, nil
+	}
+	env := make([]string, 0, len(launch.Env)+len(fixed))
+	for _, kv := range launch.Env {
+		if name, _, _ := strings.Cut(kv, "="); !slices.Contains(fixed, name) {
+			env = append(env, kv)
+		}
+	}
+	for _, name := range fixed {
+		env = append(env, name+"="+r.d.Fixed[name])
+	}
+	launch.Env = env
+	return launch, nil
 }
 
 // Map applies the descriptor's rules.
 func (r *described) Map(rec Record) []Event { return r.d.Map(rec) }
+
+// Summary applies the descriptor's tools.summary.
+func (r *described) Summary(tool string, input map[string]any) (string, bool) {
+	return r.d.Summary(tool, input)
+}
 
 // parented is the runtime of a descriptor with a parent member, the one kind of
 // described runtime that is [Parents].

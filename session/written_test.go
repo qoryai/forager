@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -81,8 +82,8 @@ func TestAFileInAWrittenPlaceIsNotReadable(t *testing.T) {
 // TestASettingsFileAWalledRunCouldWriteIsNoRun pins that the session refuses the
 // settings a launch passes when they lie in a place a walled run could have written:
 // a place of Spec.Written, with or without a wall, and behind a wall the run's
-// workspace and its writable mounts. The run stops before the wall is wrapped. A
-// read-only mount is no such place.
+// workspace, read-only or not, its writable mounts and the setup container's folder. The
+// run stops before the wall is wrapped. A read-only mount is no such place.
 func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 	settingsIn := func(t *testing.T, sp *runSpec, dir string) string {
 		t.Helper()
@@ -127,6 +128,67 @@ func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 		if res, err := runWithSettingsEnv(t, sp); err != nil || res.ExitCode != 0 {
 			t.Errorf("the run: %+v, %v", res, err)
 		}
+	})
+	t.Run("a read-only workspace inside a read-only mount", func(t *testing.T) {
+		w := &openWall{}
+		sp := spec(t, "FAKE_EXIT=0")
+		root := t.TempDir()
+		dir := mkdirs(t, filepath.Join(root, "src"))
+		sp.Wall, sp.Image, sp.Mounts = w, "example.com/agent:1", []wall.Mount{{Path: root, ReadOnly: true}}
+		sp.Dir, sp.WorkspaceReadOnly = dir, true
+		settingsIn(t, &sp, dir)
+		if err := runErr(sp); err == nil || !strings.Contains(err.Error(), ", which lies in "+dir+", a place a walled run can write,") {
+			t.Errorf("the run: %v", err)
+		}
+		if w.wrapped {
+			t.Errorf("the wall was wrapped: %+v", w.got)
+		}
+	})
+	t.Run("the setup's folder beside a read-only workspace", func(t *testing.T) {
+		w := &setupWall{}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image, sp.WorkspaceReadOnly = w, "example.com/agent:1", true
+		folder := t.TempDir()
+		settingsIn(t, &sp, folder)
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Setup(ctx, session.SetupSpec{Dir: folder, Commands: twoCommands[:1]}); err != nil {
+			t.Fatal(err)
+		}
+		res, err := r.Join(ctx, sp.SessionSpec)
+		if err == nil || !strings.Contains(err.Error(), ", which lies in "+folder+", a place a walled run can write,") {
+			t.Errorf("the join: %v", err)
+		}
+		r.Close(ctx, outcomeOf(res, err))
+	})
+	t.Run("the setup's folder after RemoveSetup", func(t *testing.T) {
+		w := &setupWall{}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image, sp.WorkspaceReadOnly = w, "example.com/agent:1", true
+		folder := t.TempDir()
+		settingsIn(t, &sp, folder)
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Setup(ctx, session.SetupSpec{Dir: folder, Commands: twoCommands[:1]}); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.RemoveSetup(ctx); err != nil {
+			t.Fatal(err)
+		}
+		res, err := r.Join(ctx, sp.SessionSpec)
+		if err == nil || !strings.Contains(err.Error(), ", which lies in "+folder+", a place a walled run can write,") {
+			t.Errorf("the join: %v", err)
+		}
+		if w.wrapped {
+			t.Errorf("the wall was wrapped: %+v", w.got)
+		}
+		r.Close(ctx, outcomeOf(res, err))
 	})
 	t.Run("a place of Spec.Written without a wall", func(t *testing.T) {
 		sp := spec(t, "FAKE_EXIT=0")

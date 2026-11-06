@@ -65,8 +65,10 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 
 // TestTheRunExitedIsTheClosesOutcome pins a session's dev.qory.run.exited, the
 // close's: any state, with no reason, timeout or interrupted, no_session only in a run
-// with no join, and image_missing only failed with exit_code -1 in a run with no join,
-// are taken; a reason the gateway decides, or a starter's, is refused, and the run ends
+// with no join, and image_missing, image_user_root, workflow_not_in_harness,
+// read_needs_wall, read_needs_setup_outside, read_needs_no_nested_docker and
+// read_needs_setup_removed only failed with exit_code -1 in a run with no join, are
+// taken; a reason the gateway decides, or a starter's, is refused, and the run ends
 // failed, batch_refused, its reason in the report.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
@@ -89,6 +91,35 @@ func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 		{map[string]any{"state": "failed", "exit_code": 0, "reason": "image_missing"}, false, "a run.exited image_missing that is not failed with exit_code -1"},
 		{map[string]any{"state": "succeeded", "exit_code": -1, "reason": "image_missing"}, false, "a run.exited image_missing that is not failed with exit_code -1"},
 		{map[string]any{"state": "failed", "reason": "image_missing"}, false, "a run.exited image_missing that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_user_root"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_user_root"}, true, "a run.exited image_user_root of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "image_user_root"}, false, "a run.exited image_user_root that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "image_user_root"}, false, "a run.exited image_user_root that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "workflow_not_in_harness"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "workflow_not_in_harness"}, true, "a run.exited workflow_not_in_harness of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 1, "reason": "workflow_not_in_harness"}, false, "a run.exited workflow_not_in_harness that is not failed with exit_code -1"},
+		{map[string]any{"state": "succeeded", "exit_code": -1, "reason": "workflow_not_in_harness"}, false, "a run.exited workflow_not_in_harness that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "reason": "workflow_not_in_harness"}, false, "a run.exited workflow_not_in_harness that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "read_needs_wall"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "read_needs_wall"}, true, "a run.exited read_needs_wall of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "read_needs_wall"}, false, "a run.exited read_needs_wall that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "read_needs_wall"}, false, "a run.exited read_needs_wall that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "reason": "read_needs_wall"}, false, "a run.exited read_needs_wall that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "read_needs_setup_outside"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "read_needs_setup_outside"}, true, "a run.exited read_needs_setup_outside of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "read_needs_setup_outside"}, false, "a run.exited read_needs_setup_outside that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "read_needs_setup_outside"}, false, "a run.exited read_needs_setup_outside that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "reason": "read_needs_setup_outside"}, false, "a run.exited read_needs_setup_outside that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "read_needs_no_nested_docker"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "read_needs_no_nested_docker"}, true, "a run.exited read_needs_no_nested_docker of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "read_needs_no_nested_docker"}, false, "a run.exited read_needs_no_nested_docker that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "read_needs_no_nested_docker"}, false, "a run.exited read_needs_no_nested_docker that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "reason": "read_needs_no_nested_docker"}, false, "a run.exited read_needs_no_nested_docker that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "read_needs_setup_removed"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "read_needs_setup_removed"}, true, "a run.exited read_needs_setup_removed of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "read_needs_setup_removed"}, false, "a run.exited read_needs_setup_removed that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "read_needs_setup_removed"}, false, "a run.exited read_needs_setup_removed that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "reason": "read_needs_setup_removed"}, false, "a run.exited read_needs_setup_removed that is not failed with exit_code -1"},
 		{map[string]any{"state": "failed", "exit_code": 130, "reason": "interrupted"}, false, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "timeout"}, false, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "session_lost"}, false, "one link-batch.schema.json refuses"},

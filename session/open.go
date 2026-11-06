@@ -92,6 +92,9 @@ type Run struct {
 	// stack proxy then, and [Run.StackProxy] starts none from then on. It is read
 	// without the joining lock too, by a StackProxy that finds the lock taken.
 	joinAsked atomic.Bool
+	// ending is true once Close began: [Run.RunAPI] reads it without the joining lock,
+	// which a Join holds.
+	ending atomic.Bool
 	// keptBy is the number of the session whose wall's removal failed, 0 for none:
 	// its entry among the walled runs still going stays, and no session joins after it.
 	keptBy         int
@@ -113,9 +116,12 @@ type Run struct {
 	wallFwd    *forwarder
 	relayToken string
 	// setupFirst and setupLast are the numbers of the first and the last step of
-	// [Run.Setup], 0 until it wrote one, and setupFailed the number of its step that
-	// failed, 0 for none: no session joins after it.
+	// [Run.Setup], 0 until it wrote one, and setupFailed the number of the step of
+	// [Run.Setup] or [Run.RemoveSetup] that failed, 0 for none: no session joins after it.
 	setupFirst, setupLast, setupFailed int
+	// setupUp is the run's setup container from its start until [Run.RemoveSetup]
+	// removes it, nil otherwise.
+	setupUp setupContainer
 }
 
 // Open opens a run at its gateway and returns it once dev.qory.run.started and the
@@ -231,17 +237,19 @@ func (r *Run) clearMaskers() {
 const minServerMask = 8
 
 // addServerValues adds to the run's masker each of values, the server's variables by
-// name, of minServerMask characters or more. A value the masker refuses, past its
-// mask.MaxSecrets different values, is not masked, and is a Report line with its
-// variable's name: the run goes on, since the server's values are not the caller's to
-// change. The names are taken in order, so the values over the count are the same on
-// every run. Each value has at most mask.MaxSecretSize bytes already: the link refuses
-// a run or reload answer with a variable's value of more than server.MaxVariableValue
-// bytes, the same 4096.
+// name, of minServerMask characters or more. It leaves out QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES by name: they are not secrets, and a step's name contains them,
+// such as fetch github.com/example-org/app. Another variable with the same value still
+// adds it. A value the masker refuses, past its mask.MaxSecrets different values, is not
+// masked, and is a Report line with its variable's name: the run goes on, since the
+// server's values are not the caller's to change. The names are taken in order, so the
+// values over the count are the same on every run. Each value has at most
+// mask.MaxSecretSize bytes already: the link refuses a run or reload answer with a
+// variable's value of more than server.MaxVariableValue bytes, the same 4096.
 func (r *Run) addServerValues(values map[string]string) {
 	for _, name := range slices.Sorted(maps.Keys(values)) {
 		v := values[name]
-		if utf8.RuneCountInString(v) < minServerMask {
+		if name == envRunSystem || name == envRunRepositories || utf8.RuneCountInString(v) < minServerMask {
 			continue
 		}
 		b := []byte(v)
@@ -256,7 +264,7 @@ func (r *Run) addServerValues(values map[string]string) {
 // mask.ProxyPassword, and to r.passwords, the masker of the forwarders' passwords
 // alone, which [Run.Setup] refuses in its variables. The run's masker replaces the
 // run's secrets in what the run writes and reports: the forwarders' passwords, the
-// caller's values and the server's variable values of minServerMask characters or more.
+// caller's values and the server's variable values that addServerValues adds.
 func (r *Run) addPassword(password string) {
 	r.masker.AddProxy(proxyUser, password)
 	r.passwords.AddProxy(proxyUser, password)
@@ -530,8 +538,8 @@ func (r *Run) start(ctx context.Context) (err error) {
 	// A reload fetches what the gateway put in force and records it, at the sequence
 	// where it takes effect; batches from then on contain its digest.
 	r.reload.start(func(a *server.LinkReloadAnswer, held string) {
-		// The reload's variable values are masked from here on, whether or not its
-		// members are recorded.
+		// The reload's variable values that addServerValues adds are masked from here on,
+		// whether or not its members are recorded.
 		r.addServerValues(a.Values())
 		members, err := appliedMembers(a.Applied)
 		if err != nil {
@@ -590,6 +598,10 @@ func (r *Run) System() string { return r.answer.Values()[envRunSystem] }
 // Repositories is the server's value of QORY_RUN_REPOSITORIES in the run answer's
 // variables, the repositories the run may fetch; empty when the server sets none.
 func (r *Run) Repositories() string { return r.answer.Values()[envRunRepositories] }
+
+// Image is the image of the run answer, the one the agent's enclosure starts from; the
+// zero Image in a run with no wall or when the run answer has no image.
+func (r *Run) Image() Image { return r.img }
 
 // AgentEnv is the environment a session of spec gets from the server's variables,
 // Variables.Run, Variables.Machine, LaunchDefaults and SessionSpec.Env, as [Run.Join]
@@ -819,6 +831,7 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 		out.Reason, out.ExitCode = event.ReasonNoSession, -1
 	}
 	r.closed = true
+	r.ending.Store(true)
 	r.hosts.closeAll()
 	r.closeEngine()
 	// A host step still open ends before run.exited, as one the caller stopped.
@@ -826,7 +839,8 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 		r.hostStep.end(event.StateCancelled, -1)
 	}
 	// The run's wall goes before run.exited: its containers, the setup container's
-	// among them, its networks and its private directory, then the run's forwarder.
+	// among them unless RemoveSetup removed it, its networks and its private directory,
+	// then the run's forwarder.
 	r.closeWall(context.WithoutCancel(ctx))
 	// Nothing of a reload goes after run.exited, and the heartbeats stop before it.
 	r.reload.stop()

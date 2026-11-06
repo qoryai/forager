@@ -117,9 +117,10 @@ func Timestamp(now time.Time) string { return strconv.FormatInt(now.Unix(), 10) 
 // X-Qory-Signature-Ed25519 exactly as sent, for an enrolment the request's proof, and
 // for a separate gateway's answer the hash of the connection and the request,
 // link.AnswerRequest; the lower-case hex SHA-256 of the body as the server produced it,
-// before any content coding; the answer's X-Qory-Configuration, or empty; and its
-// X-Qory-Run-Configuration, or empty. The third line binds the answer to its request,
-// and through the request's signature to the access key and the instance that sent it.
+// before any content coding, or Digest when it is set; the answer's X-Qory-Configuration,
+// or empty; and its X-Qory-Run-Configuration, or empty. The third line binds the answer
+// to its request, and through the request's signature to the access key and the instance
+// that sent it.
 type Answer struct {
 	// Enrolment marks an answer to an enrolment, whose message starts with
 	// EnrolAnswerDomain. [EnrolmentRequest.VerifyAnswer] sets it; a server sets it to
@@ -131,6 +132,10 @@ type Answer struct {
 	Status           int
 	RequestSignature string
 	Body             []byte
+	// Digest, when set, is the lower-case hex SHA-256 the fourth line contains in place
+	// of Body's: a file of the run API, whose body the reader reads as it streams and so
+	// hashes itself.
+	Digest           string
 	Configuration    string
 	RunConfiguration string
 }
@@ -144,9 +149,13 @@ func (a Answer) Message() []byte {
 	case a.Link:
 		domain = LinkAnswerDomain
 	}
-	sum := sha256.Sum256(a.Body)
+	digest := a.Digest
+	if digest == "" {
+		sum := sha256.Sum256(a.Body)
+		digest = hex.EncodeToString(sum[:])
+	}
 	return []byte(domain + "\n" + fmt.Sprintf("%03d", a.Status) + "\n" + a.RequestSignature + "\n" +
-		hex.EncodeToString(sum[:]) + "\n" + a.Configuration + "\n" + a.RunConfiguration)
+		digest + "\n" + a.Configuration + "\n" + a.RunConfiguration)
 }
 
 // SignAnswer returns X-Qory-Signature-Ed25519 for an answer: its signature under the

@@ -112,8 +112,8 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	}
 	// A wall whose removal failed may still run, with the places its entry lists: a
 	// join would rewrite that entry with the join's places alone.
-	if r.keptBy > 0 {
-		return nil, fmt.Errorf("Open a new run. The wall of session %d could not be removed and may still run, so this run takes no more sessions.", r.keptBy)
+	if err := r.wallKept(); err != nil {
+		return nil, err
 	}
 	// A run whose setup failed is not set up as its sessions need.
 	if r.setupFailed > 0 {
@@ -157,8 +157,8 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 
 // checkSession is the spec of a session of the run with its defaults filled, and its
 // runtime, after the checks a join runs before the join request: the variables, the
-// harness's home and sources, the setup, the helper's exec and the stop signal and
-// grace. It writes nothing and sends nothing.
+// harness's home and sources, the read-only workspace, the setup, the helper's exec and
+// the stop signal and grace. It writes nothing and sends nothing.
 func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) {
 	spec = sessionDefaults(spec, r.open.Wall != nil)
 	s := runSpec{OpenSpec: r.open, SessionSpec: spec}
@@ -177,6 +177,9 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 		}
 	}
 	if err := checkHarness(spec.Harness); err != nil {
+		return runSpec{}, nil, err
+	}
+	if err := checkWorkspaceReadOnly(s); err != nil {
 		return runSpec{}, nil, err
 	}
 	if err := checkSetup(s); err != nil {
@@ -253,6 +256,18 @@ func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.L
 	}
 	step.end(event.StateFailed, -1)
 	return nil, 0, err
+}
+
+// wallKept is the error of a call that must not run beside the wall of a session whose
+// removal failed, nil for a run with no such wall: [Run.Join], since the wall may still
+// run, and [Run.HostProxy], since the agent's container may still change what a push
+// sends. A timed-out or cancelled session ends by killing the docker client, which does
+// not prove the container stopped.
+func (r *Run) wallKept() error {
+	if r.keptBy > 0 {
+		return fmt.Errorf("Open a new run. The wall of session %d could not be removed and may still run, so this run takes no more sessions.", r.keptBy)
+	}
+	return nil
 }
 
 // refusedJoin writes the dev.qory.session.exited of a join that did not start, n:
@@ -378,6 +393,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if err != nil {
 		return fail(err)
 	}
+	markSetup(plan.sources, r.setupUp != nil)
 	if r.listed != nil {
 		if err := r.listed.update(slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
@@ -454,10 +470,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// not its to read. The runtime learns whether the run is walled, and the
 	// placeholders the run sets, with or without a wall. A file the runtime reads from this machine is refused
 	// when a walled run could have written it: one in a place of SessionSpec.Written, in
-	// a writable bind of another walled run in the registry or, behind a wall, in a
-	// writable bind of this session's. A directory the runtime passes is refused as well
-	// when it contains such a place. The places are worked out once, for both.
-	written := sync.OnceValues(func() ([]string, error) { return writtenPlaces(spec, r.id, plan, r.wallOwn) })
+	// a writable bind of another walled run in the registry or, behind a wall, in the
+	// workspace, in a writable bind of this session's or in one of the setup container's.
+	// A directory the runtime passes is refused as well when it contains such a place. The places are worked out once, for both.
+	written := sync.OnceValues(func() ([]string, error) {
+		return writtenPlaces(spec, r.id, plan, slices.Concat(r.wallOwn, r.setupBinds))
+	})
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	denied, err := deniedVariables(rt, spec.Wall != nil)
 	if err != nil {
@@ -497,7 +515,16 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// session inherits either, walled or not: it would send their values to the start
 	// key's endpoint.
 	spec.Env = withoutNames(spec.Env, key.Others)
+	// A session without a wall may inherit QORY_RUN_API from another run: this run's value
+	// replaces it, and a run with no control plane has none. Behind a wall the value is
+	// variable_reserved, when the variables are resolved.
+	if spec.Wall == nil {
+		spec.Env = withoutNames(spec.Env, []string{EnvRunAPI})
+	}
 	ownEnv := []string{EnvRunID + "=" + r.id}
+	if r.answer.RunAPI != "" {
+		ownEnv = append(ownEnv, EnvRunAPI+"="+r.answer.RunAPI)
+	}
 	if spec.HarnessHome != "" {
 		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
 	}
@@ -632,9 +659,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), neutral, hidden)
 	// The mapper is reached from the socket's goroutine and the output's: it sets
 	// parent_agent_id on a subagent's start, which it may keep back for a while, and
-	// writes every event of the session's runtime in order.
+	// writes every event of the session's runtime in order. Each event is masked first,
+	// then cut and given its summary (shapedRecord), so a cut never splits a secret
+	// before the masker sees it whole.
+	summaries, _ := rt.(runtimes.Summaries)
 	mapper := parents.New(rt, func(e runtimes.Event) {
-		r.write(e.Type, withSession(neutralRecord(e.Type, maskedRecord(texts{secrets: masker, harness: hidden}, e.Data), neutralText), n))
+		masked := maskedRecord(texts{secrets: masker, harness: hidden}, e.Data)
+		r.write(e.Type, withSession(neutralRecord(e.Type, shapedRecord(e.Type, masked, summaries), neutralText), n))
 	}, parents.Real)
 	records := func(rec runtimes.Record) {
 		if rec.Source == runtimes.SourceSetup {
@@ -679,6 +710,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err != nil {
 			return fail(err)
 		}
+		markSetup(again.sources, r.setupUp != nil)
 		if err := samePlan(plan, again); err != nil {
 			return fail(err)
 		}
@@ -716,7 +748,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			r.write(event.RunLog, map[string]any{"stream": stream, "bytes": encode(b), "session": n})
 		}
 	}
-	output := func(m map[string]any) { records(runtimes.Record{Source: runtimes.SourceOutput, Record: m}) }
+	output := func(m map[string]any, line int) {
+		records(runtimes.Record{Source: runtimes.SourceOutput, Record: m, Line: line})
+	}
 	if !rt.ReadsOutput() {
 		output = nil
 	}

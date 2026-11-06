@@ -493,3 +493,97 @@ func TestARemoteGatewaysRunRefusesAMountOfALinkDirectory(t *testing.T) {
 		}
 	}
 }
+
+// TestAReadOnlyWorkspaceKeepsTheChecksOfAWritablePlace pins that
+// SessionSpec.WorkspaceReadOnly changes the bind alone: a place through a link inside
+// the workspace is still mount_through_link, and a link in the workspace on the way to
+// the runs directory is still mount_contains_forager_files, since the setup container
+// and the host steps still write the workspace.
+func TestAReadOnlyWorkspaceKeepsTheChecksOfAWritablePlace(t *testing.T) {
+	ws, outside := t.TempDir(), t.TempDir()
+	home := filepath.Join(ws, "home")
+	symlink(t, outside, home)
+	w := &openWall{}
+	sp := walledSpec(t, w)
+	sp.Mounts, sp.Dir, sp.WorkspaceReadOnly = []wall.Mount{{Path: home, ReadOnly: true}}, ws, true
+	throughLink(t, runErr(sp), home, home, ws)
+	if w.wrapped {
+		t.Error("the wall was wrapped")
+	}
+
+	ws = t.TempDir()
+	runs := filepath.Join(ws, "runs")
+	symlink(t, t.TempDir(), runs)
+	w = &openWall{}
+	sp = walledSpec(t, w)
+	sp.Dir, sp.RunsDir, sp.WorkspaceReadOnly = ws, runs, true
+	r := mountRefusal(t, runErr(sp))
+	want := "the workspace " + ws + " contains " + entry(t, runs) + ", on the way to " + runs +
+		", where the run directories are kept"
+	if !slices.Equal(r.Names, []string{ws, runs}) || r.Detail != want {
+		t.Errorf("names %q, detail %q\nwant names %q, detail %q", r.Names, r.Detail, []string{ws, runs}, want)
+	}
+	if w.wrapped {
+		t.Error("the wall was wrapped")
+	}
+}
+
+// TestAReadOnlyWorkspaceNeedsAWallAndNoSetupInside pins the two specs with
+// SessionSpec.WorkspaceReadOnly that Join and AgentEnv refuse before the join request,
+// with the fix first: a run with no wall, and SessionSpec.Setup, which runs in the
+// agent's container. No join request is sent, the record gets no event and the runtime
+// does not start.
+func TestAReadOnlyWorkspaceNeedsAWallAndNoSetupInside(t *testing.T) {
+	for name, c := range map[string]struct {
+		walled bool
+		setup  []session.SetupCommand
+		want   string
+	}{
+		"no wall": {false, nil,
+			"Open the run with a wall to mount the workspace read-only: a run with no wall starts the agent on this machine."},
+		"no wall, setup inside": {false, []session.SetupCommand{{Name: "install", Args: []string{"true"}}},
+			"Open the run with a wall to mount the workspace read-only: a run with no wall starts the agent on this machine."},
+		"setup inside": {true, []session.SetupCommand{{Name: "install", Args: []string{"true"}}},
+			"Run the setup with Run.Setup, or leave SessionSpec.WorkspaceReadOnly unset: SessionSpec.Setup runs in the agent's container, which sees the workspace read-only."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			sp, g := specGateway(t, "FAKE_EXIT=0")
+			sp.Command, sp.Args, sp.Forwarder = "/bin/sh", []string{"-c", "touch runtime-ran"}, nil
+			if c.walled {
+				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			}
+			sp.SetupRunner, sp.SessionSpec.Setup, sp.WorkspaceReadOnly = setupRunner, c.setup, true
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := filepath.Join(r.Dir(), "session.jsonl")
+			before, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.AgentEnv(sp.SessionSpec); err == nil || err.Error() != c.want {
+				t.Errorf("AgentEnv: %v\nwant %s", err, c.want)
+			}
+			res, err := r.Join(ctx, sp.SessionSpec)
+			if err == nil || err.Error() != c.want {
+				t.Errorf("Join: %v\nwant %s", err, c.want)
+			}
+			after, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Errorf("the join wrote to the record:\n%s", after[len(before):])
+			}
+			if joins := g.Joins(); len(joins) != 0 {
+				t.Errorf("join requests %+v; want none", joins)
+			}
+			if _, err := os.Stat(filepath.Join(sp.Dir, "runtime-ran")); err == nil {
+				t.Error("the runtime started")
+			}
+			r.Close(ctx, outcomeOf(res, err))
+		})
+	}
+}

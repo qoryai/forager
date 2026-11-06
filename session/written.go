@@ -13,8 +13,11 @@ import (
 
 // writtenPlaces are the places a walled run could have written, as SessionSpec.Written lists
 // them, the writable binds of the other walled runs in the registry and, behind a wall,
-// the run's writable binds: the places of the plan the enclosure binds writable, the
-// workspace among them, and the wall's writable binds.
+// the run's writable binds: the workspace, the places of the plan the enclosure binds
+// writable, and own, the wall's writable binds and the setup container's. The workspace
+// is among them whatever its bind: the host steps write it, a setup command may have
+// written it, and the agent writes it unless SessionSpec.WorkspaceReadOnly binds it
+// read-only.
 func writtenPlaces(spec runSpec, runID string, plan mountPlan, own []bindSource) ([]string, error) {
 	others, err := othersWritable(runID)
 	if err != nil {
@@ -24,6 +27,7 @@ func writtenPlaces(spec runSpec, runID string, plan mountPlan, own []bindSource)
 	if spec.Wall == nil {
 		return places, nil
 	}
+	places = append(places, spec.Dir)
 	for _, b := range slices.Concat(plan.sources, own) {
 		if b.Writable {
 			places = append(places, b.Path)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -74,6 +75,167 @@ func TestDockerSetupCommandLines(t *testing.T) {
 		t.Error("the proxy's token is on a command line or in the setup container's environment file")
 	}
 	golden(t, "setup", lines+"\n\nsetup environment:\n"+string(env))
+}
+
+// TestDockerRemoveSetup pins the removal of the setup container: the one command is
+// docker rm --force --volumes with the container's name, Close does not run it again
+// and works, and a docker rm that fails with "no such container" is not an error. Any
+// other failure returns docker's error, keeps the container's entry in e.made, and Close
+// runs the command again: a missing engine socket and a container runtime that fails
+// leave the container up, though their text has "no such" or "not found".
+func TestDockerRemoveSetup(t *testing.T) {
+	ctx := context.Background()
+	rm := "docker rm --force --volumes qory-" + runID + "-setup"
+	const noSuch = "Error response from daemon: No such container: qory-x-setup"
+	const socket = "failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+	const runtime = "Error response from daemon: Could not kill running container, cannot remove: OCI runtime kill failed: runtime \"runsc\": executable file not found in $PATH"
+	for _, c := range []struct {
+		name, failOut, wantErr string
+		fail                   string
+		atClose                int
+	}{
+		{name: "removed", atClose: 0},
+		{name: "gone already", fail: rm, failOut: noSuch, atClose: 0},
+		{name: "fails", fail: rm, atClose: 1,
+			wantErr: "wall docker: docker rm --force: exit status 1: Error response from daemon: told to fail"},
+		{name: "no engine socket", fail: rm, failOut: socket, atClose: 1,
+			wantErr: "wall docker: docker rm --force: exit status 1: " + socket},
+		{name: "a runtime that fails", fail: rm, failOut: runtime, atClose: 1,
+			wantErr: "wall docker: docker rm --force: exit status 1: " + runtime},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, HoldArgs: []string{"run", "hold"}, sys: rec}
+			enc, err := d.Prepare(ctx, Request{RunID: runID, Image: "example.com/agent:1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := enc.(*dockerEnclosure)
+			l := setupLaunch()
+			l.Proxy = "172.30.0.1:50123"
+			if err := e.StartSetup(ctx, l); err != nil {
+				t.Fatal(err)
+			}
+			before := len(rec.lines)
+			rec.fail, rec.failOut = c.fail, c.failOut
+			err = e.RemoveSetup(ctx)
+			if (err == nil) != (c.wantErr == "") || (err != nil && err.Error() != c.wantErr) {
+				t.Errorf("RemoveSetup: %v, want %q", err, c.wantErr)
+			}
+			if got := rec.lines[before:]; len(got) != 1 || got[0] != rm {
+				t.Errorf("the commands %q, want %q alone", got, rm)
+			}
+			entry := []string{"rm", "--force", "--volumes", "qory-" + runID + "-setup"}
+			if got := slices.ContainsFunc(e.made, func(m []string) bool { return slices.Equal(m, entry) }); got != (c.atClose == 1) {
+				t.Errorf("the entry in e.made: %v, want %v", got, c.atClose == 1)
+			}
+			rec.fail, rec.failOut = "", ""
+			before = len(rec.lines)
+			if err := e.Close(ctx); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+			if got := strings.Count(strings.Join(rec.lines[before:], "\n")+"\n", rm+"\n"); got != c.atClose {
+				t.Errorf("Close ran %q %d times, want %d:\n%s", rm, got, c.atClose, strings.Join(rec.lines[before:], "\n"))
+			}
+		})
+	}
+}
+
+// TestDockerRemoveSetupAfterUnwrap pins the removal after a session: the setup container
+// runs through the session, RemoveSetup after Unwrap runs its one docker rm and leaves
+// the relay and the networks, a later Wrap starts the agent's container, and Close
+// removes the rest without the setup container.
+func TestDockerRemoveSetupAfterUnwrap(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, HoldArgs: []string{"run", "hold"}, sys: rec}
+	enc, err := d.Prepare(ctx, Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := enc.(*dockerEnclosure)
+	l := setupLaunch()
+	l.Proxy = "172.30.0.1:50123"
+	if err := e.StartSetup(ctx, l); err != nil {
+		t.Fatal(err)
+	}
+	agent := l
+	agent.Command = "agent"
+	if _, err := e.Wrap(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Unwrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	made := slices.Clone(e.made)
+	before := len(rec.lines)
+	if err := e.RemoveSetup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rm := "docker rm --force --volumes qory-" + runID + "-setup"
+	if got := rec.lines[before:]; len(got) != 1 || got[0] != rm {
+		t.Errorf("the commands %q, want %q alone", got, rm)
+	}
+	entry := []string{"rm", "--force", "--volumes", "qory-" + runID + "-setup"}
+	want := slices.DeleteFunc(made, func(m []string) bool { return slices.Equal(m, entry) })
+	if !slices.EqualFunc(e.made, want, slices.Equal[[]string]) {
+		t.Errorf("e.made %q, want %q", e.made, want)
+	}
+	if _, err := e.Wrap(ctx, agent); err != nil {
+		t.Errorf("a later Wrap: %v", err)
+	}
+	if err := e.Unwrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before = len(rec.lines)
+	if err := e.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(rec.lines[before:], "\n"); strings.Contains(got, "-setup") {
+		t.Errorf("Close touched the setup container:\n%s", got)
+	}
+}
+
+// TestDockerUnwrapKeepsItsCheck pins Unwrap's reading of a docker rm that fails: only "no
+// such container", which docker run --rm leaves for a container that exits, counts as
+// gone, in any case. Any other failure is an error and keeps the container's entry in
+// e.made: a missing engine socket and a missing docker command leave the container's
+// state unknown, though their text has "no such" or "not found". Close still reads
+// those two as gone, with goneAlready, and any other failure as an error.
+func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		failOut           string
+		wantErr, closeErr bool
+	}{
+		{"Error response from daemon: No such container: qory-x-agent", false, false},
+		{"Error: no container with name or ID \"qory-x-agent\" found: no such container", false, false},
+		{"dial unix /var/run/docker.sock: connect: no such file or directory", true, false},
+		{"failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory", true, false},
+		{"executable file not found in $PATH", true, false},
+		{"Error response from daemon: told to fail", true, true},
+	} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+		enc, err := d.Prepare(ctx, Request{RunID: runID, Image: "i"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := enc.(*dockerEnclosure)
+		rec.fail, rec.failOut = "-agent", c.failOut
+		entry := []string{"rm", "--force", "--volumes", e.agent()}
+		e.made = append(e.made, entry)
+		if err := e.Unwrap(ctx); (err != nil) != c.wantErr {
+			t.Errorf("%q: %v, want an error: %v", c.failOut, err, c.wantErr)
+		}
+		if kept := slices.ContainsFunc(e.made, func(m []string) bool { return slices.Equal(m, entry) }); kept != c.wantErr {
+			t.Errorf("%q: the container's entry in e.made: %v, want %v", c.failOut, kept, c.wantErr)
+		}
+		if err := e.Close(ctx); (err != nil) != c.closeErr {
+			t.Errorf("%q: Close with the failure still there: %v, want an error: %v", c.failOut, err, c.closeErr)
+		}
+		rec.fail, rec.failOut = "", ""
+	}
 }
 
 // TestDockerSetupRefuses pins what stops the setup container before anything starts: no

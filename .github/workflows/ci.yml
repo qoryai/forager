@@ -255,6 +255,17 @@ jobs:
           sudo apt-get install -y jq
           curl -fsSLo sysbox.deb "https://github.com/nestybox/sysbox/releases/download/v${SYSBOX_VERSION}/sysbox-ce_${SYSBOX_VERSION}.linux_amd64.deb"
           docker rm -f $(docker ps -aq) 2>/dev/null || true
+          # Ubuntu 25.04 and later confine fusermount3 with AppArmor, and its profile
+          # blocks sysbox-fs's FUSE mounts, so no container starts (nestybox/sysbox#1005).
+          # These three rules are the Sysbox maintainer's addition to the profile
+          # (nestybox/sysbox#947). Ubuntu 24.04 has no such profile.
+          if [ -f /etc/apparmor.d/fusermount3 ]; then
+            printf '%s\n' \
+              'mount fstype=@{fuse_types} options=(nosuid,nodev,rw) -> /var/lib/sysboxfs/**/,' \
+              'mount fstype=@{fuse_types} options=(nosuid,nodev,ro) -> /var/lib/sysboxfs/**/,' \
+              'umount /var/lib/sysboxfs/**/,' | sudo tee -a /etc/apparmor.d/local/fusermount3
+            sudo apparmor_parser -r /etc/apparmor.d/fusermount3
+          fi
           sudo apt-get install -y ./sysbox.deb
           docker info --format '{{json .Runtimes}}' | grep -q sysbox-runc
           # The package returns before sysbox-fs and sysbox-mgr listen, and a container
@@ -306,3 +317,9 @@ jobs:
           QORY_WALL_REQUIRE: "1"
           QORY_WALL_RUNTIME: sysbox-runc
         run: go test ./e2e -count=1 -v -run TestDockerNestedConforms
+
+      - name: Show Sysbox's log and AppArmor denials
+        if: failure()
+        run: |
+          sudo journalctl -u sysbox -u sysbox-fs -u sysbox-mgr --no-pager | tail -n 100 || true
+          sudo dmesg | grep 'apparmor="DENIED"' | tail -n 50 || true

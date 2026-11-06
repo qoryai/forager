@@ -128,7 +128,7 @@ and the log lines of each step.
 
 - `dev.qory.run.step_started` has `step`, the step's number in the run from 1, `name`,
   a readable name such as `fetch github.com/example-org/app`, and `kind`: `fetch`,
-  `compose`, `image`, `setup`, `join`, `wall` or `build`.
+  `compose`, `image`, `setup`, `join`, `wall`, `build`, `push` or `machine`.
 - `dev.qory.run.step_exited` has the same `step`, `state` (`succeeded`, `failed` or
   `cancelled`), `exit_code`, -1 when no process exit status exists, and `duration_ms`.
 - Each host line of a step is a `dev.qory.run.log` with the step's number in `step`,
@@ -137,12 +137,21 @@ and the log lines of each step.
 The steps come after `dev.qory.run.started`, numbered in the order they start, one at
 a time:
 
-- The caller writes the `fetch`, `compose` and `build` steps of its host work with
-  `(*session.Run).StartStep`, before the first join or between two joins, and the
-  `image` step of an image by reference with `(*session.Run).FetchImage`.
+- The caller writes the `fetch`, `compose`, `build`, `push` and `machine` steps of its
+  host work with `(*session.Run).StartStep`, before the first join, between joins, or
+  after the last join and before the close, and the `image` step of an image by
+  reference with `(*session.Run).FetchImage`. `push` is host work that sends the run's
+  commits. `machine` is the start of the machine the run runs on: the caller writes its
+  lines from a file the machine wrote. Its `duration_ms` is the time to write the
+  lines; the start's times are in the lines.
 - Each join writes a `join` step, `join session <n>`, around its join request and the
   session's checks. It ends before `dev.qory.session.started`, or `failed` before the
   `dev.qory.session.exited` of a refused join.
+- Behind a wall, before the first join, `(*session.Run).Setup` writes a `wall` step,
+  `start the setup container`, and a `setup` step for each command.
+  `(*session.Run).RemoveSetup` writes a `wall` step, `remove the setup container`, before
+  the first join, between joins, or after the last join and before the close. These
+  `wall` steps lie outside every session.
 - Behind a wall, after `dev.qory.session.started`, the join writes an `image` step,
   with the image's reference as its name, when the policy's image is a reference that
   no step fetched yet, and a `wall` step, `start the wall`, up to the launch's start.
@@ -173,9 +182,17 @@ starter's, carried as given. The close writes `timeout`, `cancelled`, `interrupt
 `failed`, a run closed with no session after its host work failed, such as a fetch,
 and posts them. The close writes and posts `image_missing`, `failed` with exit code
 `-1`, when its caller gives it for a run with no session after the fetch of the run's
-image found that its registry, or the registry's mirror, does not have it. The gateway
-writes the others: `session_lost`, `failed`, the session was silent; `batch_refused`,
-`failed`, the gateway refused a batch from the run's session
+image found that its registry, or the registry's mirror, does not have it, and the same
+for `image_user_root`, after the fetch found that the image's user is root. qory closes
+a run with no session whose workflow is not in the harness with
+`workflow_not_in_harness`, `failed` with exit code `-1`. qory closes a read run (the
+contract's §The events, How a run ends) with no session that has no wall with
+`read_needs_wall`, a read run whose setup is set to run inside the agent's container
+with `read_needs_setup_outside`, a read run whose image runs nested Docker with
+`read_needs_no_nested_docker`, and a read run whose setup container could not be removed
+with `read_needs_setup_removed`, each `failed` with exit code `-1`.
+The gateway writes the others: `session_lost`, `failed`, the session was silent;
+`batch_refused`, `failed`, the gateway refused a batch from the run's session
 (see the contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
 gave no outcome, or the starter's outcome and reason when it gave one; and sending a
 record again writes `gateway_lost`, `failed`. Forager's codes are reserved, and so are
@@ -211,11 +228,13 @@ records come from outside. A **descriptor** maps those reports to events:
 | `dev.qory.runtime.tool_started`      | The runtime is about to run a tool    |
 | `dev.qory.runtime.tool_finished`     | A tool ran and returned               |
 | `dev.qory.runtime.tool_failed`       | A tool ran and failed                 |
+| `dev.qory.runtime.tool_result`       | The model got a tool's result         |
+| `dev.qory.runtime.tool_denied`       | The runtime denied a tool call        |
 | `dev.qory.runtime.turn_finished`     | The runtime finished responding       |
 | `dev.qory.runtime.turn_failed`       | A turn ended on an API error          |
 | `dev.qory.runtime.subagent_started`  | A subagent was spawned                |
 | `dev.qory.runtime.subagent_finished` | A subagent finished                   |
-| `dev.qory.runtime.message`           | A subagent wrote a message            |
+| `dev.qory.runtime.text`              | The runtime printed a text block      |
 | `dev.qory.runtime.notification`      | The runtime notified its user         |
 | `dev.qory.runtime.ended`             | The runtime closed its session        |
 | `dev.qory.runtime.result`            | A headless session printed its result |

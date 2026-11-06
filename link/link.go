@@ -47,6 +47,19 @@ const StackPreamble = "QORY-STACK"
 // environment.
 const EnvRunSocket = "QORY_RUN_SOCKET"
 
+// RunAPIHost is the host of the run API's route on a run's proxy. The name never
+// resolves: a caller reaches it through the run's proxy alone, and [NoProxy] does not
+// list it.
+const RunAPIHost = "run-api.qory.invalid"
+
+// EnvRunAPI is the variable that contains the base URL of the run API for the agent and
+// the setup: [RunAPIURL] of the run.
+const EnvRunAPI = "QORY_RUN_API"
+
+// RunAPIURL is the base URL of the run API of the run runID, the same in the wall, in
+// host steps and in an unwalled run.
+func RunAPIURL(runID string) string { return "http://" + RunAPIHost + "/v1/runs/" + runID }
+
 // EnvToolListen names, in a tool's environment, the path of the Unix socket it listens
 // on.
 const EnvToolListen = "QORY_TOOL_LISTEN"

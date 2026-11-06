@@ -10,9 +10,14 @@
 // source, it keeps a subagent's start and the hook events after it back until the
 // subagent's link arrives, for at most [Hold], and then writes them in their order.
 // The mapper returns at once while it keeps events back; a timer writes them.
+//
+// The mapper sets line on each event of a record of the output source, the record's
+// line on the runtime's standard output, and leaves line out of every other event,
+// whatever the runtime's Map returns.
 package parents
 
 import (
+	"maps"
 	"sync"
 	"time"
 
@@ -30,6 +35,7 @@ const (
 	fieldToolUseID  = "tool_use_id"
 	fieldAgentID    = "agent_id"
 	fieldParent     = "parent_agent_id"
+	fieldLine       = "line"
 )
 
 // Runtime is what the mapper maps a record with.
@@ -114,6 +120,7 @@ func (m *Mapper) Handle(rec descriptor.Record) {
 		}
 	}
 	for _, e := range m.rt.Map(rec) {
+		e.Data = lined(e.Data, rec)
 		k := &kept{event: e}
 		switch e.Type {
 		case toolStarted:
@@ -203,4 +210,18 @@ func (m *Mapper) flush() {
 		m.queue[i] = nil
 	}
 	m.queue = m.queue[i:]
+}
+
+// lined is a copy of data with the record's line as line, for a record of the output
+// source with a line, and without line for any other record.
+func lined(data map[string]any, rec descriptor.Record) map[string]any {
+	out := maps.Clone(data)
+	if out == nil {
+		out = map[string]any{}
+	}
+	delete(out, fieldLine)
+	if rec.Source == descriptor.SourceOutput && rec.Line > 0 {
+		out[fieldLine] = rec.Line
+	}
+	return out
 }

@@ -61,15 +61,15 @@ const (
 //
 // A run gets two networks and the relay's container when it opens, the agent's
 // container for each session, and, with setup outside, the setup container, which runs
-// until the run closes. When the relay starts from another image, the wall reads the
-// run's image's files out of a container of that image, never started and on no
-// network. The agent's container and the setup container are on a network created with
-// --internal and on nothing else, so they have no route out and their resolver knows
-// only that network; the network's bridge gets no address, so the engine's host is not
-// on it either. For any image the network has no IPv6 subnet, and the agent's container
-// starts with no IPv6 address but loopback's. With nested Docker, which needs the
-// docker command and Docker Engine 28 or later, the network has an IPv6 subnet, the
-// engine's choice, in Docker's isolated gateway mode: the bridge has IPv6 off and no
+// until the session removes it or the run closes. When the relay starts from another
+// image, the wall reads the run's image's files out of a container of that image, never
+// started and on no network. The agent's container and the setup container are on a
+// network created with --internal and on nothing else, so they have no route out and
+// their resolver knows only that network; the network's bridge gets no address, so the
+// engine's host is not on it either. For any image the network has no IPv6 subnet, and
+// the agent's container starts with no IPv6 address but loopback's. With nested Docker,
+// which needs the docker command and Docker Engine 28 or later, the network has an IPv6
+// subnet, the engine's choice, in Docker's isolated gateway mode: the bridge has IPv6 off and no
 // address. The relay's container is on that network and on an ordinary one; it runs
 // [Relay], forwarding one port to the gateway, listens on its addresses on the internal
 // network alone, and is the one peer of the agent's with a way out. The agent reaches the
@@ -90,7 +90,7 @@ type Docker struct {
 	// image is refused. Experimental: see contracts/forager/v1/README.md §The wall.
 	NestArgs []string
 	// HoldArgs are the arguments that make Helper run [Hold], the entrypoint of a run's
-	// setup container, which keeps the container running until the run closes. Without
+	// setup container, which keeps the container running until it is removed. Without
 	// them the setup container does not start.
 	HoldArgs []string
 	// CAEnv names the variables that point a program at [BundlePath] when the run has
@@ -820,6 +820,14 @@ func noSuchImage(said string) bool {
 	return strings.Contains(said, "no such image") || strings.Contains(said, "image not known")
 }
 
+// noSuchContainer reports whether out, the output of a docker rm that failed, contains
+// "no such container" in any case: the one failure that shows the container is gone.
+// Output with "no such file or directory" or "not found", from a missing engine socket
+// or a container runtime that fails, leaves the container's state unknown.
+func noSuchContainer(out string) bool {
+	return strings.Contains(strings.ToLower(out), "no such container")
+}
+
 // fullReference is a reference pinned by digest, NAME@sha256:…, with its registry and
 // path in full, as the engine reads it: a NAME whose first part holds no dot or colon
 // and is not localhost is on docker.io, and a docker.io NAME of one part is in library/.
@@ -1198,14 +1206,24 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 }
 
 // Unwrap removes the agent's container that Wrap's launch started, within closeWait,
-// as its session ends, so the next session's container can take its name. A container
-// that is gone already, as docker run --rm removes one that exits, is not an error.
-// Everything else the enclosure made stays until Close.
+// as its session ends, so the next session's container can take its name. A docker rm
+// that fails with [noSuchContainer]'s text is not an error: docker run --rm removes a
+// container that exits. Every other failure is, and the container stays for Close to
+// remove: an engine that cannot be reached leaves its state unknown, and under
+// live-restore it still runs. Everything else the enclosure made stays until Close.
 func (e *dockerEnclosure) Unwrap(ctx context.Context) error {
+	return e.removeContainer(ctx, e.agent(), noSuchContainer)
+}
+
+// removeContainer removes one container of e.made with docker rm --force --volumes,
+// within closeWait, and returns once the engine removed it: the engine kills what still
+// runs in it. A failed command whose output gone accepts is not an error. On any other
+// failure the entry stays in e.made, so Close tries again.
+func (e *dockerEnclosure) removeContainer(ctx context.Context, name string, gone func(out string) bool) error {
 	ctx, cancel := context.WithTimeout(ctx, closeWait)
 	defer cancel()
-	rm := []string{"rm", "--force", "--volumes", e.agent()}
-	if err := e.remove(ctx, rm); err != nil {
+	rm := []string{"rm", "--force", "--volumes", name}
+	if err := e.remove(ctx, rm, gone); err != nil {
 		return err
 	}
 	e.made = slices.DeleteFunc(e.made, func(c []string) bool { return slices.Equal(c, rm) })
@@ -1218,11 +1236,11 @@ func (e *dockerEnclosure) Unwrap(ctx context.Context) error {
 // their Targets, the workspace as its working directory, the helper and, with l.CA, the
 // bundle read-only. Its environment, through a file, is the relay's proxy variables,
 // with l.CA the variables that point a program at the bundle, and then l.Env. Its
-// entrypoint is the helper with HoldArgs, [Hold], so it runs until Close removes it. It
-// starts the relay first when it has not started, [dockerEnclosure.StartRelay], and
-// runs the run's first use of the enclosure when no container of the run's image ran
-// it, as Wrap does. l.Command, l.Args, l.Interactive and l.Socket are not read: the
-// setup container gets no hook socket.
+// entrypoint is the helper with HoldArgs, [Hold], so it runs until
+// [dockerEnclosure.RemoveSetup] or Close removes it. It starts the relay first when it
+// has not started, [dockerEnclosure.StartRelay], and runs the run's first use of the
+// enclosure when no container of the run's image ran it, as Wrap does. l.Command, l.Args,
+// l.Interactive and l.Socket are not read: the setup container gets no hook socket.
 func (e *dockerEnclosure) StartSetup(ctx context.Context, l Launch) error {
 	if len(e.d.HoldArgs) == 0 {
 		return errors.New("wall docker: setup needs the helper's arguments that keep the setup container running, HoldArgs")
@@ -1334,6 +1352,16 @@ func (e *dockerEnclosure) setupRuns(ctx context.Context) error {
 	}
 	out, _ := e.docker(ctx, "logs", e.setup())
 	return fmt.Errorf("wall docker: the setup container stopped: %s", accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
+}
+
+// RemoveSetup removes the setup container within closeWait, with Close's docker rm
+// --force --volumes, and returns once the engine removed it: every process in it has
+// ended, and the name qory-setup no longer resolves on the internal network. A docker rm
+// that fails with [noSuchContainer]'s text is not an error. Every other failure is, and
+// the container stays for a later call or Close to remove. It touches the setup
+// container alone, so it may follow an Unwrap, and a later Wrap may follow it.
+func (e *dockerEnclosure) RemoveSetup(ctx context.Context) error {
+	return e.removeContainer(ctx, e.setup(), noSuchContainer)
 }
 
 // Binds lists the adapter's own binds before an enclosure is prepared: the helper,
@@ -1606,7 +1634,7 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 	defer cancel()
 	var errs []error
 	for i := len(e.made) - 1; i >= 0; i-- {
-		if err := e.remove(ctx, e.made[i]); err != nil {
+		if err := e.remove(ctx, e.made[i], goneAlready); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -1618,14 +1646,23 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// remove runs one of the commands that remove what the enclosure made. A thing that is
-// gone already, or was never made, is not an error.
-func (e *dockerEnclosure) remove(ctx context.Context, argv []string) error {
+// remove runs one of the commands that remove what the enclosure made. A failed command
+// whose output gone accepts is not an error.
+func (e *dockerEnclosure) remove(ctx context.Context, argv []string, gone func(out string) bool) error {
 	out, err := e.docker(ctx, argv...)
-	if gone := bytes.ToLower(out); err != nil && !bytes.Contains(gone, []byte("no such")) && !bytes.Contains(gone, []byte("not found")) {
+	if err != nil && !gone(string(out)) {
 		return err
 	}
 	return nil
+}
+
+// goneAlready reports whether out, the output of a failed removal, contains "no such" or
+// "not found" in any case: a thing that is gone already or was never made, but also a
+// missing engine socket or a container runtime that fails. Use [noSuchContainer] where
+// a container that remains matters.
+func goneAlready(out string) bool {
+	out = strings.ToLower(out)
+	return strings.Contains(out, "no such") || strings.Contains(out, "not found")
 }
 
 // Reap removes the containers and the networks that carry the run's label: what a

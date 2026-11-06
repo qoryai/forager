@@ -106,6 +106,8 @@ type Gateway struct {
 	// expired are the server's run_key_expired refusals of an attach on the one address,
 	// so a run request again with that run key is refused alike and attaches nothing.
 	expired expired
+	// runAPILimits are the limits of the run API's route across every run.
+	runAPILimits proxy.RunAPILimits
 
 	// base is the context of everything a run starts, cancelled when Close is done.
 	base   context.Context

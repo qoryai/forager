@@ -11,11 +11,11 @@ import (
 	"github.com/qoryai/forager/session/internal/chunk"
 )
 
-// Step is one step of the run: one named unit of host work, such as a fetch or a
-// compose, with a start, an end, an outcome and its lines. [Run.StartStep] starts a
-// step of the caller's host work; [Run.FetchImage] writes the image step of an image by
-// reference; [Run.Join] writes the join, image and wall steps of a session. The steps
-// of a run are numbered from 1 in the order they start.
+// Step is one step of the run: one named unit of host work, such as a fetch, a compose,
+// a push or the start of the machine, with a start, an end, an outcome and its lines.
+// [Run.StartStep] starts a step of the caller's host work; [Run.FetchImage] writes the
+// image step of an image by reference; [Run.Join] writes the join, image and wall steps
+// of a session. The steps of a run are numbered from 1 in the order they start.
 type Step struct {
 	r      *Run
 	n      int
@@ -25,28 +25,33 @@ type Step struct {
 
 // StartStep starts a step of the run's host work and writes its dev.qory.run.step_started,
 // with the run's next step number as step, name as name and kind as kind: event.StepFetch,
-// event.StepCompose or event.StepBuild. Join numbers its steps from the same counter. The
-// run's masker replaces each forwarder's password, each value of OpenSpec.Masker and each
-// server's variable value of 8 characters or more in name, and a name that contains qak_,
-// qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case is a phrase in its place,
-// as accesskey.ShownValue gives it. Write the step's lines with [Step.Log], and end it
-// with [Step.Exit].
+// event.StepCompose, event.StepBuild, event.StepPush or event.StepMachine, the start of
+// the machine the run runs on. Join numbers its steps from the same counter. The run's
+// masker replaces each forwarder's password, each value of OpenSpec.Masker and each
+// server's variable value of 8 characters or more, apart from QORY_RUN_SYSTEM's and
+// QORY_RUN_REPOSITORIES', in name, and a name that contains qak_, qrk_, qecr_, qecn_,
+// qecp_, qecg_, qeci_ or qecd_ in any case is a phrase in its place, as
+// accesskey.ShownValue gives it. Write the step's lines with [Step.Log], and end it with
+// [Step.Exit].
 //
-// An error means nothing is written: the kind is not fetch, compose or build, the name
-// is empty, a session of the run is running, another host step is open, or the run is
-// closed. Host steps go before the first join and between joins, never during one: Join
-// returns an error and writes nothing while a host step is open.
+// An error means nothing is written: the kind is not fetch, compose, build, push or
+// machine, the name is empty, a session of the run is running, another host step is
+// open, or the run is closed. A host step runs before the first join, between joins,
+// or after the last join and before the close, never during a join: Join returns an
+// error and writes nothing while a host step is open.
 //
 // The name must contain no URL userinfo, token or other credential. The masker replaces
 // only the forwarders' passwords, OpenSpec.Masker's values, the server's variable
-// values and text in the shape of a known key (mask.Shapes), and accesskey.ShownValue
-// replaces only a name that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
-// qecd_; any other secret in name is written as given. The run's masker replaces the
-// run's secrets in the errors of StartStep, [Step.Log] and [Step.Exit], as in Open's.
+// values of 8 characters or more, apart from QORY_RUN_SYSTEM's and
+// QORY_RUN_REPOSITORIES', and text in the shape of a known key (mask.Shapes), and
+// accesskey.ShownValue replaces only a name that contains qak_, qrk_, qecr_, qecn_,
+// qecp_, qecg_, qeci_ or qecd_; any other secret in name is written as given. The run's
+// masker replaces the run's secrets in the errors of StartStep, [Step.Log] and
+// [Step.Exit], as in Open's.
 func (r *Run) StartStep(kind, name string) (_ *Step, err error) {
 	defer func() { err = maskError(r.masker, err) }()
-	if kind != event.StepFetch && kind != event.StepCompose && kind != event.StepBuild {
-		return nil, fmt.Errorf("start a host step of kind fetch, compose or build, not %s: Join writes the join, image and wall steps", accesskey.ShownValue(kind, true))
+	if kind != event.StepFetch && kind != event.StepCompose && kind != event.StepBuild && kind != event.StepPush && kind != event.StepMachine {
+		return nil, fmt.Errorf("start a host step of kind fetch, compose, build, push or machine, not %s: Join writes the join, image and wall steps", accesskey.ShownValue(kind, true))
 	}
 	if name == "" {
 		return nil, fmt.Errorf("give the step a name, such as %q: a step's name is never empty", "fetch github.com/example-org/app")
@@ -69,11 +74,12 @@ func (r *Run) StartStep(kind, name string) (_ *Step, err error) {
 // stderr, the step's number as step and no session member: one chunk per line, and a
 // line longer than 4096 bytes in chunks of 4096, as a session's chunks on pipes. The
 // run's masker replaces the password of each forwarder of the run, each value of
-// OpenSpec.Masker and each server's variable value of 8 characters or more in b first,
-// within this call alone: a value split across two calls stays as written, so pass whole
-// lines. The chunks go to output.log in the run directory. A last line without a line
-// break is a chunk too, and an empty b writes nothing. A run the gateway closed has the
-// chunks in session.jsonl alone.
+// OpenSpec.Masker and each server's variable value of 8 characters or more, apart from
+// QORY_RUN_SYSTEM's and QORY_RUN_REPOSITORIES', in b first, within this call alone: a
+// value split across two calls stays as written, so pass whole lines. The chunks go to
+// output.log in the run directory. A last line without a line break is a chunk too, and
+// an empty b writes nothing. A run the gateway closed has the chunks in session.jsonl
+// alone.
 //
 // An error means nothing is written: the step exited, a session of the run is running,
 // or the run is closed.

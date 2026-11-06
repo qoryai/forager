@@ -35,8 +35,14 @@ The module is a library with two entry points: the gateway and the session.
   run's id. The session holds no policy, no credential and no server. It speaks to the
   gateway alone, over the gateway's local link (the contract's
   [§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)).
-- Before a session joins, programs on the host, such as a fetch of the run's
-  repositories or a compose of the harness, reach the run's proxy through
+- From the open on, `(*session.Run).Image` returns the image of the run answer, the one
+  the agent's enclosure starts from: its `Name`, `Ref`, `Runtime` and `Docker`. It is
+  the zero `session.Image` in a run with no wall or when the run answer has no image.
+  It reads no file and sends no request, so a caller can read `Docker` before the
+  first join and after the close.
+- While no session runs, programs on the host, such as a fetch of the run's
+  repositories, a compose of the harness or a push of the run's commits, reach the
+  run's proxy through
   `(*session.Run).HostProxy`, a forwarder on loopback with a password, for every run,
   walled or not: see [the host proxy](#the-host-proxy). qory fetches the run's harness
   definition through `(*session.Run).StackProxy` instead, which reaches the hosts of
@@ -214,7 +220,10 @@ for every run, walled or not, and returns a `session.HostProxy`:
   closes. `Join` closes every open host proxy before its join request, and `Close` does
   too, so the password opens nothing while a session runs. `HostProxy` returns an error
   while a `Join` runs, after `Close`, for a walled run with no bundle, and when the port
-  cannot be opened.
+  cannot be opened. It also returns an error when a session's wall could not be removed
+  and may still run, so a push does not run beside the agent's container: `Open a new
+  run. The wall of session 1 could not be removed and may still run, so this run takes
+  no more sessions.`
 
 Set `ProxyURL` and `CABundle` in the environment of the program that needs them, such
 as git's, and not in the calling process's environment, which every child inherits, the
@@ -360,19 +369,22 @@ failed and its lines:
 
 - `(*session.Run).StartStep(kind, name)` writes `dev.qory.run.step_started` with the
   run's next step number, shared with each join's steps, and returns a `*session.Step`.
-  `kind` is `event.StepFetch`, `event.StepCompose` or `event.StepBuild`. The run's
-  masker replaces each forwarder's password, each value of `OpenSpec.Masker` and each
-  server's variable value of 8 characters or more in `name`, and a `name` that contains
-  `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` is a phrase in
-  its place. Pass a `name` with no URL userinfo, token or other credential: `StartStep`
-  writes any other secret in `name` as given.
+  `kind` is `event.StepFetch`, `event.StepCompose`, `event.StepBuild`,
+  `event.StepPush`, host work that sends the run's commits, or `event.StepMachine`, the
+  start of the machine the run runs on. The run's masker replaces each forwarder's
+  password, each value of `OpenSpec.Masker` and each server's variable value of 8
+  characters or more, apart from `QORY_RUN_SYSTEM`'s and `QORY_RUN_REPOSITORIES`', in
+  `name`, and a `name` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`,
+  `qeci_` or `qecd_` is a phrase in its place. Pass a `name` with no URL userinfo, token
+  or other credential: `StartStep` writes any other secret in `name` as given.
 - `(*session.Step).Log(b)` writes the step's lines, such as what the fetch or the
   compose prints: each line is a `dev.qory.run.log` with `stream` `stderr`, the step's
   number as `step` and no `session`, cut at 4096 bytes as a session's lines on pipes
   are, and goes to `output.log`. The run's masker replaces each forwarder's password,
   the host proxy's included, and each value of `OpenSpec.Masker` and each server's
-  variable value of 8 characters or more in the lines, within one call: pass whole
-  lines, because a value split across two calls stays as written. Pass an error's text through
+  variable value of 8 characters or more, apart from `QORY_RUN_SYSTEM`'s and
+  `QORY_RUN_REPOSITORIES`', in the lines, within one call: pass whole lines, because a
+  value split across two calls stays as written. Pass an error's text through
   `accesskey.ShownError`, which replaces a text that contains an access key secret, a
   run key, a run code or an enrolment code.
 - `(*session.Step).Exit(state, exitCode)` writes `dev.qory.run.step_exited` with
@@ -381,12 +393,12 @@ failed and its lines:
   from `StartStep`.
 - `Close` ends a step still open `cancelled` with `-1` before `dev.qory.run.exited`.
 
-Start a step before the first `Join` or after a `Join` returns. Each error starts with
-the fix, and writes nothing:
+Start a step before the first `Join`, between two `Join`s, or after the last `Join`
+returns and before `Close`. Each error starts with the fix, and writes nothing:
 
 | Call | When | Error |
 |---|---|---|
-| `StartStep` | a kind other than fetch, compose and build | `start a host step of kind fetch, compose or build, not "setup": Join writes the join, image and wall steps` |
+| `StartStep` | a kind other than fetch, compose, build, push and machine | `start a host step of kind fetch, compose, build, push or machine, not "setup": Join writes the join, image and wall steps` |
 | `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
 | `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
 | `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |
@@ -408,6 +420,31 @@ if err := step.Exit(state, code); err != nil {
 }
 ```
 
+A walled run's `(*session.Run).Setup` writes its steps itself, and
+`(*session.Run).RemoveSetup(ctx)` removes its setup container: see
+[setup in a separate container](wall.md#setup-in-a-separate-container). Call
+`RemoveSetup` when no session is running and no host step is open: between `Setup` and
+the first `Join` for a read run, or after a session ended and before a `push` step when
+the agent needs the setup container. It returns once the setup container is gone: every
+process in it has ended, and the name `qory-setup` no longer resolves, for a later `Join`
+too. It writes the `wall` step `remove the setup container`.
+In an open run with no setup container, which includes a run where it removed that
+container, it returns nil and writes nothing, also after a join or during a host step, so
+you need no condition around it.
+Each error before the step starts with the fix, and removes and writes nothing. A removal
+that fails ends the step `failed`, or `cancelled` when `ctx` ended, and the setup
+container may still run and change the working folder: close the run, and run no `push`
+or other host step that reads the folder after this error. No session joins the run
+after it, also when a later `RemoveSetup` succeeds, and `Close` tries the removal again.
+
+| When | Error |
+|---|---|
+| while a `Join`, with its session, a `Setup` or another call of the run runs | `Call RemoveSetup after the run's other call returns: another call of the run is running.` |
+| the setup container runs, and the agent's container of session 1 could not be removed | `Close the run: the agent's container of session 1 could not be removed and may still run, so the setup container stays until the close.` |
+| the setup container runs, while step 1 is open | `Exit step 1 before you remove the setup container: one host step is open at a time.` |
+| after `Close` | `Remove the setup container before the close: the run is closed.` |
+| the removal fails | `Close the run: the setup container may still run, so no session can join: ` and the wall's error |
+
 After a build of an image, write the build as a step of kind `event.StepBuild`, then
 write its result with `(*session.Run).Built(b)`. `Built` writes `dev.qory.run.built`
 with the members of `session.Built`:
@@ -420,10 +457,11 @@ with the members of `session.Built`:
   hexadecimal characters in lower case.
 - `EnvironmentRef` as `environment_ref`: your reference to the environment the image is
   for, not empty. The run's masker replaces each forwarder's password, each value of
-  `OpenSpec.Masker` and each server's variable value of 8 characters or more in it, and a
-  reference that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or
-  `qecd_` is a phrase in its place, as in a step's `name`. Pass no other credential in
-  it: `Built` writes any other secret as you pass it.
+  `OpenSpec.Masker` and each server's variable value of 8 characters or more, apart from
+  `QORY_RUN_SYSTEM`'s and `QORY_RUN_REPOSITORIES`', in it, and a reference that contains
+  `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` is a phrase in
+  its place, as in a step's `name`. Pass no other credential in it: `Built` writes any
+  other secret as you pass it.
 - `EnvironmentImage` as `environment_image`: the environment image the build pushed,
   or the one it started from, of the form of `Image`. Leave it empty if you do not
   report it: `Built` then writes no `environment_image`.
@@ -488,6 +526,63 @@ events are sent, by the gateway or by the session, ends that batch alone: the re
 below to Forager's maintainers", with the stack, and the next batch is sent. Neither
 report nor any log contains the panic's value, which may contain a request's header or
 a credential.
+
+### The run API
+
+`(*session.Run).RunAPI` gives host work a client of Qory Apiary's run API, with no key
+on the machine and in the run: the gateway signs each request with its access key. It
+returns an `*http.Client` and the base URL, `http://run-api.qory.invalid/v1/runs/<run id>`:
+
+```go
+client, base, err := run.RunAPI()
+if err != nil {
+	return err
+}
+resp, err := client.Get(base + "/work-item")
+```
+
+Call `RunAPI` at any time from `Open` to `Close`, from any goroutine, while a `Join` runs
+too. The client works in this process alone: it needs no port and no password, and it
+dials the run's proxy for each request, on one machine and behind a separate gateway. It
+follows no redirect.
+
+`RunAPI` returns an error that starts with the fix in a closed run and in a run with no
+control plane. A request of the client fails once the run is closed.
+
+Qory Apiary serves only a run of a work item through a gateway's access key. Any other run gets a `404`, and a POST body over 64 KiB on a node's key gets `502` `answer_unverified`.
+
+Inside a session, read the same base URL from `session.EnvRunAPI`, `QORY_RUN_API`, and
+send the request through `HTTP_PROXY`. A setup container gets the variable too. Behind a
+wall, a value a caller passes for the name is `variable_reserved`.
+
+A file's `200` is chunked. Treat its bytes as unverified until the read ends cleanly: a
+file that fails its signed digest ends in a read error. The contract's README, §The run
+API, lists the five requests, each status and the limits.
+
+Plan the gateway's memory for the route. A budget of 512 MiB per gateway counts the
+bytes of `POST /artifacts` bodies and of answers other than files, past the first 1 MiB of
+each. A body or answer over the budget's room gets a `429` `rate_limited`. A retry can
+pass once a stalled read ends; runs that stall again can keep the 512 MiB full. These
+figures are what the heap takes:
+
+- During a read, the heap holds up to 1.6 times the bytes read: about 685 MiB for 32 MiB
+  bodies that fill the budget. For other sizes, plan up to about 820 MiB plus 1.6 MiB per
+  run with a POST.
+- A 32 MiB POST body takes up to about 74 MiB at the end of its read, then about 64 MiB
+  while it signs, 32 MiB of it the copy that `accesskey.Request.Message` makes. At most 8
+  sign at once.
+- A 16 MiB answer takes up to about 35 MiB at the end of its read and 16 MiB after it.
+- Each run also holds up to 1 MiB uncharged per answer.
+
+The budget does not cover the read buffer's room past the bytes it counts, the signing
+copy, an answer during its read, `POST /verdict` bodies, or the first 1 MiB of each body
+and answer. A file streams, so it takes no budget.
+
+Each run has 1 POST in flight, among its 4 requests in flight, and 1 request waiting for
+a token of the gateway's rate limit. A gateway signs 20 requests a second across its
+runs, with a burst of 20, and sends 8 `POST /artifacts` with a body over 1 MiB at once. A
+smaller body takes no send slot. The gateway reads an answer of at most 16 MiB, and a
+larger one is a `502` `answer_too_large`.
 
 ### The engine proxy
 
@@ -873,7 +968,10 @@ res, err := session.Resend(ctx, session.ResendSpec{
 - the secrets it declares, through the optional `runtimes.Secrets`; a runtime without
   it declares nothing,
 - which tool call started a subagent, through the optional `runtimes.Parents`, so the
-  session sets `parent_agent_id`; a runtime without it sets no parent.
+  session sets `parent_agent_id`; a runtime without it sets no parent,
+- the input member that is a tool's summary, through the optional `runtimes.Summaries`,
+  so the session sets `summary` on its tool events; a descriptor's runtime has it from
+  `tools.summary`, and a runtime without it has no summary.
 
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:
 
@@ -919,8 +1017,8 @@ the `environment_ref` of `dev.qory.run.built`; in every string of `dev.qory.run.
 but its `labels`, its `host`, `wall` and `about`'s members among them; in each `Report`
 line, once; in the copy of the runtime's output to `SessionSpec.Stdout` and
 `SessionSpec.Stderr`, flushed when the runtime's process ends; and in the text of the
-errors that `session.Open`, `Join`, `Close`, `Setup`, `FetchImage`, `StartStep`,
-`Step.Log` and `Step.Exit` return. `errors.Is` still reaches what such an error wraps,
+errors that `session.Open`, `Join`, `Close`, `Setup`, `RemoveSetup`, `FetchImage`,
+`StartStep`, `Step.Log` and `Step.Exit` return. `errors.Is` still reaches what such an error wraps,
 and `errors.As` gives a refusal's copy with its text, detail and names masked and its
 `Code` kept. The session writes its setup lines to `Stdout` and `Stderr` masked as well,
 so pass writers that do not mask again: a second pass may replace text inside a
@@ -932,16 +1030,20 @@ however long the chain of them and however the writes split it.
 The run adds to the masker the server's variable values of 8 characters or more, the
 run answer's at the open and each reload's from that reload on, and each forwarder's
 password, replaced with `qory-proxy-password`, before the forwarder starts, so your
-writers mask them too. `AddSecret` adds at most `mask.MaxSecrets` (1024) different
-values to one masker, each of at most `mask.MaxSecretSize` (4096) bytes, and returns an
+writers mask them too. The run leaves out the values of `QORY_RUN_SYSTEM` and
+`QORY_RUN_REPOSITORIES` by name: they are not secrets, and a step's name contains them,
+such as `fetch github.com/example-org/app`. Another variable with the same value still
+adds it. `AddSecret` adds at most `mask.MaxSecrets` (1024) different values to one
+masker, each of at most `mask.MaxSecretSize` (4096) bytes, and returns an
 error that starts with the fix and contains no value past either bound: `add at most
 1024 values to the masker: it has 1024 already, and this value is not masked`. A
 server's value past the count is not masked, and the run reports `the server's variable
 <name> is not masked: the run's masker has 1024 values already`. `AddSecret` does not
 filter by length, so leave out a value that would replace ordinary text. `Close` leaves
 a masker you pass as it is: call its `Clear` once your writers are flushed. With no
-`Masker`, the run makes one with `mask.New()`, which masks the server's values and the
-forwarders' passwords, and `Close` overwrites its copies.
+`Masker`, the run makes one with `mask.New()`, which masks the server's values, apart
+from `QORY_RUN_SYSTEM`'s and `QORY_RUN_REPOSITORIES`', and the forwarders' passwords, and
+`Close` overwrites its copies.
 
 A masker from `mask.New()` also replaces text in the shape of a known key with a bare
 `***`, its prefix included, whether or not anyone added the key's value. `mask.Shapes()`
@@ -1057,8 +1159,8 @@ request asks the gateway for, for this session.
   them: the workspaces and the writable mounts of the walled runs it starts. A settings
   file the runtime reads from this machine, the one Claude Code is passed with
   `--settings`, is refused when it lies in one of them or in a writable bind of another
-  walled run, and behind a `Wall` when it lies in a writable bind of this run's, the
-  workspace among them. Behind a `Wall`, Claude Code's `--mcp-config`, `--agents`,
+  walled run, and behind a `Wall` when it lies in the workspace, read-only or not, in a
+  writable bind of this run's or in the folder of the run's setup container. Behind a `Wall`, Claude Code's `--mcp-config`, `--agents`,
   `--plugin-dir`, `--plugin-dir-no-mcp` and `--add-dir` values are checked against the
   same places. An `--mcp-config` or `--agents` file is passed as a copy in the run
   directory. A directory may not lie in or contain one of them, nor hold a link that
@@ -1066,6 +1168,25 @@ request asks the gateway for, for this session.
   `Wall`, a place whose path goes through a link inside one of them and does not
   resolve into it is no run, `mount_through_link`. See
   [no file read from a place an agent can write](wall.md#no-file-read-from-a-place-an-agent-can-write).
+- `WorkspaceReadOnly` binds the workspace, `Dir`, read-only in the agent's container
+  for this session, so a write into it inside fails with `Read-only file system`. Under
+  nested Docker this is unverified: the enclosure's root, which the agent reaches
+  through the inner Docker daemon, may remount the workspace writable (see the
+  contract's §The wall, Nested Docker). In a run that does not call
+  `(*session.Run).RemoveSetup`, the setup container of `(*session.Run).Setup` still
+  binds the working folder writable until the run closes, so a service a setup command
+  starts there can still write the workspace, for example when the agent asks it to.
+  After `RemoveSetup` the name `qory-setup` no longer resolves and no service of the
+  setup container remains. The host steps still write the workspace, so it keeps the
+  checks of a writable place, and a settings file in it is refused as in a writable one. A writable
+  mount that holds `Dir` is `mount_mode_conflict`; a read-only one is the one
+  bind. `Join` and `AgentEnv` return an error before the join request, and write
+  nothing, in a run with no `Wall`: `Open the run with a wall to mount the workspace
+  read-only: a run with no wall starts the agent on this machine.` They do the same
+  beside `Setup`, which runs in the agent's container: `Run the setup with Run.Setup, or
+  leave SessionSpec.WorkspaceReadOnly unset: SessionSpec.Setup runs in the agent's
+  container, which sees the workspace read-only.` See
+  [the contract](../contracts/forager/v1/README.md#the-wall).
 - `Setup` is the session's setup commands for `wall.setup: inside`, each a
   `session.SetupCommand` with a `Name`, such as `install` or `start services`, and
   `Args`, the program and then its arguments. The session runs them inside the wall
@@ -1191,11 +1312,18 @@ request asks the gateway for, for this session.
 of the run's `dev.qory.run.exited`, and writes that event once. A run no session joined,
 closed `failed` with no reason, is `failed` with `no_session` and `-1`. A `timeout` is
 `cancelled` with `124`, and an `interrupted` is `cancelled`. After `FetchImage` returns
-the refusal `image_missing`, close a run no session joined with `failed`,
-`image_missing` and `-1`; `Close` refuses `image_missing` with another state or exit
-code, or after a join. `Close` refuses an outcome the contract refuses, and a close
-while a `Join` runs. `session.Closed` is what the run
-came to:
+the refusal `image_missing` or `image_user_root`, close a run no session joined with
+`failed`, that code and `-1`. Close a run no session joined whose workflow is not in
+the harness with `failed`, `workflow_not_in_harness` and `-1`. Close a read run (the
+contract's §The events, How a run ends) that no session joined with `failed` and `-1`,
+and `read_needs_wall` when the run has no wall, `read_needs_setup_outside` when its
+setup is set to run inside the agent's container, `read_needs_no_nested_docker` when its
+image runs nested Docker, which is when `Docker` is true in the image `(*session.Run).Image` returns, or
+`read_needs_setup_removed` when its setup container could not be removed.
+`Close` refuses each of the seven codes with another state or exit
+code, or after a join, as the gateway does.
+`Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
+`session.Closed` is what the run came to:
 
 - `RunID` and `Dir`, the run directory with the record.
 - `State`, `Reason` and `ExitCode`, those of the run's `dev.qory.run.exited`.

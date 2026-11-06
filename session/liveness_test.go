@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/wall"
 )
@@ -318,6 +319,52 @@ func TestAnEntryStaysWhenTheWallIsNotRemoved(t *testing.T) {
 	r := refusalOf(t, "mount_shared_with_run", runErr(other))
 	if !slices.Equal(r.Names, []string{sub, w.req.RunID, root}) {
 		t.Errorf("names %q", r.Names)
+	}
+}
+
+// TestAHostProxyAfterAWallThatStaysIsRefused pins a run whose session's wall could not
+// be removed: HostProxy returns the join's error and starts no forwarder, so a push does
+// not run beside the agent's container. A host proxy opened before the session ended at
+// its join, so none stays usable: its port takes no connection.
+func TestAHostProxyAfterAWallThatStaysIsRefused(t *testing.T) {
+	root := t.TempDir()
+	w := &closeFailing{enginedWall{engine: leftEngine}}
+	sp := walledSpec(t, w)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(filepath.Join(registry(t), r.ID())) })
+	before, err := r.HostProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, addr := hostParts(t, before)
+	if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
+		t.Fatal(err)
+	}
+	const want = "Open a new run. The wall of session 1 could not be removed and may still run, so this run takes no more sessions."
+	h, err := r.HostProxy()
+	if err == nil || err.Error() != want {
+		t.Errorf("HostProxy: %v, want %q", err, want)
+	}
+	if h.ProxyURL != "" || len(h.Env) != 0 || session.OpenHostProxies(r) != 0 {
+		t.Errorf("HostProxy started a forwarder: %+v, %d open", h, session.OpenHostProxies(r))
+	}
+	refused(t, addr, "after a wall that stays")
+	if err := before.Close(); err != nil {
+		t.Errorf("HostProxy.Close of the proxy from before the session: %v", err)
+	}
+	if _, err := r.Join(ctx, sp.SessionSpec); err == nil || err.Error() != want {
+		t.Errorf("a later Join: %v, want %q", err, want)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.HostProxy(); err == nil || err.Error() != "the run is closed" {
+		t.Errorf("HostProxy after the close: %v", err)
 	}
 }
 

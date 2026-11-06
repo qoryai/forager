@@ -8,16 +8,20 @@
 # The hooks report the session in both modes, interactive and not, so they are the
 # canonical source. The standard output, JSON lines when the session runs on pipes, adds
 # what no hook reports: the result line, with the outcome, the turns and the cost; with
-# --output-format stream-json --verbose, the tool call that started each subagent, in
-# parent_tool_use_id of the subagent's messages; and with --forward-subagent-text too,
-# each subagent's text and thinking blocks. Its init line is not mapped, because
-# SessionStart already produced runtime.started.
+# --output-format stream-json --verbose, the text and thinking blocks of the main
+# conversation, the result each tool call gave the model, each tool call denied without
+# a prompt, and the tool call that started each subagent, in parent_tool_use_id of the
+# subagent's messages; and with --forward-subagent-text too, each subagent's text and
+# thinking blocks. Its init line is not mapped, because SessionStart already produced
+# runtime.started.
 #
-# The parent member and the three message rules are written against the Agent SDK
+# The parent member and the subagent text rules are written against the Agent SDK
 # TypeScript reference (SDKAssistantMessage, SDKUserMessage) and the headless page, for
 # the versions whose stream messages of a subagent contain agent_id: Agent SDK 0.3.292,
 # which bundles Claude Code 2.1.292, and later. An older Claude Code prints no agent_id
-# there, so they do not apply to it. No fixture beside this file is a recording of them.
+# there, so they do not apply to it. The text, tool result and denial rules were checked
+# on a recorded run of 2.1.316 and its stream schemas; the fixtures beside this file
+# are written by hand in that shape.
 #
 # Work in the background has no separate hook. Its start is a tool call like any other,
 # with run_in_background in the input and whatever the tool returned in the response, and
@@ -99,6 +103,45 @@ model:
               CLAUDE_CODE_SUBAGENT_MODEL, CLAUDE_CODE_SUBAGENT_MODEL_FORCE,
               CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL, CLAUDE_CODE_AUTO_MODE_MODEL,
               CLAUDE_CODE_EFFORT_LEVEL, CLAUDE_CODE_SUBAGENT_EFFORT, CLAUDE_CODE_EXTRA_BODY]
+# The tool input member each tool's summary is copied from. The table maps both Agent
+# and Task, because the 2.1.316 binary has both names for the tool that starts a
+# subagent and the init line of a recorded 2.1.316 run lists Task.
+tools:
+  summary:
+    Bash: command
+    Read: file_path
+    Write: file_path
+    Edit: file_path
+    Glob: pattern
+    Grep: pattern
+    WebFetch: url
+    WebSearch: query
+    Skill: skill
+    Agent: description
+    Task: description
+# The session sets each of these variables to 1 in every launch, walled or not, in place
+# of a value of the server, the run, the machine, the harness or the environment the run
+# inherits, and sets it in the env object of the --settings copy, which Claude Code
+# applies over the env of the workspace's settings files.
+# With CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, Claude Code sends no log lines to
+# Datadog and makes no other request the environment-variable reference lists as
+# nonessential. Without it, a walled run of 2.1.316 in observe mode connected to
+# http-intake.logs.us5.datadoghq.com.
+# With CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL, an interactive Claude Code
+# does not auto-install the official plugin marketplace, so it makes neither request of
+# the install: the fetch from downloads.claude.ai and the clone from github.com when that
+# fetch fails. A marketplace already installed in the home still refreshes from
+# downloads.claude.ai. With CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC set, as here, and
+# FORCE_AUTOUPDATE_PLUGINS unset, it refreshes only when a command asks for it, run by
+# the agent or by a person: claude plugin marketplace update, claude plugin update, or
+# Update in the /plugin menu. FORCE_AUTOUPDATE_PLUGINS turns on the background refresh
+# again, and the refreshes for a plugin missing from the marketplace's cached catalog:
+# when that plugin is installed, and at start when it is enabled.
+# Without CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL, an interactive walled
+# run of 2.1.316 in observe mode connected to downloads.claude.ai.
+fixed:
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+  CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: "1"
 # A subagent's message has its agent_id and, in parent_tool_use_id, the id of the Agent
 # or Skill tool call that started the subagent.
 parent:
@@ -223,38 +266,71 @@ rules:
       duration_ms: duration_ms
       cost_usd: total_cost_usd
       result: result
-  # A subagent's text and thinking blocks: each text block of an assistant message, and
-  # of a user message such as the first one, which contains the prompt that drives the
-  # subagent, and each thinking block of an assistant message, in the order of the
-  # message's blocks. A message of the main conversation has no agent_id, and a
-  # redacted_thinking block matches no rule.
+  # Text and thinking blocks, in the order of the message's blocks: each text and
+  # thinking block of an assistant message, of the main conversation or of a subagent,
+  # and each text block of a subagent's user message, such as the first one, which
+  # contains the prompt that drives the subagent. A user message of the main
+  # conversation is not text: it contains a skill's expanded prompt. A redacted_thinking
+  # block matches no rule.
   - source: output
-    match: {type: assistant, agent_id: {present: true}, each.type: text}
+    match: {type: assistant, each.type: text}
     each: message.content
-    type: dev.qory.runtime.message
+    type: dev.qory.runtime.text
     data:
       session_id: session_id
       agent_id: agent_id
+      agent_type: agent_type
       role: message.role
+      message_id: message.id
       text: each.text
       kind: each.type
   - source: output
     match: {type: user, agent_id: {present: true}, each.type: text}
     each: message.content
-    type: dev.qory.runtime.message
+    type: dev.qory.runtime.text
     data:
       session_id: session_id
       agent_id: agent_id
+      agent_type: agent_type
       role: message.role
+      message_id: message.id
       text: each.text
       kind: each.type
   - source: output
-    match: {type: assistant, agent_id: {present: true}, each.type: thinking}
+    match: {type: assistant, each.type: thinking}
     each: message.content
-    type: dev.qory.runtime.message
+    type: dev.qory.runtime.text
     data:
       session_id: session_id
       agent_id: agent_id
+      agent_type: agent_type
       role: message.role
+      message_id: message.id
       text: each.thinking
       kind: each.type
+  # Each tool_result block of a user message, of the main conversation or of a
+  # subagent. The rule comes after the subagent's user text rule, which has the same
+  # each, so a subagent's user message with text and tool results gives both, in the
+  # order of its blocks.
+  - source: output
+    match: {type: user, each.type: tool_result, each.content: {present: true}}
+    each: message.content
+    type: dev.qory.runtime.tool_result
+    data:
+      session_id: session_id
+      agent_id: agent_id
+      tool_use_id: each.tool_use_id
+      content: each.content
+      is_error: each.is_error
+  # A tool call denied without a prompt: no PostToolUse or PostToolUseFailure follows
+  # its PreToolUse.
+  - source: output
+    match: {type: system, subtype: permission_denied}
+    type: dev.qory.runtime.tool_denied
+    data:
+      session_id: session_id
+      tool: tool_name
+      tool_use_id: tool_use_id
+      message: message
+      agent_id: agent_id
+      agent_type: agent_type

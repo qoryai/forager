@@ -99,6 +99,13 @@ func HoldJoining(r *Run) func() {
 	return r.joining.Unlock
 }
 
+// OpenHostProxies is how many of the run's forwarders for host work are open.
+func OpenHostProxies(r *Run) int {
+	r.hosts.mu.Lock()
+	defer r.hosts.mu.Unlock()
+	return len(r.hosts.open)
+}
+
 // SetManifestRoots sets authorities, as PEM, that the check of a run's image at its
 // registry trusts beside the machine's and the run's, nil for none, and returns what
 // they were.
@@ -122,4 +129,25 @@ func SetManifestWait(d time.Duration) time.Duration {
 	old := manifestWait
 	manifestWait = d
 	return old
+}
+
+// WallForwarder starts the forwarder a walled run has, whose address a wall's relay
+// forwards to, and returns its address and the token the relay opens each connection
+// with, and how to stop it: on one machine the run's proxy secret, and behind a separate
+// gateway a hop token.
+func (r *Run) WallForwarder() (addr, token string, stop func(), err error) {
+	var f *forwarder
+	if r.remote == nil {
+		token = r.answer.ProxySecret
+		f, err = listenForwarder("127.0.0.1:0", r.disc.Proxy.Address, "", "")
+	} else {
+		if token, err = newForwarderSecret(); err != nil {
+			return "", "", nil, err
+		}
+		f, err = listenForwarding("127.0.0.1:0", forwarding{dial: r.link.DialProxy, hop: token})
+	}
+	if err != nil {
+		return "", "", nil, err
+	}
+	return f.Addr(), token, func() { f.Close() }, nil
 }

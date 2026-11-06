@@ -90,6 +90,9 @@ func (a *apiary) configuration() ([]byte, string) {
 // handle answers the gateway, signed: the discovery, an attach with labels of the
 // starter's registration, a reload and a batch, whose events it keeps.
 func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
+	if runAPIAnswers(a.signer, w, r) {
+		return
+	}
 	body, _ := io.ReadAll(r.Body)
 	doc, conf := a.configuration()
 	a.mu.Lock()
