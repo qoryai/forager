@@ -371,13 +371,12 @@ failed and its lines:
   run's next step number, shared with each join's steps, and returns a `*session.Step`.
   `kind` is `event.StepFetch`, `event.StepCompose`, `event.StepBuild`,
   `event.StepPush`, host work that sends the run's commits, or `event.StepMachine`, the
-  start of the machine the run runs on. The run's
-  masker replaces each forwarder's password, each value of `OpenSpec.Masker` and each
-  server's variable value of 8 characters or more, apart from `QORY_RUN_SYSTEM`'s and
-  `QORY_RUN_REPOSITORIES`', in `name`, and a `name` that contains `qak_`, `qrk_`,
-  `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` is a phrase in its place. Pass
-  a `name` with no URL userinfo, token or other credential: `StartStep` writes any other
-  secret in `name` as given.
+  start of the machine the run runs on. The run's masker replaces each forwarder's
+  password, each value of `OpenSpec.Masker` and each server's variable value of 8
+  characters or more, apart from `QORY_RUN_SYSTEM`'s and `QORY_RUN_REPOSITORIES`', in
+  `name`, and a `name` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`,
+  `qeci_` or `qecd_` is a phrase in its place. Pass a `name` with no URL userinfo, token
+  or other credential: `StartStep` writes any other secret in `name` as given.
 - `(*session.Step).Log(b)` writes the step's lines, such as what the fetch or the
   compose prints: each line is a `dev.qory.run.log` with `stream` `stderr`, the step's
   number as `step` and no `session`, cut at 4096 bytes as a session's lines on pipes

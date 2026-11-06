@@ -142,7 +142,8 @@ a time:
   after the last join and before the close, and the `image` step of an image by
   reference with `(*session.Run).FetchImage`. `push` is host work that sends the run's
   commits. `machine` is the start of the machine the run runs on: the caller writes its
-  lines from a file the machine wrote.
+  lines from a file the machine wrote. Its `duration_ms` is the time to write the
+  lines; the start's times are in the lines.
 - Each join writes a `join` step, `join session <n>`, around its join request and the
   session's checks. It ends before `dev.qory.session.started`, or `failed` before the
   `dev.qory.session.exited` of a refused join.

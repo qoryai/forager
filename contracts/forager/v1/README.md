@@ -1732,7 +1732,7 @@ the two events is required.
 | `wall` | the start of a wall, or the start or the removal of a setup container |
 | `build` | a build of an image |
 | `push` | host work that sends the run's commits |
-| `machine` | the start of the machine the run runs on; the caller writes its lines from a file the machine wrote |
+| `machine` | the start of the machine the run runs on |
 
 The steps come after `dev.qory.run.started`, numbered from 1 in the order they start,
 one at a time. The host lines of a step are `dev.qory.run.log` events with the step's
@@ -1743,14 +1743,16 @@ kind of a setup command wherever it runs. Forager writes a `setup` step for each
 command of `(*session.Run).Setup` and of `SessionSpec.Setup`.
 
 The caller writes the steps of its host work, `fetch`, `compose`, `build`, `push` and
-`machine`, before the first join, between joins, or after the last join and before the close
-(`(*session.Run).StartStep`), the image's, `image`
+`machine`, before the first join, between joins, or after the last join and before the
+close (`(*session.Run).StartStep`), the image's, `image`
 (`(*session.Run).FetchImage`, §Images), the setup's, `wall` and `setup`
 (`(*session.Run).Setup`, §The wall, Setup), and the removal of the setup container, `wall`
 (`(*session.Run).RemoveSetup`, §The wall, Setup). The `wall` steps of the setup lie
 outside every session, before the first join. The `wall` step of the removal lies outside
 every session, before the first join, between joins, or after the last join and before
-the close. Each join writes its steps:
+the close. The caller writes the lines of a `machine` step from a file the machine
+wrote. Its `duration_ms` is the time to write the lines; the start's times are in the
+lines. Each join writes its steps:
 
 1. **The join step**, `join`, with the name `join session <n>`, the number the gateway
    gives the next join. It spans the join request and the session's checks, and ends right

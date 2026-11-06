@@ -321,7 +321,7 @@ release may change what an existing document does, and says so under Upgrading.
   run's host work, such as a fetch or a compose, with a start, an end, an outcome and
   its log lines, so a reader shows each step and the step that failed.
   `dev.qory.run.step_started` has `step`, the step's number from 1, `name` and `kind`:
-  `fetch`, `compose`, `image`, `setup`, `join`, `wall`, `build` or `push`.
+  `fetch`, `compose`, `image`, `setup`, `join`, `wall`, `build`, `push` or `machine`.
   `dev.qory.run.step_exited` has `step`, `state` (`succeeded`, `failed` or
   `cancelled`), `exit_code`, -1 when no process exit status exists, and
   `duration_ms`. Steps come after
@@ -330,7 +330,7 @@ release may change what an existing document does, and says so under Upgrading.
   run's stream. `setup` is the kind of a setup command.
   A step's `name` has `qory-proxy-password` in place of a forwarder's password, and a
   phrase in place of a name that contains `qak_` or `qrk_`. `event.StepStarted`,
-  `event.StepExited` and the eight kinds, `event.StepFetch` to `event.StepPush`, are
+  `event.StepExited` and the nine kinds, `event.StepFetch` to `event.StepMachine`, are
   the names in Go. `image` is a fetch of the run's image, and `build` a build of an
   image.
 - `push`, a kind of `dev.qory.run.step_started`, `event.StepPush`: host work that sends
@@ -341,7 +341,8 @@ release may change what an existing document does, and says so under Upgrading.
 - `machine`, a kind of `dev.qory.run.step_started`, `event.StepMachine`: the start of
   the machine the run runs on. `(*session.Run).StartStep` accepts it as it accepts
   `fetch`, `compose`, `build` and `push`. The caller writes the step's lines from a
-  file the machine wrote, one line per timed start step, such as `start Docker  3.2 s`.
+  file the machine wrote, one line per entry of that file, such as
+  `start Docker  3.2 s`.
   The step's events have the times at which Forager writes them, as every other step's
   events do. `fixtures/link/link-batch-machine-step.json` is a batch with a `machine`
   step right after `dev.qory.run.started`.
@@ -1581,14 +1582,14 @@ release may change what an existing document does, and says so under Upgrading.
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
 - `(*session.Run).StartStep(kind, name)` starts a step of the run's host work, `fetch`,
-  `compose` or `build`, and returns a `*session.Step`: `Log` writes its lines as
-  `dev.qory.run.log` with `stream: stderr`, its `step` and no `session`, after the run's
-  masker, to the record and `output.log`, and `Exit(state, exitCode)` writes its
-  `dev.qory.run.step_exited` with the `duration_ms` Forager measures. `Close` ends a
-  step still open `cancelled` with `-1`. Each call returns an error that starts with
-  the fix, and writes nothing, while a `Join` runs, after `Close`, while another host
-  step is open, for a state outside the three and after the step exited; `Join`
-  returns one while a host step is open.
+  `compose`, `build`, `push` or `machine`, and returns a `*session.Step`: `Log` writes
+  its lines as `dev.qory.run.log` with `stream: stderr`, its `step` and no `session`,
+  after the run's masker, to the record and `output.log`, and `Exit(state, exitCode)`
+  writes its `dev.qory.run.step_exited` with the `duration_ms` Forager measures.
+  `Close` ends a step still open `cancelled` with `-1`. Each call returns an error that
+  starts with the fix, and writes nothing, while a `Join` runs, after `Close`, while
+  another host step is open, for a state outside the three and after the step exited;
+  `Join` returns one while a host step is open.
 - `(*session.Run).Built(session.Built)` writes the run's `dev.qory.run.built`, with
   `Image`, `Size`, `Commit` and `EnvironmentRef` as its members, once per run. It
   returns an error that starts with the fix, and writes nothing, for a member that is
