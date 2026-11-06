@@ -163,6 +163,60 @@ func TestAPushStepRunsAfterTheLastJoinAndBeforeTheClose(t *testing.T) {
 	batchesValid(t, g)
 }
 
+// TestAMachineStepRunsRightAfterTheOpen pins a host step of kind machine, the start of
+// the machine the run runs on: StartStep accepts it right after Open and before the first
+// fetch, it is step 1, its lines are run.log chunks with stream stderr and its step, and
+// it exits succeeded with -1 before the fetch step starts. The record and the link have
+// the same steps, and every batch passes the link's schema.
+func TestAMachineStepRunsRightAfterTheOpen(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.StartStep(event.StepMachine, "start machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Log([]byte("boot  14.8 s\nstart Docker  3.2 s\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Exit(event.StateSucceeded, -1); err != nil {
+		t.Fatal(err)
+	}
+	hostStep(t, r, event.StepFetch, "fetch github.com/example-org/app", "Cloning into 'app'...\n")
+	res, err := r.Join(ctx, sp.SessionSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Close(ctx, outcomeOf(res, nil)); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"step 1 machine start machine", "log <nil> 1 boot  14.8 s", "log <nil> 1 start Docker  3.2 s", "step 1 succeeded -1",
+		"step 2 fetch fetch github.com/example-org/app", "log <nil> 2 Cloning into 'app'...", "step 2 succeeded 0",
+		"step 3 join join session 1", "step 3 succeeded -1", "session 1 started", "session 1 exited",
+		"run exited",
+	}
+	rec := events(t, &session.Result{Dir: r.Dir()})
+	for where, evs := range map[string][]map[string]any{"the record": rec, "the link": g.Events()} {
+		if got := stepOrder(evs); !slices.Equal(got, want) {
+			t.Errorf("%s:\n%q\nwant\n%q", where, got, want)
+		}
+	}
+	var streams []any
+	for _, e := range rec {
+		if d := data(e); e["type"] == event.RunLog && d["step"] == float64(1) {
+			streams = append(streams, d["stream"])
+		}
+	}
+	if !slices.Equal(streams, []any{"stderr", "stderr"}) {
+		t.Errorf("the streams of the machine step's lines: %v, want stderr twice", streams)
+	}
+	batchesValid(t, g)
+}
+
 // TestCloseEndsAnOpenHostStep pins a host step the caller leaves open: the close writes
 // its step_exited, cancelled with -1, right before run.exited, and the step's Log and
 // Exit then return an error that starts with the fix.
@@ -200,7 +254,7 @@ func TestCloseEndsAnOpenHostStep(t *testing.T) {
 
 // TestAStepsErrorsStartWithTheFix pins what a host step refuses, each with an error
 // that starts with the fix and with nothing written: a kind other than fetch, compose,
-// build and push, an empty name, a state outside the three, an exit code below -1, a second
+// build, push and machine, an empty name, a state outside the three, an exit code below -1, a second
 // host step while one is open, a join while one is open, a line or an exit after the
 // step exited, and a step while a session runs.
 func TestAStepsErrorsStartWithTheFix(t *testing.T) {
@@ -217,9 +271,11 @@ func TestAStepsErrorsStartWithTheFix(t *testing.T) {
 		}
 	}
 	_, err = r.StartStep(event.StepSetup, "make setup")
-	refused("a setup step", err, "start a host step of kind fetch, compose, build or push, not \"setup\"")
+	refused("a setup step", err, "start a host step of kind fetch, compose, build, push or machine, not \"setup\"")
 	_, err = r.StartStep(event.StepJoin, "join")
-	refused("a join step", err, "start a host step of kind fetch, compose, build or push")
+	refused("a join step", err, "start a host step of kind fetch, compose, build, push or machine, not \"join\"")
+	_, err = r.StartStep("checkout", "checkout the work")
+	refused("an unknown kind", err, "start a host step of kind fetch, compose, build, push or machine, not \"checkout\"")
 	_, err = r.StartStep(event.StepFetch, "")
 	refused("an empty name", err, "give the step a name")
 	s, err := r.StartStep(event.StepFetch, "fetch github.com/example-org/app")

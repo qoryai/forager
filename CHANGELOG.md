@@ -338,6 +338,13 @@ release may change what an existing document does, and says so under Upgrading.
   `compose` and `build`. A host step runs before the first join, between joins, or
   after the last join and before the close, and the run's host proxy and credentials
   apply at each of these times.
+- `machine`, a kind of `dev.qory.run.step_started`, `event.StepMachine`: the start of
+  the machine the run runs on. `(*session.Run).StartStep` accepts it as it accepts
+  `fetch`, `compose`, `build` and `push`. The caller writes the step's lines from a
+  file the machine wrote, one line per timed start step, such as `start Docker  3.2 s`.
+  The step's events have the times at which Forager writes them, as every other step's
+  events do. `fixtures/link/link-batch-machine-step.json` is a batch with a `machine`
+  step right after `dev.qory.run.started`.
 - `step` in `dev.qory.run.log`: the number of the step whose line the chunk is,
   between that step's `dev.qory.run.step_started` and `dev.qory.run.step_exited`. The
   member is optional, and a line outside every step has none. A session's chunk has

@@ -52,7 +52,8 @@ const (
 // The kinds of a step, the kind of dev.qory.run.step_started: a fetch of a source, a
 // compose of the harness, a fetch of the run's image, a setup command, the join of a
 // session, the start of a wall or the start or the removal of a setup container, a build
-// of an image, and host work that sends the run's commits.
+// of an image, host work that sends the run's commits, and the start of the machine the
+// run runs on.
 const (
 	StepFetch   = "fetch"
 	StepCompose = "compose"
@@ -62,6 +63,7 @@ const (
 	StepWall    = "wall"
 	StepBuild   = "build"
 	StepPush    = "push"
+	StepMachine = "machine"
 )
 
 // OpenedByRun is the opened_by of dev.qory.run.started that the contract accepts:
