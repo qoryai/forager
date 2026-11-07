@@ -186,8 +186,9 @@ func TestTheEngineProxyEnds(t *testing.T) {
 	})
 }
 
-// TestAnEngineProxyThatCannotOpen pins each refusal of EngineProxy: an error that
-// starts with the fix and contains no password, and no listener at the address.
+// TestAnEngineProxyThatCannotOpen pins each error of EngineProxy, among them the one
+// during a copy step: an error that starts with the fix and contains no password, and
+// no listener at the address.
 func TestAnEngineProxyThatCannotOpen(t *testing.T) {
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -202,6 +203,13 @@ func TestAnEngineProxyThatCannotOpen(t *testing.T) {
 		{"no engine proxy", "Set OpenSpec.EngineProxy to the engine's proxy setting: the run has no engine proxy.", nil},
 		{"no host step", "Start a host step before you open the engine proxy: the engine proxy opens only during a host step.",
 			func(_ *session.Run, step *session.Step) { step.Exit(event.StateSucceeded, 0) }},
+		{"a copy step", "Exit step 2 and start a host step of another kind before you open the engine proxy: a join during a copy step closes the engine proxy.",
+			func(r *session.Run, step *session.Step) {
+				step.Exit(event.StateSucceeded, 0)
+				if _, err := r.StartStep(event.StepCopy, "copy work out"); err != nil {
+					t.Fatal(err)
+				}
+			}},
 		{"a second holder", "Close the engine proxy before you open it again: the engine has one proxy setting, and the run's engine proxy is open.",
 			func(r *session.Run, _ *session.Step) {
 				if _, err := r.EngineProxy(nil); err != nil {

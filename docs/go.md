@@ -138,7 +138,8 @@ At each `Join` the session:
    registry, the image's fetch and the check of its user, and the wall step, `start the wall`, around the wall's start up to the
    runtime's start;
 5. starts the runtime, in no step, records `dev.qory.session.exited` when it exits, and
-   returns once the gateway accepted that batch, or the run ended.
+   returns once the gateway accepted that batch, or the run ended. A session with no
+   runtime that joins during a `copy` step runs while that step is open.
 
 A join the gateway refuses, `403`, or that fails the session's checks, ends its join
 step `failed` with `-1` and records `dev.qory.session.exited` `failed`, `-1` and
@@ -149,7 +150,12 @@ fails after `dev.qory.session.started` and before its runtime starts, at the ima
 pull or the wall's start, writes the error's text as a line of the session and of the
 step, ends the step `failed` with `-1`, and records `dev.qory.session.exited` `failed`
 with `-1`. `Join` returns an error and writes nothing while a host step is open: "exit
-step 1 before the join: a session does not join during a host step".
+step 1 before the join: a session does not join during a host step". The one exception
+is a session with no runtime (`SessionSpec.Runtime` nil) during a `copy` step, such as
+qory's copy of the work out of the wall: its steps take the next numbers and start and
+end inside the `copy` step, and you exit the `copy` step after `Join` returns. A
+session with a runtime during a `copy` step gets "exit step 1 before the join: only a
+session with no runtime joins during a copy step".
 
 On the local link every batch names its run in `X-Qory-Run-Id`; the link carries no
 secret, since the session and the gateway check that the socket's peer runs as their
@@ -220,10 +226,11 @@ for every run, walled or not, and returns a `session.HostProxy`:
   closes. `Join` closes every open host proxy before its join request, and `Close` does
   too, so the password opens nothing while a session runs. `HostProxy` returns an error
   while a `Join` runs, after `Close`, for a walled run with no bundle, and when the port
-  cannot be opened. It also returns an error when a session's wall could not be removed
-  and may still run, so a push does not run beside the agent's container: `Open a new
-  run. The wall of session 1 could not be removed and may still run, so this run takes
-  no more sessions.`
+  cannot be opened. During a `copy` step it returns "exit step 1 before you start the
+  host proxy: a join during a copy step closes the host proxy". It also returns an
+  error when a session's wall could not be removed and may still run, so a push does
+  not run beside the agent's container: `Open a new run. The wall of session 1 could
+  not be removed and may still run, so this run takes no more sessions.`
 
 Set `ProxyURL` and `CABundle` in the environment of the program that needs them, such
 as git's, and not in the calling process's environment, which every child inherits, the
@@ -365,13 +372,15 @@ and git sends a request to a host that `NO_PROXY` lists past `http.proxy`, so a 
 host on loopback would not go through the stack proxy.
 
 Write the host work as steps, one at a time, so a reader shows each step, the step that
-failed and its lines:
+failed and its lines. A session with no runtime may join during a `copy` step, and the
+steps of that join start and end inside the `copy` step:
 
 - `(*session.Run).StartStep(kind, name)` writes `dev.qory.run.step_started` with the
   run's next step number, shared with each join's steps, and returns a `*session.Step`.
   `kind` is `event.StepFetch`, `event.StepCompose`, `event.StepBuild`,
-  `event.StepPush`, host work that sends the run's commits, or `event.StepMachine`, the
-  start of the machine the run runs on. The run's masker replaces each forwarder's
+  `event.StepPush` (host work that sends the run's commits), `event.StepMachine` (the
+  start of the machine the run runs on), or `event.StepCopy` (host work that copies the
+  session's work out of the wall). The run's masker replaces each forwarder's
   password, each value of `OpenSpec.Masker` and each server's variable value of 8
   characters or more, apart from `QORY_RUN_SYSTEM`'s and `QORY_RUN_REPOSITORIES`', in
   `name`, and a `name` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`,
@@ -398,10 +407,12 @@ returns and before `Close`. Each error starts with the fix, and writes nothing:
 
 | Call | When | Error |
 |---|---|---|
-| `StartStep` | a kind other than fetch, compose, build, push and machine | `start a host step of kind fetch, compose, build, push or machine, not "setup": Join writes the join, image and wall steps` |
+| `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `start a host step of kind fetch, compose, build, push, machine or copy, not "setup": Join writes the join, image and wall steps` |
 | `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
 | `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
 | `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |
+| `Join` | a session with a runtime while copy step 1 is open | `exit step 1 before the join: only a session with no runtime joins during a copy step` |
+| `Log`, `Exit` | while a `Join` runs, such as the `Join` of a session with no runtime during a `copy` step | `write step 1's lines after Join returns: a session of the run is still running`, `exit step 1 after Join returns: a session of the run is still running` |
 | `Exit` | a state outside the three | `exit the step with succeeded, failed or cancelled, not "skipped"` |
 | `Log`, `Exit` | after the step exited | `start a new step for these lines: step 1 exited`, `start a new step: step 1 exited already` |
 
@@ -688,14 +699,15 @@ the `http-proxy` and `https-proxy` of Docker's `daemon.json`.
   links to is overwritten, so `/etc/docker/certs.d` must be writable only by the run's
   user.
 
-Open it while a host step is open; it stays open after the step exits. Each error
-starts with the fix, and opens nothing:
+Open it while a host step of a kind other than `copy` is open; it stays open after the
+step exits. Each error starts with the fix, and opens nothing:
 
 | When | Error |
 |---|---|
 | a walled run | `Open the engine proxy in a run with no wall: a walled run's image step listens at the engine proxy's address.` |
 | no `OpenSpec.EngineProxy` | `Set OpenSpec.EngineProxy to the engine's proxy setting: the run has no engine proxy.` |
 | no host step is open | `Start a host step before you open the engine proxy: the engine proxy opens only during a host step.` |
+| step 1, a `copy` step, is open | `Exit step 1 and start a host step of another kind before you open the engine proxy: a join during a copy step closes the engine proxy.` |
 | the run's engine proxy is open | `Close the engine proxy before you open it again: the engine has one proxy setting, and the run's engine proxy is open.` |
 | an address that is not a loopback host:port | `Set the engine proxy's address to a loopback host:port, such as 127.0.0.1:3129: "0.0.0.0:3129" is not one.` |
 | an empty password | `Give the engine proxy the password from the daemon's proxy setting: the password is empty.` |

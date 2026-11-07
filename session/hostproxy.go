@@ -2,9 +2,11 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/link"
 )
 
@@ -90,10 +92,10 @@ func (h *hostProxies) closeAll() {
 // with the run's proxy secret, and behind a separate gateway it dials the gateway's
 // proxy with the run key, as an unwalled session's forwarder does. The run's masker
 // gets the password before the forwarder starts. An error means no host proxy started:
-// a session of the run is running, the run is closed, the wall of a session could not be
-// removed and may still run, so a push must not run beside it, a walled run with an
-// authority has no bundle because the machine has no CA bundle, or the forwarder's port
-// could not be opened.
+// a session of the run is running, the run is closed, a copy step is open, during which
+// a join closes the host proxy, the wall of a session could not be removed and may still
+// run, so a push must not run beside it, a walled run with an authority has no bundle
+// because the machine has no CA bundle, or the forwarder's port could not be opened.
 func (r *Run) HostProxy() (HostProxy, error) {
 	if !r.joining.TryLock() {
 		return HostProxy{}, errors.New("start the host proxy after Join returns: a session of the run is still running")
@@ -101,6 +103,9 @@ func (r *Run) HostProxy() (HostProxy, error) {
 	defer r.joining.Unlock()
 	if r.closed {
 		return HostProxy{}, errors.New("the run is closed")
+	}
+	if r.hostStep != nil && r.hostStep.kind == event.StepCopy {
+		return HostProxy{}, fmt.Errorf("exit step %d before you start the host proxy: a join during a copy step closes the host proxy", r.hostStep.n)
 	}
 	if err := r.wallKept(); err != nil {
 		return HostProxy{}, err

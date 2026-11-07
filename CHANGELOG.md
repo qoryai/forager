@@ -333,8 +333,8 @@ release may change what an existing document does, and says so under Upgrading.
   run's host work, such as a fetch or a compose, with a start, an end, an outcome and
   its log lines, so a reader shows each step and the step that failed.
   `dev.qory.run.step_started` has `step`, the step's number from 1, `name` and `kind`:
-  `fetch`, `compose`, `image`, `setup`, `join`, `wall`, `build`, `push` or `machine`.
-  `dev.qory.run.step_exited` has `step`, `state` (`succeeded`, `failed` or
+  `fetch`, `compose`, `image`, `setup`, `join`, `wall`, `build`, `push`, `machine` or
+  `copy`. `dev.qory.run.step_exited` has `step`, `state` (`succeeded`, `failed` or
   `cancelled`), `exit_code`, -1 when no process exit status exists, and
   `duration_ms`. Steps come after
   `dev.qory.run.started`, one at a time, and each ends before `dev.qory.run.exited`.
@@ -342,7 +342,7 @@ release may change what an existing document does, and says so under Upgrading.
   run's stream. `setup` is the kind of a setup command.
   A step's `name` has `qory-proxy-password` in place of a forwarder's password, and a
   phrase in place of a name that contains `qak_` or `qrk_`. `event.StepStarted`,
-  `event.StepExited` and the nine kinds, `event.StepFetch` to `event.StepMachine`, are
+  `event.StepExited` and the ten kinds, `event.StepFetch` to `event.StepCopy`, are
   the names in Go. `image` is a fetch of the run's image, and `build` a build of an
   image.
 - `push`, a kind of `dev.qory.run.step_started`, `event.StepPush`: host work that sends
@@ -358,6 +358,23 @@ release may change what an existing document does, and says so under Upgrading.
   The step's events have the times at which Forager writes them, as every other step's
   events do. `fixtures/link/link-batch-machine-step.json` is a batch with a `machine`
   step right after `dev.qory.run.started`.
+- `copy`, a kind of `dev.qory.run.step_started`, `event.StepCopy`: host work that
+  copies the session's work out of the wall. The record contains the copy as a separate
+  step, also in a write run with no push. `(*session.Run).StartStep` accepts it as it
+  accepts `fetch`, `compose`, `build`, `push` and `machine`.
+  `fixtures/link/link-batch-copy-step.json` is a batch with a `copy` step after a
+  `dev.qory.session.exited`, before the `dev.qory.run.exited`. A session with no
+  runtime, `bare: true` in its `dev.qory.session.started`, may join during a `copy`
+  step, such as qory's copy of the work out of the wall: the steps of that join take
+  the next numbers and start and end inside the `copy` step, the one exception to one
+  step at a time. A session with a runtime does not join during a `copy` step, and no
+  session joins during a step of another kind. The host proxy and the engine proxy do
+  not open during a `copy` step, because that join closes them. The contract stays at
+  revision 1. `fixtures/run/0197f506-c172-7384-9f50-ab1c2d3e4f50/` is a recorded run with
+  such a join, and the recorded-run check requires one step open at a time, apart from
+  a `join`, `image`, `wall` or `setup` step inside an open `copy` step. It also requires
+  `bare: true` on a session inside a `copy` step, and no session running when a `copy`
+  step exits.
 - `step` in `dev.qory.run.log`: the number of the step whose line the chunk is,
   between that step's `dev.qory.run.step_started` and `dev.qory.run.step_exited`. The
   member is optional, and a line outside every step has none. A session's chunk has
@@ -369,7 +386,8 @@ release may change what an existing document does, and says so under Upgrading.
   reference, with the reference as its name, around the fetch and the check of the
   image's user, and a `wall` step, `start the wall`, around the rest of the wall's
   start. A failure with no code in either step has its text as a line of the session
-  and of the step. The runtime runs in no step.
+  and of the step. The runtime runs in no step. The command of a session with no
+  runtime that joins during a `copy` step runs while that step is open.
 - `fixtures/run/0195d3e4-af50-7162-9d3e-8f9a0b1c2d3e/`, a recorded run with a `fetch`
   step, a `compose` step and a `join` step before its session; the recorded run in an
   image by reference has its `join`, `image` and `wall` steps; and
@@ -864,6 +882,10 @@ release may change what an existing document does, and says so under Upgrading.
   writes `bare` in `dev.qory.session.started`. A gateway built with an older contract
   refuses a batch with `bare`, because the event's schema has
   `additionalProperties: false`.
+- Update a separate gateway before you run a caller that writes a `copy` step. A
+  gateway built with an older contract ends the run `failed` with `batch_refused` at
+  the batch with a `dev.qory.run.step_started` of kind `copy`, because `copy` is
+  outside the schema's `kind` enum.
 - List a host that resolves to a private network address by name in the node's allow
   list, or a walled run can no longer reach it.
 - Each run on a gateway now has limits: at most 256 connections open at once, and 50
@@ -1649,14 +1671,20 @@ release may change what an existing document does, and says so under Upgrading.
   the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
   log events in between to a session's `output.log` as well.
 - `(*session.Run).StartStep(kind, name)` starts a step of the run's host work, `fetch`,
-  `compose`, `build`, `push` or `machine`, and returns a `*session.Step`: `Log` writes
-  its lines as `dev.qory.run.log` with `stream: stderr`, its `step` and no `session`,
-  after the run's masker, to the record and `output.log`, and `Exit(state, exitCode)`
-  writes its `dev.qory.run.step_exited` with the `duration_ms` Forager measures.
-  `Close` ends a step still open `cancelled` with `-1`. Each call returns an error that
-  starts with the fix, and writes nothing, while a `Join` runs, after `Close`, while
-  another host step is open, for a state outside the three and after the step exited;
-  `Join` returns one while a host step is open.
+  `compose`, `build`, `push`, `machine` or `copy`, and returns a `*session.Step`: `Log`
+  writes its lines as `dev.qory.run.log` with `stream: stderr`, its `step` and no
+  `session`, after the run's masker, to the record and `output.log`, and
+  `Exit(state, exitCode)` writes its `dev.qory.run.step_exited` with the `duration_ms`
+  Forager measures. `Close` ends a step still open `cancelled` with `-1`. Each call
+  returns an error that starts with the fix, and writes nothing, while a `Join` runs,
+  after `Close`, while another host step is open, for a state outside the three and
+  after the step exited; `Join` returns one while a host step is open. The exception is
+  a session with no runtime (`SessionSpec.Runtime` nil) during a `copy` step: it joins,
+  its steps start and end inside the `copy` step, and the caller exits the `copy` step
+  after `Join` returns. A session with a runtime gets "exit step 1 before the join:
+  only a session with no runtime joins during a copy step". `HostProxy` and
+  `EngineProxy` return an error that starts with the fix during a `copy` step, because
+  that join closes them.
 - `(*session.Run).Built(session.Built)` writes the run's `dev.qory.run.built`, with
   `Image`, `Size`, `Commit` and `EnvironmentRef` as its members, once per run. It
   returns an error that starts with the fix, and writes nothing, for a member that is

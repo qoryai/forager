@@ -372,6 +372,12 @@ func TestASetupThatCannotStartWritesNothing(t *testing.T) {
 			}
 			return setup(sp)
 		}, "Exit step 1 before the setup: one host step is open at a time."},
+		{"a copy step open", nil, func(t *testing.T, sp runSpec, r *session.Run) session.SetupSpec {
+			if _, err := r.StartStep(event.StepCopy, "copy work out"); err != nil {
+				t.Fatal(err)
+			}
+			return setup(sp)
+		}, "Exit step 1 before the setup: one host step is open at a time."},
 		{"no command", nil, func(_ *testing.T, sp runSpec, _ *session.Run) session.SetupSpec {
 			return session.SetupSpec{Dir: sp.Dir}
 		}, "Give the setup at least one command."},
@@ -1090,6 +1096,24 @@ func TestRemoveSetupThatCannotStartRemovesNothing(t *testing.T) {
 			t.Fatal(err)
 		}
 		step, err := r.StartStep(event.StepPush, "push work to github.com/example-org/app")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := r.RemoveSetup(ctx)
+		if err := step.Exit(event.StateSucceeded, 0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+			t.Fatal(err)
+		}
+		check(t, w, r, got, "Exit step 5 before you remove the setup container: one host step is open at a time.")
+	})
+	t.Run("a copy step is open after a session", func(t *testing.T) {
+		w, sp, r := opens(t)
+		if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
+			t.Fatal(err)
+		}
+		step, err := r.StartStep(event.StepCopy, "copy work out")
 		if err != nil {
 			t.Fatal(err)
 		}

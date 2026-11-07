@@ -80,7 +80,9 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // setup step for each command of SessionSpec.Setup, from the records of its runner. A
 // refused join ends its join step failed with -1 before its dev.qory.session.exited.
 // Join returns an error and writes nothing while a host step of [Run.StartStep] is
-// open.
+// open, apart from one case: a session with no runtime (SessionSpec.Runtime nil) joins
+// during a copy step (event.StepCopy). Its steps then start and end inside the copy
+// step, and the copy step stays open until the caller exits it.
 //
 // A session that starts has a directory in the run directory, sessions/<n>/ with n its
 // number ([Result.SessionDir]): its output.log, the bytes of its dev.qory.run.log
@@ -108,8 +110,15 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if r.closed {
 		return nil, errors.New("the run is closed")
 	}
-	if r.hostStep != nil {
-		return nil, fmt.Errorf("exit step %d before the join: a session does not join during a host step", r.hostStep.n)
+	// A session with no runtime, such as the caller's copy of the work out of the wall,
+	// joins during a copy step, and the join's steps start and end inside that step.
+	if h := r.hostStep; h != nil {
+		if h.kind != event.StepCopy {
+			return nil, fmt.Errorf("exit step %d before the join: a session does not join during a host step", h.n)
+		}
+		if spec.Runtime != nil {
+			return nil, fmt.Errorf("exit step %d before the join: only a session with no runtime joins during a copy step", h.n)
+		}
 	}
 	// A wall whose removal failed may still run, with the places its entry lists: a
 	// join would rewrite that entry with the join's places alone.
@@ -297,10 +306,11 @@ func (r *Run) refusedJoin(n int, err error) {
 // the rest: the wall's preparation, its networks, the forwarder, the hook socket, the
 // second check of the places and the wall's Wrap, up to the launch's start. Each setup
 // command of SessionSpec.Setup then has a setup step, which the session writes from its
-// runner's records. The runtime runs in no step. A failure in the image or the wall
-// step ends it failed with -1, after the failure's line with the session's number and
-// the step's when the failure has no refusal code, and before the session's
-// dev.qory.session.exited.
+// runner's records. The runtime runs in no step. The command of a session with no
+// runtime that joins during a copy step runs while that step is open. A failure in the
+// image or the wall step ends it failed with -1, after the failure's line with the
+// session's number and the step's when the failure has no refusal code, and before the
+// session's dev.qory.session.exited.
 func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Runtime, answer *server.LinkJoinAnswer, n int, joined *Step) (*Result, error) {
 	dir := r.dir
 	// sessionDir is the session's directory, made once the session's checks before the
@@ -760,7 +770,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(errRunClosed)
 	}
 	// The wall step ends as the launch starts: the setup commands, each in its setup
-	// step, then the runtime, which runs in no step.
+	// step, then the runtime, which runs in none of the join's steps.
 	endStep(event.StateSucceeded)
 	logs := func(stream string) func([]byte) {
 		return func(b []byte) {
