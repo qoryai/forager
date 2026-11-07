@@ -609,22 +609,37 @@ other hosts and CONNECTs pass unchecked.
 | The check returns | The program gets | The gateway gets |
 |---|---|---|
 | `nil, nil` | the gateway's reply | the POST as the program sent it, with `Connection: close` added to the head |
-| a `RunAPIRefusal` with `Status` 400 to 499 | `Status` and `{"error":Code,"message":Message,"findings":Findings}`, without `findings` when it is empty | nothing |
-| an error, a panic, a `Status` outside 400 to 499, or no return within 90 seconds or before the run closes | `503` and `{"error":"push_check_unavailable","message":"Run the push again: the check before the push did not finish."}` | nothing |
+| a `RunAPIRefusal` with a `Code` and a `Status` from 400 to 499 other than 407 | `Status` and `{"error":Code,"message":Message,"findings":Findings}`, without `findings` when it is empty | nothing |
+| an error, a panic, a refusal with no `Code`, a `Status` of 407 or outside 400 to 499, or no return within 90 seconds or before the run closes | `503` and `{"error":"push_check_unavailable","message":"Run the push again: the check before the push did not finish."}` | nothing |
 
 A panic is a line to `OpenSpec.Report`. The check's context ends after 90 seconds or when
-the run closes. The forwarder reads and checks one POST of the run at a time, as the
-gateway's route has one in flight, and a POST that waits 90 seconds for its turn gets the
-`503` too.
+the run closes. Return from the check when its context ends. The forwarder reads and
+checks one POST of the run at a time, as the gateway's route has one in flight, and takes
+the next POST once the context ends, so a check that ignores its context may still run
+beside the next POST's check. A POST that waits 90 seconds for its turn gets the `503`
+too.
 
 With the check set in a run with a control plane, the forwarder passes one request per
-connection through the wall, as it does for an unwalled agent. A POST to the run API's
-host gets a `400` unless net/http would read it the same way as the forwarder: HTTP/1.1 to
-`http://run-api.qory.invalid/`, one `Host: run-api.qory.invalid`, every line ending in
-CRLF, no folded line, and at most one `Content-Length` with no `Transfer-Encoding`. A
-body over the path's limit gets the gateway's `413` before it is read: 64 KiB for
-`/verdict` and 32 MiB for any other path. A program has 60 seconds to send the body. The
-contract's README, §The run API, lists what the program sees.
+connection through the wall, as it does for an unwalled agent: a CONNECT and its tunnel,
+or one plain request and its reply. There is no plain-HTTP keep-alive or pipelining: the
+connection closes after the reply, and a client opens another for its next request.
+
+- A request's head must arrive within 10 seconds and have at most 16 KiB, 100 lines and
+  8 KiB a line. A larger head gets a `431`, and a head that net/http does not read gets a
+  `400`, each in plain text.
+- The forwarder sends a plain request that it does not check as HTTP/1.1, an HTTP/1.0
+  request among them.
+- A POST to the run API's host gets a `400` unless net/http would read it the same way as
+  the forwarder: HTTP/1.1 to `http://run-api.qory.invalid/`, one
+  `Host: run-api.qory.invalid`, every line ending in CRLF, no folded line, and at most
+  one `Content-Length` with no `Transfer-Encoding`.
+- A body over the path's limit gets the gateway's `413` before it is read: 64 KiB for
+  `/verdict` and 32 MiB for any other path. A program has 60 seconds to send the body.
+- A POST with `Expect: 100-continue` gets two `100 Continue` replies: the forwarder's,
+  before the body, and the route's, once the body goes on. HTTP allows several 1xx
+  replies before the final one.
+
+The contract's README, §The run API, lists what the program sees.
 
 Each run has 1 POST in flight, among its 4 requests in flight, and 1 request waiting for
 a token of the gateway's rate limit. A gateway signs 20 requests a second across its

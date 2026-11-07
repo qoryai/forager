@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -37,8 +38,11 @@ const workItem = `{"work_item":{"title":"Fix the failing build"}}`
 // artifact is the file the fake run API serves.
 var artifact = bytes.Repeat([]byte("artifact "), 1<<14)
 
+// pushed is the body of the fake run API's 201 to a POST of artifacts.
+const pushed = `{"artifact":{"version_id":"v1"}}`
+
 // runAPIAnswers serves the paths of a fake run API under a run, signed by signer, and
-// reports whether r was one of them: the work item; the file of the version good, under
+// reports whether r was one of them: a POST of artifacts, with a 201; the work item; the file of the version good, under
 // its digest; and the file of the version bad, under another digest.
 func runAPIAnswers(signer *accesskey.Key, w http.ResponseWriter, r *http.Request) bool {
 	rest, ok := strings.CutPrefix(r.URL.Path, "/v1/runs/")
@@ -55,6 +59,14 @@ func runAPIAnswers(signer *accesskey.Key, w http.ResponseWriter, r *http.Request
 		return true
 	}
 	switch path {
+	case "artifacts":
+		if r.Method != http.MethodPost {
+			return false
+		}
+		w.Header().Set(server.HeaderSignature, signer.SignAnswer(accesskey.Answer{Status: http.StatusCreated, RequestSignature: sig, Body: []byte(pushed)}))
+		w.WriteHeader(http.StatusCreated)
+		io.WriteString(w, pushed)
+		return true
 	case "work-item":
 		w.Header().Set(server.HeaderSignature, signer.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: sig, Body: []byte(workItem)}))
 		io.WriteString(w, workItem)
@@ -590,5 +602,58 @@ func TestASetupContainersPostToTheRunAPIIsChecked(t *testing.T) {
 	defer mu.Unlock()
 	if !slices.Equal(paths, []string{"/artifacts", "/artifacts"}) {
 		t.Errorf("the check got %q", paths)
+	}
+}
+
+// TestACheckedPostThatExpectsAContinueReachesTheRoute pins Expect: 100-continue through
+// the forwarder with a check and a real gateway's run API route: the program reads the
+// forwarder's 100 Continue, sends the body, then reads the route's 100 Continue and the
+// route's reply, the control plane's 201.
+func TestACheckedPostThatExpectsAContinueReachesTheRoute(t *testing.T) {
+	c := newControl(t)
+	c.runAPI.Store(true)
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Timeout = 20 * time.Second
+	sp.RunID = event.NewRunID()
+	startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
+	w := &setupWall{}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	sp.RunAPICheck = func(context.Context, session.RunAPIRequest) (*session.RunAPIRefusal, error) { return nil, nil }
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", w.setup.Proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	const body = `{"artifacts":[]}`
+	fmt.Fprintf(conn, "%sPOST %s/artifacts HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nExpect: 100-continue\r\nContent-Length: %d\r\n\r\n",
+		link.RelayLine(w.setup.ProxyToken), link.RunAPIURL(r.ID()), link.RunAPIHost, len(body))
+	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	br := bufio.NewReader(conn)
+	readContinue := func(who string) {
+		t.Helper()
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil || resp.StatusCode != http.StatusContinue {
+			t.Fatalf("%s: %v, %v; want a 100 Continue", who, resp, err)
+		}
+	}
+	readContinue("the forwarder")
+	io.WriteString(conn, body)
+	readContinue("the route")
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusCreated || string(got) != pushed {
+		t.Errorf("the program got %d %q", resp.StatusCode, got)
 	}
 }

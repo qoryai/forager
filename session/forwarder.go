@@ -265,8 +265,13 @@ func (f *forwarder) serve(c net.Conn) {
 	var from *bufio.Reader
 	if f.way.password == "" && f.way.check != nil {
 		c.SetReadDeadline(time.Now().Add(f.headWait()))
-		head, rest, ok := readHead(c, nil)
-		if !ok {
+		head, rest, err := readHead(c, nil)
+		if errors.Is(err, errHeadLimits) {
+			plainError(c, http.StatusRequestHeaderFieldsTooLarge, err)
+			return
+		}
+		if err != nil {
+			// The connection ended, or sent no whole head in time: there is no request.
 			return
 		}
 		c.SetReadDeadline(time.Time{})
@@ -283,6 +288,7 @@ func (f *forwarder) serve(c net.Conn) {
 			}
 		default:
 			if plain = plainRequest(head, rest); plain == nil {
+				badRequest(c, errUnreadableHead)
 				return
 			}
 		}
@@ -500,12 +506,12 @@ const (
 // readProxyLogin reads the head of the first request of a connection, up to its empty
 // line, and reports whether it carries exactly one Proxy-Authorization, Basic, whose
 // password is password, compared in constant time; the user name is ignored. It
-// returns the head without that header, and the reader that holds what follows it. A
+// returns the head without that header, and the reader of what follows it. A
 // head with a line longer than [maxProxyLine] bytes, more than [maxProxyLines] lines or
 // more than [maxProxyHead] bytes in all is refused.
 func readProxyLogin(c io.Reader, password string) (head []byte, rest *bufio.Reader, ok bool) {
 	logins := 0
-	head, rest, ok = readHead(c, func(l []byte) (keep, ok bool) {
+	head, rest, err := readHead(c, func(l []byte) (keep, ok bool) {
 		name, value, found := bytes.Cut(l, []byte(":"))
 		if !found || !strings.EqualFold(string(name), "Proxy-Authorization") {
 			return true, true
@@ -513,26 +519,38 @@ func readProxyLogin(c io.Reader, password string) (head []byte, rest *bufio.Read
 		logins++
 		return false, proxyLogin(string(bytes.TrimSpace(value)), password)
 	})
-	if !ok || logins != 1 {
+	if err != nil || logins != 1 {
 		return nil, nil, false
 	}
 	return head, rest, true
 }
 
+// errHeadLimits is the error of [readHead] for a head over the limits, and the text of
+// the forwarder's 431.
+var errHeadLimits = fmt.Errorf("Shrink the request head to at most %d bytes, %d lines and %d bytes a line: the proxy reads no larger head.",
+	maxProxyHead, maxProxyLines, maxProxyLine)
+
+// errHeadRefused is the error of [readHead] for a head with a line that header failed.
+var errHeadRefused = errors.New("the head has a header line that header failed")
+
 // readHead reads the head of the first request of a connection, up to its empty line,
-// and returns it with the reader that holds what follows it. header, when set, gets each
-// header line without its line end: false for keep leaves the line out of the head, and
-// false for ok fails the read. A head with a line longer than [maxProxyLine] bytes, more
-// than [maxProxyLines] lines or more than [maxProxyHead] bytes in all fails it too.
-func readHead(c io.Reader, header func(line []byte) (keep, ok bool)) (head []byte, rest *bufio.Reader, ok bool) {
+// and returns it with the reader of what follows it. header, when set, gets each header
+// line without its line end: false for keep leaves the line out of the head, and false
+// for ok fails the read with [errHeadRefused]. A head with a line longer than
+// [maxProxyLine] bytes, more than [maxProxyLines] lines or more than [maxProxyHead]
+// bytes in all fails it with [errHeadLimits]; a read that fails, its error.
+func readHead(c io.Reader, header func(line []byte) (keep, ok bool)) (head []byte, rest *bufio.Reader, err error) {
 	r := bufio.NewReaderSize(c, maxProxyLine)
 	var out bytes.Buffer
 	size := 0
 	for i := 0; ; i++ {
 		line, err := r.ReadSlice('\n')
 		size += len(line)
-		if err != nil || i == maxProxyLines || size > maxProxyHead {
-			return nil, nil, false
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull) || i == maxProxyLines || size > maxProxyHead:
+			return nil, nil, errHeadLimits
+		case err != nil:
+			return nil, nil, err
 		}
 		if i > 0 {
 			l := bytes.TrimRight(line, "\r\n")
@@ -543,7 +561,7 @@ func readHead(c io.Reader, header func(line []byte) (keep, ok bool)) (head []byt
 			if header != nil {
 				keep, ok := header(l)
 				if !ok {
-					return nil, nil, false
+					return nil, nil, errHeadRefused
 				}
 				if !keep {
 					continue
@@ -552,7 +570,7 @@ func readHead(c io.Reader, header func(line []byte) (keep, ok bool)) (head []byt
 		}
 		out.Write(line)
 	}
-	return out.Bytes(), r, true
+	return out.Bytes(), r, nil
 }
 
 // The texts of the forwarder's 400 to a request line it refuses. The origin-form and
@@ -591,12 +609,20 @@ func checkRequestLine(head []byte) error {
 
 // badRequest answers the agent's connection c with a 400 whose body is err's text and
 // a newline, as plain text, and Connection: close.
-func badRequest(c net.Conn, err error) {
+func badRequest(c net.Conn, err error) { plainError(c, http.StatusBadRequest, err) }
+
+// plainError writes the agent's connection c a reply of status, whose body is err's text and
+// a newline, as plain text, and Connection: close.
+func plainError(c net.Conn, status int, err error) {
 	body := err.Error() + "\n"
 	c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
-	fmt.Fprintf(c, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: %d\r\n"+
-		"Content-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\n\r\n%s", len(body), body)
+	fmt.Fprintf(c, "HTTP/1.1 %d %s\r\nConnection: close\r\nContent-Length: %d\r\n"+
+		"Content-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\n\r\n%s", status, http.StatusText(status), len(body), body)
 }
+
+// errUnreadableHead is the text of the forwarder's 400 to a head that net/http does not
+// read as a request.
+var errUnreadableHead = errors.New("Send a request head that HTTP/1.1 allows: the proxy reads no other head.")
 
 // connectHead reports whether head, a request's head, is a CONNECT's.
 func connectHead(head []byte) bool {

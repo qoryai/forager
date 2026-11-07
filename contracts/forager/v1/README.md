@@ -4323,16 +4323,23 @@ go on or returns a refusal, which the program that sent the POST gets at once:
 
 | Status | `error` | When |
 |---|---|---|
-| `400` to `499`, the check's | the check's code | the check returns a refusal for the POST; the body may contain `findings`, a list of strings, and `message` may contain line feeds |
+| `400` to `499` other than `407`, the check's | the check's code | the check returns a refusal for the POST; the body may contain `findings`, a list of strings, and `message` may contain line feeds |
 | `400` | `bad_request` | the forwarder and the gateway could read the POST differently: not HTTP/1.1 to `http://run-api.qory.invalid/`, not exactly one `Host: run-api.qory.invalid`, a line that does not end in CRLF, a folded line, a `Transfer-Encoding`, or more than one `Content-Length`. A target that is not absolute-form gets the forwarder's plain-text `400`, as without a check |
 | `413` | `payload_too_large` | the `Content-Length` is over the path's limit, 64 KiB for `verdict` and 32 MiB for any other path; nothing is read |
-| `503` | `push_check_unavailable` | the check failed or did not finish within 90 seconds, or the POST waited 90 seconds behind another POST of the run, since the forwarder checks one at a time; run the push again |
+| `503` | `push_check_unavailable` | the check failed, returned a refusal with no code or another status, or did not finish within 90 seconds, or the POST waited 90 seconds behind another POST of the run, since the forwarder checks one at a time; run the push again |
 
 Each of these replies closes the connection, and nothing reaches the gateway. A POST the
 check lets pass goes to the gateway as the program sent it, with `Connection: close`,
 and the route treats it as any other. In such a run, the forwarder passes one request
 per connection through the wall: a CONNECT and its tunnel, or one plain request and its
-reply. The check gets no POST outside the run's path, no GET and no other method.
+reply. There is no plain-HTTP keep-alive or pipelining: the connection closes after the
+reply, and a client opens another for its next request. A request's head must arrive
+within 10 seconds and have at most 16 KiB, 100 lines and 8 KiB a line; a larger head gets
+a `431`, and a head that net/http does not read gets a `400`, each in plain text. A plain
+request that the forwarder does not check goes on as HTTP/1.1, an HTTP/1.0 one among
+them. A POST with `Expect: 100-continue` gets two `100 Continue` replies, the
+forwarder's before the body and the route's once the body goes on. The check gets no POST
+outside the run's path, no GET and no other method.
 
 **No tunnel.** A `CONNECT` to `run-api.qory.invalid` is denied with a `403` and, where the
 policy would allow it, the rule `wall:run-api`, in either mode. On a proxy with the

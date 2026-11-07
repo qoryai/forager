@@ -189,7 +189,7 @@ func TestARefusedPostGetsTheChecksReply(t *testing.T) {
 }
 
 // TestACheckThatFailsGetsA503 pins the 503 of a check that returns an error, panics,
-// returns a status outside 400 to 499, outlasts its 90 seconds, here shortened, whether
+// returns a refusal with no code, a 407 or a status outside 400 to 499, outlasts its 90 seconds, here shortened, whether
 // it watches its context or not, or runs as the run closes; a panic is a Report line, and
 // nothing reaches the proxy.
 func TestACheckThatFailsGetsA503(t *testing.T) {
@@ -202,7 +202,18 @@ func TestACheckThatFailsGetsA503(t *testing.T) {
 		},
 		"a panic": func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) { panic("the check broke") },
 		"a 200":   func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) { return &RunAPIRefusal{Status: 200}, nil },
-		"a 500":   func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) { return &RunAPIRefusal{Status: 500}, nil },
+		"a 500": func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
+			return &RunAPIRefusal{Status: 500, Code: "broken", Message: "Retry."}, nil
+		},
+		"a 399": func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
+			return &RunAPIRefusal{Status: 399, Code: "odd", Message: "Retry."}, nil
+		},
+		"a 407": func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
+			return &RunAPIRefusal{Status: http.StatusProxyAuthRequired, Code: "credentials", Message: "Sign in."}, nil
+		},
+		"no code": func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
+			return &RunAPIRefusal{Status: http.StatusUnprocessableEntity, Message: "Fix the tests."}, nil
+		},
 		"a refusal and an error": func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
 			return &RunAPIRefusal{Status: 422}, errors.New("half done")
 		},
@@ -668,6 +679,80 @@ func TestTheCheckClosesAConnectionWithNoHead(t *testing.T) {
 	if b, _ := io.ReadAll(c); len(b) != 0 || time.Since(start) > 3*time.Second {
 		t.Errorf("the program got %q after %v", b, time.Since(start))
 	}
+	if opened, _ := u.seen(); opened != 0 {
+		t.Errorf("the proxy got %d connections", opened)
+	}
+}
+
+// TestAProgramThatKeepsSendingAfterARefusalHoldsBackNoCheck pins the slot's release at
+// the check's return: while a program that got a refusal still sends a byte every 100
+// milliseconds, another POST's check runs and its reply comes at once.
+func TestAProgramThatKeepsSendingAfterARefusalHoldsBackNoCheck(t *testing.T) {
+	p := startProxyStandIn(t, checkSecret, nil)
+	k := &checkCalls{answer: func(_ context.Context, req RunAPIRequest) (*RunAPIRefusal, error) {
+		if string(req.Body) == `{"first":1}` {
+			return &RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the tests."}, nil
+		}
+		return nil, nil
+	}}
+	f := checkedForwarder(t, p.Addr().String(), &runAPICheck{check: k.check, runID: checkRunID})
+	c, err := net.Dial("tcp", f.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	io.WriteString(c, link.RelayLine(checkHop)+post(checkTarget("/artifacts"), `{"first":1}`))
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if resp, err := http.ReadResponse(bufio.NewReader(c), nil); err != nil || resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("the first POST got %v, %v", resp, err)
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(100 * time.Millisecond):
+				if _, err := io.WriteString(c, "x"); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	start := time.Now()
+	resp, body := replyOf(t, relaySend(t, f, post(checkTarget("/artifacts"), `{"second":2}`)))
+	if resp.StatusCode != http.StatusOK || body != "ok 12" || time.Since(start) > 2*time.Second {
+		t.Errorf("the second POST got %d %q after %v", resp.StatusCode, body, time.Since(start))
+	}
+}
+
+// TestTheCheckWritesAReplyToAHeadItCannotPass pins a request with a check that is not a
+// POST to the run API: a head over the limits gets a 431 and a head net/http does not
+// read gets a 400, each in plain text, and nothing reaches the proxy.
+func TestTheCheckWritesAReplyToAHeadItCannotPass(t *testing.T) {
+	u := startUpstream(t)
+	f := checkedForwarder(t, u.ln.Addr().String(), &runAPICheck{check: (&checkCalls{}).check, runID: checkRunID})
+	get := "GET http://api.example/ HTTP/1.1\r\nHost: api.example\r\n"
+	for name, c := range map[string]struct {
+		what   string
+		status int
+	}{
+		"a long line":     {get + "X-Long: " + strings.Repeat("a", maxProxyLine) + "\r\n\r\n", http.StatusRequestHeaderFieldsTooLarge},
+		"too many lines":  {get + strings.Repeat("X-Line: a\r\n", maxProxyLines) + "\r\n", http.StatusRequestHeaderFieldsTooLarge},
+		"too many bytes":  {get + strings.Repeat("X-Line: "+strings.Repeat("a", 400)+"\r\n", 50) + "\r\n", http.StatusRequestHeaderFieldsTooLarge},
+		"a line no colon": {get + "No colon here\r\n\r\n", http.StatusBadRequest},
+		"a bad length":    {get + "Content-Length: abc\r\n\r\n", http.StatusBadRequest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := relaySend(t, f, c.what)
+			resp, body := replyOf(t, out)
+			if resp.StatusCode != c.status || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" || !strings.HasPrefix(body, "S") {
+				t.Errorf("the program got %q", out)
+			}
+		})
+	}
+	time.Sleep(100 * time.Millisecond)
 	if opened, _ := u.seen(); opened != 0 {
 		t.Errorf("the proxy got %d connections", opened)
 	}

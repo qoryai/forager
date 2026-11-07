@@ -62,30 +62,37 @@ type OpenSpec struct {
 	// push. Nil means the engine pulls over the machine's network.
 	EngineProxy *EngineProxy
 	// RunAPICheck, when set, checks each POST to the run API that a program behind the
-	// Wall sends, the agent's or a setup command's, before anything of it reaches the
+	// wall sends, the agent's or a setup command's, before anything of it reaches the
 	// gateway: a POST to run-api.qory.invalid under /v1/runs/<run id>/, such as a push of
 	// artifacts. The run's forwarder reads the POST whole, as the gateway's route does,
 	// then calls RunAPICheck. When it returns nil, nil, the forwarder sends the POST on,
 	// the bytes RunAPICheck got with Connection: close added to the head, and the
 	// gateway's route checks it as any other. A [RunAPIRefusal] goes to the program
-	// instead, with its Status, which must be 400 to 499, and nothing reaches the
-	// gateway. An error, a panic, which is a Report line, a Status outside 400 to 499, or
-	// a call that outlasts its context gets a 503,
-	// {"error":"push_check_unavailable",...}, and nothing reaches the gateway either. The
-	// context ends after 90 seconds or when the run closes. The forwarder reads and
-	// checks one POST of the run at a time, as the gateway's route has one in flight; a
-	// POST that waits 90 seconds for its turn gets the 503 too.
+	// instead, with its Status, and nothing reaches the gateway. An error, a panic, which
+	// is a Report line, a refusal with no Code, a Status of 407 or outside 400 to 499, or
+	// a call that outlasts its context gets a 503, {"error":"push_check_unavailable",...},
+	// and nothing reaches the gateway either. The context ends after 90 seconds or when
+	// the run closes. Return when ctx ends: the forwarder reads and checks one POST of the
+	// run at a time and takes the next one once the context ends, so a check that ignores
+	// ctx may still run beside the next POST's check. A POST that waits 90 seconds for its
+	// turn gets the 503 too.
 	//
 	// With RunAPICheck set in a run with a control plane, the forwarder passes one request
-	// per connection through the wall: a CONNECT and its tunnel, or one plain request and its
-	// reply, which the forwarder sends as HTTP/1.1. A POST to the run API host must reach
-	// the forwarder as net/http would read it, with no doubt about its host or the end of
-	// its body: HTTP/1.1 to http://run-api.qory.invalid/, one Host header with that
-	// host, every line ending in CRLF, no folded line, and a body of at most one
-	// Content-Length with no Transfer-Encoding; any other gets a 400. A body over the
-	// path's limit, 64 KiB for /verdict and 32 MiB otherwise, gets the gateway's 413.
-	// GETs, other methods and other hosts pass unchecked. Nil, and a run with no control
-	// plane, pass every connection through the wall as it arrives.
+	// per connection through the wall, with no plain-HTTP keep-alive or pipelining: a
+	// CONNECT and its tunnel, or one plain request and its reply, after which the
+	// connection closes and a client opens another. A request's head must arrive within 10
+	// seconds and have at most 16 KiB, 100 lines and 8 KiB a line; a larger one gets a
+	// 431, and one net/http does not read gets a 400. The forwarder sends a plain request
+	// that it does not check as HTTP/1.1, an HTTP/1.0 one among them. A POST to the run API
+	// host must reach the forwarder as net/http would read it, with no doubt about its
+	// host or the end of its body: HTTP/1.1 to http://run-api.qory.invalid/, one Host
+	// header with that host, every line ending in CRLF, no folded line, and a body of at
+	// most one Content-Length with no Transfer-Encoding; any other gets a 400. A body over
+	// the path's limit, 64 KiB for /verdict and 32 MiB otherwise, gets the gateway's 413
+	// before the body is read. A POST with Expect: 100-continue gets the forwarder's 100
+	// Continue, then, once its body goes on, the route's. GETs, other methods and other
+	// hosts pass unchecked. Nil, and a run with no control plane, pass every connection
+	// through the wall as it arrives.
 	RunAPICheck func(ctx context.Context, req RunAPIRequest) (*RunAPIRefusal, error)
 	// ImagesAllow are the prefixes of the references pinned by digest a run's policy may
 	// name its image by, for qory images.allow: an entry covers a reference that starts

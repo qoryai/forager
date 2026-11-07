@@ -55,10 +55,11 @@ const (
 	// the gateway's route allows a POST to arrive and reach Qory Apiary, so a body that
 	// takes longer would fail at the gateway too.
 	runAPIBodyWait = 60 * time.Second
-	// runAPILinger is how long the forwarder reads and drops what a program still sends
-	// after the forwarder's reply, before it closes the connection, so the close does not
-	// reset the connection before the program reads the reply.
-	runAPILinger = 500 * time.Millisecond
+	// runAPIDrainWait is how long, in all, the forwarder reads and drops what a program
+	// still sends after a reply that the forwarder writes, before it closes the
+	// connection, so the close does not reset the connection before the program reads the
+	// reply.
+	runAPIDrainWait = 5 * time.Second
 )
 
 // runAPICheck is a walled run's check of every POST to its run API, which the forwarder
@@ -353,28 +354,18 @@ func (k *runAPICheck) pass(ctx context.Context, c net.Conn, head []byte, from *b
 		replyRunAPI(c, from, p.length, http.StatusServiceUnavailable, &RunAPIRefusal{Code: "push_check_unavailable", Message: runAPICheckUnavailable})
 		return nil
 	}
-	defer k.leave()
-	if p.expect {
-		c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
-		if _, err := io.WriteString(c, "HTTP/1.1 100 Continue\r\n\r\n"); err != nil {
-			return nil
-		}
-		c.SetWriteDeadline(time.Time{})
+	out, err := k.readBody(c, head, from, p, wait)
+	if err != nil || p.path == "" {
+		k.leave()
+		return out
 	}
-	out := bytes.NewBuffer(closingHead(head))
-	c.SetReadDeadline(time.Now().Add(wait))
-	// The buffer grows as the body arrives, so a Content-Length alone costs nothing.
-	if _, err := io.CopyN(out, from, p.length); err != nil {
-		return nil
-	}
-	c.SetReadDeadline(time.Time{})
-	if p.path == "" {
-		return out.Bytes()
-	}
-	body := out.Bytes()[out.Len()-int(p.length):]
+	body := out[len(out)-int(p.length):]
 	refusal, err := k.call(ctx, RunAPIRequest{Path: p.path, Header: p.header, Body: bytes.Clone(body)})
-	if err == nil && refusal != nil && (refusal.Status < 400 || refusal.Status > 499) {
-		err = fmt.Errorf("the check returned status %d, outside 400 to 499", refusal.Status)
+	// The slot goes back before the reply and its drain, so a program that keeps sending
+	// after a refusal holds back no other POST's check.
+	k.leave()
+	if err == nil && refusal != nil {
+		err = checkRefusal(refusal)
 	}
 	switch {
 	case err != nil:
@@ -384,7 +375,41 @@ func (k *runAPICheck) pass(ctx context.Context, c net.Conn, head []byte, from *b
 		replyRunAPI(c, from, maxProxyHead, refusal.Status, refusal)
 		return nil
 	}
-	return out.Bytes()
+	return out
+}
+
+// readBody writes the program a 100 Continue when the POST p expects one, then reads its
+// body from from, within wait, and returns head with Connection: close before its empty
+// line, then the body, or the error of a failed write or read.
+func (k *runAPICheck) readBody(c net.Conn, head []byte, from *bufio.Reader, p runAPIPost, wait time.Duration) ([]byte, error) {
+	if p.expect {
+		c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
+		if _, err := io.WriteString(c, "HTTP/1.1 100 Continue\r\n\r\n"); err != nil {
+			return nil, err
+		}
+		c.SetWriteDeadline(time.Time{})
+	}
+	out := bytes.NewBuffer(closingHead(head))
+	c.SetReadDeadline(time.Now().Add(wait))
+	// The buffer grows as the body arrives, so a Content-Length alone costs nothing.
+	if _, err := io.CopyN(out, from, p.length); err != nil {
+		return nil, err
+	}
+	c.SetReadDeadline(time.Time{})
+	return out.Bytes(), nil
+}
+
+// checkRefusal returns an error for a refusal the forwarder does not pass on: one with
+// no Code, a Status outside 400 to 499, or 407, which a client reads as the proxy's
+// demand for credentials.
+func checkRefusal(r *RunAPIRefusal) error {
+	switch {
+	case r.Code == "":
+		return errors.New("the check returned a refusal with no code")
+	case r.Status < 400 || r.Status > 499 || r.Status == http.StatusProxyAuthRequired:
+		return fmt.Errorf("the check returned status %d, outside 400 to 499 or 407", r.Status)
+	}
+	return nil
 }
 
 // call calls the check with req, under a context that ends after [runAPICheckWait], when
@@ -438,9 +463,9 @@ func (k *runAPICheck) checkWait() time.Duration {
 // replyRunAPI writes the program a reply of status with refusal's code, message and
 // findings, in the gateway's JSON shape, and Connection: close. It then ends the
 // connection's writing half and reads and drops what the program still sends, up to
-// unread bytes, or [maxRunAPIDrain] when unread is below zero or over it, until the
-// program pauses for [runAPILinger], so the close that follows does not reset the
-// connection before the program reads the reply.
+// unread bytes, or [maxRunAPIDrain] when unread is below zero or over it, for at most
+// [runAPIDrainWait] in all, so the close that follows does not reset the connection
+// before the program reads the reply.
 func replyRunAPI(c net.Conn, from io.Reader, unread int64, status int, refusal *RunAPIRefusal) {
 	b, _ := json.Marshal(struct {
 		Error    string   `json:"error"`
@@ -462,21 +487,10 @@ func replyRunAPI(c net.Conn, from io.Reader, unread int64, status int, refusal *
 	if unread < 0 || unread > maxRunAPIDrain {
 		unread = maxRunAPIDrain
 	}
-	io.Copy(io.Discard, io.LimitReader(lingering{c: c, r: from}, unread))
+	c.SetReadDeadline(time.Now().Add(runAPIDrainWait))
+	io.Copy(io.Discard, io.LimitReader(from, unread))
 }
 
-// maxRunAPIDrain is the most bytes the forwarder reads and drops after a reply of its
-// own making: the largest body the run API takes, and a head.
+// maxRunAPIDrain is the most bytes the forwarder reads and drops after a reply that the
+// forwarder writes: the largest body the run API takes, and a head.
 const maxRunAPIDrain = link.MaxRunAPIArtifacts + maxProxyHead
-
-// lingering reads r, the connection c's bytes, with a deadline [runAPILinger] ahead of
-// each read.
-type lingering struct {
-	c net.Conn
-	r io.Reader
-}
-
-func (l lingering) Read(b []byte) (int, error) {
-	l.c.SetReadDeadline(time.Now().Add(runAPILinger))
-	return l.r.Read(b)
-}
