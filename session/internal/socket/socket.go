@@ -11,7 +11,9 @@
 //
 // The listener hands records to a function and does nothing else with them: a record
 // of the hooks or the output source reaches a receiver only through a descriptor's
-// rules, and the session writes the setup steps from the records of the setup source.
+// rules, the session writes the setup steps from the records of the setup source, and
+// puts the values of a record of the measure source on the session's
+// dev.qory.session.exited.
 package socket
 
 import (
@@ -25,6 +27,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -99,6 +102,9 @@ func (l *Listener) Serve(handle func(descriptor.Record), bad func(error)) {
 // Patience is how long one connection may take to write its records and close.
 const Patience = 5 * time.Second
 
+// sources are the sources of a record the listener reads.
+var sources = []string{descriptor.SourceHooks, descriptor.SourceOutput, descriptor.SourceSetup, descriptor.SourceMeasure}
+
 // read decodes one connection's lines until end of file.
 func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 	s := bufio.NewScanner(r)
@@ -109,7 +115,7 @@ func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 			continue
 		}
 		var rec descriptor.Record
-		if err := json.Unmarshal(line, &rec); err != nil || (rec.Source != descriptor.SourceHooks && rec.Source != descriptor.SourceOutput && rec.Source != descriptor.SourceSetup) || rec.Record == nil {
+		if err := json.Unmarshal(line, &rec); err != nil || !slices.Contains(sources, rec.Source) || rec.Record == nil {
 			if bad != nil {
 				if err == nil {
 					err = fmt.Errorf("not a record: %.80s", accesskey.ShownValue(string(line), false))

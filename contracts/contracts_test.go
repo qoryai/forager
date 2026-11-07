@@ -1153,3 +1153,24 @@ func TestEveryTypeHasASchemaAndTheReadmeNamesIt(t *testing.T) {
 		t.Errorf("%d data schemas under events/ for %d types", len(schemas), len(types))
 	}
 }
+
+// TestAMeasureRecordValidates pins the record the helper's exec sends to the session's
+// socket as the runtime exits: the source measure with peak_memory_bytes and
+// cpu_time_ms, either, or neither.
+func TestAMeasureRecordValidates(t *testing.T) {
+	s := compile(t, "record.schema.json")["record.schema.json"]
+	for _, rec := range []map[string]any{
+		{"source": "measure", "record": map[string]any{"peak_memory_bytes": 734003200, "cpu_time_ms": 4210}},
+		{"source": "measure", "record": map[string]any{"cpu_time_ms": 0}},
+		{"source": "measure", "record": map[string]any{}},
+	} {
+		b, _ := json.Marshal(rec)
+		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(doc); err != nil {
+			t.Errorf("%s: %v", b, err)
+		}
+	}
+}

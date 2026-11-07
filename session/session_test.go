@@ -62,6 +62,14 @@ func TestMain(m *testing.M) {
 	// The helper's exec and setup runner, as the caller's binary runs them in their
 	// modes.
 	if len(os.Args) > 1 && os.Args[1] == "exec" {
+		// The cgroup files of FAKE_CGROUP_ROOT, or none: the machine's cgroup is not
+		// the test's.
+		root := os.Getenv("FAKE_CGROUP_ROOT")
+		if root == "" {
+			root = "/nonexistent/cgroup"
+		}
+		session.SetCgroupRoot(root)
+		session.SetExecHooks(listFDs(os.Getenv("FAKE_FDS_OUT")), waitAfter(os.Getenv("FAKE_AFTER_WAIT")))
 		os.Exit(session.Exec(os.Args[2:], os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "setup-command" {
@@ -172,6 +180,29 @@ func fakeRuntime() int {
 		}
 	}
 	fmt.Println(`{"type":"result","subtype":"success","session_id":"fake","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0.01,"result":"done"}`)
+	// FAKE_MEASURE is records of the measure source to send, one JSON object a line, as
+	// a process of the launch other than the helper's exec could.
+	if lines := os.Getenv("FAKE_MEASURE"); lines != "" {
+		var recs []runtimes.Record
+		for _, line := range strings.Split(strings.TrimSpace(lines), "\n") {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(line), &m); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 92
+			}
+			recs = append(recs, runtimes.Record{Source: runtimes.SourceMeasure, Record: m})
+		}
+		if err := socket.Send(context.Background(), os.Getenv(session.EnvSocket), recs); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 93
+		}
+		// FAKE_HANG is a file to write once the records are sent; the runtime then runs
+		// until it is stopped.
+		if hang := os.Getenv("FAKE_HANG"); hang != "" {
+			os.WriteFile(hang, []byte("sent"), 0o600)
+			time.Sleep(time.Minute)
+		}
+	}
 	time.Sleep(60 * time.Millisecond)
 	code := 0
 	fmt.Sscan(os.Getenv("FAKE_EXIT"), &code)

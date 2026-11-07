@@ -183,6 +183,14 @@ func TestTheSessionExitedTheRuntimesExitDecides(t *testing.T) {
 		{map[string]any{"state": "failed", "exit_code": 130, "reason": "interrupted"}, false},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "session_lost"}, false},
 		{map[string]any{"state": "succeeded", "exit_code": -1, "reason": "mount_mode_conflict"}, false},
+		// The enclosure's measure, on a runtime's exit alone, each a whole number of 0
+		// or more.
+		{map[string]any{"state": "succeeded", "exit_code": 0, "peak_memory_bytes": 4096, "cpu_time_ms": 12}, true},
+		{map[string]any{"state": "failed", "exit_code": 137, "cpu_time_ms": 0}, true},
+		{map[string]any{"state": "failed", "exit_code": -1, "peak_memory_bytes": 4096}, false},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_user_root", "cpu_time_ms": 1}, false},
+		{map[string]any{"state": "succeeded", "exit_code": 0, "peak_memory_bytes": -1}, false},
+		{map[string]any{"state": "succeeded", "exit_code": 0, "cpu_time_ms": 1.5}, false},
 	} {
 		a := h.open(server.LinkRunRequest{})
 		n := h.joined(a.RunID)
@@ -196,6 +204,30 @@ func TestTheSessionExitedTheRuntimesExitDecides(t *testing.T) {
 			t.Errorf("%v: %+v", c.data, d)
 		}
 	}
+}
+
+// TestTheSessionExitedKeepsTheMeasure pins that the gateway records a session's
+// peak_memory_bytes and cpu_time_ms as the session sent them.
+func TestTheSessionExitedKeepsTheMeasure(t *testing.T) {
+	h := start(t, gateway.Config{})
+	a := h.open(server.LinkRunRequest{})
+	n := h.joined(a.RunID)
+	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), sessionStarted(a.RunID, n)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	data := map[string]any{"session": n, "state": "succeeded", "exit_code": 0, "duration_ms": 5, "peak_memory_bytes": 8589934592, "cpu_time_ms": 61250}
+	if d := h.post(ev(a.RunID, event.SessionExited, data)); !d.Accepted() {
+		t.Fatalf("session.exited: %+v", d)
+	}
+	for _, e := range h.record(a.RunID) {
+		if e.Type == event.SessionExited {
+			if e.Data["peak_memory_bytes"] != float64(8589934592) || e.Data["cpu_time_ms"] != float64(61250) {
+				t.Errorf("the record's session.exited: %v", e.Data)
+			}
+			return
+		}
+	}
+	t.Error("no session.exited in the record")
 }
 
 // TestTheWordsOfARunsEnd pins the words a person reads of each ending, in a 410's

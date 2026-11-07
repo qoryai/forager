@@ -390,12 +390,14 @@ type SessionSpec struct {
 	Forwarder []string
 	// Exec is the command, a path inside the enclosure, that makes the caller's binary
 	// run [Exec] there: {wall.HelperPath, "exec"} for a binary that runs it in its exec
-	// mode. Behind a wall the session starts the launch through it when the session has
-	// names to unset, in front of everything else the launch starts, after the wall's
-	// programs, with the names the session has that nothing sets and wins with, the
-	// runtime's declared, reserved and denied names, its model overrides and the node's
-	// denied ones, so the runtime sees them unset, never as the image's values or empty.
-	// dev.qory.session.started reports the launch without it. The run's Wall needs one.
+	// mode. Behind a wall the session starts every launch through it, in front of
+	// everything else the launch starts, after the wall's programs, with the names the
+	// session has that nothing sets and wins with, the runtime's declared, reserved and
+	// denied names, its model overrides and the node's denied ones, so the runtime sees
+	// them unset, never as the image's values or empty. It waits for the launch and
+	// sends the enclosure's peak memory and CPU time to the session, which puts them on
+	// dev.qory.session.exited. dev.qory.session.started reports the launch without it.
+	// The run's Wall needs one.
 	Exec []string
 	// Timeout is how long the runtime may run, the session's setup commands included; zero
 	// means no limit. At the limit the runtime is stopped the way the context ending

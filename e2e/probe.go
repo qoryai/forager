@@ -17,8 +17,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/qoryai/forager/link"
@@ -110,6 +113,107 @@ type report struct {
 	// RunAPI is what the probe found of the run API, when PROBE_RUN_API is 1: the probe
 	// then tries nothing else.
 	RunAPI *runAPIReport `json:"run_api,omitempty"`
+	// Parent is what the probe sees of its parent, the helper's exec, which waits for
+	// it and then measures the enclosure.
+	Parent parentReport `json:"parent"`
+	// CgroupV2 is whether /sys/fs/cgroup/memory.max exists inside: the helper's exec
+	// then reads the enclosure's peak memory and CPU time.
+	CgroupV2 bool `json:"cgroup_v2"`
+	// TTY is what the terminal probe found; nil for the probe.
+	TTY *terminalReport `json:"tty,omitempty"`
+}
+
+// parentReport is what the probe sees of its parent process: its arguments, the lines
+// of its status and of the probe's that contain users, groups, capabilities and
+// no_new_privs, the owner of its /proc fd directory, which is root while it is not
+// dumpable, and each file descriptor with its target, or why the list could not be
+// read; Err is why the rest could not be read.
+type parentReport struct {
+	Args   []string `json:"args"`
+	Status []string `json:"status"`
+	Self   []string `json:"self"`
+	Owner  int      `json:"owner"`
+	FDs    []string `json:"fds"`
+	FDsErr string   `json:"fds_err"`
+	Err    string   `json:"err"`
+}
+
+// privileges are the lines of a process's status that the parent's must match.
+var privileges = []string{"Uid", "Gid", "Groups", "CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb", "NoNewPrivs"}
+
+// statusLines returns the lines of /proc/<pid>/status that [privileges] lists.
+func statusLines(pid string) ([]string, error) {
+	b, err := os.ReadFile("/proc/" + pid + "/status")
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		name, _, _ := strings.Cut(line, ":")
+		for _, p := range privileges {
+			if name == p {
+				out = append(out, strings.Join(strings.Fields(line), " "))
+			}
+		}
+	}
+	return out, nil
+}
+
+// probeParent reads the probe's parent process.
+func probeParent() parentReport {
+	var r parentReport
+	pid := strconv.Itoa(os.Getppid())
+	args, err := os.ReadFile("/proc/" + pid + "/cmdline")
+	if err != nil {
+		r.Err = err.Error()
+		return r
+	}
+	r.Args = strings.Split(strings.TrimRight(string(args), "\x00"), "\x00")
+	if r.Status, err = statusLines(pid); err != nil {
+		r.Err = err.Error()
+		return r
+	}
+	r.Self, _ = statusLines("self")
+	r.Owner = -1
+	if info, err := os.Stat("/proc/" + pid + "/fd"); err == nil {
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			r.Owner = int(st.Uid)
+		}
+	}
+	entries, err := os.ReadDir("/proc/" + pid + "/fd")
+	if err != nil {
+		r.FDsErr = err.Error()
+		return r
+	}
+	for _, e := range entries {
+		target, _ := os.Readlink("/proc/" + pid + "/fd/" + e.Name())
+		r.FDs = append(r.FDs, e.Name()+" "+target)
+	}
+	return r
+}
+
+// problem is what is wrong with the parent: not the helper's exec, other users, groups
+// or privileges than the probe's, dumpable, so the probe can list its descriptors, or
+// a file descriptor above 2 other than the Go runtime's poller, an eventpoll and an
+// eventfd. Empty when nothing is.
+func (r parentReport) problem() string {
+	switch {
+	case r.Err != "":
+		return "the parent could not be read: " + r.Err
+	case len(r.Args) < 2 || r.Args[1] != modeExec:
+		return fmt.Sprintf("the parent is %q, not the helper's exec", r.Args)
+	case len(r.Status) != len(privileges) || !slices.Equal(r.Status, r.Self):
+		return fmt.Sprintf("the helper's exec waits with %q and the agent runs with %q", r.Status, r.Self)
+	case r.Owner != 0 || r.FDsErr == "":
+		return fmt.Sprintf("the helper's exec waits dumpable: its /proc fd directory belongs to uid %d, and the agent lists its descriptors %q (%s)", r.Owner, r.FDs, r.FDsErr)
+	}
+	for _, fd := range r.FDs {
+		n, target, _ := strings.Cut(fd, " ")
+		if n != "0" && n != "1" && n != "2" && target != "anon_inode:[eventpoll]" && target != "anon_inode:[eventfd]" {
+			return fmt.Sprintf("the helper's exec waits with descriptor %s open on %s; all: %q", n, target, r.FDs)
+		}
+	}
+	return ""
 }
 
 // The files of the case of a workspace bound read-only: the setup container writes
@@ -461,6 +565,10 @@ func probe(args []string) int {
 		fmt.Fprintln(os.Stderr, "probe: the workspace:", err)
 	}
 	r.Terminal = term.IsTerminal(int(os.Stdout.Fd()))
+	r.Parent = probeParent()
+	if _, err := os.Stat("/sys/fs/cgroup/memory.max"); err == nil {
+		r.CgroupV2 = true
+	}
 
 	for i, a := range args {
 		if a == "--settings" && i+1 < len(args) {
