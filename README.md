@@ -1,5 +1,8 @@
 # Qory Forager
 
+This repository is part of [Qory](https://github.com/qoryai/qory). Its README lists every
+part and how to install Qory.
+
 Forager stands between your coding agent and the world.
 
 It does four things:

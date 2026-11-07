@@ -1,7 +1,7 @@
 # Trademarks
 
 *Qory* is a trademark of 8wonders GmbH. The Apache License,
-Version 2.0, grants no right to use it (section 6). This page says what you
+Version 2.0, grants no right to use it (section 6). This page lists what you
 may do with it without asking.
 
 ## You may
