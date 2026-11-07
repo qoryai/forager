@@ -488,6 +488,8 @@ up in its parent, so two binds of one root are allowed.
   not be removed, the run's entry keeps that session's places, and a later join returns
   "Open a new run. The wall of session 1 could not be removed and may still run, so this
   run takes no more sessions."
+  After the close could not remove the run's wall, the run's entry stays as it was at
+  the close, with its places.
 
   `session.RunsBinding(ctx, d, p)` reads the registry, under its lock, for a caller that
   removes or reuses a place p, an absolute path: it returns each walled run still going,

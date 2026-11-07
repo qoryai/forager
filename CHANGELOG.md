@@ -1317,6 +1317,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Expect an error from the Docker wall's `Close` when the engine cannot be reached: it
+  counts only `no such container` as gone for a container. Before, a missing engine
+  socket counted as gone.
 - A wall outside Forager: the session calls `Prepare` in `session.Open`, once per run,
   and `Wrap` once per session on the one enclosure `Prepare` returned, with `Unwrap`,
   when the enclosure has it, at the session's end.
@@ -1779,7 +1782,8 @@ release may change what an existing document does, and says so under Upgrading.
   point of the run: the agent's container at a session's end, the setup container in
   `RemoveSetup`, or anything at the close. A process may have kept writing the run's
   binds after its session ended, so do not trust what is in them. It stays true when a
-  later removal succeeded.
+  later removal succeeded. It is also true when the close failed only on a network or the
+  wall's private directory, because `wall.Enclosure.Close` returns one error.
 
 #### Fixed
 
