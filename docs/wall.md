@@ -743,7 +743,8 @@ runtime's poller. It starts the runtime in a separate process group. On a termin
 that group is the foreground group, so the terminal sends a Ctrl-C or a resize to the
 runtime alone, and the helper passes neither on again.
 The helper passes on the signals that reach it, such as the stop signal, and exits with
-the runtime's exit status, or 128 and the signal's number when a signal ended it.
+the runtime's exit status. When a signal ended the runtime, the helper ends by the same
+signal, so the run's exit status is the same as without the helper.
 
 ## Images
 

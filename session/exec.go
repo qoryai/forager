@@ -81,11 +81,15 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 //
 // Its arguments are --unset NAME, any number of times, then -- and the program and
 // its arguments, which no option of its reaches. A NAME is a variable's name: letters,
-// digits and underscores, starting with a letter or an underscore. It returns the exit
-// status, as a shell does: the program's, 128 and the signal's number for a program a
-// signal ended, 2 for arguments it cannot read, 127 for a program it does not find,
-// or finds only through . or an empty entry of PATH, and 126 for one it cannot
-// execute, its reason written to stderr.
+// digits and underscores, starting with a letter or an underscore. When a signal ended
+// the program, Exec ends by the same signal once it has sent the measure, so its
+// parent sees the end it saw when Exec executed the program in its place: docker-init
+// exits 128 and the signal's number, and a session without Docker sees the signal.
+// For a signal whose default action does not end a process, or when Exec outlives the
+// signal, it returns 128 and the signal's number. Otherwise it returns the exit
+// status, as a shell does: the program's, 2 for arguments it cannot read, 127 for a
+// program it does not find, or finds only through . or an empty entry of PATH, and
+// 126 for one it cannot execute, its reason written to stderr.
 func Exec(args []string, stderr io.Writer) int {
 	names, argv, err := parseExec(args)
 	if err != nil {
@@ -112,7 +116,7 @@ func Exec(args []string, stderr io.Writer) int {
 		return 127
 	}
 	closeInherited()
-	code, err := startAndWait(path, argv)
+	code, sig, err := startAndWait(path, argv)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		fmt.Fprintf(stderr, "exec: %s: not found: %v\n", program, accesskey.ShownError(err))
@@ -126,7 +130,20 @@ func Exec(args []string, stderr io.Writer) int {
 		// the measure and nothing else.
 		sendMeasure(addr, cgroupRoot)
 	}
+	if sig != 0 && endsByDefault(sig) {
+		raise(sig)
+	}
 	return code
+}
+
+// endsByDefault reports whether the default action of sig ends a process.
+func endsByDefault(sig syscall.Signal) bool {
+	switch sig {
+	case syscall.SIGCHLD, syscall.SIGCONT, syscall.SIGURG, syscall.SIGWINCH,
+		syscall.SIGSTOP, syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU:
+		return false
+	}
+	return true
 }
 
 // sendMeasure sends the measure of the cgroup v2 files under root, [readMeasure]'s, to
@@ -149,9 +166,9 @@ var forwarded = []os.Signal{
 
 // startAndWait starts the program at path with argv and the process's environment and
 // standard streams, passes on each of [forwarded] until it exits, and returns its exit
-// status: its code, or 128 and the number of the signal that ended it. The error is
-// that of the start: the program did not run.
-func startAndWait(path string, argv []string) (int, error) {
+// status: its code, or 128 and the number of the signal that ended it, with that
+// signal. The error is that of the start: the program did not run.
+func startAndWait(path string, argv []string) (int, syscall.Signal, error) {
 	var notify []os.Signal
 	for _, sig := range forwarded {
 		// Go keeps HUP and INT ignored when the process started with them ignored, and
@@ -175,7 +192,7 @@ func startAndWait(path string, argv []string) (int, error) {
 	pid, err := syscall.ForkExec(path, argv, &syscall.ProcAttr{Env: os.Environ(), Files: []uintptr{0, 1, 2}, Sys: attr})
 	if err != nil {
 		signal.Stop(sigs)
-		return 0, err
+		return 0, 0, err
 	}
 	var mu sync.Mutex
 	reaped := false
@@ -206,11 +223,11 @@ func startAndWait(path string, argv []string) (int, error) {
 	switch {
 	case err != nil:
 		// The child is no longer Exec's to wait for: no status is known.
-		return 128, nil
+		return 128, 0, nil
 	case ws.Signaled():
-		return 128 + int(ws.Signal()), nil
+		return 128 + int(ws.Signal()), ws.Signal(), nil
 	}
-	return ws.ExitStatus(), nil
+	return ws.ExitStatus(), 0, nil
 }
 
 // foreground reports whether standard input is a terminal whose foreground process

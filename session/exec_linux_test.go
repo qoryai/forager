@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -47,5 +48,14 @@ func TestTheHelpersExecWaitsWithNothingTheProgramLacks(t *testing.T) {
 	self, _ := os.ReadFile(filepath.Join(dir, "self"))
 	if len(parent) == 0 || string(parent) != string(self) {
 		t.Errorf("the helper's exec waits with\n%s\nand the program runs with\n%s", parent, self)
+	}
+}
+
+// TestTheHelpersExecEndsByAFaultsSignal pins the end of the helper's exec by a signal
+// the Go runtime handles itself, QUIT, ABRT and SEGV, and of USR1: the same signal,
+// with no goroutine dump in its place.
+func TestTheHelpersExecEndsByAFaultsSignal(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGQUIT, syscall.SIGABRT, syscall.SIGSEGV, syscall.SIGUSR1} {
+		helperEndsBy(t, sig)
 	}
 }

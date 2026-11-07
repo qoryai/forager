@@ -2,8 +2,12 @@ package session
 
 import (
 	"os"
+	"runtime"
 	"strconv"
 	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // closeInherited closes every file descriptor above 2 of the process, apart from the
@@ -39,4 +43,28 @@ func closeInherited() {
 	for _, fd := range fds {
 		syscall.Close(fd)
 	}
+}
+
+// sigaction is the kernel's struct sigaction on Linux, as the Go runtime declares it
+// for amd64 and arm64.
+type sigaction struct {
+	handler  uintptr
+	flags    uint64
+	restorer uintptr
+	mask     uint64
+}
+
+// raise ends the process by sig: it sets no core file, sets sig's action to the
+// default, which the Go runtime's handler would not apply for QUIT, ABRT or SEGV,
+// unblocks it on this thread and sends it to this thread. It returns only when the
+// process outlives the signal.
+func raise(sig syscall.Signal) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{})
+	var dfl sigaction
+	unix.RawSyscall6(unix.SYS_RT_SIGACTION, uintptr(sig), uintptr(unsafe.Pointer(&dfl)), 0, unsafe.Sizeof(dfl.mask), 0, 0)
+	set := uint64(1) << (uint(sig) - 1)
+	unix.RawSyscall6(unix.SYS_RT_SIGPROCMASK, unix.SIG_UNBLOCK, uintptr(unsafe.Pointer(&set)), 0, unsafe.Sizeof(set), 0, 0)
+	unix.Tgkill(unix.Getpid(), unix.Gettid(), sig)
 }

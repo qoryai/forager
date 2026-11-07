@@ -124,8 +124,7 @@ func TestTheHelpersExecRefusesWhatItCannotRun(t *testing.T) {
 }
 
 // TestTheHelpersExecReturnsTheProgramsStatus pins the exit status of the helper's
-// exec, which waits for the program: the program's code, and 128 and the signal's
-// number for a program a signal ended, as a shell reports it.
+// exec, which waits for the program: the program's code.
 func TestTheHelpersExecReturnsTheProgramsStatus(t *testing.T) {
 	env := []string{"PATH=" + os.Getenv("PATH")}
 	for _, c := range []struct {
@@ -135,13 +134,34 @@ func TestTheHelpersExecReturnsTheProgramsStatus(t *testing.T) {
 		{"exit 0", 0},
 		{"exit 7", 7},
 		{"exit 255", 255},
-		{"kill -KILL $$", 128 + 9},
-		{"kill -TERM $$", 128 + 15},
-		{"kill -INT $$", 128 + 2},
 	} {
 		if out, code := helperExec(t, env, "--", "sh", "-c", c.line); code != c.want {
 			t.Errorf("%s: exit %d, %q; want %d", c.line, code, out, c.want)
 		}
+	}
+}
+
+// helperEndsBy runs the helper's exec with a program that sends itself sig, and fails
+// unless the helper's exec ends by sig too, as the program would end where the helper's
+// exec executed it.
+func helperEndsBy(t *testing.T, sig syscall.Signal) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "exec", "--", "sh", "-c", "kill -"+strings.TrimPrefix(unix.SignalName(sig), "SIG")+" $$")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	out, _ := cmd.CombinedOutput()
+	ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() || ws.Signal() != sig {
+		t.Errorf("%s: the helper's exec ended with %v, %q; want the signal %s", unix.SignalName(sig), cmd.ProcessState, out, unix.SignalName(sig))
+	}
+}
+
+// TestTheHelpersExecEndsByTheProgramsSignal pins the end of the helper's exec when a
+// signal ended the program: the same signal, so a session without Docker sees the
+// signal and docker-init exits 128 and its number, as when the program ran in its
+// place.
+func TestTheHelpersExecEndsByTheProgramsSignal(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL, syscall.SIGINT, syscall.SIGHUP} {
+		helperEndsBy(t, sig)
 	}
 }
 

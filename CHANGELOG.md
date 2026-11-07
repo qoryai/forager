@@ -1928,8 +1928,10 @@ release may change what an existing document does, and says so under Upgrading.
   terminal's foreground group on a terminal, so the terminal sends a Ctrl-C or a resize
   to the runtime alone, as before, and the helper's exec passes neither on again. It
   passes HUP, INT, QUIT, ABRT, USR1, USR2, ALRM, TERM, CONT, TSTP,
-  TTIN, TTOU and WINCH on to the runtime, and exits with the runtime's exit status, or
-  128 and the signal's number when a signal ended it, as docker-init does.
+  TTIN, TTOU and WINCH on to the runtime, and exits with the runtime's exit status.
+  When a signal ended the runtime, it ends by the same signal after it sends the
+  measure, so docker-init exits 128 and the signal's number, and a session sees the
+  same exit as before.
 - A variable the runtime's preparation sets is in the launch's environment once: the
   harness's computed value of the name is left out. Before, both were in it, and the
   preparation's, the later one, applied.
