@@ -2,9 +2,11 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -77,8 +79,8 @@ func (r *Run) closeEngine() {
 // before the forwarder listens. For a run with a certificate authority, EngineProxy
 // writes the run's certificate as qory-run-<id>.crt in /etc/docker/certs.d/<host>/ for
 // each of hosts, as [wall.Trust] does; a host that cannot be a directory name, such as
-// a *. pattern, gets none. Open it while a host step is open; it stays open after the
-// step exits.
+// a *. pattern, gets none. Open it while a host step of a kind other than copy is open;
+// it stays open after the step exits.
 //
 // close ends it: the forwarder takes no connection, and the certificates and the
 // directories made for them are removed. [Run.Join] ends it before its join request,
@@ -89,7 +91,8 @@ func (r *Run) closeEngine() {
 // An error means nothing is open and no certificate of the call is left: a session of
 // the run is running, the run is closed, the run has a wall, whose image step listens
 // at the engine proxy's address, OpenSpec.EngineProxy is nil or not a loopback
-// host:port with a password of the shape a forwarder checks, no host step is open, an
+// host:port with a password of the shape a forwarder checks, no host step is open, the
+// open host step is a copy step, during which a join closes the engine proxy, an
 // engine proxy of the run is open, the address is in use, a certificate could not be
 // written, or a symbolic link is where a certificate would be written. Each error
 // starts with its fix and contains no password.
@@ -108,6 +111,8 @@ func (r *Run) EngineProxy(hosts []string) (close func() error, err error) {
 		return nil, errors.New("Set OpenSpec.EngineProxy to the engine's proxy setting: the run has no engine proxy.")
 	case r.hostStep == nil:
 		return nil, errors.New("Start a host step before you open the engine proxy: the engine proxy opens only during a host step.")
+	case r.hostStep.kind == event.StepCopy:
+		return nil, fmt.Errorf("Exit step %d and start a host step of another kind before you open the engine proxy: a join during a copy step closes the engine proxy.", r.hostStep.n)
 	case r.engine.held():
 		return nil, errors.New("Close the engine proxy before you open it again: the engine has one proxy setting, and the run's engine proxy is open.")
 	}

@@ -343,7 +343,8 @@ harness, then joins a session.
    `dev.qory.run.policy_applied` and outside every session. The caller
    writes its host work as steps, such as a fetch and then a compose,
    before the first join, between joins, or after the last join and before the close,
-   and never during a join (`(*session.Run).StartStep`). Each
+   and never during a join (`(*session.Run).StartStep`). A session with no runtime
+   may join during a `copy` step (§The events, Steps). Each
    step is a `dev.qory.run.step_started`, the step's lines as `dev.qory.run.log` with
    `stream: stderr`, its number as `step` and no `session`, and a
    `dev.qory.run.step_exited` (§The events, Steps); the run's masker replaces each
@@ -1738,7 +1739,12 @@ the two events is required.
 | `copy` | host work that copies the session's work out of the wall |
 
 The steps come after `dev.qory.run.started`, numbered from 1 in the order they start,
-one at a time. The host lines of a step are `dev.qory.run.log` events with the step's
+one at a time, apart from one case: a session with no runtime, `bare: true` in its
+`dev.qory.session.started`, may join during a `copy` step. The steps of that join,
+numbered on from the `copy` step, start and end inside the `copy` step, as the session
+does, and the caller exits the `copy` step after the session. A session with a runtime
+does not join during a `copy` step, and no session joins during a step of another
+kind. The host lines of a step are `dev.qory.run.log` events with the step's
 number as `step`, between its `dev.qory.run.step_started` and its
 `dev.qory.run.step_exited`. A host line outside every step has no `step`. `step` is
 optional on `dev.qory.run.log`, so a record with no steps validates. `setup` is the
@@ -4189,7 +4195,8 @@ machine. The programs trust the run's certificate through `ca-bundle.pem` in the
 directory (§Credentials, Termination). The host proxy ends when its caller closes it,
 before each join request and at the run's close; from then on its port takes no
 connection. It does not start in a run with a session whose wall could not be removed
-and may still run, so a push does not run beside the agent's container. The session
+and may still run, so a push does not run beside the agent's container, and it does not
+start during a `copy` step, because a join during that step closes it. The session
 writes its password into no event and no file.
 
 **The engine's host work.** In a run with no wall, the machine's container engine
@@ -4197,7 +4204,8 @@ reaches the run's proxy during host work, such as a build's pulls and push, thro
 engine proxy: a forwarder at the address of the proxy setting the engine reads when it
 starts, which passes on only a request with that setting's password and reaches the
 gateway's proxy as the host proxy does. The session opens one engine proxy at a time,
-only while a host step is open, and none for a walled run, whose image step listens at
+only while a host step of a kind other than `copy` is open, because a join during a
+`copy` step closes it, and none for a walled run, whose image step listens at
 that address (§Images). For a run with a certificate authority, the session writes the
 run's certificate as `qory-run-<id>.crt` in `/etc/docker/certs.d/<host>/` for each host
 its caller lists, and removes the files when the engine proxy ends: when its caller

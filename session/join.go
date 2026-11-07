@@ -80,7 +80,9 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // setup step for each command of SessionSpec.Setup, from the records of its runner. A
 // refused join ends its join step failed with -1 before its dev.qory.session.exited.
 // Join returns an error and writes nothing while a host step of [Run.StartStep] is
-// open.
+// open, apart from one case: a session with no runtime (SessionSpec.Runtime nil) joins
+// during a copy step (event.StepCopy). Its steps then start and end inside the copy
+// step, and the copy step stays open until the caller exits it.
 //
 // A session that starts has a directory in the run directory, sessions/<n>/ with n its
 // number ([Result.SessionDir]): its output.log, the bytes of its dev.qory.run.log
@@ -108,8 +110,15 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if r.closed {
 		return nil, errors.New("the run is closed")
 	}
-	if r.hostStep != nil {
-		return nil, fmt.Errorf("exit step %d before the join: a session does not join during a host step", r.hostStep.n)
+	// A session with no runtime, such as the caller's copy of the work out of the wall,
+	// joins during a copy step, and the join's steps start and end inside that step.
+	if h := r.hostStep; h != nil {
+		if h.kind != event.StepCopy {
+			return nil, fmt.Errorf("exit step %d before the join: a session does not join during a host step", h.n)
+		}
+		if spec.Runtime != nil {
+			return nil, fmt.Errorf("exit step %d before the join: only a session with no runtime joins during a copy step", h.n)
+		}
 	}
 	// A wall whose removal failed may still run, with the places its entry lists: a
 	// join would rewrite that entry with the join's places alone.

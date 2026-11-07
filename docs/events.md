@@ -147,7 +147,7 @@ and the log lines of each step.
   between the step's two events. A host line outside every step has no `step`.
 
 The steps come after `dev.qory.run.started`, numbered in the order they start, one at
-a time:
+a time, apart from a join during a `copy` step:
 
 - The caller writes the `fetch`, `compose`, `build`, `push`, `machine` and `copy`
   steps of its host work with `(*session.Run).StartStep`, before the first join,
@@ -172,6 +172,11 @@ a time:
   step after the `wall` step, with the command's name, such as `install`, its output as
   the step's lines and its exit status. The runtime runs in no step, and a session's
   lines have `step` only in its `image`, `wall` and `setup` steps.
+- A session with no runtime, `bare: true` in its `dev.qory.session.started`, may join
+  during a `copy` step. The steps of that join, numbered on from the `copy` step, start
+  and end inside the `copy` step, as the session does, and the caller exits the `copy`
+  step after the session. A session with a runtime does not join during a `copy` step,
+  and no session joins during a step of another kind.
 
 The close ends a host step still open `cancelled` with -1, before
 `dev.qory.run.exited`. When the gateway ends a run during a step, the run's stream has

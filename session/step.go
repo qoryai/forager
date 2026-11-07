@@ -19,6 +19,7 @@ import (
 type Step struct {
 	r      *Run
 	n      int
+	kind   string
 	start  time.Time
 	exited bool
 }
@@ -38,8 +39,12 @@ type Step struct {
 // An error means nothing is written: the kind is not fetch, compose, build, push,
 // machine or copy, the name is empty, a session of the run is running, another host
 // step is open, or the run is closed. A host step runs before the first join, between
-// joins, or after the last join and before the close, never during a join: Join returns
-// an error and writes nothing while a host step is open.
+// joins, or after the last join and before the close. Join returns an error and writes
+// nothing while a host step is open, apart from one case: a session with no runtime
+// (SessionSpec.Runtime nil) joins during a copy step, and the join's steps start and
+// end inside the copy step, which stays open until the caller exits it after Join
+// returns. [Run.EngineProxy] and [Run.HostProxy] return an error during a copy step,
+// since that join closes them.
 //
 // The name must contain no URL userinfo, token or other credential. The masker replaces
 // only the forwarders' passwords, OpenSpec.Masker's values, the server's variable
@@ -136,7 +141,7 @@ func (s *Step) Exit(state string, exitCode int) (err error) {
 // as [Run.stepName] shows it, and returns the step.
 func (r *Run) startStep(kind, name string) *Step {
 	r.steps++
-	s := &Step{r: r, n: r.steps, start: time.Now()}
+	s := &Step{r: r, n: r.steps, kind: kind, start: time.Now()}
 	r.post(event.StepStarted, map[string]any{"step": s.n, "name": r.stepName(name), "kind": kind})
 	return s
 }

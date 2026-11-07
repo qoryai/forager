@@ -363,7 +363,14 @@ release may change what an existing document does, and says so under Upgrading.
   step, also in a write run with no push. `(*session.Run).StartStep` accepts it as it
   accepts `fetch`, `compose`, `build`, `push` and `machine`.
   `fixtures/link/link-batch-copy-step.json` is a batch with a `copy` step after a
-  `dev.qory.session.exited`, before the `dev.qory.run.exited`.
+  `dev.qory.session.exited`, before the `dev.qory.run.exited`. A session with no
+  runtime, `bare: true` in its `dev.qory.session.started`, may join during a `copy`
+  step, such as qory's copy of the work out of the wall: the steps of that join take
+  the next numbers and start and end inside the `copy` step, the one exception to one
+  step at a time. A session with a runtime does not join during a `copy` step, and no
+  session joins during a step of another kind. The host proxy and the engine proxy do
+  not open during a `copy` step, because that join closes them. The contract stays at
+  revision 1.
 - `step` in `dev.qory.run.log`: the number of the step whose line the chunk is,
   between that step's `dev.qory.run.step_started` and `dev.qory.run.step_exited`. The
   member is optional, and a line outside every step has none. A session's chunk has
@@ -1666,7 +1673,13 @@ release may change what an existing document does, and says so under Upgrading.
   Forager measures. `Close` ends a step still open `cancelled` with `-1`. Each call
   returns an error that starts with the fix, and writes nothing, while a `Join` runs,
   after `Close`, while another host step is open, for a state outside the three and
-  after the step exited; `Join` returns one while a host step is open.
+  after the step exited; `Join` returns one while a host step is open. The exception is
+  a session with no runtime (`SessionSpec.Runtime` nil) during a `copy` step: it joins,
+  its steps start and end inside the `copy` step, and the caller exits the `copy` step
+  after `Join` returns. A session with a runtime gets "exit step 1 before the join:
+  only a session with no runtime joins during a copy step". `HostProxy` and
+  `EngineProxy` return an error that starts with the fix during a `copy` step, because
+  that join closes them.
 - `(*session.Run).Built(session.Built)` writes the run's `dev.qory.run.built`, with
   `Image`, `Size`, `Commit` and `EnvironmentRef` as its members, once per run. It
   returns an error that starts with the fix, and writes nothing, for a member that is
