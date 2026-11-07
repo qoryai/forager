@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -667,9 +668,24 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		masked := maskedRecord(texts{secrets: masker, harness: hidden}, e.Data)
 		r.write(e.Type, withSession(neutralRecord(e.Type, shapedRecord(e.Type, masked, summaries), neutralText), n))
 	}, parents.Real)
+	// A record of the measure source is the enclosure's peak memory and CPU time, which
+	// the helper's exec sends as the runtime exits. Only the launch reaches this socket:
+	// the session opens it for this launch alone, the setup container gets no socket,
+	// and host steps run outside the enclosure. The last record read before the socket
+	// is drained counts, and only behind a wall: without one there is no enclosure.
+	var measureMu sync.Mutex
+	var measure map[string]any
 	records := func(rec runtimes.Record) {
-		if rec.Source == runtimes.SourceSetup {
+		switch rec.Source {
+		case runtimes.SourceSetup:
 			setupSteps.handle(rec)
+			return
+		case runtimes.SourceMeasure:
+			if spec.Wall != nil {
+				measureMu.Lock()
+				measure = measured(rec.Record)
+				measureMu.Unlock()
+			}
 			return
 		}
 		mapper.Handle(rec)
@@ -688,11 +704,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the variables of the run's bundle, and last the placeholders, so a placeholder wins
 	// over a value the session inherits. The resolution has left out every value of a
 	// fixed name, so what wins here by position is what the record says. Behind a wall
-	// the launch starts through Exec when the session has names to unset, which unsets
-	// the runtime's declared, reserved and denied variables, its model overrides and the
-	// node's denied ones that nothing sets, so an image's value for one does not reach
-	// the runtime; the record lists the launch without it. ownEnv is set before the
-	// variables are checked.
+	// every launch starts through Exec, which unsets the runtime's declared, reserved
+	// and denied variables, its model overrides and the node's denied ones that nothing
+	// sets, so an image's value for one does not reach the runtime, and which measures
+	// the enclosure when the runtime exits; the record lists the launch without it.
+	// ownEnv is set before the variables are checked.
 	launch := wall.Launch{
 		Command: command, Args: args, Dir: spec.Dir,
 		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, fwd.Env(), []string{EnvSocket + "=" + sock.Path()}, ownEnv, r.caVars, placeholders(placeholderNames, key)),
@@ -830,6 +846,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if exit.signal != "" {
 		exited["signal"] = exit.signal
 	}
+	if !closed {
+		// The socket is closed by now: the measure is here when it reached the session
+		// within the close's grace.
+		measureMu.Lock()
+		maps.Copy(exited, measure)
+		measureMu.Unlock()
+	}
 	if reason != "" {
 		exited["reason"] = reason
 	}
@@ -856,6 +879,19 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		r.write(event.SessionExited, exited)
 	}
 	return res, nil
+}
+
+// measured are the members of a record of the measure source that the session puts on
+// dev.qory.session.exited: peak_memory_bytes and cpu_time_ms, each when it is a whole
+// number from 0 to 2^53-1.
+func measured(rec map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, name := range []string{"peak_memory_bytes", "cpu_time_ms"} {
+		if v, ok := rec[name].(float64); ok && v >= 0 && v <= maxMeasure && v == math.Trunc(v) {
+			out[name] = int64(v)
+		}
+	}
+	return out
 }
 
 // sessionStarted is the data of the session's dev.qory.session.started. A value of the

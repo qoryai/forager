@@ -229,6 +229,8 @@ func Main() {
 		os.Exit(0)
 	case modeWrite:
 		os.Exit(writeFile(os.Args[2:]))
+	case modeTerminal:
+		os.Exit(terminalProbe())
 	case modeReach:
 		os.Exit(reach(os.Args[2:]))
 	case modeService:
@@ -437,6 +439,29 @@ func Run(t *testing.T, o Options) {
 	check("the record is read-only", p.RecordWrite != "", "the probe opened events.jsonl for writing")
 	check("not root", p.UID != 0 && p.GID != 0, fmt.Sprintf("uid %d gid %d", p.UID, p.GID))
 	check("no capabilities and none to gain", zero(p.CapEff) && zero(p.CapPrm) && zero(p.CapBnd) && zero(p.CapInh) && zero(p.CapAmb) && p.NoNewPrivs == "1", fmt.Sprintf("CapEff %s CapPrm %s CapBnd %s CapInh %s CapAmb %s NoNewPrivs %s", p.CapEff, p.CapPrm, p.CapBnd, p.CapInh, p.CapAmb, p.NoNewPrivs))
+	// The helper's exec waits for the runtime as its parent: as the agent's user, with
+	// the agent's groups, no capability, no_new_privs, and no descriptor above 2 but the
+	// Go runtime's poller.
+	check("the helper's exec waits with nothing the agent lacks", p.Parent.problem() == "", p.Parent.problem())
+	t.Run("session.exited has the enclosure's peak memory and CPU time", func(t *testing.T) {
+		if !o.Hooks {
+			t.Skip("the adapter does not bind the hook socket into the enclosure on this machine, so the measure does not reach the session")
+		}
+		if !p.CgroupV2 {
+			Skip(t, "the enclosure has no cgroup v2 with a cgroup namespace: /sys/fs/cgroup/memory.max does not exist inside")
+		}
+		var exited map[string]any
+		for _, e := range r.events {
+			if e["type"] == "dev.qory.session.exited" {
+				exited, _ = e["data"].(map[string]any)
+			}
+		}
+		peak, _ := exited["peak_memory_bytes"].(float64)
+		cpu, _ := exited["cpu_time_ms"].(float64)
+		if peak <= 0 || cpu <= 0 {
+			t.Errorf("session.exited %v; want peak_memory_bytes and cpu_time_ms above 0", exited)
+		}
+	})
 	if !o.Docker {
 		check("no container runtime socket", len(p.Sockets) == 0, p.Sockets)
 	} else {
@@ -573,6 +598,7 @@ func Run(t *testing.T, o Options) {
 	setupRemoved(t, o, origin, outside)
 	setupRemovedAfterSession(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
+	terminal(t, o, origin, outside)
 
 	t.Run("the terminal crosses and a named host on this machine is reached", func(t *testing.T) {
 		origin.named = true
@@ -1444,6 +1470,12 @@ type variant struct {
 	readOnly bool
 	// server, when set, is the gateway's control plane.
 	server *gateway.Server
+	// mode is the helper's mode the runtime runs in; empty for the probe.
+	mode string
+	// stdin, when set, is the session's standard input in place of an empty one, and
+	// stdout gets the session's standard output too.
+	stdin  io.Reader
+	stdout io.Writer
 }
 
 // run runs the probe as the runtime of a session behind the wall and reads what it
@@ -1463,6 +1495,16 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	dir, runs := t.TempDir(), filepath.Join(t.TempDir(), "runs")
 	var out, errs, reports bytes.Buffer
 	var reportsMu sync.Mutex
+	mode, stdin, stdout := modeProbe, io.Reader(strings.NewReader("")), io.Writer(&out)
+	if v.mode != "" {
+		mode = v.mode
+	}
+	if v.stdin != nil {
+		stdin = v.stdin
+	}
+	if v.stdout != nil {
+		stdout = io.MultiWriter(&out, v.stdout)
+	}
 	// The settings the launch passes lie outside the workspace, which a walled run
 	// writes: the session refuses a file in it.
 	settings := filepath.Join(t.TempDir(), "launch-settings.json")
@@ -1573,12 +1615,12 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		SessionSpec: session.SessionSpec{
 			Runtime:           rt,
 			Command:           o.Probe,
-			Args:              []string{modeProbe, "--settings", settings},
+			Args:              []string{mode, "--settings", settings},
 			Env:               env,
 			Dir:               dir,
 			Interactive:       interactive,
-			Stdin:             strings.NewReader(""),
-			Stdout:            &out,
+			Stdin:             stdin,
+			Stdout:            stdout,
 			Stderr:            &errs,
 			Forwarder:         o.Forwarder,
 			Exec:              o.Exec,
