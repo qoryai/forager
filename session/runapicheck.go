@@ -21,7 +21,7 @@ import (
 )
 
 // RunAPIRequest is one POST to the run API that a program behind the wall sent, as
-// [OpenSpec.RunAPICheck] gets it.
+// [Run.SetRunAPICheck] gets it.
 type RunAPIRequest struct {
 	// Path is the path after /v1/runs/<run id>, each segment decoded and escaped again,
 	// as the gateway's route reads it: /artifacts for a push of artifacts, /verdict for
@@ -35,7 +35,7 @@ type RunAPIRequest struct {
 	Body []byte
 }
 
-// RunAPIRefusal is the reply that [OpenSpec.RunAPICheck] returns for a POST that does
+// RunAPIRefusal is the reply that [Run.SetRunAPICheck] returns for a POST that does
 // not go on. The forwarder writes it to the program with Status, 400 to 499, and a JSON
 // body in the shape of the gateway's run API errors:
 // {"error":Code,"message":Message,"findings":Findings}, without "findings" when
@@ -47,7 +47,77 @@ type RunAPIRefusal struct {
 	Findings []string
 }
 
-// The waits of a check of [OpenSpec.RunAPICheck].
+// SetRunAPICheck sets check, which checks each POST to the run API that a program behind
+// the wall sends, the agent's or a setup command's, before anything of it reaches the
+// gateway: a POST to run-api.qory.invalid under /v1/runs/<run id>/, such as a push of
+// artifacts. Call it after [Open], when the caller knows whether the run has checks, and
+// before [Run.Setup] and the first [Run.Join]. Without the call, the run's forwarder
+// passes every connection through the wall as it arrives, byte for byte.
+//
+// The run's forwarder reads the POST whole, as the gateway's route does, then calls
+// check. When it returns nil, nil, the forwarder sends the POST on, the bytes check got
+// with Connection: close added to the head, and the gateway's route checks it as any
+// other. A [RunAPIRefusal] goes to the program instead, with its Status, and nothing
+// reaches the gateway. An error, a panic, which is a Report line, a refusal with no
+// Code, a Status of 407 or outside 400 to 499, or a call that outlasts its context gets
+// a 503, {"error":"push_check_unavailable",...}, and nothing reaches the gateway either.
+// The context ends after 90 seconds or when the run closes. Return when ctx ends: the
+// forwarder reads and checks one POST of the run at a time and takes the next one once
+// the context ends, so a check that ignores ctx may still run beside the next POST's
+// check. A POST that waits 90 seconds for its turn gets the 503 too.
+//
+// With the check set, the forwarder passes one request per connection through the
+// wall, with no plain-HTTP keep-alive or pipelining: a CONNECT and its tunnel, or one
+// plain request and its reply, after which the connection closes and a client opens
+// another. A request's head must arrive within 10 seconds and have at most 16 KiB, 100
+// lines and 8 KiB a line; a larger one gets a 431, and one net/http does not read gets a
+// 400. The forwarder sends a plain request that it does not check as HTTP/1.1, an
+// HTTP/1.0 one among them. A POST to the run API host must reach the forwarder as
+// net/http would read it, with no doubt about its host or the end of its body: HTTP/1.1
+// to http://run-api.qory.invalid/, one Host header with that host, every line ending in
+// CRLF, no folded line, and a body of at most one Content-Length with no
+// Transfer-Encoding; any other gets a 400. A body over the path's limit, 64 KiB for
+// /verdict and 32 MiB otherwise, gets the gateway's 413 before the body is read. A POST
+// with Expect: 100-continue gets the forwarder's 100 Continue, then, once its body goes
+// on, the route's. GETs, other methods and other hosts pass unchecked.
+//
+// SetRunAPICheck may be called from any goroutine. It returns an error, and changes
+// nothing, when check is nil; the run has no wall or no control plane; the run is
+// closed or closing; the check is set already; [Run.Setup] started; a session joined;
+// another call of the run is running; or the run's forwarder accepted a connection,
+// whose requests it passed on unread. A connection that arrives during the call is
+// either accepted before the check is set, and the call returns that error, or after
+// it, and every request on it is checked.
+func (r *Run) SetRunAPICheck(check func(ctx context.Context, req RunAPIRequest) (*RunAPIRefusal, error)) error {
+	if check == nil {
+		return errors.New("Give SetRunAPICheck a check: a nil check checks nothing.")
+	}
+	if r.open.Wall == nil {
+		return errors.New("Open the run with a wall to check its run API: the check runs in the run's forwarder behind the wall.")
+	}
+	if r.answer.RunAPI == "" {
+		return errors.New("Open the run at a gateway with a control plane to check its run API: the run has no run API.")
+	}
+	if !r.joining.TryLock() {
+		return errors.New("Call SetRunAPICheck before Setup and the first Join: another call of the run is running.")
+	}
+	defer r.joining.Unlock()
+	switch {
+	case r.closed || r.wallFwd == nil:
+		return errors.New("Open another run to check its run API: the run is closed.")
+	case r.ending.Load() || r.closing.Err() != nil:
+		return errors.New("Open another run to check its run API: the run is closing.")
+	case r.setupFirst > 0:
+		return fmt.Errorf("Call SetRunAPICheck before Setup: the setup ran in steps %d to %d.", r.setupFirst, r.setupLast)
+	case r.numbered > 0:
+		return fmt.Errorf("Call SetRunAPICheck before the first Join: session %d joined the run.", r.numbered)
+	case r.maybeJoined || r.joinAsked.Load():
+		return errors.New("Call SetRunAPICheck before the first Join: a join of the run reached the gateway.")
+	}
+	return r.wallFwd.setCheck(&runAPICheck{check: check, runID: r.id, done: r.closing, report: r.open.Report})
+}
+
+// The waits of a check of [Run.SetRunAPICheck].
 const (
 	// runAPICheckWait is how long one call of the check has.
 	runAPICheckWait = 90 * time.Second

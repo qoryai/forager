@@ -18,7 +18,7 @@ import (
 )
 
 // The tests of this file pin the walled forwarder with the run's check of its run API,
-// OpenSpec.RunAPICheck: what goes on, what the program gets, and what never reaches the
+// Run.SetRunAPICheck: what goes on, what the program gets, and what never reaches the
 // gateway's proxy.
 
 const (
@@ -497,23 +497,25 @@ func TestTheCheckTakesOneRequestAConnection(t *testing.T) {
 }
 
 // TestTheWalledForwarderWithoutACheckPassesBytesAsTheyCome pins a walled forwarder with no
-// check, on one machine and behind a separate gateway: a connection that carries a POST
-// to the run API and a GET after it, kept alive, reaches the proxy byte for byte, after
-// the relay's preamble.
+// check set, as the run opens it on one machine and behind a separate gateway: a
+// connection that carries a POST to the run API, a GET whose head is over the checked
+// forwarder's limits, and a chunked POST, kept alive, reaches the proxy byte for byte,
+// after the relay's preamble.
 func TestTheWalledForwarderWithoutACheckPassesBytesAsTheyCome(t *testing.T) {
 	sent := post(checkTarget("/artifacts"), `{"artifacts":[]}`) +
-		"GET " + checkTarget("/work-item") + " HTTP/1.1\r\nHost: " + link.RunAPIHost + "\r\n\r\n" +
+		"GET " + checkTarget("/work-item") + " HTTP/1.1\r\nHost: " + link.RunAPIHost + "\r\nX-Large: " + strings.Repeat("a", 2*maxProxyLine) + "\r\n\r\n" +
 		"POST " + checkTarget("/artifacts") + " HTTP/1.1\r\nHost: " + link.RunAPIHost + "\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
 	for name, way := range map[string]struct {
-		secret, hop string
-		relayed     string
+		way     forwarding
+		relayed string
 	}{
-		"one machine":        {"", "", link.RelayLine(checkSecret)},
-		"a separate gateway": {checkSecret, checkHop, link.RelayLine(checkHop)},
+		"one machine":        {forwarding{checkRelay: checkSecret}, link.RelayLine(checkSecret)},
+		"a separate gateway": {forwarding{secret: checkSecret, hop: checkHop}, link.RelayLine(checkHop)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			u := startUpstream(t)
-			f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(u.ln.Addr().String()), secret: way.secret, hop: way.hop})
+			way.way.dial = dialTCP(u.ln.Addr().String())
+			f, err := listenForwarding("127.0.0.1:0", way.way)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -541,19 +543,21 @@ func TestTheWalledForwarderWithoutACheckPassesBytesAsTheyCome(t *testing.T) {
 	}
 }
 
-// TestTheCheckOnOneMachineTakesTheRelaysPreamble pins the walled forwarder on one machine
-// with a check: a connection without the relay's preamble and the run's proxy secret
-// closes with nothing sent on, and one with them reaches the proxy after the same
-// preamble.
+// TestTheCheckOnOneMachineTakesTheRelaysPreamble pins the walled forwarder on one machine,
+// as the run opens it, once setCheck set the check: a connection without the relay's
+// preamble and the run's proxy secret closes with nothing sent on, and one with them
+// reaches the proxy after the same preamble.
 func TestTheCheckOnOneMachineTakesTheRelaysPreamble(t *testing.T) {
 	p := startProxyStandIn(t, checkSecret, nil)
 	k := &checkCalls{}
-	f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(p.Addr().String()), secret: checkSecret, hop: checkSecret,
-		check: &runAPICheck{check: k.check, runID: checkRunID}})
+	f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(p.Addr().String()), checkRelay: checkSecret})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
+	if err := f.setCheck(&runAPICheck{check: k.check, runID: checkRunID}); err != nil {
+		t.Fatal(err)
+	}
 	what := post(checkTarget("/artifacts"), "{}")
 	send := func(preamble string) string {
 		c, err := net.Dial("tcp", f.Addr())
@@ -755,5 +759,115 @@ func TestTheCheckWritesAReplyToAHeadItCannotPass(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if opened, _ := u.seen(); opened != 0 {
 		t.Errorf("the proxy got %d connections", opened)
+	}
+}
+
+// TestAConnectionDuringSetCheckIsRefusedOrChecked pins setCheck against connections that
+// arrive while it runs, on a forwarder as the run opens it on one machine: either the call
+// fails, as a connection was accepted before it, or every request of every connection is
+// checked, so each POST to the run API gets the check's refusal and nothing reaches the
+// proxy. Run it with -race.
+func TestAConnectionDuringSetCheckIsRefusedOrChecked(t *testing.T) {
+	const conns = 4
+	what := post(checkTarget("/artifacts"), "{}")
+	var refused, checked int
+	for n := range 40 {
+		u := startUpstream(t)
+		k := &checkCalls{answer: func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
+			return &RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the checks."}, nil
+		}}
+		f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(u.ln.Addr().String()), checkRelay: checkSecret})
+		if err != nil {
+			t.Fatal(err)
+		}
+		outs := make([]string, conns)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := range conns {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer c.Close()
+				io.WriteString(c, link.RelayLine(checkSecret)+what)
+				c.(*net.TCPConn).CloseWrite()
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				b, _ := io.ReadAll(c)
+				outs[i] = string(b)
+			}()
+		}
+		close(start)
+		// The waits differ, so some calls come before the first connection and some
+		// after it.
+		time.Sleep(time.Duration(n%10) * 100 * time.Microsecond)
+		err = f.setCheck(&runAPICheck{check: k.check, runID: checkRunID})
+		wg.Wait()
+		f.Close()
+		if err != nil {
+			if !errors.Is(err, errCheckAccepted) {
+				t.Fatalf("setCheck returned %v", err)
+			}
+			refused++
+			continue
+		}
+		checked++
+		if opened, received := u.seen(); opened != 0 {
+			t.Fatalf("with the check set, the proxy got %d connections: %q", opened, received)
+		}
+		for _, out := range outs {
+			if !strings.HasPrefix(out, "HTTP/1.1 422 Unprocessable Entity\r\n") {
+				t.Fatalf("with the check set, a connection got %q", out)
+			}
+		}
+		if n := len(k.got()); n != conns {
+			t.Fatalf("the check ran %d times, want %d", n, conns)
+		}
+	}
+	t.Logf("setCheck failed %d times and checked every connection %d times", refused, checked)
+}
+
+// TestSetCheckIsRefusedOnceTheForwarderAcceptedAConnection pins that setCheck fails after
+// the forwarder accepted a connection, even one that sent nothing, and after the close,
+// and that a check passed to listenForwarding counts as set.
+func TestSetCheckIsRefusedOnceTheForwarderAcceptedAConnection(t *testing.T) {
+	u := startUpstream(t)
+	k := &runAPICheck{check: (&checkCalls{}).check, runID: checkRunID}
+	f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(u.ln.Addr().String()), checkRelay: checkSecret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp", f.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		f.mu.Lock()
+		accepted := f.accepted
+		f.mu.Unlock()
+		if accepted {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the forwarder accepted no connection")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := f.setCheck(k); !errors.Is(err, errCheckAccepted) {
+		t.Errorf("after a connection: %v", err)
+	}
+	f.Close()
+	if err := f.setCheck(k); !errors.Is(err, errCheckClosed) {
+		t.Errorf("after the close: %v", err)
+	}
+	g := checkedForwarder(t, u.ln.Addr().String(), k)
+	if err := g.setCheck(k); !errors.Is(err, errCheckSet) {
+		t.Errorf("with a check set: %v", err)
 	}
 }

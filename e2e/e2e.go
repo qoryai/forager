@@ -1444,7 +1444,8 @@ type variant struct {
 	readOnly bool
 	// server, when set, is the gateway's control plane.
 	server *gateway.Server
-	// runAPICheck, when set, is OpenSpec.RunAPICheck.
+	// runAPICheck, when set, is the check that the run sets with
+	// (*session.Run).SetRunAPICheck after the open.
 	runAPICheck func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error)
 }
 
@@ -1571,7 +1572,6 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		RunID:          v.runID,
 		ForagerVersion: "walltest",
 		Report:         report,
-		RunAPICheck:    v.runAPICheck,
 	},
 		SessionSpec: session.SessionSpec{
 			Runtime:           rt,
@@ -1589,6 +1589,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			WorkspaceReadOnly: v.readOnly,
 		},
 		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup, removeSetup: v.removeSetup, opened: v.opened,
+		runAPICheck: v.runAPICheck,
 	}
 	if v.afterSession != nil {
 		spec.afterSession = func(r *session.Run) { v.afterSession(r, dir) }

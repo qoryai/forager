@@ -171,12 +171,12 @@ func startRunAPIControl(t *testing.T) *gateway.Server {
 }
 
 // runAPIThroughTheWall checks the run API from inside the enclosure, with no key in it,
-// in a run whose OpenSpec.RunAPICheck returns a refusal for a POST of artifacts: a
-// walled run reaches a fake control plane at QORY_RUN_API through the proxy; a request
-// outside the five shapes and another run's get 404; a file ends cleanly when its bytes
-// match its digest and in a read error when they do not; the POST gets the check's 422
-// and never reaches the gateway; no tunnel opens to the host; and the record has the
-// requests.
+// in a run whose check, set with Run.SetRunAPICheck after the open, returns a refusal
+// for a POST of artifacts: a walled run reaches a fake control plane at QORY_RUN_API
+// through the proxy; a request outside the five shapes and another run's get 404; a
+// file ends cleanly when its bytes match its digest and in a read error when they do
+// not; the POST gets the check's 422 and never reaches the gateway; no tunnel opens to
+// the host; and the record has the requests.
 func runAPIThroughTheWall(t *testing.T, o Options, h hosts, outside string) {
 	t.Run("the run API is reached from inside the wall", func(t *testing.T) {
 		runID := event.NewRunID()

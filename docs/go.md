@@ -580,12 +580,13 @@ and answer. A file streams, so it takes no budget.
 
 #### Check a push before it leaves the wall
 
-Set `OpenSpec.RunAPICheck` to check each POST that a program behind the wall sends to the
+Call `Run.SetRunAPICheck` to check each POST that a program behind the wall sends to the
 run API, the agent's or a setup command's, before anything of it reaches the gateway.
-The program gets a refusal at once, and can correct its push:
+The program gets a refusal at once, and can correct its push. Call it after `Open`, once
+you know whether the run has checks, and before `Setup` and the first `Join`:
 
 ```go
-spec.RunAPICheck = func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error) {
+err := run.SetRunAPICheck(func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error) {
 	if req.Path != "/artifacts" {
 		return nil, nil
 	}
@@ -598,8 +599,18 @@ spec.RunAPICheck = func(ctx context.Context, req session.RunAPIRequest) (*sessio
 			Message: "Fix the findings, then push again.", Findings: findings}, nil
 	}
 	return nil, nil
-}
+})
 ```
+
+If you do not call it, the run's forwarder passes every connection through the wall as
+it arrives, byte for byte, with keep-alive, and no request gets a `400` or `431` from
+the forwarder. The call returns an error, and changes nothing, when the check is nil;
+the run has no wall or no control plane; the run is closed or closing; the check is set
+already; `Setup` started; a session joined; another call of the run is running; or the
+forwarder accepted a connection before the call, since it passed that connection's
+requests on unread. A connection that arrives during the call is either accepted before
+the check is set, and the call returns that error, or after it, and every request on it
+is checked.
 
 The run's forwarder calls the check for every POST to `run-api.qory.invalid` under
 `/v1/runs/<run id>/`, with the path after the run's id, such as `/artifacts`, the

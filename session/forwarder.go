@@ -44,9 +44,10 @@ const dialWait = 10 * time.Second
 // first open with the relay's preamble and the hop secret the session gave the wall's
 // relay, which the forwarder takes off.
 //
-// Behind a wall, with the run's check of its run API ([forwarding.check]), the forwarder
-// reads each connection's one request as it does without a wall, and a POST to the run
-// API goes on only once the check returns nil, nil.
+// Behind a wall, a connection accepted after [forwarder.setCheck] set the run's check of
+// its run API is read one request at a time, as without a wall, and a POST to the run API
+// goes on only once the check returns nil, nil. A connection accepted without the check
+// passes on as it is.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
 // environment only as that password, in the unwalled agent's proxy URL.
@@ -64,7 +65,12 @@ type forwarder struct {
 	// one that has waited longest first; at most [maxWaiting].
 	waiting []net.Conn
 	closed  bool
-	wg      sync.WaitGroup
+	// check is the run's check of its run API, nil until [forwarder.setCheck] sets it,
+	// and accepted is true once the forwarder accepted a connection. Each connection is
+	// served with the check set when it was accepted.
+	check    *runAPICheck
+	accepted bool
+	wg       sync.WaitGroup
 }
 
 // maxWaiting is the most connections a forwarder holds at once that are yet to show
@@ -97,8 +103,14 @@ type forwarding struct {
 	// The forwarder then passes one request per connection, as with the password: a
 	// CONNECT and its tunnel, a POST to the run API, which goes on as sent only once the
 	// check returns nil, nil, or any other plain request and its reply. Nil passes on
-	// what arrives as it is.
+	// what arrives as it is. [listenForwarding] sets it as [forwarder.setCheck] does.
 	check *runAPICheck
+	// checkRelay, when set, is the secret of the relay's preamble on one machine, the
+	// run's proxy secret, used for a connection with the check alone: the forwarder reads
+	// that connection's request, so it takes the preamble off as hop and writes it again
+	// toward the proxy as secret. A connection without the check passes the preamble on
+	// as it is.
+	checkRelay string
 }
 
 // listenForwarder listens on addr, host:port, and forwards to target, the gateway's
@@ -118,7 +130,7 @@ func dialTCP(target string) func(context.Context) (net.Conn, error) {
 // listenForwarding listens on addr, host:port, and forwards each connection the way
 // says.
 func listenForwarding(addr string, way forwarding) (*forwarder, error) {
-	for _, s := range []string{way.secret, way.hop, way.password} {
+	for _, s := range []string{way.secret, way.hop, way.password, way.checkRelay} {
 		if s == "" {
 			continue
 		}
@@ -130,7 +142,8 @@ func listenForwarding(addr string, way forwarding) (*forwarder, error) {
 	if err != nil {
 		return nil, err
 	}
-	f := &forwarder{ln: ln, way: way, conns: map[net.Conn]struct{}{}}
+	f := &forwarder{ln: ln, way: way, check: way.check, conns: map[net.Conn]struct{}{}}
+	f.way.check = nil
 	f.ctx, f.stop = context.WithCancel(context.Background())
 	f.wg.Add(1)
 	go f.accept()
@@ -177,20 +190,67 @@ func (f *forwarder) accept() {
 		if err != nil {
 			return
 		}
-		if !f.track(c) {
+		way, ok := f.trackAccepted(c)
+		if !ok {
 			c.Close()
 			return
 		}
-		if f.way.hop != "" || f.way.password != "" {
+		if way.hop != "" || way.password != "" {
 			f.await(c)
 		}
 		f.wg.Add(1)
 		go func() {
 			defer f.wg.Done()
 			defer f.untrack(c)
-			f.serve(c)
+			f.serve(c, way)
 		}()
 	}
+}
+
+// trackAccepted lists c, a connection the forwarder accepted, so Close ends it, and
+// returns the way to serve it: with the check set at this moment, which a later
+// [forwarder.setCheck] does not change. It is false once the forwarder is closed.
+func (f *forwarder) trackAccepted(c net.Conn) (forwarding, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return forwarding{}, false
+	}
+	f.conns[c] = struct{}{}
+	f.accepted = true
+	way := f.way
+	way.check = f.check
+	if way.check != nil && way.checkRelay != "" {
+		way.hop, way.secret = way.checkRelay, way.checkRelay
+	}
+	return way, true
+}
+
+// The errors of [forwarder.setCheck].
+var (
+	errCheckSet      = errors.New("Call SetRunAPICheck once per run: the run API check is set already.")
+	errCheckAccepted = errors.New("Call SetRunAPICheck before anything connects to the run's proxy behind the wall: " +
+		"the run's forwarder passed a connection on unread, so it cannot check that connection's requests.")
+	errCheckClosed = errors.New("Open another run to check its run API: the run's forwarder is closed.")
+)
+
+// setCheck sets k as the check of every connection the forwarder accepts from now on. It
+// fails, and sets nothing, once a check is set, once the forwarder is closed, or once it
+// accepted a connection, whose requests pass on unread. A connection that arrives during
+// the call is either accepted before it, so the call fails, or after it, with k.
+func (f *forwarder) setCheck(k *runAPICheck) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case f.closed:
+		return errCheckClosed
+	case f.check != nil:
+		return errCheckSet
+	case f.accepted:
+		return errCheckAccepted
+	}
+	f.check = k
+	return nil
 }
 
 // track lists a connection, so Close ends it; false once the forwarder is closed.
@@ -242,16 +302,17 @@ func (f *forwarder) admitLocked(c net.Conn) bool {
 }
 
 // serve copies one connection to the proxy and back, each direction until its end,
-// which it passes on as a half close.
-func (f *forwarder) serve(c net.Conn) {
-	if f.way.hop != "" {
+// which it passes on as a half close, the way that [forwarder.trackAccepted] returned for
+// it says.
+func (f *forwarder) serve(c net.Conn, way forwarding) {
+	if way.hop != "" {
 		// Nothing reaches the proxy from a connection that is not the run's relay.
 		c.SetReadDeadline(time.Now().Add(link.PreambleWait))
-		if ok, err := link.ReadRelayPreamble(c, f.way.hop); !ok || err != nil {
+		if ok, err := link.ReadRelayPreamble(c, way.hop); !ok || err != nil {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
-		if f.way.password == "" && !f.admit(c) {
+		if way.password == "" && !f.admit(c) {
 			return
 		}
 	}
@@ -263,7 +324,7 @@ func (f *forwarder) serve(c net.Conn) {
 	// the agent sends after it.
 	var checked []byte
 	var from *bufio.Reader
-	if f.way.password == "" && f.way.check != nil {
+	if way.password == "" && way.check != nil {
 		c.SetReadDeadline(time.Now().Add(f.headWait()))
 		head, rest, err := readHead(c, nil)
 		if errors.Is(err, errHeadLimits) {
@@ -283,7 +344,7 @@ func (f *forwarder) serve(c net.Conn) {
 		case connectHead(head):
 			src = io.MultiReader(bytes.NewReader(closingHead(head)), rest)
 		case forRunAPIPost(head):
-			if checked, from = f.way.check.pass(f.ctx, c, head, rest), rest; checked == nil {
+			if checked, from = way.check.pass(f.ctx, c, head, rest), rest; checked == nil {
 				return
 			}
 		default:
@@ -293,10 +354,10 @@ func (f *forwarder) serve(c net.Conn) {
 			}
 		}
 	}
-	if f.way.password != "" {
+	if way.password != "" {
 		// Nothing reaches the proxy from a connection that is not the run's agent.
 		c.SetReadDeadline(time.Now().Add(f.headWait()))
-		head, rest, ok := readProxyLogin(c, f.way.password)
+		head, rest, ok := readProxyLogin(c, way.password)
 		if !ok {
 			return
 		}
@@ -319,7 +380,7 @@ func (f *forwarder) serve(c net.Conn) {
 		}
 	}
 	ctx, cancel := context.WithTimeout(f.ctx, dialWait)
-	up, err := f.way.dial(ctx)
+	up, err := way.dial(ctx)
 	cancel()
 	if err != nil {
 		return
@@ -329,9 +390,9 @@ func (f *forwarder) serve(c net.Conn) {
 		return
 	}
 	defer f.untrack(up)
-	if f.way.secret != "" {
+	if way.secret != "" {
 		up.SetWriteDeadline(time.Now().Add(link.PreambleWait))
-		if _, err := io.WriteString(up, link.RelayLine(f.way.secret)); err != nil {
+		if _, err := io.WriteString(up, link.RelayLine(way.secret)); err != nil {
 			return
 		}
 		up.SetWriteDeadline(time.Time{})
@@ -347,7 +408,7 @@ func (f *forwarder) serve(c net.Conn) {
 		})
 		return
 	}
-	pipe(c, up, src, up, f.way.password != "" || f.way.check != nil)
+	pipe(c, up, src, up, way.password != "" || way.check != nil)
 }
 
 // headWait is how long a connection has to send its first request's head.

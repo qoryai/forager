@@ -4318,7 +4318,9 @@ The gateway writes no signature, key or answer into a record or a log line.
 
 **A check before the push.** A run can check each POST to the run API from behind its
 wall before anything of it reaches the gateway: qory checks a push of artifacts against
-the run's push checks. The run's forwarder reads the POST whole, then the check lets it
+the run's push checks. The check is set after the run opens, before its setup and its
+first session; a run without one passes every connection through the wall as it
+arrives, byte for byte. The run's forwarder reads the POST whole, then the check lets it
 go on or returns a refusal, which the program that sent the POST gets at once:
 
 | Status | `error` | When |
