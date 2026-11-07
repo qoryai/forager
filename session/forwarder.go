@@ -30,8 +30,9 @@ const dialWait = 10 * time.Second
 
 // forwarder is the run's own listener on this machine: every connection it accepts it
 // copies, byte for byte, to the gateway's proxy. Without a wall it opens each with the
-// relay's preamble and the run's proxy secret first; behind a wall the wall's relay
-// writes the preamble itself, and the forwarder passes on what arrives as it is.
+// relay's preamble and the run's proxy secret first; behind a wall on one machine the
+// wall's relay writes that preamble itself, and the forwarder checks it, writes the same
+// preamble on, and passes on what follows as it arrives.
 // Without a wall, on one machine as behind a separate gateway, the first request of
 // every connection must carry the password of the agent's proxy URL, a secret the
 // session made for this run's forwarder alone, which the forwarder takes off; the
@@ -44,10 +45,10 @@ const dialWait = 10 * time.Second
 // first open with the relay's preamble and the hop secret the session gave the wall's
 // relay, which the forwarder takes off.
 //
-// Behind a wall, a connection accepted after [forwarder.setCheck] set the run's check of
-// its run API is read one request at a time, as without a wall, and a POST to the run API
-// goes on only once the check returns nil, nil. A connection accepted without the check
-// passes on as it is.
+// Behind a wall, a connection that shows the relay's preamble after [forwarder.setCheck]
+// set the run's check of its run API is read one request at a time, as without a wall,
+// and a POST to the run API goes on only once the check returns nil, nil. A connection
+// that shows it without the check passes on as it is, after the same preamble.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
 // environment only as that password, in the unwalled agent's proxy URL.
@@ -66,11 +67,12 @@ type forwarder struct {
 	waiting []net.Conn
 	closed  bool
 	// check is the run's check of its run API, nil until [forwarder.setCheck] sets it,
-	// and accepted is true once the forwarder accepted a connection. Each connection is
-	// served with the check set when it was accepted.
-	check    *runAPICheck
-	accepted bool
-	wg       sync.WaitGroup
+	// and shown is true once a connection showed the relay's hop or preamble, or, on a
+	// forwarder that reads neither, once one arrived. Each connection is served with the
+	// check set when it showed them.
+	check *runAPICheck
+	shown bool
+	wg    sync.WaitGroup
 }
 
 // maxWaiting is the most connections a forwarder holds at once that are yet to show
@@ -106,10 +108,10 @@ type forwarding struct {
 	// what arrives as it is. [listenForwarding] sets it as [forwarder.setCheck] does.
 	check *runAPICheck
 	// checkRelay, when set, is the secret of the relay's preamble on one machine, the
-	// run's proxy secret, used for a connection with the check alone: the forwarder reads
-	// that connection's request, so it takes the preamble off as hop and writes it again
-	// toward the proxy as secret. A connection without the check passes the preamble on
-	// as it is.
+	// run's proxy secret: every accepted connection must open with that preamble, read
+	// within the head's wait, before anything reaches the proxy. The forwarder writes the
+	// same preamble toward the proxy again, so without the check the proxy gets the bytes
+	// the relay sent, and with it the forwarder reads the request after the preamble.
 	checkRelay string
 }
 
@@ -190,54 +192,53 @@ func (f *forwarder) accept() {
 		if err != nil {
 			return
 		}
-		way, ok := f.trackAccepted(c)
-		if !ok {
+		if !f.track(c) {
 			c.Close()
 			return
 		}
-		if way.hop != "" || way.password != "" {
+		if f.way.hop != "" || f.way.checkRelay != "" || f.way.password != "" {
 			f.await(c)
 		}
 		f.wg.Add(1)
 		go func() {
 			defer f.wg.Done()
 			defer f.untrack(c)
-			f.serve(c, way)
+			f.serve(c)
 		}()
 	}
 }
 
-// trackAccepted lists c, a connection the forwarder accepted, so Close ends it, and
+// show marks that a connection showed the relay's hop or preamble, or needs neither, and
 // returns the way to serve it: with the check set at this moment, which a later
 // [forwarder.setCheck] does not change. It is false once the forwarder is closed.
-func (f *forwarder) trackAccepted(c net.Conn) (forwarding, bool) {
+func (f *forwarder) show() (forwarding, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
 		return forwarding{}, false
 	}
-	f.conns[c] = struct{}{}
-	f.accepted = true
+	f.shown = true
 	way := f.way
 	way.check = f.check
-	if way.check != nil && way.checkRelay != "" {
-		way.hop, way.secret = way.checkRelay, way.checkRelay
+	if way.checkRelay != "" {
+		way.secret = way.checkRelay
 	}
 	return way, true
 }
 
 // The errors of [forwarder.setCheck].
 var (
-	errCheckSet      = errors.New("Call SetRunAPICheck once per run: the run API check is set already.")
-	errCheckAccepted = errors.New("Call SetRunAPICheck before anything connects to the run's proxy behind the wall: " +
-		"the run's forwarder passed a connection on unread, so it cannot check that connection's requests.")
+	errCheckSet   = errors.New("Call SetRunAPICheck once per run: the run API check is set already.")
+	errCheckShown = errors.New("Call SetRunAPICheck before the wall's relay connects to the run's proxy: " +
+		"the run's forwarder passed a connection of the relay on unread, so it cannot check that connection's requests.")
 	errCheckClosed = errors.New("Open another run to check its run API: the run's forwarder is closed.")
 )
 
-// setCheck sets k as the check of every connection the forwarder accepts from now on. It
-// fails, and sets nothing, once a check is set, once the forwarder is closed, or once it
-// accepted a connection, whose requests pass on unread. A connection that arrives during
-// the call is either accepted before it, so the call fails, or after it, with k.
+// setCheck sets k as the check of every connection that shows the relay's hop or
+// preamble from now on. It fails, and sets nothing, once a check is set, once the
+// forwarder is closed, or once a connection showed them, whose requests pass on unread.
+// A connection that shows them during the call does so either before it, so the call
+// fails, or after it, with k. A connection that shows neither changes nothing.
 func (f *forwarder) setCheck(k *runAPICheck) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -246,8 +247,8 @@ func (f *forwarder) setCheck(k *runAPICheck) error {
 		return errCheckClosed
 	case f.check != nil:
 		return errCheckSet
-	case f.accepted:
-		return errCheckAccepted
+	case f.shown:
+		return errCheckShown
 	}
 	f.check = k
 	return nil
@@ -302,19 +303,28 @@ func (f *forwarder) admitLocked(c net.Conn) bool {
 }
 
 // serve copies one connection to the proxy and back, each direction until its end,
-// which it passes on as a half close, the way that [forwarder.trackAccepted] returned for
-// it says.
-func (f *forwarder) serve(c net.Conn, way forwarding) {
-	if way.hop != "" {
+// which it passes on as a half close, the way that [forwarder.show] returns for it says.
+func (f *forwarder) serve(c net.Conn) {
+	// hop is the secret of the relay's preamble that the connection must open with:
+	// behind a separate gateway the hop, and on one machine the run's proxy secret.
+	hop, wait := f.way.hop, link.PreambleWait
+	if hop == "" && f.way.checkRelay != "" {
+		hop, wait = f.way.checkRelay, f.headWait()
+	}
+	if hop != "" {
 		// Nothing reaches the proxy from a connection that is not the run's relay.
-		c.SetReadDeadline(time.Now().Add(link.PreambleWait))
-		if ok, err := link.ReadRelayPreamble(c, way.hop); !ok || err != nil {
+		c.SetReadDeadline(time.Now().Add(wait))
+		if ok, err := link.ReadRelayPreamble(c, hop); !ok || err != nil {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
-		if way.password == "" && !f.admit(c) {
+		if f.way.password == "" && !f.admit(c) {
 			return
 		}
+	}
+	way, ok := f.show()
+	if !ok {
+		return
 	}
 	var src io.Reader = c
 	// plain is the one plain request of a connection the password let in, or of a

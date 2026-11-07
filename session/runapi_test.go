@@ -773,7 +773,7 @@ func TestSetRunAPICheckIsRefusedWhenItCannotCheckEveryRequest(t *testing.T) {
 		if out := relayed(t, addr, token, get); !strings.HasPrefix(out, "HTTP/1.1 200 OK\r\n") {
 			t.Fatalf("the early request got %q", out)
 		}
-		refused(t, r.SetRunAPICheck(pass), "Call SetRunAPICheck before anything connects to the run's proxy")
+		refused(t, r.SetRunAPICheck(pass), "Call SetRunAPICheck before the wall's relay connects to the run's proxy")
 		// The forwarder is as it was: a request after the call passes unread, kept alive.
 		target := link.RunAPIURL(r.ID()) + "/artifacts"
 		out := relayed(t, addr, token, fmt.Sprintf("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 2\r\n\r\n{}", target, link.RunAPIHost)+get)
@@ -781,6 +781,32 @@ func TestSetRunAPICheckIsRefusedWhenItCannotCheckEveryRequest(t *testing.T) {
 			t.Errorf("the requests after the call got %q", out)
 		}
 		if got := g.Proxied(); !slices.Contains(got, "POST "+target) {
+			t.Errorf("the proxy got %q", got)
+		}
+	})
+	t.Run("after stray connections, the call succeeds", func(t *testing.T) {
+		r, _, g := open(t, &setupWall{}, false)
+		addr, token := r.WallProxy()
+		silent, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer silent.Close()
+		if out := relayed(t, addr, token+"x", "GET http://api.example/stray HTTP/1.1\r\nHost: api.example\r\n\r\n"); out != "" {
+			t.Errorf("the wrong preamble got %q", out)
+		}
+		refuse := func(context.Context, session.RunAPIRequest) (*session.RunAPIRefusal, error) {
+			return &session.RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the checks."}, nil
+		}
+		if err := r.SetRunAPICheck(refuse); err != nil {
+			t.Fatal(err)
+		}
+		target := link.RunAPIURL(r.ID()) + "/artifacts"
+		out := relayed(t, addr, token, fmt.Sprintf("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 2\r\n\r\n{}", target, link.RunAPIHost))
+		if !strings.HasPrefix(out, "HTTP/1.1 422 Unprocessable Entity\r\n") {
+			t.Errorf("the POST after the call got %q", out)
+		}
+		if got := g.Proxied(); slices.Contains(got, "POST "+target) || slices.Contains(got, "GET http://api.example/stray") {
 			t.Errorf("the proxy got %q", got)
 		}
 	})
@@ -804,5 +830,92 @@ func TestSetRunAPICheckIsRefusedWhenItCannotCheckEveryRequest(t *testing.T) {
 			t.Fatal(err)
 		}
 		refused(t, r.SetRunAPICheck(pass), "Open another run to check its run API")
+	})
+}
+
+// TestSetRunAPICheckBesideSetupJoinAndClose pins Run.SetRunAPICheck called while a Setup,
+// a Join or a Close of the run begins, from another goroutine: either the call fails, or
+// a POST to the run API through the run's forwarder after the Setup or the Join is
+// checked; and the Close never fails because of the call. Run it with -race.
+func TestSetRunAPICheckBesideSetupJoinAndClose(t *testing.T) {
+	ctx := context.Background()
+	refuse := func(context.Context, session.RunAPIRequest) (*session.RunAPIRefusal, error) {
+		return &session.RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the checks."}, nil
+	}
+	// beside opens a walled run with a control plane, runs the call and other at once,
+	// and returns the run, its gateway, the call's error and other's.
+	beside := func(t *testing.T, other func(*session.Run, runSpec) error) (*session.Run, *linktest.Fake, error, error) {
+		t.Helper()
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		hasRunAPI(g)
+		sp.Wall, sp.Image = &setupWall{}, "example.com/agent:1"
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { r.Close(ctx, session.Outcome{State: event.StateCancelled}) })
+		start := make(chan struct{})
+		var callErr, otherErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; callErr = r.SetRunAPICheck(refuse) }()
+		go func() { defer wg.Done(); <-start; otherErr = other(r, sp) }()
+		close(start)
+		wg.Wait()
+		return r, g, callErr, otherErr
+	}
+	// checked sends a POST to the run API through the run's forwarder and reports whether
+	// the check refused it, as the call succeeded, or it reached the proxy, as it failed.
+	checked := func(t *testing.T, r *session.Run, g *linktest.Fake, callErr error, fix string) {
+		t.Helper()
+		addr, token := r.WallProxy()
+		target := link.RunAPIURL(r.ID()) + "/artifacts"
+		out := relayed(t, addr, token, fmt.Sprintf("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}", target, link.RunAPIHost))
+		reached := slices.Contains(g.Proxied(), "POST "+target)
+		switch {
+		case callErr == nil && (reached || !strings.HasPrefix(out, "HTTP/1.1 422 ")):
+			t.Errorf("the call succeeded, and the POST got %q, reaching the proxy %v", out, reached)
+		case callErr != nil && !strings.HasPrefix(callErr.Error(), fix):
+			t.Errorf("the call returned %v, want an error that starts %q", callErr, fix)
+		case callErr != nil && !reached:
+			t.Errorf("the call failed, and the POST got %q without reaching the proxy", out)
+		}
+	}
+	t.Run("Setup", func(t *testing.T) {
+		for range 6 {
+			r, g, callErr, err := beside(t, func(r *session.Run, sp runSpec) error {
+				return r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			checked(t, r, g, callErr, "Call SetRunAPICheck before Setup")
+		}
+	})
+	t.Run("Join", func(t *testing.T) {
+		for range 2 {
+			r, g, callErr, err := beside(t, func(r *session.Run, sp runSpec) error {
+				_, err := r.Join(ctx, sp.SessionSpec)
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			checked(t, r, g, callErr, "Call SetRunAPICheck before the first Join")
+		}
+	})
+	t.Run("Close", func(t *testing.T) {
+		for range 10 {
+			_, _, callErr, err := beside(t, func(r *session.Run, _ runSpec) error {
+				_, err := r.Close(ctx, session.Outcome{State: event.StateCancelled})
+				return err
+			})
+			if err != nil {
+				t.Fatalf("the close returned %v", err)
+			}
+			if callErr != nil && !strings.HasPrefix(callErr.Error(), "Open another run to check its run API") {
+				t.Errorf("the call returned %v", callErr)
+			}
+		}
 	})
 }

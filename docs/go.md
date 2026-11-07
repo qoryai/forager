@@ -602,15 +602,20 @@ err := run.SetRunAPICheck(func(ctx context.Context, req session.RunAPIRequest) (
 })
 ```
 
-If you do not call it, the run's forwarder passes every connection through the wall as
-it arrives, byte for byte, with keep-alive, and no request gets a `400` or `431` from
-the forwarder. The call returns an error, and changes nothing, when the check is nil;
-the run has no wall or no control plane; the run is closed or closing; the check is set
-already; `Setup` started; a session joined; another call of the run is running; or the
-forwarder accepted a connection before the call, since it passed that connection's
-requests on unread. A connection that arrives during the call is either accepted before
-the check is set, and the call returns that error, or after it, and every request on it
-is checked.
+If you do not call it, the run's forwarder passes every connection of the wall's relay
+through the wall as it arrives, byte for byte, with keep-alive, and no request gets a
+`400` or `431` from the forwarder. The call returns an error, and changes nothing, when
+the check is nil; the run has no wall or no control plane; the run is closed or closing;
+the check is set already; `Setup` or a `Join` passed its checks; or a connection with
+the relay's preamble reached the forwarder before the call, since the forwarder passed
+that connection's requests on unread. A connection without the preamble is closed and
+changes nothing. A connection that shows the preamble during the call shows it either
+before the check is set, and the call returns that error, or after it, and every
+request on it is checked. You may call it beside `Setup`, `Join` or `Close`: whichever
+begins first wins, and `Close` waits for the call.
+
+Close the run when `SetRunAPICheck` returns an error for a run that needs the check: the
+run would otherwise carry its programs' POSTs to the run API unchecked.
 
 The run's forwarder calls the check for every POST to `run-api.qory.invalid` under
 `/v1/runs/<run id>/`, with the path after the run's id, such as `/artifacts`, the

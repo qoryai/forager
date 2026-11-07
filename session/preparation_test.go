@@ -148,7 +148,9 @@ func steps(t *testing.T, evs []map[string]any) []*step {
 // session.started has the commands' names and the script as its command.
 func TestSetupCommandsRunBeforeTheRuntime(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_PREPARATION_URL=http://api.example/prepare")
-	sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
+	// The setup commands reach the run's forwarder through a relay, which opens each
+	// connection with the run's proxy secret, as the wall's relay does.
+	sp.Wall, sp.Image, sp.Mounts = &relayWall{}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	sp.Forwarder = nil
 	sp.Command, sp.Args = "/bin/sh", []string{"-c", `cp prepared.json runtime-saw.json && cat > runtime-input; exit 5`}
 	sp.Stdin = strings.NewReader("for the runtime\n")
@@ -188,7 +190,7 @@ func TestSetupCommandsRunBeforeTheRuntime(t *testing.T) {
 	if in, _ := os.ReadFile(filepath.Join(sp.Dir, "runtime-input")); string(in) != "for the runtime\n" {
 		t.Errorf("the runtime's input %q", in)
 	}
-	if got := g.Proxied(); len(got) == 0 || !strings.HasPrefix(got[0], "GET http://api.example/prepare ") {
+	if got := g.Proxied(); len(got) == 0 || got[0] != "GET http://api.example/prepare" {
 		t.Errorf("the gateway's proxy saw %q", got)
 	}
 	evs := events(t, res)

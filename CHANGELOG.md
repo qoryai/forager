@@ -1444,8 +1444,11 @@ release may change what an existing document does, and says so under Upgrading.
 - `(*session.Run).SetRunAPICheck`, `session.RunAPIRequest` and `session.RunAPIRefusal`:
   a check of each POST that a walled program sends to the run API, before anything of it
   reaches the gateway. Call `SetRunAPICheck` after `Open` and before `Setup` and the
-  first `Join`; it returns an error once the run's forwarder accepted a connection,
-  `Setup` started or a session joined, and for a run with no wall or no control plane.
+  first `Join`; it returns an error once a connection with the wall relay's preamble
+  reached the run's forwarder, or `Setup` or a `Join` passed its checks, and for a run
+  with no wall or no control plane. Close the run when it returns an error: the run
+  would otherwise carry POSTs to the run API unchecked. A `Close` during the call waits
+  for it.
   The run's forwarder reads the POST whole and calls the check. On `nil, nil` it sends
   the POST on as the program sent it, with `Connection: close` added to the head. A
   refusal with a code and a status from 400 to 499 other than 407 goes to the program in
@@ -1919,6 +1922,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- On one machine, the walled run's forwarder closes a connection that does not open
+  with the relay's preamble and the run's proxy secret within 10 seconds, as it does
+  behind a separate gateway, and writes the same preamble on toward the proxy. Before,
+  it passed every connection on as it arrived.
 - A variable the runtime's preparation sets is in the launch's environment once: the
   harness's computed value of the name is left out. Before, both were in it, and the
   preparation's, the later one, applied.

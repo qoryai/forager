@@ -95,6 +95,11 @@ type Run struct {
 	// ending is true once Close began: [Run.RunAPI] reads it without the joining lock,
 	// which a Join holds.
 	ending atomic.Bool
+	// checkMu orders [Run.SetRunAPICheck] against Setup, Join and Close without the
+	// joining lock, which a Join holds while its session runs: each sets checkShut
+	// under it as it begins, and SetRunAPICheck returns checkShut once it is set.
+	checkMu   sync.Mutex
+	checkShut error
 	// keptBy is the number of the session whose wall's removal failed, 0 for none:
 	// its entry among the walled runs still going stays, and no session joins after it.
 	keptBy         int
@@ -831,6 +836,7 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 		out.Reason, out.ExitCode = event.ReasonNoSession, -1
 	}
 	r.closed = true
+	r.shutCheck(errCheckClosedRun, true)
 	r.ending.Store(true)
 	r.hosts.closeAll()
 	r.closeEngine()

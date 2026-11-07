@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -763,15 +764,16 @@ func TestTheCheckWritesAReplyToAHeadItCannotPass(t *testing.T) {
 }
 
 // TestAConnectionDuringSetCheckIsRefusedOrChecked pins setCheck against connections that
-// arrive while it runs, on a forwarder as the run opens it on one machine: either the call
-// fails, as a connection was accepted before it, or every request of every connection is
-// checked, so each POST to the run API gets the check's refusal and nothing reaches the
-// proxy. Run it with -race.
+// show the relay's preamble while it runs, on a forwarder as the run opens it on one
+// machine: either the call fails, as a connection showed the preamble before it, or every
+// request of every connection is checked, so each POST to the run API gets the check's
+// refusal and nothing reaches the proxy. The rounds go on until both happened, at most
+// 400 of them. Run it with -race.
 func TestAConnectionDuringSetCheckIsRefusedOrChecked(t *testing.T) {
 	const conns = 4
 	what := post(checkTarget("/artifacts"), "{}")
 	var refused, checked int
-	for n := range 40 {
+	for n := 0; n < 400 && (refused == 0 || checked == 0); n++ {
 		u := startUpstream(t)
 		k := &checkCalls{answer: func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
 			return &RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the checks."}, nil
@@ -802,14 +804,14 @@ func TestAConnectionDuringSetCheckIsRefusedOrChecked(t *testing.T) {
 			}()
 		}
 		close(start)
-		// The waits differ, so some calls come before the first connection and some
-		// after it.
+		// The waits differ, so some calls come before the first preamble and some after
+		// it.
 		time.Sleep(time.Duration(n%10) * 100 * time.Microsecond)
 		err = f.setCheck(&runAPICheck{check: k.check, runID: checkRunID})
 		wg.Wait()
 		f.Close()
 		if err != nil {
-			if !errors.Is(err, errCheckAccepted) {
+			if !errors.Is(err, errCheckShown) {
 				t.Fatalf("setCheck returned %v", err)
 			}
 			refused++
@@ -828,46 +830,141 @@ func TestAConnectionDuringSetCheckIsRefusedOrChecked(t *testing.T) {
 			t.Fatalf("the check ran %d times, want %d", n, conns)
 		}
 	}
+	if refused == 0 || checked == 0 {
+		t.Fatalf("setCheck failed %d times and checked every connection %d times; want both", refused, checked)
+	}
 	t.Logf("setCheck failed %d times and checked every connection %d times", refused, checked)
 }
 
-// TestSetCheckIsRefusedOnceTheForwarderAcceptedAConnection pins that setCheck fails after
-// the forwarder accepted a connection, even one that sent nothing, and after the close,
-// and that a check passed to listenForwarding counts as set.
-func TestSetCheckIsRefusedOnceTheForwarderAcceptedAConnection(t *testing.T) {
-	u := startUpstream(t)
-	k := &runAPICheck{check: (&checkCalls{}).check, runID: checkRunID}
-	f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(u.ln.Addr().String()), checkRelay: checkSecret})
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := net.Dial("tcp", f.Addr())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+// waitShown waits until a connection showed f the relay's preamble.
+func waitShown(t *testing.T, f *forwarder) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		f.mu.Lock()
-		accepted := f.accepted
+		shown := f.shown
 		f.mu.Unlock()
-		if accepted {
-			break
+		if shown {
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("the forwarder accepted no connection")
+			t.Fatal("no connection showed the relay's preamble")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := f.setCheck(k); !errors.Is(err, errCheckAccepted) {
-		t.Errorf("after a connection: %v", err)
-	}
-	f.Close()
-	if err := f.setCheck(k); !errors.Is(err, errCheckClosed) {
-		t.Errorf("after the close: %v", err)
+}
+
+// TestSetCheckIsRefusedOnceAConnectionShowedThePreamble pins that setCheck fails after a
+// connection showed the relay's preamble, on one machine and behind a separate gateway,
+// and after the close, and that a check passed to listenForwarding counts as set.
+func TestSetCheckIsRefusedOnceAConnectionShowedThePreamble(t *testing.T) {
+	u := startUpstream(t)
+	k := &runAPICheck{check: (&checkCalls{}).check, runID: checkRunID}
+	for name, way := range map[string]struct {
+		way      forwarding
+		preamble string
+	}{
+		"one machine":        {forwarding{checkRelay: checkSecret}, link.RelayLine(checkSecret)},
+		"a separate gateway": {forwarding{secret: checkSecret, hop: checkHop}, link.RelayLine(checkHop)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			way.way.dial = dialTCP(u.ln.Addr().String())
+			f, err := listenForwarding("127.0.0.1:0", way.way)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			c, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			io.WriteString(c, way.preamble)
+			waitShown(t, f)
+			if err := f.setCheck(k); !errors.Is(err, errCheckShown) {
+				t.Errorf("after a connection showed the preamble: %v", err)
+			}
+			f.Close()
+			if err := f.setCheck(k); !errors.Is(err, errCheckClosed) {
+				t.Errorf("after the close: %v", err)
+			}
+		})
 	}
 	g := checkedForwarder(t, u.ln.Addr().String(), k)
 	if err := g.setCheck(k); !errors.Is(err, errCheckSet) {
 		t.Errorf("with a check set: %v", err)
+	}
+}
+
+// TestAStrayConnectionLeavesSetCheckFree pins that a connection without the relay's
+// preamble changes nothing, on one machine and behind a separate gateway: one that sends
+// nothing stays unread, one with another secret is closed with nothing sent on, and
+// setCheck then succeeds, so a POST of a connection with the preamble is checked.
+func TestAStrayConnectionLeavesSetCheckFree(t *testing.T) {
+	for name, way := range map[string]struct {
+		way             forwarding
+		preamble, wrong string
+	}{
+		"one machine":        {forwarding{checkRelay: checkSecret}, link.RelayLine(checkSecret), link.RelayLine(checkHop)},
+		"a separate gateway": {forwarding{secret: checkSecret, hop: checkHop}, link.RelayLine(checkHop), link.RelayLine(checkSecret)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			u := startUpstream(t)
+			way.way.dial = dialTCP(u.ln.Addr().String())
+			f, err := listenForwarding("127.0.0.1:0", way.way)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			silent, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer silent.Close()
+			wrong, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer wrong.Close()
+			io.WriteString(wrong, way.wrong+"GET http://api.example/ HTTP/1.1\r\nHost: api.example\r\n\r\n")
+			wrong.SetReadDeadline(time.Now().Add(5 * time.Second))
+			// The close may reset the connection, as the forwarder read none of the GET.
+			if b, err := io.ReadAll(wrong); len(b) != 0 || errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("the wrong preamble got %q, %v; want the connection closed", b, err)
+			}
+			// The silent connection is accepted, and waits for its preamble.
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				f.mu.Lock()
+				waiting := len(f.waiting)
+				f.mu.Unlock()
+				if waiting == 1 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("%d connections wait for their preamble, want 1", waiting)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			k := &checkCalls{answer: func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
+				return &RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the checks."}, nil
+			}}
+			if err := f.setCheck(&runAPICheck{check: k.check, runID: checkRunID}); err != nil {
+				t.Fatal(err)
+			}
+			c, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			io.WriteString(c, way.preamble+post(checkTarget("/artifacts"), "{}"))
+			c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			if b, _ := io.ReadAll(c); !strings.HasPrefix(string(b), "HTTP/1.1 422 Unprocessable Entity\r\n") {
+				t.Errorf("the POST after the call got %q", b)
+			}
+			if opened, received := u.seen(); opened != 0 {
+				t.Errorf("the proxy got %d connections: %q", opened, received)
+			}
+		})
 	}
 }

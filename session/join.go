@@ -123,6 +123,8 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The session may reach the run's forwarder from here on.
+	r.shutCheck(errCheckAfterJoin, false)
 	// The run's host proxies and its engine proxy end before the join request and the
 	// wall's start, so their passwords open nothing while the session runs. The join
 	// request closes the run's stack proxy at the gateway.

@@ -81,13 +81,18 @@ type RunAPIRefusal struct {
 // with Expect: 100-continue gets the forwarder's 100 Continue, then, once its body goes
 // on, the route's. GETs, other methods and other hosts pass unchecked.
 //
-// SetRunAPICheck may be called from any goroutine. It returns an error, and changes
-// nothing, when check is nil; the run has no wall or no control plane; the run is
-// closed or closing; the check is set already; [Run.Setup] started; a session joined;
-// another call of the run is running; or the run's forwarder accepted a connection,
-// whose requests it passed on unread. A connection that arrives during the call is
-// either accepted before the check is set, and the call returns that error, or after
-// it, and every request on it is checked.
+// SetRunAPICheck may be called from any goroutine, beside Setup, Join and Close too:
+// each of them that begins first makes the call fail, and a Close waits for a call that
+// runs. It returns an error, and changes nothing, when check is nil; the run has no wall
+// or no control plane; the run is closed or closing; the check is set already;
+// [Run.Setup] passed its checks; a [Run.Join] passed its checks; or a connection
+// reached the run's forwarder with the relay's preamble, and so passed on unread. A
+// connection that shows that preamble during the call shows it either before the check
+// is set, and the call returns that error, or after it, and every request on it is
+// checked. A connection without the preamble is closed, and changes nothing.
+//
+// Close the run when SetRunAPICheck returns an error for a run that needs the check: the
+// run would otherwise carry its programs' POSTs to the run API unchecked.
 func (r *Run) SetRunAPICheck(check func(ctx context.Context, req RunAPIRequest) (*RunAPIRefusal, error)) error {
 	if check == nil {
 		return errors.New("Give SetRunAPICheck a check: a nil check checks nothing.")
@@ -98,23 +103,33 @@ func (r *Run) SetRunAPICheck(check func(ctx context.Context, req RunAPIRequest) 
 	if r.answer.RunAPI == "" {
 		return errors.New("Open the run at a gateway with a control plane to check its run API: the run has no run API.")
 	}
-	if !r.joining.TryLock() {
-		return errors.New("Call SetRunAPICheck before Setup and the first Join: another call of the run is running.")
-	}
-	defer r.joining.Unlock()
+	r.checkMu.Lock()
+	defer r.checkMu.Unlock()
 	switch {
-	case r.closed || r.wallFwd == nil:
-		return errors.New("Open another run to check its run API: the run is closed.")
-	case r.ending.Load() || r.closing.Err() != nil:
+	case r.checkShut != nil:
+		return r.checkShut
+	case r.closing.Err() != nil:
 		return errors.New("Open another run to check its run API: the run is closing.")
-	case r.setupFirst > 0:
-		return fmt.Errorf("Call SetRunAPICheck before Setup: the setup ran in steps %d to %d.", r.setupFirst, r.setupLast)
-	case r.numbered > 0:
-		return fmt.Errorf("Call SetRunAPICheck before the first Join: session %d joined the run.", r.numbered)
-	case r.maybeJoined || r.joinAsked.Load():
-		return errors.New("Call SetRunAPICheck before the first Join: a join of the run reached the gateway.")
 	}
+	// Close writes r.wallFwd only after it set r.checkShut under r.checkMu.
 	return r.wallFwd.setCheck(&runAPICheck{check: check, runID: r.id, done: r.closing, report: r.open.Report})
+}
+
+// The errors of [Run.SetRunAPICheck] once Setup, Join or Close began.
+var (
+	errCheckAfterSetup = errors.New("Call SetRunAPICheck before Setup: the setup started.")
+	errCheckAfterJoin  = errors.New("Call SetRunAPICheck before the first Join: a session joined the run.")
+	errCheckClosedRun  = errors.New("Open another run to check its run API: the run is closed.")
+)
+
+// shutCheck makes every later [Run.SetRunAPICheck] return err, once a call that runs
+// returned. Without replace, an err set earlier stays.
+func (r *Run) shutCheck(err error, replace bool) {
+	r.checkMu.Lock()
+	defer r.checkMu.Unlock()
+	if replace || r.checkShut == nil {
+		r.checkShut = err
+	}
 }
 
 // The waits of a check of [Run.SetRunAPICheck].
