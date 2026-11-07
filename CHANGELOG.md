@@ -1968,6 +1968,14 @@ release may change what an existing document does, and says so under Upgrading.
   `TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy` with `QORY_WALL_REQUIRE`
   set, so that the test fails on a machine with none of the CA bundles. Before, it ran
   only in the e2e part job, where it skipped on such a machine and the job passed.
+- CI's nested Docker job runs on Ubuntu 26.04 as on 24.04. On Ubuntu 25.04 and later,
+  before it installs Sysbox, it adds three rules to
+  `/etc/apparmor.d/local/fusermount3`, so that AppArmor allows
+  sysbox-fs's FUSE mounts (nestybox/sysbox#947). After the install, it sets
+  `"features": {"time-namespaces": false}` in `/etc/docker/daemon.json` and restarts
+  the engine, as production's run machines do, because sysbox-runc fails under Docker
+  29.5's time namespaces (nestybox/sysbox#1011). If a step fails, the job prints
+  Sysbox's journal and the kernel's AppArmor denials.
 
 ## [0.7.0] - 2026-10-12
 

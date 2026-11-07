@@ -267,6 +267,13 @@ jobs:
             sudo apparmor_parser -r /etc/apparmor.d/fusermount3
           fi
           sudo apt-get install -y ./sysbox.deb
+          # Docker 29.5 and later start each container in a time namespace, and sysbox-runc
+          # then fails to create the container (nestybox/sysbox#1011). Production's run
+          # machines turn the feature off in the same file. The package wrote the file, so
+          # jq adds the setting to it, and the engine restarts to read it.
+          sudo sh -c 'jq ".features[\"time-namespaces\"] = false" /etc/docker/daemon.json >/etc/docker/daemon.json.new'
+          sudo mv /etc/docker/daemon.json.new /etc/docker/daemon.json
+          sudo systemctl restart docker
           docker info --format '{{json .Runtimes}}' | grep -q sysbox-runc
           # The package returns before sysbox-fs and sysbox-mgr listen, and a container
           # started before then fails. Wait up to 60 seconds for each socket. /run/sysbox
