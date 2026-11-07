@@ -608,6 +608,25 @@ func postHead(t *testing.T, r *route, length int64) net.Conn {
 	return c
 }
 
+// waitPosting waits for r's run to have its one POST slot taken, or free. The handler
+// frees the slot after it writes the answer, so a caller can have the whole of a large
+// answer while the slot is still taken. A POST in that time gets a 429, or, with a body
+// the server does not read to its end, a connection error.
+func waitPosting(t *testing.T, r *route, want bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		r.a.mu.Lock()
+		posting := r.a.posting
+		r.a.mu.Unlock()
+		if posting == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the run's POST slot: taken is %v, want %v", posting, want)
+		}
+	}
+}
+
 // postBody sends a POST of n bytes to path and returns the status, 0 for a connection
 // that ended before one.
 func postBody(t *testing.T, r *route, path string, n int) int {
@@ -687,17 +706,7 @@ func TestAFullBudgetLeavesWhatAnyRunNeeds(t *testing.T) {
 
 	silent := startRoute(t, &RunAPI{Limits: limits}, nil)
 	postHead(t, silent, maxRunAPIArtifacts)
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
-		silent.a.mu.Lock()
-		posting := silent.a.posting
-		silent.a.mu.Unlock()
-		if posting {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the head did not reach the route")
-		}
-	}
+	waitPosting(t, silent, true)
 	if got := limits.used.Load(); got != full {
 		t.Errorf("a head with no bytes costs %d bytes", got-full)
 	}
@@ -712,6 +721,7 @@ func TestAFullBudgetLeavesWhatAnyRunNeeds(t *testing.T) {
 		"a push of 1 MiB":  {"/artifacts", free},
 		"a verdict":        {"/verdict", 64 << 10},
 	} {
+		waitPosting(t, v, false)
 		if got := postBody(t, v, c.path, c.size); got != http.StatusOK {
 			t.Errorf("%s: %d", what, got)
 		}
@@ -720,6 +730,7 @@ func TestAFullBudgetLeavesWhatAnyRunNeeds(t *testing.T) {
 		t.Errorf("an answer of 1 MiB: %d", status)
 	}
 	sent := v.sent.Load()
+	waitPosting(t, v, false)
 	if got := postBody(t, v, "/artifacts", free+1<<16); got != http.StatusTooManyRequests && got != 0 {
 		t.Errorf("a larger push: %d", got)
 	}
@@ -734,6 +745,7 @@ func TestAFullBudgetLeavesWhatAnyRunNeeds(t *testing.T) {
 		c.Close()
 	}
 	waitUsed(t, limits, 0)
+	waitPosting(t, v, false)
 	if got := postBody(t, v, "/artifacts", free+1<<16); got != http.StatusOK {
 		t.Errorf("the push's retry: %d", got)
 	}
