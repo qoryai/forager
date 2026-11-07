@@ -78,7 +78,9 @@ func endedWith(t *testing.T, res *session.Result) (string, string, int) {
 
 // TestTheContextsEndWhileTheRuntimeRunsIsACancel pins Cancelled for a context that ends
 // once the runtime runs, which the session stops: on its own, and in a wall.
-// session.exited is cancelled with interrupted, with the signal that killed the runtime.
+// session.exited is cancelled with interrupted, with the signal that killed the runtime;
+// in a wall the helper's exec passes the stop signal on and exits 128 and the signal's
+// number, 143, as docker-init does.
 func TestTheContextsEndWhileTheRuntimeRunsIsACancel(t *testing.T) {
 	for name, sp := range map[string]func(t *testing.T, script string) runSpec{
 		"unwalled": shellSpec,
@@ -102,10 +104,14 @@ func TestTheContextsEndWhileTheRuntimeRunsIsACancel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !res.Cancelled || res.TimedOut || res.Signal != "SIGTERM" {
+			wantCode, wantSignal := -1, "SIGTERM"
+			if name == "walled" {
+				wantCode, wantSignal = 128+15, ""
+			}
+			if !res.Cancelled || res.TimedOut || res.Signal != wantSignal {
 				t.Errorf("result %+v", res)
 			}
-			if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "interrupted" || code != -1 {
+			if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "interrupted" || code != wantCode {
 				t.Errorf("session.exited %s %s %d", state, reason, code)
 			}
 			if res.State != "cancelled" || res.Reason != "interrupted" {

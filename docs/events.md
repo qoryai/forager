@@ -113,6 +113,17 @@ When the run ends while a session runs, that session's `dev.qory.session.exited`
 right before the run's `dev.qory.run.exited`, with the same state and reason and exit
 code -1. So every `dev.qory.session.started` has its `dev.qory.session.exited`.
 
+Behind a wall, the `dev.qory.session.exited` of a runtime that exited also has the
+enclosure's peak memory and CPU time, as measured inside the enclosure, to size machine
+types; they are not for limits or billing:
+
+- `peak_memory_bytes`, the most memory the agent's container used, in bytes;
+- `cpu_time_ms`, the CPU time it used, in milliseconds.
+
+Each is left out when it could not be read, never 0. With nested Docker they cover the
+daemon and the containers the agent starts too. See
+[the measure of the enclosure](wall.md#the-measure-of-the-enclosure).
+
 Every `dev.qory.run.log`, `dev.qory.run.resized` and `dev.qory.runtime.*` event of a
 session contains the session's number in `session`, so a reader of a run with several
 sessions can show each session's terminal and events apart. A line of the run's host

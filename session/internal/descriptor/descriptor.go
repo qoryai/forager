@@ -264,8 +264,9 @@ type Event struct {
 
 // Record is one unit of runtime output as a descriptor reads it.
 type Record struct {
-	// Source is "output" or "hooks", or "setup" for a setup command's record, which the
-	// session reads and no descriptor's rule maps.
+	// Source is "output" or "hooks"; "setup" for a setup command's record, or "measure"
+	// for the enclosure's peak memory and CPU time, which the session reads and no
+	// descriptor's rule maps.
 	Source string `json:"source"`
 	// Record is the JSON object the runtime produced, decoded with encoding/json.
 	Record map[string]any `json:"record"`
@@ -277,11 +278,12 @@ type Record struct {
 }
 
 // The sources of a record. A descriptor's rules map records of SourceOutput and
-// SourceHooks; the session reads the records of SourceSetup.
+// SourceHooks; the session reads the records of SourceSetup and SourceMeasure.
 const (
-	SourceOutput = "output"
-	SourceHooks  = "hooks"
-	SourceSetup  = "setup"
+	SourceOutput  = "output"
+	SourceHooks   = "hooks"
+	SourceSetup   = "setup"
+	SourceMeasure = "measure"
 )
 
 // Parse validates a descriptor document against the schema and decodes it. name is

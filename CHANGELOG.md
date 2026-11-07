@@ -210,6 +210,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `peak_memory_bytes` and `cpu_time_ms` on `dev.qory.session.exited`: behind a wall,
+  the enclosure's peak memory in bytes and its CPU time in milliseconds when the
+  runtime exited, as measured inside the enclosure, to size machine types; not for
+  limits or billing. Each is an integer of 0 or more, and absent when it could not be
+  read, never 0. With nested Docker they cover the daemon and the containers the agent
+  starts too. A run without a wall, a refused join, a failure before the runtime starts
+  and a session open when the run ended have neither: an event with `exit_code` `-1`
+  and no `signal` that has either fails the schema. The README's §The events, The measure
+  of the enclosure, states which record counts.
+- The record source `measure` in `record.schema.json`: the record the helper's exec
+  sends to the session's socket, with `peak_memory_bytes` and `cpu_time_ms`.
 - The run API's route in the contract: the run answer's `run_api`, the base URL of a run
   with a control plane; `QORY_RUN_API`, one of Forager's names; and the `channel`
   `run_api` of `dev.qory.run.egress`, with the rule `wall:run-api`. The README's §The run
@@ -831,6 +842,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Update the gateway before the sessions that write `peak_memory_bytes` and
+  `cpu_time_ms` on `dev.qory.session.exited`. A gateway built with an older contract
+  does not have them, and ends the run `failed` with `batch_refused` at the batch that
+  contains the session's `dev.qory.session.exited`. A session behind a wall writes them
+  from the first session whose runtime exits, on a machine with cgroup v2.
 - Update the gateway before the sessions that write `dev.qory.runtime.text`,
   `dev.qory.runtime.tool_result` or `dev.qory.runtime.tool_denied`, or `line`,
   `truncated` and `summary`. A gateway built with an older contract does not have them,
@@ -1441,6 +1457,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The helper's exec, `session.Exec`, measures the enclosure when the runtime exits. It
+  reads `/sys/fs/cgroup/memory.peak` and the `usage_usec` line of
+  `/sys/fs/cgroup/cpu.stat`, only when `/sys/fs/cgroup/memory.max` exists, and sends
+  them to the session's socket as a record of the source `measure`. The session puts
+  the last such record its socket read for the runtime's launch on the session's
+  `dev.qory.session.exited`, behind a wall alone.
 - `QORY_RUN_API` in the agent's environment and in a setup container, with a wall and
   without, for a run with a control plane, and `(*session.Run).RunAPI`, which returns a
   client for host work and the base URL. `RunAPI` works from `Open` to `Close`, while a
@@ -1895,6 +1917,19 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- Every walled launch starts through the helper's exec, `SessionSpec.Exec`. Before, a
+  launch with no names to unset started without it. The arguments of the exec mode and
+  of `wall.Nest` stay as they were, so a caller changes nothing. Without a wall nothing
+  changes.
+- The helper's exec stays the runtime's parent and waits for it, in place of executing
+  it. It closes every file descriptor above 2 but the Go runtime's poller, and runs as
+  the runtime does: with nested Docker, `wall.Nest` executes it after it becomes the
+  agent's user. It starts the runtime in a separate process group, which is the
+  terminal's foreground group on a terminal, so the terminal sends a Ctrl-C or a resize
+  to the runtime alone, as before, and the helper's exec passes neither on again. It
+  passes HUP, INT, QUIT, ABRT, USR1, USR2, ALRM, TERM, CONT, TSTP,
+  TTIN, TTOU and WINCH on to the runtime, and exits with the runtime's exit status, or
+  128 and the signal's number when a signal ended it, as docker-init does.
 - A variable the runtime's preparation sets is in the launch's environment once: the
   harness's computed value of the name is left out. Before, both were in it, and the
   preparation's, the later one, applied.
@@ -1935,6 +1970,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The conformance suite checks that the helper's exec waits for the runtime as the
+  agent's user, with the agent's groups, capabilities and `no_new_privs`, and no file
+  descriptor above 2 but the Go runtime's poller; that `dev.qory.session.exited` has
+  `peak_memory_bytes` and `cpu_time_ms` above 0 where the hook socket crosses and the
+  enclosure has cgroup v2; and that on a terminal a resize reaches the runtime, a
+  Ctrl-C reaches it once, and the exit status is the runtime's.
 - The conformance suite checks that a run's preparation runs inside, before the runtime,
   through the proxy.
 - The conformance suite checks a run in an image by reference: refused outside

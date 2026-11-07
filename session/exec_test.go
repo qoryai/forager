@@ -2,11 +2,18 @@ package session_test
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
+
+	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 // helperExec runs the helper's exec, this test binary in its exec mode, with args and
@@ -113,5 +120,120 @@ func TestTheHelpersExecRefusesWhatItCannotRun(t *testing.T) {
 		if out, code := helperExec(t, env, "--", program); code != 126 || !strings.Contains(out, "cannot be executed") {
 			t.Errorf("%s: exit %d, %q; want 126", filepath.Base(program), code, out)
 		}
+	}
+}
+
+// TestTheHelpersExecReturnsTheProgramsStatus pins the exit status of the helper's
+// exec, which waits for the program: the program's code, and 128 and the signal's
+// number for a program a signal ended, as a shell reports it.
+func TestTheHelpersExecReturnsTheProgramsStatus(t *testing.T) {
+	env := []string{"PATH=" + os.Getenv("PATH")}
+	for _, c := range []struct {
+		line string
+		want int
+	}{
+		{"exit 0", 0},
+		{"exit 7", 7},
+		{"exit 255", 255},
+		{"kill -KILL $$", 128 + 9},
+		{"kill -TERM $$", 128 + 15},
+		{"kill -INT $$", 128 + 2},
+	} {
+		if out, code := helperExec(t, env, "--", "sh", "-c", c.line); code != c.want {
+			t.Errorf("%s: exit %d, %q; want %d", c.line, code, out, c.want)
+		}
+	}
+}
+
+// waitForFile waits up to 10 seconds for path to exist with content.
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	for range 200 {
+		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("%s did not appear", path)
+}
+
+// signalScript traps each signal it is given with a line in $OUT, writes $READY, and
+// exits 40 a moment after the first line.
+const signalScript = `for s in "$@"; do trap "echo $s >> \"\$OUT\"" "$s"; done
+echo ready > "$READY"
+while [ ! -s "$OUT" ]; do sleep 0.05; done
+sleep 0.3
+exit 40`
+
+// TestTheHelpersExecPassesSignalsOn pins that each signal a session or docker-init
+// sends the helper's exec reaches the program once, and that the helper's exec still
+// returns the program's status after it.
+func TestTheHelpersExecPassesSignalsOn(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGWINCH, syscall.SIGALRM} {
+		name := strings.TrimPrefix(unix.SignalName(sig), "SIG")
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			ready, out := filepath.Join(dir, "ready"), filepath.Join(dir, "out")
+			cmd := exec.Command(os.Args[0], "exec", "--", "sh", "-c", signalScript, "sh", name)
+			cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "READY=" + ready, "OUT=" + out}
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			waitForFile(t, ready)
+			if err := cmd.Process.Signal(sig); err != nil {
+				t.Fatal(err)
+			}
+			err := cmd.Wait()
+			got, _ := os.ReadFile(out)
+			if cmd.ProcessState.ExitCode() != 40 || string(got) != name+"\n" {
+				t.Errorf("exit %d (%v), the program got %q; want 40 and %s once", cmd.ProcessState.ExitCode(), err, got, name)
+			}
+		})
+	}
+}
+
+// terminalScript reports its process group and the terminal's foreground group in
+// $PG, counts INT and WINCH in $OUT, writes $READY, and exits 40 plus the number of
+// lines once it has one of each.
+const terminalScript = `trap 'echo int >> "$OUT"' INT
+trap 'echo winch >> "$OUT"' WINCH
+ps -o pgid= -o tpgid= -p $$ > "$PG"
+echo ready > "$READY"
+while [ "$(grep -c . "$OUT" 2>/dev/null)" != 2 ]; do sleep 0.05; done
+sleep 0.3
+exit $((40 + $(grep -c . "$OUT")))`
+
+// TestTheHelpersExecGivesTheProgramTheTerminal pins the helper's exec on a terminal:
+// the program runs in a separate process group, which is the terminal's foreground
+// group, so a resize and a Ctrl-C reach the program once each and the helper's exec
+// not at all, and the helper's exec returns the program's status.
+func TestTheHelpersExecGivesTheProgramTheTerminal(t *testing.T) {
+	dir := t.TempDir()
+	ready, out, pg := filepath.Join(dir, "ready"), filepath.Join(dir, "out"), filepath.Join(dir, "pg")
+	cmd := exec.Command(os.Args[0], "exec", "--", "sh", "-c", terminalScript)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "READY=" + ready, "OUT=" + out, "PG=" + pg}
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ptmx.Close()
+	go io.Copy(io.Discard, ptmx)
+	waitForFile(t, ready)
+	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: 100, Rows: 30}); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, out)
+	if _, err := ptmx.Write([]byte{3}); err != nil {
+		t.Fatal(err)
+	}
+	err = cmd.Wait()
+	got, _ := os.ReadFile(out)
+	if cmd.ProcessState.ExitCode() != 42 || string(got) != "winch\nint\n" {
+		t.Errorf("exit %d (%v), the program got %q; want 42 and one WINCH, then one INT", cmd.ProcessState.ExitCode(), err, got)
+	}
+	groups, _ := os.ReadFile(pg)
+	f := strings.Fields(string(groups))
+	if len(f) != 2 || f[0] != f[1] || f[0] == strconv.Itoa(cmd.Process.Pid) {
+		t.Errorf("the program's process group and the terminal's foreground group: %q; want one group, not the helper's %d", groups, cmd.Process.Pid)
 	}
 }

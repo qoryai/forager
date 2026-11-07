@@ -254,12 +254,14 @@ type Summaries interface {
 }
 
 // The sources of a record. A runtime maps records of SourceOutput and SourceHooks;
-// the session reads the records of SourceSetup, a setup command's, and passes none of
-// them to a runtime.
+// the session reads the records of SourceSetup, a setup command's, and of
+// SourceMeasure, the helper's measure of the enclosure, and passes none of them to a
+// runtime.
 const (
-	SourceOutput = descriptor.SourceOutput
-	SourceHooks  = descriptor.SourceHooks
-	SourceSetup  = descriptor.SourceSetup
+	SourceOutput  = descriptor.SourceOutput
+	SourceHooks   = descriptor.SourceHooks
+	SourceSetup   = descriptor.SourceSetup
+	SourceMeasure = descriptor.SourceMeasure
 )
 
 // Stop is how a program is asked to leave: Signal, one [CheckStopSignal] passes, and

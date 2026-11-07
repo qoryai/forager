@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/record.schema.json",
   "title": "Record",
-  "description": "One unit of runtime output as a descriptor reads it, or one report of a setup command that runs inside the wall: the source it came from and the record itself. The shape of the lines a hook forwarder and a setup runner write to the local socket, and of a descriptor fixture's records.jsonl.",
+  "description": "One unit of runtime output as a descriptor reads it, one report of a setup command that runs inside the wall, or the measure of the enclosure as its runtime exits: the source it came from and the record itself. The shape of the lines a hook forwarder, a setup runner and the helper's exec write to the local socket, and of a descriptor fixture's records.jsonl.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -11,16 +11,17 @@
   ],
   "properties": {
     "source": {
-      "description": "output for a JSON line the runtime printed on its standard output; hooks for the JSON a hook command received on its standard input; setup for a report of a setup command, which the session writes as the command's setup step and no descriptor's rule maps.",
+      "description": "output for a JSON line the runtime printed on its standard output; hooks for the JSON a hook command received on its standard input; setup for a report of a setup command, which the session writes as the command's setup step and no descriptor's rule maps; measure for the enclosure's peak memory and CPU time, which the helper's exec reads inside the enclosure once the runtime exits, and which the session puts on the session's dev.qory.session.exited and no descriptor's rule maps.",
       "type": "string",
       "enum": [
         "output",
         "hooks",
-        "setup"
+        "setup",
+        "measure"
       ]
     },
     "record": {
-      "description": "The JSON object as the runtime produced it, unchanged; for setup, command, the command's number from 1, and event: started, line with stream (stdout or stderr), bytes (the line in standard base64) and, on a line the runner writes when it cannot start or wait for the command, runner true, or exited with exit_code (0 to 255).",
+      "description": "The JSON object as the runtime produced it, unchanged; for setup, command, the command's number from 1, and event: started, line with stream (stdout or stderr), bytes (the line in standard base64) and, on a line the runner writes when it cannot start or wait for the command, runner true, or exited with exit_code (0 to 255); for measure, peak_memory_bytes and cpu_time_ms, each a whole number of 0 or more, and each left out when it could not be read.",
       "type": "object"
     }
   }

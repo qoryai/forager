@@ -254,11 +254,13 @@ res, err := run.Join(ctx, session.SessionSpec{
 })
 ```
 
-When a walled run has names to unset, its launch starts through `Exec`, the helper's
-`exec` mode, which calls `os.Exit(session.Exec(os.Args[2:], os.Stderr))`: it unsets the
-runtime's declared, reserved and denied variables and the node's denied ones that
-nothing sets, so a value the image's `ENV` gives one never reaches the runtime, and
-neither does an empty one. A name Forager or the wall sets is never unset. One
+Every walled launch starts through `Exec`, the helper's `exec` mode, which calls
+`os.Exit(session.Exec(os.Args[2:], os.Stderr))`. It unsets the runtime's declared,
+reserved and denied variables and the node's denied ones that nothing sets, so a value
+the image's `ENV` gives one never reaches the runtime, and neither does an empty one.
+Then it starts the runtime as its child, passes on the signals that reach it, waits,
+and sends the enclosure's peak memory and CPU time to the session (see
+[the measure of the enclosure](#the-measure-of-the-enclosure)). A name Forager or the wall sets is never unset. One
 exception limits this: with nested Docker, `DOCKER_CONFIG` is never unset, and a
 non-empty value, the image's included, takes the place of the wall's docker
 configuration, as [Nested Docker](#nested-docker) says. Only an image the machine
@@ -710,10 +712,38 @@ The helper is the caller's binary:
 - It is mounted read-only into the enclosure.
 - It runs there as the relay the agent reaches the proxy through.
 - It runs there as the hook forwarder.
+- It runs there as `session.Exec`, which starts the runtime and waits for it.
 - For an image with nested Docker, it also runs as `wall.Nest`. That starts the daemon
-  inside, then the agent as its user.
+  inside, then becomes the agent's user and executes `session.Exec`.
 
 So the wall needs no separate image.
+
+### The measure of the enclosure
+
+When the runtime exits, `session.Exec` reads the enclosure's peak memory and CPU time
+and sends them to the session, which puts them on `dev.qory.session.exited` as
+`peak_memory_bytes` and `cpu_time_ms`. An instance admin uses them to size machine
+types. They are measured inside the enclosure, and are not for limits or billing.
+
+- `peak_memory_bytes` is `/sys/fs/cgroup/memory.peak`, and `cpu_time_ms` is the
+  `usage_usec` line of `/sys/fs/cgroup/cpu.stat`, divided by 1000.
+- The helper reads them only when `/sys/fs/cgroup/memory.max` exists: with cgroup v2
+  and a cgroup namespace of the container's, Docker's default on cgroup v2. With cgroup
+  v1, or with `--cgroupns=host`, the event has neither.
+- A value the helper cannot read is left out, never 0: `memory.peak` needs Linux 5.19
+  or later.
+- The values cover the agent's container: the runtime, the setup commands and every
+  process they start. With nested Docker they cover the daemon and the containers the
+  agent starts too. The setup container is not measured.
+- A run without a wall has neither.
+
+The helper stays the runtime's parent while it waits, with the runtime's user, groups
+and capabilities, `no_new_privs` set, and no file descriptor above 2 but the Go
+runtime's poller. It starts the runtime in a separate process group. On a terminal
+that group is the foreground group, so the terminal sends a Ctrl-C or a resize to the
+runtime alone, and the helper passes neither on again.
+The helper passes on the signals that reach it, such as the stop signal, and exits with
+the runtime's exit status, or 128 and the signal's number when a signal ended it.
 
 ## Images
 

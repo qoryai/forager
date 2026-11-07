@@ -7,6 +7,9 @@ import (
 	"github.com/qoryai/forager/wall"
 )
 
+// SetCgroupRoot sets where [Exec] reads the enclosure's cgroup v2 files.
+func SetCgroupRoot(root string) { cgroupRoot = root }
+
 // SetCloseWait sets how long the sinks get to flush at the end of a join and at the
 // close.
 func SetCloseWait(d time.Duration) { closeWait = d }

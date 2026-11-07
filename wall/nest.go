@@ -49,7 +49,10 @@ const nestWait = 2 * 60
 // agent's docker configuration, which sets the proxy for the containers the agent
 // starts by its address, since they do not resolve its name; then drops every
 // capability, the bounding set included, becomes the agent's user and executes the
-// launch with the run's environment. It returns only on an error.
+// launch with the run's environment. The session starts every walled launch through
+// the helper's exec, session.Exec, so the process that waits for the runtime and
+// measures the enclosure runs as the agent's user, with no capability. It returns
+// only on an error.
 //
 // Its arguments are --user, uid:gid or a name of the image's, then -- and the launch.
 // The caller's binary runs it in a hidden mode, as it runs [Relay].
