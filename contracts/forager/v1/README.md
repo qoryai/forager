@@ -1796,12 +1796,13 @@ lines. Each join writes its steps:
    stopped the launch, and `failed` with `-1` otherwise. After a step that does not end
    `succeeded`, no later setup step starts.
 
-The runtime runs in no step, apart from a session with no runtime that joins during a
-`copy` step, which runs while that step is open. A failure in the image or the wall
-step ends that step `failed` with `-1`. A failure with no refusal code has its text as
-a `dev.qory.run.log` on `stderr` with both the session's `session` and the step's
-`step`, before the step's `dev.qory.run.step_exited`. Then comes the session's `dev.qory.session.exited`.
-So a session's `dev.qory.run.log` has `step` only during its image, wall or setup step.
+The runtime runs in no step. The command of a session with no runtime that joins during
+a `copy` step runs while that step is open. A failure in the image or the wall step ends
+that step `failed` with `-1`. A failure with no refusal code has its text as a
+`dev.qory.run.log` on `stderr` with both the session's `session` and the step's `step`,
+before the step's `dev.qory.run.step_exited`. Then comes the session's
+`dev.qory.session.exited`. So a session's `dev.qory.run.log` has `step` only during its
+image, wall or setup step.
 
 Every step ends before `dev.qory.run.exited`: the close ends a host step still open
 `cancelled` with `-1`, right before `dev.qory.run.exited`. A run the gateway ends during

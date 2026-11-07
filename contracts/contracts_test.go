@@ -410,7 +410,8 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // session, and a run.log with both session and step is one of an image, a wall or a
 // setup step; and every step ends before run.exited, unless the gateway ended the run, whose
 // run.exited has a reason the close never writes; and one step is open at a time, apart
-// from what [openSteps.breaks] allows inside a copy step.
+// from what [openSteps.breaks] allows inside a copy step, whose session has bare true and
+// ends before the copy step does.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
 	runs, err := fs.ReadDir(contracts.FS, "fixtures/run")
@@ -434,7 +435,7 @@ func TestRecordedRunValidates(t *testing.T) {
 		var log []byte
 		open, last := 0, 0
 		started, steps, stepped, kinds := false, 0, map[int]string{}, map[int]string{}
-		opened := openSteps{}
+		opened := openSteps{steps: map[int]string{}}
 		// openJoin reports whether a join step is open.
 		openJoin := func() bool {
 			for n, k := range kinds {
@@ -593,72 +594,105 @@ func stepNumber(m map[string]any) (int, bool) {
 	return int(v), err == nil
 }
 
-// openSteps is the steps of a recorded run that are open: each step's number and kind.
-type openSteps map[int]string
+// openSteps is what is open in a recorded run: each step's number and kind, and the
+// number of the session that runs, 0 for none.
+type openSteps struct {
+	steps   map[int]string
+	session int
+}
 
-// breaks applies m, an event of the run, and returns the overlap of steps it starts or
-// ends, or "" for none. One step is open at a time, apart from a join, an image, a wall
-// or a setup step, which starts and ends inside an open copy step.
-func (o openSteps) breaks(m map[string]any) string {
+// breaks applies m, an event of the run, and returns the rule of open steps it breaks,
+// or "" for none. One step is open at a time, apart from a join, an image, a wall or a
+// setup step, which starts and ends inside an open copy step. A session that starts
+// inside a copy step has bare true, and a copy step exits with no session running.
+func (o *openSteps) breaks(m map[string]any) string {
+	numbers := slices.Sorted(maps.Keys(o.steps))
+	if n, ok := sessionNumber(m); ok {
+		if m["type"] == "dev.qory.session.exited" {
+			o.session = 0
+			return ""
+		}
+		o.session = n
+		for _, other := range numbers {
+			if o.steps[other] == "copy" && m["data"].(map[string]any)["bare"] != true {
+				return fmt.Sprintf("session %d starts inside copy step %d with no bare true", n, other)
+			}
+		}
+		return ""
+	}
 	n, ok := stepNumber(m)
 	if !ok {
 		return ""
 	}
-	numbers := slices.Sorted(maps.Keys(o))
 	switch m["type"] {
 	case "dev.qory.run.step_started":
 		kind, _ := m["data"].(map[string]any)["kind"].(string)
-		o[n] = kind
+		o.steps[n] = kind
 		inCopy := kind == "join" || kind == "image" || kind == "wall" || kind == "setup"
 		for _, other := range numbers {
-			if o[other] != "copy" || !inCopy {
-				return fmt.Sprintf("%s step %d starts inside %s step %d", kind, n, o[other], other)
+			if o.steps[other] != "copy" || !inCopy {
+				return fmt.Sprintf("%s step %d starts inside %s step %d", kind, n, o.steps[other], other)
 			}
 		}
 	case "dev.qory.run.step_exited":
-		kind := o[n]
-		delete(o, n)
+		kind := o.steps[n]
+		delete(o.steps, n)
 		for _, other := range numbers {
 			if other > n {
-				return fmt.Sprintf("%s step %d exits with %s step %d open inside it", kind, n, o[other], other)
+				return fmt.Sprintf("%s step %d exits with %s step %d open inside it", kind, n, o.steps[other], other)
 			}
+		}
+		if kind == "copy" && o.session != 0 {
+			return fmt.Sprintf("copy step %d exits with session %d running", n, o.session)
 		}
 	}
 	return ""
 }
 
 // TestOneStepIsOpenAtATime pins [openSteps.breaks], the rule TestRecordedRunValidates
-// checks each recorded run against: the steps a join writes inside an open copy step
-// pass, and each other overlap returns the first event that breaks the rule.
+// checks each recorded run against: the steps and the bare session of a join inside an
+// open copy step pass, and each other case returns the first event that breaks the rule.
 func TestOneStepIsOpenAtATime(t *testing.T) {
-	type step struct {
-		n    int
-		kind string // empty for the step's end
+	number := func(n int) json.Number { return json.Number(strconv.Itoa(n)) }
+	start := func(n int, kind string) map[string]any {
+		return map[string]any{"type": "dev.qory.run.step_started", "data": map[string]any{"step": number(n), "kind": kind}}
+	}
+	exit := func(n int) map[string]any {
+		return map[string]any{"type": "dev.qory.run.step_exited", "data": map[string]any{"step": number(n)}}
+	}
+	runtime := func(n int) map[string]any {
+		return map[string]any{"type": "dev.qory.session.started", "data": map[string]any{"session": number(n)}}
+	}
+	bare := func(n int) map[string]any {
+		return map[string]any{"type": "dev.qory.session.started", "data": map[string]any{"session": number(n), "bare": true}}
+	}
+	ended := func(n int) map[string]any {
+		return map[string]any{"type": "dev.qory.session.exited", "data": map[string]any{"session": number(n)}}
 	}
 	for _, c := range []struct {
-		name  string
-		steps []step
-		want  string
+		name   string
+		events []map[string]any
+		want   string
 	}{
-		{"steps one after another", []step{{1, "fetch"}, {1, ""}, {2, "copy"}, {2, ""}, {3, "join"}, {3, ""}}, ""},
-		{"the steps of a join inside a copy step", []step{
-			{1, "copy"}, {2, "join"}, {2, ""}, {3, "image"}, {3, ""}, {4, "wall"}, {4, ""}, {5, "setup"}, {5, ""}, {6, "join"}, {6, ""}, {1, ""},
+		{"steps one after another", []map[string]any{start(1, "fetch"), exit(1), start(2, "copy"), exit(2), start(3, "join"), exit(3)}, ""},
+		{"the steps of a join inside a copy step", []map[string]any{
+			start(1, "copy"), start(2, "join"), exit(2), start(3, "image"), exit(3), start(4, "wall"), exit(4), start(5, "setup"), exit(5), start(6, "join"), exit(6), exit(1),
 		}, ""},
-		{"a compose step inside a fetch step", []step{{1, "fetch"}, {2, "compose"}}, "compose step 2 starts inside fetch step 1"},
-		{"a join step inside a push step", []step{{1, "push"}, {2, "join"}}, "join step 2 starts inside push step 1"},
-		{"a wall step inside a join step", []step{{1, "join"}, {2, "wall"}}, "wall step 2 starts inside join step 1"},
-		{"a fetch step inside a copy step", []step{{1, "copy"}, {2, "fetch"}}, "fetch step 2 starts inside copy step 1"},
-		{"a copy step inside a copy step", []step{{1, "copy"}, {2, "copy"}}, "copy step 2 starts inside copy step 1"},
-		{"two steps at once inside a copy step", []step{{1, "copy"}, {2, "join"}, {3, "wall"}}, "wall step 3 starts inside join step 2"},
-		{"a copy step that ends before the step inside it", []step{{1, "copy"}, {2, "join"}, {1, ""}}, "copy step 1 exits with join step 2 open inside it"},
+		{"a bare session inside a copy step", []map[string]any{start(1, "copy"), bare(1), start(2, "wall"), exit(2), ended(1), exit(1)}, ""},
+		{"a session with a runtime outside every step", []map[string]any{runtime(1), ended(1), start(1, "copy"), exit(1)}, ""},
+		{"a compose step inside a fetch step", []map[string]any{start(1, "fetch"), start(2, "compose")}, "compose step 2 starts inside fetch step 1"},
+		{"a join step inside a push step", []map[string]any{start(1, "push"), start(2, "join")}, "join step 2 starts inside push step 1"},
+		{"a wall step inside a join step", []map[string]any{start(1, "join"), start(2, "wall")}, "wall step 2 starts inside join step 1"},
+		{"a fetch step inside a copy step", []map[string]any{start(1, "copy"), start(2, "fetch")}, "fetch step 2 starts inside copy step 1"},
+		{"a copy step inside a copy step", []map[string]any{start(1, "copy"), start(2, "copy")}, "copy step 2 starts inside copy step 1"},
+		{"two steps at once inside a copy step", []map[string]any{start(1, "copy"), start(2, "join"), start(3, "wall")}, "wall step 3 starts inside join step 2"},
+		{"a copy step that ends before the step inside it", []map[string]any{start(1, "copy"), start(2, "join"), exit(1)}, "copy step 1 exits with join step 2 open inside it"},
+		{"a session with no bare inside a copy step", []map[string]any{start(1, "copy"), runtime(1)}, "session 1 starts inside copy step 1 with no bare true"},
+		{"a copy step that exits while its session runs", []map[string]any{start(1, "copy"), bare(1), exit(1)}, "copy step 1 exits with session 1 running"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			opened, got := openSteps{}, ""
-			for _, s := range c.steps {
-				m := map[string]any{"type": "dev.qory.run.step_exited", "data": map[string]any{"step": json.Number(strconv.Itoa(s.n))}}
-				if s.kind != "" {
-					m = map[string]any{"type": "dev.qory.run.step_started", "data": map[string]any{"step": json.Number(strconv.Itoa(s.n)), "kind": s.kind}}
-				}
+			opened, got := openSteps{steps: map[int]string{}}, ""
+			for _, m := range c.events {
 				if got = opened.breaks(m); got != "" {
 					break
 				}

@@ -359,7 +359,7 @@ release may change what an existing document does, and says so under Upgrading.
   events do. `fixtures/link/link-batch-machine-step.json` is a batch with a `machine`
   step right after `dev.qory.run.started`.
 - `copy`, a kind of `dev.qory.run.step_started`, `event.StepCopy`: host work that
-  copies the session's work out of the wall, so a reader shows the copy as a separate
+  copies the session's work out of the wall. The record contains the copy as a separate
   step, also in a write run with no push. `(*session.Run).StartStep` accepts it as it
   accepts `fetch`, `compose`, `build`, `push` and `machine`.
   `fixtures/link/link-batch-copy-step.json` is a batch with a `copy` step after a
@@ -372,7 +372,9 @@ release may change what an existing document does, and says so under Upgrading.
   not open during a `copy` step, because that join closes them. The contract stays at
   revision 1. `fixtures/run/0197f506-c172-7384-9f50-ab1c2d3e4f50/` is a recorded run with
   such a join, and the recorded-run check requires one step open at a time, apart from
-  a `join`, `image`, `wall` or `setup` step inside an open `copy` step.
+  a `join`, `image`, `wall` or `setup` step inside an open `copy` step. It also requires
+  `bare: true` on a session inside a `copy` step, and no session running when a `copy`
+  step exits.
 - `step` in `dev.qory.run.log`: the number of the step whose line the chunk is,
   between that step's `dev.qory.run.step_started` and `dev.qory.run.step_exited`. The
   member is optional, and a line outside every step has none. A session's chunk has
@@ -384,8 +386,8 @@ release may change what an existing document does, and says so under Upgrading.
   reference, with the reference as its name, around the fetch and the check of the
   image's user, and a `wall` step, `start the wall`, around the rest of the wall's
   start. A failure with no code in either step has its text as a line of the session
-  and of the step. The runtime runs in no step, apart from a session with no runtime
-  that joins during a `copy` step, which runs while that step is open.
+  and of the step. The runtime runs in no step. The command of a session with no
+  runtime that joins during a `copy` step runs while that step is open.
 - `fixtures/run/0195d3e4-af50-7162-9d3e-8f9a0b1c2d3e/`, a recorded run with a `fetch`
   step, a `compose` step and a `join` step before its session; the recorded run in an
   image by reference has its `join`, `image` and `wall` steps; and
