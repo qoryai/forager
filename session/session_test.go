@@ -1057,6 +1057,38 @@ func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T)
 	}
 }
 
+// TestOnlyNoRuntimeIsMarkedBare pins bare in session.started, in the record and in the
+// batch to the gateway: true for a nil Runtime, and no member for a runtime the spec
+// sets, described or bare.
+func TestOnlyNoRuntimeIsMarkedBare(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		runtime func(*testing.T) runtimes.Runtime
+		want    any
+	}{
+		{"no runtime", func(*testing.T) runtimes.Runtime { return nil }, true},
+		{"a described runtime", claudeCode, nil},
+		{"a bare runtime the spec sets", func(*testing.T) runtimes.Runtime { return runtimes.Bare("sh") }, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			sp.Runtime = c.runtime(t)
+			sp.Forwarder = nil
+			sp.Command, sp.Args = "sh", []string{"-c", "exit 0"}
+			res, err := run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for where, started := range map[string]map[string]any{"the record": sessionStarted(t, events(t, res)), "the gateway": sessionStarted(t, g.Events())} {
+				got, present := started["bare"]
+				if got != c.want || present != (c.want != nil) {
+					t.Errorf("%s: session.started %v; want bare %v", where, started, c.want)
+				}
+			}
+		})
+	}
+}
+
 func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
 	sp := spec(t)
 	sp.Runtime = nil

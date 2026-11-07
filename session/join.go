@@ -626,6 +626,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 					// is the run's while one of the run's containers exists.
 					r.listed.keep()
 					r.keptBy = n
+					r.wallFailed = true
 				}
 			}()
 		}
@@ -922,6 +923,11 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 	}
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = accesskey.ShownValue(v, false)
+	}
+	// rt is a bare runtime for a nil Runtime and for a bare one the caller set. A session
+	// whose runtime the caller set has no bare.
+	if spec.SessionSpec.Runtime == nil {
+		started["bare"] = true
 	}
 	if setup := spec.SessionSpec.Setup; len(setup) > 0 {
 		names := make([]string, len(setup))

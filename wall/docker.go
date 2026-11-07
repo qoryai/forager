@@ -1627,14 +1627,20 @@ func (e *dockerEnclosure) relayListens(ctx context.Context) error {
 const closeWait = 30 * time.Second
 
 // Close removes the containers and the networks, newest first, and the private
-// directory with the environment files and the bundle. What is already gone, or was
-// never made, is not an error.
+// directory with the environment files and the bundle. A docker rm that fails with
+// [noSuchContainer]'s text is not an error, and neither is a network rm that fails with
+// [goneAlready]'s text. Every other failure is: a docker rm that fails because the engine
+// cannot be reached leaves the container's state unknown, and it may still run.
 func (e *dockerEnclosure) Close(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, closeWait)
 	defer cancel()
 	var errs []error
 	for i := len(e.made) - 1; i >= 0; i-- {
-		if err := e.remove(ctx, e.made[i], goneAlready); err != nil {
+		gone := goneAlready
+		if e.made[i][0] == "rm" {
+			gone = noSuchContainer
+		}
+		if err := e.remove(ctx, e.made[i], gone); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -1656,10 +1662,10 @@ func (e *dockerEnclosure) remove(ctx context.Context, argv []string, gone func(o
 	return nil
 }
 
-// goneAlready reports whether out, the output of a failed removal, contains "no such" or
-// "not found" in any case: a thing that is gone already or was never made, but also a
-// missing engine socket or a container runtime that fails. Use [noSuchContainer] where
-// a container that remains matters.
+// goneAlready reports whether out, the output of a failed network rm, contains "no such"
+// or "not found" in any case: a network that is gone already or was never made, but also
+// a missing engine socket. Use [noSuchContainer] for a container: one that remains may
+// still run.
 func goneAlready(out string) bool {
 	out = strings.ToLower(out)
 	return strings.Contains(out, "no such") || strings.Contains(out, "not found")

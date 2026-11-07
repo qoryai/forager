@@ -199,21 +199,21 @@ func TestDockerRemoveSetupAfterUnwrap(t *testing.T) {
 // TestDockerUnwrapKeepsItsCheck pins Unwrap's reading of a docker rm that fails: only "no
 // such container", which docker run --rm leaves for a container that exits, counts as
 // gone, in any case. Any other failure is an error and keeps the container's entry in
-// e.made: a missing engine socket and a missing docker command leave the container's
-// state unknown, though their text has "no such" or "not found". Close still reads
-// those two as gone, with goneAlready, and any other failure as an error.
+// e.made, and Close, with the failure still there, returns an error too: a missing engine
+// socket and a missing docker command leave the container's state unknown, though their
+// text has "no such" or "not found".
 func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {
-		failOut           string
-		wantErr, closeErr bool
+		failOut string
+		wantErr bool
 	}{
-		{"Error response from daemon: No such container: qory-x-agent", false, false},
-		{"Error: no container with name or ID \"qory-x-agent\" found: no such container", false, false},
-		{"dial unix /var/run/docker.sock: connect: no such file or directory", true, false},
-		{"failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory", true, false},
-		{"executable file not found in $PATH", true, false},
-		{"Error response from daemon: told to fail", true, true},
+		{"Error response from daemon: No such container: qory-x-agent", false},
+		{"Error: no container with name or ID \"qory-x-agent\" found: no such container", false},
+		{"dial unix /var/run/docker.sock: connect: no such file or directory", true},
+		{"failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory", true},
+		{"executable file not found in $PATH", true},
+		{"Error response from daemon: told to fail", true},
 	} {
 		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
 		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
@@ -231,10 +231,46 @@ func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
 		if kept := slices.ContainsFunc(e.made, func(m []string) bool { return slices.Equal(m, entry) }); kept != c.wantErr {
 			t.Errorf("%q: the container's entry in e.made: %v, want %v", c.failOut, kept, c.wantErr)
 		}
-		if err := e.Close(ctx); (err != nil) != c.closeErr {
-			t.Errorf("%q: Close with the failure still there: %v, want an error: %v", c.failOut, err, c.closeErr)
+		if err := e.Close(ctx); (err != nil) != c.wantErr {
+			t.Errorf("%q: Close with the failure still there: %v, want an error: %v", c.failOut, err, c.wantErr)
 		}
 		rec.fail, rec.failOut = "", ""
+	}
+}
+
+// TestDockerCloseReadsEachKindOfRemoval pins what Close counts as gone: for a container,
+// only "no such container", so a missing engine socket is an error while the container
+// may still run; for a network, also "not found" and a missing engine socket's text.
+func TestDockerCloseReadsEachKindOfRemoval(t *testing.T) {
+	ctx := context.Background()
+	const socket = "dial unix /var/run/docker.sock: connect: no such file or directory"
+	for _, c := range []struct {
+		name, fail, failOut string
+		wantErr             bool
+	}{
+		{"nothing fails", "", "", false},
+		{"a container, no engine socket", "docker rm", socket, true},
+		{"a container that is gone", "docker rm", "Error response from daemon: No such container: qory-x-agent", false},
+		{"a container that is gone, in Podman's form", "docker rm", "Error: no container with name or ID \"qory-x-agent\" found: no such container", false},
+		{"a container, another failure", "docker rm", "", true},
+		{"a network that is gone", "docker network rm", "Error response from daemon: network qory-x-inside not found", false},
+		{"a network, no engine socket", "docker network rm", socket, false},
+		{"a network, another failure", "docker network rm", "", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+			d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+			enc, err := d.Prepare(ctx, Request{RunID: runID, Image: "i"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := enc.(*dockerEnclosure)
+			e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
+			rec.fail, rec.failOut = c.fail, c.failOut
+			if err := e.Close(ctx); (err != nil) != c.wantErr {
+				t.Errorf("Close: %v, want an error: %v", err, c.wantErr)
+			}
+		})
 	}
 }
 

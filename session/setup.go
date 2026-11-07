@@ -133,6 +133,7 @@ func (r *Run) openWall(ctx context.Context) error {
 func (r *Run) closeWall(ctx context.Context) {
 	if r.enclosure != nil {
 		if err := r.enclosure.Close(ctx); err != nil {
+			r.wallFailed = true
 			r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
 			if r.listed != nil {
 				r.listed.keep()
@@ -409,6 +410,7 @@ func (r *Run) RemoveSetup(ctx context.Context) (err error) {
 		}
 	}()
 	if err := r.setupUp.RemoveSetup(ctx); err != nil {
+		r.wallFailed = true
 		err = fmt.Errorf("Close the run: the setup container may still run, so no session can join: %w", accesskey.ShownError(err))
 		r.writeLog("stderr", 0, step.n, failureLine(err))
 		state := event.StateFailed

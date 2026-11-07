@@ -1063,8 +1063,10 @@ res, err := session.Resend(ctx, session.ResendSpec{
 
 A session whose `SessionSpec.Runtime` is nil runs a bare runtime named after its
 command, and has no start key: its program gets no model key's variable, placeholder or
-endpoint, whatever model keys the run has. A runtime set in the spec without a `model`
-section, even a bare one, fails in a run with a model key.
+endpoint, whatever model keys the run has. Its `dev.qory.session.started` contains
+`bare`, `true`; a session whose runtime the caller sets has no `bare`, even a bare
+runtime. A runtime set in the spec without a `model` section, even a bare one, fails in
+a run with a model key.
 
 A program that needs custom code implements the interface.
 `session/runtimes/runtimetest` runs the same checks on it.
@@ -1409,6 +1411,12 @@ code, or after a join, as the gateway does.
 - `Undelivered`, how many of the run's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` and `ClosedReason`, as `session.Result` has them.
+- `WallKept`, true when removing a part of the run's wall failed at some point of the
+  run: the agent's container at a session's end, the setup container in `RemoveSetup`,
+  or anything at the close. A process may have kept writing the run's binds after its
+  session ended, so do not trust what is in them. `WallKept` stays true when a later
+  removal succeeded. It is also true when the close failed only on a network or the
+  wall's private directory, because `wall.Enclosure`'s `Close` returns one error.
 
 What reached the server is the gateway's to say: `(*gateway.Gateway).Close` returns a
 `gateway.Delivery`.

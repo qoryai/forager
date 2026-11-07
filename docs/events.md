@@ -184,6 +184,10 @@ harness source the session's compose used, each with `source`, the source as it 
 configured, and `commit`, the full commit id compose used, 40 or 64 hexadecimal
 characters.
 
+`dev.qory.session.started` contains `bare`, `true`, when the session's
+`SessionSpec.Runtime` is nil, and no `bare` otherwise, also for a bare runtime the caller
+set. The command may still be an agent, because Forager does not inspect it.
+
 Every `dev.qory.run.exited` shows how the run ended in `state`: `succeeded`, `failed` or
 `cancelled`, stopped before it said how it went. The close of the run writes the
 outcome its caller gives. A run its starter ends with an outcome has that outcome. When
