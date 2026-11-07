@@ -25,20 +25,21 @@ type Step struct {
 
 // StartStep starts a step of the run's host work and writes its dev.qory.run.step_started,
 // with the run's next step number as step, name as name and kind as kind: event.StepFetch,
-// event.StepCompose, event.StepBuild, event.StepPush or event.StepMachine, the start of
-// the machine the run runs on. Join numbers its steps from the same counter. The run's
-// masker replaces each forwarder's password, each value of OpenSpec.Masker and each
+// event.StepCompose, event.StepBuild, event.StepPush, event.StepMachine, the start of
+// the machine the run runs on, or event.StepCopy, host work that copies the session's
+// work out of the wall. Join numbers its steps from the same counter. The run's masker
+// replaces each forwarder's password, each value of OpenSpec.Masker and each
 // server's variable value of 8 characters or more, apart from QORY_RUN_SYSTEM's and
 // QORY_RUN_REPOSITORIES', in name, and a name that contains qak_, qrk_, qecr_, qecn_,
 // qecp_, qecg_, qeci_ or qecd_ in any case is a phrase in its place, as
 // accesskey.ShownValue gives it. Write the step's lines with [Step.Log], and end it with
 // [Step.Exit].
 //
-// An error means nothing is written: the kind is not fetch, compose, build, push or
-// machine, the name is empty, a session of the run is running, another host step is
-// open, or the run is closed. A host step runs before the first join, between joins,
-// or after the last join and before the close, never during a join: Join returns an
-// error and writes nothing while a host step is open.
+// An error means nothing is written: the kind is not fetch, compose, build, push,
+// machine or copy, the name is empty, a session of the run is running, another host
+// step is open, or the run is closed. A host step runs before the first join, between
+// joins, or after the last join and before the close, never during a join: Join returns
+// an error and writes nothing while a host step is open.
 //
 // The name must contain no URL userinfo, token or other credential. The masker replaces
 // only the forwarders' passwords, OpenSpec.Masker's values, the server's variable
@@ -50,8 +51,8 @@ type Step struct {
 // [Step.Exit], as in Open's.
 func (r *Run) StartStep(kind, name string) (_ *Step, err error) {
 	defer func() { err = maskError(r.masker, err) }()
-	if kind != event.StepFetch && kind != event.StepCompose && kind != event.StepBuild && kind != event.StepPush && kind != event.StepMachine {
-		return nil, fmt.Errorf("start a host step of kind fetch, compose, build, push or machine, not %s: Join writes the join, image and wall steps", accesskey.ShownValue(kind, true))
+	if kind != event.StepFetch && kind != event.StepCompose && kind != event.StepBuild && kind != event.StepPush && kind != event.StepMachine && kind != event.StepCopy {
+		return nil, fmt.Errorf("start a host step of kind fetch, compose, build, push, machine or copy, not %s: Join writes the join, image and wall steps", accesskey.ShownValue(kind, true))
 	}
 	if name == "" {
 		return nil, fmt.Errorf("give the step a name, such as %q: a step's name is never empty", "fetch github.com/example-org/app")

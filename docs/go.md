@@ -370,8 +370,9 @@ failed and its lines:
 - `(*session.Run).StartStep(kind, name)` writes `dev.qory.run.step_started` with the
   run's next step number, shared with each join's steps, and returns a `*session.Step`.
   `kind` is `event.StepFetch`, `event.StepCompose`, `event.StepBuild`,
-  `event.StepPush`, host work that sends the run's commits, or `event.StepMachine`, the
-  start of the machine the run runs on. The run's masker replaces each forwarder's
+  `event.StepPush`, host work that sends the run's commits, `event.StepMachine`, the
+  start of the machine the run runs on, or `event.StepCopy`, host work that copies the
+  session's work out of the wall. The run's masker replaces each forwarder's
   password, each value of `OpenSpec.Masker` and each server's variable value of 8
   characters or more, apart from `QORY_RUN_SYSTEM`'s and `QORY_RUN_REPOSITORIES`', in
   `name`, and a `name` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`,
@@ -398,7 +399,7 @@ returns and before `Close`. Each error starts with the fix, and writes nothing:
 
 | Call | When | Error |
 |---|---|---|
-| `StartStep` | a kind other than fetch, compose, build, push and machine | `start a host step of kind fetch, compose, build, push or machine, not "setup": Join writes the join, image and wall steps` |
+| `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `start a host step of kind fetch, compose, build, push, machine or copy, not "setup": Join writes the join, image and wall steps` |
 | `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
 | `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
 | `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |

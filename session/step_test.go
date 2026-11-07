@@ -163,6 +163,39 @@ func TestAPushStepRunsAfterTheLastJoinAndBeforeTheClose(t *testing.T) {
 	batchesValid(t, g)
 }
 
+// TestACopyStepRunsAfterTheLastJoinWithNoPush pins a host step of kind copy, host work
+// that copies the session's work out of the wall: StartStep accepts it once Join
+// returned, it has the next step number, and its start, its line and its exit lie
+// between the session's exit and run.exited, with no push step after it. The record and
+// the link have the same steps, and every batch passes the link's schema.
+func TestACopyStepRunsAfterTheLastJoinWithNoPush(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Join(ctx, sp.SessionSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostStep(t, r, event.StepCopy, "copy the work of session 1 out of the wall", "copied 2 commits to work/session-1\n")
+	if _, err := r.Close(ctx, outcomeOf(res, nil)); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"step 1 join join session 1", "step 1 succeeded -1", "session 1 started", "session 1 exited",
+		"step 2 copy copy the work of session 1 out of the wall", "log <nil> 2 copied 2 commits to work/session-1", "step 2 succeeded 0",
+		"run exited",
+	}
+	for where, evs := range map[string][]map[string]any{"the record": events(t, &session.Result{Dir: r.Dir()}), "the link": g.Events()} {
+		if got := stepOrder(evs); !slices.Equal(got, want) {
+			t.Errorf("%s:\n%q\nwant\n%q", where, got, want)
+		}
+	}
+	batchesValid(t, g)
+}
+
 // TestAMachineStepRunsRightAfterTheOpen pins a host step of kind machine, the start of
 // the machine the run runs on: StartStep accepts it right after Open and before the first
 // fetch, it is step 1, its lines are run.log chunks with stream stderr and its step, and
@@ -254,7 +287,7 @@ func TestCloseEndsAnOpenHostStep(t *testing.T) {
 
 // TestAStepsErrorsStartWithTheFix pins what a host step refuses, each with an error
 // that starts with the fix and with nothing written: a kind other than fetch, compose,
-// build, push and machine, an empty name, a state outside the three, an exit code below
+// build, push, machine and copy, an empty name, a state outside the three, an exit code below
 // -1, a second host step while one is open, a join while one is open, a line or an exit
 // after the step exited, and a step while a session runs.
 func TestAStepsErrorsStartWithTheFix(t *testing.T) {
@@ -271,11 +304,11 @@ func TestAStepsErrorsStartWithTheFix(t *testing.T) {
 		}
 	}
 	_, err = r.StartStep(event.StepSetup, "make setup")
-	refused("a setup step", err, "start a host step of kind fetch, compose, build, push or machine, not \"setup\"")
+	refused("a setup step", err, "start a host step of kind fetch, compose, build, push, machine or copy, not \"setup\"")
 	_, err = r.StartStep(event.StepJoin, "join")
-	refused("a join step", err, "start a host step of kind fetch, compose, build, push or machine, not \"join\"")
+	refused("a join step", err, "start a host step of kind fetch, compose, build, push, machine or copy, not \"join\"")
 	_, err = r.StartStep("checkout", "checkout the work")
-	refused("an unknown kind", err, "start a host step of kind fetch, compose, build, push or machine, not \"checkout\"")
+	refused("an unknown kind", err, "start a host step of kind fetch, compose, build, push, machine or copy, not \"checkout\"")
 	_, err = r.StartStep(event.StepFetch, "")
 	refused("an empty name", err, "give the step a name")
 	s, err := r.StartStep(event.StepFetch, "fetch github.com/example-org/app")
