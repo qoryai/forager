@@ -306,8 +306,9 @@ func (r *Run) refusedJoin(n int, err error) {
 // the rest: the wall's preparation, its networks, the forwarder, the hook socket, the
 // second check of the places and the wall's Wrap, up to the launch's start. Each setup
 // command of SessionSpec.Setup then has a setup step, which the session writes from its
-// runner's records. The runtime runs in no step. A failure in the image or the wall
-// step ends it failed with -1, after the failure's line with the session's number and
+// runner's records. The runtime runs in no step, apart from a session with no runtime
+// that joins during a copy step, which runs while that step is open. A failure in the
+// image or the wall step ends it failed with -1, after the failure's line with the session's number and
 // the step's when the failure has no refusal code, and before the session's
 // dev.qory.session.exited.
 func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Runtime, answer *server.LinkJoinAnswer, n int, joined *Step) (*Result, error) {
@@ -769,7 +770,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(errRunClosed)
 	}
 	// The wall step ends as the launch starts: the setup commands, each in its setup
-	// step, then the runtime, which runs in no step.
+	// step, then the runtime, which runs in none of the join's steps.
 	endStep(event.StateSucceeded)
 	logs := func(stream string) func([]byte) {
 		return func(b []byte) {

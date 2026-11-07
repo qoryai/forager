@@ -138,7 +138,8 @@ At each `Join` the session:
    registry, the image's fetch and the check of its user, and the wall step, `start the wall`, around the wall's start up to the
    runtime's start;
 5. starts the runtime, in no step, records `dev.qory.session.exited` when it exits, and
-   returns once the gateway accepted that batch, or the run ended.
+   returns once the gateway accepted that batch, or the run ended. A session with no
+   runtime that joins during a `copy` step runs while that step is open.
 
 A join the gateway refuses, `403`, or that fails the session's checks, ends its join
 step `failed` with `-1` and records `dev.qory.session.exited` `failed`, `-1` and
@@ -409,9 +410,9 @@ returns and before `Close`. Each error starts with the fix, and writes nothing:
 | `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `start a host step of kind fetch, compose, build, push, machine or copy, not "setup": Join writes the join, image and wall steps` |
 | `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
 | `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
+| `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |
 | `Join` | a session with a runtime while copy step 1 is open | `exit step 1 before the join: only a session with no runtime joins during a copy step` |
 | `Log`, `Exit` | while a `Join` runs, such as the `Join` of a session with no runtime during a `copy` step | `write step 1's lines after Join returns: a session of the run is still running`, `exit step 1 after Join returns: a session of the run is still running` |
-| `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |
 | `Exit` | a state outside the three | `exit the step with succeeded, failed or cancelled, not "skipped"` |
 | `Log`, `Exit` | after the step exited | `start a new step for these lines: step 1 exited`, `start a new step: step 1 exited already` |
 
@@ -699,8 +700,7 @@ the `http-proxy` and `https-proxy` of Docker's `daemon.json`.
   user.
 
 Open it while a host step of a kind other than `copy` is open; it stays open after the
-step exits. Each error
-starts with the fix, and opens nothing:
+step exits. Each error starts with the fix, and opens nothing:
 
 | When | Error |
 |---|---|

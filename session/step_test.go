@@ -297,6 +297,130 @@ func TestABareSessionJoinsDuringACopyStep(t *testing.T) {
 	}
 }
 
+// TestACopyStepAfterABareJoin pins the copy step around the join of a session with no
+// runtime: a second bare join in the same step, a join with a runtime after a bare one,
+// a bare join that ends with a 403, and a close with the step still open. The record and
+// the link have the same steps, and every batch passes the link's schema.
+func TestACopyStepAfterABareJoin(t *testing.T) {
+	ctx := context.Background()
+	refusedJoin := func(linktest.Join) linktest.Reply {
+		return linktest.Reply{Status: 403, Body: linktest.Refusal("run_configuration_invalid", "gateway", "model")}
+	}
+	for _, c := range []struct {
+		name    string
+		onJoin  func(linktest.Join) linktest.Reply
+		during  func(t *testing.T, r *session.Run, sp runSpec, cp *session.Step)
+		outcome session.Outcome
+		want    []string
+	}{
+		{
+			name: "a second bare join",
+			during: func(t *testing.T, r *session.Run, sp runSpec, cp *session.Step) {
+				for range 2 {
+					if _, err := r.Join(ctx, bareSession(sp.SessionSpec)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := cp.Exit(event.StateSucceeded, 0); err != nil {
+					t.Fatal(err)
+				}
+			},
+			outcome: session.Outcome{State: event.StateSucceeded},
+			want: []string{
+				"step 1 copy copy work out",
+				"step 2 join join session 1", "step 2 succeeded -1", "session 1 started", "session 1 exited",
+				"step 3 join join session 2", "step 3 succeeded -1", "session 2 started", "session 2 exited",
+				"step 1 succeeded 0", "run exited",
+			},
+		},
+		{
+			name: "a join with a runtime after a bare one",
+			during: func(t *testing.T, r *session.Run, sp runSpec, cp *session.Step) {
+				if _, err := r.Join(ctx, bareSession(sp.SessionSpec)); err != nil {
+					t.Fatal(err)
+				}
+				_, err := r.Join(ctx, sp.SessionSpec)
+				if want := "exit step 1 before the join: only a session with no runtime joins during a copy step"; err == nil || err.Error() != want {
+					t.Errorf("the join with a runtime: %v, want %s", err, want)
+				}
+				if err := cp.Exit(event.StateSucceeded, 0); err != nil {
+					t.Fatal(err)
+				}
+			},
+			outcome: session.Outcome{State: event.StateSucceeded},
+			want: []string{
+				"step 1 copy copy work out",
+				"step 2 join join session 1", "step 2 succeeded -1", "session 1 started", "session 1 exited",
+				"step 1 succeeded 0", "run exited",
+			},
+		},
+		{
+			name:   "a bare join with a 403",
+			onJoin: refusedJoin,
+			during: func(t *testing.T, r *session.Run, sp runSpec, cp *session.Step) {
+				if _, err := r.Join(ctx, bareSession(sp.SessionSpec)); err == nil {
+					t.Error("the join with a 403 returned no error")
+				}
+				_, err := r.StartStep(event.StepFetch, "fetch github.com/example-org/app")
+				if want := "exit step 1 before the next host step starts"; err == nil || !strings.HasPrefix(err.Error(), want) {
+					t.Errorf("a step after the join with a 403: %v, want an error that starts %q", err, want)
+				}
+				if err := cp.Log([]byte("the copy failed\n")); err != nil {
+					t.Fatal(err)
+				}
+				if err := cp.Exit(event.StateFailed, -1); err != nil {
+					t.Fatal(err)
+				}
+			},
+			outcome: session.Outcome{State: event.StateFailed, ExitCode: -1},
+			want: []string{
+				"step 1 copy copy work out",
+				"step 2 join join session 1", "step 2 failed -1", "session 1 exited",
+				"log <nil> 1 the copy failed", "step 1 failed -1", "run exited",
+			},
+		},
+		{
+			name: "a close with the step still open",
+			during: func(t *testing.T, r *session.Run, sp runSpec, _ *session.Step) {
+				if _, err := r.Join(ctx, bareSession(sp.SessionSpec)); err != nil {
+					t.Fatal(err)
+				}
+			},
+			outcome: session.Outcome{State: event.StateSucceeded},
+			want: []string{
+				"step 1 copy copy work out",
+				"step 2 join join session 1", "step 2 succeeded -1", "session 1 started", "session 1 exited",
+				"step 1 cancelled -1", "run exited",
+			},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t, "FAKE_EXIT=0")
+			if c.onJoin != nil {
+				g.OnJoin(c.onJoin)
+			}
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cp, err := r.StartStep(event.StepCopy, "copy work out")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.during(t, r, sp, cp)
+			if _, err := r.Close(ctx, c.outcome); err != nil {
+				t.Fatal(err)
+			}
+			for where, evs := range map[string][]map[string]any{"the record": events(t, &session.Result{Dir: r.Dir()}), "the link": g.Events()} {
+				if got := stepOrder(evs); !slices.Equal(got, c.want) {
+					t.Errorf("%s:\n%q\nwant\n%q", where, got, c.want)
+				}
+			}
+			batchesValid(t, g)
+		})
+	}
+}
+
 // TestOnlyASessionWithNoRuntimeJoinsDuringACopyStep pins the calls that return an error
 // during a copy step, each error starting with the fix and with nothing written: a join
 // of a session with a runtime, the host proxy and the build's result. During a push

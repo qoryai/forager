@@ -170,13 +170,17 @@ a time, apart from a join during a `copy` step:
   no step fetched yet, and a `wall` step, `start the wall`, up to the launch's start.
 - With setup commands inside the wall, `SessionSpec.Setup`, each command is a `setup`
   step after the `wall` step, with the command's name, such as `install`, its output as
-  the step's lines and its exit status. The runtime runs in no step, and a session's
-  lines have `step` only in its `image`, `wall` and `setup` steps.
+  the step's lines and its exit status. The runtime runs in no step, apart from a
+  session with no runtime that joins during a `copy` step, which runs while that step
+  is open. A session's lines have `step` only in its `image`, `wall` and `setup` steps.
 - A session with no runtime, `bare: true` in its `dev.qory.session.started`, may join
-  during a `copy` step. The steps of that join, numbered on from the `copy` step, start
-  and end inside the `copy` step, as the session does, and the caller exits the `copy`
-  step after the session. A session with a runtime does not join during a `copy` step,
-  and no session joins during a step of another kind.
+  during a `copy` step. The record then contains the `copy` step and, inside it, the
+  join's steps as separate numbered steps: `join`, and behind a wall `image` when no
+  step fetched the image yet, `wall`, and `setup` for each setup command. The session's
+  lines outside those steps have no `step`, so no line of the session has the `copy`
+  step's number. The caller exits the `copy` step after the session. A session with a
+  runtime does not join during a `copy` step, and no session joins during a step of
+  another kind.
 
 The close ends a host step still open `cancelled` with -1, before
 `dev.qory.run.exited`. When the gateway ends a run during a step, the run's stream has

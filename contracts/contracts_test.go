@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"reflect"
@@ -408,7 +409,8 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // session and no session starts during one, an image or a wall step lies inside a
 // session, and a run.log with both session and step is one of an image, a wall or a
 // setup step; and every step ends before run.exited, unless the gateway ended the run, whose
-// run.exited has a reason the close never writes.
+// run.exited has a reason the close never writes; and one step is open at a time, apart
+// from what [openSteps.breaks] allows inside a copy step.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
 	runs, err := fs.ReadDir(contracts.FS, "fixtures/run")
@@ -432,6 +434,7 @@ func TestRecordedRunValidates(t *testing.T) {
 		var log []byte
 		open, last := 0, 0
 		started, steps, stepped, kinds := false, 0, map[int]string{}, map[int]string{}
+		opened := openSteps{}
 		// openJoin reports whether a join step is open.
 		openJoin := func() bool {
 			for n, k := range kinds {
@@ -487,6 +490,9 @@ func TestRecordedRunValidates(t *testing.T) {
 			}
 			if m["type"] == "dev.qory.run.started" {
 				started = true
+			}
+			if broken := opened.breaks(m); broken != "" {
+				t.Errorf("%s: line %d: %s", dir, i+1, broken)
 			}
 			if n, ok := stepNumber(m); ok {
 				switch m["type"] {
@@ -585,6 +591,83 @@ func stepNumber(m map[string]any) (int, bool) {
 	}
 	v, err := n.Int64()
 	return int(v), err == nil
+}
+
+// openSteps is the steps of a recorded run that are open: each step's number and kind.
+type openSteps map[int]string
+
+// breaks applies m, an event of the run, and returns the overlap of steps it starts or
+// ends, or "" for none. One step is open at a time, apart from a join, an image, a wall
+// or a setup step, which starts and ends inside an open copy step.
+func (o openSteps) breaks(m map[string]any) string {
+	n, ok := stepNumber(m)
+	if !ok {
+		return ""
+	}
+	numbers := slices.Sorted(maps.Keys(o))
+	switch m["type"] {
+	case "dev.qory.run.step_started":
+		kind, _ := m["data"].(map[string]any)["kind"].(string)
+		o[n] = kind
+		inCopy := kind == "join" || kind == "image" || kind == "wall" || kind == "setup"
+		for _, other := range numbers {
+			if o[other] != "copy" || !inCopy {
+				return fmt.Sprintf("%s step %d starts inside %s step %d", kind, n, o[other], other)
+			}
+		}
+	case "dev.qory.run.step_exited":
+		kind := o[n]
+		delete(o, n)
+		for _, other := range numbers {
+			if other > n {
+				return fmt.Sprintf("%s step %d exits with %s step %d open inside it", kind, n, o[other], other)
+			}
+		}
+	}
+	return ""
+}
+
+// TestOneStepIsOpenAtATime pins [openSteps.breaks], the rule TestRecordedRunValidates
+// checks each recorded run against: the steps a join writes inside an open copy step
+// pass, and each other overlap returns the first event that breaks the rule.
+func TestOneStepIsOpenAtATime(t *testing.T) {
+	type step struct {
+		n    int
+		kind string // empty for the step's end
+	}
+	for _, c := range []struct {
+		name  string
+		steps []step
+		want  string
+	}{
+		{"steps one after another", []step{{1, "fetch"}, {1, ""}, {2, "copy"}, {2, ""}, {3, "join"}, {3, ""}}, ""},
+		{"the steps of a join inside a copy step", []step{
+			{1, "copy"}, {2, "join"}, {2, ""}, {3, "image"}, {3, ""}, {4, "wall"}, {4, ""}, {5, "setup"}, {5, ""}, {6, "join"}, {6, ""}, {1, ""},
+		}, ""},
+		{"a compose step inside a fetch step", []step{{1, "fetch"}, {2, "compose"}}, "compose step 2 starts inside fetch step 1"},
+		{"a join step inside a push step", []step{{1, "push"}, {2, "join"}}, "join step 2 starts inside push step 1"},
+		{"a wall step inside a join step", []step{{1, "join"}, {2, "wall"}}, "wall step 2 starts inside join step 1"},
+		{"a fetch step inside a copy step", []step{{1, "copy"}, {2, "fetch"}}, "fetch step 2 starts inside copy step 1"},
+		{"a copy step inside a copy step", []step{{1, "copy"}, {2, "copy"}}, "copy step 2 starts inside copy step 1"},
+		{"two steps at once inside a copy step", []step{{1, "copy"}, {2, "join"}, {3, "wall"}}, "wall step 3 starts inside join step 2"},
+		{"a copy step that ends before the step inside it", []step{{1, "copy"}, {2, "join"}, {1, ""}}, "copy step 1 exits with join step 2 open inside it"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			opened, got := openSteps{}, ""
+			for _, s := range c.steps {
+				m := map[string]any{"type": "dev.qory.run.step_exited", "data": map[string]any{"step": json.Number(strconv.Itoa(s.n))}}
+				if s.kind != "" {
+					m = map[string]any{"type": "dev.qory.run.step_started", "data": map[string]any{"step": json.Number(strconv.Itoa(s.n)), "kind": s.kind}}
+				}
+				if got = opened.breaks(m); got != "" {
+					break
+				}
+			}
+			if got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
 }
 
 // TestSessionExitedReasonsAreTheSessions pins the reasons of a dev.qory.session.exited in a
