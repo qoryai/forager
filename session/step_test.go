@@ -287,9 +287,9 @@ func TestCloseEndsAnOpenHostStep(t *testing.T) {
 
 // TestAStepsErrorsStartWithTheFix pins what a host step refuses, each with an error
 // that starts with the fix and with nothing written: a kind other than fetch, compose,
-// build, push, machine and copy, an empty name, a state outside the three, an exit code below
-// -1, a second host step while one is open, a join while one is open, a line or an exit
-// after the step exited, and a step while a session runs.
+// build, push, machine and copy, an empty name, a state outside the three, an exit
+// code below -1, a second host step while one is open, a join while one is open, a line
+// or an exit after the step exited, and a step while a session runs.
 func TestAStepsErrorsStartWithTheFix(t *testing.T) {
 	sp := spec(t, "FAKE_EXIT=0")
 	ctx := context.Background()

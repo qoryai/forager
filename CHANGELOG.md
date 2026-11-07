@@ -870,9 +870,10 @@ release may change what an existing document does, and says so under Upgrading.
   writes `bare` in `dev.qory.session.started`. A gateway built with an older contract
   refuses a batch with `bare`, because the event's schema has
   `additionalProperties: false`.
-- Update a separate gateway before the sessions that send a `copy` step. A gateway
-  built with an older contract refuses a batch with a `dev.qory.run.step_started` of
-  kind `copy`, because the kind is outside the `kind` enum of the event's schema.
+- Update a separate gateway before you run a caller that writes a `copy` step. A
+  gateway built with an older contract ends the run `failed` with `batch_refused` at
+  the batch with a `dev.qory.run.step_started` of kind `copy`, because `copy` is
+  outside the schema's `kind` enum.
 - List a host that resolves to a private network address by name in the node's allow
   list, or a walled run can no longer reach it.
 - Each run on a gateway now has limits: at most 256 connections open at once, and 50

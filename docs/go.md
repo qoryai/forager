@@ -370,9 +370,9 @@ failed and its lines:
 - `(*session.Run).StartStep(kind, name)` writes `dev.qory.run.step_started` with the
   run's next step number, shared with each join's steps, and returns a `*session.Step`.
   `kind` is `event.StepFetch`, `event.StepCompose`, `event.StepBuild`,
-  `event.StepPush`, host work that sends the run's commits, `event.StepMachine`, the
-  start of the machine the run runs on, or `event.StepCopy`, host work that copies the
-  session's work out of the wall. The run's masker replaces each forwarder's
+  `event.StepPush` (host work that sends the run's commits), `event.StepMachine` (the
+  start of the machine the run runs on), or `event.StepCopy` (host work that copies the
+  session's work out of the wall). The run's masker replaces each forwarder's
   password, each value of `OpenSpec.Masker` and each server's variable value of 8
   characters or more, apart from `QORY_RUN_SYSTEM`'s and `QORY_RUN_REPOSITORIES`', in
   `name`, and a `name` that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`,

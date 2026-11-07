@@ -25,9 +25,9 @@ type Step struct {
 
 // StartStep starts a step of the run's host work and writes its dev.qory.run.step_started,
 // with the run's next step number as step, name as name and kind as kind: event.StepFetch,
-// event.StepCompose, event.StepBuild, event.StepPush, event.StepMachine, the start of
-// the machine the run runs on, or event.StepCopy, host work that copies the session's
-// work out of the wall. Join numbers its steps from the same counter. The run's masker
+// event.StepCompose, event.StepBuild, event.StepPush, event.StepMachine (the start of
+// the machine the run runs on), or event.StepCopy (host work that copies the session's
+// work out of the wall). Join numbers its steps from the same counter. The run's masker
 // replaces each forwarder's password, each value of OpenSpec.Masker and each
 // server's variable value of 8 characters or more, apart from QORY_RUN_SYSTEM's and
 // QORY_RUN_REPOSITORIES', in name, and a name that contains qak_, qrk_, qecr_, qecn_,
