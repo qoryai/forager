@@ -1441,6 +1441,18 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `OpenSpec.RunAPICheck`, `session.RunAPIRequest` and `session.RunAPIRefusal`: a check
+  of each POST that a walled program sends to the run API, before anything of it reaches
+  the gateway. The run's forwarder reads the POST whole and calls the check. On `nil,
+  nil` it sends the POST on as the program sent it, with `Connection: close` added to the
+  head. A refusal goes to the program with its status, 400 to 499, and the gateway's JSON
+  error shape with `findings`. An error, a panic, an out-of-range status or 90 seconds
+  without a return gets a `503` `push_check_unavailable`. The forwarder reads and checks
+  one POST of the run at a time. With the check set, the
+  forwarder passes one request per connection through the wall, and a POST to the run
+  API's host with a `Transfer-Encoding`, several `Content-Length` values or a head that
+  net/http could read another way gets a `400`. Without the check, the forwarder passes
+  what the wall's relay sends as it is, byte for byte.
 - `QORY_RUN_API` in the agent's environment and in a setup container, with a wall and
   without, for a run with a control plane, and `(*session.Run).RunAPI`, which returns a
   client for host work and the base URL. `RunAPI` works from `Open` to `Close`, while a

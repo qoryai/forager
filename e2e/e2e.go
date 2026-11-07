@@ -1444,6 +1444,8 @@ type variant struct {
 	readOnly bool
 	// server, when set, is the gateway's control plane.
 	server *gateway.Server
+	// runAPICheck, when set, is OpenSpec.RunAPICheck.
+	runAPICheck func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error)
 }
 
 // run runs the probe as the runtime of a session behind the wall and reads what it
@@ -1569,6 +1571,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		RunID:          v.runID,
 		ForagerVersion: "walltest",
 		Report:         report,
+		RunAPICheck:    v.runAPICheck,
 	},
 		SessionSpec: session.SessionSpec{
 			Runtime:           rt,

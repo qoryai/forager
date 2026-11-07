@@ -104,14 +104,23 @@ func (r *Run) openWall(ctx context.Context) error {
 	r.enclosure = enclosure
 	bind := enclosure.ProxyAddr()
 	r.relayToken = r.answer.ProxySecret
+	var check *runAPICheck
+	if r.open.RunAPICheck != nil && r.answer.RunAPI != "" {
+		check = &runAPICheck{check: r.open.RunAPICheck, runID: r.id, done: r.closing, report: r.open.Report}
+	}
 	var fwd *forwarder
-	if r.remote == nil {
+	switch {
+	case r.remote == nil && check == nil:
 		fwd, err = listenForwarder(bind, r.disc.Proxy.Address, "", "")
-	} else {
+	case r.remote == nil:
+		// The forwarder reads each request, so it takes the relay's preamble off, and
+		// writes the same preamble again toward the proxy.
+		fwd, err = listenForwarding(bind, forwarding{dial: dialTCP(r.disc.Proxy.Address), secret: r.relayToken, hop: r.relayToken, check: check})
+	default:
 		if r.relayToken, err = newForwarderSecret(); err != nil {
 			return err
 		}
-		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, hop: r.relayToken})
+		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, hop: r.relayToken, check: check})
 	}
 	if err != nil {
 		return err

@@ -527,3 +527,68 @@ func TestAFilesEndReachesTheCallerOnEveryPath(t *testing.T) {
 		check(t, sp)
 	})
 }
+
+// TestASetupContainersPostToTheRunAPIIsChecked pins OpenSpec.RunAPICheck for the setup
+// container, which reaches the proxy through the run's forwarder as the agent does: a
+// POST under QORY_RUN_API for which the check returns a refusal gets the refusal and
+// never reaches the gateway's proxy, and one for which it returns nil, nil reaches it.
+func TestASetupContainersPostToTheRunAPIIsChecked(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	hasRunAPI(g)
+	w := &setupWall{}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	var mu sync.Mutex
+	var paths []string
+	sp.RunAPICheck = func(_ context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error) {
+		mu.Lock()
+		paths = append(paths, req.Path)
+		mu.Unlock()
+		if strings.Contains(string(req.Body), "failing") {
+			return &session.RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the failing test, then push again."}, nil
+		}
+		return nil, nil
+	}
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	target := link.RunAPIURL(r.ID()) + "/artifacts"
+	// send writes body in a POST to the setup container's proxy, after the relay's
+	// preamble, as the wall's relay sends it, and returns the reply.
+	send := func(body string) string {
+		c, err := net.Dial("tcp", w.setup.Proxy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		fmt.Fprintf(c, "%sPOST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+			link.RelayLine(w.setup.ProxyToken), target, link.RunAPIHost, len(body), body)
+		c.SetReadDeadline(time.Now().Add(10 * time.Second))
+		b, _ := io.ReadAll(c)
+		return string(b)
+	}
+	out := send(`{"artifacts":[{"name":"failing"}]}`)
+	if !strings.HasPrefix(out, "HTTP/1.1 422 Unprocessable Entity\r\n") ||
+		!strings.HasSuffix(out, `{"error":"push_checks_failed","message":"Fix the failing test, then push again."}`) {
+		t.Errorf("the refused POST got %q", out)
+	}
+	if got := g.Proxied(); slices.Contains(got, "POST "+target) {
+		t.Errorf("the refused POST reached the proxy: %q", got)
+	}
+	if out := send(`{"artifacts":[{"name":"report.md"}]}`); !strings.HasPrefix(out, "HTTP/1.1 200 OK\r\n") {
+		t.Errorf("the POST the check let pass got %q", out)
+	}
+	if got := g.Proxied(); !slices.Contains(got, "POST "+target) {
+		t.Errorf("the proxy got %q, no POST", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(paths, []string{"/artifacts", "/artifacts"}) {
+		t.Errorf("the check got %q", paths)
+	}
+}

@@ -4241,7 +4241,8 @@ run's id, another method, an HTTP/1.0 request that reaches the proxy, a target o
 one, a fragment, a port other than 80, an empty segment,
 `.` or `..`, or a segment that decodes to a slash, a backslash, a control character or
 bytes that are not UTF-8. The forwarder of a run with no wall sends every plain request
-as HTTP/1.1, so only a program behind a wall reaches the proxy with HTTP/1.0.
+as HTTP/1.1, and so does the forwarder of a walled run with a check before the push, so
+only a program behind a wall without such a check reaches the proxy with HTTP/1.0.
 
 **What Qory Apiary gets.** The gateway builds a request from the parsed path and signs it
 as every request of the server (§The server), to `<run.url>/<run_id>` and the path. No
@@ -4314,6 +4315,24 @@ status the caller got; for a file whose stream ended early, `502` when its bytes
 failed the digest and `503` otherwise. The event has no body and no header value. A
 `429` of the run's rate limit, which spends no token, is recorded at most once a second.
 The gateway writes no signature, key or answer into a record or a log line.
+
+**A check before the push.** A run can check each POST to the run API from behind its
+wall before anything of it reaches the gateway: qory checks a push of artifacts against
+the run's push checks. The run's forwarder reads the POST whole, then the check lets it
+go on or returns a refusal, which the program that sent the POST gets at once:
+
+| Status | `error` | When |
+|---|---|---|
+| `400` to `499`, the check's | the check's code | the check returns a refusal for the POST; the body may contain `findings`, a list of strings, and `message` may contain line feeds |
+| `400` | `bad_request` | the forwarder and the gateway could read the POST differently: not HTTP/1.1 to `http://run-api.qory.invalid/`, not exactly one `Host: run-api.qory.invalid`, a line that does not end in CRLF, a folded line, a `Transfer-Encoding`, or more than one `Content-Length`. A target that is not absolute-form gets the forwarder's plain-text `400`, as without a check |
+| `413` | `payload_too_large` | the `Content-Length` is over the path's limit, 64 KiB for `verdict` and 32 MiB for any other path; nothing is read |
+| `503` | `push_check_unavailable` | the check failed or did not finish within 90 seconds, or the POST waited 90 seconds behind another POST of the run, since the forwarder checks one at a time; run the push again |
+
+Each of these replies closes the connection, and nothing reaches the gateway. A POST the
+check lets pass goes to the gateway as the program sent it, with `Connection: close`,
+and the route treats it as any other. In such a run, the forwarder passes one request
+per connection through the wall: a CONNECT and its tunnel, or one plain request and its
+reply. The check gets no POST outside the run's path, no GET and no other method.
 
 **No tunnel.** A `CONNECT` to `run-api.qory.invalid` is denied with a `403` and, where the
 policy would allow it, the rule `wall:run-api`, in either mode. On a proxy with the

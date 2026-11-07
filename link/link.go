@@ -8,7 +8,10 @@
 // and the wire of the link to a separate gateway, its channel binding and its paths.
 package link
 
-import "io/fs"
+import (
+	"fmt"
+	"io/fs"
+)
 
 // Loopback is the address the proxy binds when it is given none: a port of the
 // system's choosing on loopback.
@@ -59,6 +62,19 @@ const EnvRunAPI = "QORY_RUN_API"
 // RunAPIURL is the base URL of the run API of the run runID, the same in the wall, in
 // host steps and in an unwalled run.
 func RunAPIURL(runID string) string { return "http://" + RunAPIHost + "/v1/runs/" + runID }
+
+// MaxRunAPIArtifacts and MaxRunAPIVerdict are the largest bodies, in bytes, of the run
+// API's POST artifacts and POST verdict: Qory Apiary's sizes, which the gateway's route
+// and a walled run's forwarder read whole.
+const (
+	MaxRunAPIArtifacts int64 = 32 << 20
+	MaxRunAPIVerdict   int64 = 64 << 10
+)
+
+// RunAPITooLarge is the message of the run API's 413 for a body over limit, in bytes.
+func RunAPITooLarge(limit int64) string {
+	return fmt.Sprintf("Shrink the body to at most %d bytes: the run API takes no more on this path.", limit)
+}
 
 // EnvToolListen names, in a tool's environment, the path of the Unix socket it listens
 // on.

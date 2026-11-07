@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,6 +61,32 @@ type OpenSpec struct {
 	// no wall, [Run.EngineProxy] starts one for host work, such as a build's pulls and
 	// push. Nil means the engine pulls over the machine's network.
 	EngineProxy *EngineProxy
+	// RunAPICheck, when set, checks each POST to the run API that a program behind the
+	// Wall sends, the agent's or a setup command's, before anything of it reaches the
+	// gateway: a POST to run-api.qory.invalid under /v1/runs/<run id>/, such as a push of
+	// artifacts. The run's forwarder reads the POST whole, as the gateway's route does,
+	// then calls RunAPICheck. When it returns nil, nil, the forwarder sends the POST on,
+	// the bytes RunAPICheck got with Connection: close added to the head, and the
+	// gateway's route checks it as any other. A [RunAPIRefusal] goes to the program
+	// instead, with its Status, which must be 400 to 499, and nothing reaches the
+	// gateway. An error, a panic, which is a Report line, a Status outside 400 to 499, or
+	// a call that outlasts its context gets a 503,
+	// {"error":"push_check_unavailable",...}, and nothing reaches the gateway either. The
+	// context ends after 90 seconds or when the run closes. The forwarder reads and
+	// checks one POST of the run at a time, as the gateway's route has one in flight; a
+	// POST that waits 90 seconds for its turn gets the 503 too.
+	//
+	// With RunAPICheck set in a run with a control plane, the forwarder passes one request
+	// per connection through the wall: a CONNECT and its tunnel, or one plain request and its
+	// reply, which the forwarder sends as HTTP/1.1. A POST to the run API host must reach
+	// the forwarder as net/http would read it, with no doubt about its host or the end of
+	// its body: HTTP/1.1 to http://run-api.qory.invalid/, one Host header with that
+	// host, every line ending in CRLF, no folded line, and a body of at most one
+	// Content-Length with no Transfer-Encoding; any other gets a 400. A body over the
+	// path's limit, 64 KiB for /verdict and 32 MiB otherwise, gets the gateway's 413.
+	// GETs, other methods and other hosts pass unchecked. Nil, and a run with no control
+	// plane, pass every connection through the wall as it arrives.
+	RunAPICheck func(ctx context.Context, req RunAPIRequest) (*RunAPIRefusal, error)
 	// ImagesAllow are the prefixes of the references pinned by digest a run's policy may
 	// name its image by, for qory images.allow: an entry covers a reference that starts
 	// with it when the entry ends in / or @, or the reference's next character is / or
