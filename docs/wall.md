@@ -731,15 +731,17 @@ types. They are measured inside the enclosure, and are not for limits or billing
   and a cgroup namespace of the container's, Docker's default on cgroup v2. With cgroup
   v1, or with `--cgroupns=host`, the event has neither.
 - A value the helper cannot read is left out, never 0: `memory.peak` needs Linux 5.19
-  or later.
-- The values cover the agent's container: the runtime, the setup commands and every
-  process they start. With nested Docker they cover the daemon and the containers the
-  agent starts too. The setup container is not measured.
+  or later. A value over 2^53-1 is left out too.
+- The values cover the agent's container: the setup commands that run inside the
+  enclosure before the runtime, the runtime, and every process they start. With nested
+  Docker they cover the daemon and the containers the agent starts too. Only the setup
+  container and the host steps are outside.
 - A run without a wall has neither.
 
 The helper stays the runtime's parent while it waits, with the runtime's user, groups
 and capabilities, `no_new_privs` set, and no file descriptor above 2 but the Go
-runtime's poller. It starts the runtime in a separate process group. On a terminal
+runtime's poller. It is not dumpable while it waits, so the agent cannot read its
+`/proc` files or trace it. It starts the runtime in a separate process group. On a terminal
 that group is the foreground group, so the terminal sends a Ctrl-C or a resize to the
 runtime alone, and the helper passes neither on again.
 The helper passes on the signals that reach it, such as the stop signal, and exits with

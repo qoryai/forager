@@ -213,9 +213,10 @@ release may change what an existing document does, and says so under Upgrading.
 - `peak_memory_bytes` and `cpu_time_ms` on `dev.qory.session.exited`: behind a wall,
   the enclosure's peak memory in bytes and its CPU time in milliseconds when the
   runtime exited, as measured inside the enclosure, to size machine types; not for
-  limits or billing. Each is an integer of 0 or more, and absent when it could not be
-  read, never 0. With nested Docker they cover the daemon and the containers the agent
-  starts too. A run without a wall, a refused join, a failure before the runtime starts
+  limits or billing. Each is an integer from 0 to 2^53-1, and absent when it could not
+  be read, never 0. They include the setup commands that run inside the enclosure
+  before the runtime; only the setup container and the host steps are outside. With
+  nested Docker they cover the daemon and the containers the agent starts too. A run without a wall, a refused join, a failure before the runtime starts
   and a session open when the run ended have neither: an event with `exit_code` `-1`
   and no `signal` that has either fails the schema. The README's §The events, The measure
   of the enclosure, states which record counts.
@@ -1922,8 +1923,9 @@ release may change what an existing document does, and says so under Upgrading.
   of `wall.Nest` stay as they were, so a caller changes nothing. Without a wall nothing
   changes.
 - The helper's exec stays the runtime's parent and waits for it, in place of executing
-  it. It closes every file descriptor above 2 but the Go runtime's poller, and runs as
-  the runtime does: with nested Docker, `wall.Nest` executes it after it becomes the
+  it. It closes every file descriptor above 2 but the Go runtime's poller, is not
+  dumpable while it waits, so no process of the agent's reads its `/proc` files or
+  traces it, and runs as the runtime does: with nested Docker, `wall.Nest` executes it after it becomes the
   agent's user. It starts the runtime in a separate process group, which is the
   terminal's foreground group on a terminal, so the terminal sends a Ctrl-C or a resize
   to the runtime alone, as before, and the helper's exec passes neither on again. It

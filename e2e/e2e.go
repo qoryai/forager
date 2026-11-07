@@ -445,7 +445,7 @@ func Run(t *testing.T, o Options) {
 	check("the helper's exec waits with nothing the agent lacks", p.Parent.problem() == "", p.Parent.problem())
 	t.Run("session.exited has the enclosure's peak memory and CPU time", func(t *testing.T) {
 		if !o.Hooks {
-			t.Skip("the adapter carries no hook socket across on this machine, so the measure does not reach the session")
+			t.Skip("the adapter does not bind the hook socket into the enclosure on this machine, so the measure does not reach the session")
 		}
 		if !p.CgroupV2 {
 			Skip(t, "the enclosure has no cgroup v2 with a cgroup namespace: /sys/fs/cgroup/memory.max does not exist inside")

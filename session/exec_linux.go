@@ -1,7 +1,9 @@
 package session
 
 import (
+	"errors"
 	"os"
+	"os/signal"
 	"runtime"
 	"strconv"
 	"syscall"
@@ -67,4 +69,26 @@ func raise(sig syscall.Signal) {
 	set := uint64(1) << (uint(sig) - 1)
 	unix.RawSyscall6(unix.SYS_RT_SIGPROCMASK, unix.SIG_UNBLOCK, uintptr(unsafe.Pointer(&set)), 0, unsafe.Sizeof(set), 0, 0)
 	unix.Tgkill(unix.Getpid(), unix.Gettid(), sig)
+}
+
+// ignore keeps sigs from ending the process.
+func ignore(sigs []os.Signal) {
+	signal.Ignore(sigs...)
+}
+
+// undumpable makes the process not dumpable, so a process of the agent's user cannot
+// read its /proc files, trace it or take its descriptors.
+func undumpable() {
+	unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
+}
+
+// exited waits until the process pid has exited, leaves it to be reaped, and reports
+// true.
+func exited(pid int) bool {
+	var info unix.Siginfo
+	for {
+		if err := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOWAIT, nil); !errors.Is(err, unix.EINTR) {
+			return true
+		}
+	}
 }

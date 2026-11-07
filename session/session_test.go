@@ -69,6 +69,7 @@ func TestMain(m *testing.M) {
 			root = "/nonexistent/cgroup"
 		}
 		session.SetCgroupRoot(root)
+		session.SetExecHooks(listFDs(os.Getenv("FAKE_FDS_OUT")), waitAfter(os.Getenv("FAKE_AFTER_WAIT")))
 		os.Exit(session.Exec(os.Args[2:], os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "setup-command" {
@@ -194,6 +195,12 @@ func fakeRuntime() int {
 		if err := socket.Send(context.Background(), os.Getenv(session.EnvSocket), recs); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 93
+		}
+		// FAKE_HANG is a file to write once the records are sent; the runtime then runs
+		// until it is stopped.
+		if hang := os.Getenv("FAKE_HANG"); hang != "" {
+			os.WriteFile(hang, []byte("sent"), 0o600)
+			time.Sleep(time.Minute)
 		}
 	}
 	time.Sleep(60 * time.Millisecond)

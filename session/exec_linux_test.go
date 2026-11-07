@@ -10,17 +10,20 @@ import (
 )
 
 // parentScript writes what the program sees of its parent, the helper's exec, while
-// it waits: each file descriptor and its target in $OUT/fds, the lines of its status
-// that hold its users, groups, capabilities and no_new_privs in $OUT/parent, and the
-// same lines of the program's status in $OUT/self.
-const parentScript = `for f in /proc/$PPID/fd/*; do echo "${f##*/} $(readlink "$f")"; done > "$OUT/fds"
+// it waits: the owner of its /proc fd directory in $OUT/owner, "denied" in $OUT/fds when
+// its descriptors cannot be listed, the lines of its status that contain its users,
+// groups, capabilities and no_new_privs in $OUT/parent, and the same lines of the
+// program's status in $OUT/self.
+const parentScript = `stat -c %u /proc/$PPID/fd > "$OUT/owner"
+ls /proc/$PPID/fd > /dev/null 2>&1 || echo denied > "$OUT/fds"
 grep -E '^(Uid|Gid|Groups|CapInh|CapPrm|CapEff|CapBnd|CapAmb|NoNewPrivs):' /proc/$PPID/status > "$OUT/parent"
 grep -E '^(Uid|Gid|Groups|CapInh|CapPrm|CapEff|CapBnd|CapAmb|NoNewPrivs):' /proc/$$/status > "$OUT/self"`
 
 // TestTheHelpersExecWaitsWithNothingTheProgramLacks pins the helper's exec while it
-// waits as the program's parent: no file descriptor above 2 but the Go runtime's
-// poller, an eventpoll and an eventfd, even one its parent passed on; and the program's
-// users, groups, capabilities and no_new_privs.
+// waits as the program's parent: as it starts the program, no file descriptor above 2
+// but the Go runtime's poller, an eventpoll and an eventfd, even one its parent passed
+// on, as it lists them itself; not dumpable, so the program, unless it runs as root,
+// cannot list them; and the program's users, groups, capabilities and no_new_privs.
 func TestTheHelpersExecWaitsWithNothingTheProgramLacks(t *testing.T) {
 	dir := t.TempDir()
 	passed, err := os.Create(filepath.Join(dir, "passed-on"))
@@ -29,20 +32,28 @@ func TestTheHelpersExecWaitsWithNothingTheProgramLacks(t *testing.T) {
 	}
 	defer passed.Close()
 	cmd := exec.Command(os.Args[0], "exec", "--", "sh", "-c", parentScript)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "OUT=" + dir}
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "OUT=" + dir, "FAKE_FDS_OUT=" + filepath.Join(dir, "own-fds")}
 	cmd.ExtraFiles = []*os.File{passed}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
-	fds, _ := os.ReadFile(filepath.Join(dir, "fds"))
+	fds, _ := os.ReadFile(filepath.Join(dir, "own-fds"))
+	if len(fds) == 0 {
+		t.Fatal("the helper's exec listed no descriptors")
+	}
 	for _, line := range strings.Split(strings.TrimSpace(string(fds)), "\n") {
 		fd, target, _ := strings.Cut(line, " ")
 		switch {
 		case fd == "0" || fd == "1" || fd == "2":
 		case target == "anon_inode:[eventpoll]" || target == "anon_inode:[eventfd]":
 		default:
-			t.Errorf("the helper's exec waits with descriptor %s open on %s", fd, target)
+			t.Errorf("the helper's exec starts the program with descriptor %s open on %s", fd, target)
 		}
+	}
+	owner, _ := os.ReadFile(filepath.Join(dir, "owner"))
+	denied, _ := os.ReadFile(filepath.Join(dir, "fds"))
+	if os.Geteuid() != 0 && (strings.TrimSpace(string(owner)) != "0" || strings.TrimSpace(string(denied)) != "denied") {
+		t.Errorf("the helper's exec waits dumpable: its /proc fd directory belongs to uid %q, and the program lists its descriptors: %v", owner, len(denied) == 0)
 	}
 	parent, _ := os.ReadFile(filepath.Join(dir, "parent"))
 	self, _ := os.ReadFile(filepath.Join(dir, "self"))

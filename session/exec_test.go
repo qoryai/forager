@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -255,5 +256,63 @@ func TestTheHelpersExecGivesTheProgramTheTerminal(t *testing.T) {
 	f := strings.Fields(string(groups))
 	if len(f) != 2 || f[0] != f[1] || f[0] == strconv.Itoa(cmd.Process.Pid) {
 		t.Errorf("the program's process group and the terminal's foreground group: %q; want one group, not the helper's %d", groups, cmd.Process.Pid)
+	}
+}
+
+// listFDs is the helper's exec's hook that writes each of its file descriptors and
+// its target to out, one a line; nil for an empty out.
+func listFDs(out string) func() {
+	if out == "" {
+		return nil
+	}
+	return func() {
+		dir, err := os.Open("/proc/self/fd")
+		if err != nil {
+			return
+		}
+		names, _ := dir.Readdirnames(-1)
+		var b strings.Builder
+		for _, name := range names {
+			// The list leaves out the descriptor that reads it.
+			if name == strconv.Itoa(int(dir.Fd())) {
+				continue
+			}
+			target, _ := os.Readlink("/proc/self/fd/" + name)
+			fmt.Fprintf(&b, "%s %s\n", name, target)
+		}
+		dir.Close()
+		os.WriteFile(out, []byte(b.String()), 0o600)
+	}
+}
+
+// waitAfter is the helper's exec's hook that, once the program is reaped, writes
+// out and waits a second; nil for an empty out.
+func waitAfter(out string) func() {
+	if out == "" {
+		return nil
+	}
+	return func() {
+		os.WriteFile(out, []byte("reaped"), 0o600)
+		time.Sleep(time.Second)
+	}
+}
+
+// TestASignalAfterTheProgramExitedChangesNothing pins the helper's exec once the
+// program exited: a TERM that reaches it while it sends the measure neither ends it
+// nor changes its exit status, the program's.
+func TestASignalAfterTheProgramExitedChangesNothing(t *testing.T) {
+	reaped := filepath.Join(t.TempDir(), "reaped")
+	cmd := exec.Command(os.Args[0], "exec", "--", "sh", "-c", "exit 5")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "FAKE_AFTER_WAIT=" + reaped}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, reaped)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Wait()
+	if code := cmd.ProcessState.ExitCode(); code != 5 {
+		t.Errorf("the helper's exec ended with %v; want the program's 5", cmd.ProcessState)
 	}
 }

@@ -5,6 +5,17 @@
   "description": "One unit of runtime output as a descriptor reads it, one report of a setup command that runs inside the wall, or the measure of the enclosure as its runtime exits: the source it came from and the record itself. The shape of the lines a hook forwarder, a setup runner and the helper's exec write to the local socket, and of a descriptor fixture's records.jsonl.",
   "type": "object",
   "additionalProperties": false,
+  "if": {"properties": {"source": {"const": "measure"}}, "required": ["source"]},
+  "then": {
+    "properties": {
+      "record": {
+        "properties": {
+          "peak_memory_bytes": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+          "cpu_time_ms": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}
+        }
+      }
+    }
+  },
   "required": [
     "source",
     "record"
@@ -21,7 +32,7 @@
       ]
     },
     "record": {
-      "description": "The JSON object as the runtime produced it, unchanged; for setup, command, the command's number from 1, and event: started, line with stream (stdout or stderr), bytes (the line in standard base64) and, on a line the runner writes when it cannot start or wait for the command, runner true, or exited with exit_code (0 to 255); for measure, peak_memory_bytes and cpu_time_ms, each a whole number of 0 or more, and each left out when it could not be read.",
+      "description": "The JSON object as the runtime produced it, unchanged; for setup, command, the command's number from 1, and event: started, line with stream (stdout or stderr), bytes (the line in standard base64) and, on a line the runner writes when it cannot start or wait for the command, runner true, or exited with exit_code (0 to 255); for measure, peak_memory_bytes and cpu_time_ms, each a whole number from 0 to 2^53-1, and each left out when it could not be read.",
       "type": "object"
     }
   }

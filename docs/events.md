@@ -120,7 +120,8 @@ types; they are not for limits or billing:
 - `peak_memory_bytes`, the most memory the agent's container used, in bytes;
 - `cpu_time_ms`, the CPU time it used, in milliseconds.
 
-Each is left out when it could not be read, never 0. With nested Docker they cover the
+Each is left out when it could not be read, never 0. They include the setup commands
+that run inside the enclosure before the runtime; with nested Docker they cover the
 daemon and the containers the agent starts too. See
 [the measure of the enclosure](wall.md#the-measure-of-the-enclosure).
 

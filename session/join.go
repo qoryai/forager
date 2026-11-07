@@ -847,8 +847,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		exited["signal"] = exit.signal
 	}
 	if !closed {
-		// The socket is drained by now, so the measure the helper's exec sent before
-		// the enclosure ended has been read.
+		// The socket is closed by now: the measure is here when it reached the session
+		// within the close's grace.
 		measureMu.Lock()
 		maps.Copy(exited, measure)
 		measureMu.Unlock()
@@ -883,11 +883,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 
 // measured are the members of a record of the measure source that the session puts on
 // dev.qory.session.exited: peak_memory_bytes and cpu_time_ms, each when it is a whole
-// number from 0 up to the largest int64.
+// number from 0 to 2^53-1.
 func measured(rec map[string]any) map[string]any {
 	out := map[string]any{}
 	for _, name := range []string{"peak_memory_bytes", "cpu_time_ms"} {
-		if v, ok := rec[name].(float64); ok && v >= 0 && v < math.MaxInt64 && v == math.Trunc(v) {
+		if v, ok := rec[name].(float64); ok && v >= 0 && v <= maxMeasure && v == math.Trunc(v) {
 			out[name] = int64(v)
 		}
 	}

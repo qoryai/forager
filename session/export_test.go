@@ -10,6 +10,10 @@ import (
 // SetCgroupRoot sets where [Exec] reads the enclosure's cgroup v2 files.
 func SetCgroupRoot(root string) { cgroupRoot = root }
 
+// SetExecHooks sets what [Exec] calls just before it starts the program and once it
+// has reaped it; nil for nothing.
+func SetExecHooks(before, after func()) { beforeStart, afterWait = before, after }
+
 // SetCloseWait sets how long the sinks get to flush at the end of a join and at the
 // close.
 func SetCloseWait(d time.Duration) { closeWait = d }

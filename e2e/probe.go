@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/qoryai/forager/link"
@@ -124,12 +125,16 @@ type report struct {
 
 // parentReport is what the probe sees of its parent process: its arguments, the lines
 // of its status and of the probe's that contain users, groups, capabilities and
-// no_new_privs, and each file descriptor with its target, or why one could not be read.
+// no_new_privs, the owner of its /proc fd directory, which is root while it is not
+// dumpable, and each file descriptor with its target, or why the list could not be
+// read; Err is why the rest could not be read.
 type parentReport struct {
 	Args   []string `json:"args"`
 	Status []string `json:"status"`
 	Self   []string `json:"self"`
+	Owner  int      `json:"owner"`
 	FDs    []string `json:"fds"`
+	FDsErr string   `json:"fds_err"`
 	Err    string   `json:"err"`
 }
 
@@ -169,9 +174,15 @@ func probeParent() parentReport {
 		return r
 	}
 	r.Self, _ = statusLines("self")
+	r.Owner = -1
+	if info, err := os.Stat("/proc/" + pid + "/fd"); err == nil {
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			r.Owner = int(st.Uid)
+		}
+	}
 	entries, err := os.ReadDir("/proc/" + pid + "/fd")
 	if err != nil {
-		r.Err = err.Error()
+		r.FDsErr = err.Error()
 		return r
 	}
 	for _, e := range entries {
@@ -182,8 +193,9 @@ func probeParent() parentReport {
 }
 
 // problem is what is wrong with the parent: not the helper's exec, other users, groups
-// or privileges than the probe's, or a file descriptor above 2 other than the Go
-// runtime's poller, an eventpoll and an eventfd. Empty when nothing is.
+// or privileges than the probe's, dumpable, so the probe can list its descriptors, or
+// a file descriptor above 2 other than the Go runtime's poller, an eventpoll and an
+// eventfd. Empty when nothing is.
 func (r parentReport) problem() string {
 	switch {
 	case r.Err != "":
@@ -192,6 +204,8 @@ func (r parentReport) problem() string {
 		return fmt.Sprintf("the parent is %q, not the helper's exec", r.Args)
 	case len(r.Status) != len(privileges) || !slices.Equal(r.Status, r.Self):
 		return fmt.Sprintf("the helper's exec waits with %q and the agent runs with %q", r.Status, r.Self)
+	case r.Owner != 0 || r.FDsErr == "":
+		return fmt.Sprintf("the helper's exec waits dumpable: its /proc fd directory belongs to uid %d, and the agent lists its descriptors %q (%s)", r.Owner, r.FDs, r.FDsErr)
 	}
 	for _, fd := range r.FDs {
 		n, target, _ := strings.Cut(fd, " ")

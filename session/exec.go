@@ -27,7 +27,7 @@ import (
 func checkExec(spec runSpec) error {
 	switch {
 	case spec.Wall != nil && len(spec.Exec) == 0:
-		return errors.New("a walled run starts every launch through Exec, the helper's exec, and the spec has none")
+		return errors.New(`Set SessionSpec.Exec to the helper's exec, such as {wall.HelperPath, "exec"}: a walled run starts every launch through it`)
 	case len(spec.Exec) > 0 && spec.Exec[0] == "":
 		return errors.New("Exec's program is empty")
 	case slices.ContainsFunc(spec.Exec, func(w string) bool { return strings.ContainsRune(w, 0) }):
@@ -55,21 +55,24 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // node's denied ones. So a value the image gives one never reaches the runtime, and
 // neither does an empty one, which a program may read as set. Every other variable
 // stays as it is. Exec finds the program in PATH by [exec.LookPath] and does not run
-// one found only through . or an empty entry of PATH, which LookPath refuses.
+// one found only through . or an empty entry of PATH, for which LookPath returns an
+// error.
 //
 // Exec stays the program's parent and waits for it, so it can measure the enclosure
-// once the program exits. Before it starts the program it closes every file
-// descriptor above 2, apart from the Go runtime's poller, an eventpoll and an eventfd,
-// which reach no file. It runs as the program does: the same user, groups and
-// capabilities. With nested Docker, [wall.Nest] executes Exec after it becomes the
-// agent's user. Exec starts the program in a separate process group, as a shell
-// starts a job. When its standard input is a terminal whose foreground group is
-// Exec's, that group becomes the program's, so the terminal sends INT, QUIT, TSTP and
-// WINCH to the program alone, once each. Exec never reads or writes the terminal while
-// it waits. It passes each of HUP, INT, QUIT, ABRT, USR1, USR2, ALRM, TERM, CONT,
-// TSTP, TTIN, TTOU and WINCH that reaches it, such as the stop signal docker-init
-// passes on, to the program, except HUP or INT when its parent started it with that
-// signal ignored: the program then inherits it ignored.
+// once the program exits. Before it starts the program it closes every file descriptor
+// above 2, apart from the Go runtime's poller, an eventpoll and an eventfd, which reach
+// no file. It runs as the program does: the same user, groups and capabilities. It is
+// not dumpable while it waits, so no process of the agent's reads its /proc files or
+// traces it. With nested Docker, [wall.Nest] executes Exec after it becomes the agent's
+// user. Exec starts the program in a separate process group, as a shell starts a job.
+// When its standard input is a terminal whose foreground group is Exec's, that group
+// becomes the program's, so the terminal sends INT, QUIT, TSTP and WINCH to the program
+// alone, once each. Exec never reads or writes the terminal while it waits. It passes
+// each of HUP, INT, QUIT, ABRT, USR1, USR2, ALRM, TERM, CONT, TSTP, TTIN, TTOU and
+// WINCH that reaches it, such as the stop signal docker-init passes on, to the program,
+// except HUP or INT when its parent started it with that signal ignored: the program
+// then inherits it ignored. A signal that reaches Exec after the program has exited
+// changes nothing.
 //
 // When the program has exited and [EnvSocket] is set, Exec reads the enclosure's peak
 // memory and CPU time from its cgroup v2 files and sends them to the session's socket
@@ -189,6 +192,12 @@ func startAndWait(path string, argv []string) (int, syscall.Signal, error) {
 	if foreground() {
 		attr.Foreground, attr.Ctty = true, 0
 	}
+	// While Exec waits, no process of the agent's reads its memory, environment or
+	// descriptors, or traces it: the program's execve makes the program dumpable again.
+	undumpable()
+	if beforeStart != nil {
+		beforeStart()
+	}
 	pid, err := syscall.ForkExec(path, argv, &syscall.ProcAttr{Env: os.Environ(), Files: []uintptr{0, 1, 2}, Sys: attr})
 	if err != nil {
 		signal.Stop(sigs)
@@ -207,6 +216,17 @@ func startAndWait(path string, argv []string) (int, syscall.Signal, error) {
 			mu.Unlock()
 		}
 	}()
+	// No signal is passed on once the program has exited: its pid may belong to
+	// another process once it is reaped. Where exited cannot wait without reaping, a
+	// signal may still be passed on between the reaping and the lock.
+	stop := func() {
+		mu.Lock()
+		reaped = true
+		mu.Unlock()
+	}
+	if exited(pid) {
+		stop()
+	}
 	var ws syscall.WaitStatus
 	for {
 		_, err = syscall.Wait4(pid, &ws, 0, nil)
@@ -214,12 +234,16 @@ func startAndWait(path string, argv []string) (int, syscall.Signal, error) {
 			break
 		}
 	}
-	mu.Lock()
-	reaped = true
-	mu.Unlock()
+	stop()
+	// A signal from now on, while Exec sends the measure, changes nothing: Exec ends
+	// with the program's status. raise sets the default action of the one it sends.
+	ignore(notify)
 	signal.Stop(sigs)
 	close(sigs)
 	<-done
+	if afterWait != nil {
+		afterWait()
+	}
 	switch {
 	case err != nil:
 		// The child is no longer Exec's to wait for: no status is known.
@@ -237,6 +261,14 @@ func foreground() bool {
 	return err == nil && pgrp == syscall.Getpgrp()
 }
 
+// beforeStart, when set, runs just before the program starts, and afterWait once the
+// program is reaped: a test's hooks.
+var beforeStart, afterWait func()
+
+// maxMeasure is the largest value of a measure, 2^53-1, which every JSON reader,
+// JavaScript's included, reads exactly.
+const maxMeasure = 1<<53 - 1
+
 // cgroupRoot is where the enclosure's cgroup v2 files are.
 var cgroupRoot = "/sys/fs/cgroup"
 
@@ -244,21 +276,21 @@ var cgroupRoot = "/sys/fs/cgroup"
 // under root: peak_memory_bytes from memory.peak and cpu_time_ms from the usage_usec
 // line of cpu.stat, divided by 1000 and rounded down. It reads nothing when
 // root/memory.max does not exist. A file it cannot read, or a value that is not a
-// whole number of 0 or more, leaves its member out.
+// whole number from 0 to 2^53-1, leaves its member out.
 func readMeasure(root string) map[string]any {
 	if _, err := os.Stat(filepath.Join(root, "memory.max")); err != nil {
 		return nil
 	}
 	m := map[string]any{}
 	if b, err := os.ReadFile(filepath.Join(root, "memory.peak")); err == nil {
-		if v, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil && v >= 0 {
+		if v, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil && v >= 0 && v <= maxMeasure {
 			m["peak_memory_bytes"] = v
 		}
 	}
 	if b, err := os.ReadFile(filepath.Join(root, "cpu.stat")); err == nil {
 		for _, line := range strings.Split(string(b), "\n") {
 			if f := strings.Fields(line); len(f) == 2 && f[0] == "usage_usec" {
-				if v, err := strconv.ParseInt(f[1], 10, 64); err == nil && v >= 0 {
+				if v, err := strconv.ParseInt(f[1], 10, 64); err == nil && v >= 0 && v/1000 <= maxMeasure {
 					m["cpu_time_ms"] = v / 1000
 				}
 				break

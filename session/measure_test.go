@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -45,6 +47,7 @@ func TestSessionExitedHasTheMeasureOfTheEnclosure(t *testing.T) {
 		{"the last of two records counts", true, []string{"FAKE_MEASURE={\"peak_memory_bytes\": 100, \"cpu_time_ms\": 5}\n{\"peak_memory_bytes\": 2048, \"cpu_time_ms\": 7}"}, 0, float64(2048), float64(7), "succeeded"},
 		{"a member that is no whole number of 0 or more is left out", true, []string{"FAKE_MEASURE={\"peak_memory_bytes\": -1, \"cpu_time_ms\": 7}"}, 0, nil, float64(7), "succeeded"},
 		{"a fraction and a string are left out", true, []string{"FAKE_MEASURE={\"peak_memory_bytes\": 1.5, \"cpu_time_ms\": \"7\"}"}, 0, nil, nil, "succeeded"},
+		{"a value over 2^53-1 is left out", true, []string{"FAKE_MEASURE={\"peak_memory_bytes\": 9007199254740992, \"cpu_time_ms\": 9007199254740991}"}, 0, nil, float64(9007199254740991), "succeeded"},
 		{"no record, no measure", true, nil, 0, nil, nil, "succeeded"},
 		{"no wall, no measure", false, []string{"FAKE_MEASURE={\"peak_memory_bytes\": 100, \"cpu_time_ms\": 5}"}, 0, nil, nil, "succeeded"},
 	} {
@@ -67,4 +70,46 @@ func TestSessionExitedHasTheMeasureOfTheEnclosure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTheMeasureOfAStoppedSession pins the measure of a session the session stopped:
+// on the dev.qory.session.exited of a runtime stopped at the run's time limit, which
+// exited; and on none of a session still open when the gateway closed the run, whose
+// end is the run's.
+func TestTheMeasureOfAStoppedSession(t *testing.T) {
+	measure := "FAKE_MEASURE={\"peak_memory_bytes\": 2048, \"cpu_time_ms\": 7}"
+	t.Run("at the time limit", func(t *testing.T) {
+		sp := spec(t, measure, "FAKE_HANG="+filepath.Join(t.TempDir(), "sent"))
+		sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
+		sp.Timeout = 2 * time.Second
+		res, err := run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := data(ofType(events(t, res), "dev.qory.session.exited")[0])
+		if !res.TimedOut || d["state"] != "cancelled" || d["reason"] != "timeout" || d["peak_memory_bytes"] != float64(2048) || d["cpu_time_ms"] != float64(7) {
+			t.Errorf("timed out %v, session.exited %v; want cancelled, timeout and the measure", res.TimedOut, d)
+		}
+	})
+	t.Run("the run closed", func(t *testing.T) {
+		sent := filepath.Join(t.TempDir(), "sent")
+		sp, g := specGateway(t, measure, "FAKE_HANG="+sent)
+		sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
+		sp.StopGrace = time.Second
+		g.SetInterval(1)
+		g.OnBatch(func([]map[string]any) linktest.Reply {
+			if _, err := os.Stat(sent); err != nil {
+				return linktest.Reply{Status: 200}
+			}
+			return *gone("stopped", "cancelled", "no_longer_needed")
+		})
+		res, err := run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := data(ofType(events(t, res), "dev.qory.session.exited")[0])
+		if _, ok := d["peak_memory_bytes"]; !res.RunClosed || ok || d["cpu_time_ms"] != nil {
+			t.Errorf("run closed %v, session.exited %v; want no measure", res.RunClosed, d)
+		}
+	})
 }

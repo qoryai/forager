@@ -47,6 +47,8 @@ func TestReadMeasureReadsTheCgroupFiles(t *testing.T) {
 			map[string]any{"peak_memory_bytes": int64(7)}},
 		{"values that do not parse", map[string]string{"memory.max": "max\n", "memory.peak": "lots\n", "cpu.stat": "usage_usec -5\n"}, map[string]any{}},
 		{"a value past int64", map[string]string{"memory.max": "max\n", "memory.peak": "99999999999999999999\n", "cpu.stat": "usage_usec 1.5\n"}, map[string]any{}},
+		{"a value over 2^53-1", map[string]string{"memory.max": "max\n", "memory.peak": "9007199254740992\n", "cpu.stat": "usage_usec 9007199254740991999\n"},
+			map[string]any{"cpu_time_ms": int64(9007199254740991)}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()
