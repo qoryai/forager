@@ -674,6 +674,10 @@ release may change what an existing document does, and says so under Upgrading.
   any format verb, also as a field of a struct printed by reflection; `sealed.Seal`
   seals and signs an answer, for a receiver and the tests. Each refusal is one of the
   package's errors, and no error contains a value.
+- `dev.qory.session.started` contains `bare`, `true`, when `SessionSpec.Runtime` is nil,
+  so a reader can leave a session with no runtime out of what it records as the run's
+  runtime. A session whose runtime the caller sets has no `bare`, even a bare runtime.
+  The command may still be an agent, because Forager does not inspect it.
 
 #### Changed
 
@@ -856,6 +860,10 @@ release may change what an existing document does, and says so under Upgrading.
   `tools.summary` lists, on pipes or on a pseudo-terminal, and `line`,
   `dev.qory.runtime.text`, `dev.qory.runtime.tool_result` and
   `dev.qory.runtime.tool_denied` from the first stdout line that a rule maps, on pipes.
+- Update a separate gateway before the sessions that use it. A session with no runtime
+  writes `bare` in `dev.qory.session.started`. A gateway built with an older contract
+  refuses a batch with `bare`, because the event's schema has
+  `additionalProperties: false`.
 - List a host that resolves to a private network address by name in the node's allow
   list, or a walled run can no longer reach it.
 - Each run on a gateway now has limits: at most 256 connections open at once, and 50
@@ -1309,6 +1317,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Expect an error from the Docker wall's `Close` when the engine cannot be reached: it
+  counts only `no such container` as gone for a container. Before, a missing engine
+  socket counted as gone.
 - A wall outside Forager: the session calls `Prepare` in `session.Open`, once per run,
   and `Wrap` once per session on the one enclosure `Prepare` returned, with `Unwrap`,
   when the enclosure has it, at the session's end.
@@ -1402,7 +1413,13 @@ release may change what an existing document does, and says so under Upgrading.
   live-restore keeps the agent's container running, now fails `Unwrap`: the run keeps its
   entry among the walled runs still going, takes no further joins, and `HostProxy`
   returns an error. Before, `no such file or directory` counted as gone, and a push could
-  run beside the agent's container. `Close` keeps its reading.
+  run beside the agent's container.
+- The Docker wall's `Close` counts only `no such container` as gone for a container, as
+  `Unwrap` and `RemoveSetup` do. An engine that cannot be reached fails `Close`: the run
+  reports the failure, keeps its entry among the walled runs still going, and sets
+  `session.Closed.WallKept`. Before, `no such file or directory` counted as gone while
+  the containers might still run. A failed `docker network rm` still counts `no such`
+  and `not found` as gone.
 
 ### Session
 
@@ -1761,6 +1778,12 @@ release may change what an existing document does, and says so under Upgrading.
 - `(*session.Run).Image`, the image of the run answer with its `Docker`, so a caller can
   close a read-only run in an image with nested Docker before its first join. It is the
   zero `session.Image` in a run with no wall or when the run answer has no image.
+- `session.Closed.WallKept`, true when removing a part of the run's wall failed at some
+  point of the run: the agent's container at a session's end, the setup container in
+  `RemoveSetup`, or anything at the close. A process may have kept writing the run's
+  binds after its session ended, so do not trust what is in them. It stays true when a
+  later removal succeeded. It is also true when the close failed only on a network or the
+  wall's private directory, because `wall.Enclosure.Close` returns one error.
 
 #### Fixed
 
