@@ -578,6 +578,85 @@ The budget does not cover the read buffer's room past the bytes it counts, the s
 copy, an answer during its read, `POST /verdict` bodies, or the first 1 MiB of each body
 and answer. A file streams, so it takes no budget.
 
+#### Check a push before it leaves the wall
+
+Call `Run.SetRunAPICheck` to check each POST that a program behind the wall sends to the
+run API, the agent's or a setup command's, before anything of it reaches the gateway.
+The program gets a refusal at once, and can correct its push. Call it after `Open`, once
+you know whether the run has checks, and before `Setup` and the first `Join`:
+
+```go
+err := run.SetRunAPICheck(func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error) {
+	if req.Path != "/artifacts" {
+		return nil, nil
+	}
+	findings, err := runPushChecks(ctx, req.Body)
+	if err != nil {
+		return nil, err
+	}
+	if len(findings) > 0 {
+		return &session.RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed",
+			Message: "Fix the findings, then push again.", Findings: findings}, nil
+	}
+	return nil, nil
+})
+```
+
+If you do not call it, the run's forwarder passes every connection of the wall's relay
+through the wall as it arrives, byte for byte, with keep-alive, and no request gets a
+`400` or `431` from the forwarder. The call returns an error, and changes nothing, when
+the check is nil; the run has no wall or no control plane; the run is closed or closing;
+the check is set already; `Setup` or a `Join` passed its checks; or a connection with
+the relay's preamble reached the forwarder before the call, since the forwarder passed
+that connection's requests on unread. A connection without the preamble is closed and
+changes nothing. A connection that shows the preamble during the call shows it either
+before the check is set, and the call returns that error, or after it, and every
+request on it is checked. You may call it beside `Setup`, `Join` or `Close`: whichever
+begins first wins, and `Close` waits for the call.
+
+Close the run when `SetRunAPICheck` returns an error for a run that needs the check: the
+run would otherwise carry its programs' POSTs to the run API unchecked.
+
+The run's forwarder calls the check for every POST to `run-api.qory.invalid` under
+`/v1/runs/<run id>/`, with the path after the run's id, such as `/artifacts`, the
+header without hop-by-hop and `Proxy-` headers, and the whole body. GETs, other methods,
+other hosts and CONNECTs pass unchecked.
+
+| The check returns | The program gets | The gateway gets |
+|---|---|---|
+| `nil, nil` | the gateway's reply | the POST as the program sent it, with `Connection: close` added to the head |
+| a `RunAPIRefusal` with a `Code` and a `Status` from 400 to 499 other than 407 | `Status` and `{"error":Code,"message":Message,"findings":Findings}`, without `findings` when it is empty | nothing |
+| an error, a panic, a refusal with no `Code`, a `Status` of 407 or outside 400 to 499, or no return within 90 seconds or before the run closes | `503` and `{"error":"push_check_unavailable","message":"Run the push again: the check before the push did not finish."}` | nothing |
+
+A panic is a line to `OpenSpec.Report`. The check's context ends after 90 seconds or when
+the run closes. Return from the check when its context ends. The forwarder reads and
+checks one POST of the run at a time, as the gateway's route has one in flight, and takes
+the next POST once the context ends, so a check that ignores its context may still run
+beside the next POST's check. A POST that waits 90 seconds for its turn gets the `503`
+too.
+
+With the check set in a run with a control plane, the forwarder passes one request per
+connection through the wall, as it does for an unwalled agent: a CONNECT and its tunnel,
+or one plain request and its reply. There is no plain-HTTP keep-alive or pipelining: the
+connection closes after the reply, and a client opens another for its next request.
+
+- A request's head must arrive within 10 seconds and have at most 16 KiB, 100 lines and
+  8 KiB a line. A larger head gets a `431`, and a head that net/http does not read gets a
+  `400`, each in plain text.
+- The forwarder sends a plain request that it does not check as HTTP/1.1, an HTTP/1.0
+  request among them.
+- A POST to the run API's host gets a `400` unless net/http would read it the same way as
+  the forwarder: HTTP/1.1 to `http://run-api.qory.invalid/`, one
+  `Host: run-api.qory.invalid`, every line ending in CRLF, no folded line, and at most
+  one `Content-Length` with no `Transfer-Encoding`.
+- A body over the path's limit gets the gateway's `413` before it is read: 64 KiB for
+  `/verdict` and 32 MiB for any other path. A program has 60 seconds to send the body.
+- A POST with `Expect: 100-continue` gets two `100 Continue` replies: the forwarder's,
+  before the body, and the route's, once the body goes on. HTTP allows several 1xx
+  replies before the final one.
+
+The contract's README, §The run API, lists what the program sees.
+
 Each run has 1 POST in flight, among its 4 requests in flight, and 1 request waiting for
 a token of the gateway's rate limit. A gateway signs 20 requests a second across its
 runs, with a burst of 20, and sends 8 `POST /artifacts` with a body over 1 MiB at once. A

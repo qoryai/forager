@@ -158,3 +158,7 @@ func (r *Run) WallForwarder() (addr, token string, stop func(), err error) {
 	}
 	return f.Addr(), token, func() { f.Close() }, nil
 }
+
+// WallProxy returns the address of a walled run's forwarder, where the wall's relay
+// sends every connection, and the token the relay opens each connection with.
+func (r *Run) WallProxy() (addr, token string) { return r.wallFwd.Addr(), r.relayToken }

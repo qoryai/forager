@@ -90,11 +90,12 @@ type setupContainer interface {
 }
 
 // openWall builds the run's wall as the run opens: the wall's preparation, the run's
-// forwarder at the address the enclosure's ProxyAddr returns, and, for an enclosure that starts
-// its relay apart from Wrap, the relay. On one machine the relay opens every connection
-// with the run's proxy secret, and the forwarder passes on what arrives as it is.
-// Behind a separate gateway the relay opens each with the run's hop token, which the
-// forwarder checks and takes off before it opens the gateway's proxy with the run key
+// forwarder at the address the enclosure's ProxyAddr returns, and, for an enclosure that
+// starts its relay apart from Wrap, the relay. On one machine the relay opens every
+// connection with the run's proxy secret, which the forwarder checks and writes on, and
+// the forwarder passes on what follows as it arrives until [Run.SetRunAPICheck] sets the
+// check. Behind a separate gateway the relay opens each with the run's hop token, which
+// the forwarder checks and takes off before it opens the gateway's proxy with the run key
 // inside TLS. What it made is the caller's to remove with closeWall, also when it fails.
 func (r *Run) openWall(ctx context.Context) error {
 	enclosure, err := r.open.Wall.Prepare(ctx, r.wallRequest())
@@ -106,7 +107,10 @@ func (r *Run) openWall(ctx context.Context) error {
 	r.relayToken = r.answer.ProxySecret
 	var fwd *forwarder
 	if r.remote == nil {
-		fwd, err = listenForwarder(bind, r.disc.Proxy.Address, "", "")
+		// Once [Run.SetRunAPICheck] sets the check, the forwarder reads each request, so
+		// it takes the relay's preamble off and writes the same preamble again toward the
+		// proxy; until then the preamble goes on as it arrives.
+		fwd, err = listenForwarding(bind, forwarding{dial: dialTCP(r.disc.Proxy.Address), checkRelay: r.relayToken})
 	} else {
 		if r.relayToken, err = newForwarderSecret(); err != nil {
 			return err
@@ -246,6 +250,8 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 		}
 	}
 	commands := insideSetup(spec.Commands, inside)
+	// The setup container may reach the run's forwarder from here on.
+	r.shutCheck(errCheckAfterSetup, false)
 
 	// open is the setup's step that runs, nil for none. A panic that a caller recovers
 	// leaves no step open, and the setup failed.

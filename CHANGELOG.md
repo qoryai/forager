@@ -1458,6 +1458,33 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `(*session.Run).SetRunAPICheck`, `session.RunAPIRequest` and `session.RunAPIRefusal`:
+  a check of each POST that a walled program sends to the run API, before anything of it
+  reaches the gateway. Call `SetRunAPICheck` after `Open` and before `Setup` and the
+  first `Join`; it returns an error once a connection with the wall relay's preamble
+  reached the run's forwarder, or `Setup` or a `Join` passed its checks, and for a run
+  with no wall or no control plane. Close the run when it returns an error: the run
+  would otherwise carry POSTs to the run API unchecked. A `Close` during the call waits
+  for it.
+  The run's forwarder reads the POST whole and calls the check. On `nil, nil` it sends
+  the POST on as the program sent it, with `Connection: close` added to the head. A
+  refusal with a code and a status from 400 to 499 other than 407 goes to the program in
+  the gateway's JSON error shape with `findings`. An error, a panic, any other refusal,
+  or 90 seconds without a return gets a `503` `push_check_unavailable`. The check's
+  context ends after 90 seconds or when the run closes; return when it ends. The
+  forwarder reads and checks one POST of the run at a time, and a POST that waits 90
+  seconds for its turn gets the `503`. A body over the gateway's limit gets its `413`
+  before the body is read. A POST with `Expect: 100-continue` gets two `100 Continue`
+  replies, the forwarder's and the route's.
+- With the check set, the forwarder passes one request per connection through the wall,
+  with no plain-HTTP keep-alive or pipelining: clients open a connection for each
+  request. A head must arrive within 10 seconds and have at most 16 KiB, 100 lines and 8
+  KiB a line, or it gets a `431`; a head that net/http does not read gets a `400`. A
+  plain request that the forwarder does not check goes on as HTTP/1.1, an HTTP/1.0 one
+  among them. A POST to the run API's host with a `Transfer-Encoding`, several
+  `Content-Length` values or a head that net/http could read another way gets a `400`.
+  Without a call of `SetRunAPICheck`, the forwarder passes what the wall's relay sends
+  as it is, byte for byte.
 - The helper's exec, `session.Exec`, measures the enclosure when the runtime exits. It
   reads `/sys/fs/cgroup/memory.peak` and the `usage_usec` line of
   `/sys/fs/cgroup/cpu.stat`, only when `/sys/fs/cgroup/memory.max` exists, and sends
@@ -1918,6 +1945,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- On one machine, the walled run's forwarder closes a connection that does not open
+  with the relay's preamble and the run's proxy secret within 10 seconds, as it does
+  behind a separate gateway, and writes the same preamble on toward the proxy. Before,
+  it passed every connection on as it arrived.
 - Every walled launch starts through the helper's exec, `SessionSpec.Exec`. Before, a
   launch with no names to unset started without it. The arguments of the exec mode and
   of `wall.Nest` stay as they were, so a caller changes nothing. Without a wall nothing

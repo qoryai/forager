@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -22,6 +23,7 @@ import (
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/receiver"
 	"github.com/qoryai/forager/server"
+	"github.com/qoryai/forager/session"
 )
 
 // What the fake control plane of the case of the run API serves.
@@ -53,6 +55,9 @@ type runAPIReport struct {
 	BadFileBytes int    `json:"bad_file_bytes"`
 	BadFileErr   string `json:"bad_file_err"`
 	Tunnel       string `json:"tunnel"`
+	// Push and PushBody are the status and the body of a POST of artifacts.
+	Push     int    `json:"push"`
+	PushBody string `json:"push_body"`
 }
 
 // probeRunAPI reaches the run API at QORY_RUN_API through the proxy, as a program in the
@@ -90,6 +95,11 @@ func probeRunAPI() *runAPIReport {
 	r.FileBytes = len(body)
 	r.BadFile, body, r.BadFileErr = read("/artifacts/" + runAPIBad + "/files/report.md")
 	r.BadFileBytes = len(body)
+	if resp, err := client.Post(r.Base+"/artifacts", "application/json", strings.NewReader(`{"artifacts":[]}`)); err == nil {
+		body, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		r.Push, r.PushBody = resp.StatusCode, string(body)
+	}
 	if resp, err := client.Get("https://" + link.RunAPIHost + "/"); err != nil {
 		r.Tunnel = err.Error()
 	} else {
@@ -160,15 +170,24 @@ func startRunAPIControl(t *testing.T) *gateway.Server {
 	return &gateway.Server{Version: 1, URL: srv.URL, AccessKeyID: runAPIKeyID, ApiaryPublicKey: pinned, AccessKey: key, InstanceID: "i_test"}
 }
 
-// runAPIThroughTheWall checks the run API from inside the enclosure, with no key in it:
-// a walled run reaches a fake control plane at QORY_RUN_API through the proxy; a request
-// outside the five shapes and another run's get 404; a file ends cleanly when its bytes
-// match its digest and in a read error when they do not; no tunnel opens to the host; and
-// the record has the requests.
+// runAPIThroughTheWall checks the run API from inside the enclosure, with no key in it,
+// in a run whose check, set with Run.SetRunAPICheck after the open, returns a refusal
+// for a POST of artifacts: a walled run reaches a fake control plane at QORY_RUN_API
+// through the proxy; a request outside the five shapes and another run's get 404; a
+// file ends cleanly when its bytes match its digest and in a read error when they do
+// not; the POST gets the check's 422 and never reaches the gateway; no tunnel opens to
+// the host; and the record has the requests.
 func runAPIThroughTheWall(t *testing.T, o Options, h hosts, outside string) {
 	t.Run("the run API is reached from inside the wall", func(t *testing.T) {
 		runID := event.NewRunID()
-		r, err := runIn(t, o, variant{runID: runID, server: startRunAPIControl(t), env: []string{"PROBE_RUN_API=1"}}, false, h, outside)
+		check := func(_ context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error) {
+			if req.Path != "/artifacts" {
+				return nil, nil
+			}
+			return &session.RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed",
+				Message: "Fix the failing checks, then push again:\ngo test exited 1.", Findings: []string{"go test ./...: 1 failure"}}, nil
+		}
+		r, err := runIn(t, o, variant{runID: runID, server: startRunAPIControl(t), env: []string{"PROBE_RUN_API=1"}, runAPICheck: check}, false, h, outside)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -193,6 +212,10 @@ func runAPIThroughTheWall(t *testing.T, o Options, h hosts, outside string) {
 		}
 		if p.BadFile != http.StatusOK || !strings.Contains(p.BadFileErr, "unexpected EOF") {
 			t.Errorf("a file that fails its digest: %d, %d bytes, %q; want a read error", p.BadFile, p.BadFileBytes, p.BadFileErr)
+		}
+		const refused = `{"error":"push_checks_failed","message":"Fix the failing checks, then push again:\ngo test exited 1.","findings":["go test ./...: 1 failure"]}`
+		if p.Push != http.StatusUnprocessableEntity || p.PushBody != refused {
+			t.Errorf("the POST of artifacts: %d %s", p.Push, p.PushBody)
 		}
 		if p.Tunnel == "" {
 			t.Error("a tunnel to the run API's host opened")

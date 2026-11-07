@@ -33,8 +33,8 @@ const RunAPIRule = "wall:run-api"
 // The limits of the run API's route. The two sizes are Qory Apiary's: bodies are read
 // whole, because Ed25519 signs the whole message.
 const (
-	maxRunAPIArtifacts int64 = 32 << 20
-	maxRunAPIVerdict   int64 = 64 << 10
+	maxRunAPIArtifacts = link.MaxRunAPIArtifacts
+	maxRunAPIVerdict   = link.MaxRunAPIVerdict
 	// RunAPIRate is the most requests one run sends through the route in a second.
 	RunAPIRate = 10
 	// RunAPIInFlight is the most requests one run has in flight through the route.
@@ -536,9 +536,7 @@ const (
 )
 
 // tooLarge is the text of a body over limit.
-func tooLarge(limit int64) string {
-	return fmt.Sprintf("Shrink the body to at most %d bytes: the run API takes no more on this path.", limit)
-}
+func tooLarge(limit int64) string { return link.RunAPITooLarge(limit) }
 
 // The texts of the gateway's limits that have no number to fill in.
 const (

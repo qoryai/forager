@@ -19,7 +19,10 @@ type runSpec struct {
 	setup       []session.SetupCommand
 	onSetup     func(error)
 	removeSetup bool
-	// opened, when set, is called with the run once it opens, before anything else.
+	// runAPICheck, when set, is the run's check of its run API, which runOne sets with
+	// (*session.Run).SetRunAPICheck once the run opens, before anything else.
+	runAPICheck func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error)
+	// opened, when set, is called with the run once it opens, after runAPICheck is set.
 	opened func(*session.Run)
 	// afterSession, when set, is called with the run after a join that returned no error,
 	// before the close.
@@ -36,6 +39,12 @@ func runOne(ctx context.Context, sp runSpec) (*session.Result, error) {
 	r, err := session.Open(ctx, sp.OpenSpec)
 	if err != nil {
 		return nil, err
+	}
+	if sp.runAPICheck != nil {
+		if err := r.SetRunAPICheck(sp.runAPICheck); err != nil {
+			r.Close(ctx, session.Outcome{State: event.StateFailed, ExitCode: -1})
+			return nil, err
+		}
 	}
 	if sp.opened != nil {
 		sp.opened(r)

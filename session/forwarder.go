@@ -30,8 +30,9 @@ const dialWait = 10 * time.Second
 
 // forwarder is the run's own listener on this machine: every connection it accepts it
 // copies, byte for byte, to the gateway's proxy. Without a wall it opens each with the
-// relay's preamble and the run's proxy secret first; behind a wall the wall's relay
-// writes the preamble itself, and the forwarder passes on what arrives as it is.
+// relay's preamble and the run's proxy secret first; behind a wall on one machine the
+// wall's relay writes that preamble itself, and the forwarder checks it, writes the same
+// preamble on, and passes on what follows as it arrives.
 // Without a wall, on one machine as behind a separate gateway, the first request of
 // every connection must carry the password of the agent's proxy URL, a secret the
 // session made for this run's forwarder alone, which the forwarder takes off; the
@@ -43,6 +44,11 @@ const dialWait = 10 * time.Second
 // the run key, which the link's proxy dial writes: behind a wall, every connection must
 // first open with the relay's preamble and the hop secret the session gave the wall's
 // relay, which the forwarder takes off.
+//
+// Behind a wall, a connection that shows the relay's preamble after [forwarder.setCheck]
+// set the run's check of its run API is read one request at a time, as without a wall,
+// and a POST to the run API goes on only once the check returns nil, nil. A connection
+// that shows it without the check passes on as it is, after the same preamble.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
 // environment only as that password, in the unwalled agent's proxy URL.
@@ -60,7 +66,13 @@ type forwarder struct {
 	// one that has waited longest first; at most [maxWaiting].
 	waiting []net.Conn
 	closed  bool
-	wg      sync.WaitGroup
+	// check is the run's check of its run API, nil until [forwarder.setCheck] sets it,
+	// and shown is true once a connection showed the relay's hop or preamble, or, on a
+	// forwarder that reads neither, once one arrived. Each connection is served with the
+	// check set when it showed them.
+	check *runAPICheck
+	shown bool
+	wg    sync.WaitGroup
 }
 
 // maxWaiting is the most connections a forwarder holds at once that are yet to show
@@ -87,8 +99,20 @@ type forwarding struct {
 	// request that asks for an upgrade the proxy answers with 101 makes it a tunnel.
 	password string
 	// headWait is how long a connection has to send its first request's head when the
-	// password is set; zero is [link.PreambleWait], as long as a preamble has.
+	// password or check is set; zero is [link.PreambleWait], as long as a preamble has.
 	headWait time.Duration
+	// check, when set without a password, is a walled run's check of its run API's POSTs.
+	// The forwarder then passes one request per connection, as with the password: a
+	// CONNECT and its tunnel, a POST to the run API, which goes on as sent only once the
+	// check returns nil, nil, or any other plain request and its reply. Nil passes on
+	// what arrives as it is. [listenForwarding] sets it as [forwarder.setCheck] does.
+	check *runAPICheck
+	// checkRelay, when set, is the secret of the relay's preamble on one machine, the
+	// run's proxy secret: every accepted connection must open with that preamble, read
+	// within the head's wait, before anything reaches the proxy. The forwarder writes the
+	// same preamble toward the proxy again, so without the check the proxy gets the bytes
+	// the relay sent, and with it the forwarder reads the request after the preamble.
+	checkRelay string
 }
 
 // listenForwarder listens on addr, host:port, and forwards to target, the gateway's
@@ -96,18 +120,19 @@ type forwarding struct {
 // at the start of every connection, and a non-empty password is what the first request
 // of every accepted connection must carry.
 func listenForwarder(addr, target, secret, password string) (*forwarder, error) {
+	return listenForwarding(addr, forwarding{dial: dialTCP(target), secret: secret, password: password})
+}
+
+// dialTCP opens a connection to target, host:port, over TCP.
+func dialTCP(target string) func(context.Context) (net.Conn, error) {
 	var d net.Dialer
-	return listenForwarding(addr, forwarding{
-		dial:     func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", target) },
-		secret:   secret,
-		password: password,
-	})
+	return func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", target) }
 }
 
 // listenForwarding listens on addr, host:port, and forwards each connection the way
 // says.
 func listenForwarding(addr string, way forwarding) (*forwarder, error) {
-	for _, s := range []string{way.secret, way.hop, way.password} {
+	for _, s := range []string{way.secret, way.hop, way.password, way.checkRelay} {
 		if s == "" {
 			continue
 		}
@@ -119,7 +144,8 @@ func listenForwarding(addr string, way forwarding) (*forwarder, error) {
 	if err != nil {
 		return nil, err
 	}
-	f := &forwarder{ln: ln, way: way, conns: map[net.Conn]struct{}{}}
+	f := &forwarder{ln: ln, way: way, check: way.check, conns: map[net.Conn]struct{}{}}
+	f.way.check = nil
 	f.ctx, f.stop = context.WithCancel(context.Background())
 	f.wg.Add(1)
 	go f.accept()
@@ -170,7 +196,7 @@ func (f *forwarder) accept() {
 			c.Close()
 			return
 		}
-		if f.way.hop != "" || f.way.password != "" {
+		if f.way.hop != "" || f.way.checkRelay != "" || f.way.password != "" {
 			f.await(c)
 		}
 		f.wg.Add(1)
@@ -180,6 +206,52 @@ func (f *forwarder) accept() {
 			f.serve(c)
 		}()
 	}
+}
+
+// show marks that a connection showed the relay's hop or preamble, or needs neither, and
+// returns the way to serve it: with the check set at this moment, which a later
+// [forwarder.setCheck] does not change. It is false once the forwarder is closed.
+func (f *forwarder) show() (forwarding, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return forwarding{}, false
+	}
+	f.shown = true
+	way := f.way
+	way.check = f.check
+	if way.checkRelay != "" {
+		way.secret = way.checkRelay
+	}
+	return way, true
+}
+
+// The errors of [forwarder.setCheck].
+var (
+	errCheckSet   = errors.New("Call SetRunAPICheck once per run: the run API check is set already.")
+	errCheckShown = errors.New("Call SetRunAPICheck before the wall's relay connects to the run's proxy: " +
+		"the run's forwarder passed a connection of the relay on unread, so it cannot check that connection's requests.")
+	errCheckClosed = errors.New("Open another run to check its run API: the run's forwarder is closed.")
+)
+
+// setCheck sets k as the check of every connection that shows the relay's hop or
+// preamble from now on. It fails, and sets nothing, once a check is set, once the
+// forwarder is closed, or once a connection showed them, whose requests pass on unread.
+// A connection that shows them during the call does so either before it, so the call
+// fails, or after it, with k. A connection that shows neither changes nothing.
+func (f *forwarder) setCheck(k *runAPICheck) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case f.closed:
+		return errCheckClosed
+	case f.check != nil:
+		return errCheckSet
+	case f.shown:
+		return errCheckShown
+	}
+	f.check = k
+	return nil
 }
 
 // track lists a connection, so Close ends it; false once the forwarder is closed.
@@ -231,12 +303,18 @@ func (f *forwarder) admitLocked(c net.Conn) bool {
 }
 
 // serve copies one connection to the proxy and back, each direction until its end,
-// which it passes on as a half close.
+// which it passes on as a half close, the way that [forwarder.show] returns for it says.
 func (f *forwarder) serve(c net.Conn) {
-	if f.way.hop != "" {
+	// hop is the secret of the relay's preamble that the connection must open with:
+	// behind a separate gateway the hop, and on one machine the run's proxy secret.
+	hop, wait := f.way.hop, link.PreambleWait
+	if hop == "" && f.way.checkRelay != "" {
+		hop, wait = f.way.checkRelay, f.headWait()
+	}
+	if hop != "" {
 		// Nothing reaches the proxy from a connection that is not the run's relay.
-		c.SetReadDeadline(time.Now().Add(link.PreambleWait))
-		if ok, err := link.ReadRelayPreamble(c, f.way.hop); !ok || err != nil {
+		c.SetReadDeadline(time.Now().Add(wait))
+		if ok, err := link.ReadRelayPreamble(c, hop); !ok || err != nil {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
@@ -244,17 +322,52 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 	}
+	way, ok := f.show()
+	if !ok {
+		return
+	}
 	var src io.Reader = c
-	// plain is the one plain request of a connection the password let in.
+	// plain is the one plain request of a connection the password let in, or of a
+	// connection with the check.
 	var plain *proxied
-	if f.way.password != "" {
-		// Nothing reaches the proxy from a connection that is not the run's agent.
-		wait := f.way.headWait
-		if wait == 0 {
-			wait = link.PreambleWait
+	// checked is what goes on of a POST to the run API the check let pass, and from what
+	// the agent sends after it.
+	var checked []byte
+	var from *bufio.Reader
+	if way.password == "" && way.check != nil {
+		c.SetReadDeadline(time.Now().Add(f.headWait()))
+		head, rest, err := readHead(c, nil)
+		if errors.Is(err, errHeadLimits) {
+			plainError(c, http.StatusRequestHeaderFieldsTooLarge, err)
+			return
 		}
-		c.SetReadDeadline(time.Now().Add(wait))
-		head, rest, ok := readProxyLogin(c, f.way.password)
+		if err != nil {
+			// The connection ended, or sent no whole head in time: there is no request.
+			return
+		}
+		c.SetReadDeadline(time.Time{})
+		if err := checkRequestLine(head); err != nil {
+			badRequest(c, err)
+			return
+		}
+		switch {
+		case connectHead(head):
+			src = io.MultiReader(bytes.NewReader(closingHead(head)), rest)
+		case forRunAPIPost(head):
+			if checked, from = way.check.pass(f.ctx, c, head, rest), rest; checked == nil {
+				return
+			}
+		default:
+			if plain = plainRequest(head, rest); plain == nil {
+				badRequest(c, errUnreadableHead)
+				return
+			}
+		}
+	}
+	if way.password != "" {
+		// Nothing reaches the proxy from a connection that is not the run's agent.
+		c.SetReadDeadline(time.Now().Add(f.headWait()))
+		head, rest, ok := readProxyLogin(c, way.password)
 		if !ok {
 			return
 		}
@@ -277,7 +390,7 @@ func (f *forwarder) serve(c net.Conn) {
 		}
 	}
 	ctx, cancel := context.WithTimeout(f.ctx, dialWait)
-	up, err := f.way.dial(ctx)
+	up, err := way.dial(ctx)
 	cancel()
 	if err != nil {
 		return
@@ -287,9 +400,9 @@ func (f *forwarder) serve(c net.Conn) {
 		return
 	}
 	defer f.untrack(up)
-	if f.way.secret != "" {
+	if way.secret != "" {
 		up.SetWriteDeadline(time.Now().Add(link.PreambleWait))
-		if _, err := io.WriteString(up, link.RelayLine(f.way.secret)); err != nil {
+		if _, err := io.WriteString(up, link.RelayLine(way.secret)); err != nil {
 			return
 		}
 		up.SetWriteDeadline(time.Time{})
@@ -298,7 +411,22 @@ func (f *forwarder) serve(c net.Conn) {
 		passPlain(c, up, plain)
 		return
 	}
-	pipe(c, up, src, up, f.way.password != "")
+	if checked != nil {
+		passOne(c, up, from, func(w io.Writer) error {
+			_, err := w.Write(checked)
+			return err
+		})
+		return
+	}
+	pipe(c, up, src, up, way.password != "" || way.check != nil)
+}
+
+// headWait is how long a connection has to send its first request's head.
+func (f *forwarder) headWait() time.Duration {
+	if f.way.headWait == 0 {
+		return link.PreambleWait
+	}
+	return f.way.headWait
 }
 
 // pipe copies fromAgent to up and fromProxy, what up sends, to c, each direction until
@@ -372,17 +500,24 @@ func passPlain(c, up net.Conn, p *proxied) {
 		stop()
 		return
 	}
+	passOne(c, up, p.from, p.req.WriteProxy)
+}
+
+// passOne writes one request to up, the proxy, with write, and passes on its reply until
+// the proxy ends it; what the agent sends meanwhile, read through from, is dropped, and
+// an agent that goes away, or ends its side, closes up.
+func passOne(c, up net.Conn, from *bufio.Reader, write func(io.Writer) error) {
 	replied := make(chan struct{})
 	go func() {
 		io.Copy(c, up)
 		close(replied)
 	}()
-	if err := p.req.WriteProxy(up); err != nil {
+	if err := write(up); err != nil {
 		up.Close()
 		<-replied
 		return
 	}
-	stop := watchAgent(c, p.from, up, true)
+	stop := watchAgent(c, from, up, true)
 	<-replied
 	stop()
 }
@@ -442,37 +577,71 @@ const (
 // readProxyLogin reads the head of the first request of a connection, up to its empty
 // line, and reports whether it carries exactly one Proxy-Authorization, Basic, whose
 // password is password, compared in constant time; the user name is ignored. It
-// returns the head without that header, and the reader that holds what follows it. A
+// returns the head without that header, and the reader of what follows it. A
 // head with a line longer than [maxProxyLine] bytes, more than [maxProxyLines] lines or
 // more than [maxProxyHead] bytes in all is refused.
 func readProxyLogin(c io.Reader, password string) (head []byte, rest *bufio.Reader, ok bool) {
+	logins := 0
+	head, rest, err := readHead(c, func(l []byte) (keep, ok bool) {
+		name, value, found := bytes.Cut(l, []byte(":"))
+		if !found || !strings.EqualFold(string(name), "Proxy-Authorization") {
+			return true, true
+		}
+		logins++
+		return false, proxyLogin(string(bytes.TrimSpace(value)), password)
+	})
+	if err != nil || logins != 1 {
+		return nil, nil, false
+	}
+	return head, rest, true
+}
+
+// errHeadLimits is the error of [readHead] for a head over the limits, and the text of
+// the forwarder's 431.
+var errHeadLimits = fmt.Errorf("Shrink the request head to at most %d bytes, %d lines and %d bytes a line: the proxy reads no larger head.",
+	maxProxyHead, maxProxyLines, maxProxyLine)
+
+// errHeadRefused is the error of [readHead] for a head with a line that header failed.
+var errHeadRefused = errors.New("the head has a header line that header failed")
+
+// readHead reads the head of the first request of a connection, up to its empty line,
+// and returns it with the reader of what follows it. header, when set, gets each header
+// line without its line end: false for keep leaves the line out of the head, and false
+// for ok fails the read with [errHeadRefused]. A head with a line longer than
+// [maxProxyLine] bytes, more than [maxProxyLines] lines or more than [maxProxyHead]
+// bytes in all fails it with [errHeadLimits]; a read that fails, its error.
+func readHead(c io.Reader, header func(line []byte) (keep, ok bool)) (head []byte, rest *bufio.Reader, err error) {
 	r := bufio.NewReaderSize(c, maxProxyLine)
 	var out bytes.Buffer
-	logins, size := 0, 0
+	size := 0
 	for i := 0; ; i++ {
 		line, err := r.ReadSlice('\n')
 		size += len(line)
-		if err != nil || i == maxProxyLines || size > maxProxyHead {
-			return nil, nil, false
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull) || i == maxProxyLines || size > maxProxyHead:
+			return nil, nil, errHeadLimits
+		case err != nil:
+			return nil, nil, err
 		}
 		if i > 0 {
-			if l := bytes.TrimRight(line, "\r\n"); len(l) == 0 {
+			l := bytes.TrimRight(line, "\r\n")
+			if len(l) == 0 {
 				out.Write(line)
 				break
-			} else if name, value, found := bytes.Cut(l, []byte(":")); found && strings.EqualFold(string(name), "Proxy-Authorization") {
-				logins++
-				if !proxyLogin(string(bytes.TrimSpace(value)), password) {
-					return nil, nil, false
+			}
+			if header != nil {
+				keep, ok := header(l)
+				if !ok {
+					return nil, nil, errHeadRefused
 				}
-				continue
+				if !keep {
+					continue
+				}
 			}
 		}
 		out.Write(line)
 	}
-	if logins != 1 {
-		return nil, nil, false
-	}
-	return out.Bytes(), r, true
+	return out.Bytes(), r, nil
 }
 
 // The texts of the forwarder's 400 to a request line it refuses. The origin-form and
@@ -511,12 +680,20 @@ func checkRequestLine(head []byte) error {
 
 // badRequest answers the agent's connection c with a 400 whose body is err's text and
 // a newline, as plain text, and Connection: close.
-func badRequest(c net.Conn, err error) {
+func badRequest(c net.Conn, err error) { plainError(c, http.StatusBadRequest, err) }
+
+// plainError writes the agent's connection c a reply of status, whose body is err's text and
+// a newline, as plain text, and Connection: close.
+func plainError(c net.Conn, status int, err error) {
 	body := err.Error() + "\n"
 	c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
-	fmt.Fprintf(c, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: %d\r\n"+
-		"Content-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\n\r\n%s", len(body), body)
+	fmt.Fprintf(c, "HTTP/1.1 %d %s\r\nConnection: close\r\nContent-Length: %d\r\n"+
+		"Content-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\n\r\n%s", status, http.StatusText(status), len(body), body)
 }
+
+// errUnreadableHead is the text of the forwarder's 400 to a head that net/http does not
+// read as a request.
+var errUnreadableHead = errors.New("Send a request head that HTTP/1.1 allows: the proxy reads no other head.")
 
 // connectHead reports whether head, a request's head, is a CONNECT's.
 func connectHead(head []byte) bool {

@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -37,8 +38,11 @@ const workItem = `{"work_item":{"title":"Fix the failing build"}}`
 // artifact is the file the fake run API serves.
 var artifact = bytes.Repeat([]byte("artifact "), 1<<14)
 
+// pushed is the body of the fake run API's 201 to a POST of artifacts.
+const pushed = `{"artifact":{"version_id":"v1"}}`
+
 // runAPIAnswers serves the paths of a fake run API under a run, signed by signer, and
-// reports whether r was one of them: the work item; the file of the version good, under
+// reports whether r was one of them: a POST of artifacts, with a 201; the work item; the file of the version good, under
 // its digest; and the file of the version bad, under another digest.
 func runAPIAnswers(signer *accesskey.Key, w http.ResponseWriter, r *http.Request) bool {
 	rest, ok := strings.CutPrefix(r.URL.Path, "/v1/runs/")
@@ -55,6 +59,14 @@ func runAPIAnswers(signer *accesskey.Key, w http.ResponseWriter, r *http.Request
 		return true
 	}
 	switch path {
+	case "artifacts":
+		if r.Method != http.MethodPost {
+			return false
+		}
+		w.Header().Set(server.HeaderSignature, signer.SignAnswer(accesskey.Answer{Status: http.StatusCreated, RequestSignature: sig, Body: []byte(pushed)}))
+		w.WriteHeader(http.StatusCreated)
+		io.WriteString(w, pushed)
+		return true
 	case "work-item":
 		w.Header().Set(server.HeaderSignature, signer.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: sig, Body: []byte(workItem)}))
 		io.WriteString(w, workItem)
@@ -525,5 +537,385 @@ func TestAFilesEndReachesTheCallerOnEveryPath(t *testing.T) {
 		sp := spec(t)
 		separateRun(t, &sp)
 		check(t, sp)
+	})
+}
+
+// TestASetupContainersPostToTheRunAPIIsChecked pins Run.SetRunAPICheck, called after
+// Open, for the setup container, which reaches the proxy through the run's forwarder as
+// the agent does: a POST under QORY_RUN_API for which the check returns a refusal gets
+// the refusal and never reaches the gateway's proxy, and one for which it returns nil,
+// nil reaches it.
+func TestASetupContainersPostToTheRunAPIIsChecked(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	hasRunAPI(g)
+	w := &setupWall{}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	var mu sync.Mutex
+	var paths []string
+	check := func(_ context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error) {
+		mu.Lock()
+		paths = append(paths, req.Path)
+		mu.Unlock()
+		if strings.Contains(string(req.Body), "failing") {
+			return &session.RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the failing test, then push again."}, nil
+		}
+		return nil, nil
+	}
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
+	if err := r.SetRunAPICheck(check); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	target := link.RunAPIURL(r.ID()) + "/artifacts"
+	// send writes body in a POST to the setup container's proxy, after the relay's
+	// preamble, as the wall's relay sends it, and returns the reply.
+	send := func(body string) string {
+		c, err := net.Dial("tcp", w.setup.Proxy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		fmt.Fprintf(c, "%sPOST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+			link.RelayLine(w.setup.ProxyToken), target, link.RunAPIHost, len(body), body)
+		c.SetReadDeadline(time.Now().Add(10 * time.Second))
+		b, _ := io.ReadAll(c)
+		return string(b)
+	}
+	out := send(`{"artifacts":[{"name":"failing"}]}`)
+	if !strings.HasPrefix(out, "HTTP/1.1 422 Unprocessable Entity\r\n") ||
+		!strings.HasSuffix(out, `{"error":"push_checks_failed","message":"Fix the failing test, then push again."}`) {
+		t.Errorf("the refused POST got %q", out)
+	}
+	if got := g.Proxied(); slices.Contains(got, "POST "+target) {
+		t.Errorf("the refused POST reached the proxy: %q", got)
+	}
+	if out := send(`{"artifacts":[{"name":"report.md"}]}`); !strings.HasPrefix(out, "HTTP/1.1 200 OK\r\n") {
+		t.Errorf("the POST the check let pass got %q", out)
+	}
+	if got := g.Proxied(); !slices.Contains(got, "POST "+target) {
+		t.Errorf("the proxy got %q, no POST", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(paths, []string{"/artifacts", "/artifacts"}) {
+		t.Errorf("the check got %q", paths)
+	}
+}
+
+// TestACheckedPostThatExpectsAContinueReachesTheRoute pins Expect: 100-continue through
+// the forwarder with a check and a real gateway's run API route: the program reads the
+// forwarder's 100 Continue, sends the body, then reads the route's 100 Continue and the
+// route's reply, the control plane's 201.
+func TestACheckedPostThatExpectsAContinueReachesTheRoute(t *testing.T) {
+	c := newControl(t)
+	c.runAPI.Store(true)
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Timeout = 20 * time.Second
+	sp.RunID = event.NewRunID()
+	startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
+	w := &setupWall{}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
+	if err := r.SetRunAPICheck(func(context.Context, session.RunAPIRequest) (*session.RunAPIRefusal, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", w.setup.Proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	const body = `{"artifacts":[]}`
+	fmt.Fprintf(conn, "%sPOST %s/artifacts HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nExpect: 100-continue\r\nContent-Length: %d\r\n\r\n",
+		link.RelayLine(w.setup.ProxyToken), link.RunAPIURL(r.ID()), link.RunAPIHost, len(body))
+	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	br := bufio.NewReader(conn)
+	readContinue := func(who string) {
+		t.Helper()
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil || resp.StatusCode != http.StatusContinue {
+			t.Fatalf("%s: %v, %v; want a 100 Continue", who, resp, err)
+		}
+	}
+	readContinue("the forwarder")
+	io.WriteString(conn, body)
+	readContinue("the route")
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusCreated || string(got) != pushed {
+		t.Errorf("the program got %d %q", resp.StatusCode, got)
+	}
+}
+
+// relayed opens a connection to addr as the wall's relay does on one machine, with the
+// relay's preamble and token, writes what, ends its side, and returns all that comes
+// back until the connection closes or 10 seconds pass.
+func relayed(t *testing.T, addr, token, what string) string {
+	t.Helper()
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	io.WriteString(c, link.RelayLine(token)+what)
+	c.(*net.TCPConn).CloseWrite()
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	b, _ := io.ReadAll(c)
+	return string(b)
+}
+
+// TestAWalledRunWithoutTheCheckPassesRequestsAsTheyCome pins a walled run with a control
+// plane whose caller never calls Run.SetRunAPICheck: the setup container's connection
+// carries a POST to the run API and, kept alive after it, a GET whose head is over the
+// checked forwarder's limits, and both reach the gateway's proxy and get its replies, with
+// no 431 and no check.
+func TestAWalledRunWithoutTheCheckPassesRequestsAsTheyCome(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	hasRunAPI(g)
+	w := &setupWall{}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	target := link.RunAPIURL(r.ID()) + "/artifacts"
+	const body = `{"artifacts":[{"name":"failing"}]}`
+	big := strings.Repeat("a", 10<<10)
+	out := relayed(t, w.setup.Proxy, w.setup.ProxyToken,
+		fmt.Sprintf("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\n\r\n%s", target, link.RunAPIHost, len(body), body)+
+			"GET http://api.example/large HTTP/1.1\r\nHost: api.example\r\nX-Large: "+big+"\r\nConnection: close\r\n\r\n")
+	if n := strings.Count(out, "HTTP/1.1 200 OK\r\n"); n != 2 || strings.Contains(out, "431") {
+		t.Errorf("the program got %d replies of 200: %q", n, out)
+	}
+	if got := g.Proxied(); !slices.Contains(got, "POST "+target) || !slices.Contains(got, "GET http://api.example/large") {
+		t.Errorf("the proxy got %q", got)
+	}
+}
+
+// TestSetRunAPICheckIsRefusedWhenItCannotCheckEveryRequest pins the errors of
+// Run.SetRunAPICheck, each of which leaves the run as it was: a nil check, a run with no
+// wall or no control plane, a second call, a call after a connection reached the run's
+// forwarder, after Setup, after a join, and after the close.
+func TestSetRunAPICheckIsRefusedWhenItCannotCheckEveryRequest(t *testing.T) {
+	ctx := context.Background()
+	pass := func(context.Context, session.RunAPIRequest) (*session.RunAPIRefusal, error) { return nil, nil }
+	// open opens a run with a control plane, unless plain, behind w unless it is nil.
+	open := func(t *testing.T, w *setupWall, plain bool) (*session.Run, runSpec, *linktest.Fake) {
+		t.Helper()
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		if !plain {
+			hasRunAPI(g)
+		}
+		if w != nil {
+			sp.Wall, sp.Image = w, "example.com/agent:1"
+		}
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { r.Close(ctx, session.Outcome{State: event.StateCancelled}) })
+		return r, sp, g
+	}
+	refused := func(t *testing.T, err error, fix string) {
+		t.Helper()
+		if err == nil || !strings.HasPrefix(err.Error(), fix) {
+			t.Errorf("SetRunAPICheck returned %v, want an error that starts %q", err, fix)
+		}
+	}
+	t.Run("a nil check", func(t *testing.T) {
+		r, _, _ := open(t, &setupWall{}, false)
+		refused(t, r.SetRunAPICheck(nil), "Give SetRunAPICheck a check")
+		if err := r.SetRunAPICheck(pass); err != nil {
+			t.Errorf("the call after it: %v", err)
+		}
+	})
+	t.Run("a run with no wall", func(t *testing.T) {
+		r, _, _ := open(t, nil, false)
+		refused(t, r.SetRunAPICheck(pass), "Open the run with a wall to check its run API")
+	})
+	t.Run("a run with no control plane", func(t *testing.T) {
+		r, _, _ := open(t, &setupWall{}, true)
+		refused(t, r.SetRunAPICheck(pass), "Open the run at a gateway with a control plane")
+	})
+	t.Run("a second call", func(t *testing.T) {
+		r, _, _ := open(t, &setupWall{}, false)
+		if err := r.SetRunAPICheck(pass); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, r.SetRunAPICheck(pass), "Call SetRunAPICheck once per run")
+	})
+	t.Run("after a connection reached the forwarder", func(t *testing.T) {
+		r, _, g := open(t, &setupWall{}, false)
+		addr, token := r.WallProxy()
+		get := "GET http://api.example/early HTTP/1.1\r\nHost: api.example\r\n\r\n"
+		if out := relayed(t, addr, token, get); !strings.HasPrefix(out, "HTTP/1.1 200 OK\r\n") {
+			t.Fatalf("the early request got %q", out)
+		}
+		refused(t, r.SetRunAPICheck(pass), "Call SetRunAPICheck before the wall's relay connects to the run's proxy")
+		// The forwarder is as it was: a request after the call passes unread, kept alive.
+		target := link.RunAPIURL(r.ID()) + "/artifacts"
+		out := relayed(t, addr, token, fmt.Sprintf("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 2\r\n\r\n{}", target, link.RunAPIHost)+get)
+		if n := strings.Count(out, "HTTP/1.1 200 OK\r\n"); n != 2 {
+			t.Errorf("the requests after the call got %q", out)
+		}
+		if got := g.Proxied(); !slices.Contains(got, "POST "+target) {
+			t.Errorf("the proxy got %q", got)
+		}
+	})
+	t.Run("after stray connections, the call succeeds", func(t *testing.T) {
+		r, _, g := open(t, &setupWall{}, false)
+		addr, token := r.WallProxy()
+		silent, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer silent.Close()
+		if out := relayed(t, addr, token+"x", "GET http://api.example/stray HTTP/1.1\r\nHost: api.example\r\n\r\n"); out != "" {
+			t.Errorf("the wrong preamble got %q", out)
+		}
+		refuse := func(context.Context, session.RunAPIRequest) (*session.RunAPIRefusal, error) {
+			return &session.RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the checks."}, nil
+		}
+		if err := r.SetRunAPICheck(refuse); err != nil {
+			t.Fatal(err)
+		}
+		target := link.RunAPIURL(r.ID()) + "/artifacts"
+		out := relayed(t, addr, token, fmt.Sprintf("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 2\r\n\r\n{}", target, link.RunAPIHost))
+		if !strings.HasPrefix(out, "HTTP/1.1 422 Unprocessable Entity\r\n") {
+			t.Errorf("the POST after the call got %q", out)
+		}
+		if got := g.Proxied(); slices.Contains(got, "POST "+target) || slices.Contains(got, "GET http://api.example/stray") {
+			t.Errorf("the proxy got %q", got)
+		}
+	})
+	t.Run("after Setup", func(t *testing.T) {
+		r, sp, _ := open(t, &setupWall{}, false)
+		if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, r.SetRunAPICheck(pass), "Call SetRunAPICheck before Setup")
+	})
+	t.Run("after a join", func(t *testing.T) {
+		r, sp, _ := open(t, &setupWall{}, false)
+		if _, err := r.Join(ctx, sp.SessionSpec); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, r.SetRunAPICheck(pass), "Call SetRunAPICheck before the first Join")
+	})
+	t.Run("after the close", func(t *testing.T) {
+		r, _, _ := open(t, &setupWall{}, false)
+		if _, err := r.Close(ctx, session.Outcome{State: event.StateCancelled}); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, r.SetRunAPICheck(pass), "Open another run to check its run API")
+	})
+}
+
+// TestSetRunAPICheckBesideSetupJoinAndClose pins Run.SetRunAPICheck called while a Setup,
+// a Join or a Close of the run begins, from another goroutine: either the call fails, or
+// a POST to the run API through the run's forwarder after the Setup or the Join is
+// checked; and the Close never fails because of the call. Run it with -race.
+func TestSetRunAPICheckBesideSetupJoinAndClose(t *testing.T) {
+	ctx := context.Background()
+	refuse := func(context.Context, session.RunAPIRequest) (*session.RunAPIRefusal, error) {
+		return &session.RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the checks."}, nil
+	}
+	// beside opens a walled run with a control plane, runs the call and other at once,
+	// and returns the run, its gateway, the call's error and other's.
+	beside := func(t *testing.T, other func(*session.Run, runSpec) error) (*session.Run, *linktest.Fake, error, error) {
+		t.Helper()
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		hasRunAPI(g)
+		sp.Wall, sp.Image = &setupWall{}, "example.com/agent:1"
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { r.Close(ctx, session.Outcome{State: event.StateCancelled}) })
+		start := make(chan struct{})
+		var callErr, otherErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; callErr = r.SetRunAPICheck(refuse) }()
+		go func() { defer wg.Done(); <-start; otherErr = other(r, sp) }()
+		close(start)
+		wg.Wait()
+		return r, g, callErr, otherErr
+	}
+	// checked sends a POST to the run API through the run's forwarder and reports whether
+	// the check refused it, as the call succeeded, or it reached the proxy, as it failed.
+	checked := func(t *testing.T, r *session.Run, g *linktest.Fake, callErr error, fix string) {
+		t.Helper()
+		addr, token := r.WallProxy()
+		target := link.RunAPIURL(r.ID()) + "/artifacts"
+		out := relayed(t, addr, token, fmt.Sprintf("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}", target, link.RunAPIHost))
+		reached := slices.Contains(g.Proxied(), "POST "+target)
+		switch {
+		case callErr == nil && (reached || !strings.HasPrefix(out, "HTTP/1.1 422 ")):
+			t.Errorf("the call succeeded, and the POST got %q, reaching the proxy %v", out, reached)
+		case callErr != nil && !strings.HasPrefix(callErr.Error(), fix):
+			t.Errorf("the call returned %v, want an error that starts %q", callErr, fix)
+		case callErr != nil && !reached:
+			t.Errorf("the call failed, and the POST got %q without reaching the proxy", out)
+		}
+	}
+	t.Run("Setup", func(t *testing.T) {
+		for range 6 {
+			r, g, callErr, err := beside(t, func(r *session.Run, sp runSpec) error {
+				return r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			checked(t, r, g, callErr, "Call SetRunAPICheck before Setup")
+		}
+	})
+	t.Run("Join", func(t *testing.T) {
+		for range 2 {
+			r, g, callErr, err := beside(t, func(r *session.Run, sp runSpec) error {
+				_, err := r.Join(ctx, sp.SessionSpec)
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			checked(t, r, g, callErr, "Call SetRunAPICheck before the first Join")
+		}
+	})
+	t.Run("Close", func(t *testing.T) {
+		for range 10 {
+			_, _, callErr, err := beside(t, func(r *session.Run, _ runSpec) error {
+				_, err := r.Close(ctx, session.Outcome{State: event.StateCancelled})
+				return err
+			})
+			if err != nil {
+				t.Fatalf("the close returned %v", err)
+			}
+			if callErr != nil && !strings.HasPrefix(callErr.Error(), "Open another run to check its run API") {
+				t.Errorf("the call returned %v", callErr)
+			}
+		}
 	})
 }
