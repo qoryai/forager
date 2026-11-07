@@ -67,11 +67,13 @@ func checkedForwarder(t *testing.T, target string, k *runAPICheck) *forwarder {
 
 // relaySend opens a connection to f as the wall's relay does, with the hop, writes what,
 // and returns all that f writes back until it closes the connection, or 5 seconds pass.
+// It runs in any goroutine: a failed dial is an error of t and an empty reply.
 func relaySend(t *testing.T, f *forwarder, what string) string {
 	t.Helper()
 	c, err := net.Dial("tcp", f.Addr())
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return ""
 	}
 	defer c.Close()
 	go io.WriteString(c, link.RelayLine(checkHop)+what)
