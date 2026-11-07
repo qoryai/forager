@@ -308,9 +308,9 @@ func (r *Run) refusedJoin(n int, err error) {
 // command of SessionSpec.Setup then has a setup step, which the session writes from its
 // runner's records. The runtime runs in no step, apart from a session with no runtime
 // that joins during a copy step, which runs while that step is open. A failure in the
-// image or the wall step ends it failed with -1, after the failure's line with the session's number and
-// the step's when the failure has no refusal code, and before the session's
-// dev.qory.session.exited.
+// image or the wall step ends it failed with -1, after the failure's line with the
+// session's number and the step's when the failure has no refusal code, and before the
+// session's dev.qory.session.exited.
 func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Runtime, answer *server.LinkJoinAnswer, n int, joined *Step) (*Result, error) {
 	dir := r.dir
 	// sessionDir is the session's directory, made once the session's checks before the
