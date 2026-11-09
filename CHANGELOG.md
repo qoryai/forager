@@ -818,6 +818,13 @@ release may change what an existing document does, and says so under Upgrading.
   65535 with no leading zero. `runkey.Parse`, `runkey.Verify` and `Key.Sign` refuse
   any other URL, such as `https://:443`, `https://host:`, port 0 or a host with an
   underscore or a trailing dot, which they accepted before.
+- The contract's README, §Enrolment, states the enrolment limit per source address:
+  which requests it counts, that a request past it gets the unsigned `429`
+  `rate_limited` before any `401`, Qory Apiary's defaults of 1 request a second, in
+  bursts of at most 10, per source address, and 1 a second, in bursts of at most 5, per
+  code, and the `Retry-After` of each `429` of the server. Before, it stated no rate and
+  no `Retry-After`. `enrolment.schema.json` describes the `Retry-After` too. The
+  revision stays 1.
 
 #### Fixed
 
