@@ -40,6 +40,20 @@ const (
 	// have, as the session's check of its manifest or the engine's pull reports it: no
 	// manifest of that digest, or no repository of that name. Its name is the reference.
 	ImageMissing = "image_missing"
+	// ImageAccessDenied is an image that a policy sets by reference that the session's
+	// check of its manifest may not read with the run's credentials: a 401 from its
+	// registry after the token, a 401 with no Bearer challenge, a 403 from its registry
+	// or the run's proxy, or a 401 or 403 from its token realm. Its name is the reference.
+	ImageAccessDenied = "image_access_denied"
+	// ImageRateLimited is an image that a policy sets by reference whose check of its
+	// manifest got 429 from its registry, its token realm or the run's proxy. Its name
+	// is the reference.
+	ImageRateLimited = "image_rate_limited"
+	// ImageRegistryUnreachable is an image that a policy sets by reference whose check
+	// of its manifest did not reach its registry or token realm: a host name that does
+	// not resolve, a connection refused or reset, a TLS handshake or certificate that
+	// fails, or a timeout. Its name is the reference.
+	ImageRegistryUnreachable = "image_registry_unreachable"
 	// VariableReserved is a walled run whose environment passes a QORY_ variable, or a
 	// variable a machine value is read from, into the enclosure.
 	VariableReserved = "variable_reserved"
@@ -81,7 +95,7 @@ const (
 func Decides(code string) bool {
 	switch code {
 	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot, ImageMissing,
-		VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
+		ImageAccessDenied, ImageRateLimited, ImageRegistryUnreachable, VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable:
 		return true
 	}
