@@ -777,7 +777,10 @@ neither 0: the engine would look a name, or a uid's groups, up in the image's
 uid alone is refused. In the run's `image` step, before the first container of the
 image starts, the session requests the image's manifest from its registry through the
 run's proxy, with the run's credentials, with or without an engine proxy. A registry
-that does not answer 200 for that digest fails the step, and a 404 is `image_missing`.
+that does not return 200 for that digest fails the step. A 404 is `image_missing`; a 401
+or 403 is `image_access_denied`; a 429 is `image_rate_limited`; and a registry the check
+does not reach, by DNS, connection, TLS or time, is `image_registry_unreachable`. The
+contract's §Images, An image pulled through the gateway, lists the cases.
 Then the wall pulls the image, also when the engine holds it by that digest, and the
 engine fetches the layers it lacks: through the run's proxy with an engine proxy,
 otherwise over the machine's network with the engine's credentials. The wall refuses

@@ -1405,7 +1405,8 @@ request asks the gateway for, for this session.
 of the run's `dev.qory.run.exited`, and writes that event once. A run no session joined,
 closed `failed` with no reason, is `failed` with `no_session` and `-1`. A `timeout` is
 `cancelled` with `124`, and an `interrupted` is `cancelled`. After `FetchImage` returns
-the refusal `image_missing` or `image_user_root`, close a run no session joined with
+the refusal `image_missing`, `image_user_root`, `image_access_denied`,
+`image_rate_limited` or `image_registry_unreachable`, close a run no session joined with
 `failed`, that code and `-1`. Close a run no session joined whose workflow is not in
 the harness with `failed`, `workflow_not_in_harness` and `-1`. Close a read run (the
 contract's §The events, How a run ends) that no session joined with `failed` and `-1`,
@@ -1413,7 +1414,7 @@ and `read_needs_wall` when the run has no wall, `read_needs_setup_outside` when 
 setup is set to run inside the agent's container, `read_needs_no_nested_docker` when its
 image runs nested Docker, which is when `Docker` is true in the image `(*session.Run).Image` returns, or
 `read_needs_setup_removed` when its setup container could not be removed.
-`Close` refuses each of the seven codes with another state or exit
+`Close` refuses each of the ten codes with another state or exit
 code, or after a join, as the gateway does.
 `Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
 `session.Closed` is what the run came to:
