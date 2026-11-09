@@ -13,8 +13,8 @@ release may change what an existing document does, and says so under Upgrading.
 - Deploy the gateway before the sessions that use it: a session's batch may contain
   `image_access_denied`, `image_rate_limited` and `image_registry_unreachable` as the
   `code` of `dev.qory.run.refused` and the `reason` of `dev.qory.session.exited` and
-  `dev.qory.run.exited`. A gateway built before this change refuses such a batch with
-  400 and ends the run `batch_refused`. A gateway with this change accepts the batches
+  `dev.qory.run.exited`. A gateway built before this change returns 400 to such a batch
+  and ends the run `batch_refused`. A gateway with this change accepts the batches
   of older sessions. A control plane reads the three codes in `reason` of
   `dev.qory.run.exited` as it reads `image_missing`.
 - Remove `session`, `line`, `truncated` and `summary` from the `data` of a descriptor's
@@ -226,11 +226,13 @@ release may change what an existing document does, and says so under Upgrading.
   Hub returns 401 for a repository that does not exist, so on Docker Hub the code also
   covers a missing repository; and a 403 from the run's proxy at a HEAD gives the same
   result as the registry's. `image_rate_limited` is a 429 from the registry, the token
-  realm or the run's proxy, with the `Retry-After` seconds in the detail when set.
-  `image_registry_unreachable` is the run's proxy's 502 to a CONNECT, a TLS handshake
-  or certificate that fails, a connection reset, and a check longer than 30 seconds,
-  each read from the error's type. A host the run's proxy denies, a failed connection
-  to the run's proxy, any other status, such as a 500, and any other failure stay
+  realm or the run's proxy, which returns it at `gateway.run_limits`, with the
+  `Retry-After` seconds in the detail when set. `image_registry_unreachable` is the
+  run's proxy's 502 to a CONNECT, a TLS handshake or certificate that fails, a reset of
+  the tunnel after the proxy returned 200 to the CONNECT, and a check longer than 30
+  seconds, each read from the error's type. A host the run's proxy denies, a failure on
+  the connection to the run's proxy itself (a dial that fails or hangs, or a reset
+  before the tunnel opened), any other status, such as a 500, and any other failure stay
   errors with no code. In a join, `dev.qory.session.exited` is `failed` with
   `exit_code` `-1` and the code as `reason`; `(*session.Run).FetchImage` returns the
   refusal, and `Close` takes the code `failed` with `-1` in a run with no join, as for

@@ -4906,19 +4906,25 @@ the status or the cause:
   401 or 403. Docker Hub returns 401 for a repository that does not exist, so on Docker
   Hub this code also covers a missing repository. A HEAD response has no body, so a 403
   from the run's proxy, for a path rule or for plain http to a host with a credential,
-  gives the same result as the registry's 403; the detail names both, and the path rule
-  to set.
+  gives the same result as the registry's 403; the detail contains both, and the path
+  rule to set.
 - `image_rate_limited`: the registry or the realm returns 429. The run's proxy returns
-  429 too at the run's limits on a host it terminates, with the same result. The detail
-  contains the `Retry-After` in seconds when the response sets one.
+  429 too at `gateway.run_limits` on a host it terminates, with the same result, so the
+  detail contains both fixes: wait for the registry's limit, or raise
+  `gateway.run_limits`. The detail contains the `Retry-After` in seconds when the
+  response sets one.
 - `image_registry_unreachable`: the run's proxy returns 502 to the CONNECT, because its
   connection to the registry or the realm failed, such as a host name that does not
   resolve or a port that refuses; or the session's TLS handshake or the certificate
-  check fails; or a connection is reset; or the check takes longer than 30 seconds. The
-  session reads each from the error's type, not from its text.
+  check fails; or the tunnel is reset after the proxy returned 200 to the CONNECT; or
+  the check takes longer than 30 seconds. The session reads each from the error's type,
+  not from its text.
 
-A host the run's proxy denies is a failure with no code that names the host to allow,
-and so is a failed connection to the run's proxy itself. Any other status, such as a
+A host the run's proxy denies is a failure with no code whose error contains the host
+to allow. A failure on the connection to the run's proxy itself is a failure with no
+code too: a dial of the proxy that fails or does not open within the 30 seconds, and a
+read or write that fails, such as a reset, before the proxy returned 200 to the
+CONNECT. Any other status, such as a
 500, and any other failure, such as a 502 from the registry or from the run's proxy on a
 host it terminates, fail the step with no code. The token is held in memory
 alone. The engine may answer
