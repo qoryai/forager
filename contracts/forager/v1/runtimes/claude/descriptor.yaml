@@ -142,6 +142,9 @@ tools:
 fixed:
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
   CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: "1"
+# The hosts Claude Code needs to reach, for a server to allow for a run. A machine's
+# policy can still block them.
+egress_hosts: [api.anthropic.com]
 # A subagent's message has its agent_id and, in parent_tool_use_id, the id of the Agent
 # or Skill tool call that started the subagent.
 parent:

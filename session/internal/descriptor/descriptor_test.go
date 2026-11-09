@@ -3,6 +3,7 @@ package descriptor_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"reflect"
 	"strings"
@@ -481,17 +482,87 @@ func TestRuntimesJSONIsGenerated(t *testing.T) {
 	}
 }
 
+// TestEgressHostsAreListed pins that a descriptor's egress_hosts decode and that
+// runtimes.json lists them in the descriptor's order, as [] for a descriptor with none,
+// and what the schema accepts: 1 to 16 exact DNS names, each once. A declaration's
+// hosts are not in the list.
+func TestEgressHostsAreListed(t *testing.T) {
+	const head = "version: 1\nruntime: amp\ntitle: Amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n" +
+		"secrets:\n  declares: [{id: key, title: Key, name: AMP_SECRET, hosts: [secret.example.com], auth: {scheme: bearer}}]\n"
+	listed := func(doc string) string {
+		t.Helper()
+		rendered, err := descriptor.Runtimes(fstest.MapFS{"runtimes/amp/descriptor.yaml": {Data: []byte(doc)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var file struct {
+			Runtimes []struct {
+				EgressHosts json.RawMessage `json:"egress_hosts"`
+			} `json:"runtimes"`
+		}
+		if err := json.Unmarshal(rendered, &file); err != nil || len(file.Runtimes) != 1 {
+			t.Fatalf("runtimes.json: %v\n%s", err, rendered)
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, file.Runtimes[0].EgressHosts); err != nil {
+			t.Fatal(err)
+		}
+		return compact.String()
+	}
+	if got, want := listed(head), `[]`; got != want {
+		t.Errorf("egress_hosts of a descriptor with none = %s; want %s", got, want)
+	}
+	two := head + "egress_hosts: [b.example.com, a.example.com]\n"
+	if got, want := listed(two), `["b.example.com","a.example.com"]`; got != want {
+		t.Errorf("egress_hosts = %s; want %s", got, want)
+	}
+	d, err := descriptor.Parse("amp.yaml", []byte(two))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"b.example.com", "a.example.com"}; !reflect.DeepEqual(d.EgressHosts, want) {
+		t.Errorf("EgressHosts = %v; want %v", d.EgressHosts, want)
+	}
+	hosts := func(n int) string {
+		names := make([]string, n)
+		for i := range names {
+			names[i] = fmt.Sprintf("h%d.example.com", i)
+		}
+		return "[" + strings.Join(names, ", ") + "]"
+	}
+	if _, err := descriptor.Parse("amp.yaml", []byte(head+"egress_hosts: "+hosts(16)+"\n")); err != nil {
+		t.Errorf("16 hosts: %v", err)
+	}
+	for name, list := range map[string]string{
+		"an empty list":   "[]",
+		"17 hosts":        hosts(17),
+		"a host twice":    "[a.example.com, a.example.com]",
+		"a wildcard host": "['*.example.com']",
+		"an IP literal":   "[192.0.2.1]",
+		"upper case":      "[API.example.com]",
+		"a port":          "['api.example.com:443']",
+		"a single label":  "[localhost]",
+		"a trailing dot":  "[api.example.com.]",
+	} {
+		if _, err := descriptor.Parse("amp.yaml", []byte(head+"egress_hosts: "+list+"\n")); err == nil {
+			t.Errorf("%s: passed; want a schema failure", name)
+		}
+	}
+}
+
 // TestRuntimesJSONShape pins the members of runtimes.json a server reads: version and
 // runtimes; per runtime its name, title, reserves, denies, credential_files, declares,
-// one_of and fixed, every one present, fixed an object of strings; per declaration id, title, name, hosts, auth with its
+// one_of, fixed and egress_hosts, every one present, fixed an object of strings; per declaration id, title, name, hosts, auth with its
 // scheme, the header of a header scheme and the username of a basic scheme, and paths
 // when it has some; per group id, required and of; and model when the descriptor has
 // one, with formats, model, endpoint with its variable and optionally effort, with run
 // and optionally agent, each place being exactly one of flag, setting and variable, and
 // optionally overrides. The claude runtime has a model with overrides, and its fixed
 // sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and
-// CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL to 1, and nothing else. Every
-// built-in descriptor is one runtime, in name order.
+// CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL to 1, and nothing else, and its
+// egress_hosts is api.anthropic.com alone. Every built-in descriptor is one runtime, in
+// name order.
 func TestRuntimesJSONShape(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
 	if err != nil {
@@ -578,7 +649,7 @@ func TestRuntimesJSONShape(t *testing.T) {
 		t.Fatalf("%d runtimes for %d descriptors", len(runtimes), len(dirs))
 	}
 	for i, r := range runtimes {
-		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of", "fixed"}, "model")
+		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of", "fixed", "egress_hosts"}, "model")
 		if rt["name"] != dirs[i].Name() || rt["title"] == "" {
 			t.Errorf("runtime %d is %v, %v; want %s and a title", i, rt["name"], rt["title"], dirs[i].Name())
 		}
@@ -596,6 +667,10 @@ func TestRuntimesJSONShape(t *testing.T) {
 		}
 		for _, k := range []string{"reserves", "denies", "credential_files"} {
 			strs(k, rt[k])
+		}
+		hosts := strs("egress_hosts", rt["egress_hosts"])
+		if want := []string{"api.anthropic.com"}; rt["name"] == "claude" && !reflect.DeepEqual(hosts, want) {
+			t.Errorf("the claude runtime's egress_hosts is %v; want %v", hosts, want)
 		}
 		declares, _ := rt["declares"].([]any)
 		for _, d := range declares {

@@ -1,0 +1,14 @@
+# A descriptor without egress hosts leaves the member out; an empty list is not valid.
+version: 1
+runtime: claude
+runtime_version: "2.1.273"
+sources:
+  output:
+    format: jsonl
+egress_hosts: []
+rules:
+  - source: output
+    match: {type: result}
+    type: dev.qory.runtime.result
+    data:
+      session_id: session_id

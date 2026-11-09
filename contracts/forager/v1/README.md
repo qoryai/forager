@@ -4446,7 +4446,7 @@ exactly the recorded events and that each passes this contract's schema.
 
 ### The descriptor
 
-`descriptor.schema.json`. One YAML file per runtime. It has nine parts, beside
+`descriptor.schema.json`. One YAML file per runtime. It has ten parts, beside
 `runtime`, the name, a lower-case letter and then up to 63 lower-case letters, digits
 and dashes, and an optional `title`, the name a person reads: `Claude Code`.
 
@@ -4593,6 +4593,12 @@ it, and a descriptor sets no such variable`, or that the descriptor lists in
 `model.endpoint` or `model.overrides`, `fixed: remove AMP_MODEL from fixed or from
 model.overrides: a variable that fixed sets is in no other list of the descriptor`.
 
+**Egress hosts**, optional: `egress_hosts`, the hosts the runtime needs to reach,
+`[api.anthropic.com]`: 1 to 16 exact DNS names, each once, no wildcard and no IP
+literal. `runtimes.json` lists them for a server to allow for a run, and a machine's
+policy can still block them. No Forager code applies this list to a run's policy.
+`secrets.declares[].hosts` is a different list: the hosts a secret's value is set on.
+
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
 per event the rules produce from them, in order. A descriptor without fixtures is not
@@ -4627,6 +4633,7 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`,
 `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`, `CLAUDE_CODE_AUTO_MODE_MODEL`,
 `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_EFFORT` and `CLAUDE_CODE_EXTRA_BODY`.
+Its `egress_hosts` lists `api.anthropic.com`.
 Its `fixed` sets two variables to `1`. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
 Claude Code 2.1.316 sends no log lines to Datadog, does not call
 `/api/claude_cli/bootstrap`, and makes no other request that its environment-variable
@@ -4682,7 +4689,8 @@ directory, `preparation.sh`, which then starts the launch as the runtime prepare
 **`runtimes.json`** lists, for a server to vendor, every descriptor this contract ships,
 in name order: `version`, 1, and `runtimes`, each with its `name`, `title`, `reserves`,
 `denies`, `credential_files`, `fixed`, the descriptor's fixed variables by name,
-`declares` with `id`, `title`, `name`, `hosts`, `auth`
+`egress_hosts`, the hosts the runtime needs to reach, `declares` with `id`, `title`,
+`name`, `hosts`, `auth`
 (`scheme`, and `header` for the `header` scheme, `username` for the `basic` scheme and
 `oauth` when it is set), `paths` when the declaration has some, `one_of` with `id`,
 `required` and `of`, and `model`, the descriptor's model section in the same shape,

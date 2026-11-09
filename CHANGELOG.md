@@ -242,6 +242,11 @@ release may change what an existing document does, and says so under Upgrading.
   from fixed or from model.overrides: a variable that fixed sets is in no other list of
   the descriptor`. `runtimes.json` lists `fixed` for every runtime, an empty object when
   the descriptor has none.
+- `egress_hosts` in a runtime descriptor: the hosts the runtime needs to reach, 1 to 16
+  exact DNS names, with no wildcard and no IP literal. `runtimes.json` lists
+  `egress_hosts` for every runtime, `[]` when the descriptor has none, for a server to
+  allow for a run, and a machine's policy can still block them. No Forager code applies
+  the list to a run's policy. The Claude Code descriptor lists `api.anthropic.com`.
 - `parent_agent_id` in `dev.qory.runtime.subagent_started`: the subagent that started
   this one, when the runtime reports it. Claude Code 2.1.292 and later reports it in a
   session on pipes with `--output-format stream-json --verbose`. A descriptor sets where
