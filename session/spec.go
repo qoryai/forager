@@ -468,9 +468,10 @@ func checkMachine(spec OpenSpec) error {
 
 // Outcome is how the caller says the run ended, which [Run.Close] writes in
 // dev.qory.run.exited: State, succeeded, failed or cancelled; Reason, empty for none,
-// timeout or interrupted with cancelled, timeout with ExitCode 124, image_missing or
-// image_user_root, failed with -1 for a run no session joined, after [Run.FetchImage]
-// returned that refusal, workflow_not_in_harness, failed with -1 for a run no session
+// timeout or interrupted with cancelled, timeout with ExitCode 124, image_missing,
+// image_user_root, image_access_denied, image_rate_limited or
+// image_registry_unreachable, failed with -1 for a run no session joined, after
+// [Run.FetchImage] returned that refusal, workflow_not_in_harness, failed with -1 for a run no session
 // joined whose workflow is not in the harness, read_needs_wall,
 // read_needs_setup_outside, read_needs_no_nested_docker and read_needs_setup_removed,
 // failed with -1 for a read run (the contract's §The events, How a run ends) no session
@@ -489,8 +490,8 @@ type Outcome struct {
 // checkOutcome refuses an outcome the close cannot write: a state outside the three, an
 // exit code under -1, a reason outside the pattern or one of Forager's reserved codes
 // other than timeout, interrupted and no_session, those three with another state or
-// exit code than they take, and image_missing, image_user_root,
-// workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
+// exit code than they take, and image_missing, image_user_root, image_access_denied,
+// image_rate_limited, image_registry_unreachable, workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
 // read_needs_no_nested_docker and read_needs_setup_removed other than failed with -1 for
 // a run no session joined, the one outcome with each of them that the gateway accepts.
 // joined is true when a join of the run was numbered, or may have been.
@@ -500,7 +501,8 @@ func checkOutcome(o Outcome, joined bool) error {
 		return fmt.Errorf("the outcome's state %q is none of succeeded, failed and cancelled", o.State)
 	case o.ExitCode < -1:
 		return fmt.Errorf("the outcome's exit code %d is under -1", o.ExitCode)
-	case o.Reason == refusal.ImageMissing, o.Reason == refusal.ImageUserRoot, o.Reason == event.ReasonWorkflowNotInHarness,
+	case o.Reason == refusal.ImageMissing, o.Reason == refusal.ImageUserRoot, o.Reason == refusal.ImageAccessDenied,
+		o.Reason == refusal.ImageRateLimited, o.Reason == refusal.ImageRegistryUnreachable, o.Reason == event.ReasonWorkflowNotInHarness,
 		o.Reason == event.ReasonReadNeedsWall, o.Reason == event.ReasonReadNeedsSetupOutside,
 		o.Reason == event.ReasonReadNeedsNoNestedDocker, o.Reason == event.ReasonReadNeedsSetupRemoved:
 		if o.State != event.StateFailed || o.ExitCode != -1 || joined {

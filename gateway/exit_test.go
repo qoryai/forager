@@ -65,7 +65,8 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 
 // TestTheRunExitedIsTheClosesOutcome pins a session's dev.qory.run.exited, the
 // close's: any state, with no reason, timeout or interrupted, no_session only in a run
-// with no join, and image_missing, image_user_root, workflow_not_in_harness,
+// with no join, and image_missing, image_user_root, image_access_denied,
+// image_rate_limited, image_registry_unreachable, workflow_not_in_harness,
 // read_needs_wall, read_needs_setup_outside, read_needs_no_nested_docker and
 // read_needs_setup_removed only failed with exit_code -1 in a run with no join, are
 // taken; a reason the gateway decides, or a starter's, is refused, and the run ends
@@ -95,6 +96,18 @@ func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_user_root"}, true, "a run.exited image_user_root of a run with a join"},
 		{map[string]any{"state": "failed", "exit_code": 0, "reason": "image_user_root"}, false, "a run.exited image_user_root that is not failed with exit_code -1"},
 		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "image_user_root"}, false, "a run.exited image_user_root that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_access_denied"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_access_denied"}, true, "a run.exited image_access_denied of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "image_access_denied"}, false, "a run.exited image_access_denied that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "image_access_denied"}, false, "a run.exited image_access_denied that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_rate_limited"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_rate_limited"}, true, "a run.exited image_rate_limited of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "image_rate_limited"}, false, "a run.exited image_rate_limited that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "image_rate_limited"}, false, "a run.exited image_rate_limited that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_registry_unreachable"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "image_registry_unreachable"}, true, "a run.exited image_registry_unreachable of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "image_registry_unreachable"}, false, "a run.exited image_registry_unreachable that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "image_registry_unreachable"}, false, "a run.exited image_registry_unreachable that is not failed with exit_code -1"},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "workflow_not_in_harness"}, false, ""},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "workflow_not_in_harness"}, true, "a run.exited workflow_not_in_harness of a run with a join"},
 		{map[string]any{"state": "failed", "exit_code": 1, "reason": "workflow_not_in_harness"}, false, "a run.exited workflow_not_in_harness that is not failed with exit_code -1"},
