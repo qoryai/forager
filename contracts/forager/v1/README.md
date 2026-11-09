@@ -2499,70 +2499,66 @@ is a status like any other.
 code an owner or administrator of the server created: a prefix, 26 Crockford base32
 characters, then `.` and the fingerprint of the server's key, and during a rotation of
 that key a second `.` and the next key's fingerprint. The prefix names the kind of key
-the code enrols: `qecn_` a node's, `qecp_` a node pool's, `qecg_` a gateway's,
-`qeci_` an integration's (node_kind `adapter`) and `qecd_` a diagnostics key's
-(node_kind `diagnostics`). `qecr_` is a run code: it enrols no access key and redeems
-a run's run key (**A run code**, in
-[The server](#the-server)). A code whose prefix names another kind than its node's is
-unknown to the server, which answers it `401` as any unknown code; a code with any
-other prefix is malformed, and the server refuses it as an invalid request, `400`. The
-body contains the code in its normalised form, the prefix in lower
-case and the 26 characters in upper case with `I` and `L` read as `1`, `O` as `0` and hyphens
-removed; a name for the access key; the raw public key; a timestamp; and
+the code enrols: `qecn_` a node's, `qecp_` a node pool's, `qecg_` a gateway's, `qeci_`
+an integration's (node_kind `adapter`) and `qecd_` a diagnostics key's (node_kind
+`diagnostics`). `qecr_` is a run code: it enrols no access key and redeems a run's run
+key (**A run code**, in [The server](#the-server)). A code whose prefix names another
+kind than its node's is unknown to the server, which answers it `401` as any unknown
+code; a code with any other prefix is malformed, and the server refuses it as an invalid
+request, `400`. The body contains the code in its normalised form, the prefix in lower
+case and the 26 characters in upper case with `I` and `L` read as `1`, `O` as `0` and
+hyphens removed; a name for the access key; the raw public key; a timestamp; and
 `proof`, the Ed25519 signature under the new key of five lines joined by `\n`:
 `qory-enrol-ed25519-v1`, the code, the public key as in the body, the name, and the
-timestamp in decimal. The request a machine sends contains no `X-Qory-Access-Key-Id`
-and no request signature: the code and the proof authenticate it. A gateway's relay
-adds the gateway's access key id, instance id and request signature (**The relay of
-the server's endpoints**, in [The gateway's link](#the-gateways-link)). The server
-answers an enrolment in this order, unsigned until the code is accepted, the key passes
-the checks and the proof verifies under it: `413`; `415`; `400` `bad_request` for a
-header sent twice; `429` `rate_limited` per source address; `400`
-`unsupported_contract_version`; `400`
-`invalid_request`, a malformed code among them; `401` for a code it did not issue or
-that is used, expired or cancelled, for a code whose prefix names another kind than its
-node's, for a code whose fingerprints are not its keys', for a run code, `qecr_`, that
-does not come through the relay of the gateway the code is bound to, signed under a
+timestamp in decimal. The request a machine sends contains no `X-Qory-Access-Key-Id` and
+no request signature: the code and the proof authenticate it. A gateway's relay adds the
+gateway's access key id, instance id and request signature (**The relay of the server's
+endpoints**, in [The gateway's link](#the-gateways-link)). The server answers an
+enrolment in this order, unsigned until the code is accepted, the key passes the checks
+and the proof verifies under it: `413`; `415`; `400` `bad_request` for a header sent
+twice; `429` `rate_limited` per source address; `400` `unsupported_contract_version`;
+`400` `invalid_request`, a malformed code among them; `401` for a code it did not issue
+or that is used, expired or cancelled, for a code whose prefix names another kind than
+its node's, for a code whose fingerprints are not its keys', for a run code, `qecr_`,
+that does not come through the relay of the gateway the code is bound to, signed under a
 live access key of that gateway, and for a timestamp outside ±300 seconds; `409`
 `key_invalid` for a key the checks refuse or a `proof` that does not verify under it,
 the key checked first. Then, signed: `429` `rate_limited` per code; `409` `key_invalid`
 for a key already enrolled, a revoked one included; `409` `key_limit`; and `201`. The
-limit per source address counts every request that passes the `413`, `415` and `400`
-`bad_request` checks, before the server reads the version, the body or the code: a
-request past the limit gets the unsigned `429`, even with a code that would get a `401`,
-and a request within the limit spends one request of it, whatever its answer. A request
-refused at `413`, `415` or `400` `bad_request` spends none. The server sets both limits.
-Qory Apiary's defaults are 1 request a second with a burst of 10 per source address, and
-1 a second with a burst of 5 per code, and its operator can change them. Behind a
-gateway's relay, the source address is the gateway's, so every machine behind one
-gateway shares one limit. Each `429`, unsigned or signed, has `Retry-After`: the whole
+limit per source address counts each request that passes the `413`, `415` and `400`
+`bad_request` checks, before the server checks the version or parses the body. Each such
+request spends one request of the limit, whatever status it gets. A request past the
+limit gets the unsigned `429`, even with a code that would get a `401`. The server sets
+both limits. Qory Apiary's defaults are 1 request a second, in bursts of at most 10, per
+source address, and 1 a second, in bursts of at most 5, per code. Behind a gateway's
+relay, the source address is the gateway's, so every machine behind one gateway shares
+one limit. Each `429` of the server, unsigned or signed, has `Retry-After`: the whole
 seconds until one more request fits the limit, at least 1, and 1 under Qory Apiary's
-defaults. The server signs an answer only to a proof that verifies under a key the checks pass, so a
-proof no key made, such as one under a key of small order, which plain Ed25519
-verification accepts for any message, gets no signed answer. The `201` answer contains
-the access key id, `node_id` with `node_kind`, `node` for an `nd_` id, `pool` for an
-`np_` id, `gateway` for an `ng_` id, `adapter` for an `na_` id and `diagnostics` for
-a `dg_` id, `stored_secrets`,
-true for an access key allowed stored secrets, and the server's keys,
+defaults. The relay's `429` comes first and has no `Retry-After`. The server signs an
+answer only to a proof that verifies under a key the checks pass, so a proof no key
+made, such as one under a key of small order, which plain Ed25519 verification accepts
+for any message, gets no signed answer. The `201` answer contains the access key id,
+`node_id` with `node_kind`, `node` for an `nd_` id, `pool` for an `np_` id, `gateway`
+for an `ng_` id, `adapter` for an `na_` id and `diagnostics` for a `dg_` id,
+`stored_secrets`, true for an access key allowed stored secrets, and the server's keys,
 signed as Signed answers describes under `qory-enrol-answer-ed25519-v1` with the
 request's `proof` as line 3; the machine verifies it under the listed key whose
 fingerprint the code carries first, checks that `node_kind` is the kind the code's
 prefix names, and pins only the keys whose fingerprints the code carries. A `201` means
-the access key is active: the code's use activates it. A `401`
-means the code was used, has expired or was cancelled; a signed `409` `key_invalid`
-refuses the key, and `key_limit` a node that already holds two keys; a signed `429`
-`rate_limited` means too many attempts with the code. Each signed refusal lists
-`apiary_public_key`, the same list in the same order as a `201` at that moment, and the
-machine verifies it exactly as the `201`; a refusal sent unsigned lists no key, and the
-machine acts on none by its status, an unsigned `409` or `429` being `answer_unsigned`.
-In place of a code, an owner or administrator may make a key for an existing node or node
-pool in the server's console, which receives only its public key; the key is active at
-once, and the machine takes its id, secret and pin as `QORY_ACCESS_KEY_ID`,
-`QORY_ACCESS_KEY_SECRET` and `QORY_APIARY_PUBLIC_KEY`. The server checks every public
-key it is given: a canonical encoding, a point on the curve, not of small order, of
-prime order, and y ≠ 1; `fixtures/known-answers/small-order.json` lists keys it
-refuses. The known answers are `fixtures/enrolment/` and the enrolment lines of
-`signatures.json`.
+the access key is active: the code's use activates it. A `401` means the code was used,
+has expired or was cancelled; a signed `409` `key_invalid` refuses the key, and
+`key_limit` a node that already holds two keys; a signed `429` `rate_limited` means too
+many attempts with the code. Each signed refusal lists `apiary_public_key`, the same
+list in the same order as a `201` at that moment, and the machine verifies it exactly as
+the `201`; a refusal sent unsigned lists no key, and the machine acts on none by its
+status, an unsigned `409` or `429` being `answer_unsigned`. In place of a code, an owner
+or administrator may make a key for an existing node or node pool in the server's
+console, which receives only its public key; the key is active at once, and the machine
+takes its id, secret and pin as `QORY_ACCESS_KEY_ID`, `QORY_ACCESS_KEY_SECRET` and
+`QORY_APIARY_PUBLIC_KEY`. The server checks every public key it is given: a canonical
+encoding, a point on the curve, not of small order, of prime order, and y ≠ 1;
+`fixtures/known-answers/small-order.json` lists keys it refuses. The known answers are
+`fixtures/enrolment/` and the enrolment lines of `signatures.json`.
 
 **A run code.** A provisioner that creates a machine for one run, on AWS EC2 say, puts
 a run code, `qecr_`, in the machine's start data in place of the run key: EC2 keeps user
