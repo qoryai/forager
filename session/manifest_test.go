@@ -336,17 +336,17 @@ func TestTheImageIsCheckedAtItsRegistryBeforeThePull(t *testing.T) {
 				"the token request got 403 from the realm or from the run's proxy"},
 		{name: "a 429", reg: &scripted{status: 429, retryAfter: "30"}, heads: []string{head},
 			code: refusals.ImageRateLimited,
-			want: "Run again once the rate limit of the registry at registry.example resets, or give the run a credential with a higher limit: " +
+			want: "Run again once the rate limit of the registry at registry.example resets, give the run a credential with a higher limit, or raise gateway.run_limits of the gateway: " +
 				"the check of the image " + pinned + " got 429 from its registry or from the run's proxy (Retry-After: 30)"},
 		{name: "a 429 after the token", reg: &scripted{status: 401, withToken: 429, challenge: bearer},
 			heads: []string{head, head + "Bearer " + registryToken}, realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "},
 			code: refusals.ImageRateLimited,
-			want: "Run again once the rate limit of the registry at registry.example resets, or give the run a credential with a higher limit: " +
+			want: "Run again once the rate limit of the registry at registry.example resets, give the run a credential with a higher limit, or raise gateway.run_limits of the gateway: " +
 				"the check of the image " + pinned + " got 429 from its registry or from the run's proxy"},
 		{name: "a realm that returns 429", reg: &scripted{status: 401, challenge: bearer, realmStatus: 429}, heads: []string{head},
 			realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "},
 			code:  refusals.ImageRateLimited,
-			want: "Run again once the rate limit of the token realm at auth.registry.example resets, or give the run a credential for auth.registry.example with a higher limit: " +
+			want: "Run again once the rate limit of the token realm at auth.registry.example resets, give the run a credential for auth.registry.example with a higher limit, or raise gateway.run_limits of the gateway: " +
 				"the token request for the image " + pinned + " got 429 from the realm or from the run's proxy"},
 		{name: "a host name that does not resolve", reg: &scripted{status: 200}, to: "registry.invalid:443",
 			code: refusals.ImageRegistryUnreachable, prefix: true,
