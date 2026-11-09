@@ -1,4 +1,4 @@
-# Egress hosts are exact DNS names; an IP literal is none.
+# Egress hosts are exact DNS names, not IP literals.
 version: 1
 runtime: claude
 runtime_version: "2.1.273"

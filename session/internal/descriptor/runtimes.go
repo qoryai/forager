@@ -13,8 +13,8 @@ import (
 )
 
 // RuntimesFile is the path, in the contract directory, of the file that lists the
-// secrets, the model section, the fixed variables and the egress hosts of every runtime the contract
-// ships a descriptor for, the file a server vendors.
+// secrets, the model section, the fixed variables and the egress hosts of every
+// runtime the contract ships a descriptor for, the file a server vendors.
 const RuntimesFile = "runtimes.json"
 
 // runtimesFile is the document of [RuntimesFile].

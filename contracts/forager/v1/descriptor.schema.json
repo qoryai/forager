@@ -266,7 +266,7 @@
       "additionalProperties": {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00\\r\\n]*$"}
     },
     "egress_hosts": {
-      "description": "The hosts the runtime needs to reach: exact DNS names, no wildcard, no IP literal. runtimes.json lists them for every descriptor the contract ships, for a server to allow for a run; a machine's policy can still block them. This list differs from secrets.declares[].hosts, which is where a secret's value is set.",
+      "description": "The hosts the runtime needs to reach: exact DNS names, no wildcard, no IP literal. runtimes.json lists them for every descriptor the contract ships, for a server to allow for a run; a machine's policy can still block them. This list differs from secrets.declares[].hosts, the hosts a secret's value is set on.",
       "type": "array",
       "minItems": 1,
       "maxItems": 16,
