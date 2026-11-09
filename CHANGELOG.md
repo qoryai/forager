@@ -860,6 +860,12 @@ release may change what an existing document does, and says so under Upgrading.
   run whose workspace qory binds read-only for the agent. Before, they said the run's
   workflow is read-only, which is false for a run of a `write` workflow that qory binds
   read-only. The codes stay.
+- The contract's README, §Enrolment, states the enrolment limit per source address:
+  which requests it counts, that a request past it gets the unsigned `429`
+  `rate_limited` before any `401`, Qory Apiary's defaults of 1 request a second with a
+  burst of 10 per source address and 1 a second with a burst of 5 per code, and the
+  `Retry-After` of each `429`. Before, it stated no rate and no `Retry-After`.
+  `enrolment.schema.json` describes the `Retry-After` too. The revision stays 1.
 
 ### Gateway
 

@@ -2517,7 +2517,8 @@ adds the gateway's access key id, instance id and request signature (**The relay
 the server's endpoints**, in [The gateway's link](#the-gateways-link)). The server
 answers an enrolment in this order, unsigned until the code is accepted, the key passes
 the checks and the proof verifies under it: `413`; `415`; `400` `bad_request` for a
-header sent twice; `429` per source address; `400` `unsupported_contract_version`; `400`
+header sent twice; `429` `rate_limited` per source address; `400`
+`unsupported_contract_version`; `400`
 `invalid_request`, a malformed code among them; `401` for a code it did not issue or
 that is used, expired or cancelled, for a code whose prefix names another kind than its
 node's, for a code whose fingerprints are not its keys', for a run code, `qecr_`, that
@@ -2526,7 +2527,17 @@ live access key of that gateway, and for a timestamp outside ±300 seconds; `409
 `key_invalid` for a key the checks refuse or a `proof` that does not verify under it,
 the key checked first. Then, signed: `429` `rate_limited` per code; `409` `key_invalid`
 for a key already enrolled, a revoked one included; `409` `key_limit`; and `201`. The
-server signs an answer only to a proof that verifies under a key the checks pass, so a
+limit per source address counts every request that passes the `413`, `415` and `400`
+`bad_request` checks, before the server reads the version, the body or the code: a
+request past the limit gets the unsigned `429`, even with a code that would get a `401`,
+and a request within the limit spends one request of it, whatever its answer. A request
+refused at `413`, `415` or `400` `bad_request` spends none. The server sets both limits.
+Qory Apiary's defaults are 1 request a second with a burst of 10 per source address, and
+1 a second with a burst of 5 per code, and its operator can change them. Behind a
+gateway's relay, the source address is the gateway's, so every machine behind one
+gateway shares one limit. Each `429`, unsigned or signed, has `Retry-After`: the whole
+seconds until one more request fits the limit, at least 1, and 1 under Qory Apiary's
+defaults. The server signs an answer only to a proof that verifies under a key the checks pass, so a
 proof no key made, such as one under a key of small order, which plain Ed25519
 verification accepts for any message, gets no signed answer. The `201` answer contains
 the access key id, `node_id` with `node_kind`, `node` for an `nd_` id, `pool` for an
