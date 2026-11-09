@@ -732,7 +732,8 @@ func TestSessionExitedReasonsAreTheSessions(t *testing.T) {
 			t.Errorf("a link batch's session.exited allows the reason %s, which the session does not decide", code)
 		}
 	}
-	for _, code := range []string{"timeout", "interrupted", "placeholder_conflict", "mount_mode_conflict", "engine_unreachable"} {
+	for _, code := range []string{"timeout", "interrupted", "placeholder_conflict", "mount_mode_conflict", "engine_unreachable",
+		"image_access_denied", "image_rate_limited", "image_registry_unreachable"} {
 		if !slices.Contains(got, code) {
 			t.Errorf("a link batch's session.exited does not allow the reason %s", code)
 		}
