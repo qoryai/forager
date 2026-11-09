@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -86,6 +87,19 @@ func defaultRegistry() func() {
 	return reg.Close
 }
 
+// closedPort is a loopback host:port that refuses a connection: a listener's address,
+// closed.
+func closedPort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
+}
+
 // pinnedDigest is the digest of pinned.
 var pinnedDigest = pinned[strings.Index(pinned, "@")+1:]
 
@@ -100,8 +114,10 @@ type scripted struct {
 	// when empty; challenge, when set, is the WWW-Authenticate of a 401.
 	status, withToken int
 	digest, challenge string
-	// realmStatus is the realm's answer, 200 with registryToken when 0.
+	// realmStatus is the realm's answer, 200 with registryToken when 0; retryAfter, when
+	// set, is the Retry-After of every answer other than 200.
 	realmStatus int
+	retryAfter  string
 	// hang has the manifest answer nothing until the request ends.
 	hang bool
 	// heads are the HEADs, each with its Authorization; realm the realm's queries, each
@@ -115,6 +131,9 @@ func (s *scripted) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/token" {
 		s.realm = append(s.realm, r.URL.RawQuery+" "+r.Header.Get("Authorization"))
 		if s.realmStatus != 0 {
+			if s.retryAfter != "" {
+				w.Header().Set("Retry-After", s.retryAfter)
+			}
 			w.WriteHeader(s.realmStatus)
 			return
 		}
@@ -134,6 +153,9 @@ func (s *scripted) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if status == http.StatusUnauthorized && s.challenge != "" {
 		w.Header().Set("WWW-Authenticate", s.challenge)
+	}
+	if status != http.StatusOK && s.retryAfter != "" {
+		w.Header().Set("Retry-After", s.retryAfter)
 	}
 	if status == http.StatusOK {
 		_, digest, _ := strings.Cut(r.URL.Path, "/manifests/")
@@ -201,28 +223,44 @@ func byReferenceHolding(g *linktest.Fake, creds []held) {
 // proxy, with the Accept of an index and a manifest; on a 401 with a Bearer challenge, a
 // GET of the realm with the service and the scope of a pull, with no Authorization, and
 // the HEAD again with the token; only a 200 pulls. A 401 after the token, a Basic
-// challenge, a 403, a realm that answers 401 or 403, a realm over http on a host off
+// challenge, a 403, a realm that returns 401 or 403, a 429 from the registry or the
+// realm, a host name the run's proxy does not resolve, a port that refuses, a
+// certificate the check does not trust, a 500, a realm over http on a host off
 // loopback, a realm on a host with no ASCII form, a realm on another host than the
 // registry's that a tool of the run serves, where a credential of the run applies on
 // every path or on other paths, or that the answer lists a credential for with no use
 // or a use with masked hosts, a digest the registry did not ask for and a host the
 // run's proxy denies each fail the image step before the wall pulls, each error
-// starting with what to fix; a 404 is image_missing. The token is in no error, no file
-// of the run directory and no report.
+// starting with what to fix. A 404 is image_missing; a 401 or 403 image_access_denied,
+// a 429 image_rate_limited, and a host the check does not reach
+// image_registry_unreachable, each with the image as its name and in its detail; a 500
+// has no code. The token is in no error, no file of the run directory and no report.
 func TestTheImageIsCheckedAtItsRegistryBeforeThePull(t *testing.T) {
 	accept := "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, " +
 		"application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json"
 	head := "HEAD /v2/agents/app/manifests/" + pinnedDigest + " " + accept + " "
+	// closed is a port that refuses; untrusted a TLS server whose authority the check
+	// does not trust.
+	closed := closedPort(t)
+	untrusted := httptest.NewTLSServer(http.HandlerFunc(anyManifest))
+	defer untrusted.Close()
 	for _, c := range []struct {
 		name  string
 		reg   *scripted
 		creds []held
 		deny  string
+		// to, when set, is where the run's proxy connects a CONNECT of the registry's in
+		// place of the test registry.
+		to    string
 		heads []string
 		realm []string
-		// want is the start of the error, empty for a pull; missing wants image_missing.
+		// want is the error, empty for a pull; missing wants image_missing. With code,
+		// want is the detail of a refusal with that code and the image as its name, or
+		// the start of the detail with prefix.
 		want    string
 		missing bool
+		code    string
+		prefix  bool
 	}{
 		{name: "200", reg: &scripted{status: 200}, heads: []string{head}},
 		{name: "a 401, the token, then 200", reg: &scripted{status: 401, withToken: 200, challenge: bearer},
@@ -276,18 +314,54 @@ func TestTheImageIsCheckedAtItsRegistryBeforeThePull(t *testing.T) {
 			want: "Check the registry at registry.example: its Bearer challenge to the check of the image " + pinned + " has the token realm host " + `"ａpi.forge.example"` + ", which is not an ASCII host name or an IP address in canonical form."},
 		{name: "a 401 after the token", reg: &scripted{status: 401, withToken: 401, challenge: bearer},
 			heads: []string{head, head + "Bearer " + registryToken}, realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "},
-			want: "Give the run a credential that may pull " + pinned + ": its registry answered 401 to the check of its manifest with the token from auth.registry.example."},
+			code: refusals.ImageAccessDenied,
+			want: "Give the run a credential that may pull " + pinned + ": its registry returned 401 to the check of its manifest with the token from auth.registry.example"},
 		{name: "a Basic challenge", reg: &scripted{status: 401, challenge: `Basic realm="registry"`}, heads: []string{head},
-			want: "Give the run a credential for registry.example: its registry answered 401 to the check of the image " + pinned + " with no Bearer challenge."},
-		{name: "a realm that answers 401", reg: &scripted{status: 401, challenge: bearer, realmStatus: 401}, heads: []string{head},
+			code: refusals.ImageAccessDenied,
+			want: "Give the run a credential for registry.example: its registry returned 401 to the check of the image " + pinned + " with no Bearer challenge"},
+		{name: "a 401 with no challenge", reg: &scripted{status: 401}, heads: []string{head},
+			code: refusals.ImageAccessDenied,
+			want: "Give the run a credential for registry.example: its registry returned 401 to the check of the image " + pinned + " with no Bearer challenge"},
+		{name: "a realm that returns 401", reg: &scripted{status: 401, challenge: bearer, realmStatus: 401}, heads: []string{head},
 			realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "},
-			want:  "Give the run a credential for auth.registry.example that may pull " + pinned + ": the token realm answered 401 to the check of the image."},
+			code:  refusals.ImageAccessDenied,
+			want:  "Give the run a credential for auth.registry.example that may pull " + pinned + ": the token realm returned 401 to the check of the image"},
 		{name: "403", reg: &scripted{status: 403}, heads: []string{head},
-			want: "Give the run a credential that may pull " + pinned + ", or a path rule that covers /v2/agents/app/manifests/ on registry.example: the check of its manifest got 403 from its registry or from the run's proxy."},
-		{name: "a realm that answers 403", reg: &scripted{status: 401, challenge: bearer, realmStatus: 403}, heads: []string{head},
+			code: refusals.ImageAccessDenied,
+			want: "Give the run a credential that may pull " + pinned + ", or a path rule that covers /v2/agents/app/manifests/ on registry.example: the check of its manifest got 403 from its registry or from the run's proxy"},
+		{name: "a realm that returns 403", reg: &scripted{status: 401, challenge: bearer, realmStatus: 403}, heads: []string{head},
 			realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "},
+			code:  refusals.ImageAccessDenied,
 			want: "Give the run a credential for auth.registry.example that may pull " + pinned + ", or a path rule that covers /token on auth.registry.example: " +
-				"the token request got 403 from the realm or from the run's proxy."},
+				"the token request got 403 from the realm or from the run's proxy"},
+		{name: "a 429", reg: &scripted{status: 429, retryAfter: "30"}, heads: []string{head},
+			code: refusals.ImageRateLimited,
+			want: "Run again once the rate limit of the registry at registry.example resets, or give the run a credential with a higher limit: " +
+				"the check of the image " + pinned + " got 429 from its registry or from the run's proxy (Retry-After: 30)"},
+		{name: "a 429 after the token", reg: &scripted{status: 401, withToken: 429, challenge: bearer},
+			heads: []string{head, head + "Bearer " + registryToken}, realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "},
+			code: refusals.ImageRateLimited,
+			want: "Run again once the rate limit of the registry at registry.example resets, or give the run a credential with a higher limit: " +
+				"the check of the image " + pinned + " got 429 from its registry or from the run's proxy"},
+		{name: "a realm that returns 429", reg: &scripted{status: 401, challenge: bearer, realmStatus: 429}, heads: []string{head},
+			realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "},
+			code:  refusals.ImageRateLimited,
+			want: "Run again once the rate limit of the token realm at auth.registry.example resets, or give the run a credential for auth.registry.example with a higher limit: " +
+				"the token request for the image " + pinned + " got 429 from the realm or from the run's proxy"},
+		{name: "a host name that does not resolve", reg: &scripted{status: 200}, to: "registry.invalid:443",
+			code: refusals.ImageRegistryUnreachable, prefix: true,
+			want: "Check that the run's proxy reaches registry.example: the check of the image " + pinned + " at its registry failed (" +
+				`Head "https://registry.example/v2/agents/app/manifests/` + pinnedDigest + `": the run's proxy did not reach registry.example:443: upstream: dial tcp: lookup registry.invalid`},
+		{name: "a port that refuses", reg: &scripted{status: 200}, to: closed,
+			code: refusals.ImageRegistryUnreachable, prefix: true,
+			want: "Check that the run's proxy reaches registry.example: the check of the image " + pinned + " at its registry failed (" +
+				`Head "https://registry.example/v2/agents/app/manifests/` + pinnedDigest + `": the run's proxy did not reach registry.example:443: upstream: dial tcp ` + closed + ": connect: connection refused"},
+		{name: "a certificate the check does not trust", reg: &scripted{status: 200}, to: untrusted.Listener.Addr().String(),
+			code: refusals.ImageRegistryUnreachable, prefix: true,
+			want: "Check that the run's proxy reaches registry.example: the check of the image " + pinned + " at its registry failed (" +
+				`Head "https://registry.example/v2/agents/app/manifests/` + pinnedDigest + `": tls: failed to verify certificate: x509: `},
+		{name: "500", reg: &scripted{status: 500}, heads: []string{head},
+			want: "Check the registry at registry.example: it answered 500 to the check of the image " + pinned + "."},
 		{name: "a realm over http", reg: &scripted{status: 401, challenge: `Bearer realm="http://auth.registry.example/token",service="registry.example"`}, heads: []string{head},
 			want: "Check the registry at registry.example: the realm of its Bearer challenge to the check of the image " + pinned + " is neither https nor http on loopback."},
 		{name: "404", reg: &scripted{status: 404}, heads: []string{head}, missing: true},
@@ -319,8 +393,11 @@ func TestTheImageIsCheckedAtItsRegistryBeforeThePull(t *testing.T) {
 					sp.Gateway = session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID()), TLS: server.RemoteTLS{CAFile: g.CAFile()}}
 				}
 				g.OnConnect(func(hostport string) string {
-					if hostport == c.deny {
+					switch {
+					case hostport == c.deny:
 						return ""
+					case c.to != "":
+						return c.to
 					}
 					return reg.addr()
 				})
@@ -339,14 +416,18 @@ func TestTheImageIsCheckedAtItsRegistryBeforeThePull(t *testing.T) {
 				}
 				err = r.FetchImage(ctx)
 				var ref *session.Refusal
+				coded := errors.As(err, &ref)
 				switch {
 				case c.want == "" && !c.missing && err != nil:
 					t.Errorf("the fetch: %v", err)
-				case c.missing && (!errors.As(err, &ref) || ref.Code != refusals.ImageMissing || !slices.Equal(ref.Names, []string{pinned}) ||
+				case c.missing && (!coded || ref.Code != refusals.ImageMissing || !slices.Equal(ref.Names, []string{pinned}) ||
 					ref.Detail != "the image "+pinned+" is not in its registry: the registry answered 404 to the check of its manifest"):
 					t.Errorf("the fetch: %v, want image_missing", err)
-				case c.want != "" && (err == nil || err.Error() != c.want):
-					t.Errorf("the fetch: %v\nwant %s", err, c.want)
+				case c.code != "" && (!coded || ref.Code != c.code || !slices.Equal(ref.Names, []string{pinned}) || !strings.Contains(ref.Detail, pinned) ||
+					!c.prefix && ref.Detail != c.want || c.prefix && !strings.HasPrefix(ref.Detail, c.want)):
+					t.Errorf("the fetch: %v\nwant %s with the detail %s", err, c.code, c.want)
+				case c.code == "" && c.want != "" && (err == nil || coded || err.Error() != c.want):
+					t.Errorf("the fetch: %v\nwant %s with no code", err, c.want)
 				}
 				if pulled := len(w.pulls) == 1; pulled != (c.want == "" && !c.missing) {
 					t.Errorf("the wall pulled %+v", w.pulls)
@@ -383,9 +464,10 @@ func TestTheImageIsCheckedAtItsRegistryBeforeThePull(t *testing.T) {
 	}
 }
 
-// TestACheckThatTimesOutFailsTheStep pins a registry that does not answer the check: the
-// image step fails after the check's time, with an error that says so, and the wall
-// pulls nothing.
+// TestACheckThatTimesOutFailsTheStep pins a registry that does not respond to the check:
+// the image step fails after the check's time with image_registry_unreachable, whose
+// name is the image and whose detail says the check timed out, and the wall pulls
+// nothing.
 func TestACheckThatTimesOutFailsTheStep(t *testing.T) {
 	reg := startRegistry(&scripted{hang: true})
 	defer reg.Close()
@@ -401,18 +483,22 @@ func TestACheckThatTimesOutFailsTheStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "Check that registry.example answers through the run's proxy within 1s: the check of the image " + pinned + " at its registry timed out."
-	if err := r.FetchImage(ctx); err == nil || err.Error() != want || len(w.pulls) != 0 {
-		t.Errorf("the fetch: %v, pulled %+v\nwant %s", err, w.pulls, want)
+	want := "Check that the run's proxy reaches registry.example within 1s: the check of the image " + pinned + " at its registry timed out"
+	err = r.FetchImage(ctx)
+	var ref *session.Refusal
+	if !errors.As(err, &ref) || ref.Code != refusals.ImageRegistryUnreachable || !slices.Equal(ref.Names, []string{pinned}) || ref.Detail != want || len(w.pulls) != 0 {
+		t.Errorf("the fetch: %v, pulled %+v\nwant image_registry_unreachable with the detail %s", err, w.pulls, want)
 	}
 	if _, err := r.Close(ctx, session.Outcome{State: event.StateFailed, ExitCode: -1}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestAFailedCheckStartsNoContainer pins the check in a join: a registry that answers 403
-// ends the session failed, with no reason, before the wall pulls or wraps, so no
-// container of the image starts.
+// TestAFailedCheckStartsNoContainer pins the check in a join: a registry that returns 403
+// ends the session failed with the reason image_access_denied, before the wall pulls or
+// wraps, so no container of the image starts. The refusal's name is the image, and its
+// detail contains the image, the path rule to set and that the 403 came from the
+// registry or from the run's proxy.
 func TestAFailedCheckStartsNoContainer(t *testing.T) {
 	reg := startRegistry(&scripted{status: http.StatusForbidden})
 	defer reg.Close()
@@ -423,13 +509,19 @@ func TestAFailedCheckStartsNoContainer(t *testing.T) {
 	w := &targetWall{}
 	sp.Wall, sp.Image, sp.ImagesAllow, sp.RunID = w, "example.com/agent:1", []string{"registry.example/"}, event.NewRunID()
 	_, err := run(context.Background(), sp)
-	if want := "Give the run a credential that may pull " + pinned + ", or a path rule that covers /v2/agents/app/manifests/ on registry.example: the check of its manifest got 403 from its registry or from the run's proxy."; err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("the run: %v, want %s", err, want)
+	var ref *session.Refusal
+	if !errors.As(err, &ref) || ref.Code != refusals.ImageAccessDenied || !slices.Equal(ref.Names, []string{pinned}) {
+		t.Fatalf("the run: %v, want image_access_denied with the name %s", err, pinned)
+	}
+	for _, want := range []string{pinned, "or a path rule that covers /v2/agents/app/manifests/ on registry.example", "got 403 from its registry or from the run's proxy"} {
+		if !strings.Contains(ref.Detail, want) {
+			t.Errorf("the detail %q, want it to contain %q", ref.Detail, want)
+		}
 	}
 	if len(w.pulls) != 0 || w.wrapped {
 		t.Errorf("the wall pulled %+v, wrapped %v", w.pulls, w.wrapped)
 	}
-	startedThenExited(t, "the record", events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)}), "")
+	startedThenExited(t, "the record", events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)}), refusals.ImageAccessDenied)
 }
 
 // TestTheManifestIsAtTheRegistrysAPIHost pins where the check finds a manifest: the
