@@ -219,6 +219,9 @@ func (g *Gateway) handler(s *side) http.Handler {
 		case r.Method == http.MethodPost && isJoin(r.URL.Path, runs):
 			id, _ := joinRun(r.URL.Path, runs)
 			g.joinSession(s, w, r, id)
+		case r.Method == http.MethodGet && isTranscript(r.URL.Path, runs):
+			id, _ := transcriptRun(r.URL.Path, runs)
+			g.transcript(s, w, r, id)
 		case strings.HasPrefix(r.URL.Path, runs+"/") && r.Method == http.MethodGet:
 			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runs+"/"))
 		case r.URL.Path == events && r.Method == http.MethodPost:

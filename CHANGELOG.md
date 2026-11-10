@@ -1038,6 +1038,11 @@ release may change what an existing document does, and says so under Upgrading.
 - The link takes a session's `dev.qory.run.exited` `cancelled` with `model_key_limit`
   after a last `dev.qory.session.exited` with that reason.
 - `server.Client.PostModelKeys`, the signed model keys report and its answer.
+- The link's transcript request, `GET <run.url>/<run_id>/transcript`, for a run whose
+  run configuration has `resume`: the gateway reads the paused run's transcript from
+  Qory Apiary with `server.Client.ResumeTranscript`, verifies it against the signed
+  digest, and streams it as `application/x-ndjson`, at most 64 MiB. The run API's route
+  keeps `404` for `GET /resume/transcript`.
 - The gateway's route to the run API, on a run's proxy, for a run with a control plane:
   a plain `http://` request to `run-api.qory.invalid` reaches Qory Apiary, signed with
   the gateway's access key, so no key enters the run. Only five requests pass, and each

@@ -101,3 +101,10 @@ func (r *Run) ModelKeys() []modelkey.Key {
 	}
 	return out
 }
+
+// Resumes reports whether the run configuration the run started with has resume: the
+// run continues a paused run, and its session may read the paused run's transcript.
+func (r *Run) Resumes() bool {
+	d := r.cfg.Fetched.Document
+	return d != nil && d.Resume != nil
+}

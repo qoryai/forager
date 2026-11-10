@@ -570,7 +570,7 @@ A file's `200` is chunked. Treat its bytes as unverified until the read ends cle
 file that fails its signed digest ends in a read error. The contract's README, §The run
 API, lists the five requests, each status and the limits. Its sixth request, `GET
 /resume/transcript`, gets `404` `not_found` through `QORY_RUN_API` and from behind a
-wall, and nothing is sent.
+wall, and nothing is sent: the session reads the transcript over the gateway's link.
 
 Plan the gateway's memory for the route. A budget of 512 MiB per gateway counts the
 bytes of `POST /artifacts` bodies and of answers other than files, past the first 1 MiB of

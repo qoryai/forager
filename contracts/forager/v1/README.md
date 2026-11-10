@@ -3473,7 +3473,7 @@ what a run request and its answer carry.
 | The session knows the gateway | the socket's peer is the session's user, by its uid | the certificate chain, for the host name of `gateway_url`, against the system's roots or the authorities of the run's CA file, and the pin of the certificate's public key when one is set (below); and on every connection the binding, the gateway's proof that it holds a key the run key names, and every answer signed under one (below) |
 | The gateway knows the session | the socket's peer is the gateway's user, by its uid; a batch names its run in `X-Qory-Run-Id` | the run key, sent only once the connection is bound: `Authorization: Bearer` on every request, and the relay's preamble of every proxy connection |
 | The run's labels | the session's | the run's registration's; the run request carries none |
-| Paths | `/.well-known/qory-configuration`, `/v1/run-configuration`, the join's `/v1/run-configuration/<run_id>/sessions` and `/v1/events` | under `/qory-link/`: `/qory-link/configuration`, `/qory-link/run-configuration`, the join's `/qory-link/run-configuration/<run_id>/sessions` and `/qory-link/events` |
+| Paths | `/.well-known/qory-configuration`, `/v1/run-configuration`, the join's `/v1/run-configuration/<run_id>/sessions`, the transcript request's `/v1/run-configuration/<run_id>/transcript` and `/v1/events` | under `/qory-link/`: `/qory-link/configuration`, `/qory-link/run-configuration`, the join's `/qory-link/run-configuration/<run_id>/sessions`, the transcript request's `/qory-link/run-configuration/<run_id>/transcript` and `/qory-link/events` |
 | Answers | unsigned | signed under the gateway's access key, a key the run key names |
 | The run answer's `labels`, `proxy_secret` and `stack_proxy_secret` | present | absent |
 | `narrowing` | refused | accepted |
@@ -4000,6 +4000,24 @@ document:
   `http://run-api.qory.invalid/v1/runs/<run_id>` (§The run API). Present for a run with
   a control plane, on the local link and behind a separate gateway, and absent otherwise.
   Qory Apiary serves only a run of a work item through a gateway's access key. Any other run gets a `404`, and a POST body over 64 KiB on a node's key gets `502` `answer_unverified`.
+
+**The transcript request.** A session of a run whose run configuration has `resume`
+reads the paused run's transcript with `GET <run.url>/<run_id>/transcript`, the path of
+`run.url`, a slash, the `run_id` and `/transcript`; behind a separate gateway with the
+run key, as on the join. The gateway reads `GET <run.url>/<run_id>/resume/transcript`
+from Qory Apiary with its signed client, verifies the bytes against the signed digest
+as it verifies a file of the run API (§The run API, A file), and streams them with
+`Content-Type: application/x-ndjson`, at most 64 MiB. Bytes that fail the digest, or a
+transcript over 64 MiB, end with no clean end of body: on the local link the
+connection closes; behind a separate gateway, whose answers are signed whole, no answer
+comes and the connection closes. The other answers:
+
+| Status | `error` | `from` | When |
+|---|---|---|---|
+| `404` | `not_found` | `gateway` | the run configuration has no `resume`, or the run has no control plane; nothing is sent |
+| `404` | `not_found` | `apiary` | Qory Apiary answered a signed `404` |
+| `502` | `transcript_unavailable` | `gateway` | any other answer of Qory Apiary, one that fails verification, or none; the gateway writes one line to its log |
+| `410` | the end's code | `gateway` | the run ended at the gateway |
 
 **Joining a session.** The run answer opens the run; each session then joins it with a
 `POST` to `<run.url>/<run_id>/sessions`, the path of `run.url`, a slash, the `run_id`
@@ -4551,7 +4569,7 @@ with the fix.
 
 | Status | `error` | When |
 |---|---|---|
-| `404` | `not_found` | the request is outside the six, or is `GET /resume/transcript` from a program other than the session (The transcript of a paused run, below) |
+| `404` | `not_found` | the request is outside the six, or is `GET /resume/transcript`, which the session reads over the gateway's link (The transcript of a paused run, below) |
 | `413` | `payload_too_large` | a POST's body is over its limit; nothing is sent |
 | `429` | `rate_limited` | a limit below, or a body or answer over 1 MiB while the gateway's 512 MiB are full; with `Retry-After: 1` |
 | `502` | `answer_unverified` | the answer fails verification under the pin, an unsigned `401` among them; its body does not reach the caller |
@@ -4567,12 +4585,13 @@ bytes of a file as unverified until the read ends cleanly.
 
 **The transcript of a paused run.** A run whose run configuration has `resume` continues
 the runtime session of a paused run, one that ended `cancelled` with `model_key_limit`
-(§The events, How a run ends). Before the runtime starts, the session reads `GET
-/resume/transcript` through `Run.RunAPI`. The route serves this path only to the
-session: a request for it through `QORY_RUN_API`, from behind a wall or from any other
-program, gets `404` `not_found`, and nothing is sent. Qory Apiary gets `GET
-<run.url>/<run_id>/resume/transcript` with this run's id, signed as every GET is, since
-the route sends no other run's id. Qory Apiary returns the transcript of `resume.run_id`
+(§The events, How a run ends). Before the runtime starts, the session reads the
+transcript over the gateway's link, `GET <run.url>/<run_id>/transcript` (§The gateway's
+link, The transcript request). The run API's route never serves `GET
+/resume/transcript`: a request for it through `QORY_RUN_API`, from behind a wall or from
+any other program, gets `404` `not_found`, and nothing is sent. For the link's request
+the gateway sends Qory Apiary `GET <run.url>/<run_id>/resume/transcript` with this run's
+id, signed as every GET of the run API is. Qory Apiary returns the transcript of `resume.run_id`
 only when that run is the paused run this run continues: the same organisation, work
 item and stage, and the run that ended with `model_key_limit` and queued this run.
 Otherwise, and when the run configuration has no `resume` or the transcript is gone, it

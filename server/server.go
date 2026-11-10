@@ -313,11 +313,23 @@ type RunConfiguration struct {
 	// path_rule, and dev.qory.run.policy_applied lists each harness credential by its name
 	// and purpose alone. False when the document has no harness_hidden.
 	HarnessHidden bool `json:"harness_hidden,omitzero"`
+	// Resume is the paused run whose runtime session the run continues; nil when the
+	// document has no resume.
+	Resume *RunResume `json:"resume,omitzero"`
 	// Computed is sha256= and the lower-case hex SHA-256 of the bytes the document was
 	// read from, which Forager computes itself: the digest a secrets request and the
 	// open of its answer use, never the answer's header. Empty for a document not read
 	// from bytes.
 	Computed string `json:"-"`
+}
+
+// RunResume is a run configuration's resume, run-configuration.schema.json's: the
+// paused run's id, the runtime's session id in that run, and the transcript's path
+// under the runtime's home.
+type RunResume struct {
+	RunID     string `json:"run_id"`
+	SessionID string `json:"session_id"`
+	Path      string `json:"path"`
 }
 
 // RunCredential is one entry of a run configuration's credentials, with no value. An

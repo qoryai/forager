@@ -320,7 +320,8 @@ func shownSegment(s string) string {
 // GET work-item, GET artifacts, GET artifacts/<version_id>/files/<filename>, POST
 // artifacts and POST verdict, under /v1/runs/ and the run's id. A request outside them
 // reaches nothing: GET resume/transcript, the run API's sixth request, which the
-// session alone reads and no program reaches through the route; a target over [maxRunAPITarget], a path over [maxRunAPIPath] once
+// session reads over the gateway's link and no program reaches through the route; a
+// target over [maxRunAPITarget], a path over [maxRunAPIPath] once
 // escaped, a query, a fragment, user information, a scheme other than http, a port other than 80, a segment that fails
 // [segmentClean], another run's id, another method, and an HTTP/1.0 request that reaches
 // the proxy, which has no way to end a file's stream with a read error. A forwarder
