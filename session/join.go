@@ -679,7 +679,15 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// then cut and given its summary (shapedRecord), so a cut never splits a secret
 	// before the masker sees it whole.
 	summaries, _ := rt.(runtimes.Summaries)
+	// tr sends the runtime's transcript, for a runtime with resume and a run with no
+	// wall; nil otherwise.
+	var tr *transcript
 	mapper := parents.New(rt, func(e runtimes.Event) {
+		if tr != nil && e.Type == "dev.qory.runtime.started" {
+			if id, ok := e.Data["session_id"].(string); ok {
+				tr.started(id)
+			}
+		}
 		masked := maskedRecord(texts{secrets: masker, harness: hidden}, e.Data)
 		r.write(e.Type, withSession(neutralRecord(e.Type, shapedRecord(e.Type, masked, summaries), neutralText), n))
 	}, parents.Real)
@@ -702,6 +710,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 				measureMu.Unlock()
 			}
 			return
+		}
+		if tr != nil {
+			tr.record(rec)
 		}
 		mapper.Handle(rec)
 	}
@@ -788,6 +799,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	resized := func(cols, rows int) {
 		r.write(event.RunResized, map[string]any{"cols": cols, "rows": rows, "session": n})
 	}
+	tr = r.sessionTranscript(rt, n, spec.Wall != nil, launch.Env, spec.Dir, masker, hidden)
+	stopTranscript := make(chan struct{})
+	if tr != nil {
+		go tr.run(stopTranscript)
+	}
 	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: stdout, stderr: stderr, logs: logs, masker: masker, harness: hidden, output: output, cols: cols, rows: rows, resized: resized}
 	// The limit ends the runtime and nothing else: the wall is closed on the caller's
 	// context, as after any exit. The run being closed from outside ends it the same
@@ -837,8 +853,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	closed := errors.Is(context.Cause(runCtx), errRunClosed)
 	cancelLimit()
 	closeSocket()
-	// The events the mapper still keeps back come before the session's exit.
+	// The events the mapper still keeps back come before the session's exit, and so
+	// does the end of the runtime's transcript.
 	mapper.Close()
+	close(stopTranscript)
+	if tr != nil && !closed {
+		tr.finish()
+	}
 	// A setup step still open when the launch ended has no exit status.
 	setupSteps.finish(closed || timedOut || cancelled)
 	if err != nil && !closed {
