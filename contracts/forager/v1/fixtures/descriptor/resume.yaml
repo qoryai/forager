@@ -1,0 +1,18 @@
+# A descriptor whose runtime resumes a session from its transcript.
+version: 1
+runtime: claude
+runtime_version: "2.1.316"
+sources:
+  output:
+    format: jsonl
+resume:
+  path_from: transcript_path
+  path: ~/.claude/projects/{cwd_slug}/{session_id}.jsonl
+  prefix: ~/.claude/projects/
+  args: ["--resume", "{session_id}"]
+rules:
+  - source: output
+    match: {type: result}
+    type: dev.qory.runtime.result
+    data:
+      session_id: session_id

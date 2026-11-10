@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/session.transcript.schema.json",
+  "title": "dev.qory.session.transcript",
+  "description": "One chunk of the transcript file of a runtime's session, for a runtime whose descriptor has resume: whole lines as the runtime appends them, each masked as a dev.qory.run.log chunk is, cut at 32768 bytes. The transcript is the chunks of one path in sequence order. Each run's chunks start at offset 0 and cover the whole file, the lines a continuation restored included. A gap in offset means the file cannot be restored.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "session_id", "path", "offset", "bytes"],
+  "properties": {
+    "session": {
+      "description": "The number of the session whose runtime wrote the file, from 1. The chunk lies between that session's dev.qory.session.started and dev.qory.session.exited.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "session_id": {
+      "description": "The runtime's session id, as dev.qory.runtime.started has it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "path": {
+      "description": "The file's path under the runtime's home, under the descriptor's resume.prefix, such as ~/.claude/projects/-workspace/<session_id>.jsonl.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "offset": {
+      "description": "The position of the chunk's first byte in the masked file: the sum of the sizes of the run's earlier chunks of this path.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "bytes": {
+      "description": "The chunk, base64, 1 to 32768 bytes before the encoding.",
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 43692,
+      "contentEncoding": "base64"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e",
+  "time": "2026-11-10T12:00:05Z",
+  "keys": [
+    {
+      "credential": "model",
+      "window": "seven_day",
+      "status": "allowed_warning",
+      "resets_at": "2026-11-14T08:00:00Z",
+      "utilization": 101,
+      "source": "provider",
+      "observed_at": "2026-11-10T12:00:04Z"
+    }
+  ]
+}

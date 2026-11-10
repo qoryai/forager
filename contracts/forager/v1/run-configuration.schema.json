@@ -27,14 +27,17 @@
       "additionalProperties": {"$ref": "#/$defs/variable"}
     },
     "credentials": {
-      "description": "The credentials whose values the server stores for the run, at most 8, each name once. The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it when the run starts, for every entry, and again for each entry whose value has expires_at: 5 minutes before it expires, and after a host answers 401 to a request that the value was set on, at most every 30 seconds per entry. It sets each value in place of a credential of the machine's that claims one of its hosts. The entries are fixed for the run: a renewal changes only the value.",
+      "description": "The credentials whose values the server stores for the run, at most 8, each name once, and at most 6 of them API credentials. The order of the key group's API credentials is the order in which the gateway sets them (model_credential). The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it when the run starts, for every entry, and again for each entry whose value has expires_at: 5 minutes before it expires, and after a host answers 401 to a request that the value was set on, at most every 30 seconds per entry. It sets each value in place of a credential of the machine's that claims one of its hosts. The entries are fixed for the run: a renewal changes only the value.",
       "type": "array",
       "minItems": 1,
       "maxItems": 8,
+      "contains": {"type": "object", "required": ["format"]},
+      "minContains": 0,
+      "maxContains": 6,
       "items": {"$ref": "#/$defs/credential"}
     },
     "model_credential": {
-      "description": "The name of the model key the runtime starts with: an API credential of credentials, or a model key the machine defines and the run's policy selects. Required when the run has two or more model keys, of the server's and the machine's together; with one, that one is the start key. The gateway holds every model key of the run and sets only the start key, on requests to its endpoint's host that carry its placeholder; the session gives the runtime the start key's variable and endpoint alone. A name of no model key of the run, or of a credential without format, is run_configuration_invalid. Fixed when the run starts.",
+      "description": "The name of the model key the runtime starts with, the start key: an API credential of credentials, or a model key the machine defines and the run's policy selects. Required when the run has two or more model keys, of the server's and the machine's together; with one, that one is the start key. When the start key is an API credential, it and every API credential with its format, auth and endpoint are the key group, in the order of credentials. The gateway holds every model key of the run and sets one key of the group, the active key, on requests to its endpoint's host that contain the start key's placeholder: the start key first, then the next key of the group, by the order of credentials, after a provider's limit refusal. The session gives the runtime the start key's variable and endpoint alone. A name of no model key of the run, or of a credential without format, is run_configuration_invalid. Fixed when the run starts.",
       "$ref": "#/$defs/credential_name"
     },
     "stack_hosts": {
@@ -44,6 +47,17 @@
       "maxItems": 32,
       "uniqueItems": true,
       "items": {"$ref": "policy.schema.json#/$defs/host_entry"}
+    },
+    "resume": {
+      "description": "The paused run whose runtime session this run continues: the paused run's id, and the runtime's session id and the path of its transcript, as that run's last dev.qory.session.transcript has them. Before the runtime starts, the session reads the transcript with GET /resume/transcript of the run API, writes it at path, and adds the descriptor's resume.args. When the read or the write fails, the session starts the runtime without a resume and writes one dev.qory.run.log line. Fixed when the run starts. Absent, the session starts the runtime without a resume.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "session_id", "path"],
+      "properties": {
+        "run_id": {"description": "The id of the paused run, a lower-case UUID.", "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+        "session_id": {"description": "The runtime's session id in the paused run, as dev.qory.session.transcript has it.", "type": "string", "minLength": 1, "maxLength": 128},
+        "path": {"description": "The transcript's path under the runtime's home, as dev.qory.session.transcript has it, such as ~/.claude/projects/-workspace/<session_id>.jsonl. It lies under the descriptor's resume.prefix.", "type": "string", "minLength": 1, "maxLength": 1024}
+      }
     },
     "harness_hidden": {
       "description": "Whether the run's harness is one the run's workspace may not see, such as one of another organisation. True: the stack channel's dev.qory.run.egress has no path and no path_rule, and the open's dev.qory.run.policy_applied lists each harness credential by name and purpose alone. Fixed when the run starts. Absent, false.",
@@ -65,7 +79,7 @@
       "oneOf": [{"$ref": "#/$defs/api_credential"}, {"$ref": "#/$defs/host_credential"}]
     },
     "api_credential": {
-      "description": "A model key: its name, the API format and endpoint it is for, how its value is set, and the prefixes a value must start with. The gateway sets the value on every path of the endpoint's host alone. The session gives the key to the variable the run's runtime's descriptor lists for the format and auth in model.keys, and sets the runtime's endpoint variable to endpoint, in place of every other value of it. A run whose runtime lists no key for the format, or none with this auth, is run_configuration_invalid.",
+      "description": "A model key: its name, the API format and endpoint it is for, how its value is set, the prefixes a value must start with, and what the gateway needs for its cooldown. The gateway sets the value on every path of the endpoint's host alone. The session gives the key to the variable the run's runtime's descriptor lists for the format and auth in model.keys, and sets the runtime's endpoint variable to endpoint, in place of every other value of it. A run whose runtime lists no key for the format, or none with this auth, is run_configuration_invalid.",
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "format", "endpoint", "auth"],
@@ -74,7 +88,10 @@
         "format": {"description": "The API format the endpoint serves.", "$ref": "api-format.schema.json"},
         "endpoint": {"description": "The base URL of the model API, such as https://api.deepseek.com/anthropic.", "$ref": "#/$defs/endpoint"},
         "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},
-        "key_prefixes": {"description": "The prefixes a value must start with, such as sk-ant-. The gateway refuses a value that starts with none of them when it loads it. Absent, any value is taken.", "$ref": "#/$defs/key_prefixes"}
+        "key_prefixes": {"description": "The prefixes a value must start with, such as sk-ant-. The gateway refuses a value that starts with none of them when it loads it. Absent, any value is taken.", "$ref": "#/$defs/key_prefixes"},
+        "resets_at": {"description": "The key's earliest reset in a provider's answer, as the server had it at the claim, an RFC 3339 time. The server orders the key group's keys by it (README §Credentials, Several model keys). Absent when no answer had one.", "type": "string", "format": "date-time"},
+        "schedule_resets_at": {"description": "The next reset of the key's weekly schedule after the claim, an RFC 3339 time. The gateway sets the key's cooldown to it when a limit refusal has no reset, and to it plus 7 days once it has passed. Absent when the key has no schedule.", "type": "string", "format": "date-time"},
+        "pause_for_s": {"description": "The cooldown in seconds when a limit refusal has no reset and the key has no schedule_resets_at, 1 to 604800. The server sends it on every key of the key group, from the provider's settings or catalogue; the gateway has no default, and a key of the group without it is run_configuration_invalid.", "type": "integer", "minimum": 1, "maximum": 604800}
       }
     },
     "host_credential": {

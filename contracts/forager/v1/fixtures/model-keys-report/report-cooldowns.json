@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e",
+  "time": "2026-11-10T12:30:00Z",
+  "keys": [
+    {
+      "credential": "model",
+      "window": "key",
+      "status": "rejected",
+      "cooldown_until": "2026-11-14T08:00:00Z",
+      "source": "schedule",
+      "observed_at": "2026-11-10T12:29:58Z"
+    },
+    {
+      "credential": "model-2",
+      "window": "spend_limit",
+      "status": "rejected",
+      "cooldown_until": "2026-11-10T17:29:59Z",
+      "source": "pause_for",
+      "observed_at": "2026-11-10T12:29:59Z"
+    }
+  ]
+}

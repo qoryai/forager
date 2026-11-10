@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "keys": [
+    {
+      "credential": "model",
+      "window": "five_hour",
+      "status": "rejected",
+      "resets_at": "2026-11-10T14:00:00Z",
+      "utilization": 100,
+      "cooldown_until": "2026-11-10T14:00:00Z",
+      "source": "provider",
+      "observed_at": "2026-11-10T12:00:04Z"
+    },
+    {
+      "credential": "model",
+      "window": "seven_day",
+      "status": "allowed_warning",
+      "resets_at": "2026-11-14T08:00:00Z",
+      "utilization": 76,
+      "source": "provider",
+      "observed_at": "2026-11-10T12:00:04Z"
+    },
+    {
+      "credential": "model-2",
+      "window": "five_hour",
+      "status": "allowed",
+      "resets_at": "2026-11-10T16:30:00Z",
+      "utilization": 12,
+      "source": "provider",
+      "observed_at": "2026-11-10T12:00:05Z"
+    },
+    {
+      "credential": "model-3",
+      "window": "tokens",
+      "status": "allowed",
+      "resets_at": "2026-11-10T12:01:00Z",
+      "utilization": 40,
+      "source": "provider",
+      "observed_at": "2026-11-10T11:58:30Z"
+    }
+  ]
+}

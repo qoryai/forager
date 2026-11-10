@@ -39,6 +39,9 @@ const (
 	// the runtime starts, and its end.
 	SessionStarted = "dev.qory.session.started"
 	SessionExited  = "dev.qory.session.exited"
+	// SessionTranscript is one chunk of the transcript file of a runtime's session, for
+	// a runtime whose descriptor has resume.
+	SessionTranscript = "dev.qory.session.transcript"
 	// StepStarted and StepExited mark one step of a run's host work, such as a fetch
 	// or a compose: its start, and its end with an outcome.
 	StepStarted = "dev.qory.run.step_started"
@@ -88,9 +91,10 @@ const (
 // names quiet, credential_expired, credential_check_unreachable,
 // credential_check_invalid, run_ended_at_issuer, issuer_unreachable and
 // issuer_answer_invalid, which Forager never writes. The session writes timeout,
-// interrupted and run_closed, the close of a run with no join writes no_session, and
-// the session in the session's record the code of the gateway's 410, batch_refused among
-// them; the resend of a record writes gateway_lost; the gateway writes the others.
+// interrupted and run_closed, the close of a run with no join writes no_session, the
+// close after a join writes model_key_limit, and the session in the session's record
+// the code of the gateway's 410, batch_refused among them; the resend of a record
+// writes gateway_lost; the gateway writes the others.
 const (
 	ReasonTimeout = "timeout"
 	// ReasonInterrupted is a session's run stopped from where it was started, cancelled:
@@ -109,6 +113,12 @@ const (
 	// ReasonNoSession is a run closed with no join, failed with exit code -1: its host
 	// work, such as a fetch or a compose, failed before the first session.
 	ReasonNoSession = "no_session"
+	// ReasonModelKeyLimit is a session the session stopped after the gateway's answer to
+	// a batch had stop with this reason, cancelled: the gateway's proxy passed a model
+	// provider's limit refusal to the session. It is also the reason of the close of a
+	// run whose last session ended with it, cancelled, which a control plane reads as a
+	// pause of the run.
+	ReasonModelKeyLimit = "model_key_limit"
 )
 
 // ReasonWorkflowNotInHarness is the reason qory gives the close of a run with no join
@@ -151,8 +161,8 @@ func IsState(s string) bool {
 var reserved = map[string]bool{
 	ReasonTimeout: true, ReasonInterrupted: true, ReasonStopped: true,
 	ReasonSessionLost: true, ReasonGatewayLost: true, ReasonBatchRefused: true, ReasonRunClosed: true,
-	ReasonNoSession: true,
-	"quiet":         true, "credential_expired": true, "credential_check_unreachable": true, "credential_check_invalid": true,
+	ReasonNoSession: true, ReasonModelKeyLimit: true,
+	"quiet": true, "credential_expired": true, "credential_check_unreachable": true, "credential_check_invalid": true,
 	"run_ended_at_issuer": true, "issuer_unreachable": true, "issuer_answer_invalid": true,
 }
 

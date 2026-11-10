@@ -10,6 +10,19 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Deploy the gateway before Qory Apiary serves `model-keys`. A gateway built before
+  this change fails a run with `run_configuration_invalid` when the run configuration's
+  API credential has `resets_at`, `schedule_resets_at` or `pause_for_s`, and ignores the
+  run configuration's `resume`. It also ends a run `batch_refused` for a batch with
+  `dev.qory.session.transcript`, or with `model_key_limit` as the reason of
+  `dev.qory.session.exited` or `dev.qory.run.exited`.
+- Send `pause_for_s` on every key of a key group: the start key and every API credential
+  with its `format`, `auth` and `endpoint`. Forager has no default cooldown, and a run
+  configuration with such a key without it fails with `run_configuration_invalid`. A
+  run configuration has at most 6 API credentials.
+- Read a `dev.qory.run.exited` `cancelled` with `model_key_limit` as a pause of the run,
+  not as a person's cancel: the run's work is kept, and a continuation of the run can
+  resume its runtime session.
 - Deploy the gateway before the sessions that use it: a session's batch may contain
   `image_access_denied`, `image_rate_limited` and `image_registry_unreachable` as the
   `code` of `dev.qory.run.refused` and the `reason` of `dev.qory.session.exited` and
@@ -217,6 +230,50 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- Several model keys per run. When the start key is an API credential, the key group is
+  the start key and every API credential with its `format`, `auth` and `endpoint`, in the
+  order of `credentials`. The keys of the group share the start key's placeholder, and
+  the proxy sets one of them, the active key. The proxy keeps a copy of each request body
+  to the model endpoint, up to 8 MiB, until the answer's status arrives. On a `429` from
+  the provider it puts the key in cooldown, makes the next key of the group the active
+  key, and sends the request again from the copy, so the session does not see the
+  refusal. A cooldown ends at the reset in the refusal, at the key's
+  `schedule_resets_at` (plus 7 days once it has passed), or `pause_for_s` seconds after
+  the refusal. A provider's `rate_limit_error` in a streaming answer puts the key in
+  cooldown and switches the active key too. The active key stays across sessions, and a
+  join request without `model_credential` gets it. The run configuration's API
+  credential has `resets_at`, `schedule_resets_at` and `pause_for_s`. README §Credentials,
+  Several model keys.
+- The model keys report: the gateway posts the state of each limit window of the run's
+  keys, `POST <run.url>/<run_id>/model-keys`, signed by its access key, at most once a
+  second, and takes the newest state of every gateway from the answer, so a run sets no
+  key that another run found at its limit. `model-keys-report.schema.json` and
+  `model-keys-answer.schema.json` define the body and the answer. With a control plane
+  that returns `404`, the cooldowns stay within the run. README §The server, The model
+  keys.
+- `model_key_limit`, a reserved reason, `event.ReasonModelKeyLimit`. When no key of the
+  group is left, or the refused body was over 8 MiB, the proxy passes the refusal to the
+  session, and the gateway's `2xx` to the session's next batch has
+  `{"stop": {"reason": "model_key_limit"}}`, `link-batch-answer.schema.json`. The session
+  stops the runtime and writes `dev.qory.session.exited` `cancelled` with
+  `model_key_limit`. The run stays open for its host work, and its caller closes it
+  `cancelled` with `model_key_limit` and the last session's exit code.
+- `dev.qory.session.transcript`, `event.SessionTranscript`: the transcript of a runtime's
+  session, masked as `dev.qory.run.log` is, in chunks of at most 32 KiB, each run's from
+  offset 0. The descriptor's `resume` sets where the runtime writes the transcript and the
+  arguments that resume it; the Claude Code descriptor reads `transcript_path`, falls back
+  to `~/.claude/projects/{cwd_slug}/{session_id}.jsonl`, and resumes with
+  `--resume {session_id}`.
+- `GET /resume/transcript`, a sixth request of the run API, and `resume` in the run
+  configuration: before the runtime of a continuation starts, the session reads the
+  paused run's transcript through `Run.RunAPI`, writes it at `resume.path` and adds the
+  descriptor's `resume.args`. A program behind the wall gets `404` for the path. When the
+  read or the write fails, the session starts the runtime without a resume.
+- The contract stays at revision 1. Fixtures: `fixtures/run-configuration/model-keys.json`
+  and `resume.json`, `fixtures/model-keys-report/`, `fixtures/model-keys-answer/`,
+  `fixtures/link/link-batch-answer-stop.json`,
+  `link-batch-exited-model-key-limit.json` and `link-batch-session-transcript.json`, and
+  `fixtures/descriptor/resume.yaml`.
 - `image_access_denied`, `image_rate_limited` and `image_registry_unreachable`,
   refusal codes of `refusal.Decides`, from the session's check of an image's manifest
   before its pull. Each refusal has the reference as its name and in its detail, and

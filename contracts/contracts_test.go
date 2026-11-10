@@ -93,14 +93,17 @@ func TestEverySchemaCompiles(t *testing.T) {
 }
 
 // TestDocumentFixturesValidate pins that every policy, server, configuration, run
-// registration, run configuration, attach answer, outcome, batch answer, API format and
-// descriptor fixture passes its schema.
+// registration, run configuration, attach answer, outcome, batch answer, API format,
+// descriptor, model keys report and model keys answer fixture passes its schema.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json",
 		"run-attach-answer.schema.json", "run-outcome.schema.json", "batch-answer.schema.json",
-		"api-format.schema.json", "descriptor.schema.json")
+		"api-format.schema.json", "descriptor.schema.json",
+		"model-keys-report.schema.json", "model-keys-answer.schema.json")
 	dirs := map[string]string{
+		"fixtures/model-keys-report": "model-keys-report.schema.json",
+		"fixtures/model-keys-answer": "model-keys-answer.schema.json",
 		"fixtures/api-format":        "api-format.schema.json",
 		"fixtures/descriptor":        "descriptor.schema.json",
 		"fixtures/run-attach-answer": "run-attach-answer.schema.json",
@@ -170,6 +173,7 @@ const (
 	linkRefusal    = "link-refusal.schema.json"
 	linkJoinReq    = "link-join-request.schema.json"
 	linkJoinAnswer = "link-join-answer.schema.json"
+	linkBatchAns   = "link-batch-answer.schema.json"
 )
 
 // namedSchema returns the longest schema name, without .schema.json, that the file's
@@ -204,11 +208,13 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // step after a session.exited and before the run.exited, a batch of a machine step right
 // after the run.started, a batch of a session with no runtime, with bare, a join request
 // with and without model_credential, a join answer with and
-// without model_credential, and refusals from the gateway, two internal ones among them, one whose message spans
+// without model_credential, a batch answer with stop and an empty one, a batch of a
+// session.exited and a run.exited with model_key_limit and one of a session.exited
+// alone, a batch of two session.transcript chunks, and refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
 	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
-		linkJoinReq, linkJoinAnswer)
+		linkJoinReq, linkJoinAnswer, linkBatchAns)
 	seen := map[string]bool{}
 	for _, f := range files(t, "fixtures/link") {
 		kind := namedSchema(s, f)
@@ -349,8 +355,18 @@ const beyondLinkSchema = "-beyond-schema-"
 // link join answer without its session or numbered 0, and a link refusal without from, with a control
 // character other than tab and newline in its message, C0, DEL or C1, or with a state
 // other than the three, and an API format outside the list, in upper case or as an
-// object. A fixture whose name holds -beyond-schema- breaks a
-// rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
+// object; and, for several model keys and a resume, a run configuration whose API
+// credential has a pause_for_s of 0 or over a week or a resets_at that is no time, with
+// seven API credentials, a host credential with pause_for_s, or a resume without its
+// session id or with a run id in upper case, a model keys report whose entry has a
+// utilization over 100, a status, a source or a window outside the grammar, rejected
+// without cooldown_until or cooldown_until with another status, or no observed_at, or
+// whose time has a fraction, a model keys answer without version, a link batch answer
+// whose stop has no reason or another one, a session.exited or a session's run.exited
+// failed with model_key_limit, a session.transcript numbered 0, with a negative offset,
+// without its session id or over 32 KiB, and a descriptor whose resume has no args, a
+// prefix outside the home or a path without {session_id}. A fixture whose name holds
+// -beyond-schema- breaks a rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
 // the schema, so run-configuration-variable-value-not-string is held to the run
 // configuration and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
@@ -358,6 +374,7 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 		"run-registration.schema.json", "run-configuration.schema.json", "event.schema.json", "batch.schema.json",
 		"api-format.schema.json", "descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
 		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal, linkJoinReq, linkJoinAnswer,
+		linkBatchAns, "model-keys-report.schema.json", "model-keys-answer.schema.json",
 		"run-key.schema.json", "run-registration-answer.schema.json",
 		"run-attach.schema.json", "run-attach-answer.schema.json", "run-outcome.schema.json",
 		"run-outcome-answer.schema.json", "batch-answer.schema.json",
@@ -536,7 +553,7 @@ func TestRecordedRunValidates(t *testing.T) {
 			}
 			if m["type"] == "dev.qory.run.exited" {
 				reason, _ := m["data"].(map[string]any)["reason"].(string)
-				byClose := reason == "" || reason == "timeout" || reason == "interrupted" || reason == "no_session"
+				byClose := reason == "" || reason == "timeout" || reason == "interrupted" || reason == "no_session" || reason == "model_key_limit"
 				for n, st := range stepped {
 					if st == "started" && byClose {
 						t.Errorf("%s: line %d: the run exits with step %d open", dir, i+1, n)
@@ -706,8 +723,8 @@ func TestOneStepIsOpenAtATime(t *testing.T) {
 }
 
 // TestSessionExitedReasonsAreTheSessions pins the reasons of a dev.qory.session.exited in a
-// link batch to timeout, interrupted and the codes a link batch's dev.qory.run.refused may
-// carry, the codes the session decides itself: a refused join has its refusal's code as
+// link batch to timeout, interrupted, model_key_limit and the codes a link batch's
+// dev.qory.run.refused may carry, the codes the session decides itself: a refused join has its refusal's code as
 // reason. The event's reason is the open code of dev.qory.run.exited, since the gateway
 // writes a session's dev.qory.session.exited with the reason of the run's end.
 func TestSessionExitedReasonsAreTheSessions(t *testing.T) {
@@ -728,11 +745,11 @@ func TestSessionExitedReasonsAreTheSessions(t *testing.T) {
 		}
 	}
 	for _, code := range got {
-		if code != "timeout" && code != "interrupted" && !refusal.Decides(code) {
+		if code != "timeout" && code != "interrupted" && code != "model_key_limit" && !refusal.Decides(code) {
 			t.Errorf("a link batch's session.exited allows the reason %s, which the session does not decide", code)
 		}
 	}
-	for _, code := range []string{"timeout", "interrupted", "placeholder_conflict", "mount_mode_conflict", "engine_unreachable",
+	for _, code := range []string{"timeout", "interrupted", "model_key_limit", "placeholder_conflict", "mount_mode_conflict", "engine_unreachable",
 		"image_access_denied", "image_rate_limited", "image_registry_unreachable"} {
 		if !slices.Contains(got, code) {
 			t.Errorf("a link batch's session.exited does not allow the reason %s", code)

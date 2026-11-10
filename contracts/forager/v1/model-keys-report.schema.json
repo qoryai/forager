@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/model-keys-report.schema.json",
+  "title": "Model keys report",
+  "description": "The body of the gateway's signed POST <run.url>/<run_id>/model-keys, application/json, at most 16 KiB: the state of each limit window the gateway has of the run's key group, from the model provider's answers and the gateway's cooldowns (README §The server, The model keys). Each report has every window the gateway has, so it replaces the one before. The server accepts it from the key that a batch of the run is accepted from, and answers with model-keys-answer.schema.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "run_id", "time", "keys"],
+  "properties": {
+    "version": {
+      "description": "The document format. The server reads version 1 alone; another version is invalid_request.",
+      "const": 1
+    },
+    "run_id": {
+      "description": "The run's id, the one of the path, a lower-case UUID.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "time": {
+      "description": "The gateway's clock when it sent the report, RFC 3339, UTC, in whole seconds, held to the same window as a registration's time.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "keys": {
+      "description": "One entry per key of the key group and limit window, each pair once; empty when the gateway has no window yet.",
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/key_state"}
+    }
+  },
+  "$defs": {
+    "key_state": {
+      "description": "The state of one limit window of one model key: the provider's status, reset and use, and the gateway's cooldown.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credential", "window", "status", "source", "observed_at"],
+      "if": {"properties": {"status": {"const": "rejected"}}, "required": ["status"]},
+      "then": {"required": ["cooldown_until"]},
+      "else": {"not": {"required": ["cooldown_until"]}},
+      "properties": {
+        "credential": {"description": "The key's name, an API credential of the run configuration's credentials.", "$ref": "run-configuration.schema.json#/$defs/credential_name"},
+        "window": {"description": "The limit's window, an open code. For a subscription: five_hour, seven_day, seven_day_opus, seven_day_sonnet and overage. For an API key: requests, tokens, input_tokens, output_tokens and spend_limit. key: a limit refusal with no window in it.", "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+        "status": {"description": "allowed, allowed_warning or rejected, from the provider's answer; rejected for every limit refusal.", "enum": ["allowed", "allowed_warning", "rejected"]},
+        "resets_at": {"description": "When the window resets, from the provider's answer, an RFC 3339 time. Absent when the answer has none.", "type": "string", "format": "date-time"},
+        "utilization": {"description": "The window's use in whole percent, 0 to 100, rounded down: the answer's fraction times 100, or 100 times (1 - remaining / limit). Absent once its window's reset has passed.", "type": "integer", "minimum": 0, "maximum": 100},
+        "cooldown_until": {"description": "The time until which the gateway sets the key no more, an RFC 3339 time. Present with rejected alone.", "type": "string", "format": "date-time"},
+        "source": {"description": "Where cooldown_until, or resets_at without it, comes from. provider: the provider's answer. schedule: the key's schedule_resets_at. pause_for: the key's pause_for_s after the refusal.", "enum": ["provider", "schedule", "pause_for"]},
+        "observed_at": {"description": "The gateway's clock when the provider's answer arrived, an RFC 3339 time. A receiver keeps the newest state per key and window, and ignores an older one.", "type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

@@ -14,8 +14,8 @@ import (
 )
 
 // TestEventsValidateAgainstTheContract pins that what the emitter makes is what the
-// envelope schema accepts, for a run type, for the two step types, for run.built and
-// for a runtime type.
+// envelope schema accepts, for a run type, for the two step types, for run.built, for
+// a runtime type and for session.transcript.
 func TestEventsValidateAgainstTheContract(t *testing.T) {
 	schema, err := contracts.Compile("event.schema.json")
 	if err != nil {
@@ -29,6 +29,8 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 		e.Make(event.RunBuilt, map[string]any{"image": "example.registry/example-org/env@sha256:" + strings.Repeat("3f", 32), "size": int64(734003200),
 			"commit": strings.Repeat("9b", 20), "environment_ref": "env-example-01"}),
 		e.Make("dev.qory.runtime.ended", map[string]any{"session_id": "s1", "reason": "other"}),
+		e.Make(event.SessionTranscript, map[string]any{"session": 1, "session_id": "s1",
+			"path": "~/.claude/projects/-workspace/s1.jsonl", "offset": 0, "bytes": "eyJ0eXBlIjoidXNlciJ9Cg=="}),
 	} {
 		b, err := ev.JSON()
 		if err != nil {
@@ -42,8 +44,8 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 			t.Errorf("%s: %v\n%s", ev.Type, err, b)
 		}
 	}
-	if e.Sequence() != 5 {
-		t.Errorf("sequence %d, want 5", e.Sequence())
+	if e.Sequence() != 6 {
+		t.Errorf("sequence %d, want 6", e.Sequence())
 	}
 }
 
@@ -78,7 +80,7 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	pattern := regexp.MustCompile(reason["pattern"].(string))
 	description := reason["description"].(string)
 	for _, code := range []string{event.ReasonTimeout, event.ReasonInterrupted, event.ReasonRunClosed, event.ReasonGatewayLost,
-		event.ReasonSessionLost, event.ReasonStopped, event.ReasonBatchRefused, event.ReasonNoSession,
+		event.ReasonSessionLost, event.ReasonStopped, event.ReasonBatchRefused, event.ReasonNoSession, event.ReasonModelKeyLimit,
 		"quiet", "credential_expired", "credential_check_unreachable", "credential_check_invalid",
 		"run_ended_at_issuer", "issuer_unreachable", "issuer_answer_invalid"} {
 		if !pattern.MatchString(code) {
@@ -117,7 +119,7 @@ func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
 
 // TestTheReservedCodesAreTheContracts pins event.Reserved to the reserved codes the
 // schema of run.exited names in its reason's description, and those link-batch.schema.json
-// refuses beside timeout and interrupted, and event.StarterReason to the reason's pattern less them: a
+// refuses beside timeout, interrupted, no_session and model_key_limit, and event.StarterReason to the reason's pattern less them: a
 // starter's code is any other code.
 func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	doc, err := contracts.Document("events/run.exited.schema.json")
@@ -132,7 +134,7 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]+_[a-z0-9_]+|\btimeout\b|\binterrupted\b|\bquiet\b|\bstopped\b`).FindAllString(listed, -1) {
 		want = append(want, w)
 	}
-	if len(want) != 15 {
+	if len(want) != 16 {
 		t.Fatalf("the description names %d reserved codes: %v", len(want), want)
 	}
 	for _, code := range want {
@@ -150,8 +152,9 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 			t.Errorf("%q is reserved", code)
 		}
 	}
-	// A session's batch may carry timeout, interrupted and no_session, the close's.
-	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted, event.ReasonNoSession}} {
+	// A session's batch may contain timeout, interrupted, no_session and model_key_limit,
+	// the close's.
+	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted, event.ReasonNoSession, event.ReasonModelKeyLimit}} {
 		doc, err := contracts.Document(name)
 		if err != nil {
 			t.Fatal(err)
