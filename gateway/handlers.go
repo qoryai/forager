@@ -466,12 +466,24 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	digest := lr.reloadDigest
 	lr.mu.Unlock()
 	g.answerHeaders(s, w, r, digest)
-	w.WriteHeader(http.StatusAccepted)
+	if lr.keys.Passed() {
+		// The proxy passed a model provider's limit refusal to the session: the session
+		// stops the runtime, and the run pauses.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		w.Write(stopModelKeyLimit)
+	} else {
+		w.WriteHeader(http.StatusAccepted)
+	}
 	if final {
 		// The session's run.exited or run.refused: the run's gateway side ends.
 		lr.end(ending{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
 	}
 }
+
+// stopModelKeyLimit is the body of the answer to a batch after the proxy passed a
+// limit refusal to the session, link-batch-answer.schema.json.
+var stopModelKeyLimit = []byte(`{"stop":{"reason":"` + event.ReasonModelKeyLimit + `"}}`)
 
 // closeRule is why the link refuses a session's dev.qory.run.exited, its data, empty
 // when it accepts it: the close's, with no reason or with timeout, interrupted,
@@ -488,13 +500,26 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 // that has no wall, read_needs_setup_outside the close of a read run whose setup is set
 // to run inside the agent's container, read_needs_no_nested_docker the close of a read
 // run whose image runs nested Docker, and read_needs_setup_removed the close of a read
-// run whose setup container could not be removed. The gateway writes the event of every other end itself. joined is true when the gateway numbered a
-// join of the run.
-func closeRule(data map[string]any, joined bool) string {
+// run whose setup container could not be removed. It accepts model_key_limit, the pause
+// after a limit refusal, cancelled, only for a run with a join whose last
+// dev.qory.session.exited has that reason. The gateway writes the event of every other
+// end itself. joined is true when the gateway numbered a join of the run, and last is
+// the reason of the last dev.qory.session.exited the run's stream numbered, empty for
+// none.
+func closeRule(data map[string]any, joined bool, last string) string {
 	given, hasReason := data["reason"]
 	why, _ := given.(string)
 	switch {
 	case !hasReason, why == event.ReasonTimeout, why == event.ReasonInterrupted:
+	case why == event.ReasonModelKeyLimit:
+		switch {
+		case data["state"] != event.StateCancelled:
+			return "a run.exited model_key_limit that is not cancelled"
+		case !joined:
+			return "a run.exited model_key_limit of a run with no join"
+		case last != event.ReasonModelKeyLimit:
+			return "a run.exited model_key_limit after a last session.exited with another reason"
+		}
 	case why == event.ReasonNoSession:
 		if joined {
 			return "a run.exited no_session of a run with a join"
@@ -514,6 +539,18 @@ func closeRule(data map[string]any, joined bool) string {
 		return "a run.exited with a reason the gateway decides"
 	}
 	return ""
+}
+
+// lastReason is the reason of the dev.qory.session.exited of the highest-numbered join
+// of joins that has one, empty for none.
+func lastReason(joins map[int]join) string {
+	n, why := 0, ""
+	for _, j := range joins {
+		if j.exited && j.session > n {
+			n, why = j.session, j.reason
+		}
+	}
+	return why
 }
 
 // sessionOf is the session number of a dev.qory.session.started or
@@ -595,7 +632,7 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			}
 			startedID = ev.ID
 		case event.RunExited:
-			if why := closeRule(data, len(joins) > 0); why != "" {
+			if why := closeRule(data, len(joins) > 0, lastReason(joins)); why != "" {
 				return why
 			}
 			for _, j := range joins {
@@ -629,6 +666,7 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 				return "a second session.exited of one session"
 			}
 			j.exited = true
+			j.reason, _ = data["reason"].(string)
 			joins[n] = j
 		case event.RunRefused:
 			if startedID != "" {
@@ -700,9 +738,12 @@ func (lr *linkRun) joined(ev event.Event) {
 	j := lr.joins[n-1]
 	if ev.Type == event.SessionExited {
 		j.exited = true
+		j.reason, _ = data["reason"].(string)
+		// The session's join ended: a stop after a limit refusal ends with it.
+		lr.keys.Resume()
 		if held := lr.r.Held(); j.accepted && (j.model != "" || j.noKey) && held != nil && held.Start != "" {
 			// The session ended: the proxy sets the start key again, after a session's
-			// model key or after none.
+			// model key or after none; of a key group, the group's active key.
 			lr.px.SetModelKey(held.Start)
 		}
 		return

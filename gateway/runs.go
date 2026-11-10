@@ -19,6 +19,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/credential"
+	"github.com/qoryai/forager/gateway/internal/modelkey"
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
@@ -42,6 +43,9 @@ type linkRun struct {
 	r      *run.Run
 	st     *stream.Run
 	px     *proxy.Proxy
+	// keys is the run's key group, nil when the run has none: the start key's, from the
+	// run configuration's credentials.
+	keys *modelkey.Group
 	// secret is the run's proxy secret, held so that no print of the run shows it.
 	secret secretValue
 	tools  *tool.Set
@@ -493,8 +497,24 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		authority = ca.PEM()
 	}
 	if held := r.Held(); held != nil && held.Start != "" {
-		// Before any session joins, and between sessions, the proxy sets the start key.
+		// Before any session joins, and between sessions, the proxy sets the start key;
+		// of a key group, the group's active key.
 		lr.px.SetModelKey(held.Start)
+	}
+	if keys := r.ModelKeys(); len(keys) > 0 {
+		// The run's key group: the proxy sets its active key, sends a refused request
+		// again with the next key, and the reporter shares each key's state with the
+		// control plane.
+		lr.keys = modelkey.New(keys, nil)
+		lr.px.SetKeyGroup(lr.keys, func(line string) { g.report("run " + req.RunID + ": " + line) })
+		if g.client != nil {
+			conf, _ := g.config()
+			rep := newKeyReporter(req.RunID, conf.Run.URL, lr.keys, func(ctx context.Context, m server.ModelKeysReport) ([]server.ModelKeyState, error) {
+				conf, _ := g.config()
+				return g.client.PostModelKeys(ctx, conf.Run.URL, req.RunID, m)
+			}, g.report, lr.logLine)
+			routine.Go(routine.ForRun(g.report, req.RunID), func() { rep.run(ctx) })
+		}
 	}
 	if !remote {
 		// On the one address the run key opens the run's proxy, bound to its connection.
