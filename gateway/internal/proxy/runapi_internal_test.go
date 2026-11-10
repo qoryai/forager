@@ -1403,3 +1403,25 @@ func TestARecordHasNoEncodedSecret(t *testing.T) {
 		}
 	}
 }
+
+// TestTheResumeTranscriptIsNotServedThroughTheRoute pins GET /resume/transcript, the
+// sixth request of the run API: a program that reaches the route, from behind a wall
+// or through QORY_RUN_API, gets 404 not_found, nothing is sent, and the record has the
+// word outside for its path.
+func TestTheResumeTranscriptIsNotServedThroughTheRoute(t *testing.T) {
+	r := startRoute(t, &RunAPI{}, nil)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		if status, code, _ := r.status(t, method, "/resume/transcript"); status != http.StatusNotFound || code != "not_found" {
+			t.Errorf("%s /resume/transcript: %d %s; want 404 not_found", method, status, code)
+		}
+	}
+	if got := r.sent.Load(); got != 0 {
+		t.Errorf("%d requests sent; want none", got)
+	}
+	r.mu.Lock()
+	d := r.decisions[len(r.decisions)-1]
+	r.mu.Unlock()
+	if d.Path != runAPIOutside || d.Status != http.StatusNotFound {
+		t.Errorf("the record %+v; want the path outside and 404", d)
+	}
+}
