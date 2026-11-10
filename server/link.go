@@ -254,11 +254,24 @@ type LinkRunAnswer struct {
 	// RunAPI is the base URL of the run API, [link.RunAPIURL] of the run, which the
 	// session sets in QORY_RUN_API; empty for a run with no control plane.
 	RunAPI string `json:"run_api,omitempty"`
+	// Resume is the run configuration's resume: the paused run whose runtime session
+	// this run continues. Nil when the run continues none.
+	Resume *LinkResume `json:"resume,omitempty"`
 	// Applied are the members of dev.qory.run.policy_applied the gateway decides for
 	// the policy in force, a JSON object: every member but harness_hosts, variables and
 	// credential_variables, which the session adds. The gateway refuses a policy_applied whose other members
 	// are not these. Nil when the answer has none.
 	Applied json.RawMessage `json:"applied,omitzero"`
+}
+
+// LinkResume is the paused run a run continues, run-configuration.schema.json's resume:
+// RunID, the paused run's id; SessionID, the runtime's session id in that run; and
+// Path, the path of the runtime's transcript under its home, such as
+// ~/.claude/projects/-workspace/<session id>.jsonl.
+type LinkResume struct {
+	RunID     string `json:"run_id"`
+	SessionID string `json:"session_id"`
+	Path      string `json:"path"`
 }
 
 // Values are the answer's variables as values by name; nil when it has none.
