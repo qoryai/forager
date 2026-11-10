@@ -475,11 +475,14 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 
 // closeRule is why the link refuses a session's dev.qory.run.exited, its data, empty
 // when it accepts it: the close's, with no reason or with timeout, interrupted,
-// no_session, image_missing, image_user_root, workflow_not_in_harness, read_needs_wall,
+// no_session, image_missing, image_user_root, image_access_denied, image_rate_limited,
+// image_registry_unreachable, workflow_not_in_harness, read_needs_wall,
 // read_needs_setup_outside, read_needs_no_nested_docker or read_needs_setup_removed, the
-// last eight only for a run with no join the gateway numbered, and the last seven only
+// last eleven only for a run with no join the gateway numbered, and the last ten only
 // failed with exit_code -1: image_missing and image_user_root the close after a fetch of
 // the run's image that its registry did not have or whose user is root,
+// image_access_denied, image_rate_limited and image_registry_unreachable the close after
+// a check of the run's image that its registry refused, rate-limited or did not reach,
 // workflow_not_in_harness the close of a run whose workflow is not in the harness,
 // read_needs_wall the close of a read run (the contract's §The events, How a run ends)
 // that has no wall, read_needs_setup_outside the close of a read run whose setup is set
@@ -496,7 +499,8 @@ func closeRule(data map[string]any, joined bool) string {
 		if joined {
 			return "a run.exited no_session of a run with a join"
 		}
-	case why == refusal.ImageMissing, why == refusal.ImageUserRoot, why == event.ReasonWorkflowNotInHarness,
+	case why == refusal.ImageMissing, why == refusal.ImageUserRoot, why == refusal.ImageAccessDenied,
+		why == refusal.ImageRateLimited, why == refusal.ImageRegistryUnreachable, why == event.ReasonWorkflowNotInHarness,
 		why == event.ReasonReadNeedsWall, why == event.ReasonReadNeedsSetupOutside, why == event.ReasonReadNeedsNoNestedDocker,
 		why == event.ReasonReadNeedsSetupRemoved:
 		code, _ := data["exit_code"].(float64)

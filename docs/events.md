@@ -209,7 +209,10 @@ starter's, carried as given. The close writes `timeout`, `cancelled`, `interrupt
 and posts them. The close writes and posts `image_missing`, `failed` with exit code
 `-1`, when its caller gives it for a run with no session after the fetch of the run's
 image found that its registry, or the registry's mirror, does not have it, and the same
-for `image_user_root`, after the fetch found that the image's user is root. qory closes
+for `image_user_root`, after the fetch found that the image's user is root, and for
+`image_access_denied`, `image_rate_limited` and `image_registry_unreachable`, after the
+check of the image at its registry got 401 or 403, got 429, or did not reach the
+registry. qory closes
 a run with no session whose workflow is not in the harness with
 `workflow_not_in_harness`, `failed` with exit code `-1`. qory closes a read run (the
 contract's §The events, How a run ends) with no session that has no wall with

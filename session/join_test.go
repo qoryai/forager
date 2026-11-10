@@ -218,7 +218,7 @@ const imageMissingOutcome = "an outcome with the reason image_missing is failed 
 
 // noJoinReasons are the reasons Close takes only failed with -1, for a run no session
 // joined, as the gateway does.
-var noJoinReasons = []string{"image_missing", "image_user_root", "workflow_not_in_harness", "read_needs_wall", "read_needs_setup_outside", "read_needs_no_nested_docker", "read_needs_setup_removed"}
+var noJoinReasons = []string{"image_missing", "image_user_root", "image_access_denied", "image_rate_limited", "image_registry_unreachable", "workflow_not_in_harness", "read_needs_wall", "read_needs_setup_outside", "read_needs_no_nested_docker", "read_needs_setup_removed"}
 
 // noJoinOutcome is Close's text for an outcome with one of noJoinReasons that the
 // gateway does not accept.
@@ -227,7 +227,8 @@ func noJoinOutcome(reason string) string {
 }
 
 // TestImageMissingClosesOnlyARunNoSessionJoined pins the close's image_missing,
-// image_user_root, workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
+// image_user_root, image_access_denied, image_rate_limited, image_registry_unreachable,
+// workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
 // read_needs_no_nested_docker and read_needs_setup_removed: failed with -1 after a join
 // is refused before anything is written, and the run closes with another outcome after.
 func TestImageMissingClosesOnlyARunNoSessionJoined(t *testing.T) {
@@ -254,7 +255,8 @@ func TestImageMissingClosesOnlyARunNoSessionJoined(t *testing.T) {
 }
 
 // TestANoJoinReasonClosesARunNoSessionJoined pins the close's image_missing,
-// image_user_root, workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
+// image_user_root, image_access_denied, image_rate_limited, image_registry_unreachable,
+// workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
 // read_needs_no_nested_docker and read_needs_setup_removed, failed with -1 in a run no
 // session joined: Close writes the outcome as given and posts it.
 func TestANoJoinReasonClosesARunNoSessionJoined(t *testing.T) {

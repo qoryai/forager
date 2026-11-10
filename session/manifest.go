@@ -12,8 +12,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -59,29 +62,40 @@ var manifestHook func(ctx context.Context, image string) error
 // applies has paths and one matches the realm's path, [manifestCheck.realmRefused]:
 // a registry cannot have the check fetch a token with a credential set for other paths,
 // such as a forge's API. Only a 200 passes, with a Docker-Content-Digest equal to the
-// digest when the registry sends one. A 404 is image_missing. A host the run's proxy
-// denies is an error that names the host to allow; any other answer or failure is an
-// error whose first words say what to fix. The token is held in memory alone and is in
-// no error.
+// digest when the registry sends one. A 404 is image_missing. A 401 or 403 is
+// image_access_denied, a 429 image_rate_limited, and a registry or realm the check does
+// not reach, [unreachable], image_registry_unreachable, each a refusal whose name is
+// the image and whose detail starts with what to fix. A host the run's proxy denies is
+// an error that names the host to allow; any other answer or failure is an error whose
+// first words say what to fix. The token is held in memory alone and is in no error.
 func (r *Run) checkManifest(ctx context.Context) error {
 	if manifestHook != nil {
 		return manifestHook(ctx, r.img.Ref)
 	}
-	checking, cancel := context.WithTimeout(ctx, manifestWait)
-	defer cancel()
-	c := manifestCheck{client: r.manifestClient(), image: accesskey.ShownName(r.img.Ref, false)}
+	c := manifestCheck{client: r.manifestClient(), image: accesskey.ShownName(r.img.Ref, false), ended: ctx.Err}
 	c.host, c.repository, c.digest = wall.RegistryManifest(r.img.Ref)
 	c.held = r.realmCredentials
+	return c.check(ctx)
+}
+
+// check runs the check under [manifestWait]. A check that runs out of that time is
+// image_registry_unreachable, unless its error is a [proxyConnError] or a dial of the
+// run's proxy did not open, [proxyDials]: the fix is then at the gateway.
+func (c manifestCheck) check(ctx context.Context) error {
+	checking, cancel := context.WithTimeout(ctx, manifestWait)
+	defer cancel()
+	checking = context.WithValue(checking, proxyDialsKey{}, &proxyDials{})
 	err := c.run(checking)
-	if err != nil && ctx.Err() == nil && errors.Is(checking.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("Check that %s answers through the run's proxy within %s: the check of the image %s at its registry timed out.", accesskey.ShownValue(c.host, false), manifestWait, c.image)
+	var conn *proxyConnError
+	if err != nil && ctx.Err() == nil && errors.Is(checking.Err(), context.DeadlineExceeded) && !errors.As(err, &conn) && !proxyDialHung(checking) {
+		return c.refuse(refusal.ImageRegistryUnreachable, "Check that the run's proxy reaches %s within %s: the check of the image %s at its registry timed out",
+			accesskey.ShownValue(c.host, false), manifestWait, c.image)
 	}
 	return err
 }
 
-// manifestClient is the client of the check: every request goes through the run's
-// proxy, [Run.dialProxy], follows no redirect, and trusts the machine's authorities and
-// the run's certificate.
+// manifestClient is the client of the check, [manifestHTTPClient], over [Run.dialProxy],
+// trusting the machine's authorities and the run's certificate.
 func (r *Run) manifestClient() *http.Client {
 	roots, err := x509.SystemCertPool()
 	if err != nil {
@@ -89,20 +103,103 @@ func (r *Run) manifestClient() *http.Client {
 	}
 	roots.AppendCertsFromPEM(r.authority)
 	roots.AppendCertsFromPEM(manifestRoots)
+	return manifestHTTPClient(r.dialProxy, roots)
+}
+
+// manifestHTTPClient is a client whose every request goes through the run's proxy over
+// a connection that dial opens, a [proxyConn], follows no redirect, and trusts roots.
+func manifestHTTPClient(dial func(context.Context) (net.Conn, error), roots *x509.CertPool) *http.Client {
 	// The proxy's URL is never dialled: DialContext opens every connection to the run's
 	// proxy.
 	proxy := &url.URL{Scheme: "http", Host: "run-proxy"}
 	return &http.Client{
 		Transport: &http.Transport{
-			Proxy:                  func(*http.Request) (*url.URL, error) { return proxy, nil },
-			DialContext:            func(ctx context.Context, _, _ string) (net.Conn, error) { return r.dialProxy(ctx) },
-			OnProxyConnectResponse: proxyDenial,
+			Proxy: func(*http.Request) (*url.URL, error) { return proxy, nil },
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				dials, _ := ctx.Value(proxyDialsKey{}).(*proxyDials)
+				if dials != nil {
+					dials.started.Add(1)
+				}
+				c, err := dial(ctx)
+				if err != nil {
+					return nil, &proxyConnError{err: err}
+				}
+				if dials != nil {
+					dials.opened.Add(1)
+				}
+				t, _ := ctx.Value(tunnelKey{}).(*tunnel)
+				return &proxyConn{Conn: c, tunnel: t}, nil
+			},
+			OnProxyConnectResponse: connectFailure,
 			TLSClientConfig:        &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
 			DisableKeepAlives:      true,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
+
+// proxyDialsKey is the context key of a check's [*proxyDials].
+type proxyDialsKey struct{}
+
+// proxyDials counts the dials of the run's proxy of one check: those started, and those
+// that opened a connection. When the check's time ends during a dial, the client
+// returns the context's error, not the dial's, and the dial opens nothing, so started
+// stays above opened.
+type proxyDials struct{ started, opened atomic.Int32 }
+
+// proxyDialHung reports whether a dial of the run's proxy of the check of ctx started
+// and opened no connection.
+func proxyDialHung(ctx context.Context) bool {
+	d, _ := ctx.Value(proxyDialsKey{}).(*proxyDials)
+	return d != nil && d.started.Load() != d.opened.Load()
+}
+
+// tunnelKey is the context key of a request's [*tunnel].
+type tunnelKey struct{}
+
+// tunnel is one request's CONNECT: open once the run's proxy returned 200 to it,
+// [connectFailure], so the connection is a tunnel to the registry or its realm.
+type tunnel struct{ open atomic.Bool }
+
+// withTunnel is ctx with a [*tunnel] for one request of the check.
+func withTunnel(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tunnelKey{}, &tunnel{})
+}
+
+// proxyConn is a connection to the run's proxy. A read or a write that fails before
+// the proxy returned 200 to the CONNECT, or on a request with no CONNECT, fails on the
+// connection to the proxy itself, and its error is a [proxyConnError]; io.EOF stays as
+// it is.
+type proxyConn struct {
+	net.Conn
+	tunnel *tunnel
+}
+
+func (c *proxyConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	return n, c.failed(err)
+}
+
+func (c *proxyConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	return n, c.failed(err)
+}
+
+// failed is err as a [proxyConnError] while no tunnel is open.
+func (c *proxyConn) failed(err error) error {
+	if err == nil || err == io.EOF || c.tunnel != nil && c.tunnel.open.Load() {
+		return err
+	}
+	return &proxyConnError{err: err}
+}
+
+// proxyConnError is a connection to the run's proxy itself that failed: its dial, or a
+// read or write before the proxy opened the tunnel. [unreachable] does not count it as
+// the registry's, since the fix is at the gateway.
+type proxyConnError struct{ err error }
+
+func (e *proxyConnError) Error() string { return e.err.Error() }
+func (e *proxyConnError) Unwrap() error { return e.err }
 
 // dialProxy opens one connection to the run's proxy, as the host proxy's forwarder
 // does: on one machine with the relay's preamble and the run's proxy secret, and behind
@@ -133,18 +230,41 @@ type deniedHost struct {
 
 func (d *deniedHost) Error() string { return "the run's proxy denied " + d.host }
 
-// proxyDenial is a [deniedHost] for a CONNECT the run's proxy answers 403, nil for any
-// other answer.
-func proxyDenial(_ context.Context, _ *url.URL, req *http.Request, resp *http.Response) error {
-	if resp.StatusCode != http.StatusForbidden {
+// unreachedHost is a CONNECT the run's proxy returned 502 to: the proxy allowed the
+// host, and its connection to the host failed, such as a host name that does not
+// resolve or a port that refuses. hostport is the CONNECT's host:port, and said is the
+// first line of the proxy's body.
+type unreachedHost struct {
+	hostport, said string
+}
+
+func (u *unreachedHost) Error() string {
+	if u.said == "" {
+		return "the run's proxy did not reach " + u.hostport
+	}
+	return "the run's proxy did not reach " + u.hostport + ": " + u.said
+}
+
+// connectFailure is a [deniedHost] for a CONNECT the run's proxy returns 403 to, an
+// [unreachedHost] for one it returns 502 to, and nil for any other status. A 200 opens
+// the request's [tunnel].
+func connectFailure(ctx context.Context, _ *url.URL, req *http.Request, resp *http.Response) error {
+	if t, _ := ctx.Value(tunnelKey{}).(*tunnel); t != nil && resp.StatusCode == http.StatusOK {
+		t.open.Store(true)
+	}
+	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusBadGateway {
 		return nil
 	}
 	line, _ := bufio.NewReader(io.LimitReader(resp.Body, 512)).ReadString('\n')
+	line = strings.TrimSpace(line)
+	if resp.StatusCode == http.StatusBadGateway {
+		return &unreachedHost{hostport: req.Host, said: line}
+	}
 	host, _, err := net.SplitHostPort(req.Host)
 	if err != nil {
 		host = req.Host
 	}
-	return &deniedHost{host: host, said: strings.TrimSpace(line)}
+	return &deniedHost{host: host, said: line}
 }
 
 // heldCredentials are the run's credentials and tools as the check of a token realm
@@ -216,12 +336,20 @@ func jsonStrings(v any) []string {
 
 // manifestCheck is one check of an image's manifest: host is the registry's API host,
 // repository and digest where its manifest is, image the reference as errors show it,
-// and held reads the run's credentials, [Run.realmCredentials].
+// held reads the run's credentials, [Run.realmCredentials], and ended is the caller's
+// context's Err, so a failure after the caller's end has no refusal code.
 type manifestCheck struct {
 	client                   *http.Client
 	host, repository, digest string
 	image                    string
 	held                     func() heldCredentials
+	ended                    func() error
+}
+
+// refuse is the refusal with the code whose name is the check's image, and whose
+// detail is written as fmt writes it.
+func (c manifestCheck) refuse(code, format string, a ...any) error {
+	return refusal.New(code, []string{c.image}, format, a...)
 }
 
 // realmRefused is the error of a realm the check does not ask for a token, nil for one
@@ -319,7 +447,7 @@ func (c manifestCheck) run(ctx context.Context) error {
 	manifest := scheme(c.host) + "://" + c.host + "/v2/" + c.repository + "/manifests/" + c.digest
 	status, header, err := c.head(ctx, manifest, "")
 	if err != nil {
-		return c.failed(c.host, err)
+		return c.failed(ctx, c.host, err)
 	}
 	if status == http.StatusUnauthorized {
 		token, realm, err := c.token(ctx, header.Values("WWW-Authenticate"))
@@ -327,10 +455,11 @@ func (c manifestCheck) run(ctx context.Context) error {
 			return err
 		}
 		if status, header, err = c.head(ctx, manifest, token); err != nil {
-			return c.failed(c.host, err)
+			return c.failed(ctx, c.host, err)
 		}
 		if status == http.StatusUnauthorized {
-			return fmt.Errorf("Give the run a credential that may pull %s: its registry answered 401 to the check of its manifest with the token from %s.", c.image, accesskey.ShownValue(realm, false))
+			return c.refuse(refusal.ImageAccessDenied, "Give the run a credential that may pull %s: its registry returned 401 to the check of its manifest with the token from %s",
+				c.image, accesskey.ShownValue(realm, false))
 		}
 	}
 	switch status {
@@ -344,15 +473,19 @@ func (c manifestCheck) run(ctx context.Context) error {
 	case http.StatusForbidden:
 		// A HEAD has no body: the 403 of a path rule or of plain http to a host with a
 		// credential, from the run's proxy, looks the same as the registry's.
-		return fmt.Errorf("Give the run a credential that may pull %s, or a path rule that covers /v2/%s/manifests/ on %s: the check of its manifest got 403 from its registry or from the run's proxy.",
+		return c.refuse(refusal.ImageAccessDenied, "Give the run a credential that may pull %s, or a path rule that covers /v2/%s/manifests/ on %s: the check of its manifest got 403 from its registry or from the run's proxy",
 			c.image, accesskey.ShownValue(c.repository, false), accesskey.ShownValue(c.host, false))
+	case http.StatusTooManyRequests:
+		// The run's proxy returns 429 too, at gateway.run_limits on a host it terminates.
+		return c.refuse(refusal.ImageRateLimited, "Run again once the rate limit of the registry at %s resets, give the run a credential with a higher limit, or raise gateway.run_limits of the gateway: "+
+			"the check of the image %s got 429 from its registry or from the run's proxy%s", accesskey.ShownValue(c.host, false), c.image, retryAfter(header))
 	}
 	return fmt.Errorf("Check the registry at %s: it answered %d to the check of the image %s.", accesskey.ShownValue(c.host, false), status, c.image)
 }
 
 // head sends the HEAD of the manifest, with token as its Bearer when set.
 func (c manifestCheck) head(ctx context.Context, manifest, token string) (int, http.Header, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, manifest, nil)
+	req, err := http.NewRequestWithContext(withTunnel(ctx), http.MethodHead, manifest, nil)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -373,7 +506,8 @@ func (c manifestCheck) head(ctx context.Context, manifest, token string) (int, h
 func (c manifestCheck) token(ctx context.Context, challenges []string) (token, realmHost string, err error) {
 	params, bearer := bearerChallenge(challenges)
 	if !bearer {
-		return "", "", fmt.Errorf("Give the run a credential for %s: its registry answered 401 to the check of the image %s with no Bearer challenge.", accesskey.ShownValue(c.host, false), c.image)
+		return "", "", c.refuse(refusal.ImageAccessDenied, "Give the run a credential for %s: its registry returned 401 to the check of the image %s with no Bearer challenge",
+			accesskey.ShownValue(c.host, false), c.image)
 	}
 	realm, err := url.Parse(params["realm"])
 	if err != nil || realm.Host == "" || realm.Scheme != "https" && (realm.Scheme != "http" || scheme(realm.Hostname()) != "http") {
@@ -390,23 +524,29 @@ func (c manifestCheck) token(ctx context.Context, challenges []string) (token, r
 	}
 	q.Set("scope", "repository:"+c.repository+":pull")
 	realm.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, realm.String(), nil)
+	req, err := http.NewRequestWithContext(withTunnel(ctx), http.MethodGet, realm.String(), nil)
 	if err != nil {
-		return "", "", c.failed(realm.Hostname(), err)
+		return "", "", c.failed(ctx, realm.Hostname(), err)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return "", "", c.failed(realm.Hostname(), err)
+		return "", "", c.failed(ctx, realm.Hostname(), err)
 	}
 	defer resp.Body.Close()
 	shownRealm := accesskey.ShownValue(realm.Host, false)
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusForbidden:
-		return "", "", fmt.Errorf("Give the run a credential for %s that may pull %s, or a path rule that covers %s on %s: the token request got 403 from the realm or from the run's proxy.",
+		return "", "", c.refuse(refusal.ImageAccessDenied, "Give the run a credential for %s that may pull %s, or a path rule that covers %s on %s: the token request got 403 from the realm or from the run's proxy",
 			shownRealm, c.image, accesskey.ShownValue(realm.EscapedPath(), false), shownRealm)
+	case http.StatusUnauthorized:
+		return "", "", c.refuse(refusal.ImageAccessDenied, "Give the run a credential for %s that may pull %s: the token realm returned 401 to the check of the image",
+			shownRealm, c.image)
+	case http.StatusTooManyRequests:
+		return "", "", c.refuse(refusal.ImageRateLimited, "Run again once the rate limit of the token realm at %s resets, give the run a credential for %s with a higher limit, or raise gateway.run_limits of the gateway: "+
+			"the token request for the image %s got 429 from the realm or from the run's proxy%s", shownRealm, shownRealm, c.image, retryAfter(resp.Header))
 	default:
-		return "", "", fmt.Errorf("Give the run a credential for %s that may pull %s: the token realm answered %d to the check of the image.", shownRealm, c.image, resp.StatusCode)
+		return "", "", fmt.Errorf("the check of the image %s got %d from the token realm %s", c.image, resp.StatusCode, shownRealm)
 	}
 	var answer struct {
 		Token       string `json:"token"`
@@ -423,10 +563,11 @@ func (c manifestCheck) token(ctx context.Context, challenges []string) (token, r
 
 // failed is the error of a request to host that got no answer: a host the run's proxy
 // denied names the host to allow in the policies a run's egress.allow comes from, the
-// node's and, for a run from a server, the server's (docs/policy.md); any other
-// failure, such as an unknown host or an authority the check does not trust, is the
-// request's error.
-func (c manifestCheck) failed(host string, err error) error {
+// node's and, for a run from a server, the server's (docs/policy.md); a host the check
+// does not reach, [unreachable], is image_registry_unreachable with the request's
+// error, unless a dial of the run's proxy hung, [proxyDialHung]; any other failure is
+// the request's error with no code.
+func (c manifestCheck) failed(ctx context.Context, host string, err error) error {
 	var d *deniedHost
 	if errors.As(err, &d) {
 		said := ""
@@ -435,7 +576,60 @@ func (c manifestCheck) failed(host string, err error) error {
 		}
 		return fmt.Errorf("Allow %s in the node's policy, and in the server's policy for a run from a server.\nThe run's proxy denied the check of the image %s at its registry%s.", accesskey.ShownValue(d.host, false), c.image, said)
 	}
+	if (c.ended == nil || c.ended() == nil) && !proxyDialHung(ctx) && unreachable(err) {
+		return c.refuse(refusal.ImageRegistryUnreachable, "Check that the run's proxy reaches %s: the check of the image %s at its registry failed (%s)",
+			accesskey.ShownValue(host, false), c.image, accesskey.ShownError(err))
+	}
 	return fmt.Errorf("Check that %s answers through the run's proxy: the check of the image %s at its registry failed (%s).", accesskey.ShownValue(host, false), c.image, accesskey.ShownError(err))
+}
+
+// unreachable reports whether err is a request of the check that did not reach the
+// registry or its token realm: a CONNECT the run's proxy returned 502 to
+// ([unreachedHost]), a host name that does not resolve, a connection refused or reset,
+// on the tunnel, a TLS handshake or certificate that failed, or a timeout. Each is read
+// from the error's type, never from its text. A failed connection to the run's proxy
+// itself, [proxyConnError], is none of them, and neither is any other error, such as
+// the text error the client returns for another status of a CONNECT.
+func unreachable(err error) bool {
+	var (
+		dial      *proxyConnError
+		unreached *unreachedHost
+		dns       *net.DNSError
+		op        *net.OpError
+		record    tls.RecordHeaderError
+		alert     tls.AlertError
+		verify    *tls.CertificateVerificationError
+		authority x509.UnknownAuthorityError
+		hostname  x509.HostnameError
+		invalid   x509.CertificateInvalidError
+		timeout   net.Error
+	)
+	switch {
+	case errors.As(err, &dial):
+		return false
+	case errors.As(err, &unreached), errors.As(err, &dns), errors.As(err, &record), errors.As(err, &alert),
+		errors.As(err, &verify), errors.As(err, &authority), errors.As(err, &hostname), errors.As(err, &invalid):
+		return true
+	case errors.Is(err, os.ErrDeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
+		return true
+	case errors.As(err, &timeout) && timeout.Timeout():
+		return true
+	case errors.As(err, &op):
+		// A [proxyConn] makes every failure on the connection to the proxy, before
+		// its tunnel opened, a proxyConnError: an OpError here is on the tunnel.
+		return true
+	}
+	return false
+}
+
+// retryAfter is " (Retry-After: <seconds>)" for a Retry-After of whole seconds, empty
+// otherwise.
+func retryAfter(h http.Header) string {
+	s := h.Get("Retry-After")
+	if n, err := strconv.Atoi(s); err != nil || n < 0 {
+		return ""
+	}
+	return " (Retry-After: " + s + ")"
 }
 
 // scheme is http for a host on loopback, as the engine reaches a registry there without

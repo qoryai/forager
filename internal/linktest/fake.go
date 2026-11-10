@@ -289,8 +289,9 @@ func (f *Fake) OnConnect(c Connect) {
 }
 
 // tunnel answers a CONNECT for hostport, read from r on w: 403 with a gateway's line
-// for a host the fake denies, or 200 and then a tunnel to the address the decision
-// gives, until either side ends.
+// for a host the fake denies, 502 with the dial's error when the address the decision
+// gives does not connect, as the gateway's proxy does, or 200 and then a tunnel to that
+// address, until either side ends.
 func (f *Fake) tunnel(w io.ReadWriter, r *bufio.Reader, hostport string) {
 	f.mu.Lock()
 	f.connects = append(f.connects, hostport)
@@ -307,7 +308,12 @@ func (f *Fake) tunnel(w io.ReadWriter, r *bufio.Reader, hostport string) {
 	}
 	var up net.Conn
 	if addr != "" {
-		up, _ = net.Dial("tcp", addr)
+		var err error
+		if up, err = dialAddress(addr); err != nil {
+			line := "upstream: " + err.Error() + "\n"
+			io.WriteString(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: "+strconv.Itoa(len(line))+"\r\nConnection: close\r\n\r\n"+line)
+			return
+		}
 	}
 	if up == nil {
 		host, port, _ := net.SplitHostPort(hostport)
@@ -329,6 +335,16 @@ func (f *Fake) tunnel(w io.ReadWriter, r *bufio.Reader, hostport string) {
 		c.CloseWrite()
 	}
 	<-done
+}
+
+// dialAddress connects to addr, an IP address and a port. The fake resolves no host
+// name: a name fails as a lookup the resolver did not find, and no query reaches DNS.
+func dialAddress(addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil && net.ParseIP(host) == nil {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}}
+	}
+	return net.Dial("tcp", addr)
 }
 
 // RunAnswer is the fake's default answer to a run request on the local link: the
