@@ -133,12 +133,13 @@ masked as a `dev.qory.run.log` chunk is, in chunks of at most 32 KiB, with `sess
 to its end before the session's `dev.qory.session.exited`. Behind a wall the file lies
 inside the agent's container: the session sends no transcript and writes one line on
 `stderr` that says so. When the run answer has `resume`, the run's first session whose
-runtime has `resume` reads the paused run's transcript from the run API, writes it in
-the session's directory as `resume.jsonl`, and starts the runtime through `resume.sh`,
-which copies it under the runtime's home and adds the descriptor's arguments, such as
-`--resume <session id>`. When the read or the copy fails, the runtime starts without a
-resume, after one line on `stderr` that says why. See the contract's §The events, A
-session's transcript, and §The run API, The transcript of a paused run.
+runtime has `resume` reads the paused run's transcript over the gateway's link, `GET
+<run.url>/<run_id>/transcript`, writes it in the session's directory as
+`resume.jsonl`, and starts the runtime through `resume.sh`, which copies it under the
+runtime's home and adds the descriptor's arguments, such as `--resume <session id>`.
+When the read or the copy fails, the runtime starts without a resume, after one line
+on `stderr` that says why, a `404` from the gateway among the causes. See the
+contract's §The events, A session's transcript.
 
 Behind a wall, the `dev.qory.session.exited` of a runtime that exited also has the
 enclosure's peak memory and CPU time, as measured inside the enclosure, to size machine

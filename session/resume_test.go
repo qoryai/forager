@@ -12,7 +12,6 @@ import (
 
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
-	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
@@ -54,9 +53,9 @@ echo '{"line":2}' >> "$f"
 `
 
 // resumerSpec is a session of the resumer on the fake local link g, with a home of its
-// own, and the run's masker with the resumer's secret; the run answer has run_api when
-// withAPI is true, and resume always.
-func resumerSpec(t *testing.T, withAPI bool) (runSpec, *linktest.Fake, string) {
+// own, and the run's masker with the resumer's secret; the run answer has resume, and
+// the transcript request gets restored when restored is not empty, else the fake's 404.
+func resumerSpec(t *testing.T, restored string) (runSpec, *linktest.Fake, string) {
 	t.Helper()
 	sp, g := specGateway(t)
 	rt, err := runtimes.Described("resumer.yaml", []byte(resumer), nil)
@@ -74,12 +73,12 @@ func resumerSpec(t *testing.T, withAPI bool) (runSpec, *linktest.Fake, string) {
 	}
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
 		a := linktest.RunAnswer(req)
-		if withAPI {
-			a["run_api"] = link.RunAPIURL(req.RunID)
-		}
 		a["resume"] = map[string]any{"run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "session_id": "s-1", "path": "~/.resumer/" + slug + "/s-1.jsonl"}
 		return linktest.Reply{Status: 200, Body: a}
 	})
+	if restored != "" {
+		g.OnTranscript(func(string) linktest.Reply { return linktest.Reply{Status: 200, Body: []byte(restored)} })
+	}
 	return sp, g, home
 }
 
@@ -95,26 +94,25 @@ func cwdSlugOf(dir string) string {
 }
 
 // TestARunWithResumeRestoresTheTranscriptAndResumes pins a run whose run answer has
-// resume: before the runtime starts, the session reads GET /resume/transcript through
-// the run's proxy, the runtime finds the bytes at resume.path under its home and gets
+// resume: before the runtime starts, the session reads the transcript over the link,
+// GET <run.url>/<run_id>/transcript, the runtime finds the bytes at resume.path under its home and gets
 // the resume arguments; and the session sends the transcript as
 // dev.qory.session.transcript from offset 0, the restored bytes first, masked, between
 // the session's start and its exit.
 func TestARunWithResumeRestoresTheTranscriptAndResumes(t *testing.T) {
 	session.SetTranscriptPoll(50 * time.Millisecond)
-	sp, g, _ := resumerSpec(t, true)
+	sp, g, _ := resumerSpec(t, "ok\n")
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	evs := events(t, res)
 	out := runLogText(t, evs)
-	// The fake gateway's proxy answers every request with 200 "ok".
 	if !strings.Contains(out, "restored: ok\n") || !strings.Contains(out, "args: --resume s-1\n") {
 		t.Errorf("the runtime's output %q", out)
 	}
-	if !slices.Contains(g.Proxied(), "GET "+link.RunAPIURL(res.RunID)+"/resume/transcript") {
-		t.Errorf("proxied %v", g.Proxied())
+	if got := g.Transcripts(); !slices.Equal(got, []string{res.RunID}) {
+		t.Errorf("transcript requests %v", got)
 	}
 	chunks := ofType(evs, event.SessionTranscript)
 	var file []byte
@@ -126,7 +124,7 @@ func TestARunWithResumeRestoresTheTranscriptAndResumes(t *testing.T) {
 		b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
 		file = append(file, b...)
 	}
-	if want := "ok{\"line\":1,\"key\":\"" + mask.Secret + "\"}\n{\"line\":2}\n"; string(file) != want {
+	if want := "ok\n{\"line\":1,\"key\":\"" + mask.Secret + "\"}\n{\"line\":2}\n"; string(file) != want {
 		t.Errorf("the transcript %q; want %q", file, want)
 	}
 	started := slices.IndexFunc(evs, func(e map[string]any) bool { return e["type"] == event.SessionStarted })
@@ -139,11 +137,11 @@ func TestARunWithResumeRestoresTheTranscriptAndResumes(t *testing.T) {
 }
 
 // TestAResumeThatFailsStartsTheRuntimeWithoutIt pins a run whose run answer has resume
-// and whose read of the transcript fails, here in a run with no control plane: the
-// runtime starts without the resume arguments, and the session writes the line of a
+// and whose read of the transcript fails, here with the gateway's 404: the runtime
+// starts without the resume arguments, and the session writes the line of a
 // failed resume on stderr.
 func TestAResumeThatFailsStartsTheRuntimeWithoutIt(t *testing.T) {
-	sp, _, home := resumerSpec(t, false)
+	sp, _, home := resumerSpec(t, "")
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +150,7 @@ func TestAResumeThatFailsStartsTheRuntimeWithoutIt(t *testing.T) {
 	if strings.Contains(out, "restored: ok") || !strings.Contains(out, "args: \n") {
 		t.Errorf("the runtime's output %q", out)
 	}
-	want := "The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: Open the run through a gateway with a control plane"
+	want := "The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the gateway returned 404 not_found to the transcript request\n"
 	if !strings.Contains(out, want) {
 		t.Errorf("no line %q in %q", want, out)
 	}
@@ -171,7 +169,7 @@ func TestAResumeThatFailsStartsTheRuntimeWithoutIt(t *testing.T) {
 // container, and writes one line that says so.
 func TestAWalledRunResumesAndSendsNoTranscript(t *testing.T) {
 	t.Setenv("QORY_TEST_HOST_ONLY", "1")
-	sp, _, _ := resumerSpec(t, true)
+	sp, _, _ := resumerSpec(t, "ok\n")
 	w := &openWall{}
 	sp.Wall, sp.Image, sp.Mounts = w, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	res, err := run(context.Background(), sp)
@@ -180,7 +178,7 @@ func TestAWalledRunResumesAndSendsNoTranscript(t *testing.T) {
 	}
 	evs := events(t, res)
 	out := runLogText(t, evs)
-	if !strings.Contains(out, "restored: ok") || !strings.Contains(out, "args: --resume s-1\n") {
+	if !strings.Contains(out, "restored: ok\n") || !strings.Contains(out, "args: --resume s-1\n") {
 		t.Errorf("the runtime's output %q", out)
 	}
 	if want := "A continuation of this run starts the runtime without a resume: the runtime's transcript lies inside the agent's container, which the session does not read\n"; strings.Count(out, want) != 1 {
