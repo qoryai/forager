@@ -335,6 +335,13 @@ type RunCredential struct {
 	KeyPrefixes []string `json:"key_prefixes,omitzero"`
 	// Auth is how an API credential's value is set; zero for a host credential.
 	Auth Auth `json:"auth,omitzero"`
+	// ResetsAt is an API credential's earliest reset in a provider's answer as the
+	// server had it at the claim, RFC 3339; ScheduleResetsAt the next reset of its weekly
+	// schedule; each empty when the document has none. PauseForS is its cooldown in
+	// seconds after a limit refusal with no reset, 0 when the document has none.
+	ResetsAt         string `json:"resets_at,omitzero"`
+	ScheduleResetsAt string `json:"schedule_resets_at,omitzero"`
+	PauseForS        int    `json:"pause_for_s,omitzero"`
 	// Apply are where and how a host credential's value is set, one item per way; nil
 	// for an API credential.
 	Apply        []Apply  `json:"apply,omitzero"`

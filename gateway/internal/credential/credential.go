@@ -174,7 +174,12 @@ type Held struct {
 	Uses         []*Use
 	Placeholders []string
 	Start        string
-	all          []*held
+	// Group are the names of the start key's key group, in the order of the run
+	// configuration's credentials: the start key and every credential from the server
+	// with its format, auth and endpoint. Empty when the start key is the machine's, or
+	// the run has none.
+	Group []string
+	all   []*held
 	// panics, when set, gets a panic of the renewals' goroutines ([Held.ReportPanics]).
 	panics atomic.Pointer[func(string)]
 }
@@ -368,6 +373,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		out.Close()
 		return nil, err
 	}
+	out.Group = keyGroup(stored, out.Start)
 	for _, h := range out.all {
 		h.panics = out.reportPanic
 		routine.Go(h.panics, h.renew)
@@ -406,6 +412,31 @@ func (h *Held) startKey(start string) error {
 			"set model_credential in the run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(shown, ", "), accesskey.ShownName(start, true))
 	}
 	return nil
+}
+
+// keyGroup is the key group of the start key, the names of stored in their order whose
+// format, endpoint and auth are the start key's; none when the start key is not of
+// stored.
+func keyGroup(stored []Stored, start string) []string {
+	i := slices.IndexFunc(stored, func(s Stored) bool { return s.Name == start })
+	if i < 0 || stored[i].Format == "" || len(stored[i].Apply) != 1 {
+		return nil
+	}
+	first := stored[i]
+	same := func(s Stored) bool {
+		if s.Format != first.Format || s.Endpoint != first.Endpoint || s.OAuth != first.OAuth || len(s.Apply) != 1 {
+			return false
+		}
+		a, b := s.Apply[0], first.Apply[0]
+		return a.Scheme == b.Scheme && a.Username == b.Username && strings.EqualFold(a.Header, b.Header)
+	}
+	var out []string
+	for _, s := range stored {
+		if same(s) {
+			out = append(out, s.Name)
+		}
+	}
+	return out
 }
 
 // check refuses two uses that claim a host together, unless both are model keys, which

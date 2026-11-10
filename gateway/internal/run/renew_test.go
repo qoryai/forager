@@ -19,7 +19,7 @@ import (
 // renewDoc is a run configuration with a model key and a host credential, forge, set
 // as basic on git.example and api.git.example, under a policy that allows them.
 const renewDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example","api.git.example"]}},"credentials":[` +
-	`{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
+	`{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
 	`{"name":"forge","apply":[{"hosts":["git.example","api.git.example"],"scheme":"basic","username":"x-access-token"}]}]}`
 
 // start is the fake clock's time when a test's run opens.

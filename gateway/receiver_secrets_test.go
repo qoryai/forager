@@ -73,7 +73,7 @@ func newReference(t *testing.T, origin string) *reference {
 	t.Cleanup(func() { store.Close() })
 	ref.store = store
 	ref.doc = []byte(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["` + origin + `"]}},` +
-		`"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://` + origin + `/v1","auth":{"scheme":"header","header":"x-api-key"}}]}`)
+		`"credentials":[{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://` + origin + `/v1","auth":{"scheme":"header","header":"x-api-key"}}]}`)
 	keys := map[string]receiver.AccessKey{
 		testKey:       {PublicKey: testAccessKey.PublicKey(), StoredSecrets: true},
 		refPoolKey:    {PublicKey: refPoolSecret.PublicKey(), Node: refPool},
