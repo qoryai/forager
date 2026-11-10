@@ -1029,8 +1029,9 @@ func (k *Link) Join(ctx context.Context, runURL, runID string, req LinkJoinReque
 // carries, [RunEnd]; a 400 invalid_request ends it
 // too, the gateway having ended the run, with batch_refused; anything else is retried. A
 // coded answer other than a 2xx is also its Refusal. The digests of every answer but one that ends the run are in the Delivery. A transport failure or no answer within
-// Timeout is an error. The body is the session's events of the run, with their ids and
-// without sequence.
+// Timeout is an error. A 2xx whose body has stop has its reason as the Delivery's
+// StopReason. The body is the session's events of the run, with their ids and without
+// sequence.
 func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body []byte, runDigest string) (Delivery, error) {
 	if err := k.onLink("the events URL", eventsURL); err != nil {
 		return Delivery{}, fmt.Errorf("%s: %w", k.name, err)
@@ -1070,6 +1071,24 @@ func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body [
 		d.End, d.From = event.ReasonBatchRefused, a.from()
 	default:
 		d.Digests = a.digests
+		if a.status >= 200 && a.status <= 299 {
+			d.StopReason = stopReason(a.body)
+		}
 	}
 	return d, nil
+}
+
+// stopReason is the reason of stop in a batch's answer, link-batch-answer.schema.json:
+// model_key_limit, or empty for a body that is empty, is no JSON object, has no stop
+// or has a reason Forager does not know, after which the session goes on.
+func stopReason(body []byte) string {
+	var doc struct {
+		Stop *struct {
+			Reason string `json:"reason"`
+		} `json:"stop"`
+	}
+	if len(body) == 0 || jsonv2.Unmarshal(body, &doc) != nil || doc.Stop == nil || doc.Stop.Reason != event.ReasonModelKeyLimit {
+		return ""
+	}
+	return doc.Stop.Reason
 }

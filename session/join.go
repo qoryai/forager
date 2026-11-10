@@ -287,9 +287,11 @@ func (r *Run) wallKept() error {
 // session decides it.
 func (r *Run) refusedJoin(n int, err error) {
 	exited := map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": 0}
+	r.lastReason = ""
 	var ref *Refusal
 	if errors.As(err, &ref) && refusal.Decides(ref.Code) {
 		exited["reason"] = ref.Code
+		r.lastReason = ref.Code
 	}
 	r.write(event.SessionExited, exited)
 }
@@ -371,7 +373,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			}
 			endStep(event.StateCancelled)
 			r.own(event.SessionExited, exited)
-			r.lastExit = -1
+			r.lastExit, r.lastReason = -1, reason
 			return nil, &Refusal{Code: e.Code, Status: http.StatusGone, From: e.From, Text: endedBeforeJoin}
 		}
 		if !started {
@@ -394,7 +396,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		endStep(event.StateFailed)
 		r.write(event.SessionExited, exited)
-		r.lastExit = -1
+		r.lastExit, r.lastReason = -1, reason
 		return nil, err
 	}
 	fail := func(err error) (*Result, error) { return failWith(err, "") }
@@ -790,21 +792,27 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// The limit ends the runtime and nothing else: the wall is closed on the caller's
 	// context, as after any exit. The run being closed from outside ends it the same
 	// way.
-	limited, cancelLimit := context.WithCancel(runCtx)
+	// A stop in the gateway's answer to a batch ends it as the limit does, with its own
+	// cause, from the runtime's start until its exit is decided.
+	stoppable, stopRuntime := context.WithCancelCause(runCtx)
+	defer stopRuntime(nil)
+	limited, cancelLimit := context.WithCancel(stoppable)
 	if spec.Timeout > 0 {
-		limited, cancelLimit = context.WithTimeoutCause(runCtx, spec.Timeout, errTimeout)
+		limited, cancelLimit = context.WithTimeoutCause(stoppable, spec.Timeout, errTimeout)
 	}
+	r.stops.arm(stopRuntime)
 	// Whether the session was cancelled, and whether it timed out, is decided the moment
 	// the runtime's exit is observed. Cancelled: the caller's context had ended by then,
 	// and neither the limit nor the gateway's close had ended the runtime's context
 	// first; the first end is the cause. Timed out: the limit ended it first, and its
 	// stop signal reached the runtime before the exit was observed; a runtime that
 	// exited by itself before that signal, whatever its status, is decided by its exit.
-	// What ends the context later changes nothing.
+	// What ends the context later changes nothing. A stop in the gateway's answer to a
+	// batch is decided after the exit, below.
 	var cancelled, timedOut bool
 	proc.exited = func() {
 		cause := context.Cause(limited)
-		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed)
+		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed) && !errors.Is(cause, errModelKeyLimit)
 		timedOut = errors.Is(cause, errTimeout) && proc.stopped.Load()
 		if exitObserved != nil {
 			exitObserved()
@@ -815,7 +823,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// end or the run's close, was cancelled. The end of limited once the launch exited
 	// is no stop.
 	setupSteps.start(func() bool {
-		return errors.Is(context.Cause(limited), errTimeout) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
+		cause := context.Cause(limited)
+		return errors.Is(cause, errTimeout) || errors.Is(cause, errModelKeyLimit) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
 	})
 	var exit exitStatus
 	if interactive {
@@ -833,8 +842,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// A setup step still open when the launch ended has no exit status.
 	setupSteps.finish(closed || timedOut || cancelled)
 	if err != nil && !closed {
+		r.stops.end()
 		r.write(event.SessionExited, map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": time.Since(start).Milliseconds()})
-		r.lastExit = -1
+		r.lastExit, r.lastReason = -1, ""
 		return nil, err
 	}
 	// A runtime the close kept from starting has no status: the session ends as a
@@ -842,6 +852,15 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if err != nil {
 		exit = exitStatus{code: -1}
 	}
+	// Before the dev.qory.session.exited of a runtime that exited by itself, the
+	// session posts the batch it holds and reads the answer, so a stop that comes as the
+	// runtime exits still sets the reason.
+	if !closed && !timedOut && !cancelled {
+		flushCtx, cancelFlush := context.WithTimeout(context.WithoutCancel(ctx), closeWait)
+		r.posts.Flush(flushCtx)
+		cancelFlush()
+	}
+	keyLimit := r.stops.end() == event.ReasonModelKeyLimit
 	state, reason := event.StateFailed, ""
 	switch {
 	case closed:
@@ -852,6 +871,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	case cancelled:
 		// It was stopped from where it was started, a Ctrl-C, before it said how it went.
 		state, reason = event.StateCancelled, event.ReasonInterrupted
+	case keyLimit:
+		// The gateway's answer to a batch had stop: the run's proxy passed a model
+		// provider's limit refusal to the runtime, and the run pauses.
+		state, reason = event.StateCancelled, event.ReasonModelKeyLimit
 	case exit.code == 0:
 		state = event.StateSucceeded
 	}
@@ -869,7 +892,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if reason != "" {
 		exited["reason"] = reason
 	}
-	r.lastExit = exit.code
+	r.lastExit, r.lastReason = exit.code, reason
 	if closed {
 		// The session was open at the gateway's 410: it has no exit status in the run's
 		// record.
@@ -887,6 +910,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		r.own(event.SessionExited, exited)
 	case timedOut:
 		r.open.Report(fmt.Sprintf("the runtime was stopped at the limit of %s", spec.Timeout))
+		r.write(event.SessionExited, exited)
+	case keyLimit:
+		r.open.Report("the runtime was stopped at the model provider's limit: no model key of the run is left, and the run pauses")
 		r.write(event.SessionExited, exited)
 	default:
 		r.write(event.SessionExited, exited)

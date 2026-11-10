@@ -907,6 +907,11 @@ type Delivery struct {
 	// its code, status, names, who refused and its message. Nil for any other answer,
 	// and always toward the server.
 	Refusal *accesskey.Refusal
+	// StopReason is, on the link, the reason of stop in the body of a 2xx,
+	// link-batch-answer.schema.json: model_key_limit, after which the session stops its
+	// runtime and the run stays open. Empty for a body without stop, for any other
+	// answer, and always toward the server.
+	StopReason string
 	// ServerEnd is, toward the server, the end member of a signed 2xx: the outcome the
 	// run's starter gave, which the server sends on every 2xx for the run once it has
 	// recorded one, until the run's dev.qory.run.exited arrives ([ReadEnd]). Nil for any
