@@ -76,8 +76,12 @@ func getTranscript(t *testing.T, h *harness, runID string) (int, string, []byte,
 	return resp.StatusCode, resp.Header.Get("Content-Type"), b, err
 }
 
+// wantResume is resumeDoc's resume.
+var wantResume = server.LinkResume{RunID: "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", SessionID: "3f1b2c4d-0000-4000-8000-000000000001",
+	Path: "~/.claude/projects/-workspace/3f1b2c4d-0000-4000-8000-000000000001.jsonl"}
+
 // TestATranscriptRequestReadsThePausedRunsTranscript pins the link's transcript request
-// on the local link: the gateway reads GET <run.url>/<run_id>/resume/transcript with
+// on the local link, of a run whose run answer has the run configuration's resume: the gateway reads GET <run.url>/<run_id>/resume/transcript with
 // its signed client and streams the verified bytes as application/x-ndjson; a signed
 // 404 is 404 not_found from apiary; an unsigned answer is 502 transcript_unavailable;
 // bytes that fail the signed digest end with a read error; and a run without resume
@@ -89,6 +93,9 @@ func TestATranscriptRequestReadsThePausedRunsTranscript(t *testing.T) {
 	transcriptControl(t, c, resumeDoc, &answer, &count)
 	h := start(t, gateway.Config{Server: c.server()})
 	a := h.open(server.LinkRunRequest{})
+	if a.Resume == nil || *a.Resume != wantResume {
+		t.Errorf("the run answer's resume %+v; want %+v", a.Resume, wantResume)
+	}
 	content := bytes.Repeat([]byte(`{"type":"assistant"}`+"\n"), 2000)
 
 	answer = transcriptFile(c, content, "")
@@ -116,6 +123,9 @@ func TestATranscriptRequestReadsThePausedRunsTranscript(t *testing.T) {
 
 	c.serveDocument(`{"version":1}`, 'b')
 	b := h.open(server.LinkRunRequest{})
+	if b.Resume != nil {
+		t.Errorf("the run answer of a run without resume has %+v", b.Resume)
+	}
 	if status, _, body, _ := getTranscript(t, h, b.RunID); status != http.StatusNotFound || !strings.Contains(string(body), `"from":"gateway"`) {
 		t.Errorf("a run without resume: %d %s", status, body)
 	}
@@ -125,8 +135,9 @@ func TestATranscriptRequestReadsThePausedRunsTranscript(t *testing.T) {
 }
 
 // TestATranscriptRequestBehindASeparateGateway pins the transcript request on the one
-// address: under /qory-link/run-configuration/<run_id>/transcript with the run's run key,
-// the answer signed, and another run's key is 400 run_key_invalid.
+// address: the run answer has the run configuration's resume, and the request goes
+// under /qory-link/run-configuration/<run_id>/transcript with the run's run key, the
+// answer signed; another run's key is 400 run_key_invalid.
 func TestATranscriptRequestBehindASeparateGateway(t *testing.T) {
 	c := gatewayControl(t)
 	var answer func(w http.ResponseWriter, r *http.Request)
@@ -136,6 +147,9 @@ func TestATranscriptRequestBehindASeparateGateway(t *testing.T) {
 	answer = transcriptFile(c, content, "")
 	r := startRemote(t, c, gateway.Config{})
 	e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+	if e.a.Resume == nil || *e.a.Resume != wantResume {
+		t.Errorf("the run answer's resume %+v; want %+v", e.a.Resume, wantResume)
+	}
 	got := r.do(t, e.key, http.MethodGet, "/qory-link/run-configuration/"+e.a.RunID+"/transcript", nil)
 	if got.status != http.StatusOK || !bytes.Equal(got.body, content) {
 		t.Errorf("the transcript: %d %s", got.status, got.body)

@@ -978,6 +978,7 @@ type runAnswerDoc struct {
 	Image                *server.LinkImage            `json:"image,omitempty"`
 	RelayImage           string                       `json:"relay_image,omitempty"`
 	RunAPI               string                       `json:"run_api,omitempty"`
+	Resume               *server.LinkResume           `json:"resume,omitempty"`
 	Applied              map[string]any               `json:"applied"`
 }
 
@@ -1047,6 +1048,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	if lr.g.client != nil {
 		a.RunAPI = link.RunAPIURL(lr.id)
 	}
+	a.Resume = lr.r.Resume()
 	if lr.remote {
 		a.Labels = nil
 	} else if a.Labels == nil {

@@ -69,7 +69,7 @@ func (g *Gateway) transcript(s *side, w http.ResponseWriter, r *http.Request, ru
 		return
 	}
 	lr.touch()
-	if g.client == nil || lr.r == nil || !lr.r.Resumes() {
+	if g.client == nil || lr.r == nil || lr.r.Resume() == nil {
 		refuse(w, http.StatusNotFound, codeNotFound, nil, accesskey.FromGateway,
 			"start the runtime without a resume: the run continues no paused run")
 		return
