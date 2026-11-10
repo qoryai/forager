@@ -119,9 +119,16 @@ func (p *Proxy) SetNoModelKey() { p.model.Store(&modelKey{none: true}) }
 
 // setsModelKey reports whether the proxy sets the model key of that name: the one
 // [Proxy.SetModelKey] set, none after [Proxy.SetNoModelKey], or any before either is
-// called.
+// called. Of the run's key group, it sets the group's active key alone, when the key
+// set is one of the group or none was set.
 func (p *Proxy) setsModelKey(name string) bool {
 	m := p.model.Load()
+	if k := p.group(name); k != nil {
+		if m != nil && (m.none || !k.g.Has(m.name)) {
+			return false
+		}
+		return k.g.Active() == name
+	}
 	return m == nil || (!m.none && m.name == name)
 }
 
@@ -412,7 +419,12 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			if d, ok := settle(resp.Request, resp, nil); ok {
 				t.p.observe(d)
 			}
-			if name, ok := resp.Request.Context().Value(keyedKey{}).(string); ok && resp.StatusCode == http.StatusUnauthorized {
+			name, ok := resp.Request.Context().Value(keyedKey{}).(string)
+			if rs := resendOf(resp.Request); rs != nil {
+				// The key the request went with last, after a resend another than the first.
+				name = rs.name
+			}
+			if ok && resp.StatusCode == http.StatusUnauthorized {
 				// The credential the proxy set on the request, of those of the host.
 				if i := slices.IndexFunc(creds, func(c *Credential) bool { return c.Name == name }); i >= 0 && creds[i].Rejected != nil {
 					creds[i].Rejected()
@@ -478,6 +490,16 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		r.Header.Del(setBy)
+		group := (*keyGroup)(nil)
+		if c != nil && allowed && tl == nil && c.carries(r.Header) {
+			group = t.p.group(c.Name)
+		}
+		if group != nil && group.g.Passed() {
+			// The proxy passed a limit refusal to the session: until its join ends, no
+			// request with the placeholder reaches the provider.
+			t.p.limitPassed(w, req)
+			return
+		}
 		// Every answer from a host that gets a credential has the value of each of the
 		// host's credentials replaced with its placeholder, on a path that gets none as
 		// well: the host may send back a value it received before. Each value is read
@@ -521,6 +543,9 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			// In the context, since the session's Connection header can take any header
 			// off the request before it reaches the transport, the mark among them.
 			ctx = context.WithValue(ctx, keyedKey{}, req.Credential)
+			if group != nil {
+				ctx = t.p.withResend(ctx, r, group, c, creds)
+			}
 		}
 		if mask == nil {
 			rp.ServeHTTP(w, r.WithContext(ctx))
@@ -669,20 +694,28 @@ func (u *unmark) CloseIdleConnections() {
 	closeIdle(u.keyed)
 }
 
-// RoundTrip sends the request on without the mark.
+// RoundTrip sends the request on without the mark. A request with a key of the run's
+// key group goes by its [resend], which sends it again with the next key after a
+// limit refusal.
 func (u *unmark) RoundTrip(r *http.Request) (*http.Response, error) {
 	rt := u.rt
 	if r.Context().Value(keyedKey{}) != nil {
 		rt = u.keyed
 	}
-	if r.Header.Get(setBy) == "" {
-		return rt.RoundTrip(r)
+	out := r
+	if r.Header.Get(setBy) != "" {
+		out = r.Clone(r.Context())
+		out.Header.Del(setBy)
+		// The trailer is filled once the body is read; a clone's copy would stay empty.
+		out.Trailer = r.Trailer
 	}
-	out := r.Clone(r.Context())
-	out.Header.Del(setBy)
-	// The trailer is filled once the body is read; a clone's copy would stay empty.
-	out.Trailer = r.Trailer
-	resp, err := rt.RoundTrip(out)
+	var resp *http.Response
+	var err error
+	if rs := resendOf(r); rs != nil {
+		resp, err = rs.roundTrip(rt, out)
+	} else {
+		resp, err = rt.RoundTrip(out)
+	}
 	if resp != nil {
 		resp.Request = r
 	}

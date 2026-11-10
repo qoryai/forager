@@ -201,6 +201,8 @@ type Proxy struct {
 	guardBody atomic.Pointer[func(host string, port int, never bool) string]
 	// runAPI, when set, is the route to the run API ([Proxy.SetRunAPI]).
 	runAPI atomic.Pointer[RunAPI]
+	// keys, when set, is the run's key group ([Proxy.SetKeyGroup]).
+	keys atomic.Pointer[keyGroup]
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
