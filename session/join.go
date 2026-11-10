@@ -506,6 +506,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if prepared, err = rt.Prepare(attach); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
+	// The run's first session whose runtime has resume continues the runtime session of
+	// the paused run the run answer's resume names: the launch writes its transcript under
+	// the runtime's home and resumes it. A failure starts the runtime without a resume,
+	// with resumeLine on stderr once the session started.
+	prepared, resumeLine := r.resumeLaunch(runCtx, rt, sessionDir, inside, prepared)
 	// The session's setup commands run inside, after the runtime's preparation, and then
 	// start the launch as the runtime prepared it.
 	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
@@ -586,6 +591,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	endStep(event.StateSucceeded)
 	started, start = true, time.Now()
 	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, neutral, interactive, cols, rows))
+	if resumeLine != "" {
+		r.writeLog("stderr", n, 0, []byte(neutral(resumeLine)+"\n"))
+	}
 	if r.remote != nil {
 		r.open.Report(r.launchLine(spec, n, prepared))
 	}

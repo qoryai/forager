@@ -95,6 +95,9 @@ type Run struct {
 	// stops is the stop in the gateway's answer to a batch, for the session whose
 	// runtime runs.
 	stops batchStop
+	// resumeTried is true once a session whose runtime has resume tried to resume the
+	// runtime session of the run answer's resume: no later session tries again.
+	resumeTried bool
 	// joinAsked says a Join reached its join request: the gateway closed the run's
 	// stack proxy then, and [Run.StackProxy] starts none from then on. It is read
 	// without the joining lock too, by a StackProxy that finds the lock taken.
