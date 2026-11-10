@@ -250,7 +250,7 @@ func Decide(cfg Config) (*Run, error) {
 		if err := r.checkHarness(); err != nil {
 			return nil, err
 		}
-		if err := r.checkKeyGroup(); err != nil {
+		if err := r.checkKeyGroup(r.clock().Now()); err != nil {
 			return nil, err
 		}
 		r.takeComputed(fetched)

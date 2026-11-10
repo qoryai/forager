@@ -107,3 +107,36 @@ func TestAGroupKeyWithoutPauseForIsRefused(t *testing.T) {
 		t.Errorf("Open of one key without pause_for_s: %v; want it refused", err)
 	}
 }
+
+// TestAKeyGroupInCooldownAtTheClaim pins the fixture of a key group with a chosen key and
+// a key in cooldown at the claim: the keys have resets_at, cooldown_until and chosen;
+// a start key in cooldown is refused, and so are two chosen keys, each
+// run_configuration_invalid with the key's name and before any secrets request.
+func TestAKeyGroupInCooldownAtTheClaim(t *testing.T) {
+	doc := fixture(t, "fixtures/run-configuration/model-keys-cooling.json")
+	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
+		Secrets: (&controlPlane{answer: harnessValue}).fetch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	keys := r.ModelKeys()
+	if len(keys) != 3 || !keys[0].Chosen || keys[1].Chosen || !keys[1].ResetsAt.Equal(time.Date(2026, 11, 10, 14, 0, 0, 0, time.UTC)) ||
+		!keys[2].CooldownUntil.Equal(time.Date(2026, 11, 10, 16, 30, 0, 0, time.UTC)) || !keys[0].CooldownUntil.IsZero() {
+		t.Errorf("ModelKeys %+v", keys)
+	}
+	for _, c := range []struct{ fixture, name, line string }{
+		{"run-configuration-beyond-schema-model-keys-start-cooling.json", "model", `set model_credential to a model key out of cooldown: the start key "model" is in cooldown until 2099-01-01T00:00:00Z`},
+		{"run-configuration-beyond-schema-model-keys-two-chosen.json", "model-2", `set chosen on one model key of the key group: "model" and "model-2" both have it`},
+	} {
+		s := &controlPlane{answer: harnessValue}
+		_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, fixture(t, "fixtures/invalid/"+c.fixture), digest('1')), Secrets: s.fetch})
+		code, names := refusalOf(err)
+		if code != refusal.RunConfigurationInvalid || !slices.Equal(names, []string{c.name}) || err == nil || !strings.HasPrefix(err.Error(), c.line) {
+			t.Errorf("%s: %v; want %s", c.fixture, err, c.line)
+		}
+		if len(s.calls) != 0 {
+			t.Errorf("%s: %d secrets requests; want none", c.fixture, len(s.calls))
+		}
+	}
+}

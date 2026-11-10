@@ -25,12 +25,17 @@ const maxWindows = 10
 // week is how far the gateway moves a key's schedule_resets_at once it has passed.
 const week = 7 * 24 * time.Hour
 
-// Key is one key of the group, from the run configuration's credentials: its name, the
-// next reset of its weekly schedule, zero for none, and its pause_for_s.
+// Key is one key of the group, from the run configuration's credentials: its name, its
+// earliest reset as the server had it, zero for none, the next reset of its weekly
+// schedule, zero for none, its pause_for_s, the end of its cooldown at the claim, zero
+// for none, and whether the model choice names it, chosen.
 type Key struct {
 	Name             string
+	ResetsAt         time.Time
 	ScheduleResetsAt time.Time
 	PauseFor         time.Duration
+	CooldownUntil    time.Time
+	Chosen           bool
 }
 
 // Window is the state of one limit window of one key, an entry of
@@ -97,37 +102,72 @@ func (g *Group) index(name string) int {
 	return slices.IndexFunc(g.keys, func(k Key) bool { return k.Name == name })
 }
 
-// Active is the active key's name. When the active key is in cooldown, the next key by
-// the order that is not becomes active first; when every key is in cooldown, the active
-// key stays, so the provider's answer decides.
+// Active is the active key's name. When the active key is in cooldown, the first key
+// of [Group.next] becomes active first; when every key is in cooldown, the active key
+// stays, so the provider's answer decides.
 func (g *Group) Active() string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
 	if g.coolingUntil(g.active, now).After(now) {
-		if next, ok := g.next(g.active, now); ok {
+		if next, ok := g.next(now); ok {
 			g.active = next
 		}
 	}
 	return g.keys[g.active].Name
 }
 
-// next is the first key after i, by the order and from the start again, that is not in
-// cooldown at now. Called with g.mu held.
-func (g *Group) next(i int, now time.Time) (int, bool) {
-	for step := 1; step <= len(g.keys); step++ {
-		j := (i + step) % len(g.keys)
-		if !g.coolingUntil(j, now).After(now) {
-			return j, true
+// next is the key a switch makes active, among the keys not in cooldown at now: the
+// chosen key first; then the keys with no known reset, or one that has passed, by the
+// order; then the key with the closest reset, keys whose resets fall in the same minute
+// by the order. It reports false when every key is in cooldown. Called with g.mu held.
+func (g *Group) next(now time.Time) (int, bool) {
+	best, bestReset := -1, time.Time{}
+	for i, k := range g.keys {
+		if g.coolingUntil(i, now).After(now) {
+			continue
+		}
+		if k.Chosen {
+			return i, true
+		}
+		reset := g.knownReset(i, now).Truncate(time.Minute)
+		switch {
+		case best < 0:
+		case bestReset.IsZero():
+			continue
+		case !reset.IsZero() && !reset.Before(bestReset):
+			continue
+		}
+		best, bestReset = i, reset
+	}
+	return best, best >= 0
+}
+
+// knownReset is key i's closest reset after now: the earliest resets_at of its windows
+// that is after now, or, while no window has a resets_at, the run configuration's
+// resets_at when it is after now; zero for none. Called with g.mu held.
+func (g *Group) knownReset(i int, now time.Time) time.Time {
+	var earliest time.Time
+	seen := false
+	for _, w := range g.windows[i] {
+		if w.ResetsAt.IsZero() {
+			continue
+		}
+		seen = true
+		if w.ResetsAt.After(now) && (earliest.IsZero() || w.ResetsAt.Before(earliest)) {
+			earliest = w.ResetsAt
 		}
 	}
-	return 0, false
+	if !seen && g.keys[i].ResetsAt.After(now) {
+		return g.keys[i].ResetsAt
+	}
+	return earliest
 }
 
 // coolingUntil is the end of key i's cooldown: the latest cooldown_until of its
-// windows. Called with g.mu held.
+// windows and of the run configuration. Called with g.mu held.
 func (g *Group) coolingUntil(i int, _ time.Time) time.Time {
-	var until time.Time
+	until := g.keys[i].CooldownUntil
 	for _, w := range g.windows[i] {
 		if w.Status == StatusRejected && w.CooldownUntil.After(until) {
 			until = w.CooldownUntil
@@ -146,7 +186,7 @@ func (g *Group) Answered(name string, h http.Header) {
 
 // Refused records a limit refusal of the provider to a request with key name, with its
 // headers and the error_code of its body: the key goes into cooldown. When name is the
-// active key, the next key by the order that is not in cooldown becomes active. It
+// active key, the first key of [Group.next] becomes active. It
 // returns the active key and whether it is out of cooldown, which a resend needs.
 func (g *Group) Refused(name string, h http.Header, code string) (string, bool) {
 	g.record(name, h, true, code)
@@ -161,14 +201,14 @@ func (g *Group) Streamed(name string, h http.Header) {
 	g.switched()
 }
 
-// switched makes the next key that is not in cooldown active when the active one is,
+// switched makes the first key of [Group.next] active when the active one is in cooldown,
 // and returns the active key and whether it is out of cooldown.
 func (g *Group) switched() (string, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
 	if g.coolingUntil(g.active, now).After(now) {
-		next, ok := g.next(g.active, now)
+		next, ok := g.next(now)
 		if !ok {
 			return g.keys[g.active].Name, false
 		}

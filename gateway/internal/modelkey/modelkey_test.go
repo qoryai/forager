@@ -376,3 +376,79 @@ func TestErrorOfReadsTypeAndCode(t *testing.T) {
 		t.Errorf("ErrorOf of no JSON: %q, %q", kind, code)
 	}
 }
+
+// TestASwitchTakesTheChosenKeyThenNoResetThenTheClosestReset pins the order of a switch
+// among the keys out of cooldown: the chosen key first; then the keys with no known
+// reset, or one that has passed, by the order; then the closest reset, from the
+// answers' windows over the run configuration's resets_at.
+func TestASwitchTakesTheChosenKeyThenNoResetThenTheClosestReset(t *testing.T) {
+	c := &clock{now: start}
+	keys := []modelkey.Key{
+		{Name: "model", PauseFor: time.Hour, Chosen: true},
+		{Name: "model-2", PauseFor: time.Hour, ResetsAt: start.Add(3 * time.Hour)},
+		{Name: "model-3", PauseFor: time.Hour, ResetsAt: start.Add(-time.Hour)},
+		{Name: "model-4", PauseFor: time.Hour, ResetsAt: start.Add(time.Hour)},
+		{Name: "model-5", PauseFor: time.Hour},
+	}
+	g := modelkey.New(keys, c.Now)
+	// model-5's answer gives it a reset in 2 hours, before model-2's.
+	g.Answered("model-5", headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-reset", epoch(start.Add(2*time.Hour))))
+	refuse := func(name string) string {
+		t.Helper()
+		next, ok := g.Refused(name, headers("retry-after", "600"), "")
+		if !ok {
+			t.Fatalf("Refused %s: no key left", name)
+		}
+		return next
+	}
+	for _, step := range []struct{ refused, want string }{
+		{"model", "model-3"},   // model-3's reset has passed: no known reset
+		{"model-3", "model-4"}, // the closest reset, in 1 hour
+		{"model-4", "model-5"}, // in 2 hours, from the answer
+		{"model-5", "model-2"}, // in 3 hours
+	} {
+		if got := refuse(step.refused); got != step.want {
+			t.Errorf("after %s: %s; want %s", step.refused, got, step.want)
+		}
+	}
+	c.now = start.Add(11 * time.Minute)
+	if got := refuse("model-2"); got != "model" {
+		t.Errorf("after model-2, once model's cooldown ended: %s; want model, the chosen key", got)
+	}
+}
+
+// TestResetsInOneMinuteGoByTheOrder pins a tie: two resets in the same minute go by the
+// order of the keys, whatever their seconds.
+func TestResetsInOneMinuteGoByTheOrder(t *testing.T) {
+	c := &clock{now: start}
+	g := modelkey.New([]modelkey.Key{
+		{Name: "model", PauseFor: time.Hour},
+		{Name: "model-2", PauseFor: time.Hour, ResetsAt: start.Add(time.Hour + 40*time.Second)},
+		{Name: "model-3", PauseFor: time.Hour, ResetsAt: start.Add(time.Hour + 10*time.Second)},
+	}, c.Now)
+	if next, ok := g.Refused("model", headers("retry-after", "600"), ""); next != "model-2" || !ok {
+		t.Errorf("Refused model: %s, %v; want model-2, first by the order in the same minute", next, ok)
+	}
+}
+
+// TestAKeyInCooldownAtTheClaimWaitsForItsEnd pins cooldown_until of the run
+// configuration: the key is skipped until then, and a chosen key in cooldown comes first
+// once its cooldown ends. The group pauses only when every key cools at once.
+func TestAKeyInCooldownAtTheClaimWaitsForItsEnd(t *testing.T) {
+	c := &clock{now: start}
+	g := modelkey.New([]modelkey.Key{
+		{Name: "model", PauseFor: time.Hour},
+		{Name: "model-2", PauseFor: time.Hour},
+		{Name: "model-3", PauseFor: time.Hour, Chosen: true, CooldownUntil: start.Add(30 * time.Minute)},
+	}, c.Now)
+	if next, ok := g.Refused("model", headers("retry-after", "3600"), ""); next != "model-2" || !ok {
+		t.Errorf("Refused model: %s, %v; want model-2, model-3 in cooldown", next, ok)
+	}
+	if next, ok := g.Refused("model-2", headers("retry-after", "3600"), ""); next != "model-2" || ok {
+		t.Errorf("Refused model-2: %s, %v; want no key left while every key cools", next, ok)
+	}
+	c.now = start.Add(31 * time.Minute)
+	if got := g.Active(); got != "model-3" {
+		t.Errorf("active %s once model-3's cooldown ended; want model-3", got)
+	}
+}

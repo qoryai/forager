@@ -236,8 +236,10 @@ in the order of `credentials`. A key of `forager.yaml` is never in a key group.
 
 The keys share the start key's placeholder, and the proxy sets one of them, the active
 key. When the provider answers `429` to the active key, the proxy puts the key in
-cooldown until the reset in the answer's headers, makes the next key by the order that
-is not in cooldown the active key, and sends the request again with it. The session
+cooldown until the reset in the answer's headers, makes another key out of cooldown the
+active key, and sends the request again with it. The proxy takes the key with `chosen`
+first, then a key with no known reset, by the order, then the key whose limit resets
+soonest. A key with `cooldown_until` waits until that time. The session
 sees only the answer to that second request. The proxy keeps a copy of each request
 body up to 8 MiB for this; a larger body goes once.
 

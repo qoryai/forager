@@ -20,6 +20,10 @@ release may change what an existing document does, and says so under Upgrading.
   with its `format`, `auth` and `endpoint`. Forager has no default cooldown, and a run
   configuration with such a key without it fails with `run_configuration_invalid`. A
   run configuration has at most 6 API credentials.
+- Send the key group in the order that breaks ties, with `chosen: true` on the key the
+  model choice names and `cooldown_until` on each key in cooldown at the claim. The
+  gateway refuses a start key in cooldown and two keys with `chosen`, each with
+  `run_configuration_invalid`.
 - Read a `dev.qory.run.exited` `cancelled` with `model_key_limit` as a pause of the run,
   not as a person's cancel: the run's work is kept, and a continuation of the run can
   resume its runtime session.
