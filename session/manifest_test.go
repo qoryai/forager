@@ -360,6 +360,9 @@ func TestTheImageIsCheckedAtItsRegistryBeforeThePull(t *testing.T) {
 			code: refusals.ImageRegistryUnreachable, prefix: true,
 			want: "Check that the run's proxy reaches registry.example: the check of the image " + pinned + " at its registry failed (" +
 				`Head "https://registry.example/v2/agents/app/manifests/` + pinnedDigest + `": tls: failed to verify certificate: x509: `},
+		{name: "a realm that returns 500", reg: &scripted{status: 401, challenge: bearer, realmStatus: 500}, heads: []string{head},
+			realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "},
+			want:  "the check of the image " + pinned + " got 500 from the token realm auth.registry.example"},
 		{name: "500", reg: &scripted{status: 500}, heads: []string{head},
 			want: "Check the registry at registry.example: it answered 500 to the check of the image " + pinned + "."},
 		{name: "a realm over http", reg: &scripted{status: 401, challenge: `Bearer realm="http://auth.registry.example/token",service="registry.example"`}, heads: []string{head},

@@ -546,7 +546,7 @@ func (c manifestCheck) token(ctx context.Context, challenges []string) (token, r
 		return "", "", c.refuse(refusal.ImageRateLimited, "Run again once the rate limit of the token realm at %s resets, give the run a credential for %s with a higher limit, or raise gateway.run_limits of the gateway: "+
 			"the token request for the image %s got 429 from the realm or from the run's proxy%s", shownRealm, shownRealm, c.image, retryAfter(resp.Header))
 	default:
-		return "", "", fmt.Errorf("Give the run a credential for %s that may pull %s: the token realm answered %d to the check of the image.", shownRealm, c.image, resp.StatusCode)
+		return "", "", fmt.Errorf("the check of the image %s got %d from the token realm %s", c.image, resp.StatusCode, shownRealm)
 	}
 	var answer struct {
 		Token       string `json:"token"`
