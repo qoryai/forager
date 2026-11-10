@@ -269,15 +269,19 @@ release may change what an existing document does, and says so under Upgrading.
   to `~/.claude/projects/{cwd_slug}/{session_id}.jsonl`, and resumes with
   `--resume {session_id}`.
 - `GET /resume/transcript`, a sixth request of the run API, and `resume` in the run
-  configuration: before the runtime of a continuation starts, the session reads the
-  paused run's transcript through `Run.RunAPI`, writes it at `resume.path` and adds the
-  descriptor's `resume.args`. A program behind the wall gets `404` for the path. When the
-  read or the write fails, the session starts the runtime without a resume.
+  configuration, which the gateway copies to `resume` of the run answer: before the
+  runtime of the run's first session whose runtime has `resume` starts, the session
+  reads the paused run's transcript over the gateway's link, `GET
+  <run.url>/<run_id>/transcript`, writes it at `resume.path` and adds the descriptor's
+  `resume.args`. The gateway reads the transcript from Qory Apiary with `GET
+  /resume/transcript` of the run API. A program behind the wall, or on `QORY_RUN_API`,
+  gets `404` for that path. When the read or the write fails, the session starts the
+  runtime without a resume.
 - The contract stays at revision 1. Fixtures: `fixtures/run-configuration/model-keys.json`
   and `resume.json`, `fixtures/model-keys-report/`, `fixtures/model-keys-answer/`,
   `fixtures/link/link-batch-answer-stop.json`,
-  `link-batch-exited-model-key-limit.json` and `link-batch-session-transcript.json`, and
-  `fixtures/descriptor/resume.yaml`.
+  `link-batch-exited-model-key-limit.json`, `link-batch-session-transcript.json` and
+  `link-run-answer-resume.json`, and `fixtures/descriptor/resume.yaml`.
 - `image_access_denied`, `image_rate_limited` and `image_registry_unreachable`,
   refusal codes of `refusal.Decides`, from the session's check of an image's manifest
   before its pull. Each refusal has the reference as its name and in its detail, and

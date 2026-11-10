@@ -49,7 +49,7 @@
       "items": {"$ref": "policy.schema.json#/$defs/host_entry"}
     },
     "resume": {
-      "description": "The paused run whose runtime session this run continues: the paused run's id, and the runtime's session id and the path of its transcript, as that run's last dev.qory.session.transcript has them. Before the runtime starts, the session reads the transcript with GET /resume/transcript of the run API, writes it at path, and adds the descriptor's resume.args. When the read or the write fails, the session starts the runtime without a resume and writes one dev.qory.run.log line. Fixed when the run starts. Absent, the session starts the runtime without a resume.",
+      "description": "The paused run whose runtime session this run continues: the paused run's id, and the runtime's session id and the path of its transcript, as that run's last dev.qory.session.transcript has them. Before the runtime starts, the session reads the transcript over the gateway's link, which reads it from the server with GET /resume/transcript of the run API, writes it at path, and adds the descriptor's resume.args. When the read or the write fails, the session starts the runtime without a resume and writes one dev.qory.run.log line. Fixed when the run starts. Absent, the session starts the runtime without a resume.",
       "type": "object",
       "additionalProperties": false,
       "required": ["run_id", "session_id", "path"],

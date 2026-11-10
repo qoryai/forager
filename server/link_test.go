@@ -495,6 +495,34 @@ func TestARunAnswerHasTheCredentialHostsItCarries(t *testing.T) {
 	}
 }
 
+// TestARunAnswerHasTheResumeItCarries pins that the session reads resume into Resume,
+// the paused run's id, the runtime's session id and the transcript's path; that an
+// answer without it has none; and that a resume the schema refuses, here with no
+// session_id, fails the run answer.
+func TestARunAnswerHasTheResumeItCarries(t *testing.T) {
+	resume := `"resume":{"run_id":"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e","session_id":"s-1","path":"~/.claude/projects/-workspace/s-1.jsonl"},"reserved":`
+	for name, c := range map[string]struct {
+		body string
+		want *server.LinkResume
+		fail bool
+	}{
+		"with resume":        {strings.Replace(runAnswer, `"reserved":`, resume, 1), &server.LinkResume{RunID: "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e", SessionID: "s-1", Path: "~/.claude/projects/-workspace/s-1.jsonl"}, false},
+		"without resume":     {runAnswer, nil, false},
+		"with no session_id": {strings.Replace(runAnswer, `"reserved":`, `"resume":{"run_id":"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e","path":"~/a"},"reserved":`, 1), nil, true},
+	} {
+		g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, 200, c.body) }))
+		k, _ := newLink(t, g)
+		a, err := k.OpenRun(context.Background(), "http://localhost/v1/run-configuration", server.LinkRunRequest{RunID: runID})
+		if (err != nil) != c.fail {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if err == nil && !reflect.DeepEqual(a.Resume, c.want) {
+			t.Errorf("%s: resume %+v, want %+v", name, a.Resume, c.want)
+		}
+	}
+}
+
 // TestTheRunAnswerNeverShowsItsProxySecret pins that a run answer prints and logs
 // without its proxy secret and its stack proxy secret under every verb, and that a link
 // prints by the place it speaks to.
