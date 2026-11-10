@@ -568,7 +568,9 @@ wall, a value a caller passes for the name is `variable_reserved`.
 
 A file's `200` is chunked. Treat its bytes as unverified until the read ends cleanly: a
 file that fails its signed digest ends in a read error. The contract's README, §The run
-API, lists the five requests, each status and the limits.
+API, lists the five requests, each status and the limits. Its sixth request, `GET
+/resume/transcript`, gets `404` `not_found` through `QORY_RUN_API` and from behind a
+wall, and nothing is sent.
 
 Plan the gateway's memory for the route. A budget of 512 MiB per gateway counts the
 bytes of `POST /artifacts` bodies and of answers other than files, past the first 1 MiB of

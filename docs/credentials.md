@@ -220,6 +220,40 @@ A credential without `format` whose `placeholders` list a model key's variable, 
 `ANTHROPIC_API_KEY`, stops the run with `run_configuration_invalid`. Rewrite it as a
 model key.
 
+### Several keys of one provider
+
+A key group lets a run go on when the model provider refuses a key at its limit. When
+the start key comes from the control plane, its key group is the start key and every
+API credential of the run configuration with the same `format`, `auth` and `endpoint`,
+in the order of `credentials`. A key of `forager.yaml` is never in a key group.
+
+1. Set `pause_for_s` on every key of the group: the cooldown after a refusal with no
+   reset. Without it the run stops with `run_configuration_invalid`, `set pause_for_s
+   on the model key "model-2": every key of the key group needs a cooldown, and Forager
+   has no default`.
+2. Optionally set `schedule_resets_at`, the time a subscription's weekly limit resets,
+   for a refusal with no reset.
+
+The keys share the start key's placeholder, and the proxy sets one of them, the active
+key. When the provider answers `429` to the active key, the proxy puts the key in
+cooldown until the reset in the answer's headers, makes the next key by the order that
+is not in cooldown the active key, and sends the request again with it. The session
+sees only the answer to that second request. The proxy keeps a copy of each request
+body up to 8 MiB for this; a larger body goes once.
+
+When no key is left out of cooldown, the session gets the `429`, and the proxy sends no
+more requests with the placeholder until the session's join ends: each gets a `429` from
+the gateway, `qory: start the run again once a model key's cooldown ends`. The
+gateway's answer to the session's next batch has `stop`, `model_key_limit`, so the
+session stops the runtime and the run pauses. The next join gets the active key again.
+
+The gateway reports each key's limit windows to the control plane, at most once a
+second, and takes the cooldowns other runs found from the answer, so no run sends a
+request with a key at its limit. The contract's
+[§The server, The model keys](../contracts/forager/v1/README.md#the-server) lists the
+report and its answers. The gateway writes one log line for each limit answer, with the
+status, the names of the limit headers and the error's type, and no value.
+
 ## From Qory Apiary
 
 A run configuration may list `credentials`, with no value; the control plane stores the

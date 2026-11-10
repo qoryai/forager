@@ -1022,6 +1022,18 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- Several model keys of one provider per run, a key group (docs/credentials.md, Several
+  keys of one provider). On a provider's `429` the proxy puts the active key in
+  cooldown, sends the request again with the next key, and passes the refusal only
+  when no key is left; the gateway's answer to the session's next batch then has
+  `stop`, `model_key_limit`. The gateway reports each key's limit windows to the
+  control plane with a signed `POST <run.url>/<run_id>/model-keys`, and skips a key the
+  answer has in cooldown. A control plane without the route gets one report: the run's
+  record has one line, `Upgrade the control plane to share model key cooldowns between
+  runs`, and cooldowns stay within the run.
+- The link takes a session's `dev.qory.run.exited` `cancelled` with `model_key_limit`
+  after a last `dev.qory.session.exited` with that reason.
+- `server.Client.PostModelKeys`, the signed model keys report and its answer.
 - The gateway's route to the run API, on a run's proxy, for a run with a control plane:
   a plain `http://` request to `run-api.qory.invalid` reaches Qory Apiary, signed with
   the gateway's access key, so no key enters the run. Only five requests pass, and each

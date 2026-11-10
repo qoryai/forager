@@ -219,7 +219,12 @@ contract's §The events, How a run ends) with no session that has no wall with
 `read_needs_wall`, a read run whose setup is set to run inside the agent's container
 with `read_needs_setup_outside`, a read run whose image runs nested Docker with
 `read_needs_no_nested_docker`, and a read run whose setup container could not be removed
-with `read_needs_setup_removed`, each `failed` with exit code `-1`.
+with `read_needs_setup_removed`, each `failed` with exit code `-1`. A run whose last
+session ended `cancelled` with `model_key_limit`, after the gateway's answer to a batch
+had `stop` because no model key of the run's key group was left out of cooldown, closes
+`cancelled` with `model_key_limit` after its host work; the gateway refuses that reason
+in a run with no join, after a last session that ended another way, and with another
+state.
 The gateway writes the others: `session_lost`, `failed`, the session was silent;
 `batch_refused`, `failed`, the gateway refused a batch from the run's session
 (see the contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
