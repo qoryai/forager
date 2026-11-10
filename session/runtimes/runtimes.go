@@ -234,6 +234,24 @@ type Record = descriptor.Record
 // event's, and its data.
 type Event = descriptor.Event
 
+// Resumes is implemented by a runtime whose descriptor has resume: where the runtime
+// writes the transcript of its session, and how the session starts it again from the
+// transcript. It is optional and checked by type assertion, so [Runtime] keeps its
+// methods: the session sends no transcript of a runtime without it, and starts it
+// without a resume.
+type Resumes interface {
+	// Resume is the runtime's resume, a copy, and true; the zero Resume and false when
+	// the runtime has none.
+	Resume() (Resume, bool)
+}
+
+// Resume is a descriptor's resume: PathFrom, the member of a hook's input that contains
+// the transcript's path; Path, the path while no hook input contains it, a template
+// with {session_id} and {cwd_slug}; Prefix, the directory the transcript must lie
+// under; and Args, the arguments the session adds when it resumes, with {session_id}.
+// Each path starts with ~/, the runtime's home.
+type Resume = descriptor.Resume
+
 // Parents is implemented by a runtime that reports which tool call started a subagent.
 // It is optional and checked by type assertion, so [Runtime] keeps its methods: the
 // session sets no parent_agent_id for a runtime without it.
@@ -451,6 +469,17 @@ func (r *described) Secrets() Declarations {
 		out.OneOf = append(out.OneOf, g)
 	}
 	return out
+}
+
+// Resume is the descriptor's resume, a copy, and true; the zero Resume and false when
+// it has none.
+func (r *described) Resume() (Resume, bool) {
+	if r.d.Resume == nil {
+		return Resume{}, false
+	}
+	out := *r.d.Resume
+	out.Args = slices.Clone(out.Args)
+	return out, true
 }
 
 // Model is the descriptor's model section, a copy, and true; the zero ModelPlaces and

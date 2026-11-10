@@ -725,3 +725,46 @@ func TestRuntimesJSONShape(t *testing.T) {
 		}
 	}
 }
+
+// TestResumeDecodes pins that a descriptor's resume decodes with its four members, that
+// the built-in Claude Code descriptor has the contract's, and what Parse refuses beyond
+// the schema: a path that does not start with the prefix, and a .. segment. runtimes.json
+// does not list resume (TestRuntimesJSONShape).
+func TestResumeDecodes(t *testing.T) {
+	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
+	resume := func(path, prefix string) string {
+		return head + "resume:\n  path_from: transcript_path\n  path: " + path + "\n  prefix: " + prefix + "\n  args: [--resume, '{session_id}']\n"
+	}
+	d, err := descriptor.Parse("amp.yaml", []byte(resume("~/.amp/s/{cwd_slug}/{session_id}.jsonl", "~/.amp/s/")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &descriptor.Resume{PathFrom: "transcript_path", Path: "~/.amp/s/{cwd_slug}/{session_id}.jsonl", Prefix: "~/.amp/s/", Args: []string{"--resume", "{session_id}"}}
+	if !reflect.DeepEqual(d.Resume, want) {
+		t.Errorf("Resume = %+v; want %+v", d.Resume, want)
+	}
+	if d, err := descriptor.Parse("amp.yaml", []byte(head)); err != nil || d.Resume != nil {
+		t.Errorf("a descriptor with no resume: %+v, %v; want nil", d.Resume, err)
+	}
+	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude, err := descriptor.Parse("descriptor.yaml", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (&descriptor.Resume{PathFrom: "transcript_path", Path: "~/.claude/projects/{cwd_slug}/{session_id}.jsonl", Prefix: "~/.claude/projects/", Args: []string{"--resume", "{session_id}"}}); !reflect.DeepEqual(claude.Resume, want) {
+		t.Errorf("the claude descriptor's resume = %+v; want %+v", claude.Resume, want)
+	}
+	for name, doc := range map[string]string{
+		"a path outside the prefix": resume("~/.amp/other/{session_id}.jsonl", "~/.amp/s/"),
+		"a .. in the path":          resume("~/.amp/s/../{session_id}.jsonl", "~/.amp/s/"),
+		"a .. in the prefix":        resume("~/.amp/../s/{session_id}.jsonl", "~/.amp/../s/"),
+	} {
+		if _, err := descriptor.Parse("amp.yaml", []byte(doc)); err == nil || !strings.HasPrefix(err.Error(), "amp.yaml: resume: ") {
+			t.Errorf("%s: %v; want an error that starts with the fix", name, err)
+		}
+	}
+}
