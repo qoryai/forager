@@ -990,8 +990,8 @@ limit refusal with no reset, for a key without `schedule_resets_at`. A key witho
 subscription, a key whose `auth` has `oauth`. A `pause_for_s` below 1 fails the schema,
 and the gateway checks it on each key of the group too: a key of the group with one
 below 1 is `run_configuration_invalid` with the key's name, `set pause_for_s on the
-model key "model-2" to 1 to 604800, or remove it for the default cooldown: pause_for_s
-is 0`.
+model key "model-2" to a value from 1 to 604800, or remove it for the default cooldown:
+pause_for_s is 0`.
 
 The server sends the group's keys in the order that breaks ties: the key of the model
 choice first, with `chosen: true`, when it is out of cooldown at the claim; then
@@ -1028,9 +1028,9 @@ nothing of the refusal to the session, and:
    with no reset, the cooldown ends at the key's `schedule_resets_at`, or at that time
    plus 7 days once it has passed; for a key without `schedule_resets_at`, it ends
    `pause_for_s` seconds after the refusal, or, for a key without `pause_for_s`, 60
-   seconds after it for an API key and 3600 seconds for a subscription. The gateway takes a reset, or a
-   `retry-after`, of at most 31 days after the answer arrived: a later one counts as 31
-   days after the answer.
+   seconds after it for an API key and 3600 seconds for a subscription. The gateway
+   takes a reset, or a `retry-after`, of at most 31 days after the answer arrived: a
+   later one counts as 31 days after the answer.
 2. Makes another key of the group that is not in cooldown the active key: the key with
    `chosen`; else the first key, by the order, with no known reset or a reset that has
    passed; else the key with the closest reset, keys whose resets fall in the same

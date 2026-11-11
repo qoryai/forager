@@ -54,7 +54,7 @@ func (r *Run) checkKeyGroup(now time.Time) error {
 	for _, c := range group {
 		if c.PauseForS != nil && *c.PauseForS < 1 {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"set pause_for_s on the model key %s to 1 to 604800, or remove it for the default cooldown: pause_for_s is %d", accesskey.ShownName(c.Name, true), *c.PauseForS)
+				"set pause_for_s on the model key %s to a value from 1 to 604800, or remove it for the default cooldown: pause_for_s is %d", accesskey.ShownName(c.Name, true), *c.PauseForS)
 		}
 		// The schema has refused a cooldown_until that is no RFC 3339 time.
 		if until, err := time.Parse(time.RFC3339, c.CooldownUntil); err == nil && until.After(now) && c.Name == startName(group, r.storedModel) {

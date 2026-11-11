@@ -152,7 +152,7 @@ func TestAPauseForBelowOneIsRefused(t *testing.T) {
 	_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Secrets: s.fetch})
 	code, names := refusalOf(err)
 	if code != refusal.RunConfigurationInvalid || !slices.Equal(names, []string{"model"}) ||
-		!strings.HasPrefix(err.Error(), `set pause_for_s on the model key "model" to 1 to 604800, or remove it for the default cooldown: pause_for_s is 0`) {
+		!strings.HasPrefix(err.Error(), `set pause_for_s on the model key "model" to a value from 1 to 604800, or remove it for the default cooldown: pause_for_s is 0`) {
 		t.Errorf("Open: %v; want model refused", err)
 	}
 	if len(s.calls) != 0 {
