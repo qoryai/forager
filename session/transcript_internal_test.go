@@ -265,7 +265,7 @@ func TestATranscriptOverTheLimitWithNoWallStops(t *testing.T) {
 
 // TestARestoredTranscriptIsReadWithNoWall pins the session with no wall that restored a
 // paused run's transcript: it reads the restored file from offset 0, whatever the
-// working directory's slug, and a hook input that names a file of another session id
+// working directory's slug, and a hook input that has the path of a file of another session id
 // writes one line.
 func TestARestoredTranscriptIsReadWithNoWall(t *testing.T) {
 	tr, s, home := newTestTranscript(t)

@@ -49,7 +49,7 @@ type modelKeysBody struct {
 // ModelKeysAnswerError is an answer to a model keys report other than a signed 200: its
 // status and whether its signature verified under the pin.
 type ModelKeysAnswerError struct {
-	// What is the request, Status the answer's, and Signed says it verified.
+	// What is the request, Status the answer's, and Signed is true when the signature verified.
 	What   string
 	Status int
 	Signed bool
@@ -68,7 +68,7 @@ func (e *ModelKeysAnswerError) Error() string {
 // keys: for each key of the group, the newest state per window from every gateway. A
 // body over [MaxModelKeysReport] is refused before anything is sent. A transport failure
 // is an error with no answer; any answer other than a signed 200 is a
-// [*ModelKeysAnswerError]; a signed 200 the schema refuses is a [*DocumentError].
+// [*ModelKeysAnswerError]; a signed 200 that fails the schema is a [*DocumentError].
 func (c *Client) PostModelKeys(ctx context.Context, runURL, runID string, rep ModelKeysReport) ([]ModelKeyState, error) {
 	if !runIDShape.MatchString(runID) {
 		return nil, errors.New("the model keys report: the run id is not a UUID in the canonical lower-case form")

@@ -727,7 +727,7 @@ func TestRuntimesJSONShape(t *testing.T) {
 }
 
 // TestResumeDecodes pins that a descriptor's resume decodes with its four members, that
-// the built-in Claude Code descriptor has the contract's, and what Parse refuses beyond
+// the built-in Claude Code descriptor has the contract's, and what Parse returns an error for beyond
 // the schema: a path that does not start with the prefix, and a .. segment. runtimes.json
 // does not list resume (TestRuntimesJSONShape).
 func TestResumeDecodes(t *testing.T) {

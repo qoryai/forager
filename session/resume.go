@@ -40,7 +40,7 @@ const resumeWait = 10 * time.Minute
 // the session's directory, and starts launch through the script, which writes the
 // bytes at resume.path under the runtime's home and adds the descriptor's resume.args,
 // {session_id} replaced by resume.session_id. inside is a path on this machine as the
-// runtime sees it. A failure of the script's write starts the runtime without the
+// runtime reads it. A failure of the script's write starts the runtime without the
 // arguments, after the same line from the script.
 //
 // Behind a wall, root is the session's transcript directory, which the wall binds at
@@ -142,7 +142,7 @@ func resumeFailed(runID, fix, cause string) string {
 }
 
 // resumeScript is the text of [ResumeScript]: it copies transcript, a path as the
-// runtime sees it, to rel under $HOME, the runtime's home, then starts its arguments, the
+// runtime reads it, to rel under $HOME, the runtime's home, then starts its arguments, the
 // runtime's command and arguments, with args added; when the copy fails, it writes the
 // line of a failed resume on stderr and starts them without args.
 func resumeScript(runID, transcript, rel string, args []string) string {

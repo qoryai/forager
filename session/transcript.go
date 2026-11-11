@@ -69,8 +69,8 @@ type transcript struct {
 	rel       string
 	fromHook  bool
 	// restored is true for the session that restored a paused run's transcript: rel is
-	// the restored file's, whatever a hook input or the working directory gives, and
-	// warned is true once a hook input named another file.
+	// the restored file's, whatever a hook input or the working directory shows, and
+	// warned is true once a hook input had the path of another file.
 	restored bool
 	warned   bool
 	// read is the bytes of the file read so far; partial is the part of them after the
@@ -85,7 +85,7 @@ type transcript struct {
 }
 
 // maxTranscriptLine is the longest line of a transcript the session sends, 8 MiB: the
-// most it holds of a line whose newline the runtime has not written yet.
+// most it keeps in memory of a line whose newline the runtime has not written yet.
 const maxTranscriptLine = 8 << 20
 
 // newTranscript returns the transcript of a runtime with resume rs whose home on this
@@ -124,8 +124,8 @@ func (t *transcript) restore(id, rel string) {
 // sameRestored checks p, the path of resume.PathFrom of a hook input, against the
 // restored file: a file of another name writes one line, once, and the session goes on
 // reading the restored one. Only the name, <session id>.jsonl, is compared: Claude Code
-// 2.1.316 resumed in another working directory gives the path under that directory's
-// slug and appends to the restored file all the same. The caller holds mu.
+// 2.1.316 resumed in another working directory sends the path under that directory's
+// slug and appends to the restored file all the same. Call it with mu locked.
 func (t *transcript) sameRestored(p string) {
 	if path.Base(p) == path.Base(t.rel) || t.warned || t.rel == "" {
 		return
@@ -136,7 +136,7 @@ func (t *transcript) sameRestored(p string) {
 
 // walledID takes id as the session id of a walled runtime, once: a UUID in lower case
 // sets the path, <slug>/<id>.jsonl below the transcript directory; another id writes
-// one line, and nothing is sent. The caller holds mu.
+// one line, and nothing is sent. Call it with mu locked.
 func (t *transcript) walledID(id string) {
 	if t.sessionID != "" || t.ended {
 		return
@@ -350,7 +350,7 @@ var errLinked = errors.New("the transcript's path is a symbolic link or no regul
 
 // readUnlinked reads the file at rel under home from offset on, and returns its bytes
 // and the file's size. It opens the file through an os.Root of home, so no name leads
-// out of it, and refuses a path any of whose names is a symbolic link, or that is no
+// out of it, and fails on a path any of whose names is a symbolic link, or that is no
 // regular file. A file over [maxTranscript] bytes is [errTooLarge], as behind a wall.
 func readUnlinked(home, rel string, offset int64) ([]byte, int64, error) {
 	root, err := os.OpenRoot(home)

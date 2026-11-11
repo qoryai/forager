@@ -16,7 +16,7 @@ import (
 
 // The windows of an answer's headers, model-keys-report.schema.json's window.
 const (
-	// WindowKey is the window of a limit refusal that names no window.
+	// WindowKey is the window of a limit refusal that has no window.
 	WindowKey = "key"
 	// WindowSpendLimit is the window of an API key's spend cap: a refusal whose
 	// error_code is [SpendLimitCode].

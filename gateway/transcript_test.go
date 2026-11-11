@@ -18,7 +18,7 @@ import (
 // resumeDoc is a run configuration that continues a paused run.
 const resumeDoc = `{"version":1,"resume":{"run_id":"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d","session_id":"3f1b2c4d-0000-4000-8000-000000000001","path":"~/.claude/projects/-workspace/3f1b2c4d-0000-4000-8000-000000000001.jsonl"}}`
 
-// transcriptControl is a control that serves doc and answers GET
+// transcriptControl is a control that serves doc and GET
 // <run.url>/<run_id>/resume/transcript with answer, and counts those requests.
 func transcriptControl(t *testing.T, c *control, doc string, answer *func(w http.ResponseWriter, r *http.Request), count *int) {
 	t.Helper()
@@ -36,7 +36,7 @@ func transcriptControl(t *testing.T, c *control, doc string, answer *func(w http
 	c.intercept.Store(&f)
 }
 
-// transcriptFile answers the transcript b, its digest signed as digest, by the
+// transcriptFile serves the transcript b, its digest signed as digest, by the
 // control's signer.
 func transcriptFile(c *control, b []byte, digest string) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +50,7 @@ func transcriptFile(c *control, b []byte, digest string) func(w http.ResponseWri
 	}
 }
 
-// transcriptRefusal answers status with a body, signed unless unsigned.
+// transcriptRefusal serves status with a body, signed unless unsigned.
 func transcriptRefusal(c *control, status int, unsigned bool) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := []byte(`{"error":"not_found"}`)

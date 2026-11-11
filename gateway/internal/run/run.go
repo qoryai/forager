@@ -1229,7 +1229,7 @@ func sameSelection(a, b []policy.Selected) bool {
 // ProxyUses are held credentials as the proxy sets them, every model key among them
 // with its placeholder's value: the keys of the start key's key group,
 // [credential.Held.Group], share the start key's. The proxy sets one model key at a
-// time, the one the gateway names with [proxy.Proxy.SetModelKey]: the start key,
+// time, the one the gateway sets with [proxy.Proxy.SetModelKey]: the start key,
 // [credential.Held.Start], or the key a session joined with; for a key of the group, the
 // group's active key.
 func ProxyUses(held *credential.Held) []proxy.Credential {

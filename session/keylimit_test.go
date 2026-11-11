@@ -134,7 +134,7 @@ func TestAStopWithNoRuntimeRunningChangesNothing(t *testing.T) {
 }
 
 // TestTheCloseTakesModelKeyLimitOnlyAfterSuchASession pins the outcomes with
-// model_key_limit the close refuses: one that is not cancelled, one of a run whose last
+// model_key_limit the close returns an error for: one that is not cancelled, one of a run whose last
 // session ended otherwise, and one of a run with no join.
 func TestTheCloseTakesModelKeyLimitOnlyAfterSuchASession(t *testing.T) {
 	sp, _, _ := remoteSpec(t, 0)

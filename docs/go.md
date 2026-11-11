@@ -1432,7 +1432,7 @@ image runs nested Docker, which is when `Docker` is true in the image `(*session
 `Close` refuses each of the ten codes with another state or exit
 code, or after a join, as the gateway does. Close a run whose last session ended with
 `model_key_limit` with `cancelled`, `model_key_limit` and that session's `ExitCode`: a
-control plane reads it as a pause of the run. `Close` refuses `model_key_limit` with
+control plane reads it as a pause of the run. `Close` returns an error for `model_key_limit` with
 another state, in a run with no join, and after a last session that ended otherwise.
 `Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
 `session.Closed` is what the run came to:

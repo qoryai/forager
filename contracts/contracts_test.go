@@ -240,7 +240,7 @@ func TestLinkFixturesValidate(t *testing.T) {
 }
 
 // TestLinkBatchRefusedCodesAreTheSessions pins the codes a link batch's
-// dev.qory.run.refused may carry to the codes the session decides itself: every code of
+// dev.qory.run.refused may carry to the codes the session sets itself: every code of
 // link-batch.schema.json's enum is one refusal.Decides reports, and every code of
 // run.refused.schema.json that refusal.Decides reports is in it.
 func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
@@ -365,7 +365,7 @@ const beyondLinkSchema = "-beyond-schema-"
 // whose stop has no reason or another one, a session.exited or a session's run.exited
 // failed with model_key_limit, a session.transcript numbered 0, with a negative offset,
 // without its session id or over 32 KiB, and a descriptor whose resume has no args, a
-// prefix outside the home or a path without {session_id}. A fixture whose name holds
+// prefix outside the home or a path without {session_id}. A fixture whose name contains
 // -beyond-schema- breaks a rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
 // the schema, so run-configuration-variable-value-not-string is held to the run
 // configuration and not to a schema named run.
@@ -724,7 +724,7 @@ func TestOneStepIsOpenAtATime(t *testing.T) {
 
 // TestSessionExitedReasonsAreTheSessions pins the reasons of a dev.qory.session.exited in a
 // link batch to timeout, interrupted, model_key_limit and the codes a link batch's
-// dev.qory.run.refused may carry, the codes the session decides itself: a refused join has its refusal's code as
+// dev.qory.run.refused may have, the codes the session sets itself: a refused join has its refusal's code as
 // reason. The event's reason is the open code of dev.qory.run.exited, since the gateway
 // writes a session's dev.qory.session.exited with the reason of the run's end.
 func TestSessionExitedReasonsAreTheSessions(t *testing.T) {

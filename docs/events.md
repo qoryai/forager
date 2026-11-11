@@ -103,7 +103,7 @@ before the runtime starts. A run that has nowhere to run setup commands has no `
 of the run at its gateway, before any session. Each session then has a
 `dev.qory.session.started`, with its number from 1 in `session`, the runtime, the
 command and the image, and a `dev.qory.session.exited`, with how the session ended: the
-runtime's exit decides `succeeded` or `failed`, and `cancelled` comes with `timeout`,
+runtime's exit sets `succeeded` or `failed`, and `cancelled` comes with `timeout`,
 `interrupted` or `model_key_limit`. A join that is refused has only a `dev.qory.session.exited`, `failed`
 with exit code -1 and the refusal's code, such as `mount_mode_conflict`, as its reason.
 A session whose wall fails to start has its `dev.qory.session.started`, then its
@@ -139,7 +139,7 @@ the session's transcript directory, `transcripts/<n>/` in the run directory, at
 `<slug>/<session id>.jsonl`, under a session id that is a UUID in lower case, and only a
 regular file with one link and at most 64 MiB, with no symbolic link on its path. For
 anything else it sends nothing and writes one line on `stderr` that starts with the fix
-and says why. When the
+and then shows the cause. When the
 run answer has `resume`, the run's first session whose runtime has `resume` reads the
 paused run's transcript over the gateway's link, `GET <run.url>/<run_id>/transcript`. In
 a run with no wall it writes it in the session's directory as `resume.jsonl`, and starts
@@ -148,7 +148,7 @@ descriptor's arguments, such as `--resume <session id>`. Behind a wall it writes
 the transcript directory before the agent's container starts, and adds the arguments
 itself.
 When the read or the copy fails, the runtime starts without a resume, after one line
-on `stderr` that starts with the fix and says why, a `404` from the gateway among the
+on `stderr` that starts with the fix and then shows the cause, a `404` from the gateway among the
 causes. Behind a wall the same happens when the wall cannot bind the transcript
 directory where the agent's user writes it. See the
 contract's §The events, A session's transcript.
@@ -263,7 +263,7 @@ with `read_needs_setup_outside`, a read run whose image runs nested Docker with
 with `read_needs_setup_removed`, each `failed` with exit code `-1`. A run whose last
 session ended `cancelled` with `model_key_limit`, after the gateway's answer to a batch
 had `stop` because no model key of the run's key group was left out of cooldown, closes
-`cancelled` with `model_key_limit` after its host work; the gateway refuses that reason
+`cancelled` with `model_key_limit` after its host work; the gateway returns an error for that reason
 in a run with no join, after a last session that ended another way, and with another
 state.
 The gateway writes the others: `session_lost`, `failed`, the session was silent;

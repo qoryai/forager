@@ -14,7 +14,7 @@ import (
 	"github.com/qoryai/forager/session/runtimes"
 )
 
-// transcriptsDir is the directory in the run directory that holds the transcript
+// transcriptsDir is the directory in the run directory that contains the transcript
 // directory of each walled session whose runtime has resume, transcripts/<n>/, which
 // the wall binds writable at the runtime's resume.prefix inside.
 const transcriptsDir = "transcripts"
@@ -57,7 +57,7 @@ func makeTranscriptDir(rt runtimes.Runtime, runDir string, n int, workspace stri
 }
 
 // checkTranscriptDir checks the transcript directory dir, resolved: it lies inside the
-// run directory runDir, so in no other run's, and it is not, holds no and lies inside
+// run directory runDir, so in no other run's, and it is not, contains no and lies inside
 // no workspace or bind of binds, the run directory's entry among them left out.
 func checkTranscriptDir(dir, runDir, workspace string, binds []bindSource) error {
 	at, err := split(dir, 0)

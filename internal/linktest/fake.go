@@ -79,7 +79,7 @@ type Fake struct {
 	onReload  func(runID string) Reply
 	onBatch   func([]map[string]any) Reply
 	onJoin    func(Join) Reply
-	// onTranscript answers GET <run.url>/<run_id>/transcript; transcripts are the run
+	// onTranscript serves GET <run.url>/<run_id>/transcript; transcripts are the run
 	// ids of those requests.
 	onTranscript func(runID string) Reply
 	transcripts  []string

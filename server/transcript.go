@@ -52,7 +52,7 @@ type boundedFile struct {
 
 func (b *boundedFile) Read(p []byte) (int, error) {
 	if b.left <= 0 {
-		// One byte more tells a file of exactly the bound from a longer one.
+		// One byte more separates a file of exactly the bound from a longer one.
 		var one [1]byte
 		n, err := b.f.Read(one[:])
 		if n > 0 {

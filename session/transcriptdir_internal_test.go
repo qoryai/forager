@@ -69,7 +69,7 @@ func TestTheTranscriptDirectoryComesFromResume(t *testing.T) {
 
 // TestATranscriptDirectoryInABindIsRefused pins guard 1: a transcript directory outside
 // the run directory, or that lies in the workspace, in a place the enclosure binds or
-// holds one, fails the check; one apart from all of them passes.
+// contains one, fails the check; one apart from all of them passes.
 func TestATranscriptDirectoryInABindIsRefused(t *testing.T) {
 	base := t.TempDir()
 	runDir := filepath.Join(base, "runs", "r1")

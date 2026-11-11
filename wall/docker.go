@@ -1419,7 +1419,7 @@ func (d *Docker) Binds(Launch) ([]Bind, error) {
 // Binds lists the adapter's own binds for the launch: the helper, read-only, the hook
 // socket's directory, writable, when the launch has a socket, the session's transcript
 // directory, writable, when the launch has one, and, read-only, the private directory
-// that holds the run's environment files and, with a CA, the bundle the enclosure
+// that contains the run's environment files and, with a CA, the bundle the enclosure
 // binds, which it makes now.
 func (e *dockerEnclosure) Binds(l Launch) ([]Bind, error) {
 	out := []Bind{{Path: e.d.Helper, ReadOnly: true, Helper: true}}
@@ -1563,8 +1563,8 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 // launch with none: the directory, writable, at Under below the home of the agent's
 // user inside, [dockerEnclosure.transcriptPlace]. A directory that is not absolute and
 // clean, an Under that is not relative and clean or has a .. name, a directory that is,
-// holds or lies inside one of the launch's mounts or the hook socket's directory, a
-// place inside that is, holds or lies inside another mount's place inside or /qory, and
+// contains or lies inside one of the launch's mounts or the hook socket's directory, a
+// place inside that is, contains or lies inside another mount's place inside or /qory, and
 // a place the agent's container cannot bind for the agent ([Unbound]) are refused: no
 // mount of the launch's shows the directory, and the bind hides no part of another one.
 // It also returns the place, with the directories between the home and the bind's place
@@ -1735,8 +1735,8 @@ func unreachable(h *tar.Header, q string, last bool, uid, gid int) *Unbound {
 }
 
 // agentIDs are the uid and gid the agent runs as inside, as the engine and [Nest] take
-// them from the wall's user: its uid, and the group it gives, by number or by name in
-// the image's /etc/group, else the group the image's /etc/passwd gives the uid, else 0.
+// them from the wall's user: its uid, and its group, by number or by name in
+// the image's /etc/group, else the uid's group in the image's /etc/passwd, else 0.
 // A wall's user that is a name, or a uid other than the session's, gets an Unbound: the
 // session's transcript directory is mode 0700 and owned by the session's uid, so that
 // agent could not write it.
@@ -1785,7 +1785,7 @@ func idField(passwd []byte, name string, byName bool, field int) int {
 
 // imageHeader is the first tar header docker cp writes of the path p of the image, read
 // out of [dockerEnclosure.filesContainer] under [copyWait] without --follow-link, so a
-// symbolic link at p gives a header of type tar.TypeSymlink. It is nil when the image
+// symbolic link at p comes out as a header of type tar.TypeSymlink. It is nil when the image
 // has nothing at p. The agent's container cannot be read instead: for a docker cp the
 // engine makes the places of its binds, the transcript bind's parents among them.
 func (e *dockerEnclosure) imageHeader(ctx context.Context, p string) (*tar.Header, error) {
@@ -1803,7 +1803,7 @@ func (e *dockerEnclosure) imageHeader(ctx context.Context, p string) (*tar.Heade
 			return h, nil
 		}
 	}
-	// The path is missing, or the engine failed: the command's output tells which.
+	// The path is missing, or the engine failed: the command's output shows which.
 	out, err := e.sys.run(ctx, argv, e.env)
 	switch {
 	case err == nil:
@@ -1870,7 +1870,7 @@ func (e *dockerEnclosure) filesContainer(ctx context.Context) (string, error) {
 
 // home is the home of the agent's user inside, the HOME the agent's process has: the
 // last HOME of env, the launch's environment, when it is not empty; else HOME of the
-// image's environment; else the home the image's /etc/passwd gives the user the
+// image's environment; else the home in the image's /etc/passwd of the user the
 // container starts as; else /. That user is the wall's user, or root with nested Docker,
 // where the engine sets HOME for root and the helper keeps it when it starts the agent as
 // the wall's user. A home that is not absolute is an error.
@@ -1922,7 +1922,7 @@ func lastHome(env []string) string {
 	return h
 }
 
-// passwdHome is the home /etc/passwd gives the user, a name or a uid of digits, and
+// passwdHome is the home of the user in /etc/passwd, a name or a uid of digits, and
 // whether it lists the user.
 func passwdHome(passwd []byte, user string) (string, bool) {
 	numeric := uidShape.MatchString(user)

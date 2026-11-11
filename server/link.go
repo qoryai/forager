@@ -1042,8 +1042,8 @@ const MaxTranscript = 64 << 20
 // <runURL>/<runID>/transcript, and returns its bytes, the file as Qory Apiary stored
 // it: the gateway reads it from Qory Apiary's run API with its signed client. It reads
 // at most most bytes: a longer transcript is an error. A 410 is the end of the run,
-// [Ended]; another answer than 200 is an [*accesskey.Refusal] for a code the link
-// knows, else a [*StatusError], a 404 for a run that continues no paused run among
+// [Ended]; another answer than 200 is an [*accesskey.Refusal] for a code in the link's
+// list, else a [*StatusError], a 404 for a run that continues no paused run among
 // them.
 func (k *Link) Transcript(ctx context.Context, runURL, runID string, most int) ([]byte, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
@@ -1129,7 +1129,7 @@ func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body [
 
 // stopReason is the reason of stop in a batch's answer, link-batch-answer.schema.json:
 // model_key_limit, or empty for a body that is empty, is no JSON object, has no stop
-// or has a reason Forager does not know, after which the session goes on.
+// or has a reason outside Forager's list, after which the session goes on.
 func stopReason(body []byte) string {
 	var doc struct {
 		Stop *struct {

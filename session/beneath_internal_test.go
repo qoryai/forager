@@ -206,7 +206,7 @@ func symlink(t *testing.T, to, at string) {
 }
 
 // TestAWalledTranscriptNeverWrittenWritesALine pins a walled session whose runtime
-// wrote no transcript by its end: one line on stderr, so the operator sees that no
+// wrote no transcript by its end: one line on stderr, so the operator can read that no
 // transcript was sent.
 func TestAWalledTranscriptNeverWrittenWritesALine(t *testing.T) {
 	tr, s, _ := newWalledTestTranscript(t)
@@ -223,7 +223,7 @@ func TestAWalledTranscriptNeverWrittenWritesALine(t *testing.T) {
 // restored a paused run's transcript: it reads the restored file, under the paused run's
 // slug, from offset 0, not the file under its working directory's slug. A hook input
 // whose transcript path has the restored file's name agrees, under any slug; one that
-// names a file of another session id writes one line, once, and the session goes on
+// is the path of a file of another session id writes one line, once, and the session goes on
 // reading the restored file.
 func TestAWalledRestoredTranscriptIsReadUnderThePausedRunsSlug(t *testing.T) {
 	paused := "-paused/" + walledID + ".jsonl"

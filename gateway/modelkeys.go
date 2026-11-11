@@ -51,7 +51,7 @@ func newKeyReporter(runID, runURL string, g *modelkey.Group, send func(context.C
 	return k
 }
 
-// poke asks for a report; changes in flight join the next one.
+// poke starts a report; changes in flight join the next one.
 func (k *keyReporter) poke() {
 	select {
 	case k.wake <- struct{}{}:
@@ -130,8 +130,8 @@ func (k *keyReporter) last(ctx context.Context) {
 	k.send(ctx, k.report())
 }
 
-// retried reports whether err, a failure with no answer the table names, is one a new
-// try may get past: every one but a signed 200 the schema refuses.
+// retried reports whether err, a failure with no answer the table lists, is one a new
+// try may get past: every one but a signed 200 that fails the schema.
 func retried(err error) bool {
 	var de *server.DocumentError
 	return !errors.As(err, &de)

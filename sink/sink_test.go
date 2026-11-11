@@ -851,7 +851,7 @@ func TestFlushReturnsOnceTheBatchIsAccepted(t *testing.T) {
 // TestAStopInABatchsAnswerReachesTheCaller pins stop in the body of a 2xx on the link:
 // its reason, model_key_limit, reaches OnStop once per answer before Flush returns, the
 // batch is accepted and the deliveries go on; an empty body, one without stop, one with
-// a reason Forager does not know and one that is no JSON reach OnStop not at all.
+// a reason outside Forager's list and one that is no JSON reach OnStop not at all.
 func TestAStopInABatchsAnswerReachesTheCaller(t *testing.T) {
 	for body, want := range map[string]string{
 		`{"stop":{"reason":"model_key_limit"}}`:           "[model_key_limit]",

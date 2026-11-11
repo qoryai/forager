@@ -199,9 +199,9 @@ type Launch struct {
 // in the run directory and outside every mount, where the runtime writes the transcript
 // of its session. The enclosure binds it writable at Under below the home of the
 // agent's user inside, so the session reads the transcript, and writes a restored one,
-// on this machine. The session checks that no mount holds it or lies inside it; an
-// adapter refuses a launch where one does, by path, or where its place inside is,
-// holds or lies inside another mount's place inside or a path the adapter binds for
+// on this machine. The session checks that no mount contains it or lies inside it; an
+// adapter returns an error for a launch where one does, by path, or where its place inside is,
+// contains or lies inside another mount's place inside or a path the adapter binds for
 // itself, such as /qory for [Docker].
 type Transcript struct {
 	// Path is the directory on this machine, absolute and clean; empty binds none.

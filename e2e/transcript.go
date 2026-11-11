@@ -14,7 +14,7 @@ import (
 	"github.com/qoryai/forager/event"
 )
 
-// transcriptID is the session id the probe gives in its SessionStart hook when
+// transcriptID is the session id the probe sends in its SessionStart hook when
 // PROBE_TRANSCRIPT is set: a UUID in lower case, the shape the session reads a walled
 // transcript under.
 const transcriptID = "5d0c6a51-3b2e-4f7a-9c1d-8e6f4a2b0c37"
@@ -23,7 +23,7 @@ const transcriptID = "5d0c6a51-3b2e-4f7a-9c1d-8e6f4a2b0c37"
 const transcriptMaxBytes = 64 << 20
 
 // The files the probe plants at its transcript's path, by the value of
-// PROBE_TRANSCRIPT, and the cause each line of the session gives.
+// PROBE_TRANSCRIPT, and the cause in each line of the session.
 var transcriptPlants = []struct{ kind, name, why string }{
 	{"symlink", "a planted symbolic link", "a name on its path is a symbolic link or no directory"},
 	{"fifo", "a FIFO", "it is no regular file"},
@@ -45,15 +45,15 @@ type transcriptReport struct {
 // PROBE_TRANSCRIPT=plain: one line, which the session sends.
 const transcriptLine = "{\"probe\":1}\n"
 
-// noResumeLine is the part of each line of the session that says a continuation
-// starts the runtime without a resume; the fix comes before it.
+// noResumeLine is the part of each line of the session that reports that a
+// continuation starts the runtime without a resume; the fix comes before it.
 const noResumeLine = ". A continuation of this run starts the runtime without a resume: "
 
 // probeTranscript plants kind at the runtime's transcript path, ~/.claude/projects/
-// <slug of the working directory>/<transcriptID>.jsonl, then gives the session that
+// <slug of the working directory>/<transcriptID>.jsonl, then sends the session that
 // session id through the SessionStart hooks the settings name, as Claude Code does. A
 // symbolic link leads to hostFile, a path of the host's; a hard link is made from the
-// workspace first and, when the kernel refuses a link across binds, from a file beside
+// workspace first and, when the kernel returns an error for a link across binds, from a file beside
 // the transcript.
 func probeTranscript(kind, hostFile string, settings []string) *transcriptReport {
 	r := &transcriptReport{}
@@ -194,18 +194,18 @@ func transcriptPlanted(t *testing.T, o Options, h hosts, outside string) {
 }
 
 // skipTranscript skips a transcript case where the session gets no transcript to read:
-// with no hook socket across, and with nested Docker and no Options.HomeImage.
+// with no hook socket inside the container, and with nested Docker and no Options.HomeImage.
 func skipTranscript(t *testing.T, o Options) {
 	t.Helper()
 	if !o.Hooks {
-		t.Skip("the adapter carries no hook socket across on this machine, so the session gets no session id to read a transcript under")
+		t.Skip("the adapter does not pass the hook socket into the container on this machine, so the session gets no session id to read a transcript under")
 	}
 	if o.Docker && o.HomeImage == "" {
 		t.Skip("with nested Docker the transcript cases need Options.HomeImage, a home the agent's user can reach")
 	}
 }
 
-// noResumeLines are the lines of b, a chunk of the session's stderr, that say a
+// noResumeLines are the lines of b, a chunk of the session's stderr, that report that a
 // continuation starts the runtime without a resume.
 func noResumeLines(b []byte) []string {
 	var out []string
@@ -218,7 +218,7 @@ func noResumeLines(b []byte) []string {
 }
 
 // transcriptOf is the bytes of the dev.qory.session.transcript events of a run, joined
-// in order, and the session's stderr lines that say a continuation starts the runtime
+// in order, and the session's stderr lines that report that a continuation starts the runtime
 // without a resume.
 func transcriptOf(events []map[string]any) ([]byte, []string) {
 	var sent []byte
@@ -262,7 +262,7 @@ func transcriptSent(t *testing.T, o Options, h hosts, outside string) {
 	}
 	t.Run("with nested Docker under root's home the session binds no transcript directory", func(t *testing.T) {
 		if !o.Hooks {
-			t.Skip("the adapter carries no hook socket across on this machine")
+			t.Skip("the adapter does not pass the hook socket into the container on this machine")
 		}
 		r, err := runIn(t, o, variant{env: []string{"PROBE_TRANSCRIPT=plain"}}, false, h, outside)
 		if err != nil {

@@ -29,12 +29,12 @@ var groupValues = map[string]string{"model": "fake-group-value-0001", "model-2":
 
 // groupRun is a walled run whose run configuration has a key group of three keys, model,
 // model-2 and model-3, on the endpoint's host of a fake provider, and a control that
-// answers model keys reports.
+// serves model keys reports.
 type groupRun struct {
 	h     *harness
 	c     *control
 	runID string
-	// limited are the keys the provider refuses at their limit.
+	// limited are the keys the provider returns a limit refusal for.
 	mu      sync.Mutex
 	limited map[string]bool
 	calls   []string
@@ -208,7 +208,7 @@ func TestAKeyGroupResendsReportsAndStops(t *testing.T) {
 	for _, r := range g.reports {
 		doc, _ := contracts.Decode("r.json", r)
 		if err := schema.Validate(doc); err != nil {
-			t.Errorf("the schema refuses the report %s: %v", r, err)
+			t.Errorf("the report %s fails the schema: %v", r, err)
 		}
 	}
 	g.mu.Unlock()
@@ -304,7 +304,7 @@ func TestAReportAnsweredWithACooldownBarsTheKey(t *testing.T) {
 // TestARunExitedModelKeyLimitNeedsThePausedSession pins the close of a paused run: a
 // dev.qory.run.exited cancelled with model_key_limit is taken after a last
 // dev.qory.session.exited with that reason, and refused in a run with no join and after
-// a last session.exited with another reason; the schema refuses it failed.
+// a last session.exited with another reason; it fails the schema with failed.
 func TestARunExitedModelKeyLimitNeedsThePausedSession(t *testing.T) {
 	h := start(t, gateway.Config{})
 	pausedExit := func(runID string, n int, reason string) map[string]any {

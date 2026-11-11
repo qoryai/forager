@@ -65,7 +65,7 @@ func TestTheKeyGroupSharesTheStartKeysPlaceholder(t *testing.T) {
 }
 
 // TestAKeyOfAnotherEndpointIsOutsideTheGroup pins that an API credential with another
-// endpoint, or another auth, keeps its own placeholder and needs no pause_for_s.
+// endpoint, or another auth, keeps the placeholder of that key and needs no pause_for_s.
 func TestAKeyOfAnotherEndpointIsOutsideTheGroup(t *testing.T) {
 	doc := `{"version":1,"model_credential":"model","credentials":[` +
 		`{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"pause_for_s":60},` +

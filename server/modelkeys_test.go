@@ -15,7 +15,7 @@ import (
 // TestPostModelKeys pins the model keys report: a signed POST to
 // <run.url>/<run_id>/model-keys of a body model-keys-report.schema.json accepts, the
 // answer's keys from a signed 200, and the error of every other answer: its status and
-// whether it is signed, a DocumentError for a 200 the schema refuses, 66 entries of the
+// whether it is signed, a DocumentError for a 200 that fails the schema, 66 entries of the
 // longest names taken, and a report over 32 KiB refused before anything is sent.
 func TestPostModelKeys(t *testing.T) {
 	a := newApiary(t)
@@ -104,6 +104,6 @@ func validDocument(t *testing.T, schemaName string, body []byte) {
 		t.Fatal(err)
 	}
 	if err := schema.Validate(doc); err != nil {
-		t.Errorf("%s refuses %s: %v", schemaName, body, err)
+		t.Errorf("%s fails %s: %v", body, schemaName, err)
 	}
 }

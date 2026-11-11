@@ -1493,10 +1493,10 @@ release may change what an existing document does, and says so under Upgrading.
 - `wall.Launch.Transcript`, `wall.Transcript`: the session's transcript directory,
   `transcripts/<n>/` in the run directory, which the Docker wall binds writable at the
   runtime's `resume.prefix` below the home of the agent's user inside: `HOME` of the
-  launch, else of the image, else the home the image's `/etc/passwd` gives the
+  launch, else of the image, else the home in the image's `/etc/passwd` of the
   container's user, the wall's user or, with nested Docker, root, else `/`. The wall
-  lists it among its binds, and refuses a directory that overlaps a mount or a place
-  inside that overlaps another bind's or `/qory`. `wall.TranscriptChecker`,
+  lists it among its binds, and fails the session for a directory that overlaps a mount
+  or a place inside that overlaps another bind's or `/qory`. `wall.TranscriptChecker`,
   `wall.Unbound`: before `Wrap` the Docker wall works out whether the agent's user can
   write there. It binds nothing when the wall's user is a name or a uid other than the
   session's, when a directory from `/` down to the bind's place is a symbolic link or

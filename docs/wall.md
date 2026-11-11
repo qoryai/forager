@@ -417,7 +417,7 @@ up in its parent, so two binds of one root are allowed.
   session id that is a UUID in lower case: a regular file with one link and at most 64
   MiB, with no symbolic link on its path. For a planted link, FIFO, hard link or larger
   file it reads nothing and writes one line on `stderr`. `~` is `HOME` of the launch,
-  else of the image, else the home the image's `/etc/passwd` gives the wall's user, or
+  else of the image, else the home of the wall's user in the image's `/etc/passwd`, or
   root's with nested Docker, else `/`; a home where `~/.claude/projects` overlaps a
   mount fails the session. With nested Docker the agent runs as the wall's user under
   that home, so set `HOME` in an image whose root's home is mode `0700`, as in
@@ -434,7 +434,7 @@ up in its parent, so two binds of one root are allowed.
   is `mount_shared_with_run`.
 - **The wall's extra binds.** For `wall.Docker` they are the helper, read-only, the hook
   socket's directory, writable, the session's transcript directory, writable, and,
-  read-only, the private directory that holds the
+  read-only, the private directory that contains the
   run's environment files and, with a CA, the `ca-bundle.pem` the enclosure binds. A
   wall, and its enclosure, lists them through `wall.Binder`. The session lists the
   wall's in the registry when the run starts, the directories it makes later as their

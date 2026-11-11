@@ -346,7 +346,7 @@ type RunCredential struct {
 	ScheduleResetsAt string `json:"schedule_resets_at,omitzero"`
 	PauseForS        int    `json:"pause_for_s,omitzero"`
 	// CooldownUntil is the end of an API credential's cooldown at the claim, RFC 3339,
-	// empty for a key out of cooldown; Chosen says the model choice names the key.
+	// empty for a key out of cooldown; Chosen is true when the model choice is the key.
 	CooldownUntil string `json:"cooldown_until,omitzero"`
 	Chosen        bool   `json:"chosen,omitzero"`
 	// Apply are where and how a host credential's value is set, one item per way; nil

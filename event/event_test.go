@@ -118,8 +118,8 @@ func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
 }
 
 // TestTheReservedCodesAreTheContracts pins event.Reserved to the reserved codes the
-// schema of run.exited names in its reason's description, and those link-batch.schema.json
-// refuses beside timeout, interrupted, no_session and model_key_limit, and event.StarterReason to the reason's pattern less them: a
+// schema of run.exited names in its reason's description, and those that fail link-batch.schema.json
+// beside timeout, interrupted, no_session and model_key_limit, and event.StarterReason to the reason's pattern less them: a
 // starter's code is any other code.
 func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	doc, err := contracts.Document("events/run.exited.schema.json")

@@ -52,8 +52,8 @@ sleep 0.3
 echo '{"line":2}' >> "$f"
 `
 
-// resumerSpec is a session of the resumer on the fake local link g, with a home of its
-// own, and the run's masker with the resumer's secret; the run answer has resume, and
+// resumerSpec is a session of the resumer on the fake local link g, with a home that no
+// other session has, and the run's masker with the resumer's secret; the run answer has resume, and
 // the transcript request gets restored when restored is not empty, else the fake's 404.
 func resumerSpec(t *testing.T, restored string) (runSpec, *linktest.Fake, string) {
 	t.Helper()

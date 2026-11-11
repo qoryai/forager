@@ -37,7 +37,7 @@ func isTranscript(path, runs string) bool {
 	return ok
 }
 
-// transcript answers a session's transcript request of the run runID: the transcript
+// transcript serves a session's transcript request of the run runID: the transcript
 // of the paused run the run continues, which the gateway reads from the server, GET
 // <run.url>/<run_id>/resume/transcript with its signed client, and streams with
 // Content-Type: application/x-ndjson, at most 64 MiB. The bytes are verified at the

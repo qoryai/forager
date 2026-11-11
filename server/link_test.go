@@ -497,7 +497,7 @@ func TestARunAnswerHasTheCredentialHostsItCarries(t *testing.T) {
 
 // TestARunAnswerHasTheResumeItCarries pins that the session reads resume into Resume,
 // the paused run's id, the runtime's session id and the transcript's path; that an
-// answer without it has none; and that a resume the schema refuses, here with no
+// answer without it has none; and that a resume that fails the schema, here with no
 // session_id, fails the run answer.
 func TestARunAnswerHasTheResumeItCarries(t *testing.T) {
 	resume := `"resume":{"run_id":"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e","session_id":"s-1","path":"~/.claude/projects/-workspace/s-1.jsonl"},"reserved":`
@@ -525,7 +525,7 @@ func TestARunAnswerHasTheResumeItCarries(t *testing.T) {
 
 // TestTheLinkReadsATranscript pins the transcript request on the local link: a GET of
 // <run.url>/<run_id>/transcript whose 200 is the transcript's bytes; a 404, as the
-// gateway answers a run that continues no paused run, is an error with its status; a
+// gateway returns for a run that continues no paused run, is an error with its status; a
 // 410 is the end of the run; and a transcript longer than the most the caller reads is
 // an error.
 func TestTheLinkReadsATranscript(t *testing.T) {

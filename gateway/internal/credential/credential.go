@@ -428,7 +428,7 @@ type KeyEntry struct {
 
 // KeyGroup is the key group of the start key start: the names of entries, in their
 // order, whose format, endpoint and auth are the start key's, the header's case
-// ignored; none when start is no API credential of entries. The gateway decides the key
+// ignored; none when start is no API credential of entries. The gateway sets the key
 // group by it alone: the check of the run configuration and the proxy's group.
 func KeyGroup(entries []KeyEntry, start string) []string {
 	i := slices.IndexFunc(entries, func(e KeyEntry) bool { return e.Name == start })

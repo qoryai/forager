@@ -42,11 +42,11 @@ import (
 
 // The tests of several model keys per run run Claude Code 2.1.316 itself against a stub
 // of the Messages API: a key group of fake subscription keys from a fake control plane,
-// set by the gateway's proxy. The stub tells the keys apart by the marks -AAAA-, -BBBB-
-// and -CCCC- in their values, and answers each request by its scenario: a subscription's
+// set by the gateway's proxy. The stub matches each key by the marks -AAAA-, -BBBB-
+// and -CCCC- in their values, and serves each request by its scenario: a subscription's
 // cap (a 429 with the anthropic-ratelimit-unified-* headers and a five_hour claim), a
 // stream that ends in a rate_limit_error event, a tool call or a text. Each answer has a
-// message id of its own, since Claude Code merges assistant messages that share one.
+// message id that no other answer has, since Claude Code merges assistant messages that share one.
 
 // The stub's mode, the variable of its scenario, the file it logs each request to inside
 // its container, and its scenarios.
@@ -55,7 +55,7 @@ const (
 	envKeysScenario = "E2E_KEYS_SCENARIO"
 	keysStubLog     = "/tmp/e2e-keys-stub.jsonl"
 
-	// keysHooks answers the first request with a Bash call, and the next with a text.
+	// keysHooks serves the first request with a Bash call, and the next with a text.
 	keysHooks = "hooks"
 	// keysSwitch caps key A and serves every other key.
 	keysSwitch = "switch"
@@ -64,10 +64,10 @@ const (
 	keysStream = "stream"
 	// keysCooling caps every key.
 	keysCooling = "cooling"
-	// keysReport caps key A, answers key B's first request after 3 seconds with a Bash
+	// keysReport caps key A, serves key B's first request after 3 seconds with a Bash
 	// call, and serves the rest with a Bash call first and a text after it.
 	keysReport = "report"
-	// keysResume answers with Bash calls that print turn-0 and turn-1, then with a text.
+	// keysResume returns Bash calls that print turn-0 and turn-1, then a text.
 	keysResume = "resume"
 )
 
@@ -110,7 +110,7 @@ type keysEntry struct {
 // keysTurn finds the marks the Bash calls of keysResume print.
 var keysTurn = regexp.MustCompile(`turn-[0-9]+`)
 
-// keysStub is the stub's handler: scenario, a tag that is in every id it gives, and the
+// keysStub is the stub's handler: scenario, a tag that is in every id it writes, and the
 // file it logs each request to.
 type keysStub struct {
 	scenario, tag, log string
@@ -193,7 +193,7 @@ func (s *keysStub) write(e keysEntry) {
 	f.Close()
 }
 
-// respond answers the n-th request, with key's mark and results tool results, by the
+// respond serves the n-th request, with key's mark and results tool results, by the
 // scenario, and returns the status.
 func (s *keysStub) respond(w http.ResponseWriter, req *request, key string, n, results int) int {
 	tool := func(command string) map[string]any {
@@ -242,7 +242,7 @@ func (s *keysStub) respond(w http.ResponseWriter, req *request, key string, n, r
 	return http.StatusOK
 }
 
-// keysCap answers with a subscription's cap: a 429 whose anthropic-ratelimit-unified-*
+// keysCap returns a subscription's cap: a 429 whose anthropic-ratelimit-unified-*
 // headers reject the five-hour window, which resets in an hour, and claim it. Claude
 // Code 2.1.316 sends no second request after this answer.
 func keysCap(w http.ResponseWriter) int {
@@ -303,7 +303,7 @@ func (s *keysStub) answer(w http.ResponseWriter, req *request, block map[string]
 	}
 }
 
-// streamError answers a streaming request with 200, message_start, a text block's start
+// streamError serves a streaming request with 200, message_start, a text block's start
 // and one delta, then an error event of the type rate_limit_error, and closes the
 // connection.
 func (s *keysStub) streamError(w http.ResponseWriter, req *request, n int) {
@@ -331,7 +331,7 @@ func (s *keysStub) streamError(w http.ResponseWriter, req *request, n int) {
 	}
 }
 
-// serveKeysStub is the stub in a container: it answers HTTPS on 8443 with a certificate
+// serveKeysStub is the stub in a container: it serves HTTPS on 8443 with a certificate
 // of the suite's authority for the container's addresses, by the scenario in its
 // environment, logs every request to keysStubLog, and prints RecorderReady once it
 // listens.
@@ -635,7 +635,7 @@ func refusedLines(stdout string) []string {
 // keysControl is a fake control plane in front of the reference receiver: it registers
 // runs, stores their events, serves each run's run configuration and seals its
 // credentials' values, takes the model keys reports, each checked against
-// model-keys-report.schema.json, and answers them, and serves the transcript of a paused
+// model-keys-report.schema.json, returns the answer to each, and serves the transcript of a paused
 // run at <run.url>/<run_id>/resume/transcript.
 type keysControl struct {
 	srv    *httptest.Server
@@ -851,15 +851,15 @@ func keysEntries(log []keysEntry) string {
 }
 
 // TestDockerClaudeCodeHooksReachTheSessionBehindTheWall is the hook check behind the
-// wall: Claude Code 2.1.316 runs behind the Docker adapter, the stub answers its first
+// wall: Claude Code 2.1.316 runs behind the Docker adapter, the stub serves its first
 // request with a Bash call and its second with a text, and the run's events contain
 // the runtime events the session maps from Claude Code's hooks:
 // dev.qory.runtime.started from SessionStart and dev.qory.runtime.tool_started of the
 // Bash call from PreToolUse. Every hook reaches the session through the socket the wall
 // binds into the agent's container. On an engine in a virtual machine, such as Docker
 // Desktop on macOS, the forwarder fails with "dial unix /qory/hooks/sock: connect:
-// connection refused" and this test fails; it is the check that a Linux machine carries
-// the hooks across.
+// connection refused" and this test fails; it is the check that a Linux machine passes
+// the hook socket into the container.
 func TestDockerClaudeCodeHooksReachTheSessionBehindTheWall(t *testing.T) {
 	k := newKeysWall(t)
 	name, host := k.stub(t, keysHooks)
@@ -904,7 +904,7 @@ func TestDockerClaudeCodeHooksReachTheSessionBehindTheWall(t *testing.T) {
 
 // TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain runs Claude Code behind the
 // wall with a key group of two subscription keys from a fake control plane, model with
-// key A and model-b with key B. The stub refuses A with a subscription's cap and serves
+// key A and model-b with key B. The stub returns a subscription's cap for A and serves
 // B. The proxy passes nothing of the refusal on: it puts model in cooldown and sends the
 // same body again with B. The session ends succeeded; the stub got the request with A,
 // then the same bytes with B; Claude Code printed no retry and no API error; the record
@@ -936,7 +936,7 @@ func TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain(t *testing.T) {
 }
 
 // TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError runs Claude Code behind the
-// wall with the key group of model and model-b. The stub answers the streaming request
+// wall with the key group of model and model-b. The stub serves the streaming request
 // with A with 200, message_start, a text block's start and one delta, then an error
 // event of the type rate_limit_error. The proxy passes the stream on, puts model in
 // cooldown and makes model-b active; Claude Code 2.1.316 sends the request again without
@@ -998,9 +998,9 @@ func TestDockerModelKeysAllCoolingStopTheSession(t *testing.T) {
 
 // TestDockerModelKeysReportAndTakeTheControlPlanesCooldown runs Claude Code behind the
 // wall with a key group of three keys, model, model-b and model-c, with A, B and C. The
-// stub caps A, and answers B's first request with a Bash call after 3 seconds. The
+// stub caps A, and serves B's first request with a Bash call after 3 seconds. The
 // gateway reports A's refusal with POST <run.url>/<run_id>/model-keys, and the fake
-// control plane answers that model-b is rejected in its five_hour window until an hour
+// control plane returns that model-b is rejected in its five_hour window until an hour
 // from now. Every report is valid against model-keys-report.schema.json, and one has
 // model's five_hour window rejected, from the provider, with cooldown_until. After the
 // Bash call Claude Code's next request goes with C: the answer's cooldown keeps the
