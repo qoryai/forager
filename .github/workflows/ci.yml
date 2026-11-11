@@ -187,7 +187,8 @@ jobs:
         # TestDockerSealedCredentialThroughTheWall and
         # TestDockerHarnessCredentialThroughTheStackProxy need Docker and are not subtests
         # of TestDockerConforms, so their names are in this -run too.
-        # The tests of several model keys and the hook check,
+        # The tests of several model keys, the walled resume,
+        # TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey, and the hook check,
         # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker and the image
         # the step before builds, and are listed for the same reason.
         # TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey needs no Docker, but
@@ -195,7 +196,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
 
   e2e-containerd:
     name: Wall conformance, containerd image store
@@ -277,7 +278,8 @@ jobs:
         # TestDockerSealedCredentialThroughTheWall and
         # TestDockerHarnessCredentialThroughTheStackProxy need Docker and are not subtests
         # of TestDockerConforms, so their names are in this -run too.
-        # The tests of several model keys and the hook check,
+        # The tests of several model keys, the walled resume,
+        # TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey, and the hook check,
         # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker and the image
         # the step before builds, and are listed for the same reason.
         # TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey needs no Docker, but
@@ -285,7 +287,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
 
   e2e-docker:
     name: Wall conformance, nested Docker

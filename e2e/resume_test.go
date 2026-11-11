@@ -35,11 +35,11 @@ import (
 // starts in a new home and another working directory, and its first model request
 // contains run 1's turns, goes with key B, and both runs end succeeded.
 //
-// A walled run sends no transcript, since the runtime's transcript lies inside the
-// agent's container, so the test runs without a wall. The proxy verifies the stub
-// against this machine's roots, which trustRecorders sets through SSL_CERT_FILE; Go
-// reads that variable on Linux alone, so the test is skipped on other systems, on a
-// machine with none of the CA bundles the session reads, and without claude on PATH.
+// TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey is the same check behind the
+// wall. The proxy verifies the stub against this machine's roots, which trustRecorders
+// sets through SSL_CERT_FILE; Go reads that variable on Linux alone, so the test is
+// skipped on other systems, on a machine with none of the CA bundles the session reads,
+// and without claude on PATH.
 func TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		Skip(t, "Go reads this machine's roots from SSL_CERT_FILE on Linux alone, and the proxy verifies the stub against them")
@@ -110,6 +110,76 @@ func TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
 	}
 	noKeyValue(t, o1, home1)
 	noKeyValue(t, o2, home2)
+}
+
+// TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey runs Claude Code 2.1.316 twice
+// behind the Docker wall, each run with the fake control plane's run configuration and
+// the stub of the Messages API in a container. Run 1, with key A, makes two Bash calls
+// that print turn-0 and turn-1. Claude Code writes its transcript in the session's
+// transcript directory, which the wall binds at ~/.claude/projects inside, and the
+// session sends the transcript as dev.qory.session.transcript chunks, which the control
+// plane stores. Run 2's run configuration has resume, with run 1's id, session id and
+// transcript path, and key B; the control plane serves run 1's chunks, joined in offset
+// order, at <run.url>/<run_id>/resume/transcript. The session of run 2 writes them in
+// its transcript directory before the agent's container starts. Run 2 starts in
+// another working directory; its first model request contains run 1's turns and goes
+// with key B, and both runs end succeeded.
+func TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
+	k := newKeysWall(t)
+	name, host := k.stub(t, keysResume)
+	endpoint := "https://" + host + ":" + recorderTLS
+	ctl := startKeysControl(t)
+
+	run1 := event.NewRunID()
+	ctl.configure(t, run1, host, []map[string]any{keysCredential("model", endpoint)}, []string{keyA}, nil)
+	s1 := keysSession{runID: run1, server: ctl.server, allow: []string{host}, args: []string{"--allowedTools", "Bash"},
+		prompt: "Run the commands you are given.", dir: t.TempDir(), walled: &k, timeout: 4 * time.Minute}
+	o1 := s1.run(t)
+	log1 := k.stubLog(t, name)
+	if o1.res.State != event.StateSucceeded {
+		t.Fatalf("run 1 ended %s, exit %d; want succeeded\nstub:%s\nstdout:\n%s", o1.res.State, o1.res.ExitCode, keysEntries(log1), tail(o1.out, 4000))
+	}
+	transcript, sessionID, tpath := storedTranscript(t, ctl, run1)
+	if !bytes.Contains(transcript, []byte("turn-0")) || !bytes.Contains(transcript, []byte("turn-1")) {
+		t.Fatalf("run 1's transcript, %d bytes of %s, has no turn-0 and turn-1", len(transcript), tpath)
+	}
+
+	run2 := event.NewRunID()
+	ctl.mu.Lock()
+	ctl.transcripts[run2] = transcript
+	ctl.mu.Unlock()
+	ctl.configure(t, run2, host, []map[string]any{keysCredential("model-b", endpoint)}, []string{keyB},
+		map[string]any{"run_id": run1, "session_id": sessionID, "path": tpath})
+	s2 := keysSession{runID: run2, server: ctl.server, allow: []string{host}, args: []string{"--allowedTools", "Bash"},
+		prompt: "Continue with the next command.", dir: t.TempDir(), walled: &k, timeout: 4 * time.Minute}
+	o2 := s2.run(t)
+	log2 := k.stubLog(t, name)[len(log1):]
+	t.Logf("run 1's transcript: %d bytes of %s, session %s; the stub got, in run 1:%s\nin run 2:%s", len(transcript), tpath, sessionID, keysEntries(log1), keysEntries(log2))
+	if o2.res.State != event.StateSucceeded {
+		t.Errorf("run 2 ended %s, exit %d; want succeeded\nstub:%s\nstdout:\n%s", o2.res.State, o2.res.ExitCode, keysEntries(log2), tail(o2.out, 4000))
+	}
+	for _, d := range o2.of(event.RunLog) {
+		if b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(d["bytes"])); bytes.Contains(b, []byte("without a resume")) {
+			t.Errorf("run 2 wrote: %s", b)
+		}
+	}
+	ctl.mu.Lock()
+	asked := slices.Clone(ctl.asked)
+	ctl.mu.Unlock()
+	if !slices.Equal(asked, []string{run2}) {
+		t.Errorf("the control plane was asked for the transcript of %q; want run 2's once", asked)
+	}
+	if len(log2) == 0 || log2[0].Key != "B" || !slices.Contains(log2[0].Turns, "turn-0") || !slices.Contains(log2[0].Turns, "turn-1") || log2[0].Results < 2 {
+		t.Errorf("run 2's requests:%s\nwant the first with key B, run 1's two tool results and the marks turn-0 and turn-1", keysEntries(log2))
+	}
+	for _, e := range log1 {
+		if e.Key != "A" {
+			t.Errorf("run 1 sent a request with key %q; want A:%s", e.Key, keysEntries(log1))
+			break
+		}
+	}
+	noKeyValue(t, o1, s1.dir)
+	noKeyValue(t, o2, s2.dir)
 }
 
 // storedTranscript joins the dev.qory.session.transcript chunks of run runID that the
