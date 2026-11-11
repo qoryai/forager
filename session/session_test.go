@@ -99,6 +99,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	os.Setenv("XDG_STATE_HOME", state)
+	// The transcript of a Claude Code launch with no HOME is read under the tests' home,
+	// not this user's.
+	session.SetUserHome(filepath.Join(state, "home"))
 	// A run's image by reference is checked at its registry through the fake gateway's
 	// proxy before the wall's pull.
 	stopRegistry := defaultRegistry()

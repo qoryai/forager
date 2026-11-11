@@ -88,6 +88,16 @@ type Run struct {
 	numbered    int
 	maybeJoined bool
 	lastExit    int
+	// lastReason is the reason of the dev.qory.session.exited of the run's last
+	// session, empty for none: the close's model_key_limit follows only
+	// model_key_limit.
+	lastReason string
+	// stops is the stop in the gateway's answer to a batch, for the session whose
+	// runtime runs.
+	stops batchStop
+	// resumeTried is true once a session whose runtime has resume tried to resume the
+	// runtime session of the run answer's resume: no later session tries again.
+	resumeTried bool
 	// joinAsked says a Join reached its join request: the gateway closed the run's
 	// stack proxy then, and [Run.StackProxy] starts none from then on. It is read
 	// without the joining lock too, by a StackProxy that finds the lock taken.
@@ -437,7 +447,7 @@ func (r *Run) start(ctx context.Context) (err error) {
 	}
 	r.posts = sink.New(sink.Config{
 		To: r.link, Target: sink.Target{URL: disc.Events.URL, Types: disc.Events.Types}, Spool: spool,
-		Report: spec.Report, OnDigests: r.reload.digests, OnEnded: r.end,
+		Report: spec.Report, OnDigests: r.reload.digests, OnEnded: r.end, OnStop: r.stops.see,
 		Wait: sink.LinkBatchWait, Link: true,
 	})
 	r.posts.SetRunDigest(lastAnswered())
@@ -832,7 +842,7 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 		return nil, errors.New("the run is closed already")
 	}
 	joined := r.numbered > 0 || r.maybeJoined
-	if err := checkOutcome(out, joined); err != nil {
+	if err := checkOutcome(out, joined, r.lastReason); err != nil {
 		return nil, err
 	}
 	if !joined && out.State == event.StateFailed && out.Reason == "" {

@@ -482,3 +482,28 @@ func TestTheLocalLinkHasNoProxyOverTLS(t *testing.T) {
 		t.Errorf("the local link's one address %q", k.ProxyAddress())
 	}
 }
+
+// TestTheRemoteLinkReadsATranscript pins the transcript request behind a separate
+// gateway: a GET of <run.url>/<run_id>/transcript, under /qory-link/, with the run key,
+// whose answer is verified under the key the run key names, as every other answer.
+func TestTheRemoteLinkReadsATranscript(t *testing.T) {
+	f := linktest.StartRemoteFake(t)
+	f.OnTranscript(func(string) linktest.Reply { return linktest.Reply{Status: 200, Body: []byte("{\"a\":1}\n")} })
+	key := f.RunKey(t, remoteRunID)
+	k := remoteLink(t, f, key)
+	ctx := context.Background()
+	d, err := k.Discover(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := k.Transcript(ctx, d.Run.URL, remoteRunID, server.MaxTranscript)
+	if err != nil || string(b) != "{\"a\":1}\n" {
+		t.Fatalf("the transcript %q, %v", b, err)
+	}
+	if fmt.Sprint(f.Transcripts()) != "["+remoteRunID+"]" {
+		t.Errorf("transcript requests %v", f.Transcripts())
+	}
+	if want := "Bearer " + key; f.Bearers()[len(f.Bearers())-1] != want {
+		t.Errorf("Authorization %q", f.Bearers())
+	}
+}

@@ -1035,6 +1035,42 @@ func (k *Link) Join(ctx context.Context, runURL, runID string, req LinkJoinReque
 	return &a, nil
 }
 
+// MaxTranscript is the largest transcript of a paused run [Link.Transcript] reads, 64 MiB.
+const MaxTranscript = 64 << 20
+
+// Transcript reads the transcript of the paused run that runID continues, a GET of
+// <runURL>/<runID>/transcript, and returns its bytes, the file as Qory Apiary stored
+// it: the gateway reads it from Qory Apiary's run API with its signed client. It reads
+// at most most bytes: a longer transcript is an error. A 410 is the end of the run,
+// [Ended]; another answer than 200 is an [*accesskey.Refusal] for a code the link
+// knows, else a [*StatusError], a 404 for a run that continues no paused run among
+// them.
+func (k *Link) Transcript(ctx context.Context, runURL, runID string, most int) ([]byte, error) {
+	if err := k.onLink("the run URL", runURL); err != nil {
+		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
+	}
+	if !runIDShape.MatchString(runID) {
+		return nil, errors.New("the transcript request: the run id is not a UUID in the canonical lower-case form")
+	}
+	u := strings.TrimSuffix(runURL, "/") + "/" + runID + "/transcript"
+	what := "the transcript request " + accesskey.ShownValue(k.at(u), false)
+	a, err := k.send(ctx, http.MethodGet, u, nil, most, nil)
+	var ke *GatewayKeyError
+	if errors.As(err, &ke) {
+		return nil, ke
+	} else if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, accesskey.ShownError(err))
+	}
+	k.hand(a)
+	if a.status != http.StatusOK {
+		return nil, a.refusal(what)
+	}
+	if a.body == nil {
+		return nil, fmt.Errorf("%s: the transcript is longer than %d bytes", what, most)
+	}
+	return a.body, nil
+}
+
 // Deliver posts one link batch to eventsURL, the discovery's events.url, as the
 // delivery with the given id, with the run configuration digest when it holds one, and
 // on the local link the run's id once [Link.OpenRun] opened it, and returns what the gateway answered, its Link set: a 2xx is accepted; a 410 ends the
@@ -1042,8 +1078,9 @@ func (k *Link) Join(ctx context.Context, runURL, runID string, req LinkJoinReque
 // carries, [RunEnd]; a 400 invalid_request ends it
 // too, the gateway having ended the run, with batch_refused; anything else is retried. A
 // coded answer other than a 2xx is also its Refusal. The digests of every answer but one that ends the run are in the Delivery. A transport failure or no answer within
-// Timeout is an error. The body is the session's events of the run, with their ids and
-// without sequence.
+// Timeout is an error. A 2xx whose body has stop has its reason as the Delivery's
+// StopReason. The body is the session's events of the run, with their ids and without
+// sequence.
 func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body []byte, runDigest string) (Delivery, error) {
 	if err := k.onLink("the events URL", eventsURL); err != nil {
 		return Delivery{}, fmt.Errorf("%s: %w", k.name, err)
@@ -1083,6 +1120,24 @@ func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body [
 		d.End, d.From = event.ReasonBatchRefused, a.from()
 	default:
 		d.Digests = a.digests
+		if a.status >= 200 && a.status <= 299 {
+			d.StopReason = stopReason(a.body)
+		}
 	}
 	return d, nil
+}
+
+// stopReason is the reason of stop in a batch's answer, link-batch-answer.schema.json:
+// model_key_limit, or empty for a body that is empty, is no JSON object, has no stop
+// or has a reason Forager does not know, after which the session goes on.
+func stopReason(body []byte) string {
+	var doc struct {
+		Stop *struct {
+			Reason string `json:"reason"`
+		} `json:"stop"`
+	}
+	if len(body) == 0 || jsonv2.Unmarshal(body, &doc) != nil || doc.Stop == nil || doc.Stop.Reason != event.ReasonModelKeyLimit {
+		return ""
+	}
+	return doc.Stop.Reason
 }

@@ -1064,7 +1064,12 @@ res, err := session.Resend(ctx, session.ResendSpec{
   session sets `parent_agent_id`; a runtime without it sets no parent,
 - the input member that is a tool's summary, through the optional `runtimes.Summaries`,
   so the session sets `summary` on its tool events; a descriptor's runtime has it from
-  `tools.summary`, and a runtime without it has no summary.
+  `tools.summary`, and a runtime without it has no summary,
+- where it writes the transcript of its session and how it resumes from it, through
+  the optional `runtimes.Resumes`, from a descriptor's `resume`; the session sends the
+  transcript of such a runtime as `dev.qory.session.transcript`, in a run with no wall,
+  and restores and resumes it in a run whose run answer has `resume`. A runtime without
+  it has neither. See [the record](events.md#foragers-events).
 
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:
 
@@ -1378,6 +1383,12 @@ request asks the gateway for, for this session.
   - When the run was stopped from where it was started, a Ctrl-C or a signal to the
     caller, which ends the context, `cancelled` and `interrupted`, with `Cancelled`.
     `ExitCode` and `Signal` are the runtime's, whatever they are.
+  - When the gateway's answer to a batch had `stop`, `model_key_limit`, `cancelled` and
+    `model_key_limit`: no model key of the run is left, and the session stopped the
+    runtime as at its time limit. A stop in the answer to the batch the session posts
+    once the runtime exited by itself counts too. `ExitCode` and `Signal` are the
+    runtime's. The run stays open: run its host work, such as a push, then close it
+    `cancelled` with `model_key_limit` and `ExitCode`.
   - A runtime that exits 0 at the session's stop, at the context's end or at the
     limit, has exited 0: `Join` records its `dev.qory.session.exited` and returns its
     `Result`, with no error.
@@ -1417,7 +1428,10 @@ setup is set to run inside the agent's container, `read_needs_no_nested_docker` 
 image runs nested Docker, which is when `Docker` is true in the image `(*session.Run).Image` returns, or
 `read_needs_setup_removed` when its setup container could not be removed.
 `Close` refuses each of the ten codes with another state or exit
-code, or after a join, as the gateway does.
+code, or after a join, as the gateway does. Close a run whose last session ended with
+`model_key_limit` with `cancelled`, `model_key_limit` and that session's `ExitCode`: a
+control plane reads it as a pause of the run. `Close` refuses `model_key_limit` with
+another state, in a run with no join, and after a last session that ended otherwise.
 `Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
 `session.Closed` is what the run came to:
 

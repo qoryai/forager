@@ -523,6 +523,55 @@ func TestARunAnswerHasTheResumeItCarries(t *testing.T) {
 	}
 }
 
+// TestTheLinkReadsATranscript pins the transcript request on the local link: a GET of
+// <run.url>/<run_id>/transcript whose 200 is the transcript's bytes; a 404, as the
+// gateway answers a run that continues no paused run, is an error with its status; a
+// 410 is the end of the run; and a transcript longer than the most the caller reads is
+// an error.
+func TestTheLinkReadsATranscript(t *testing.T) {
+	var got []string
+	mode := "200"
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.Path)
+		switch mode {
+		case "404":
+			answer(w, 404, `{"error":"not_found","from":"gateway","message":"no transcript"}`)
+		case "410":
+			answer(w, 410, `{"error":"run_closed","from":"gateway"}`)
+		default:
+			answer(w, 200, "{\"a\":1}\n")
+		}
+	}))
+	k, _ := newLink(t, g)
+	ctx := context.Background()
+	runURL := "http://localhost/v1/run-configuration"
+	b, err := k.Transcript(ctx, runURL, runID, 8)
+	if err != nil || string(b) != "{\"a\":1}\n" {
+		t.Errorf("the transcript %q, %v", b, err)
+	}
+	if want := "GET /v1/run-configuration/" + runID + "/transcript"; len(got) != 1 || got[0] != want {
+		t.Errorf("requests %v, want %q", got, want)
+	}
+	if _, err := k.Transcript(ctx, runURL, runID, 7); err == nil || !strings.Contains(err.Error(), "longer than 7 bytes") {
+		t.Errorf("a transcript over the most: %v", err)
+	}
+	for c, check := range map[string]func(error) bool{
+		"404": func(err error) bool {
+			var se *server.StatusError
+			return errors.As(err, &se) && se.Status == 404
+		},
+		"410": func(err error) bool { _, ok := server.Ended(err); return ok },
+	} {
+		mode = c
+		if _, err := k.Transcript(ctx, runURL, runID, 8); !check(err) {
+			t.Errorf("%s: %v", c, err)
+		}
+	}
+	if _, err := k.Transcript(ctx, runURL, "R", 8); err == nil {
+		t.Error("a run id of another form")
+	}
+}
+
 // TestTheRunAnswerNeverShowsItsProxySecret pins that a run answer prints and logs
 // without its proxy secret and its stack proxy secret under every verb, and that a link
 // prints by the place it speaks to.

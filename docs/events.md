@@ -80,6 +80,7 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.run.resized`        | The pseudo-terminal was resized                                            |
 | `dev.qory.run.egress`         | One per connection, or per request on a terminated host                    |
 | `dev.qory.run.heartbeat`      | Every interval while the run is open, 30 seconds by default                |
+| `dev.qory.session.transcript` | One per chunk of the transcript of a runtime with `resume`                 |
 | `dev.qory.session.exited`     | A session ended, its join was refused, or the run ended while it ran       |
 | `dev.qory.run.exited`         | The run ended: the result, the last event                                  |
 
@@ -99,8 +100,8 @@ before the runtime starts. A run that has nowhere to run setup commands has no `
 of the run at its gateway, before any session. Each session then has a
 `dev.qory.session.started`, with its number from 1 in `session`, the runtime, the
 command and the image, and a `dev.qory.session.exited`, with how the session ended: the
-runtime's exit decides `succeeded` or `failed`, and `cancelled` comes with `timeout` or
-`interrupted`. A join that is refused has only a `dev.qory.session.exited`, `failed`
+runtime's exit decides `succeeded` or `failed`, and `cancelled` comes with `timeout`,
+`interrupted` or `model_key_limit`. A join that is refused has only a `dev.qory.session.exited`, `failed`
 with exit code -1 and the refusal's code, such as `mount_mode_conflict`, as its reason.
 A session whose wall fails to start has its `dev.qory.session.started`, then its
 `dev.qory.session.exited`, `failed` with exit code -1 and no reason, or the refusal's
@@ -112,6 +113,33 @@ session's `dev.qory.session.exited`.
 When the run ends while a session runs, that session's `dev.qory.session.exited` comes
 right before the run's `dev.qory.run.exited`, with the same state and reason and exit
 code -1. So every `dev.qory.session.started` has its `dev.qory.session.exited`.
+
+A session ends `cancelled` with `model_key_limit` when the gateway's answer to one of
+its batches has `{"stop": {"reason": "model_key_limit"}}`: the run's proxy passed a
+model provider's limit refusal to the runtime, because no model key of the run is left.
+The session stops the runtime as at the run's time limit, and the exit code is the
+runtime's. Before it writes the `dev.qory.session.exited` of a runtime that exited by
+itself, the session posts its last batch and reads the answer, so a stop that comes as
+the runtime exits still counts. The run stays open for its host work, such as a push,
+and its caller closes it `cancelled` with `model_key_limit`: a pause of the run, which
+a control plane can continue.
+
+A runtime whose descriptor has `resume`, such as Claude Code, writes the transcript of
+its session to a file, `~/.claude/projects/<working directory as a slug>/<session
+id>.jsonl` for Claude Code. In a run with no wall, the session sends that file as
+`dev.qory.session.transcript` events: whole lines as the runtime appends them, each
+masked as a `dev.qory.run.log` chunk is, in chunks of at most 32 KiB, with `session`,
+`session_id`, `path`, `offset` from 0 and `bytes`. The session reads the file once more
+to its end before the session's `dev.qory.session.exited`. Behind a wall the file lies
+inside the agent's container: the session sends no transcript and writes one line on
+`stderr` that says so. When the run answer has `resume`, the run's first session whose
+runtime has `resume` reads the paused run's transcript over the gateway's link, `GET
+<run.url>/<run_id>/transcript`, writes it in the session's directory as
+`resume.jsonl`, and starts the runtime through `resume.sh`, which copies it under the
+runtime's home and adds the descriptor's arguments, such as `--resume <session id>`.
+When the read or the copy fails, the runtime starts without a resume, after one line
+on `stderr` that says why, a `404` from the gateway among the causes. See the
+contract's §The events, A session's transcript.
 
 Behind a wall, the `dev.qory.session.exited` of a runtime that exited also has the
 enclosure's peak memory and CPU time, as measured inside the enclosure, to size machine
@@ -206,7 +234,8 @@ a reason, `dev.qory.run.exited` contains why in `reason`: an open code, Forager'
 starter's, carried as given. The close writes `timeout`, `cancelled`, `interrupted`,
 `cancelled`, a run stopped from where it was started (a Ctrl-C), and `no_session`,
 `failed`, a run closed with no session after its host work failed, such as a fetch,
-and posts them. The close writes and posts `image_missing`, `failed` with exit code
+and `model_key_limit`, `cancelled`, a run whose last session ended with
+`model_key_limit`, which a control plane reads as a pause of the run, and posts them. The close writes and posts `image_missing`, `failed` with exit code
 `-1`, when its caller gives it for a run with no session after the fetch of the run's
 image found that its registry, or the registry's mirror, does not have it, and the same
 for `image_user_root`, after the fetch found that the image's user is root, and for

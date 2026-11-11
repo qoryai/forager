@@ -847,3 +847,37 @@ func TestFlushReturnsOnceTheBatchIsAccepted(t *testing.T) {
 	// The context has ended: the close ends the retries.
 	w.Close(ctx)
 }
+
+// TestAStopInABatchsAnswerReachesTheCaller pins stop in the body of a 2xx on the link:
+// its reason, model_key_limit, reaches OnStop once per answer before Flush returns, the
+// batch is accepted and the deliveries go on; an empty body, one without stop, one with
+// a reason Forager does not know and one that is no JSON reach OnStop not at all.
+func TestAStopInABatchsAnswerReachesTheCaller(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"stop":{"reason":"model_key_limit"}}`:           "[model_key_limit]",
+		`{"stop":{"reason":"model_key_limit"},"other":1}`: "[model_key_limit]",
+		``:                        "[]",
+		`{}`:                      "[]",
+		`{"stop":{"reason":"x"}}`: "[]",
+		`ok`:                      "[]",
+	} {
+		g := &linkGateway{answer: func(int) (int, string) { return http.StatusOK, body }}
+		var mu sync.Mutex
+		var reasons []string
+		w := linkSink(t, g, sink.Config{OnStop: func(r string) { mu.Lock(); reasons = append(reasons, r); mu.Unlock() }})
+		e := event.NewEmitter(event.NewRunID(), nil)
+		w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+		if err := w.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		if got := fmt.Sprint(reasons); got != want {
+			t.Errorf("%q: OnStop got %s; want %s", body, got, want)
+		}
+		mu.Unlock()
+		if w.Stopped() || w.RunClosed() || w.Undelivered() != 0 {
+			t.Errorf("%q: stopped %v, closed %v, %d undelivered", body, w.Stopped(), w.RunClosed(), w.Undelivered())
+		}
+		w.Close(context.Background())
+	}
+}
