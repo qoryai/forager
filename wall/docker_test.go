@@ -52,6 +52,8 @@ type recorder struct {
 	// docker cp reads out of a container, by the path inside.
 	user  string
 	files map[string]string
+	// imageHome, when set, is HOME in the Env of the image's Config.
+	imageHome string
 	// held are the repository digests the engine lists for the image a run names by its
 	// reference; nil is an engine that has no such image. down has the engine answer
 	// no image inspect of the repository digests at all.
@@ -169,6 +171,8 @@ func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error)
 		return []byte(`{"Env":["PATH=/bin"],"Cmd":["sh"]}` + "\n"), nil
 	case strings.Contains(line, " image inspect ") && r.user == "null":
 		return []byte("null\n"), nil
+	case strings.Contains(line, " image inspect ") && r.user != "" && r.imageHome != "":
+		return []byte(`{"Env":["PATH=/bin","HOME=` + r.imageHome + `"],"User":` + r.user + "}\n"), nil
 	case strings.Contains(line, " image inspect ") && r.user != "":
 		return []byte(`{"Env":["PATH=/bin"],"User":` + r.user + "}\n"), nil
 	case strings.Contains(line, " cp --follow-link "):
