@@ -144,7 +144,9 @@ type Enclosure interface {
 	// proxy listens.
 	Wrap(ctx context.Context, l Launch) (Launch, error)
 	// Close removes everything the wall created, within the context's deadline. It is
-	// safe to call after a failed Wrap and more than once.
+	// safe to call after a failed Wrap and more than once. Its error matches
+	// [ErrContainerKept] when removing a container failed, so the container may still
+	// run. It does not match when only a network or a directory stays.
 	Close(ctx context.Context) error
 }
 

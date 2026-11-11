@@ -61,7 +61,8 @@ type relayStarter interface {
 }
 
 // unwrapper is an enclosure that removes what the launch of one Wrap started, as its
-// session ends: the Docker wall's, which removes the agent's container.
+// session ends: the Docker wall's, which removes the agent's container. After any error
+// of Unwrap, the agent's container may still run.
 type unwrapper interface {
 	Unwrap(ctx context.Context) error
 }
@@ -128,12 +129,15 @@ func (r *Run) openWall(ctx context.Context) error {
 }
 
 // closeWall removes the run's wall, the enclosure and then the run's forwarder. A wall
-// that could not be removed may still run, so it is reported and the run's entry among
-// the walled runs still going stays.
+// that could not be removed is reported and the run's entry among the walled runs still
+// going stays. Only a container that could not be removed, [wall.ErrContainerKept], may
+// still run and write the run's binds, so it alone sets wallFailed.
 func (r *Run) closeWall(ctx context.Context) {
 	if r.enclosure != nil {
 		if err := r.enclosure.Close(ctx); err != nil {
-			r.wallFailed = true
+			if errors.Is(err, wall.ErrContainerKept) {
+				r.wallFailed = true
+			}
 			r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
 			if r.listed != nil {
 				r.listed.keep()

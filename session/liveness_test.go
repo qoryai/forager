@@ -249,12 +249,25 @@ func (w *closeFailing) Unwrap(context.Context) error {
 }
 
 func (w *closeFailing) Close(context.Context) error {
-	return errors.New("wall docker: rm: exit status 1")
+	return containerKept("wall docker: rm: exit status 1")
 }
 
+// containerKept is a failed removal of a container of the run, as the Docker wall
+// returns one: its text is the string, and errors.Is matches it to
+// wall.ErrContainerKept.
+type containerKept string
+
+func (k containerKept) Error() string { return string(k) }
+
+func (k containerKept) Is(target error) bool { return target == wall.ErrContainerKept }
+
 // runCloseFailing is a wall in a container engine whose agent's container is removed
-// at each session's end, and whose Close at the run's close fails.
-type runCloseFailing struct{ enginedWall }
+// at each session's end, and whose Close at the run's close fails: with closeErr when
+// it is set, and otherwise on a network alone.
+type runCloseFailing struct {
+	enginedWall
+	closeErr error
+}
 
 func (w *runCloseFailing) Prepare(
 	_ context.Context, req wall.Request,
@@ -266,6 +279,9 @@ func (w *runCloseFailing) Prepare(
 func (w *runCloseFailing) Unwrap(context.Context) error { return nil }
 
 func (w *runCloseFailing) Close(context.Context) error {
+	if w.closeErr != nil {
+		return w.closeErr
+	}
 	return errors.New("wall docker: network rm: exit status 1")
 }
 
@@ -274,7 +290,7 @@ func (w *runCloseFailing) Close(context.Context) error {
 // the run's binds and no session's, and the close reports the failure.
 func TestAnEntryStaysWhenTheRunsWallIsNotRemoved(t *testing.T) {
 	root := t.TempDir()
-	w := &runCloseFailing{enginedWall{engine: leftEngine}}
+	w := &runCloseFailing{enginedWall: enginedWall{engine: leftEngine}}
 	sp := walledSpec(t, w)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
 	var reports []string

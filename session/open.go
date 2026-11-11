@@ -113,8 +113,8 @@ type Run struct {
 	// keptBy is the number of the session whose wall's removal failed, 0 for none:
 	// its entry among the walled runs still going stays, and no session joins after it.
 	keptBy int
-	// wallFailed is true once removing a part of the run's wall failed, and stays true:
-	// the close copies it to [Closed.WallKept].
+	// wallFailed is true once removing a container of the run's wall failed, and stays
+	// true: the close copies it to [Closed.WallKept].
 	wallFailed     bool
 	closed         bool
 	sessionApplied map[string]any

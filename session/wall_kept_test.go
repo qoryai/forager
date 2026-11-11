@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -23,24 +24,43 @@ func removeEntry(t *testing.T, runID string) {
 
 // TestWallKeptAfterASession pins Closed.WallKept for a run of one session: false with
 // no wall and with a wall whose removals succeed, true when Unwrap failed, also with a
-// close that succeeded, and true when the close failed.
+// close that succeeded, and true when the close failed on a container. A close that
+// failed on a network alone leaves it false and reports the failure, as every failed
+// close does.
 func TestWallKeptAfterASession(t *testing.T) {
 	failure := errors.New("wall docker: rm: exit status 1")
+	const container = "wall docker: docker rm --force: exit status 1"
 	for name, c := range map[string]struct {
 		wall wall.Wall
 		want bool
+		// report is the close's report line, empty for none.
+		report string
 	}{
-		"no wall":                     {nil, false},
-		"nothing failed":              {&openWall{}, false},
-		"Unwrap failed":               {&keptSetupWall{unwrapErr: failure}, true},
-		"the close failed":            {&runCloseFailing{enginedWall{engine: leftEngine}}, true},
-		"Unwrap and the close failed": {&closeFailing{enginedWall{engine: leftEngine}}, true},
+		"no wall":        {nil, false, ""},
+		"nothing failed": {&openWall{}, false, ""},
+		"Unwrap failed":  {&keptSetupWall{unwrapErr: failure}, true, ""},
+		"the close failed on a container": {
+			&runCloseFailing{enginedWall: enginedWall{engine: leftEngine}, closeErr: containerKept(container)},
+			true, "removing the wall: " + container,
+		},
+		"the close failed on a network alone": {
+			&runCloseFailing{enginedWall: enginedWall{engine: leftEngine}},
+			false, "removing the wall: wall docker: network rm: exit status 1",
+		},
+		"the close failed on a network and a container": {
+			&runCloseFailing{enginedWall: enginedWall{engine: leftEngine}, closeErr: errors.Join(
+				errors.New("wall docker: network rm: exit status 1"), containerKept(container))},
+			true, "removing the wall: wall docker: network rm: exit status 1\n" + container,
+		},
+		"Unwrap and the close failed": {&closeFailing{enginedWall{engine: leftEngine}}, true, "removing the wall: wall docker: rm: exit status 1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sp := spec(t, "FAKE_EXIT=0")
 			if c.wall != nil {
 				sp.Wall, sp.Image = c.wall, "example.com/agent:1"
 			}
+			var reports []string
+			sp.Report = func(s string) { reports = append(reports, s) }
 			_, closed, err := runClosed(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
@@ -48,6 +68,9 @@ func TestWallKeptAfterASession(t *testing.T) {
 			removeEntry(t, closed.RunID)
 			if closed.WallKept != c.want {
 				t.Errorf("WallKept %v, want %v", closed.WallKept, c.want)
+			}
+			if c.report != "" && !slices.Contains(reports, c.report) {
+				t.Errorf("reports %q, want %q among them", reports, c.report)
 			}
 		})
 	}
@@ -109,8 +132,12 @@ func TestWallKeptOnARunTheGatewayClosed(t *testing.T) {
 		wall wall.Wall
 		want bool
 	}{
-		"nothing failed":   {&openWall{}, false},
-		"the close failed": {&runCloseFailing{enginedWall{engine: leftEngine}}, true},
+		"nothing failed": {&openWall{}, false},
+		"the close failed on a container": {&runCloseFailing{
+			enginedWall: enginedWall{engine: leftEngine},
+			closeErr:    containerKept("wall docker: docker rm --force: exit status 1"),
+		}, true},
+		"the close failed on a network alone": {&runCloseFailing{enginedWall: enginedWall{engine: leftEngine}}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sp, g := specGateway(t)

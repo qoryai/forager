@@ -1580,6 +1580,10 @@ release may change what an existing document does, and says so under Upgrading.
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
   that is not absolute or that overlaps `/qory`.
+- `wall.ErrContainerKept`, which `errors.Is` matches on an error of the Docker wall's
+  `Unwrap`, `RemoveSetup` or `Close` when a `docker rm` of a container of the run
+  failed: the container may still run. A failed `docker network rm` or removal of the
+  private directory does not match it. The text of each error stays as it was.
 
 #### Changed
 
@@ -1975,12 +1979,14 @@ release may change what an existing document does, and says so under Upgrading.
 - `(*session.Run).Image`, the image of the run answer with its `Docker`, so a caller can
   close a read-only run in an image with nested Docker before its first join. It is the
   zero `session.Image` in a run with no wall or when the run answer has no image.
-- `session.Closed.WallKept`, true when removing a part of the run's wall failed at some
-  point of the run: the agent's container at a session's end, the setup container in
-  `RemoveSetup`, or anything at the close. A process may have kept writing the run's
-  binds after its session ended, so do not trust what is in them. It stays true when a
-  later removal succeeded. It is also true when the close failed only on a network or the
-  wall's private directory, because `wall.Enclosure.Close` returns one error.
+- `session.Closed.WallKept`, true when removing a container of the run's wall failed at
+  some point of the run: the agent's container at a session's end, the setup container
+  in `RemoveSetup`, or a container at the close, `wall.ErrContainerKept`. A process may
+  have kept writing the run's binds after its session ended, so do not trust what is in
+  them. It stays true when a later removal succeeded. A close that failed only on a
+  network or the wall's private directory leaves it false. The run still reports the
+  failure and keeps its entry among the walled runs still going, and
+  `(*wall.Docker).Reap` removes the network.
 
 #### Fixed
 

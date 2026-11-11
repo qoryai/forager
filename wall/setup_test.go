@@ -3,6 +3,7 @@ package wall
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -82,7 +83,8 @@ func TestDockerSetupCommandLines(t *testing.T) {
 // and works, and a docker rm that fails with "no such container" is not an error. Any
 // other failure returns docker's error, keeps the container's entry in e.made, and Close
 // runs the command again: a missing engine socket and a container runtime that fails
-// leave the container up, though their text has "no such" or "not found".
+// leave the container up, though their text has "no such" or "not found". Each error
+// matches ErrContainerKept.
 func TestDockerRemoveSetup(t *testing.T) {
 	ctx := context.Background()
 	rm := "docker rm --force --volumes qory-" + runID + "-setup"
@@ -121,6 +123,9 @@ func TestDockerRemoveSetup(t *testing.T) {
 			err = e.RemoveSetup(ctx)
 			if (err == nil) != (c.wantErr == "") || (err != nil && err.Error() != c.wantErr) {
 				t.Errorf("RemoveSetup: %v, want %q", err, c.wantErr)
+			}
+			if err != nil && !errors.Is(err, ErrContainerKept) {
+				t.Errorf("RemoveSetup's error %v does not match ErrContainerKept", err)
 			}
 			if got := rec.lines[before:]; len(got) != 1 || got[0] != rm {
 				t.Errorf("the commands %q, want %q alone", got, rm)
@@ -201,7 +206,7 @@ func TestDockerRemoveSetupAfterUnwrap(t *testing.T) {
 // gone, in any case. Any other failure is an error and keeps the container's entry in
 // e.made, and Close, with the failure still there, returns an error too: a missing engine
 // socket and a missing docker command leave the container's state unknown, though their
-// text has "no such" or "not found".
+// text has "no such" or "not found". Each error of Unwrap matches ErrContainerKept.
 func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {
@@ -225,8 +230,12 @@ func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
 		rec.fail, rec.failOut = "-agent", c.failOut
 		entry := []string{"rm", "--force", "--volumes", e.agent()}
 		e.made = append(e.made, entry)
-		if err := e.Unwrap(ctx); (err != nil) != c.wantErr {
+		err = e.Unwrap(ctx)
+		if (err != nil) != c.wantErr {
 			t.Errorf("%q: %v, want an error: %v", c.failOut, err, c.wantErr)
+		}
+		if err != nil && !errors.Is(err, ErrContainerKept) {
+			t.Errorf("%q: Unwrap's error %v does not match ErrContainerKept", c.failOut, err)
 		}
 		if kept := slices.ContainsFunc(e.made, func(m []string) bool { return slices.Equal(m, entry) }); kept != c.wantErr {
 			t.Errorf("%q: the container's entry in e.made: %v, want %v", c.failOut, kept, c.wantErr)
@@ -240,22 +249,31 @@ func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
 
 // TestDockerCloseReadsEachKindOfRemoval pins what Close counts as gone: for a container,
 // only "no such container", so a missing engine socket is an error while the container
-// may still run; for a network, also "not found" and a missing engine socket's text.
+// may still run; for a network, also "not found" and a missing engine socket's text. The
+// error of a failed container's removal matches ErrContainerKept, and a network's alone
+// does not; each error's text is docker's failure.
 func TestDockerCloseReadsEachKindOfRemoval(t *testing.T) {
 	ctx := context.Background()
 	const socket = "dial unix /var/run/docker.sock: connect: no such file or directory"
+	const told = "Error response from daemon: told to fail"
+	const containerRm = "wall docker: docker rm --force: exit status 1: "
+	const networkRm = "wall docker: docker network rm: exit status 1: "
 	for _, c := range []struct {
 		name, fail, failOut string
-		wantErr             bool
+		// wantErr is Close's error text, empty for none.
+		wantErr  string
+		wantKept bool
 	}{
-		{"nothing fails", "", "", false},
-		{"a container, no engine socket", "docker rm", socket, true},
-		{"a container that is gone", "docker rm", "Error response from daemon: No such container: qory-x-agent", false},
-		{"a container that is gone, in Podman's form", "docker rm", "Error: no container with name or ID \"qory-x-agent\" found: no such container", false},
-		{"a container, another failure", "docker rm", "", true},
-		{"a network that is gone", "docker network rm", "Error response from daemon: network qory-x-inside not found", false},
-		{"a network, no engine socket", "docker network rm", socket, false},
-		{"a network, another failure", "docker network rm", "", true},
+		{name: "nothing fails"},
+		{name: "a container, no engine socket", fail: "docker rm", failOut: socket, wantErr: containerRm + socket, wantKept: true},
+		{name: "a container that is gone", fail: "docker rm", failOut: "Error response from daemon: No such container: qory-x-agent"},
+		{name: "a container that is gone, in Podman's form", fail: "docker rm", failOut: "Error: no container with name or ID \"qory-x-agent\" found: no such container"},
+		{name: "a container, another failure", fail: "docker rm", wantErr: containerRm + told, wantKept: true},
+		{name: "a network that is gone", fail: "docker network rm", failOut: "Error response from daemon: network qory-x-inside not found"},
+		{name: "a network, no engine socket", fail: "docker network rm", failOut: socket},
+		{name: "a network, another failure", fail: "docker network rm", wantErr: networkRm + told + "\n" + networkRm + told},
+		{name: "a network and a container", fail: "docker network rm|docker rm",
+			wantErr: containerRm + told + "\n" + networkRm + told + "\n" + networkRm + told, wantKept: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
@@ -267,10 +285,40 @@ func TestDockerCloseReadsEachKindOfRemoval(t *testing.T) {
 			e := enc.(*dockerEnclosure)
 			e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
 			rec.fail, rec.failOut = c.fail, c.failOut
-			if err := e.Close(ctx); (err != nil) != c.wantErr {
-				t.Errorf("Close: %v, want an error: %v", err, c.wantErr)
+			err = e.Close(ctx)
+			if (err == nil) != (c.wantErr == "") || (err != nil && err.Error() != c.wantErr) {
+				t.Errorf("Close: %v, want %q", err, c.wantErr)
+			}
+			if got := errors.Is(err, ErrContainerKept); got != c.wantKept {
+				t.Errorf("Close's error %v matches ErrContainerKept: %v, want %v", err, got, c.wantKept)
 			}
 		})
+	}
+}
+
+// TestDockerCloseOnAPrivateDirectoryThatStays pins Close when only the removal of the
+// private directory fails: an error with os.RemoveAll's text, which does not match
+// ErrContainerKept, since nothing of the run runs in a directory.
+func TestDockerCloseOnAPrivateDirectoryThatStays(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	enc, err := d.Prepare(ctx, Request{RunID: runID, Image: "i"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := enc.(*dockerEnclosure)
+	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
+	// os.RemoveAll returns an error for a path whose last name is ".", and removes
+	// nothing, also for root.
+	temp := t.TempDir() + "/."
+	e.temp = temp
+	err = e.Close(ctx)
+	if want := "RemoveAll " + temp + ": invalid argument"; err == nil || err.Error() != want {
+		t.Errorf("Close: %v, want %q", err, want)
+	}
+	if errors.Is(err, ErrContainerKept) {
+		t.Errorf("Close's error %v matches ErrContainerKept", err)
 	}
 }
 

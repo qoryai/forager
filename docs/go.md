@@ -1442,12 +1442,14 @@ another state, in a run with no join, and after a last session that ended otherw
 - `Undelivered`, how many of the run's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` and `ClosedReason`, as `session.Result` has them.
-- `WallKept`, true when removing a part of the run's wall failed at some point of the
-  run: the agent's container at a session's end, the setup container in `RemoveSetup`,
-  or anything at the close. A process may have kept writing the run's binds after its
+- `WallKept`, true when removing a container of the run's wall failed at some point of
+  the run: the agent's container at a session's end, the setup container in
+  `RemoveSetup`, or a container at the close, an error that matches
+  `wall.ErrContainerKept`. A process may have kept writing the run's binds after its
   session ended, so do not trust what is in them. `WallKept` stays true when a later
-  removal succeeded. It is also true when the close failed only on a network or the
-  wall's private directory, because `wall.Enclosure`'s `Close` returns one error.
+  removal succeeded. A close that failed only on a network or the wall's private
+  directory leaves it false. The run still reports the failure and keeps its entry
+  among the walled runs still going, and `(*wall.Docker).Reap` removes the network.
 
 What reached the server is the gateway's to say: `(*gateway.Gateway).Close` returns a
 `gateway.Delivery`.
