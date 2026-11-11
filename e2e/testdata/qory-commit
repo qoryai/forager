@@ -2,7 +2,9 @@
 # transcript link, TestDockerQory*, in e2e/qorylink_test.go. Lines that start with #
 # are comments; the first other line is the full commit hash.
 #
-# With no hash, CI skips the build and does not run these tests. Once qory's pull
-# request for model key limits (477) merges, write its merge commit on main here.
+# With no hash, CI skips the build and does not run these tests. The pin is the merge
+# commit on qory's main of its pull request for model key limits (477). Move it to a
+# later commit on qory's main when a Forager change needs one.
 # A Forager change that breaks the build of the pinned qory commit fails the e2e job
 # until the pin moves to a qory commit that builds against it.
+783be1508a44e836add00bb1d435d9de14d809c3
