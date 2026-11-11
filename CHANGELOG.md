@@ -1478,9 +1478,28 @@ release may change what an existing document does, and says so under Upgrading.
   has ended, bounds its wait, and accepts a second call after an error. The session
   calls it before the run's first `Wrap` or after a session's `Unwrap`, and a later
   `Wrap` may follow, so it leaves the rest of the enclosure as it is.
+- Bind `Launch.Transcript.Path` writable at `Launch.Transcript.Under` below the agent's
+  home in a wall outside Forager, and list it from `Binds`. A wall that ignores it
+  leaves the session's transcript directory empty: the session sends no transcript, and
+  a continuation's resume finds no transcript inside.
 
 #### Added
 
+- `wall.Launch.Transcript`, `wall.Transcript`: the session's transcript directory,
+  `transcripts/<n>/` in the run directory, which the Docker wall binds writable at the
+  runtime's `resume.prefix` below the home of the agent's user inside: `HOME` of the
+  launch, else of the image, else the home the image's `/etc/passwd` gives the
+  container's user, else `/`. The wall lists it among its binds, and refuses a
+  directory that overlaps a mount or a place inside that overlaps another bind's or
+  `/qory`. Behind a wall the session now reads a runtime's transcript there and sends
+  it as `dev.qory.session.transcript`, and writes a paused run's transcript there before
+  the agent's container starts, with no shell copy inside. It reads only
+  `<slug>/<session id>.jsonl` under a session id that is a UUID in lower case, opened
+  with no symbolic link on its path (`openat2` with `RESOLVE_BENEATH` and
+  `RESOLVE_NO_SYMLINKS` on Linux) and without waiting for a writer, and only a regular
+  file with one link of at most 64 MiB; anything else writes one line on `stderr`.
+  The line `the runtime's transcript lies inside the agent's container, which the
+  session does not read` is gone.
 - `(*session.Run).RemoveSetup`: when no session is running and no host step is open, it
   removes the setup container with `docker rm --force --volumes` and returns once the
   container is gone, so no process of it runs beside the agent or the host work that

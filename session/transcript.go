@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/session/runtimes"
@@ -36,10 +37,18 @@ var transcriptPoll = time.Second
 // from the first hook input that contains resume.PathFrom, and until then from
 // resume.Path with the runtime's session id and the slug of its working directory. The
 // session reads no path outside resume.Prefix, with a .. segment, or through a
-// symbolic link. Its methods may be called from any goroutine.
+// symbolic link.
+//
+// Behind a wall, root is the session's transcript directory, which the wall binds at
+// resume.Prefix inside, and home is empty: the file's path is <slug>/<session id>.jsonl
+// below root alone, whatever a hook input contains, the session id a UUID in lower case
+// ([walledSessionID]), and the file is read as [readBeneath] reads it. A session id of
+// another shape, or a file the session does not read, writes one line, and nothing more
+// is sent. Its methods may be called from any goroutine.
 type transcript struct {
 	resume runtimes.Resume
 	home   string
+	root   string
 	// slug is the runtime's working directory with every character other than an
 	// ASCII letter or digit replaced by -.
 	slug string
@@ -70,6 +79,35 @@ func newTranscript(rs runtimes.Resume, home, cwd string, mask func(string) strin
 	return &transcript{resume: rs, home: home, slug: cwdSlug(cwd), mask: mask, send: send, line: line}
 }
 
+// newWalledTranscript returns the transcript of a walled runtime with resume rs whose
+// transcript directory on this machine is root and whose working directory inside is
+// cwd.
+func newWalledTranscript(rs runtimes.Resume, root, cwd string, mask func(string) string, send func(map[string]any), line func(string)) *transcript {
+	return &transcript{resume: rs, root: root, slug: cwdSlug(cwd), mask: mask, send: send, line: line}
+}
+
+// noResume is the start of every line of a transcript that a continuation cannot resume
+// from.
+const noResume = "A continuation of this run starts the runtime without a resume: "
+
+// walledID takes id as the session id of a walled runtime, once: a UUID in lower case
+// sets the path, <slug>/<id>.jsonl below the transcript directory; another id writes
+// one line, and nothing is sent. The caller holds mu.
+func (t *transcript) walledID(id string) {
+	if t.sessionID != "" || t.ended {
+		return
+	}
+	if !walledSessionID.MatchString(id) {
+		t.ended = true
+		// The agent chooses the id: the line has at most its first 64 bytes, quoted, so
+		// no newline in it starts another line.
+		t.line(noResume + fmt.Sprintf("the runtime's session id %q is not a UUID in lower case, so the session reads no transcript", accesskey.ShownName(id[:min(len(id), 64)], false)))
+		return
+	}
+	t.sessionID = id
+	t.setPath(strings.TrimPrefix(t.resume.Prefix, "~/") + t.slug + "/" + id + ".jsonl")
+}
+
 // cwdSlug is dir with every character other than an ASCII letter or digit replaced by
 // -: /workspace becomes -workspace.
 func cwdSlug(dir string) string {
@@ -91,6 +129,12 @@ func (t *transcript) record(rec runtimes.Record) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.root != "" {
+		if id, ok := rec.Record["session_id"].(string); ok {
+			t.walledID(id)
+		}
+		return
+	}
 	if id, ok := rec.Record["session_id"].(string); ok && t.sessionID == "" && len(id) <= maxSessionID {
 		t.sessionID = id
 	}
@@ -112,6 +156,10 @@ func (t *transcript) record(rec runtimes.Record) {
 func (t *transcript) started(sessionID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.root != "" {
+		t.walledID(sessionID)
+		return
+	}
 	if t.sessionID == "" && len(sessionID) <= maxSessionID {
 		t.sessionID = sessionID
 	}
@@ -186,7 +234,20 @@ func (t *transcript) poll(final bool) {
 	if t.ended || t.rel == "" || t.sessionID == "" {
 		return
 	}
-	b, size, err := readUnlinked(t.home, t.rel, t.read)
+	var b []byte
+	var size int64
+	var err error
+	if t.root != "" {
+		b, size, err = readBeneath(t.root, strings.TrimPrefix(t.rel, strings.TrimPrefix(t.resume.Prefix, "~/")), t.read)
+		var refused *beneathRefused
+		if errors.As(err, &refused) {
+			t.ended = true
+			t.line(noResume + fmt.Sprintf("the session reads no transcript at ~/%s: %s", t.rel, refused.why))
+			return
+		}
+	} else {
+		b, size, err = readUnlinked(t.home, t.rel, t.read)
+	}
 	if err != nil {
 		return
 	}
@@ -262,10 +323,11 @@ func readUnlinked(home, rel string, offset int64) ([]byte, int64, error) {
 // sessionTranscript is the transcript of session n's runtime rt, nil for a runtime
 // without resume. A run with no wall reads it under the runtime's home, HOME of env,
 // the launch's environment, or the home of the user the session runs as when env has
-// none, and the runtime's working directory dir. Behind a wall the runtime's home lies
-// inside the agent's container, which the session does not read: the session writes one
-// line on stderr and sends no transcript.
-func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, env []string, dir string, masker *mask.Masker, hidden *mask.Harness) *transcript {
+// none, and the runtime's working directory dir. Behind a wall, root is the session's
+// transcript directory, which the wall binds at resume.prefix inside, and dir the
+// working directory inside; the session reads the transcript below root. A walled
+// session with no transcript directory, root empty, sends none.
+func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, root string, env []string, dir string, masker *mask.Masker, hidden *mask.Harness) *transcript {
 	resumes, ok := rt.(runtimes.Resumes)
 	if !ok {
 		return nil
@@ -275,9 +337,16 @@ func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, env []s
 		return nil
 	}
 	line := func(l string) { r.writeLog("stderr", n, 0, []byte(l+"\n")) }
+	mask := func(l string) string { return hidden.Replace(masker.Replace(l)) }
+	send := func(data map[string]any) {
+		data["session"] = n
+		r.write(event.SessionTranscript, data)
+	}
 	if walled {
-		line("A continuation of this run starts the runtime without a resume: the runtime's transcript lies inside the agent's container, which the session does not read")
-		return nil
+		if root == "" {
+			return nil
+		}
+		return newWalledTranscript(rs, root, dir, mask, send, line)
 	}
 	home := ""
 	for _, kv := range env {
@@ -289,13 +358,8 @@ func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, env []s
 		home, _ = userHome()
 	}
 	if home == "" {
-		line("A continuation of this run starts the runtime without a resume: the runtime has no home, so the session finds no transcript")
+		line(noResume + "the runtime has no home, so the session finds no transcript")
 		return nil
-	}
-	mask := func(l string) string { return hidden.Replace(masker.Replace(l)) }
-	send := func(data map[string]any) {
-		data["session"] = n
-		r.write(event.SessionTranscript, data)
 	}
 	return newTranscript(rs, home, dir, mask, send, line)
 }

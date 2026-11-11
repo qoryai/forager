@@ -125,9 +125,10 @@ Stated so a receiver reads the record for what it is.
   the harness passes (§Variables, Denied names). What is passed in is the agent's: a
   checkout that keeps a secret in the repository's configuration passes the secret in with
   the workspace. Behind a wall the enclosure sees only the session's directory in the
-  run directory, `sessions/<n>/`, read-only, and the run directory lies outside every
-  place the run binds writable, so the agent can neither read, change nor move
-  `events.jsonl`, nor read another session's files. The server's copy is out of reach
+  run directory, `sessions/<n>/`, read-only, and, for a runtime with `resume`, the
+  session's transcript directory, `transcripts/<n>/`, writable. The rest of the run
+  directory lies outside every place the run binds writable, so the agent can neither
+  read, change nor move `events.jsonl`, nor read another session's files. The server's copy is out of reach
   as well.
 - Behind a wall the exit status is the adapter's command's. With Docker that is the
   runtime's status, except that `125` is the engine failing to start the container,
@@ -2090,6 +2091,29 @@ directory with every character other than an ASCII letter or digit replaced by `
 `/workspace` becomes `-workspace`. The session reads no path outside `resume.prefix`,
 with a `..` segment or through a symbolic link.
 
+Behind a wall, the session reads the transcript in the session's transcript directory,
+`transcripts/<n>/` in the run directory, which it makes, mode `0700`, before the
+runtime starts. A runtime gets the directory only when its descriptor has `resume` and
+its `resume.path` is `resume.prefix` followed by `{cwd_slug}/{session_id}.jsonl`, as
+Claude Code's is. The wall binds the directory writable at `resume.prefix` below the
+home of the agent's user inside. For `docker` that home is `HOME` of the launch's
+environment, else `HOME` of the image's, else the home the image's `/etc/passwd` gives
+the user the container starts as, else `/`. A home where that place is, holds or lies
+inside a mount's place inside, or `/qory`, fails the session. The session reads one path
+in the directory, `<slug>/<session id>.jsonl`, with `<slug>` from the working directory
+inside, and ignores `resume.path_from`. It takes the session id from the first hook input
+or `dev.qory.runtime.started` with `session_id`, and reads only under an id that is a
+UUID in lower case, such as `5d0c6a51-3b2e-4f7a-9c1d-8e6f4a2b0c37`. It opens the file
+with no symbolic link among its names and without waiting for a writer, and reads it
+only when it is a regular file with one link and at most 67108864 bytes (64 MiB). A
+session id of another shape, or any other file, sends nothing of it and writes one
+`dev.qory.run.log` line of the session, with `stream: stderr`: `A continuation of this
+run starts the runtime without a resume: the runtime's session id "<id>" is not a UUID
+in lower case, so the session reads no transcript`, with at most the id's first 64 bytes,
+quoted, or `A continuation of this run starts
+the runtime without a resume: the session reads no transcript at <path>: <cause>`. A file
+that does not exist yet is read once it exists.
+
 The session reads whole lines as the runtime appends them, and reads the file once more
 to its end before it writes `dev.qory.session.exited`. It masks each line whole, as a
 `dev.qory.run.log` chunk is masked, a hidden harness's `[harness text: <path>]` included
@@ -2267,7 +2291,8 @@ compose keeps it out of git:
 - `sessions/<n>/`: a directory per session that started, `<n>` the session's number
   from the join answer; a join that writes no `dev.qory.session.started` has none.
   Behind a wall the enclosure binds the directory of the session that runs, read-only,
-  and nothing else of the run directory. It contains:
+  and nothing else of the run directory but the session's transcript directory. It
+  contains:
   - `output.log`: the bytes of the session's `dev.qory.run.log` chunks, those with its
     number as `session`, masked as the
     run's `output.log` is, so the session's terminal can be replayed from it alone.
@@ -2278,6 +2303,10 @@ compose keeps it out of git:
   - `approve-key.sh` and the copies of the `--mcp-config`, `--agents` and
     system-prompt files: what Claude Code's preparation writes, when it writes them
     (§Sequence step 6, §The descriptor).
+- `transcripts/<n>/`: behind a wall, the transcript directory of session `<n>` whose
+  runtime has `resume`, mode `0700`, which the enclosure binds writable at
+  `resume.prefix` inside. The agent writes it; the session reads the transcript there
+  and writes a paused run's there (§The events, A session's transcript).
 - `ca-bundle.pem`: the trusted bundle with the run's certificate, for every run with a
   certificate authority, walled or not, when the machine has a CA bundle; certificates
   only, never a key (§Credentials, Termination).
@@ -4615,7 +4644,12 @@ paused run's `dev.qory.session.transcript` chunks of `resume.path` joined in seq
 order. The session writes the bytes at `resume.path` under the runtime's home, then
 starts the runtime with the descriptor's `resume.args` added, `{session_id}` replaced by
 `resume.session_id`: `claude --resume <session id>` for Claude Code (§The descriptor,
-Resume). When the read or the write fails, the session starts the runtime without a
+Resume). Behind a wall, the session writes them in the session's transcript directory
+(§The events, A session's transcript), before the agent's container starts: it makes
+the slug directory, mode `0700`, and creates the file, mode `0600`, where none exists,
+with no symbolic link among its names. A `resume.session_id` that is not a UUID in lower
+case, or a `resume.path` other than `resume.prefix`, a slug, `/`, `resume.session_id`
+and `.jsonl`, is a failed resume. When the read or the write fails, the session starts the runtime without a
 resume and writes one `dev.qory.run.log` line of the session, with `stream: stderr`:
 `The runtime starts without a resume: the transcript of run <run id> could not be
 restored: <cause>`.
@@ -4900,8 +4934,10 @@ directory the transcript must lie under, `~/.claude/projects/`, `~` being the ru
 home. `args` are the arguments the session adds when it resumes, `["--resume",
 "{session_id}"]`. The session sends the transcript as `dev.qory.session.transcript`
 (§The events, A session's transcript) and restores it in a run with `resume` (§The run
-API, The transcript of a paused run). Absent, the session sends no transcript, and a
-continuation starts the runtime without a resume.
+API, The transcript of a paused run), behind a wall through the session's transcript
+directory, which the wall binds at `prefix` inside. Absent, the session sends no
+transcript, a wall binds no transcript directory, and a continuation starts the runtime
+without a resume.
 
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
@@ -5266,7 +5302,9 @@ A wall is what makes a connection around the proxy fail. It is optional: with no
 runtime is a process of the machine and enforcement is cooperative (§Limits). With one,
 the runtime runs in an **enclosure** and the session stays outside it with the
 proxy, the policy and the access key secret; the record is written from outside, and the
-enclosure sees only the session's directory in the run directory, read-only. A wall is built by an adapter, one per
+enclosure sees only the session's directory in the run directory, read-only, and, for a
+runtime whose descriptor has `resume`, the session's transcript directory there,
+writable (§The events, A session's transcript). A wall is built by an adapter, one per
 container interface; the contract's rules refer to no specific tool and define one list
 for all of them.
 
@@ -5357,7 +5395,12 @@ up in its parent, so two binds of one root are allowed:
 
 - the enclosure binds the outermost of the places the run lists, the mounts and the
   workspace, each once, and the session's directory, `sessions/<n>/` in the run
-  directory, read-only. The workspace is writable, or read-only for a session with
+  directory, read-only. For a runtime with `resume` it also binds the session's
+  transcript directory, `transcripts/<n>/` in the run directory, writable, at
+  `resume.prefix` below the home of the agent's user inside (§The events, A session's
+  transcript). The session makes that directory and checks that it is, holds and lies
+  inside no other bind; the wall refuses it when it overlaps a mount, or when its place
+  inside overlaps another bind's or `/qory`. The workspace is writable, or read-only for a session with
   `SessionSpec.WorkspaceReadOnly`, and
   is the working directory inside, through the bind that holds it, or bound at the same
   path as on the machine when no mount holds it; a run whose policy names its image by
@@ -5400,8 +5443,8 @@ up in its parent, so two binds of one root are allowed:
   to one of Forager's files is looked up in is `mount_contains_forager_files`;
 - the session keeps a registry of the walled runs still going on the machine, per user,
   with each run's binds: the places, the run directory and the wall's extra binds, for
-  `docker` its helper, the hook socket's directory and the private directory that holds
-  the run's environment files and, with a CA, the bundle the enclosure binds. The wall's
+  `docker` its helper, the hook socket's directory, the session's transcript directory and
+  the private directory that holds the run's environment files and, with a CA, the bundle the enclosure binds. The wall's
   are listed when the run starts, those it makes later as their patterns, which never
   conflict with another session's. A run is no run, `mount_shared_with_run`, when one of
   its binds lies inside a writable bind of another run's or is reached through one, when

@@ -847,16 +847,23 @@ func fullReference(ref string) string {
 	return domain + "/" + rest + "@" + digest
 }
 
+// imageConf is what the wall reads of an image's Config: its user and its
+// environment.
+type imageConf struct {
+	User string
+	Env  []string
+}
+
 // imageConfig is the Config of the run's image, nil when it has none. It is the whole
 // Config, since an image that sets no user has no User in it, which a template of
 // .Config.User fails on; no Config at all is no user either.
-func (e *dockerEnclosure) imageConfig(ctx context.Context) (*struct{ User string }, error) {
+func (e *dockerEnclosure) imageConfig(ctx context.Context) (*imageConf, error) {
 	argv := []string{e.command(), "image", "inspect", "--format", "{{json .Config}}", e.req.Image}
 	out, err := e.sys.output(ctx, argv, e.env)
 	if err != nil {
 		return nil, fmt.Errorf("wall docker: image inspect: %w", accesskey.ShownError(err))
 	}
-	var config *struct{ User string }
+	var config *imageConf
 	if err := json.Unmarshal(bytes.TrimSpace(out), &config); err != nil {
 		return nil, fmt.Errorf("wall docker: the image's user: %w", err)
 	}
@@ -1143,6 +1150,10 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if err != nil {
 		return Launch{}, err
 	}
+	transcript, err := e.transcriptMount(ctx, l)
+	if err != nil {
+		return Launch{}, err
+	}
 
 	run := []string{"run", "--rm", "--interactive"}
 	if l.Interactive {
@@ -1182,6 +1193,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	if bundle != "" {
 		run = append(run, "--mount", bundle)
+	}
+	if transcript != "" {
+		run = append(run, "--mount", transcript)
 	}
 	run = append(run, e.neverPull()...)
 	if e.req.Docker {
@@ -1378,13 +1392,17 @@ func (d *Docker) Binds(Launch) ([]Bind, error) {
 }
 
 // Binds lists the adapter's own binds for the launch: the helper, read-only, the hook
-// socket's directory, writable, when the launch has a socket, and, read-only, the
-// private directory that holds the run's environment files and, with a CA, the bundle
-// the enclosure binds, which it makes now.
+// socket's directory, writable, when the launch has a socket, the session's transcript
+// directory, writable, when the launch has one, and, read-only, the private directory
+// that holds the run's environment files and, with a CA, the bundle the enclosure
+// binds, which it makes now.
 func (e *dockerEnclosure) Binds(l Launch) ([]Bind, error) {
 	out := []Bind{{Path: e.d.Helper, ReadOnly: true, Helper: true}}
 	if l.Socket != "" {
 		out = append(out, Bind{Path: filepath.Dir(l.Socket)})
+	}
+	if l.Transcript.Path != "" {
+		out = append(out, Bind{Path: l.Transcript.Path})
 	}
 	if err := e.makeTemp(); err != nil {
 		return nil, err
@@ -1514,6 +1532,126 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 		out = append(out, m)
 	}
 	return out, host, nil
+}
+
+// transcriptMount is the --mount of the launch's transcript directory, empty for a
+// launch with none: the directory, writable, at Under below the home of the agent's
+// user inside, [dockerEnclosure.home]. A directory that is not absolute and clean, an
+// Under that is not relative and clean or has a .. name, a directory that is, holds or
+// lies inside one of the launch's mounts or the hook socket's directory, and a place
+// inside that is, holds or lies inside another mount's place inside or /qory, are
+// refused: no mount of the launch's shows the directory, and the bind hides no part of
+// another one.
+func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string, error) {
+	tr := l.Transcript
+	if tr.Path == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(tr.Path) || filepath.Clean(tr.Path) != tr.Path {
+		return "", fmt.Errorf("wall docker: the transcript directory %s is not an absolute, clean path", accesskey.ShownValue(tr.Path, true))
+	}
+	if tr.Under == "" || path.IsAbs(tr.Under) || path.Clean(tr.Under) != tr.Under || slices.Contains(strings.Split(tr.Under, "/"), "..") {
+		return "", fmt.Errorf("wall docker: the transcript's place below the home, %s, is not a relative, clean path", accesskey.ShownValue(tr.Under, true))
+	}
+	var sources []string
+	dsts := []string{qoryDir}
+	for _, m := range l.Mounts {
+		sources = append(sources, m.Path)
+		if m.Target != "" {
+			dsts = append(dsts, filepath.Clean(m.Target))
+		} else {
+			dsts = append(dsts, m.Path)
+		}
+	}
+	if l.Socket != "" {
+		sources = append(sources, filepath.Dir(l.Socket))
+	}
+	for _, p := range sources {
+		if under(p, tr.Path) || under(tr.Path, p) {
+			return "", fmt.Errorf("wall docker: the transcript directory %s overlaps the mount %s; the session makes it outside every mount", accesskey.ShownValue(tr.Path, true), accesskey.ShownValue(p, true))
+		}
+	}
+	home, err := e.home(ctx, l.Env)
+	if err != nil {
+		return "", err
+	}
+	dst := path.Join(home, tr.Under)
+	for _, d := range dsts {
+		if under(d, dst) || under(dst, d) {
+			return "", fmt.Errorf("wall docker: set HOME to a directory where %s overlaps no mount: the transcript directory is bound there, and it overlaps %s", accesskey.ShownValue(dst, true), accesskey.ShownValue(d, true))
+		}
+	}
+	return mount(tr.Path, dst, false)
+}
+
+// home is the home of the agent's user inside, as the engine sets HOME: the last HOME
+// of env, the launch's environment, when it is not empty; else HOME of the image's
+// environment; else the home /etc/passwd of the image gives the user the container
+// starts as, the wall's user, or root's with nested Docker; else /. A home that is not
+// absolute is an error. The image's files are read out of the relay's container, of
+// the same image, or out of the container of the run's image that is never started.
+func (e *dockerEnclosure) home(ctx context.Context, env []string) (string, error) {
+	checked := func(h, from string) (string, error) {
+		if !path.IsAbs(h) {
+			return "", fmt.Errorf("wall docker: the home inside, %s from %s, is not an absolute path", accesskey.ShownValue(h, true), from)
+		}
+		return path.Clean(h), nil
+	}
+	if h := lastHome(env); h != "" {
+		return checked(h, "the launch's HOME")
+	}
+	config, err := e.imageConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	if config != nil {
+		if h := lastHome(config.Env); h != "" {
+			return checked(h, "the image's HOME")
+		}
+	}
+	user, _, _ := strings.Cut(e.user, ":")
+	if e.req.Docker {
+		user = "0"
+	}
+	from := e.relay()
+	if e.relayImage() != e.req.Image {
+		from = e.image()
+	}
+	passwd, over, err := e.copyOut(ctx, from, "/etc/passwd")
+	if err != nil || over {
+		return "/", nil
+	}
+	if h, ok := passwdHome(passwd, user); ok && h != "" {
+		return checked(h, "the image's /etc/passwd")
+	}
+	return "/", nil
+}
+
+// lastHome is the value of the last HOME in env, empty when there is none.
+func lastHome(env []string) string {
+	h := ""
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "HOME="); ok {
+			h = v
+		}
+	}
+	return h
+}
+
+// passwdHome is the home /etc/passwd gives the user, a name or a uid of digits, and
+// whether it lists the user.
+func passwdHome(passwd []byte, user string) (string, bool) {
+	numeric := uidShape.MatchString(user)
+	for _, line := range strings.Split(string(passwd), "\n") {
+		f := strings.Split(strings.TrimSuffix(line, "\r"), ":")
+		if len(f) < 6 {
+			continue
+		}
+		if (numeric && f[2] == user) || (!numeric && f[0] == user) {
+			return f[5], true
+		}
+	}
+	return "", false
 }
 
 // under reports whether path is dir or lies below it, by whole components of the

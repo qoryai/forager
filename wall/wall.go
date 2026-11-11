@@ -190,6 +190,25 @@ type Launch struct {
 	// Limits are the resources the agent gets; the zero value leaves each to the
 	// adapter's engine.
 	Limits Limits
+	// Transcript is the session's transcript directory, which the enclosure binds
+	// writable; the zero value binds none.
+	Transcript Transcript
+}
+
+// Transcript is a directory of this machine that the session makes for one session,
+// in the run directory and outside every mount, where the runtime writes the transcript
+// of its session. The enclosure binds it writable at Under below the home of the
+// agent's user inside, so the session reads the transcript, and writes a restored one,
+// on this machine. The session checks that no mount holds it or lies inside it; an
+// adapter refuses a launch where one does, by path, or where its place inside is,
+// holds or lies inside another mount's place inside or the adapter's own paths.
+type Transcript struct {
+	// Path is the directory on this machine, absolute and clean; empty binds none.
+	Path string
+	// Under is its place inside, relative to the home of the agent's user, clean, with
+	// no .. name: the runtime descriptor's resume.prefix without its ~/, such as
+	// .claude/projects for Claude Code.
+	Under string
 }
 
 // Limits are the resources an enclosure gives the agent. A zero field is no limit of
