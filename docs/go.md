@@ -1067,8 +1067,9 @@ res, err := session.Resend(ctx, session.ResendSpec{
   `tools.summary`, and a runtime without it has no summary,
 - where it writes the transcript of its session and how it resumes from it, through
   the optional `runtimes.Resumes`, from a descriptor's `resume`; the session sends the
-  transcript of such a runtime as `dev.qory.session.transcript`, in a run with no wall,
-  and restores and resumes it in a run whose run answer has `resume`. A runtime without
+  transcript of such a runtime as `dev.qory.session.transcript`, behind a wall through
+  the session's transcript directory, which the wall binds at `resume.prefix` inside, and
+  restores and resumes it in a run whose run answer has `resume`. A runtime without
   it has neither. See [the record](events.md#foragers-events).
 
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:

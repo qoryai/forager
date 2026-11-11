@@ -126,17 +126,23 @@ a control plane can continue.
 
 A runtime whose descriptor has `resume`, such as Claude Code, writes the transcript of
 its session to a file, `~/.claude/projects/<working directory as a slug>/<session
-id>.jsonl` for Claude Code. In a run with no wall, the session sends that file as
+id>.jsonl` for Claude Code. The session sends that file as
 `dev.qory.session.transcript` events: whole lines as the runtime appends them, each
 masked as a `dev.qory.run.log` chunk is, in chunks of at most 32 KiB, with `session`,
 `session_id`, `path`, `offset` from 0 and `bytes`. The session reads the file once more
-to its end before the session's `dev.qory.session.exited`. Behind a wall the file lies
-inside the agent's container: the session sends no transcript and writes one line on
-`stderr` that says so. When the run answer has `resume`, the run's first session whose
-runtime has `resume` reads the paused run's transcript over the gateway's link, `GET
-<run.url>/<run_id>/transcript`, writes it in the session's directory as
-`resume.jsonl`, and starts the runtime through `resume.sh`, which copies it under the
-runtime's home and adds the descriptor's arguments, such as `--resume <session id>`.
+to its end before the session's `dev.qory.session.exited`. Behind a wall the wall binds
+the session's transcript directory, `transcripts/<n>/` in the run directory, at
+`~/.claude/projects/` inside, and the session reads the file there: only
+`<slug>/<session id>.jsonl`, under a session id that is a UUID in lower case, and only a
+regular file with one link and at most 64 MiB, with no symbolic link on its path. For
+anything else it sends nothing and writes one line on `stderr` that says why. When the
+run answer has `resume`, the run's first session whose runtime has `resume` reads the
+paused run's transcript over the gateway's link, `GET <run.url>/<run_id>/transcript`. In
+a run with no wall it writes it in the session's directory as `resume.jsonl`, and starts
+the runtime through `resume.sh`, which copies it under the runtime's home and adds the
+descriptor's arguments, such as `--resume <session id>`. Behind a wall it writes it in
+the transcript directory before the agent's container starts, and adds the arguments
+itself.
 When the read or the copy fails, the runtime starts without a resume, after one line
 on `stderr` that says why, a `404` from the gateway among the causes. See the
 contract's §The events, A session's transcript.

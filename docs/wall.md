@@ -410,11 +410,20 @@ up in its parent, so two binds of one root are allowed.
 - **The run directory.** The runs directory is one of Forager's files, so the run
   directory lies inside no place the run lists. Of the run directory, only the
   directory of the session that runs, `sessions/<n>/`, is bound, read-only, to that
-  session's enclosure: the agent reads no record and no file of another session. A bind
+  session's enclosure: the agent reads no record and no file of another session. For
+  Claude Code the session also makes `transcripts/<n>/`, mode `0700`, which is bound
+  writable at `~/.claude/projects/` inside, so the session reads the transcript and
+  restores a paused run's there. It reads only `<slug>/<session id>.jsonl`, under a
+  session id that is a UUID in lower case: a regular file with one link and at most 64
+  MiB, with no symbolic link on its path. For a planted link, FIFO, hard link or larger
+  file it reads nothing and writes one line on `stderr`. `~` is `HOME` of the launch,
+  else of the image, else the home the image's `/etc/passwd` gives the wall's user,
+  else `/`; a home where `~/.claude/projects` overlaps a mount fails the session. A bind
   that is, holds or lies inside another walled run's run directory, whatever its mode,
   is `mount_shared_with_run`.
 - **The wall's extra binds.** For `wall.Docker` they are the helper, read-only, the hook
-  socket's directory, writable, and, read-only, the private directory that holds the
+  socket's directory, writable, the session's transcript directory, writable, and,
+  read-only, the private directory that holds the
   run's environment files and, with a CA, the `ca-bundle.pem` the enclosure binds. A
   wall, and its enclosure, lists them through `wall.Binder`. The session lists the
   wall's in the registry when the run starts, the directories it makes later as their
