@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -122,8 +123,8 @@ func newKeyFixture(t *testing.T) *keyFixture {
 		creds = append(creds, Credential{Name: name, Hosts: []string{keyHost}, Scheme: "bearer", Placeholder: placeholder, Token: func() string { return value }})
 		keys = append(keys, modelkey.Key{Name: name, PauseFor: time.Hour})
 	}
-	f.g = modelkey.New(keys, nil)
-	f.p.SetKeyGroup(f.g, func(line string) { f.mu.Lock(); f.logged = append(f.logged, line); f.mu.Unlock() })
+	f.g = modelkey.New(keys, "model", nil)
+	f.p.SetKeyGroup(f.g, "/v1/messages", func(line string) { f.mu.Lock(); f.logged = append(f.logged, line); f.mu.Unlock() })
 	ca, err := NewCA("test")
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +228,7 @@ func TestNoKeyLeftPassesTheRefusalAndHoldsTheRest(t *testing.T) {
 	}
 	f.g.Resume()
 	delete(f.up.answers, "model-3")
-	f.g.Merge([]modelkey.Window{{Credential: "model-3", Window: "key", Status: modelkey.StatusAllowed, Source: modelkey.SourceProvider, ObservedAt: time.Now().Add(time.Minute)}})
+	f.g.Merge([]modelkey.Window{{Credential: "model-3", Window: "five_hour", Status: modelkey.StatusAllowed, Source: modelkey.SourceProvider, ObservedAt: time.Now().Add(time.Minute)}})
 	if status, _ := f.post(t, "{}"); status != http.StatusOK {
 		t.Errorf("after Resume and a cooldown that ended: %d", status)
 	}
@@ -298,14 +299,20 @@ func TestAStreamErrorSwitchesTheKeyAndPassesTheBytes(t *testing.T) {
 }
 
 // TestAStreamWithoutAnErrorKeepsTheKey pins that a content delta that contains the
-// words of an error, outside an error event, changes no key.
+// words of an error, or a data line of an error outside an event named error, changes
+// no key, and that an empty line ends the event.
 func TestAStreamWithoutAnErrorKeepsTheKey(t *testing.T) {
+	// No resend: a cooldown would panic on the nil key group.
 	s := &streamWatch{ReadCloser: io.NopCloser(bytes.NewReader(nil))}
-	for _, line := range []string{"event: content_block_delta", `data: {"delta":"\"rate_limit_error\""}`, ""} {
+	for _, line := range []string{
+		"event: content_block_delta", `data: {"delta":"\"rate_limit_error\""}`, "",
+		"event: content_block_delta", `data: {"type":"error","error":{"type":"rate_limit_error"}}`, "",
+		`data: {"type":"error","error":{"type":"rate_limit_error"}}`, "",
+	} {
 		s.read(line)
 	}
-	if s.errorEvent {
-		t.Error("an event ended, and the next is read as an error event")
+	if s.event != "" || len(s.data) != 0 {
+		t.Errorf("after an empty line the event is %q with data %q; want none", s.event, s.data)
 	}
 }
 
@@ -325,5 +332,171 @@ func TestTheJoinsKeyOfTheGroupMeansTheActiveKey(t *testing.T) {
 	f.post(t, "{}")
 	if got := keysOf(f.up.taken()); strings.Join(got, ",") != "" {
 		t.Errorf("a session with no model key got %v; want none", got)
+	}
+}
+
+// postTo sends body with method to path on the provider through the proxy with the
+// placeholder, and returns the status and the answer's body.
+func (f *keyFixture) postTo(t *testing.T, method, path, body string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(method, "https://"+keyHost+path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+link.KeyPlaceholder("model"))
+	resp, err := f.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// streamError answers with a stream that ends with an error event of the type
+// rate_limit_error.
+func streamError(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\"}\n\n"+
+		"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}\n\n")
+}
+
+// TestOnlyTheMessagesPostIsReadForAStreamError pins the path rule of the stream: an
+// error event of the type rate_limit_error cools the key only in the streamed 200 of a
+// POST to the messages path, with any query; the same stream on another path or for
+// another method changes no key, and so does a data line of the error in an event
+// that is not named error.
+func TestOnlyTheMessagesPostIsReadForAStreamError(t *testing.T) {
+	f := newKeyFixture(t)
+	f.up.answers["model"] = streamError
+	for _, c := range []struct{ method, path string }{{http.MethodPost, "/v1/messages/count_tokens"}, {http.MethodPost, "/v1/other"}, {http.MethodGet, "/v1/messages"}} {
+		f.postTo(t, c.method, c.path, "{}")
+		if f.g.Active() != "model" {
+			t.Fatalf("%s %s: active %s; want model", c.method, c.path, f.g.Active())
+		}
+	}
+	f.up.answers["model"] = func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}\n\n")
+	}
+	f.postTo(t, http.MethodPost, "/v1/messages", "{}")
+	if f.g.Active() != "model" {
+		t.Fatalf("an error's data in a content_block_delta event: active %s; want model", f.g.Active())
+	}
+	f.up.answers["model"] = streamError
+	f.postTo(t, http.MethodPost, "/v1/messages?beta=true", "{}")
+	if f.g.Active() != "model-2" {
+		t.Errorf("POST /v1/messages?beta=true: active %s; want model-2", f.g.Active())
+	}
+}
+
+// TestEveryKeyCoolingGetsTheProxys429 pins the state after a report's answer that puts
+// every key in cooldown: the proxy sets no key, returns its 429 without a call to the
+// provider, and holds the stop.
+func TestEveryKeyCoolingGetsTheProxys429(t *testing.T) {
+	f := newKeyFixture(t)
+	later := time.Now().Add(time.Hour)
+	var entries []modelkey.Window
+	for name := range fakeKeys {
+		entries = append(entries, modelkey.Window{Credential: name, Window: "five_hour", Status: modelkey.StatusRejected, CooldownUntil: later, Source: modelkey.SourceProvider, ObservedAt: time.Now()})
+	}
+	f.g.Merge(entries)
+	status, body := f.post(t, "{}")
+	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: start the run again once a model key's cooldown ends") {
+		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
+	}
+	if calls := f.up.taken(); len(calls) != 0 {
+		t.Errorf("the provider got %v; want no call", calls)
+	}
+	if !f.g.Passed() {
+		t.Error("the group holds no stop")
+	}
+}
+
+// TestAResendNeedsTheNextKeysPaths pins the host rules of a resend: when the next key's
+// credential has paths that do not match the request, the refusal reaches the session,
+// the group holds the stop, and model-2 gets nothing.
+func TestAResendNeedsTheNextKeysPaths(t *testing.T) {
+	f := newKeyFixture(t)
+	f.p.term.Load().creds[1].Paths = []string{"/v1/files"}
+	f.up.answers["model"] = limited
+	if status, _ := f.post(t, "{}"); status != http.StatusTooManyRequests {
+		t.Errorf("the session got %d; want the refusal", status)
+	}
+	if got := keysOf(f.up.taken()); strings.Join(got, ",") != "model" {
+		t.Errorf("the provider got %v; want model alone", got)
+	}
+	if !f.g.Passed() {
+		t.Error("the group holds no stop")
+	}
+}
+
+// TestConcurrentRequestsSwitchKeys sends requests at once while model and model-2
+// refuse: every request gets model-3's answer, for the race detector.
+func TestConcurrentRequestsSwitchKeys(t *testing.T) {
+	f := newKeyFixture(t)
+	f.up.answers["model"] = limited
+	f.up.answers["model-2"] = limited
+	var wg sync.WaitGroup
+	statuses := make([]int, 12)
+	for i := range statuses {
+		wg.Go(func() { statuses[i], _ = f.post(t, `{"n":1}`) })
+	}
+	wg.Wait()
+	for i, s := range statuses {
+		if s != http.StatusOK {
+			t.Errorf("request %d: %d; want 200", i, s)
+		}
+	}
+	if f.g.Active() != "model-3" || f.g.Passed() {
+		t.Errorf("active %s, passed %v; want model-3 and no stop", f.g.Active(), f.g.Passed())
+	}
+}
+
+// answers is a round tripper that returns its answers in order, and keeps each request.
+type answers struct {
+	got  []*http.Request
+	list []*http.Response
+}
+
+func (a *answers) RoundTrip(r *http.Request) (*http.Response, error) {
+	a.got = append(a.got, r)
+	resp := a.list[0]
+	a.list = a.list[1:]
+	return resp, nil
+}
+
+// TestTheCopyIsDroppedWhenTheStatusArrives pins the copy of the body: once the status
+// of the answer the proxy passes on arrives, the resend has no copy, the request's body
+// and that of the resend read nothing more, and GetBody fails, so a streamed answer
+// holds no copy for as long as it lasts.
+func TestTheCopyIsDroppedWhenTheStatusArrives(t *testing.T) {
+	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", nil)
+	one := &Credential{Name: "model", Hosts: []string{keyHost}, Scheme: "bearer", Token: func() string { return fakeKeys["model"] }}
+	two := &Credential{Name: "model-2", Hosts: []string{keyHost}, Scheme: "bearer", Token: func() string { return fakeKeys["model-2"] }}
+	k := &keyGroup{g: g, messages: "/v1/messages", log: func(string) {}}
+	r := httptest.NewRequest(http.MethodPost, "https://"+keyHost+"/v1/messages", strings.NewReader(`{"model":"m"}`))
+	p := &Proxy{}
+	ctx := p.withResend(r.Context(), r, k, one, []*Credential{one, two}, "/v1/messages", true)
+	rs := resendOf(r.WithContext(ctx))
+	refusal := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"type":"error","error":{"type":"rate_limit_error"}}`))}
+	stream := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}
+	rt := &answers{list: []*http.Response{refusal, stream}}
+	resp, err := rs.roundTrip(rt, r)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("roundTrip: %v, %v", resp, err)
+	}
+	if rs.body != nil || rs.copied {
+		t.Errorf("the resend has %d bytes of copy; want none", len(rs.body))
+	}
+	for i, out := range rt.got {
+		if b, _ := io.ReadAll(out.Body); len(b) != 0 {
+			t.Errorf("request %d: its body reads %q after the status; want nothing", i, b)
+		}
+	}
+	if again := rt.got[1]; again.GetBody == nil {
+		t.Error("the resend has no GetBody")
+	} else if _, err := again.GetBody(); !errors.Is(err, errDropped) {
+		t.Errorf("GetBody after the status: %v; want errDropped", err)
+	}
+	if _, ok := resp.Body.(*streamWatch); !ok {
+		t.Error("the stream is not read for an error event")
 	}
 }

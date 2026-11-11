@@ -19,8 +19,8 @@ import (
 const MaxCopy = 8 << 20
 
 // maxWindows is the most windows the group keeps of one key, the 11 windows of the
-// report: 6 keys of 11 windows fit the report's 66 entries. A window past them is left
-// out.
+// report, [knownWindows]: 6 keys of 11 windows fit the report's 66 entries, and every
+// key has room for the window key of a limit refusal.
 const maxWindows = 11
 
 // week is how far the gateway moves a key's schedule_resets_at once it has passed.
@@ -56,26 +56,36 @@ type Window struct {
 type Group struct {
 	keys []Key
 	now  func() time.Time
+	// made is the clock's time when the group was made, after the claim.
+	made time.Time
 
 	mu sync.Mutex
 	// windows are each key's windows, by the key's place, in the order they first came.
 	windows [][]*Window
-	active  int
-	// passed says the proxy passed a limit refusal to the session: until [Group.Resume],
-	// the proxy sends no request with the placeholder and the gateway's answer to each
-	// batch has stop.
+	// claim is each key's cooldown_until of the run configuration, by the key's place,
+	// zero once a later state of the key allows it.
+	claim  []time.Time
+	active int
+	// passed is true once the proxy passed a limit refusal to the session: until
+	// [Group.Resume], the proxy sends no request with the placeholder and the gateway's
+	// answer to each batch has stop.
 	passed bool
 	// changed, when set, is called after a change a report sends.
 	changed func()
 }
 
-// New makes the group of keys, in their order, the first one active. now is the clock;
-// nil is time.Now.
-func New(keys []Key, now func() time.Time) *Group {
+// New makes the group of keys, in their order, with the key start active, the first
+// key when start is none of them. now is the clock; nil is time.Now.
+func New(keys []Key, start string, now func() time.Time) *Group {
 	if now == nil {
 		now = time.Now
 	}
-	return &Group{keys: slices.Clone(keys), now: now, windows: make([][]*Window, len(keys))}
+	g := &Group{keys: slices.Clone(keys), now: now, made: now(), windows: make([][]*Window, len(keys)), claim: make([]time.Time, len(keys))}
+	for i, k := range keys {
+		g.claim[i] = k.CooldownUntil
+	}
+	g.active = max(g.index(start), 0)
+	return g
 }
 
 // OnChange sets f, called with no lock held after each change of a window's status,
@@ -103,19 +113,28 @@ func (g *Group) index(name string) int {
 	return slices.IndexFunc(g.keys, func(k Key) bool { return k.Name == name })
 }
 
-// Active is the active key's name. When the active key is in cooldown, the first key
-// of [Group.next] becomes active first; when every key is in cooldown, the active key
-// stays, so the provider's answer decides.
+// Active is the active key's name, as [Group.Pick] returns it.
 func (g *Group) Active() string {
+	name, _ := g.Pick()
+	return name
+}
+
+// Pick returns the active key's name, and false when every key of the group is in
+// cooldown. When the active key is in cooldown, the first key of [Group.next] becomes
+// active first; when every key is in cooldown, the active key stays, and the proxy sets
+// no key.
+func (g *Group) Pick() (string, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
 	if g.coolingUntil(g.active, now).After(now) {
-		if next, ok := g.next(now); ok {
-			g.active = next
+		next, ok := g.next(now)
+		if !ok {
+			return g.keys[g.active].Name, false
 		}
+		g.active = next
 	}
-	return g.keys[g.active].Name
+	return g.keys[g.active].Name, true
 }
 
 // next is the key a switch makes active, among the keys not in cooldown at now: the
@@ -168,7 +187,7 @@ func (g *Group) knownReset(i int, now time.Time) time.Time {
 // coolingUntil is the end of key i's cooldown: the latest cooldown_until of its
 // windows and of the run configuration. Called with g.mu held.
 func (g *Group) coolingUntil(i int, _ time.Time) time.Time {
-	until := g.keys[i].CooldownUntil
+	until := g.claim[i]
 	for _, w := range g.windows[i] {
 		if w.Status == StatusRejected && w.CooldownUntil.After(until) {
 			until = w.CooldownUntil
@@ -204,19 +223,7 @@ func (g *Group) Streamed(name string, h http.Header) {
 
 // switched makes the first key of [Group.next] active when the active one is in cooldown,
 // and returns the active key and whether it is out of cooldown.
-func (g *Group) switched() (string, bool) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	now := g.now()
-	if g.coolingUntil(g.active, now).After(now) {
-		next, ok := g.next(now)
-		if !ok {
-			return g.keys[g.active].Name, false
-		}
-		g.active = next
-	}
-	return g.keys[g.active].Name, true
-}
+func (g *Group) switched() (string, bool) { return g.Pick() }
 
 // Pass records that the proxy passed a limit refusal to the session: no key of the
 // group is left, or the refused body had no copy.
@@ -248,8 +255,9 @@ func (g *Group) Resume() {
 	g.mu.Unlock()
 }
 
-// record reads the answer's headers into key name's windows. limit says the answer is
-// a limit refusal, and code is its error_code.
+// record reads the answer's headers into key name's windows. limit is true for a limit
+// refusal, and code is its error_code. An answer that is no limit refusal ends the
+// key's cooldown_until of the run configuration: the provider served the key.
 func (g *Group) record(name string, h http.Header, limit bool, code string) {
 	i := g.index(name)
 	if i < 0 {
@@ -261,6 +269,9 @@ func (g *Group) record(name string, h http.Header, limit bool, code string) {
 		g.cool(i, &r, code, now)
 	}
 	g.mu.Lock()
+	if !limit {
+		g.claim[i] = time.Time{}
+	}
 	changed := false
 	for _, s := range r.windows {
 		w := g.window(i, s.window)
@@ -357,8 +368,11 @@ func (g *Group) cool(i int, r *read, code string, now time.Time) {
 }
 
 // window is key i's window w, added when the key has fewer than [maxWindows]; nil
-// when it has that many. Called with g.mu held.
+// for a window outside the 11 of the contract. Called with g.mu held.
 func (g *Group) window(i int, w string) *Window {
+	if !knownWindows[w] {
+		return nil
+	}
 	for _, have := range g.windows[i] {
 		if have.Window == w {
 			return have
@@ -405,16 +419,18 @@ func (g *Group) Windows() []Window {
 	return out
 }
 
-// Merge takes each entry of an answer to a report that is of a key of the group and
-// later, by observed_at, than the state the group has of its key and window. A key whose
-// entry has a cooldown_until after now is in cooldown until then. An entry of a status
-// outside the three is left out.
+// Merge takes each entry of an answer to a report that is of a key of the group, of
+// one of the 11 windows, and later, by observed_at, than the state the group has of its
+// key and window. A key whose entry has a cooldown_until after now is in cooldown until
+// then. An entry that is not rejected, observed after the group was made, ends the
+// key's cooldown_until of the run configuration. An entry of a status outside the
+// three is left out.
 func (g *Group) Merge(entries []Window) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for _, e := range entries {
 		i := g.index(e.Credential)
-		if i < 0 || status(e.Status) == "" || !windowName.MatchString(e.Window) {
+		if i < 0 || status(e.Status) == "" {
 			continue
 		}
 		w := g.window(i, e.Window)
@@ -424,6 +440,9 @@ func (g *Group) Merge(entries []Window) {
 		*w = e
 		if e.Status != StatusRejected {
 			w.CooldownUntil = time.Time{}
+			if e.ObservedAt.After(g.made) {
+				g.claim[i] = time.Time{}
+			}
 		}
 	}
 }

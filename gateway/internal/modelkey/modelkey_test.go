@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func group(t *testing.T) (*modelkey.Group, *clock) {
 	t.Helper()
 	c := &clock{now: start}
 	keys := []modelkey.Key{{Name: "model", PauseFor: 5 * time.Hour}, {Name: "model-2", PauseFor: 5 * time.Hour}, {Name: "model-3", PauseFor: 5 * time.Hour}}
-	return modelkey.New(keys, c.Now), c
+	return modelkey.New(keys, "model", c.Now), c
 }
 
 // headers is a header of the pairs given.
@@ -192,7 +193,7 @@ func TestAnAPIRefusalCoolsTheKeyByItsFamiliesOrRetryAfter(t *testing.T) {
 func TestARefusalWithNoResetUsesTheScheduleOrPauseFor(t *testing.T) {
 	c := &clock{now: start}
 	schedule := start.Add(-time.Hour)
-	g := modelkey.New([]modelkey.Key{{Name: "model", ScheduleResetsAt: schedule, PauseFor: time.Hour}, {Name: "model-2", PauseFor: 90 * time.Second}}, c.Now)
+	g := modelkey.New([]modelkey.Key{{Name: "model", ScheduleResetsAt: schedule, PauseFor: time.Hour}, {Name: "model-2", PauseFor: 90 * time.Second}}, "model", c.Now)
 	g.Refused("model", headers(), modelkey.SpendLimitCode)
 	w, ok := window(g, "model", modelkey.WindowSpendLimit)
 	if !ok || w.Status != modelkey.StatusRejected || !w.CooldownUntil.Equal(schedule.Add(7*24*time.Hour)) || w.Source != modelkey.SourceSchedule {
@@ -390,7 +391,7 @@ func TestASwitchTakesTheChosenKeyThenNoResetThenTheClosestReset(t *testing.T) {
 		{Name: "model-4", PauseFor: time.Hour, ResetsAt: start.Add(time.Hour)},
 		{Name: "model-5", PauseFor: time.Hour},
 	}
-	g := modelkey.New(keys, c.Now)
+	g := modelkey.New(keys, "model", c.Now)
 	// model-5's answer gives it a reset in 2 hours, before model-2's.
 	g.Answered("model-5", headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-reset", epoch(start.Add(2*time.Hour))))
 	refuse := func(name string) string {
@@ -425,7 +426,7 @@ func TestResetsInOneMinuteGoByTheOrder(t *testing.T) {
 		{Name: "model", PauseFor: time.Hour},
 		{Name: "model-2", PauseFor: time.Hour, ResetsAt: start.Add(time.Hour + 40*time.Second)},
 		{Name: "model-3", PauseFor: time.Hour, ResetsAt: start.Add(time.Hour + 10*time.Second)},
-	}, c.Now)
+	}, "model", c.Now)
 	if next, ok := g.Refused("model", headers("retry-after", "600"), ""); next != "model-2" || !ok {
 		t.Errorf("Refused model: %s, %v; want model-2, first by the order in the same minute", next, ok)
 	}
@@ -440,7 +441,7 @@ func TestAKeyInCooldownAtTheClaimWaitsForItsEnd(t *testing.T) {
 		{Name: "model", PauseFor: time.Hour},
 		{Name: "model-2", PauseFor: time.Hour},
 		{Name: "model-3", PauseFor: time.Hour, Chosen: true, CooldownUntil: start.Add(30 * time.Minute)},
-	}, c.Now)
+	}, "model", c.Now)
 	if next, ok := g.Refused("model", headers("retry-after", "3600"), ""); next != "model-2" || !ok {
 		t.Errorf("Refused model: %s, %v; want model-2, model-3 in cooldown", next, ok)
 	}
@@ -473,5 +474,172 @@ func TestAClaimOutsideTheWindowsIsLeftOut(t *testing.T) {
 	line := modelkey.Shown("model-2", 429, h, "")
 	if !strings.Contains(line, "no window for anthropic-ratelimit-unified-representative-claim") || strings.Contains(line, "monthly_other") {
 		t.Errorf("Shown: %s", line)
+	}
+}
+
+// TestTheStartKeyIsActiveFirst pins a start key that is not first in the order: with the
+// credentials model-a and model and the start key model, model is active at the start.
+func TestTheStartKeyIsActiveFirst(t *testing.T) {
+	c := &clock{now: start}
+	g := modelkey.New([]modelkey.Key{{Name: "model-a", PauseFor: time.Hour}, {Name: "model", PauseFor: time.Hour}}, "model", c.Now)
+	if got, ok := g.Pick(); got != "model" || !ok {
+		t.Errorf("Pick at the start: %s, %v; want model, out of cooldown", got, ok)
+	}
+	if next, ok := g.Refused("model", headers("retry-after", "600"), ""); next != "model-a" || !ok {
+		t.Errorf("Refused model: %s, %v; want model-a", next, ok)
+	}
+}
+
+// TestResetsAcrossAMinuteBoundaryGoByTheReset pins the edge of the tie rule: resets at
+// 13:00:59 and 13:01:01 fall in two minutes, so the earlier one goes first, against the
+// order.
+func TestResetsAcrossAMinuteBoundaryGoByTheReset(t *testing.T) {
+	c := &clock{now: start}
+	g := modelkey.New([]modelkey.Key{
+		{Name: "model", PauseFor: time.Hour},
+		{Name: "model-2", PauseFor: time.Hour, ResetsAt: start.Add(time.Hour + 61*time.Second)},
+		{Name: "model-3", PauseFor: time.Hour, ResetsAt: start.Add(time.Hour + 59*time.Second)},
+	}, "model", c.Now)
+	if next, ok := g.Refused("model", headers("retry-after", "600"), ""); next != "model-3" || !ok {
+		t.Errorf("Refused model: %s, %v; want model-3, whose reset is in the minute before model-2's", next, ok)
+	}
+}
+
+// TestPickIsFalseWhileEveryKeyCools pins the state in which the proxy sets no key.
+func TestPickIsFalseWhileEveryKeyCools(t *testing.T) {
+	g, c := group(t)
+	for _, name := range []string{"model", "model-2", "model-3"} {
+		g.Refused(name, headers("retry-after", "600"), "")
+	}
+	if _, ok := g.Pick(); ok {
+		t.Error("Pick while every key cools: true; want false")
+	}
+	c.now = start.Add(11 * time.Minute)
+	if got, ok := g.Pick(); !ok || got != "model-3" {
+		t.Errorf("Pick once the cooldowns ended: %s, %v; want model-3, the active key, out of cooldown", got, ok)
+	}
+}
+
+// TestNonFiniteHeadersAreLeftOut pins NaN and infinities: a utilization, a reset or an
+// API family's limit or remaining of no finite number is left out, and a fraction
+// outside 0 to 1 is held to it.
+func TestNonFiniteHeadersAreLeftOut(t *testing.T) {
+	g, _ := group(t)
+	g.Answered("model", headers(
+		"anthropic-ratelimit-unified-5h-status", "allowed",
+		"anthropic-ratelimit-unified-5h-utilization", "NaN",
+		"anthropic-ratelimit-unified-5h-reset", "NaN",
+		"anthropic-ratelimit-unified-7d-status", "allowed",
+		"anthropic-ratelimit-unified-7d-utilization", "+Inf",
+		"anthropic-ratelimit-unified-7d-reset", "Inf",
+		"anthropic-ratelimit-requests-limit", "NaN",
+		"anthropic-ratelimit-requests-remaining", "10",
+	))
+	for _, w := range []string{"five_hour", "seven_day", "requests"} {
+		got, ok := window(g, "model", w)
+		if !ok || got.HasUtilization || !got.ResetsAt.IsZero() {
+			t.Errorf("%s: %+v, %v; want the window with no utilization and no reset", w, got, ok)
+		}
+	}
+	g.Answered("model-2", headers(
+		"anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-utilization", "1.5",
+		"anthropic-ratelimit-unified-7d-status", "allowed", "anthropic-ratelimit-unified-7d-utilization", "-0.2",
+	))
+	if w, _ := window(g, "model-2", "five_hour"); !w.HasUtilization || w.Utilization != 100 {
+		t.Errorf("1.5: %+v; want 100", w)
+	}
+	if w, _ := window(g, "model-2", "seven_day"); !w.HasUtilization || w.Utilization != 0 {
+		t.Errorf("-0.2: %+v; want 0", w)
+	}
+}
+
+// TestAResetPastThirtyOneDaysIsCapped pins the cap: a reset, an API family's reset and a
+// retry-after later than 31 days after the answer count as 31 days after it, so no time
+// of a report has a year past 9999.
+func TestAResetPastThirtyOneDaysIsCapped(t *testing.T) {
+	g, _ := group(t)
+	limit := start.Add(31 * 24 * time.Hour)
+	g.Answered("model", headers(
+		"anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-reset", strconv.FormatInt(1<<39, 10),
+		"anthropic-ratelimit-tokens-limit", "100", "anthropic-ratelimit-tokens-remaining", "50", "anthropic-ratelimit-tokens-reset", "9999-12-31T23:59:59Z",
+	))
+	for _, w := range []string{"five_hour", "tokens"} {
+		if got, _ := window(g, "model", w); !got.ResetsAt.Equal(limit) {
+			t.Errorf("%s resets at %v; want %v", w, got.ResetsAt, limit)
+		}
+	}
+	g.Refused("model-2", headers("retry-after", "999999999999"), "")
+	if w, _ := window(g, "model-2", "key"); !w.CooldownUntil.Equal(limit) {
+		t.Errorf("the cooldown of a retry-after of 999999999999: %v; want %v", w.CooldownUntil, limit)
+	}
+}
+
+// TestMergeTakesOnlyTheContractsWindows pins Merge: an entry of a window outside the 11
+// of the contract is left out, so it never takes the place a refusal's window key needs,
+// and a refusal with no window still cools the key.
+func TestMergeTakesOnlyTheContractsWindows(t *testing.T) {
+	g, c := group(t)
+	var entries []modelkey.Window
+	for i := range 11 {
+		entries = append(entries, modelkey.Window{Credential: "model", Window: "monthly_" + strconv.Itoa(i), Status: modelkey.StatusAllowed, Source: modelkey.SourceProvider, ObservedAt: c.now})
+	}
+	g.Merge(entries)
+	if ws := g.Windows(); len(ws) != 0 {
+		t.Fatalf("windows %+v; want none", ws)
+	}
+	if next, ok := g.Refused("model", headers(), ""); next != "model-2" || !ok {
+		t.Errorf("Refused model: %s, %v; want model-2", next, ok)
+	}
+	if w, ok := window(g, "model", "key"); !ok || w.Status != modelkey.StatusRejected {
+		t.Errorf("key: %+v, %v; want rejected", w, ok)
+	}
+}
+
+// TestALaterAllowedStateEndsTheClaimsCooldown pins cooldown_until of the run
+// configuration: an entry of a report's answer that is not rejected and observed after
+// the group was made ends it, an older one does not, and so does an answer of the
+// provider to the key.
+func TestALaterAllowedStateEndsTheClaimsCooldown(t *testing.T) {
+	c := &clock{now: start}
+	keys := []modelkey.Key{
+		{Name: "model", PauseFor: time.Hour},
+		{Name: "model-2", PauseFor: time.Hour, CooldownUntil: start.Add(5 * time.Hour)},
+		{Name: "model-3", PauseFor: time.Hour, CooldownUntil: start.Add(5 * time.Hour)},
+	}
+	g := modelkey.New(keys, "model", c.Now)
+	g.Merge([]modelkey.Window{{Credential: "model-2", Window: "five_hour", Status: modelkey.StatusAllowed, Source: modelkey.SourceProvider, ObservedAt: start.Add(-time.Minute)}})
+	if _, ok := g.Refused("model", headers("retry-after", "600"), ""); ok {
+		t.Fatal("Refused model: a key is left; want none, the older entry ends no cooldown")
+	}
+	g.Merge([]modelkey.Window{{Credential: "model-2", Window: "five_hour", Status: modelkey.StatusAllowed, Source: modelkey.SourceProvider, ObservedAt: start.Add(time.Minute)}})
+	if got, ok := g.Pick(); got != "model-2" || !ok {
+		t.Errorf("Pick after a later allowed entry of model-2: %s, %v; want model-2", got, ok)
+	}
+	g.Answered("model-3", headers("anthropic-ratelimit-unified-5h-status", "allowed"))
+	if next, ok := g.Refused("model-2", headers("retry-after", "600"), ""); next != "model-3" || !ok {
+		t.Errorf("Refused model-2: %s, %v; want model-3, which the provider served", next, ok)
+	}
+}
+
+// TestRefusalsAndSwitchesRunConcurrently runs refusals, answers, merges, picks and
+// reads of the group at once, for the race detector, and checks that a key is left.
+func TestRefusalsAndSwitchesRunConcurrently(t *testing.T) {
+	g, _ := group(t)
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			for range 200 {
+				name := []string{"model", "model-2"}[i%2]
+				g.Refused(name, headers("retry-after", "600"), "")
+				g.Answered("model-3", headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-utilization", "0.5"))
+				g.Merge([]modelkey.Window{{Credential: "model-3", Window: "five_hour", Status: modelkey.StatusAllowed, Source: modelkey.SourceProvider, ObservedAt: start}})
+				g.Pick()
+				g.Windows()
+			}
+		})
+	}
+	wg.Wait()
+	if got, ok := g.Pick(); got != "model-3" || !ok {
+		t.Errorf("Pick: %s, %v; want model-3", got, ok)
 	}
 }

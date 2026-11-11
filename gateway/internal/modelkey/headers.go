@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/qoryai/forager/policy"
 )
 
 // The windows of an answer's headers, model-keys-report.schema.json's window.
@@ -62,15 +65,27 @@ var windowName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 // window of the report; another value is left out.
 var claimWindows = map[string]bool{"five_hour": true, "seven_day": true, "seven_day_opus": true, "seven_day_sonnet": true, "overage": true}
 
+// knownWindows are the 11 windows of the contract, model-keys-report.schema.json's
+// window: the group keeps no other.
+var knownWindows = map[string]bool{
+	"five_hour": true, "seven_day": true, "seven_day_opus": true, "seven_day_sonnet": true, "overage": true,
+	"requests": true, "tokens": true, "input_tokens": true, "output_tokens": true, WindowSpendLimit: true, WindowKey: true,
+}
+
+// maxReset is the furthest after an answer's arrival that the gateway takes a reset or a
+// retry-after of the provider's: a later one counts as this far, so every time a report
+// has is a year of four digits.
+const maxReset = 31 * 24 * time.Hour
+
 // seen is what one answer's headers contain of one window.
 type seen struct {
 	window   string
 	status   string
 	resetsAt time.Time
-	// utilization is the use in whole percent; has says the answer contains it.
+	// utilization is the use in whole percent; has is true when the answer contains it.
 	utilization int
 	has         bool
-	// exhausted says an API key's family has 0 remaining.
+	// exhausted is true when an API key's family has 0 remaining.
 	exhausted bool
 	// cooldown and source are a limit refusal's, set on each window it rejects.
 	cooldown time.Time
@@ -141,7 +156,7 @@ func readHeaders(h http.Header, now time.Time) read {
 				}
 				continue
 			case "reset":
-				r.overallReset = epoch(value)
+				r.overallReset = capped(epoch(value), now)
 				if claim != "" && !r.overallReset.IsZero() {
 					r.window(claim).resetsAt = r.overallReset
 				}
@@ -162,11 +177,11 @@ func readHeaders(h http.Header, now time.Time) read {
 					s.status = v
 				}
 			case "reset":
-				if t := epoch(value); !t.IsZero() {
+				if t := capped(epoch(value), now); !t.IsZero() {
 					s.resetsAt = t
 				}
 			case "utilization":
-				if f, err := strconv.ParseFloat(value, 64); err == nil {
+				if f, ok := finite(value); ok {
 					s.utilization, s.has = percent(f), true
 				}
 			}
@@ -190,16 +205,16 @@ func readHeaders(h http.Header, now time.Time) read {
 			}
 			switch field {
 			case "limit":
-				if v, err := strconv.ParseFloat(value, 64); err == nil {
+				if v, ok := finite(value); ok {
 					f.limit, f.hasLimit = v, true
 				}
 			case "remaining":
-				if v, err := strconv.ParseFloat(value, 64); err == nil {
+				if v, ok := finite(value); ok {
 					f.remaining, f.hasRem = v, true
 				}
 			case "reset":
 				if t, err := time.Parse(time.RFC3339, value); err == nil {
-					f.reset = t
+					f.reset = capped(t, now)
 				}
 			}
 		}
@@ -224,29 +239,47 @@ func status(v string) string {
 	return ""
 }
 
+// finite reads a decimal number, and reports false for one of no such form, NaN or an
+// infinity.
+func finite(v string) (float64, bool) {
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, false
+	}
+	return f, true
+}
+
 // epoch reads a time in seconds since 1970, zero when v has no such form.
 func epoch(v string) time.Time {
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil || f <= 0 || math.IsInf(f, 0) || f > 1<<40 {
+	f, ok := finite(v)
+	if !ok || f <= 0 || f > 1<<40 {
 		return time.Time{}
 	}
 	return time.Unix(int64(f), 0).UTC()
 }
 
-// percent is a fraction as whole percent, rounded down, 0 to 100. The small term keeps
-// a fraction such as 0.29, whose product with 100 is just below 29, at 29.
-func percent(f float64) int {
-	p := math.Floor(f*100 + 1e-9)
-	return int(min(max(p, 0), 100))
+// capped is t, or [maxReset] after now when t is later; the zero time stays zero.
+func capped(t, now time.Time) time.Time {
+	if limit := now.Add(maxReset); t.After(limit) {
+		return limit
+	}
+	return t
 }
 
-// retryAfter reads a Retry-After of seconds or an HTTP date.
+// percent is a fraction, held to 0 to 1, as whole percent, rounded down. The small term
+// keeps a fraction such as 0.29, whose product with 100 is just below 29, at 29.
+func percent(f float64) int {
+	f = min(max(f, 0), 1)
+	return int(min(math.Floor(f*100+1e-9), 100))
+}
+
+// retryAfter reads a Retry-After of seconds or an HTTP date, at most [maxReset].
 func retryAfter(v string, now time.Time) (time.Duration, bool) {
-	if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 && n <= 1<<31 {
-		return time.Duration(n) * time.Second, true
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+		return time.Duration(min(n, int64(maxReset/time.Second))) * time.Second, true
 	}
 	if t, err := http.ParseTime(v); err == nil {
-		return max(t.Sub(now), 0), true
+		return min(max(t.Sub(now), 0), maxReset), true
 	}
 	return 0, false
 }
@@ -278,4 +311,25 @@ func ErrorOf(body []byte) (kind, code string) {
 		code = ""
 	}
 	return kind, code
+}
+
+// MessagesPath is the clean path of the messages request of a model API of the format
+// at endpoint, the one path whose streamed answers the proxy reads for a
+// rate_limit_error event: for anthropic-messages, the endpoint's path, then
+// /v1/messages, such as /anthropic/v1/messages for https://api.deepseek.com/anthropic.
+// Empty for another format, whose stream the proxy does not read, and for an endpoint
+// that does not parse.
+func MessagesPath(format, endpoint string) string {
+	if format != "anthropic-messages" {
+		return ""
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return ""
+	}
+	clean, ok := policy.CleanPath(strings.TrimSuffix(u.EscapedPath(), "/") + "/v1/messages")
+	if !ok {
+		return ""
+	}
+	return clean
 }
