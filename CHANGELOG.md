@@ -20,10 +20,11 @@ release may change what an existing document does, and says so under Upgrading.
   with its `format`, `auth` and `endpoint`. Forager has no default cooldown, and a run
   configuration with such a key without it fails with `run_configuration_invalid`. A
   run configuration has at most 6 API credentials.
-- Send the key group in the order that breaks ties, with `chosen: true` on the key the
-  model choice names and `cooldown_until` on each key in cooldown at the claim. The
-  gateway refuses a start key in cooldown and two keys with `chosen`, each with
-  `run_configuration_invalid`.
+- Send the key group in the order that breaks ties: the key of the model choice first,
+  with `chosen: true`, when it is out of cooldown at the claim; then the provider's
+  default key; then the others by when they were added; then the keys in cooldown at the
+  claim, each with `cooldown_until`. A start key in cooldown and two keys with `chosen`
+  are each `run_configuration_invalid`.
 - Read a `dev.qory.run.exited` `cancelled` with `model_key_limit` as a pause of the run,
   not as a person's cancel: the run's work is kept, and a continuation of the run can
   resume its runtime session.
@@ -241,10 +242,11 @@ release may change what an existing document does, and says so under Upgrading.
   to the model endpoint, up to 8 MiB, until the answer's status arrives. On a `429` from
   the provider it puts the key in cooldown, makes the next key of the group the active
   key, and sends the request again from the copy, so the session does not see the
-  refusal. A cooldown ends at the reset in the refusal, at the key's
-  `schedule_resets_at` (plus 7 days once it has passed), or `pause_for_s` seconds after
-  the refusal. A provider's `rate_limit_error` in a streaming answer puts the key in
-  cooldown and switches the active key too. The active key stays across sessions, and a
+  refusal. A cooldown ends at the reset in the refusal, at most 31 days after it, at the
+  key's `schedule_resets_at` (plus 7 days once it has passed), or `pause_for_s` seconds
+  after the refusal. An `error` event of the type `rate_limit_error` in the streamed
+  `200` of a `POST` to the model API's messages path, `/v1/messages` under the
+  endpoint, puts the key in cooldown and switches the active key too. The active key stays across sessions, and a
   join request without `model_credential` gets it. The run configuration's API
   credential has `resets_at`, `schedule_resets_at` and `pause_for_s`. README §Credentials,
   Several model keys.
@@ -254,12 +256,13 @@ release may change what an existing document does, and says so under Upgrading.
   key that another run found at its limit. `model-keys-report.schema.json` and
   `model-keys-answer.schema.json` define the body and the answer. With a control plane
   that returns `404`, the cooldowns stay within the run. A report has at most 32 KiB
-  and 66 entries, 6 keys of 11 windows, and Qory Apiary stores only those windows. Qory
-  Apiary refuses a report whose `observed_at` is more than 300 seconds ahead of its
-  clock with `400` `invalid_request`. README §The server, The model keys.
+  and 66 entries, 6 keys of 11 windows, and Qory Apiary stores only those windows. For
+  a report whose `observed_at` is more than 300 seconds ahead of its clock, Qory Apiary
+  returns `400` `invalid_request`. README §The server, The model keys.
 - `model_key_limit`, a reserved reason, `event.ReasonModelKeyLimit`. When no key of the
   group is left, or the refused body was over 8 MiB, the proxy passes the refusal to the
-  session, and the gateway's `2xx` to the session's next batch has
+  session; while every key is in cooldown, the proxy returns its `429` and sends nothing
+  to the provider. In both cases the gateway's `2xx` to the session's next batch has
   `{"stop": {"reason": "model_key_limit"}}`, `link-batch-answer.schema.json`. The session
   stops the runtime and writes `dev.qory.session.exited` `cancelled` with
   `model_key_limit`. The run stays open for its host work, and its caller closes it

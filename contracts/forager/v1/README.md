@@ -980,7 +980,8 @@ run goes on when the provider returns a limit refusal for one key. When the star
 an API credential of `credentials`, the key group is the start key and every API
 credential with the start key's `format`, `auth` and `endpoint`. The order of the
 group's entries in `credentials` is the order in which the proxy sets them, the start
-key's place included. A run configuration has at most 6 API credentials. A model key of
+key's place included. The start key is the active key when the run starts, wherever its
+place in the order. A run configuration has at most 6 API credentials. A model key of
 the machine's, from `forager.yaml`, is never in a key group. Each key of the group has
 `pause_for_s`, and may have `resets_at`, `schedule_resets_at`, `cooldown_until` and
 `chosen` (`run-configuration.schema.json`). The schema cannot state which keys form the group, so
@@ -988,17 +989,20 @@ the gateway checks `pause_for_s`: a key of the group without it is
 `run_configuration_invalid` with the key's name, `set pause_for_s on the model key
 "model-2": every key of the key group needs a cooldown, and Forager has no default`.
 
-The server sends the group's keys in the order that breaks ties: the key the model
-choice names first, with `chosen: true`, when it is out of cooldown at the claim; then
+The server sends the group's keys in the order that breaks ties: the key of the model
+choice first, with `chosen: true`, when it is out of cooldown at the claim; then
 the provider's default key; then the others by when they were added; then the keys in
 cooldown at the claim, each with `cooldown_until`. When the group would pass 6 keys, the
 keys out of cooldown come first, then the keys in cooldown by the earliest
 `cooldown_until`. The gateway starts a key with `cooldown_until` in cooldown until that
-time. The start key is never in cooldown: a start key whose `cooldown_until` is after
-the gateway's clock is `run_configuration_invalid`, `set model_credential to a model key
-out of cooldown: the start key "model" is in cooldown until <time>`. Only one key of the
-group has `chosen`; two are `run_configuration_invalid`, `set chosen on one model key of
-the key group: "model" and "model-2" both have it`.
+time, or until a later state of the key allows it: an answer of the provider to the key
+that is no limit refusal, or an entry of the key in a model keys report's answer that is
+not `rejected` and whose `observed_at` is after the run's start. The start key is never
+in cooldown: a start key whose `cooldown_until` is after the gateway's clock is
+`run_configuration_invalid`, `set model_credential to a model key out of cooldown: the
+start key "model" is in cooldown until <time>`. Only one key of the group has `chosen`;
+two are `run_configuration_invalid`, `set chosen on one model key of the key group:
+"model" and "model-2" both have it`.
 
 The keys of the group share one placeholder, the start key's. The proxy sets the active
 key on each request to the endpoint's host that contains it, and the runtime keeps the
@@ -1018,7 +1022,9 @@ nothing of the refusal to the session, and:
    whose `-remaining` is 0, or `retry-after` seconds after the refusal. After a refusal
    with no reset, the cooldown ends at the key's `schedule_resets_at`, or at that time
    plus 7 days once it has passed; for a key without `schedule_resets_at`, it ends
-   `pause_for_s` seconds after the refusal.
+   `pause_for_s` seconds after the refusal. The gateway takes a reset, or a
+   `retry-after`, of at most 31 days after the answer arrived: a later one counts as 31
+   days after the answer.
 2. Makes another key of the group that is not in cooldown the active key: the key with
    `chosen`; else the first key, by the order, with no known reset or a reset that has
    passed; else the key with the closest reset, keys whose resets fall in the same
@@ -1030,22 +1036,35 @@ nothing of the refusal to the session, and:
    starts again at step 1.
 
 The proxy passes the limit refusal to the session when no key of the group is left out
-of cooldown, or when the refused body was over 8 MiB, since there is no copy to send
-again. The key still goes into cooldown. From then until the session's join ends, the
-proxy sends no request with the placeholder to the provider and returns a `429` to each.
+of cooldown, when the refused body was over 8 MiB, since there is no copy to send
+again, or when no `apply` item of the next key covers the request's path (an `apply` of
+the start's answer can narrow a key's paths, §Credentials, From the server). The key
+still goes into cooldown. From then until the session's join ends, the proxy sends no
+request with the placeholder to the provider and returns a `429` to each.
 The gateway's answer to the session's next batch then has `stop`, `model_key_limit`: the
 session stops the runtime, and the run pauses (§The gateway's link, A stop in a batch's
 answer).
 
 A provider may also end a streaming `200` with an `error` event of the type
-`rate_limit_error`. The proxy then puts the key in cooldown and makes the next key the
+`rate_limit_error`. The proxy reads the stream of one request alone: a `POST` with the
+group's placeholder to the messages path of the model API under the endpoint, for
+`anthropic-messages` the endpoint's path and `/v1/messages`, such as
+`/anthropic/v1/messages` for `https://api.deepseek.com/anthropic`, with any query. In
+that stream, an event whose `event` field is `error` and whose `data` is an error of the
+type `rate_limit_error`, `{"type":"error","error":{"type":"rate_limit_error"}}`, counts.
+The same words in any other event, such as a text delta, and in an answer to any other
+request do not count. The proxy then puts the key in cooldown and makes the next key the
 active key, as in steps 1 and 2, and passes the stream on as it came. The run does not
 pause: Claude Code 2.1.316 sends the same request again without streaming about 20 ms
 later, and that request gets the next key. A runtime that does not send the request
 again ends its session as it ends one after any failed request.
 
 The active key stays active across the run's sessions and joins. A key in cooldown in the
-answer to a model keys report is not set either (§The server, The model keys).
+answer to a model keys report is not set either (§The server, The model keys). When
+every key of the group is in cooldown, the proxy sets no key: until the session's join
+ends, it sends no request with the placeholder to the provider and returns a `429` to
+each, and the gateway's answer to the session's next batch has `stop`, as after a limit
+refusal it passed.
 
 **The variable of a model key.** The session gives the start key to the runtime. The
 run answer's `credential_hosts` has each model key's `format`, `endpoint` and `auth`
@@ -3237,7 +3256,8 @@ Each entry of `keys` is one key and one limit window:
 
 - `credential`: the key's name in the run configuration's `credentials`.
 - `window`: the limit's window. The gateway reads the headers of every answer of the
-  endpoint's host to a request with the group's placeholder. In the subscription's
+  endpoint's host to a request with the group's placeholder, and leaves out a value that
+  is no finite number, such as `NaN` or `Inf`. In the subscription's
   `anthropic-ratelimit-unified-*` headers, the infix `5h` is `five_hour`, `7d` is
   `seven_day` and `overage` is `overage`, and the value of `-representative-claim` is
   the window as it is when it is `five_hour`, `seven_day`, `seven_day_opus`,
@@ -3251,10 +3271,11 @@ Each entry of `keys` is one key and one limit window:
   and ignores an entry of any other.
 - `status`: `allowed`, `allowed_warning` or `rejected`, from the answer; `rejected` for
   every limit refusal.
-- `resets_at`: the window's reset, from the answer.
-- `utilization`: the window's use in whole percent, rounded down: the answer's fraction
-  times 100, or 100 × (1 − remaining / limit). Absent once the window's reset has
-  passed.
+- `resets_at`: the window's reset, from the answer, at most 31 days after the answer
+  arrived: a later reset counts as 31 days after it.
+- `utilization`: the window's use in whole percent, rounded down: the answer's fraction,
+  held to 0 to 1, times 100, or 100 × (1 − remaining / limit). Absent once the window's
+  reset has passed.
 - `cooldown_until`: with `rejected` alone, the time until which the gateway sets the key
   no more.
 - `source`: where `cooldown_until`, or `resets_at` without it, comes from: `provider`,
@@ -3266,6 +3287,9 @@ The gateway sends a report when a window's `status`, `resets_at` or `cooldown_un
 changes, or its `utilization` changes by a whole percent. Each report has every window
 the gateway has of the run's keys, so it replaces the report before. A run has at most
 one report in flight and one a second; the changes in between go into the next report.
+When the run ends while a change waits for its report, or a report waits for its next
+try, the gateway sends the newest state once more, within 10 seconds, and takes nothing
+of the answer.
 An API key's windows are per minute, so its `utilization` can change by a whole percent
 up to 100 times a minute.
 
@@ -3280,19 +3304,20 @@ credential names.
    "observed_at": "2026-11-10T12:00:04Z"}]}
 ```
 
-The gateway takes each entry whose `observed_at` is later than the state it has of that
-key and window. A key whose entry has a `cooldown_until` in the future is in cooldown
-until then, as after a limit refusal of the run's own, so a run sets no key that another
-run found at its limit. The server keeps the newest state per key and window, and
-ignores an entry older than the one it keeps. Qory Apiary refuses a report with an
-`observed_at` more than 300 seconds ahead of its clock: a signed `400`
-`invalid_request` with `names: ["observed_at"]`. The other answers:
+The gateway takes each entry of the 11 windows whose `observed_at` is later than the
+state it has of that key and window, and leaves out an entry of any other window. A key
+whose entry has a `cooldown_until` in the future is in cooldown until then, as after a
+limit refusal in this run, so a run sets no key that another run found at its limit.
+The server keeps the newest state per key and window, and ignores an entry older than
+the one it keeps. For a report with an `observed_at` more than 300 seconds ahead of its
+clock, Qory Apiary returns a signed `400` `invalid_request` with `names:
+["observed_at"]`. The other answers:
 
 | Answer | The gateway |
 |---|---|
-| a signed `400` `invalid_request`, a `401` or a `413` | drops the report and writes one line to its log; the gateway sends the next report at the next change |
+| a signed `400` `invalid_request`, a `401` or a signed `413` | drops the report and writes one line to its log; the gateway sends the next report at the next change |
 | a signed `410` | the run has ended at the server: sends no more reports for the run |
-| a `429`, a `5xx` or none | sends the newest state again after 1, 2, 4 … 60 seconds, until the run ends |
+| a `429`, an unsigned `413`, a `5xx` or none | sends the newest state again after 1, 2, 4 … 60 seconds, until the run ends |
 | a `404`, signed or not | the control plane has no such route, or no such run: sends no more reports for the run, keeps each cooldown within the run, and writes one `dev.qory.run.log` line, `Upgrade the control plane to share model key cooldowns between runs: <run.url> returned 404 for model-keys` |
 
 **Known answers of a run through a gateway.** `fixtures/known-answers/through-gateway.json`
@@ -4268,8 +4293,9 @@ and `exit_code` `-1`, `state: failed`, a failure at the join after
 `dev.qory.session.started` and before the runtime starts. The gateway checks the rest.
 
 **A stop in a batch's answer.** When the run's proxy has passed a model provider's limit
-refusal to the session (§Credentials, Several model keys), the gateway's `2xx` to the
-session's next batch has a body, `application/json`, a `link-batch-answer.schema.json`
+refusal to the session, or every key of the run's key group is in cooldown
+(§Credentials, Several model keys), the gateway's `2xx` to the session's next batch has
+a body, `application/json`, a `link-batch-answer.schema.json`
 document:
 
 ```json
@@ -4285,7 +4311,9 @@ posts the batch it holds and reads the answer, so a stop that comes as the runti
 still sets the reason. The run stays open, so its host work goes on, such as qory's
 `push` step, and its caller closes it `cancelled` with `model_key_limit` and the last
 session's exit code (§The events, How a run ends). Any other `2xx` body, or none, means
-the session goes on.
+the session goes on. The stop comes only in the answer to a batch: a session whose
+runtime writes no event gets it with the batch of its next heartbeat, up to
+`interval_seconds` later, and the runtime goes on until then.
 
 **Heartbeats and liveness.** A run has one source of heartbeats. For a session's run,
 the session's `dev.qory.run.heartbeat` events on the link, every `interval_seconds` of
@@ -4569,8 +4597,8 @@ each request as a plain `http://` request, with no credential:
 A run with no control plane has no `run_api`, no `QORY_RUN_API` and no route, and
 `Run.RunAPI` returns an error.
 
-**The six requests.** The proxy serves these requests, the path after the base URL, and
-no other:
+**The five requests.** The proxy serves these five requests, the path after the base
+URL, and no other:
 
 | Request | Largest body | Time |
 |---|---|---|
@@ -4579,10 +4607,10 @@ no other:
 | `GET /artifacts/<version_id>/files/<filename>` | | 10 minutes |
 | `POST /artifacts` | 32 MiB | 60 seconds |
 | `POST /verdict` | 64 KiB | 60 seconds |
-| `GET /resume/transcript` | | 10 minutes |
 
 The gateway decodes each segment of the path and escapes it again. It sends nothing and
-signs nothing for a request outside the six: another path of the run, such as `attach`,
+signs nothing for a request outside the five, `GET /resume/transcript` among them
+(The transcript of a paused run, below): another path of the run, such as `attach`,
 `outcome`, `reload` or `diagnostics`, the run's path with nothing after it, another
 run's id, another method, an HTTP/1.0 request that reaches the proxy, a target over
 4 KiB as sent, a path after the run's id over 1 KiB once escaped, a query, even an empty
@@ -4608,7 +4636,7 @@ with the fix.
 
 | Status | `error` | When |
 |---|---|---|
-| `404` | `not_found` | the request is outside the six, or is `GET /resume/transcript`, which the session reads over the gateway's link (The transcript of a paused run, below) |
+| `404` | `not_found` | the request is outside the five, `GET /resume/transcript` among them, which the session reads over the gateway's link (The transcript of a paused run, below) |
 | `413` | `payload_too_large` | a POST's body is over its limit; nothing is sent |
 | `429` | `rate_limited` | a limit below, or a body or answer over 1 MiB while the gateway's 512 MiB are full; with `Retry-After: 1` |
 | `502` | `answer_unverified` | the answer fails verification under the pin, an unsigned `401` among them; its body does not reach the caller |
@@ -4685,10 +4713,10 @@ the `429` at once.
 **The record.** Each request writes one `dev.qory.run.egress` with `method: HTTP`,
 `channel: run_api`, `request_method`, `path`, `status` and the rule `wall:run-api`, in
 either mode. `decision` is `allowed` for a request the gateway sent, and `denied` for a
-request it kept. For a request inside the six, `path` is `/v1/runs/<run_id>` and the
+request it kept. For a request inside the five, `path` is `/v1/runs/<run_id>` and the
 path after it, each segment decoded and escaped again, with a phrase in place of a
 segment that decodes to a secret. A file request's `path` has the version id and the
-filename the caller chose, percent-escaped. For a request outside the six, `path` is
+filename the caller chose, percent-escaped. For a request outside the five, `path` is
 the word `outside`, and no part of the path it sent reaches the record. `request_method`
 is the method when it is a standard one, and `outside` for any other. `status` is the
 status the caller got; for a file whose stream ended early, `502` when its bytes
