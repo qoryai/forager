@@ -1029,9 +1029,10 @@ nothing of the refusal to the session, and:
 2. Makes another key of the group that is not in cooldown the active key: the key with
    `chosen`; else the first key, by the order, with no known reset or a reset that has
    passed; else the key with the closest reset, keys whose resets fall in the same
-   minute by the order. A key's known reset is the earliest `resets_at` after the
-   gateway's clock among its windows (§The server, The model keys), or, while no window
-   has one, the key's `resets_at` in the run configuration.
+   minute by the order. A key's known reset is the earliest time after the gateway's
+   clock among: the `resets_at` of its windows (§The server, The model keys); while no
+   window has one, the key's `resets_at` in the run configuration; and the key's
+   `schedule_resets_at`, or that time plus 7 days once it has passed.
 3. Sends the request again with that key, from the copy, and passes the new answer to the
    session in place of the refusal. When that answer is a limit refusal too, the proxy
    starts again at step 1.

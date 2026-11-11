@@ -163,23 +163,32 @@ func (g *Group) next(now time.Time) (int, bool) {
 	return best, best >= 0
 }
 
-// knownReset is key i's closest reset after now: the earliest resets_at of its windows
-// that is after now, or, while no window has a resets_at, the run configuration's
-// resets_at when it is after now; zero for none. Called with g.mu held.
+// knownReset is key i's closest reset after now, the earliest of: the resets_at of its
+// windows; while no window has a resets_at, the run configuration's resets_at; and its
+// schedule_resets_at, or that time plus 7 days once it has passed. A time that is not
+// after now counts as none; zero for none. Called with g.mu held.
 func (g *Group) knownReset(i int, now time.Time) time.Time {
 	var earliest time.Time
-	seen := false
-	for _, w := range g.windows[i] {
-		if w.ResetsAt.IsZero() {
-			continue
-		}
-		seen = true
-		if w.ResetsAt.After(now) && (earliest.IsZero() || w.ResetsAt.Before(earliest)) {
-			earliest = w.ResetsAt
+	take := func(t time.Time) {
+		if t.After(now) && (earliest.IsZero() || t.Before(earliest)) {
+			earliest = t
 		}
 	}
-	if !seen && g.keys[i].ResetsAt.After(now) {
-		return g.keys[i].ResetsAt
+	seen := false
+	for _, w := range g.windows[i] {
+		if !w.ResetsAt.IsZero() {
+			seen = true
+			take(w.ResetsAt)
+		}
+	}
+	if !seen {
+		take(g.keys[i].ResetsAt)
+	}
+	if s := g.keys[i].ScheduleResetsAt; !s.IsZero() {
+		if !s.After(now) {
+			s = s.Add(week)
+		}
+		take(s)
 	}
 	return earliest
 }

@@ -642,6 +642,36 @@ func TestOnlyA2xxAnswerEndsTheClaimsCooldown(t *testing.T) {
 	}
 }
 
+// TestAScheduleIsAKnownReset pins schedule_resets_at in the order of a switch: a key
+// with only a schedule sorts by it against a key with a reset from the provider; a
+// schedule that has passed counts plus 7 days; one that is still past after that counts
+// as no known reset, which comes first.
+func TestAScheduleIsAKnownReset(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		schedule time.Time
+		want     string
+	}{
+		{"a schedule before the provider's reset", start.Add(time.Hour), "model-2"},
+		{"a schedule after the provider's reset", start.Add(3 * time.Hour), "model-3"},
+		{"a schedule that passed an hour ago, plus 7 days", start.Add(-time.Hour), "model-3"},
+		{"a schedule still past after 7 days", start.Add(-8 * 24 * time.Hour), "model-2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			keys := []modelkey.Key{
+				{Name: "model", PauseFor: time.Hour},
+				{Name: "model-2", PauseFor: time.Hour, ScheduleResetsAt: c.schedule},
+				{Name: "model-3", PauseFor: time.Hour},
+			}
+			g := modelkey.New(keys, "model", (&clock{now: start}).Now)
+			g.Answered("model-3", http.StatusOK, headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-reset", epoch(start.Add(2*time.Hour))))
+			if next, ok := g.Refused("model", headers("retry-after", "600"), ""); next != c.want || !ok {
+				t.Errorf("Refused model: %s, %v; want %s", next, ok, c.want)
+			}
+		})
+	}
+}
+
 // TestRefusalsAndSwitchesRunConcurrently runs refusals, answers, merges, picks and
 // reads of the group at once, for the race detector, and checks that a key is left.
 func TestRefusalsAndSwitchesRunConcurrently(t *testing.T) {
