@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 )
 
 // ResumeTranscript and ResumeScript are the files in a session's directory with which
-// the session resumes the runtime session of a paused run: the paused run's transcript,
+// a session with no wall resumes the runtime session of a paused run: the paused run's transcript,
 // as the gateway's link returns it, and the script that writes it under the runtime's
 // home and starts the runtime with the descriptor's resume.args.
 const (
@@ -41,7 +42,15 @@ const resumeWait = 10 * time.Minute
 // {session_id} replaced by resume.session_id. inside is a path on this machine as the
 // runtime sees it. A failure of the script's write starts the runtime without the
 // arguments, after the same line from the script.
-func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir string, inside func(string) string, launch runtimes.Launch) (runtimes.Launch, string) {
+//
+// Behind a wall, root is the session's transcript directory, which the wall binds at
+// resume.prefix inside: the session writes the bytes there itself, at resume.path's
+// <slug>/<session id>.jsonl below resume.prefix, before the agent's container starts
+// ([writeBeneath]), and adds resume.args to launch, with no script. A resume.session_id
+// that is not a UUID in lower case, or a resume.path below resume.prefix of another
+// shape, is a failed resume. A walled session with no transcript directory, root empty,
+// does not resume.
+func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir string, walled bool, root string, inside func(string) string, launch runtimes.Launch) (runtimes.Launch, string) {
 	want := r.answer.Resume
 	if want == nil || r.resumeTried {
 		return launch, ""
@@ -62,6 +71,31 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 	if !ok || !strings.HasPrefix(want.Path, rs.Prefix) || len(want.Path) == len(rs.Prefix) || dotted(rel) {
 		return failed(fmt.Sprintf("its path %s lies outside %s", want.Path, rs.Prefix))
 	}
+	args := make([]string, len(rs.Args))
+	for i, a := range rs.Args {
+		args[i] = strings.ReplaceAll(a, "{session_id}", want.SessionID)
+	}
+	if walled {
+		if root == "" {
+			return failed("the session has no transcript directory behind the wall")
+		}
+		below := strings.TrimPrefix(want.Path, rs.Prefix)
+		if !walledSessionID.MatchString(want.SessionID) {
+			return failed(fmt.Sprintf("its session id %s is not a UUID in lower case", accesskey.ShownName(want.SessionID, false)))
+		}
+		if _, name, err := splitTranscript(below); err != nil || name != want.SessionID+".jsonl" {
+			return failed(fmt.Sprintf("its path %s is not %s<slug>/%s.jsonl", want.Path, rs.Prefix, want.SessionID))
+		}
+		b, err := r.fetchTranscript(ctx)
+		if err != nil {
+			return failed(err.Error())
+		}
+		if err := writeBeneath(root, below, b); err != nil {
+			return failed(fmt.Sprintf("the write to %s failed: %s", want.Path, accesskey.ShownError(err).Error()))
+		}
+		launch.Args = append(slices.Clone(launch.Args), args...)
+		return launch, ""
+	}
 	b, err := r.fetchTranscript(ctx)
 	if err != nil {
 		return failed(err.Error())
@@ -69,10 +103,6 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 	transcript := filepath.Join(sessionDir, ResumeTranscript)
 	if err := runfile.Replace(transcript, b, 0o644); err != nil {
 		return failed(accesskey.ShownError(err).Error())
-	}
-	args := make([]string, len(rs.Args))
-	for i, a := range rs.Args {
-		args[i] = strings.ReplaceAll(a, "{session_id}", want.SessionID)
 	}
 	script := filepath.Join(sessionDir, ResumeScript)
 	text := resumeScript(want.RunID, inside(transcript), rel, args)

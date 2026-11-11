@@ -477,6 +477,16 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			r.open.Report("closing the session's output.log: " + accesskey.ShownError(err).Error())
 		}
 	}()
+	// Behind a wall, a runtime with resume gets the session's transcript directory,
+	// transcripts/<n>/ in the run directory, which the wall binds writable at
+	// resume.prefix inside: the session reads the transcript, and writes a restored one,
+	// there. It lies outside every place the enclosure binds.
+	var transcriptDir, transcriptUnder string
+	if spec.Wall != nil {
+		if transcriptDir, transcriptUnder, err = makeTranscriptDir(rt, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
+			return fail(err)
+		}
+	}
 	// The runtime prepares the launch before the variables are resolved, because what it
 	// sets is Forager's and wins over a server's variable of the same name. Behind a wall
 	// the session's directory goes in read-only, apart from every place the session
@@ -510,7 +520,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the paused run the run answer's resume names: the launch writes its transcript under
 	// the runtime's home and resumes it. A failure starts the runtime without a resume,
 	// with resumeLine on stderr once the session started.
-	prepared, resumeLine := r.resumeLaunch(runCtx, rt, sessionDir, inside, prepared)
+	prepared, resumeLine := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptDir, inside, prepared)
 	// The session's setup commands run inside, after the runtime's preparation, and then
 	// start the launch as the runtime prepared it.
 	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
@@ -687,8 +697,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// then cut and given its summary (shapedRecord), so a cut never splits a secret
 	// before the masker sees it whole.
 	summaries, _ := rt.(runtimes.Summaries)
-	// tr sends the runtime's transcript, for a runtime with resume and a run with no
-	// wall; nil otherwise.
+	// tr sends the runtime's transcript, for a runtime with resume; nil otherwise.
 	var tr *transcript
 	mapper := parents.New(rt, func(e runtimes.Event) {
 		if tr != nil && e.Type == "dev.qory.runtime.started" {
@@ -764,7 +773,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err := samePlan(plan, again); err != nil {
 			return fail(err)
 		}
-		binds, err := wallBinds(enclosure, sock.Path(), r.authority)
+		binds, err := wallBinds(enclosure, sock.Path(), r.authority, wall.Transcript{Path: transcriptDir, Under: transcriptUnder})
 		if err != nil {
 			return fail(err)
 		}
@@ -779,6 +788,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			CA:    r.authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: r.relayToken,
+			Transcript: wall.Transcript{Path: transcriptDir, Under: transcriptUnder},
 		})
 		if err != nil {
 			return fail(accesskey.ShownError(err))
@@ -807,7 +817,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	resized := func(cols, rows int) {
 		r.write(event.RunResized, map[string]any{"cols": cols, "rows": rows, "session": n})
 	}
-	tr = r.sessionTranscript(rt, n, spec.Wall != nil, launch.Env, spec.Dir, masker, hidden)
+	trDir := spec.Dir
+	if spec.Wall != nil {
+		trDir = shown.Dir
+	}
+	tr = r.sessionTranscript(rt, n, spec.Wall != nil, transcriptDir, launch.Env, trDir, masker, hidden)
 	stopTranscript := make(chan struct{})
 	if tr != nil {
 		go tr.run(stopTranscript)

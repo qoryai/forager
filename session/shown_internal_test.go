@@ -542,7 +542,7 @@ func TestTheSessionsFileErrorsPrintAPhraseForASecretInAPath(t *testing.T) {
 		phrased(t, "the setup's script", err, fs.ErrNotExist)
 		_, err = RunsBinding(context.Background(), nil, filepath.Join(file, "child"))
 		phrased(t, "the registry's walk", err, syscall.ENOTDIR)
-		_, err = wallBinds(bindsFail{err: &fs.PathError{Op: "open", Path: filepath.Join(base, "bind"), Err: fs.ErrPermission}}, "", nil)
+		_, err = wallBinds(bindsFail{err: &fs.PathError{Op: "open", Path: filepath.Join(base, "bind"), Err: fs.ErrPermission}}, "", nil, wall.Transcript{})
 		phrased(t, "a wall's binds", err, fs.ErrPermission)
 
 		t.Run(secret+" socket", func(t *testing.T) {

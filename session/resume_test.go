@@ -42,11 +42,11 @@ rules:
 // resumerScript is the resumer's program: it prints the transcript it finds under its
 // home and its arguments, then its start, then appends two lines to its transcript, the
 // first with the run's secret.
-const resumerScript = `f="$HOME/.resumer/$SLUG/s-1.jsonl"
+const resumerScript = `f="$HOME/.resumer/$SLUG/0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl"
 mkdir -p "${f%/*}"
 [ -f "$f" ] && echo "restored: $(cat "$f")"
 echo "args: $*"
-echo '{"type":"start","session_id":"s-1","source":"resume"}'
+echo '{"type":"start","session_id":"0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e","source":"resume"}'
 echo '{"line":1,"key":"sk-fake-resume-secret"}' >> "$f"
 sleep 0.3
 echo '{"line":2}' >> "$f"
@@ -73,7 +73,7 @@ func resumerSpec(t *testing.T, restored string) (runSpec, *linktest.Fake, string
 	}
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
 		a := linktest.RunAnswer(req)
-		a["resume"] = map[string]any{"run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "session_id": "s-1", "path": "~/.resumer/" + slug + "/s-1.jsonl"}
+		a["resume"] = map[string]any{"run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "session_id": "0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e", "path": "~/.resumer/" + slug + "/0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl"}
 		return linktest.Reply{Status: 200, Body: a}
 	})
 	if restored != "" {
@@ -108,7 +108,7 @@ func TestARunWithResumeRestoresTheTranscriptAndResumes(t *testing.T) {
 	}
 	evs := events(t, res)
 	out := runLogText(t, evs)
-	if !strings.Contains(out, "restored: ok\n") || !strings.Contains(out, "args: --resume s-1\n") {
+	if !strings.Contains(out, "restored: ok\n") || !strings.Contains(out, "args: --resume 0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e\n") {
 		t.Errorf("the runtime's output %q", out)
 	}
 	if got := g.Transcripts(); !slices.Equal(got, []string{res.RunID}) {
@@ -118,7 +118,7 @@ func TestARunWithResumeRestoresTheTranscriptAndResumes(t *testing.T) {
 	var file []byte
 	for _, c := range chunks {
 		d := data(c)
-		if d["session"] != 1.0 || d["session_id"] != "s-1" || d["path"] != "~/.resumer/"+cwdSlugOf(sp.Dir)+"/s-1.jsonl" || d["offset"] != float64(len(file)) {
+		if d["session"] != 1.0 || d["session_id"] != "0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e" || d["path"] != "~/.resumer/"+cwdSlugOf(sp.Dir)+"/0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl" || d["offset"] != float64(len(file)) {
 			t.Fatalf("chunk %v after %d bytes", d, len(file))
 		}
 		b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
@@ -162,15 +162,38 @@ func TestAResumeThatFailsStartsTheRuntimeWithoutIt(t *testing.T) {
 	}
 }
 
-// TestAWalledRunResumesAndSendsNoTranscript pins a run behind a wall whose run answer has
-// resume: the launch restores the transcript and resumes, through the script in the
-// session's directory, which the wall binds read-only; and the session sends no
-// dev.qory.session.transcript, since the runtime's home lies inside the agent's
-// container, and writes one line that says so.
-func TestAWalledRunResumesAndSendsNoTranscript(t *testing.T) {
+// transcriptWall is an open wall that stands for the bind of the session's transcript
+// directory with a link: ~/<Under> under home, the launch's HOME, leads to it.
+type transcriptWall struct {
+	openWall
+	home string
+}
+
+func (w *transcriptWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *transcriptWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, error) {
+	if l.Transcript.Path != "" {
+		if err := os.Symlink(l.Transcript.Path, filepath.Join(w.home, l.Transcript.Under)); err != nil {
+			return wall.Launch{}, err
+		}
+	}
+	return w.openWall.Wrap(ctx, l)
+}
+
+// TestAWalledRunRestoresTheTranscriptInItsDirectory pins a run behind a wall whose run
+// answer has resume: the session writes the transcript in the session's transcript
+// directory, transcripts/1/ in the run directory, mode 0700, which the wall binds at
+// resume.prefix inside, and starts the runtime with the resume arguments, through no
+// script; then it reads the transcript there and sends it from offset 0, the restored
+// bytes first, masked.
+func TestAWalledRunRestoresTheTranscriptInItsDirectory(t *testing.T) {
 	t.Setenv("QORY_TEST_HOST_ONLY", "1")
-	sp, _, _ := resumerSpec(t, "ok\n")
-	w := &openWall{}
+	session.SetTranscriptPoll(50 * time.Millisecond)
+	sp, _, home := resumerSpec(t, "ok\n")
+	w := &transcriptWall{home: home}
 	sp.Wall, sp.Image, sp.Mounts = w, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	res, err := run(context.Background(), sp)
 	if err != nil {
@@ -178,16 +201,56 @@ func TestAWalledRunResumesAndSendsNoTranscript(t *testing.T) {
 	}
 	evs := events(t, res)
 	out := runLogText(t, evs)
-	if !strings.Contains(out, "restored: ok\n") || !strings.Contains(out, "args: --resume s-1\n") {
+	if !strings.Contains(out, "restored: ok\n") || !strings.Contains(out, "args: --resume 0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e\n") || strings.Contains(out, "without a resume") {
 		t.Errorf("the runtime's output %q", out)
 	}
-	if want := "A continuation of this run starts the runtime without a resume: the runtime's transcript lies inside the agent's container, which the session does not read\n"; strings.Count(out, want) != 1 {
-		t.Errorf("the runtime's output %q; want the line %q once", out, want)
+	dir := filepath.Join(res.Dir, "transcripts", "1")
+	if w.got.Transcript != (wall.Transcript{Path: dir, Under: ".resumer"}) {
+		t.Errorf("the launch's transcript directory %+v; want %s at .resumer", w.got.Transcript, dir)
 	}
-	if got := ofType(evs, event.SessionTranscript); len(got) != 0 {
-		t.Errorf("transcript events behind a wall: %v", got)
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("the transcript directory %v %v; want mode 0700", fi, err)
 	}
-	if !slices.Contains(w.got.Mounts, wall.Mount{Path: res.SessionDir, ReadOnly: true}) {
-		t.Errorf("mounts %v", w.got.Mounts)
+	if _, err := os.Stat(filepath.Join(res.SessionDir, session.ResumeScript)); err == nil {
+		t.Error("a walled resume wrote a script")
+	}
+	var file []byte
+	for _, c := range ofType(evs, event.SessionTranscript) {
+		d := data(c)
+		if d["path"] != "~/.resumer/"+cwdSlugOf(sp.Dir)+"/0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl" || d["offset"] != float64(len(file)) {
+			t.Fatalf("chunk %v after %d bytes", d, len(file))
+		}
+		b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+		file = append(file, b...)
+	}
+	if want := "ok\n{\"line\":1,\"key\":\"" + mask.Secret + "\"}\n{\"line\":2}\n"; string(file) != want {
+		t.Errorf("the transcript %q; want %q", file, want)
+	}
+}
+
+// TestAWalledResumeOfAnotherShapeFails pins a walled run whose run answer's resume has a
+// session id that is not a UUID in lower case: the runtime starts without the resume
+// arguments, with the line of a failed resume, and no restored file is written in the
+// transcript directory.
+func TestAWalledResumeOfAnotherShapeFails(t *testing.T) {
+	t.Setenv("QORY_TEST_HOST_ONLY", "1")
+	sp, g, home := resumerSpec(t, "ok\n")
+	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+		a := linktest.RunAnswer(req)
+		a["resume"] = map[string]any{"run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "session_id": "s-1", "path": "~/.resumer/" + cwdSlugOf(sp.Dir) + "/s-1.jsonl"}
+		return linktest.Reply{Status: 200, Body: a}
+	})
+	sp.Wall, sp.Image, sp.Mounts = &transcriptWall{home: home}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := runLogText(t, events(t, res))
+	want := "The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: its session id s-1 is not a UUID in lower case\n"
+	if !strings.Contains(out, want) || !strings.Contains(out, "args: \n") {
+		t.Errorf("the runtime's output %q; want %q", out, want)
+	}
+	if _, err := os.Stat(filepath.Join(res.Dir, "transcripts", "1", cwdSlugOf(sp.Dir), "s-1.jsonl")); err == nil {
+		t.Error("the restored file was written")
 	}
 }

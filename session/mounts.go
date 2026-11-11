@@ -983,12 +983,12 @@ func firstWallBinds(w wall.Wall) ([]bindSource, error) {
 
 // wallBinds are the binds an enclosure makes of its own, as bind sources: none when
 // it lists none.
-func wallBinds(e wall.Enclosure, socketPath string, ca []byte) ([]bindSource, error) {
+func wallBinds(e wall.Enclosure, socketPath string, ca []byte, transcript wall.Transcript) ([]bindSource, error) {
 	b, ok := e.(wall.Binder)
 	if !ok {
 		return nil, nil
 	}
-	binds, err := b.Binds(wall.Launch{Socket: socketPath, CA: ca})
+	binds, err := b.Binds(wall.Launch{Socket: socketPath, CA: ca, Transcript: transcript})
 	if err != nil {
 		return nil, accesskey.ShownError(err)
 	}

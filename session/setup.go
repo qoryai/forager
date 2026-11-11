@@ -302,7 +302,7 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 	if err != nil {
 		return fail(err)
 	}
-	binds, err := wallBinds(r.enclosure, "", r.authority)
+	binds, err := wallBinds(r.enclosure, "", r.authority, wall.Transcript{})
 	if err != nil {
 		return fail(err)
 	}
