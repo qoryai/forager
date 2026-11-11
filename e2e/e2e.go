@@ -497,6 +497,11 @@ func Run(t *testing.T, o Options) {
 	check("no environment but what the run passes", !p.HostEnv && p.PassedEnv, fmt.Sprintf("the host's variable seen: %v; the run's variable seen: %v; all: %v", p.HostEnv, p.PassedEnv, p.EnvNames))
 	check("no file of the host but the mounts", !p.HostFile, "the probe read a file outside the workspace")
 	check("the settings are read-only", p.SettingsWrite != "", "the probe opened the session's settings for writing")
+	// With nested Docker the agent's container starts as root, whose home the engine
+	// sets as HOME, and the agent runs as the wall's user, so the check is of the others.
+	if !o.Docker {
+		check("the agent's user can create ~/.claude/session-env beside the transcript bind", p.SessionEnv == "", p.SessionEnv)
+	}
 	written, err := os.ReadFile(filepath.Join(r.dir, "probe-was-here"))
 	check("the workspace is the run's", err == nil && string(written) == "inside", err)
 	if runtime.GOOS == "linux" {

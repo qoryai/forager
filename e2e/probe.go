@@ -116,6 +116,10 @@ type report struct {
 	// Transcript is what the probe planted at its transcript's path, when
 	// PROBE_TRANSCRIPT is set.
 	Transcript *transcriptReport `json:"transcript,omitempty"`
+	// SessionEnv is how the probe's mkdir of ~/.claude/session-env failed, beside the
+	// transcript bind at ~/.claude/projects, as Claude Code makes it; empty when it did
+	// not, and "no HOME" when HOME is empty.
+	SessionEnv string `json:"session_env"`
 	// Parent is what the probe sees of its parent, the helper's exec, which waits for
 	// it and then measures the enclosure.
 	Parent parentReport `json:"parent"`
@@ -548,6 +552,11 @@ func probe(args []string) int {
 		}
 	}
 	r.HostEnv = os.Getenv(hostOnly) != ""
+	if home := os.Getenv("HOME"); home == "" {
+		r.SessionEnv = "no HOME"
+	} else if err := os.Mkdir(filepath.Join(home, ".claude", "session-env"), 0o700); err != nil && !os.IsExist(err) {
+		r.SessionEnv = err.Error()
+	}
 	r.PassedEnv = os.Getenv("PROBE_PASSED") == "yes"
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
