@@ -1512,7 +1512,10 @@ release may change what an existing document does, and says so under Upgrading.
   so does a session whose runtime wrote no transcript. Each poll reads only the bytes
   appended since the last one, and a line over 8 MiB stops the transcript with one
   line. With no wall a transcript over 64 MiB stops the same way, as one behind a wall
-  does. Each line on `stderr` about a transcript or a resume starts with its fix.
+  does. Each line on `stderr` about a transcript or a resume starts with its fix. A
+  session that restored a paused run's transcript sends the restored file, under the
+  paused run's slug, from offset 0, with or without a wall, whatever its working
+  directory, so a continuation of a continuation restores one run's chunks.
   The line `the runtime's transcript lies inside the agent's container, which the
   session does not read` is gone.
 - `(*session.Run).RemoveSetup`: when no session is running and no host step is open, it

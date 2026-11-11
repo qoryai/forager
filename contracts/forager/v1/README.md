@@ -2090,7 +2090,9 @@ input contains it, the session uses `resume.path`, with `{session_id}` replaced 
 directory with every character other than an ASCII letter or digit replaced by `-`:
 `/workspace` becomes `-workspace`. The session reads no path outside `resume.prefix`,
 with a `..` segment or through a symbolic link, and no file over 67108864 bytes (64
-MiB), with a wall or without one.
+MiB), with a wall or without one. The session that restored a paused run's transcript
+reads `resume.path` instead, under the paused run's slug (§The run API, The transcript of
+a paused run).
 
 Each line the session writes about a transcript is one `dev.qory.run.log` line of the
 session, with `stream: stderr`, of the form `<fix>. A continuation of this run starts
@@ -4688,8 +4690,16 @@ starts the runtime with the descriptor's `resume.args` added, `{session_id}` rep
 Resume). Behind a wall, the session writes them in the session's transcript directory
 (§The events, A session's transcript), before the agent's container starts: it makes
 the slug directory, mode `0700`, and creates the file, mode `0600`, where none exists,
-with no symbolic link among its names. A `resume.session_id` that is not a UUID in lower
-case, or a `resume.path` other than `resume.prefix`, a slug, `/`, `resume.session_id`
+with no symbolic link among its names. The resumed runtime appends to that file, under
+the paused run's slug, so the session sends it as the session's transcript, with
+`resume.path` as `path` and `resume.session_id` as `session_id`, from offset 0: the
+restored lines first, then the new ones, whatever the slug of the working directory, with
+a wall or without one, and with the same checks. A hook input whose
+`resume.path_from` names a file other than `<session id>.jsonl`, under any slug, writes
+one line, `Check that the runtime resumes
+from <path>. The session reads the restored transcript there, and <path_from> of the
+hook input is "<path>"`, and the session goes on reading the restored file. A
+`resume.session_id` that is not a UUID in lower case, or a `resume.path` other than `resume.prefix`, a slug, `/`, `resume.session_id`
 and `.jsonl`, is a failed resume, and so is a walled session whose transcript directory
 the wall does not bind (§The events, A session's transcript). When the read or the write
 fails, the session starts the runtime without a resume and writes one `dev.qory.run.log`
