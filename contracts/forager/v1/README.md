@@ -3193,7 +3193,8 @@ Several model keys) with a signed `POST <run.url>/<run_id>/model-keys`,
 `qory-request-ed25519-v1`. The server accepts it from the key that a batch of the run is
 accepted from: the registering node, or the attaching instance after an attach (After
 the attach, above). Its body is a `model-keys-report.schema.json` document of at most
-16 KiB:
+32 KiB, with at most 66 entries in `keys`: 6 keys times the 11 windows listed below. The
+cap rises with each window the list gains, in the report and in the answer:
 
 ```json
 {"version": 1, "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e", "time": "2026-11-10T12:00:05Z",
@@ -3209,13 +3210,16 @@ Each entry of `keys` is one key and one limit window:
 - `window`: the limit's window. The gateway reads the headers of every answer of the
   endpoint's host to a request with the group's placeholder. In the subscription's
   `anthropic-ratelimit-unified-*` headers, the infix `5h` is `five_hour`, `7d` is
-  `seven_day` and `overage` is `overage`, and the value of `-representative-claim`,
-  such as `seven_day_opus`, is the window as it is. The API key's four header families,
+  `seven_day` and `overage` is `overage`, and the value of `-representative-claim` is
+  the window as it is when it is `five_hour`, `seven_day`, `seven_day_opus`,
+  `seven_day_sonnet` or `overage`. The API key's four header families,
   `anthropic-ratelimit-{requests,tokens,input-tokens,output-tokens}-{limit,remaining,reset}`,
   are `requests`, `tokens`, `input_tokens` and `output_tokens`, and an error whose
   `error_code` is `enforced_spend_limit_reached` is `spend_limit`. A limit refusal with
-  no window is `key`. The gateway writes a header with any other infix to its log of
-  limit answers and reports no window for it.
+  no window is `key`. These 11 are the windows. The gateway writes a header with any
+  other infix, and a `-representative-claim` header with any other value, to its log of
+  limit answers, and reports no window for it. Qory Apiary stores only the 11 windows,
+  and ignores an entry of any other.
 - `status`: `allowed`, `allowed_warning` or `rejected`, from the answer; `rejected` for
   every limit refusal.
 - `resets_at`: the window's reset, from the answer.
@@ -3251,7 +3255,9 @@ The gateway takes each entry whose `observed_at` is later than the state it has 
 key and window. A key whose entry has a `cooldown_until` in the future is in cooldown
 until then, as after a limit refusal of the run's own, so a run sets no key that another
 run found at its limit. The server keeps the newest state per key and window, and
-ignores an entry older than the one it keeps. The other answers:
+ignores an entry older than the one it keeps. Qory Apiary refuses a report with an
+`observed_at` more than 300 seconds ahead of its clock: a signed `400`
+`invalid_request` with `names: ["observed_at"]`. The other answers:
 
 | Answer | The gateway |
 |---|---|

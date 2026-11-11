@@ -20,8 +20,9 @@ const reportGap = time.Second
 // no answer; the last one repeats until the run ends.
 var reportBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 60 * time.Second}
 
-// maxReportKeys is the most entries a report has, model-keys-report.schema.json's.
-const maxReportKeys = 64
+// maxReportKeys is the most entries a report has, model-keys-report.schema.json's: 6
+// keys of 11 windows.
+const maxReportKeys = 66
 
 // keyReporter sends the state of a run's key group to the control plane, signed POST
 // <run.url>/<run_id>/model-keys (the contract's §The server, The model keys): one report

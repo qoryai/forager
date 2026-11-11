@@ -11,8 +11,9 @@ import (
 	"github.com/qoryai/forager/accesskey"
 )
 
-// MaxModelKeysReport is the largest body of a model keys report.
-const MaxModelKeysReport = 16 << 10
+// MaxModelKeysReport is the largest body of a model keys report: 66 entries with names
+// of 64 characters take about 19 KiB.
+const MaxModelKeysReport = 32 << 10
 
 // ModelKeyState is the state of one limit window of one model key of a run's key group,
 // an entry of model-keys-report.schema.json's keys and of model-keys-answer.schema.json's.

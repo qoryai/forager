@@ -18,9 +18,10 @@ import (
 // again with another key after a limit refusal.
 const MaxCopy = 8 << 20
 
-// maxWindows is the most windows the group keeps of one key: 6 keys of 10 windows fit
-// the report's 64 entries. A window past them is left out.
-const maxWindows = 10
+// maxWindows is the most windows the group keeps of one key, the 11 windows of the
+// report: 6 keys of 11 windows fit the report's 66 entries. A window past them is left
+// out.
+const maxWindows = 11
 
 // week is how far the gateway moves a key's schedule_resets_at once it has passed.
 const week = 7 * 24 * time.Hour

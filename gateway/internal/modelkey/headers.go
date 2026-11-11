@@ -54,8 +54,13 @@ var unifiedWindows = map[string]string{"5h": "five_hour", "7d": "seven_day", "ov
 // apiWindows are the header families of an API key and their windows.
 var apiWindows = map[string]string{"requests": "requests", "tokens": "tokens", "input-tokens": "input_tokens", "output-tokens": "output_tokens"}
 
-// windowName is the form of a window, the schema's pattern.
+// windowName is the form of a window, the schema's pattern, and of an error's type and
+// code.
 var windowName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// claimWindows are the values of the subscription's -representative-claim that are a
+// window of the report; another value is left out.
+var claimWindows = map[string]bool{"five_hour": true, "seven_day": true, "seven_day_opus": true, "seven_day_sonnet": true, "overage": true}
 
 // seen is what one answer's headers contain of one window.
 type seen struct {
@@ -108,8 +113,10 @@ func readHeaders(h http.Header, now time.Time) read {
 	slices.Sort(names)
 	get := func(lower string) string { return strings.TrimSpace(h.Get(lower)) }
 	claim := ""
-	if c := get(unifiedPrefix + "representative-claim"); windowName.MatchString(c) {
+	if c := get(unifiedPrefix + "representative-claim"); claimWindows[c] {
 		claim = c
+	} else if c != "" {
+		r.unknown = append(r.unknown, unifiedPrefix+"representative-claim")
 	}
 	type family struct {
 		limit, remaining float64

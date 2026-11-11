@@ -253,8 +253,10 @@ release may change what an existing document does, and says so under Upgrading.
   second, and takes the newest state of every gateway from the answer, so a run sets no
   key that another run found at its limit. `model-keys-report.schema.json` and
   `model-keys-answer.schema.json` define the body and the answer. With a control plane
-  that returns `404`, the cooldowns stay within the run. README §The server, The model
-  keys.
+  that returns `404`, the cooldowns stay within the run. A report has at most 32 KiB
+  and 66 entries, 6 keys of 11 windows, and Qory Apiary stores only those windows. Qory
+  Apiary refuses a report whose `observed_at` is more than 300 seconds ahead of its
+  clock with `400` `invalid_request`. README §The server, The model keys.
 - `model_key_limit`, a reserved reason, `event.ReasonModelKeyLimit`. When no key of the
   group is left, or the refused body was over 8 MiB, the proxy passes the refusal to the
   session, and the gateway's `2xx` to the session's next batch has

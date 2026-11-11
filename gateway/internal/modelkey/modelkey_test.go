@@ -452,3 +452,26 @@ func TestAKeyInCooldownAtTheClaimWaitsForItsEnd(t *testing.T) {
 		t.Errorf("active %s once model-3's cooldown ended; want model-3", got)
 	}
 }
+
+// TestAClaimOutsideTheWindowsIsLeftOut pins -representative-claim: a value of the 11
+// windows is a window, and any other value is no window and is named in the log of
+// limit answers by its header, not its value.
+func TestAClaimOutsideTheWindowsIsLeftOut(t *testing.T) {
+	g, _ := group(t)
+	reset := start.Add(time.Hour)
+	g.Answered("model", headers("anthropic-ratelimit-unified-representative-claim", "seven_day_sonnet",
+		"anthropic-ratelimit-unified-status", "allowed", "anthropic-ratelimit-unified-reset", epoch(reset)))
+	if w, ok := window(g, "model", "seven_day_sonnet"); !ok || !w.ResetsAt.Equal(reset) {
+		t.Errorf("seven_day_sonnet: %+v, %v", w, ok)
+	}
+	h := headers("anthropic-ratelimit-unified-representative-claim", "monthly_other",
+		"anthropic-ratelimit-unified-status", "allowed", "anthropic-ratelimit-unified-reset", epoch(reset))
+	g.Answered("model-2", h)
+	if ws := g.Windows(); len(ws) != 1 {
+		t.Errorf("windows %+v; want seven_day_sonnet alone", ws)
+	}
+	line := modelkey.Shown("model-2", 429, h, "")
+	if !strings.Contains(line, "no window for anthropic-ratelimit-unified-representative-claim") || strings.Contains(line, "monthly_other") {
+		t.Errorf("Shown: %s", line)
+	}
+}

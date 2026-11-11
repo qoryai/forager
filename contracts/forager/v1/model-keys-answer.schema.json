@@ -12,9 +12,9 @@
       "const": 1
     },
     "keys": {
-      "description": "One entry per key of the key group and limit window, each pair once.",
+      "description": "One entry per key of the key group and limit window, each pair once: at most 66, 6 keys times the 11 windows of model-keys-report.schema.json.",
       "type": "array",
-      "maxItems": 64,
+      "maxItems": 66,
       "items": {"$ref": "model-keys-report.schema.json#/$defs/key_state"}
     }
   }
