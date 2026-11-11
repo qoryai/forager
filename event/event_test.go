@@ -117,8 +117,8 @@ func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
 	}
 }
 
-// TestTheReservedCodesAreTheContracts pins event.Reserved to the reserved codes the
-// schema of run.exited names in its reason's description, and those that fail link-batch.schema.json
+// TestTheReservedCodesAreTheContracts pins event.Reserved to the reserved codes in the
+// description of the reason in the schema of run.exited, and those that fail link-batch.schema.json
 // beside timeout, interrupted, no_session and model_key_limit, and event.StarterReason to the reason's pattern less them: a
 // starter's code is any other code.
 func TestTheReservedCodesAreTheContracts(t *testing.T) {

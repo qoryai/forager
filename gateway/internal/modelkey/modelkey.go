@@ -29,7 +29,7 @@ const week = 7 * 24 * time.Hour
 // Key is one key of the group, from the run configuration's credentials: its name, its
 // earliest reset as the server had it, zero for none, the next reset of its weekly
 // schedule, zero for none, its pause_for_s, the end of its cooldown at the claim, zero
-// for none, and whether the model choice is this key, chosen.
+// for none, and chosen, true for the key of the model choice.
 type Key struct {
 	Name             string
 	ResetsAt         time.Time

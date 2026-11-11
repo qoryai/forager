@@ -239,9 +239,10 @@ key. When the provider returns `429` for the active key, the proxy puts the key 
 cooldown until the reset in the answer's headers, makes another key out of cooldown the
 active key, and sends the request again with it. The proxy takes the key with `chosen`
 first, then a key with no known reset, by the order, then the key whose limit resets
-soonest. A key with `cooldown_until` stays in cooldown until that time, or until the
-provider returns a `2xx` for it. The session gets only the answer to that second
-request. The proxy keeps a copy of each request
+soonest. A key with `cooldown_until` stays in cooldown until that time, until the
+provider returns a `2xx` for it, or until the answer to a later model keys report has
+an entry of the key that is not `rejected`. The session gets only the answer to that
+second request. The proxy keeps a copy of each request
 body up to 8 MiB for this; a larger body goes once.
 
 When no key is left out of cooldown, the session gets the `429`, and the proxy sends no

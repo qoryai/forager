@@ -240,7 +240,7 @@ func TestLinkFixturesValidate(t *testing.T) {
 }
 
 // TestLinkBatchRefusedCodesAreTheSessions pins the codes a link batch's
-// dev.qory.run.refused may carry to the codes the session sets itself: every code of
+// dev.qory.run.refused may have to the codes the session sets itself: every code of
 // link-batch.schema.json's enum is one refusal.Decides reports, and every code of
 // run.refused.schema.json that refusal.Decides reports is in it.
 func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {

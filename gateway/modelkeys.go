@@ -51,7 +51,8 @@ func newKeyReporter(runID, runURL string, g *modelkey.Group, send func(context.C
 	return k
 }
 
-// poke starts a report; changes in flight join the next one.
+// poke wakes the reporter for a report, and drops the signal when one is already
+// waiting; changes in flight join the next report.
 func (k *keyReporter) poke() {
 	select {
 	case k.wake <- struct{}{}:

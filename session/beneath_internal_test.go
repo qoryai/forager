@@ -222,9 +222,9 @@ func TestAWalledTranscriptNeverWrittenWritesALine(t *testing.T) {
 // TestAWalledRestoredTranscriptIsReadUnderThePausedRunsSlug pins the session that
 // restored a paused run's transcript: it reads the restored file, under the paused run's
 // slug, from offset 0, not the file under its working directory's slug. A hook input
-// whose transcript path has the restored file's name agrees, under any slug; one that
-// is the path of a file of another session id writes one line, once, and the session goes on
-// reading the restored file.
+// whose transcript path has the restored file's name, under any slug, writes no line;
+// one whose transcript path is a file of another session id writes one line, once, and
+// the session goes on reading the restored file.
 func TestAWalledRestoredTranscriptIsReadUnderThePausedRunsSlug(t *testing.T) {
 	paused := "-paused/" + walledID + ".jsonl"
 	for name, c := range map[string]struct {

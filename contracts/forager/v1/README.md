@@ -2236,7 +2236,8 @@ with `read_needs_no_nested_docker`, and a read run whose setup container could n
 removed with `read_needs_setup_removed`, each `failed` with `exit_code` `-1`.
 `(*session.Run).Close` returns an error for each of the ten codes with another state or
 exit code, or after a join, and the gateway returns `400` `invalid_request` to a batch
-with such a `dev.qory.run.exited`. The state of each of Forager's endings:
+with such a `dev.qory.run.exited` and ends the run `failed` with `batch_refused`. The
+state of each of Forager's endings:
 
 | Ending | `state` | `reason` |
 |---|---|---|
