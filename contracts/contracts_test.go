@@ -209,7 +209,7 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // after the run.started, a batch of a session with no runtime, with bare, a join request
 // with and without model_credential, a join answer with and
 // without model_credential, a batch answer with stop and an empty one, a batch of a
-// session.exited and a run.exited with model_key_limit and one of a session.exited
+// session.exited and a run.exited paused with model_key_limit and one of a session.exited
 // alone, a batch of two session.transcript chunks, and refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
@@ -324,9 +324,10 @@ const beyondLinkSchema = "-beyond-schema-"
 // or of 39 characters, whose environment_ref is empty or missing, whose environment_image
 // or base has a tag, whose environment_image is empty, or with a member it does not
 // define, a
-// run.step_exited without its state, with a state other than the three, with an
+// run.step_exited without its state, with a state other than the three, paused among
+// them, with an
 // exit code below -1 or without its duration, a run.exited with no_session and succeeded,
-// a run.exited without state, with a state other than the three, with a reason that is
+// a run.exited without state, with a state other than the four, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
 // status, a descriptor with an expression, a descriptor whose model section has a
@@ -354,7 +355,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // with a member it does not define or a name of the form <name>=<value> in passes, a
 // link join answer without its session or numbered 0, and a link refusal without from, with a control
 // character other than tab and newline in its message, C0, DEL or C1, or with a state
-// other than the three, and an API format outside the list, in upper case or as an
+// other than the three, paused among them, a run outcome and a batch answer's end
+// paused, and an API format outside the list, in upper case or as an
 // object; and, for several model keys and a resume, a run configuration whose API
 // credential has a pause_for_s of 0 or over a week or a resets_at that is no time, with
 // seven API credentials, a host credential with pause_for_s, or a resume without its
@@ -363,7 +365,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // without cooldown_until or cooldown_until with another status, or no observed_at, or
 // whose time has a fraction, a model keys answer without version, a link batch answer
 // whose stop has no reason or another one, a session.exited or a session's run.exited
-// failed with model_key_limit, a session.transcript numbered 0, with a negative offset,
+// failed or cancelled with model_key_limit, a session.exited paused with no reason or
+// with timeout, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
 // without its session id or over 32 KiB, and a descriptor whose resume has no args, a
 // prefix outside the home or a path without {session_id}. A fixture whose name contains
 // -beyond-schema- breaks a rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is

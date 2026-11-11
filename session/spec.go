@@ -467,10 +467,10 @@ func checkMachine(spec OpenSpec) error {
 }
 
 // Outcome is how the caller says the run ended, which [Run.Close] writes in
-// dev.qory.run.exited: State, succeeded, failed or cancelled; Reason, empty for none,
-// timeout or interrupted with cancelled, timeout with ExitCode 124, model_key_limit
-// with cancelled after a join whose last session ended with model_key_limit, which a
-// control plane reads as a pause of the run, image_missing,
+// dev.qory.run.exited: State, succeeded, failed, cancelled or paused; Reason, empty
+// for none, timeout or interrupted with cancelled, timeout with ExitCode 124,
+// model_key_limit with paused, the one reason paused takes, after a join whose last
+// session ended paused with model_key_limit, image_missing,
 // image_user_root, image_access_denied, image_rate_limited or
 // image_registry_unreachable, failed with -1 for a run no session joined, after
 // [Run.FetchImage] returned that refusal, workflow_not_in_harness, failed with -1 for a run no session
@@ -489,10 +489,11 @@ type Outcome struct {
 	ExitCode int
 }
 
-// checkOutcome refuses an outcome the close cannot write: a state outside the three, an
+// checkOutcome refuses an outcome the close cannot write: a state outside the four, an
 // exit code under -1, a reason outside the pattern or one of Forager's reserved codes
 // other than timeout, interrupted, no_session and model_key_limit, those four with
-// another state or exit code than they take, model_key_limit in a run with no join or
+// another state or exit code than they take, paused with any reason other than
+// model_key_limit, model_key_limit in a run with no join or
 // after a last session that ended with another reason, lastReason, and image_missing, image_user_root, image_access_denied,
 // image_rate_limited, image_registry_unreachable, workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
 // read_needs_no_nested_docker and read_needs_setup_removed other than failed with -1 for
@@ -501,9 +502,11 @@ type Outcome struct {
 func checkOutcome(o Outcome, joined bool, lastReason string) error {
 	switch {
 	case !event.IsState(o.State):
-		return fmt.Errorf("the outcome's state %q is none of succeeded, failed and cancelled", o.State)
+		return fmt.Errorf("the outcome's state %q is none of succeeded, failed, cancelled and paused", o.State)
 	case o.ExitCode < -1:
 		return fmt.Errorf("the outcome's exit code %d is under -1", o.ExitCode)
+	case o.State == event.StatePaused && o.Reason != event.ReasonModelKeyLimit:
+		return errors.New("an outcome paused has the reason model_key_limit")
 	case o.Reason == refusal.ImageMissing, o.Reason == refusal.ImageUserRoot, o.Reason == refusal.ImageAccessDenied,
 		o.Reason == refusal.ImageRateLimited, o.Reason == refusal.ImageRegistryUnreachable, o.Reason == event.ReasonWorkflowNotInHarness,
 		o.Reason == event.ReasonReadNeedsWall, o.Reason == event.ReasonReadNeedsSetupOutside,
@@ -522,8 +525,8 @@ func checkOutcome(o Outcome, joined bool, lastReason string) error {
 			return errors.New("an outcome with the reason interrupted is cancelled")
 		}
 	case o.Reason == event.ReasonModelKeyLimit:
-		if o.State != event.StateCancelled || !joined || lastReason != event.ReasonModelKeyLimit {
-			return errors.New("an outcome with the reason model_key_limit is cancelled, after a join whose last session ended with model_key_limit")
+		if o.State != event.StatePaused || !joined || lastReason != event.ReasonModelKeyLimit {
+			return errors.New("an outcome with the reason model_key_limit is paused, after a join whose last session ended with model_key_limit")
 		}
 	case o.Reason == event.ReasonNoSession:
 		if o.State != event.StateFailed || o.ExitCode != -1 || joined {
@@ -554,14 +557,14 @@ type Result struct {
 	// Signal names the signal that killed the runtime, if one did.
 	Signal string
 	// State and Reason are the state and the reason of the session's
-	// dev.qory.session.exited: succeeded, failed or cancelled, and the reason, empty
+	// dev.qory.session.exited: succeeded, failed, cancelled or paused, and the reason, empty
 	// when there is none. When the runtime exits by itself, its exit decides, succeeded
 	// on 0 and failed otherwise, with no reason. At the spec's Timeout, TimedOut, they
 	// are cancelled and timeout. When the session was stopped from where it was started,
 	// Cancelled, they are cancelled and interrupted. After the gateway's answer to a
 	// batch had stop, up to the answer to the batch the session posts once the runtime
-	// exited, they are cancelled and model_key_limit: the run pauses, and the caller
-	// closes it cancelled with model_key_limit after its host work. In these three,
+	// exited, they are paused and model_key_limit: the run pauses, and the caller
+	// closes it paused with model_key_limit after its host work. In these three,
 	// ExitCode and Signal are the runtime's, whatever they are. When the gateway closed the run, RunClosed, they are
 	// the state and the reason its 410 says, but batch_refused after a refused batch,
 	// and failed with ClosedReason for an end that has no state, run_closed among them.

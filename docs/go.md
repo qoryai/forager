@@ -1385,12 +1385,12 @@ request asks the gateway for, for this session.
   - When the run was stopped from where it was started, a Ctrl-C or a signal to the
     caller, which ends the context, `cancelled` and `interrupted`, with `Cancelled`.
     `ExitCode` and `Signal` are the runtime's, whatever they are.
-  - When the gateway's answer to a batch had `stop`, `model_key_limit`, `cancelled` and
+  - When the gateway's answer to a batch had `stop`, `model_key_limit`, `paused` and
     `model_key_limit`: no model key of the run is left, and the session stopped the
     runtime as at its time limit. A stop in the answer to the batch the session posts
     once the runtime exited by itself counts too. `ExitCode` and `Signal` are the
     runtime's. The run stays open: run its host work, such as a push, then close it
-    `cancelled` with `model_key_limit` and `ExitCode`.
+    `paused` with `model_key_limit` and `ExitCode`.
   - A runtime that exits 0 at the session's stop, at the context's end or at the
     limit, has exited 0: `Join` records its `dev.qory.session.exited` and returns its
     `Result`, with no error.
@@ -1431,9 +1431,10 @@ image runs nested Docker, which is when `Docker` is true in the image `(*session
 `read_needs_setup_removed` when its setup container could not be removed.
 `Close` refuses each of the ten codes with another state or exit
 code, or after a join, as the gateway does. Close a run whose last session ended with
-`model_key_limit` with `cancelled`, `model_key_limit` and that session's `ExitCode`: a
+`model_key_limit` with `paused`, `model_key_limit` and that session's `ExitCode`: a
 control plane reads it as a pause of the run. `Close` returns an error for `model_key_limit` with
-another state, in a run with no join, and after a last session that ended otherwise.
+another state, for `paused` with another reason, in a run with no join, and after a last
+session that ended otherwise.
 `Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
 `session.Closed` is what the run came to:
 

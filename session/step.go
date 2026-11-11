@@ -117,7 +117,7 @@ func (s *Step) Log(b []byte) (err error) {
 func (s *Step) Exit(state string, exitCode int) (err error) {
 	r := s.r
 	defer func() { err = maskError(r.masker, err) }()
-	if !event.IsState(state) {
+	if !event.IsStepState(state) {
 		return fmt.Errorf("exit the step with succeeded, failed or cancelled, not %s", accesskey.ShownValue(state, true))
 	}
 	if exitCode < -1 {

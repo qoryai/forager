@@ -34,8 +34,8 @@ func hasLog(evs []map[string]any, text string) bool {
 
 // TestAStopInABatchsAnswerStopsTheRuntime pins the gateway's stop, model_key_limit, in
 // its answer to a batch behind a separate gateway: the session stops the runtime as at
-// the time limit, writes session.exited cancelled with model_key_limit and the
-// runtime's exit code, reports it, and the run stays open for its close, cancelled with
+// the time limit, writes session.exited paused with model_key_limit and the
+// runtime's exit code, reports it, and the run stays open for its close, paused with
 // model_key_limit and the last session's exit code.
 func TestAStopInABatchsAnswerStopsTheRuntime(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "pid")
@@ -52,13 +52,13 @@ func TestAStopInABatchsAnswerStopsTheRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.State != "cancelled" || res.Reason != "model_key_limit" || res.ExitCode != 143 || res.TimedOut || res.Cancelled || res.RunClosed {
+	if res.State != "paused" || res.Reason != "model_key_limit" || res.ExitCode != 143 || res.TimedOut || res.Cancelled || res.RunClosed {
 		t.Errorf("result %+v", res)
 	}
-	if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "model_key_limit" || code != 143 {
+	if state, reason, code := endedWith(t, res); state != "paused" || reason != "model_key_limit" || code != 143 {
 		t.Errorf("session.exited %s %s %d", state, reason, code)
 	}
-	if closed.State != "cancelled" || closed.Reason != "model_key_limit" || closed.ExitCode != 143 {
+	if closed.State != "paused" || closed.Reason != "model_key_limit" || closed.ExitCode != 143 {
 		t.Errorf("the close %+v", closed)
 	}
 	if !slices.ContainsFunc(reports(), func(l string) bool { return strings.Contains(l, "model provider's limit") }) {
@@ -71,7 +71,7 @@ func TestAStopInABatchsAnswerStopsTheRuntime(t *testing.T) {
 
 // TestAStopThatComesAsTheRuntimeExitsStillSetsTheReason pins the batch the session posts
 // after a runtime that exited by itself: the answer to it, which comes after the exit,
-// has stop, and session.exited is cancelled with model_key_limit and exit code 0.
+// has stop, and session.exited is paused with model_key_limit and exit code 0.
 func TestAStopThatComesAsTheRuntimeExitsStillSetsTheReason(t *testing.T) {
 	sp, g, _ := remoteSpec(t, 0)
 	sp.Args = []string{"-c", "echo last; exit 0"}
@@ -86,10 +86,10 @@ func TestAStopThatComesAsTheRuntimeExitsStillSetsTheReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.State != "cancelled" || res.Reason != "model_key_limit" || res.ExitCode != 0 {
+	if res.State != "paused" || res.Reason != "model_key_limit" || res.ExitCode != 0 {
 		t.Errorf("result %+v", res)
 	}
-	if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "model_key_limit" || code != 0 {
+	if state, reason, code := endedWith(t, res); state != "paused" || reason != "model_key_limit" || code != 0 {
 		t.Errorf("session.exited %s %s %d", state, reason, code)
 	}
 }
@@ -134,7 +134,7 @@ func TestAStopWithNoRuntimeRunningChangesNothing(t *testing.T) {
 }
 
 // TestTheCloseTakesModelKeyLimitOnlyAfterSuchASession pins the outcomes with
-// model_key_limit the close returns an error for: one that is not cancelled, one of a run whose last
+// model_key_limit the close returns an error for: one that is not paused, one of a run whose last
 // session ended otherwise, and one of a run with no join.
 func TestTheCloseTakesModelKeyLimitOnlyAfterSuchASession(t *testing.T) {
 	sp, _, _ := remoteSpec(t, 0)
@@ -142,7 +142,7 @@ func TestTheCloseTakesModelKeyLimitOnlyAfterSuchASession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	limit := session.Outcome{State: "cancelled", Reason: "model_key_limit", ExitCode: 0}
+	limit := session.Outcome{State: "paused", Reason: "model_key_limit", ExitCode: 0}
 	if _, err := r.Close(context.Background(), limit); err == nil || !strings.Contains(err.Error(), "after a join whose last session ended with model_key_limit") {
 		t.Errorf("a run with no join: %v", err)
 	}
@@ -155,7 +155,53 @@ func TestTheCloseTakesModelKeyLimitOnlyAfterSuchASession(t *testing.T) {
 	if _, err := r.Close(context.Background(), session.Outcome{State: "failed", Reason: "model_key_limit"}); err == nil {
 		t.Error("closed failed with model_key_limit")
 	}
+	if _, err := r.Close(context.Background(), session.Outcome{State: "cancelled", Reason: "model_key_limit"}); err == nil {
+		t.Error("closed cancelled with model_key_limit")
+	}
 	if _, err := r.Close(context.Background(), session.Outcome{State: "succeeded"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestTheCloseTakesPausedOnlyWithModelKeyLimit pins the outcomes of a run whose last
+// session ended paused with model_key_limit: the close returns an error for cancelled with
+// model_key_limit, and for paused with no reason, with timeout or with a starter's code,
+// and writes paused with model_key_limit.
+func TestTheCloseTakesPausedOnlyWithModelKeyLimit(t *testing.T) {
+	sp, g, _ := remoteSpec(t, 0)
+	sp.Args = []string{"-c", "echo last; exit 0"}
+	g.OnBatch(func(evs []map[string]any) linktest.Reply {
+		if hasLog(evs, "last") {
+			return keyStop
+		}
+		return linktest.Reply{Status: 200}
+	})
+	r, err := session.Open(context.Background(), opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Join(context.Background(), sp.SessionSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != event.StatePaused || res.Reason != event.ReasonModelKeyLimit {
+		t.Fatalf("result %+v", res)
+	}
+	for _, o := range []session.Outcome{
+		{State: event.StateCancelled, Reason: event.ReasonModelKeyLimit},
+		{State: event.StatePaused},
+		{State: event.StatePaused, Reason: event.ReasonTimeout, ExitCode: 124},
+		{State: event.StatePaused, Reason: "checks_failed"},
+	} {
+		if _, err := r.Close(context.Background(), o); err == nil {
+			t.Errorf("closed %+v", o)
+		}
+	}
+	closed, err := r.Close(context.Background(), session.Outcome{State: event.StatePaused, Reason: event.ReasonModelKeyLimit, ExitCode: res.ExitCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.State != event.StatePaused || closed.Reason != event.ReasonModelKeyLimit {
+		t.Errorf("the close %+v", closed)
 	}
 }

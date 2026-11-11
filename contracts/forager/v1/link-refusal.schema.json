@@ -29,8 +29,9 @@
       "enum": ["gateway", "apiary"]
     },
     "state": {
-      "description": "On a 410 that ends a run, how the run ended at the gateway: the state of the gateway's dev.qory.run.exited of it, which the session records in the session's dev.qory.run.exited. Absent on every other refusal, and on a 410 of a run that ended otherwise, run_closed.",
-      "$ref": "events/run.exited.schema.json#/properties/state"
+      "description": "On a 410 that ends a run, how the run ended at the gateway: the state of the gateway's dev.qory.run.exited of it, succeeded, failed or cancelled, which the session records in the session's dev.qory.run.exited. It is never paused: only a session's close writes paused. Absent on every other refusal, and on a 410 of a run that ended otherwise, run_closed.",
+      "type": "string",
+      "enum": ["succeeded", "failed", "cancelled"]
     },
     "reason": {
       "description": "On a 410 that ends a run, the reason of the gateway's dev.qory.run.exited of it: Forager's code, or the code the run's starter gave. The session records it in the session's dev.qory.run.exited. Absent when the run ended with no reason, as when its starter gave an outcome and none, and on every other refusal.",

@@ -334,10 +334,14 @@ func TestCloseChecksTheOutcome(t *testing.T) {
 		out  session.Outcome
 		want string
 	}{
-		{session.Outcome{State: "done"}, `the outcome's state "done" is none of succeeded, failed and cancelled`},
+		{session.Outcome{State: "done"}, `the outcome's state "done" is none of succeeded, failed, cancelled and paused`},
 		{session.Outcome{State: "failed", ExitCode: -2}, "the outcome's exit code -2 is under -1"},
 		{session.Outcome{State: "cancelled", Reason: "timeout", ExitCode: 1}, "an outcome with the reason timeout is cancelled with the exit code 124"},
 		{session.Outcome{State: "failed", Reason: "interrupted"}, "an outcome with the reason interrupted is cancelled"},
+		{session.Outcome{State: "paused"}, "an outcome paused has the reason model_key_limit"},
+		{session.Outcome{State: "paused", Reason: "timeout", ExitCode: 124}, "an outcome paused has the reason model_key_limit"},
+		{session.Outcome{State: "paused", Reason: "checks_failed"}, "an outcome paused has the reason model_key_limit"},
+		{session.Outcome{State: "cancelled", Reason: "model_key_limit"}, "an outcome with the reason model_key_limit is paused, after a join whose last session ended with model_key_limit"},
 		{session.Outcome{State: "failed", Reason: "session_lost", ExitCode: -1}, `the outcome's reason "session_lost" is not a code of the caller's: a lower-case letter, then up to 63 lower-case letters, digits and _, and none of Forager's reserved codes`},
 		{session.Outcome{State: "failed", Reason: "image_missing", ExitCode: 0}, imageMissingOutcome},
 		{session.Outcome{State: "succeeded", Reason: "image_missing", ExitCode: -1}, imageMissingOutcome},

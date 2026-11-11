@@ -9,7 +9,7 @@
     "dataschema": "https://qory.dev/contracts/forager/v1/events/session.exited.schema.json",
     "data": {
       "session": 1,
-      "state": "cancelled",
+      "state": "paused",
       "exit_code": -1,
       "signal": "SIGTERM",
       "reason": "model_key_limit",
@@ -54,7 +54,7 @@
     "time": "2026-11-10T12:00:09.500Z",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.exited.schema.json",
     "data": {
-      "state": "cancelled",
+      "state": "paused",
       "exit_code": -1,
       "signal": "SIGTERM",
       "reason": "model_key_limit",

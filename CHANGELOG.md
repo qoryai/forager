@@ -27,9 +27,9 @@ release may change what an existing document does, and says so under Upgrading.
   default key; then the others by when they were added; then the keys in cooldown at the
   claim, each with `cooldown_until`. A start key in cooldown and two keys with `chosen`
   are each `run_configuration_invalid`.
-- Read a `dev.qory.run.exited` `cancelled` with `model_key_limit` as a pause of the run,
-  not as a person's cancel: the run's work is kept, and a continuation of the run can
-  resume its runtime session.
+- Read `paused`, a state of `dev.qory.run.exited` and `dev.qory.session.exited`, always
+  with `model_key_limit`, as a pause of the run, not as a person's cancel: the run's work
+  is kept, and a continuation of the run can resume its runtime session.
 - Deploy the gateway before the sessions that use it: a session's batch may contain
   `image_access_denied`, `image_rate_limited` and `image_registry_unreachable` as the
   `code` of `dev.qory.run.refused` and the `reason` of `dev.qory.session.exited` and
@@ -267,9 +267,14 @@ release may change what an existing document does, and says so under Upgrading.
   session; while every key is in cooldown, the proxy returns its `429` and sends nothing
   to the provider. In both cases the gateway's `2xx` to the session's next batch has
   `{"stop": {"reason": "model_key_limit"}}`, `link-batch-answer.schema.json`. The session
-  stops the runtime and writes `dev.qory.session.exited` `cancelled` with
+  stops the runtime and writes `dev.qory.session.exited` `paused` with
   `model_key_limit`. The run stays open for its host work, and its caller closes it
-  `cancelled` with `model_key_limit` and the last session's exit code.
+  `paused` with `model_key_limit` and the last session's exit code.
+- `paused`, a state of `dev.qory.run.exited` and `dev.qory.session.exited`,
+  `event.StatePaused`, only with the reason `model_key_limit`. `event.IsState` accepts
+  the four states, and `event.IsStepState` the three of `dev.qory.run.step_exited`,
+  which never ends `paused`. A 410's `state`, `link-refusal.schema.json`, and a
+  starter's outcome stay `succeeded`, `failed` or `cancelled`.
 - `dev.qory.session.transcript`, `event.SessionTranscript`: the transcript of a runtime's
   session, masked as `dev.qory.run.log` is, in chunks of at most 32 KiB, each run's from
   offset 0. The descriptor's `resume` sets where the runtime writes the transcript and the
@@ -1047,7 +1052,7 @@ release may change what an existing document does, and says so under Upgrading.
   answer has in cooldown. A control plane without the route gets one report: the run's
   record has one line, `Upgrade the control plane to share model key cooldowns between
   runs`, and cooldowns stay within the run.
-- The link takes a session's `dev.qory.run.exited` `cancelled` with `model_key_limit`
+- The link takes a session's `dev.qory.run.exited` `paused` with `model_key_limit`
   after a last `dev.qory.session.exited` with that reason.
 - `server.Client.PostModelKeys`, the signed model keys report and its answer.
 - The link's transcript request, `GET <run.url>/<run_id>/transcript`, for a run whose

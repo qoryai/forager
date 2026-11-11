@@ -103,8 +103,8 @@ before the runtime starts. A run that has nowhere to run setup commands has no `
 of the run at its gateway, before any session. Each session then has a
 `dev.qory.session.started`, with its number from 1 in `session`, the runtime, the
 command and the image, and a `dev.qory.session.exited`, with how the session ended: the
-runtime's exit sets `succeeded` or `failed`, and `cancelled` comes with `timeout`,
-`interrupted` or `model_key_limit`. A join that is refused has only a `dev.qory.session.exited`, `failed`
+runtime's exit sets `succeeded` or `failed`, `cancelled` comes with `timeout` or
+`interrupted`, and `paused` with `model_key_limit`. A join that is refused has only a `dev.qory.session.exited`, `failed`
 with exit code -1 and the refusal's code, such as `mount_mode_conflict`, as its reason.
 A session whose wall fails to start has its `dev.qory.session.started`, then its
 `dev.qory.session.exited`, `failed` with exit code -1 and no reason, or the refusal's
@@ -117,14 +117,14 @@ When the run ends while a session runs, that session's `dev.qory.session.exited`
 right before the run's `dev.qory.run.exited`, with the same state and reason and exit
 code -1. So every `dev.qory.session.started` has its `dev.qory.session.exited`.
 
-A session ends `cancelled` with `model_key_limit` when the gateway's answer to one of
+A session ends `paused` with `model_key_limit` when the gateway's answer to one of
 its batches has `{"stop": {"reason": "model_key_limit"}}`: the run's proxy passed a
 model provider's limit refusal to the runtime, because no model key of the run is left.
 The session stops the runtime as at the run's time limit, and the exit code is the
 runtime's. Before it writes the `dev.qory.session.exited` of a runtime that exited by
 itself, the session posts its last batch and reads the answer, so a stop that comes as
 the runtime exits still counts. The run stays open for its host work, such as a push,
-and its caller closes it `cancelled` with `model_key_limit`: a pause of the run, which
+and its caller closes it `paused` with `model_key_limit`: a pause of the run, which
 a control plane can continue.
 
 A runtime whose descriptor has `resume`, such as Claude Code, writes the transcript of
@@ -246,7 +246,7 @@ a reason, `dev.qory.run.exited` contains why in `reason`: an open code, Forager'
 starter's, carried as given. The close writes `timeout`, `cancelled`, `interrupted`,
 `cancelled`, a run stopped from where it was started (a Ctrl-C), and `no_session`,
 `failed`, a run closed with no session after its host work failed, such as a fetch,
-and `model_key_limit`, `cancelled`, a run whose last session ended with
+and `model_key_limit`, `paused`, a run whose last session ended `paused` with
 `model_key_limit`, which a control plane reads as a pause of the run, and posts them. The close writes and posts `image_missing`, `failed` with exit code
 `-1`, when its caller gives it for a run with no session after the fetch of the run's
 image found that its registry, or the registry's mirror, does not have it, and the same
@@ -261,11 +261,11 @@ contract's §The events, How a run ends) with no session that has no wall with
 with `read_needs_setup_outside`, a read run whose image runs nested Docker with
 `read_needs_no_nested_docker`, and a read run whose setup container could not be removed
 with `read_needs_setup_removed`, each `failed` with exit code `-1`. A run whose last
-session ended `cancelled` with `model_key_limit`, after the gateway's answer to a batch
+session ended `paused` with `model_key_limit`, after the gateway's answer to a batch
 had `stop` because no model key of the run's key group was left out of cooldown, closes
-`cancelled` with `model_key_limit` after its host work; the gateway returns an error for that reason
+`paused` with `model_key_limit` after its host work; the gateway returns an error for that reason
 in a run with no join, after a last session that ended another way, and with another
-state.
+state; and for `paused` with another reason.
 The gateway writes the others: `session_lost`, `failed`, the session was silent;
 `batch_refused`, `failed`, the gateway refused a batch from the run's session
 (see the contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
