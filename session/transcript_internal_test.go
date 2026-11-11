@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -187,7 +188,7 @@ func TestATranscriptThatBecomesShorterStops(t *testing.T) {
 	tr.poll(false)
 	appendTo(t, home, rel, []byte("{\"c\":3}\n{\"d\":4}\n"))
 	tr.finish()
-	want := "A continuation of this run starts the runtime without a resume: the transcript ~/" + rel + " became shorter than the 16 bytes sent"
+	want := "Let the runtime only append to its transcript. A continuation of this run starts the runtime without a resume: the transcript ~/" + rel + " became shorter than the 16 bytes read"
 	if len(s.events) != 1 || len(s.lines) != 1 || s.lines[0] != want {
 		t.Errorf("%d events, lines %q; want 1 and %q", len(s.events), s.lines, want)
 	}
@@ -200,5 +201,64 @@ func TestTheCwdSlug(t *testing.T) {
 		if got := cwdSlug(in); got != want {
 			t.Errorf("cwdSlug(%q) = %q; want %q", in, got, want)
 		}
+	}
+}
+
+// TestAPollReadsOnlyTheBytesAppended pins the read of each poll: the bytes after the
+// last read alone, with the part of a line an earlier read held completed from them.
+// Bytes the poll already read and the runtime then changed are not read again.
+func TestAPollReadsOnlyTheBytesAppended(t *testing.T) {
+	tr, s, home := newTestTranscript(t)
+	rel := ".claude/projects/-workspace/s-1.jsonl"
+	appendTo(t, home, rel, []byte("{\"a\":1}\n{\"b\":"))
+	tr.started("s-1")
+	tr.poll(false)
+	if err := os.WriteFile(filepath.Join(home, rel), []byte("{\"x\":9}\nXXXXX"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	appendTo(t, home, rel, []byte("2}\n"))
+	tr.poll(false)
+	tr.finish()
+	if got, ok := s.file(t, "~/"+rel); !ok || string(got) != "{\"a\":1}\n{\"b\":2}\n" || len(s.lines) != 0 {
+		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+	}
+}
+
+// TestALineOverTheCapStopsTheTranscript pins a line over 8 MiB, whether the runtime has
+// written its newline or not: the lines before it are sent, then one line on stderr,
+// and nothing more.
+func TestALineOverTheCapStopsTheTranscript(t *testing.T) {
+	long := bytes.Repeat([]byte("x"), maxTranscriptLine+1)
+	for name, tail := range map[string][]byte{"without its newline": long, "with its newline": append(slices.Clone(long), '\n')} {
+		t.Run(name, func(t *testing.T) {
+			tr, s, home := newTestTranscript(t)
+			rel := ".claude/projects/-workspace/s-1.jsonl"
+			appendTo(t, home, rel, append([]byte("{\"a\":1}\n"), tail...))
+			tr.started("s-1")
+			tr.poll(false)
+			appendTo(t, home, rel, []byte("\n{\"c\":3}\n"))
+			tr.finish()
+			got, ok := s.file(t, "~/"+rel)
+			want := "Keep each line of the transcript at most 8388608 bytes (8 MiB). A continuation of this run starts the runtime without a resume: a line of the transcript ~/" + rel + " is longer, so the session sends no more of it"
+			if !ok || string(got) != "{\"a\":1}\n" || len(s.lines) != 1 || s.lines[0] != want {
+				t.Errorf("sent %q %v, lines %q; want the first line and %q", got, ok, s.lines, want)
+			}
+		})
+	}
+}
+
+// TestATranscriptOverTheLimitWithNoWallStops pins a transcript over 64 MiB with no
+// wall: one line on stderr, and nothing sent, as behind a wall.
+func TestATranscriptOverTheLimitWithNoWallStops(t *testing.T) {
+	tr, s, home := newTestTranscript(t)
+	rel := ".claude/projects/-workspace/s-1.jsonl"
+	appendTo(t, home, rel, []byte("{\"a\":1}\n"))
+	if err := os.Truncate(filepath.Join(home, rel), maxTranscript+1); err != nil {
+		t.Fatal(err)
+	}
+	tr.started("s-1")
+	tr.finish()
+	if len(s.events) != 0 || len(s.lines) != 1 || !strings.HasSuffix(s.lines[0], ": it is over 67108864 bytes (64 MiB)") {
+		t.Errorf("%d events, lines %q", len(s.events), s.lines)
 	}
 }

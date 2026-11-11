@@ -350,7 +350,7 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	return &d, nil
 }
 
-// check holds resume to what the schema cannot express: path starts with prefix, and
+// check checks what the schema cannot express of resume: path starts with prefix, and
 // neither has a .. segment. A nil Resume passes.
 func (r *Resume) check() error {
 	if r == nil {

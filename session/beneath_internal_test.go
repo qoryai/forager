@@ -101,7 +101,7 @@ func TestAWalledTranscriptRefusesWhatTheAgentPlants(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer f.Close()
-			if err := f.Truncate(maxWalledTranscript + 1); err != nil {
+			if err := f.Truncate(maxTranscript + 1); err != nil {
 				t.Fatal(err)
 			}
 		}, "it is over 67108864 bytes (64 MiB)"},
@@ -121,8 +121,8 @@ func TestAWalledTranscriptRefusesWhatTheAgentPlants(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("the read blocks")
 			}
-			want := "A continuation of this run starts the runtime without a resume: the session reads no transcript at ~/.claude/projects/" + walledRel + ": " + c.why
-			if len(s.events) != 0 || len(s.lines) != 1 || !strings.HasPrefix(s.lines[0], want) {
+			want := ". A continuation of this run starts the runtime without a resume: the session reads no transcript at ~/.claude/projects/" + walledRel + ": " + c.why
+			if len(s.events) != 0 || len(s.lines) != 1 || !strings.Contains(s.lines[0], want) || strings.HasPrefix(s.lines[0], ".") {
 				t.Errorf("%d events, lines %q; want none and %q", len(s.events), s.lines, want)
 			}
 		})
@@ -202,5 +202,19 @@ func symlink(t *testing.T, to, at string) {
 	t.Helper()
 	if err := os.Symlink(to, at); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestAWalledTranscriptNeverWrittenWritesALine pins a walled session whose runtime
+// wrote no transcript by its end: one line on stderr, so the operator sees that no
+// transcript was sent.
+func TestAWalledTranscriptNeverWrittenWritesALine(t *testing.T) {
+	tr, s, _ := newWalledTestTranscript(t)
+	tr.started(walledID)
+	tr.poll(false)
+	tr.finish()
+	want := "Check that the runtime writes its transcript at ~/.claude/projects/" + walledRel + ". A continuation of this run starts the runtime without a resume: the file does not exist, so the session sent no transcript"
+	if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
+		t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
 	}
 }

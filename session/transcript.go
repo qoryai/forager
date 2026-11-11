@@ -32,7 +32,10 @@ var transcriptPoll = time.Second
 
 // transcript sends the file in which a runtime with resume writes its session, as
 // dev.qory.session.transcript events: whole lines as the runtime appends them, each
-// masked whole, cut into chunks of at most [TranscriptChunk] bytes. home is the
+// masked whole, cut into chunks of at most [TranscriptChunk] bytes. Each read is of the
+// bytes appended since the last one; the bytes after the last newline wait for the
+// rest of their line. A line over [maxTranscriptLine] bytes, and a file over
+// [maxTranscript] bytes, stop the transcript with one line. home is the
 // directory on this machine that stands for ~, the runtime's home. The file's path comes
 // from the first hook input that contains resume.PathFrom, and until then from
 // resume.Path with the runtime's session id and the slug of its working directory. The
@@ -65,13 +68,20 @@ type transcript struct {
 	sessionID string
 	rel       string
 	fromHook  bool
-	// read is the bytes of the file read so far, and sent the masked bytes sent: the
-	// next chunk's offset. ended is true once the file became shorter than read, or
-	// once finish ran: nothing more is sent.
-	read  int64
-	sent  int64
-	ended bool
+	// read is the bytes of the file read so far; partial is the part of them after the
+	// last newline, not sent yet, at most [maxTranscriptLine] bytes; sent is the masked bytes sent: the next chunk's offset.
+	// seen is true once a read found the file. ended is true once the file became
+	// shorter than read, or once finish ran: nothing more is sent.
+	read    int64
+	partial []byte
+	sent    int64
+	seen    bool
+	ended   bool
 }
+
+// maxTranscriptLine is the longest line of a transcript the session sends, 8 MiB: the
+// most it holds of a line whose newline the runtime has not written yet.
+const maxTranscriptLine = 8 << 20
 
 // newTranscript returns the transcript of a runtime with resume rs whose home on this
 // machine is home and whose working directory is cwd.
@@ -86,9 +96,11 @@ func newWalledTranscript(rs runtimes.Resume, root, cwd string, mask func(string)
 	return &transcript{resume: rs, root: root, slug: cwdSlug(cwd), mask: mask, send: send, line: line}
 }
 
-// noResume is the start of every line of a transcript that a continuation cannot resume
-// from.
-const noResume = "A continuation of this run starts the runtime without a resume: "
+// noResume is the line of a transcript that a continuation cannot resume from: fix, the
+// change that lets it, then what follows, then cause.
+func noResume(fix, cause string) string {
+	return fix + ". A continuation of this run starts the runtime without a resume: " + cause
+}
 
 // walledID takes id as the session id of a walled runtime, once: a UUID in lower case
 // sets the path, <slug>/<id>.jsonl below the transcript directory; another id writes
@@ -101,7 +113,7 @@ func (t *transcript) walledID(id string) {
 		t.ended = true
 		// The agent chooses the id: the line has at most its first 64 bytes, quoted, so
 		// no newline in it starts another line.
-		t.line(noResume + fmt.Sprintf("the runtime's session id %q is not a UUID in lower case, so the session reads no transcript", accesskey.ShownName(id[:min(len(id), 64)], false)))
+		t.line(noResume("Use a runtime whose session ids are UUIDs in lower case", fmt.Sprintf("the runtime's session id %q is not a UUID in lower case, so the session reads no transcript", accesskey.ShownName(id[:min(len(id), 64)], false))))
 		return
 	}
 	t.sessionID = id
@@ -148,7 +160,7 @@ func (t *transcript) record(rec runtimes.Record) {
 		rel = ""
 	}
 	if !t.setPath(rel) {
-		t.line(fmt.Sprintf("A continuation of this run starts the runtime without a resume: the session reads no transcript outside %s, and %s of the hook input is %s", t.resume.Prefix, t.resume.PathFrom, p))
+		t.line(noResume("Keep the runtime's transcript below "+t.resume.Prefix, fmt.Sprintf("the session reads no transcript outside %s, and %s of the hook input is %s", t.resume.Prefix, t.resume.PathFrom, p)))
 	}
 }
 
@@ -166,7 +178,7 @@ func (t *transcript) started(sessionID string) {
 	if t.rel == "" && !t.fromHook && t.sessionID != "" {
 		p := strings.NewReplacer("{session_id}", t.sessionID, "{cwd_slug}", t.slug).Replace(t.resume.Path)
 		if !t.setPath(strings.TrimPrefix(p, "~/")) {
-			t.line(fmt.Sprintf("A continuation of this run starts the runtime without a resume: the session reads no transcript outside %s, and the transcript's path is %s", t.resume.Prefix, p))
+			t.line(noResume("Keep the runtime's transcript below "+t.resume.Prefix, fmt.Sprintf("the session reads no transcript outside %s, and the transcript's path is %s", t.resume.Prefix, p)))
 		}
 	}
 }
@@ -181,7 +193,7 @@ func (t *transcript) setPath(rel string) bool {
 		rel = ""
 	}
 	if rel != t.rel {
-		t.rel, t.read, t.sent = rel, 0, 0
+		t.rel, t.read, t.sent, t.partial = rel, 0, 0, nil
 	}
 	return ok
 }
@@ -218,16 +230,21 @@ func (t *transcript) run(stop <-chan struct{}) {
 	}
 }
 
-// finish reads the file once more to its end, and sends nothing after it.
+// finish reads the file once more to its end, and sends nothing after it. Behind a
+// wall, a file no read found writes one line: no transcript was sent.
 func (t *transcript) finish() {
 	t.poll(true)
 	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.root != "" && !t.ended && !t.seen && t.rel != "" {
+		t.line(noResume("Check that the runtime writes its transcript at ~/"+t.rel, "the file does not exist, so the session sent no transcript"))
+	}
 	t.ended = true
-	t.mu.Unlock()
 }
 
-// poll reads what the runtime appended since the last read: whole lines, and with
-// final the rest of the file too, and sends them.
+// poll reads what the runtime appended since the last read, and sends the whole lines
+// of it, with what an earlier read held of the first; with final, the rest of the file
+// too.
 func (t *transcript) poll(final bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -239,33 +256,44 @@ func (t *transcript) poll(final bool) {
 	var err error
 	if t.root != "" {
 		b, size, err = readBeneath(t.root, strings.TrimPrefix(t.rel, strings.TrimPrefix(t.resume.Prefix, "~/")), t.read)
-		var refused *beneathRefused
-		if errors.As(err, &refused) {
-			t.ended = true
-			t.line(noResume + fmt.Sprintf("the session reads no transcript at ~/%s: %s", t.rel, refused.why))
-			return
-		}
 	} else {
 		b, size, err = readUnlinked(t.home, t.rel, t.read)
+	}
+	var refused *beneathRefused
+	if errors.As(err, &refused) {
+		t.ended = true
+		t.line(noResume(refused.fix, fmt.Sprintf("the session reads no transcript at ~/%s: %s", t.rel, refused.why)))
+		return
 	}
 	if err != nil {
 		return
 	}
+	t.seen = true
 	if size < t.read {
 		t.ended = true
-		t.line(fmt.Sprintf("A continuation of this run starts the runtime without a resume: the transcript ~/%s became shorter than the %d bytes sent", t.rel, t.read))
+		t.line(noResume("Let the runtime only append to its transcript", fmt.Sprintf("the transcript ~/%s became shorter than the %d bytes read", t.rel, t.read)))
 		return
 	}
-	if !final {
-		end := bytes.LastIndexByte(b, '\n')
-		b = b[:end+1]
-	}
-	if len(b) == 0 {
+	if len(b) == 0 && !final {
 		return
 	}
 	t.read += int64(len(b))
+	data := b
+	if len(t.partial) > 0 {
+		data = append(t.partial, b...)
+	}
+	t.partial = nil
+	if !final {
+		end := bytes.LastIndexByte(data, '\n') + 1
+		data, t.partial = data[:end], bytes.Clone(data[end:])
+	}
 	var masked []byte
-	for l := range bytes.SplitAfterSeq(b, []byte("\n")) {
+	long := len(t.partial) > maxTranscriptLine
+	for l := range bytes.SplitAfterSeq(data, []byte("\n")) {
+		if len(l) > maxTranscriptLine {
+			long = true
+			break
+		}
 		masked = append(masked, t.mask(string(l))...)
 	}
 	for len(masked) > 0 {
@@ -273,6 +301,10 @@ func (t *transcript) poll(final bool) {
 		t.send(map[string]any{"session_id": t.sessionID, "path": "~/" + t.rel, "offset": t.sent, "bytes": base64.StdEncoding.EncodeToString(masked[:n])})
 		t.sent += int64(n)
 		masked = masked[n:]
+	}
+	if long {
+		t.ended, t.partial = true, nil
+		t.line(noResume(fmt.Sprintf("Keep each line of the transcript at most %d bytes (8 MiB)", maxTranscriptLine), fmt.Sprintf("a line of the transcript ~/%s is longer, so the session sends no more of it", t.rel)))
 	}
 }
 
@@ -283,7 +315,7 @@ var errLinked = errors.New("the transcript's path is a symbolic link or no regul
 // readUnlinked reads the file at rel under home from offset on, and returns its bytes
 // and the file's size. It opens the file through an os.Root of home, so no name leads
 // out of it, and refuses a path any of whose names is a symbolic link, or that is no
-// regular file.
+// regular file. A file over [maxTranscript] bytes is [errTooLarge], as behind a wall.
 func readUnlinked(home, rel string, offset int64) ([]byte, int64, error) {
 	root, err := os.OpenRoot(home)
 	if err != nil {
@@ -312,6 +344,9 @@ func readUnlinked(home, rel string, offset int64) ([]byte, int64, error) {
 	}
 	if !fi.Mode().IsRegular() {
 		return nil, 0, errLinked
+	}
+	if fi.Size() > maxTranscript {
+		return nil, 0, errTooLarge
 	}
 	if fi.Size() < offset {
 		return nil, fi.Size(), nil
@@ -358,7 +393,7 @@ func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, root st
 		home, _ = userHome()
 	}
 	if home == "" {
-		line(noResume + "the runtime has no home, so the session finds no transcript")
+		line(noResume("Set HOME for the runtime", "the runtime has no home, so the session finds no transcript"))
 		return nil
 	}
 	return newTranscript(rs, home, dir, mask, send, line)
