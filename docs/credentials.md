@@ -227,12 +227,12 @@ the start key comes from the control plane, its key group is the start key and e
 API credential of the run configuration with the same `format`, `auth` and `endpoint`,
 in the order of `credentials`. A key of `forager.yaml` is never in a key group.
 
-1. Set `pause_for_s` on every key of the group: the cooldown after a refusal with no
-   reset. Without it the run stops with `run_configuration_invalid`, `set pause_for_s
-   on the model key "model-2": every key of the key group needs a cooldown, and Forager
-   has no default`.
+1. Optionally set `pause_for_s` on a key of the group: the cooldown in seconds after a
+   refusal with no reset, 1 to 604800. A key without it has a cooldown of 60 seconds
+   for an API key, and of 3600 seconds for a subscription, a key whose `auth` has
+   `oauth`. A `pause_for_s` of 0 stops the run with `run_configuration_invalid`.
 2. Optionally set `schedule_resets_at`, the time a subscription's weekly limit resets,
-   for a refusal with no reset.
+   for a refusal with no reset. A key with it ignores `pause_for_s`.
 
 The keys share the start key's placeholder, and the proxy sets one of them, the active
 key. When the provider returns `429` for the active key, the proxy puts the key in

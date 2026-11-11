@@ -341,10 +341,10 @@ type RunCredential struct {
 	// ResetsAt is an API credential's earliest reset in a provider's answer as the
 	// server had it at the claim, RFC 3339; ScheduleResetsAt the next reset of its weekly
 	// schedule; each empty when the document has none. PauseForS is its cooldown in
-	// seconds after a limit refusal with no reset, 0 when the document has none.
+	// seconds after a limit refusal with no reset, nil when the document has none.
 	ResetsAt         string `json:"resets_at,omitzero"`
 	ScheduleResetsAt string `json:"schedule_resets_at,omitzero"`
-	PauseForS        int    `json:"pause_for_s,omitzero"`
+	PauseForS        *int   `json:"pause_for_s,omitzero"`
 	// CooldownUntil is the end of an API credential's cooldown at the claim, RFC 3339,
 	// empty for a key out of cooldown; Chosen is true for the key of the model choice.
 	CooldownUntil string `json:"cooldown_until,omitzero"`

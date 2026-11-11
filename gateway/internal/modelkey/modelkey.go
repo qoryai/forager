@@ -26,10 +26,28 @@ const maxWindows = 11
 // week is how far the gateway moves a key's schedule_resets_at once it has passed.
 const week = 7 * 24 * time.Hour
 
+// The cooldowns after a limit refusal with no reset of a key with no pause_for_s and no
+// schedule_resets_at, [DefaultPauseFor]: one for an API key, one for a subscription.
+const (
+	DefaultPauseForAPIKey       = time.Minute
+	DefaultPauseForSubscription = time.Hour
+)
+
+// DefaultPauseFor is the cooldown of a key with no pause_for_s: for a key whose auth has
+// oauth, a subscription login's token, [DefaultPauseForSubscription]; for any other key,
+// an API key, [DefaultPauseForAPIKey].
+func DefaultPauseFor(oauth bool) time.Duration {
+	if oauth {
+		return DefaultPauseForSubscription
+	}
+	return DefaultPauseForAPIKey
+}
+
 // Key is one key of the group, from the run configuration's credentials: its name, its
 // earliest reset as the server had it, zero for none, the next reset of its weekly
-// schedule, zero for none, its pause_for_s, the end of its cooldown at the claim, zero
-// for none, and chosen, true for the key of the model choice.
+// schedule, zero for none, its pause_for_s, or [DefaultPauseFor] without one, the end of
+// its cooldown at the claim, zero for none, and chosen, true for the key of the model
+// choice.
 type Key struct {
 	Name             string
 	ResetsAt         time.Time

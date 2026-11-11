@@ -45,7 +45,7 @@
         "resets_at": {"description": "When the window resets, from the provider's answer, an RFC 3339 time. Absent when the answer has none.", "type": "string", "format": "date-time"},
         "utilization": {"description": "The window's use in whole percent, 0 to 100, rounded down: the answer's fraction times 100, or 100 times (1 - remaining / limit). Absent once its window's reset has passed.", "type": "integer", "minimum": 0, "maximum": 100},
         "cooldown_until": {"description": "The time until which the gateway sets the key no more, an RFC 3339 time. Present with rejected alone.", "type": "string", "format": "date-time"},
-        "source": {"description": "Where cooldown_until, or resets_at without it, comes from. provider: the provider's answer. schedule: the key's schedule_resets_at. pause_for: the key's pause_for_s after the refusal.", "enum": ["provider", "schedule", "pause_for"]},
+        "source": {"description": "Where cooldown_until, or resets_at without it, comes from. provider: the provider's answer. schedule: the key's schedule_resets_at. pause_for: the key's pause_for_s, or the default without it, after the refusal.", "enum": ["provider", "schedule", "pause_for"]},
         "observed_at": {"description": "The gateway's clock when the provider's answer arrived, an RFC 3339 time. A receiver keeps the newest state per key and window, and ignores an older one.", "type": "string", "format": "date-time"}
       }
     }

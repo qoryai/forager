@@ -44,17 +44,17 @@ func keyEntry(c server.RunCredential) credential.KeyEntry {
 }
 
 // checkKeyGroup returns a run_configuration_invalid error, with the key's name, for a
-// key group of the run configuration the run starts with that has a key with no
-// pause_for_s, since the gateway has no default cooldown; a start key in cooldown at
-// now, since the server picks the start key among the keys out of cooldown; and a
-// second key with chosen.
+// key group of the run configuration the run starts with that has a key with a
+// pause_for_s below 1, which fails the schema too; a start key in cooldown at now,
+// since the server picks the start key among the keys out of cooldown; and a second key
+// with chosen. A key with no pause_for_s has [modelkey.DefaultPauseFor].
 func (r *Run) checkKeyGroup(now time.Time) error {
 	group := storedGroup(r.stored, r.storedModel)
 	chosen := ""
 	for _, c := range group {
-		if c.PauseForS < 1 {
+		if c.PauseForS != nil && *c.PauseForS < 1 {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"set pause_for_s on the model key %s: every key of the key group needs a cooldown, and Forager has no default", accesskey.ShownName(c.Name, true))
+				"set pause_for_s on the model key %s to 1 to 604800, or remove it for the default cooldown: pause_for_s is %d", accesskey.ShownName(c.Name, true), *c.PauseForS)
 		}
 		// The schema has refused a cooldown_until that is no RFC 3339 time.
 		if until, err := time.Parse(time.RFC3339, c.CooldownUntil); err == nil && until.After(now) && c.Name == startName(group, r.storedModel) {
@@ -82,9 +82,9 @@ func startName(group []server.RunCredential, model string) string {
 }
 
 // ModelKeys are the keys of the run's key group, [credential.Held.Group], in their
-// order, each with its resets_at, schedule_resets_at, pause_for_s, cooldown_until and
-// chosen; none when the run's start
-// key is the machine's or the run has none. Call it after [Run.Hold].
+// order, each with its resets_at, schedule_resets_at, pause_for_s or without it
+// [modelkey.DefaultPauseFor] of its auth, cooldown_until and chosen; none when the run's
+// start key is the machine's or the run has none. Call it after [Run.Hold].
 func (r *Run) ModelKeys() []modelkey.Key {
 	held := r.Held()
 	if held == nil {
@@ -97,7 +97,10 @@ func (r *Run) ModelKeys() []modelkey.Key {
 			continue
 		}
 		c := r.stored[i]
-		k := modelkey.Key{Name: name, PauseFor: time.Duration(c.PauseForS) * time.Second, Chosen: c.Chosen}
+		k := modelkey.Key{Name: name, PauseFor: modelkey.DefaultPauseFor(c.Auth.OAuth), Chosen: c.Chosen}
+		if c.PauseForS != nil {
+			k.PauseFor = time.Duration(*c.PauseForS) * time.Second
+		}
 		// The schema has refused a time that is no RFC 3339 time.
 		k.ResetsAt, _ = time.Parse(time.RFC3339, c.ResetsAt)
 		k.ScheduleResetsAt, _ = time.Parse(time.RFC3339, c.ScheduleResetsAt)

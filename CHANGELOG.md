@@ -10,16 +10,21 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- Deploy the gateway before Qory Apiary serves `model-keys`. A gateway built before
-  this change fails a run with `run_configuration_invalid` when the run configuration's
-  API credential has `resets_at`, `schedule_resets_at` or `pause_for_s`, and ignores the
-  run configuration's `resume`. It also ends a run `batch_refused` for a batch with
+- Deploy the gateway first, then Qory Apiary. A gateway built before this change fails
+  a run with `run_configuration_invalid` when the run configuration's API credential has
+  `resets_at`, `schedule_resets_at` or `pause_for_s`, and ignores the run
+  configuration's `resume`. It also ends a run `batch_refused` for a batch with
   `dev.qory.session.transcript`, or with `model_key_limit` as the reason of
-  `dev.qory.session.exited` or `dev.qory.run.exited`.
-- Send `pause_for_s` on every key of a key group: the start key and every API credential
-  with its `format`, `auth` and `endpoint`. Forager has no default cooldown, and a run
-  configuration with such a key without it fails with `run_configuration_invalid`. A
-  run configuration has at most 6 API credentials.
+  `dev.qory.session.exited` or `dev.qory.run.exited`. With a control plane that has no
+  model keys report route, the gateway keeps each key's cooldown within the run, and
+  other runs start the key out of cooldown. With a control plane that sends no
+  `pause_for_s`, each key has the default cooldown: 60 seconds for an API key, 3600 for a
+  subscription.
+- Send `pause_for_s` on a key of a key group to set its cooldown after a limit refusal
+  with no reset. A key without it has a cooldown of 60 seconds for an API key, and of
+  3600 seconds for a subscription, a key whose `auth` has `oauth`. A `pause_for_s` of 0
+  fails the run with `run_configuration_invalid`. A run configuration has at most 6 API
+  credentials.
 - Send the key group in the order that breaks ties: the key of the model choice first,
   with `chosen: true`, when it is out of cooldown at the claim; then the provider's
   default key; then the others by when they were added; then the keys in cooldown at the
@@ -244,7 +249,7 @@ release may change what an existing document does, and says so under Upgrading.
   key, and sends the request again from the copy, so the session does not see the
   refusal. A cooldown ends at the reset in the refusal, at most 31 days after it, at the
   key's `schedule_resets_at` (plus 7 days once it has passed), or `pause_for_s` seconds
-  after the refusal. An `error` event of the type `rate_limit_error` in the streamed
+  after the refusal: without it, 60 seconds for an API key and 3600 for a subscription. An `error` event of the type `rate_limit_error` in the streamed
   `200` of a `POST` to the model API's messages path, `/v1/messages` under the
   endpoint, puts the key in cooldown and switches the active key too. The active key stays across sessions, and a
   join request without `model_credential` gets it. The run configuration's API
