@@ -68,6 +68,11 @@ type transcript struct {
 	sessionID string
 	rel       string
 	fromHook  bool
+	// restored is true for the session that restored a paused run's transcript: rel is
+	// the restored file's, whatever a hook input or the working directory gives, and
+	// warned is true once a hook input named another file.
+	restored bool
+	warned   bool
 	// read is the bytes of the file read so far; partial is the part of them after the
 	// last newline, not sent yet, at most [maxTranscriptLine] bytes; sent is the masked bytes sent: the next chunk's offset.
 	// seen is true once a read found the file. ended is true once the file became
@@ -100,6 +105,33 @@ func newWalledTranscript(rs runtimes.Resume, root, cwd string, mask func(string)
 // change that lets it, then what follows, then cause.
 func noResume(fix, cause string) string {
 	return fix + ". A continuation of this run starts the runtime without a resume: " + cause
+}
+
+// restore fixes the file to the restored transcript rel, resume.path relative to the
+// home, and the session id to id: the resumed runtime appends to that file, under the
+// paused run's slug, so the session sends the whole file from offset 0, the restored
+// lines first. A path the session does not read leaves the transcript with no path.
+func (t *transcript) restore(id, rel string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(id) > maxSessionID || (t.root != "" && !walledSessionID.MatchString(id)) {
+		return
+	}
+	t.sessionID, t.restored, t.fromHook = id, true, true
+	t.setPath(rel)
+}
+
+// sameRestored checks p, the path of resume.PathFrom of a hook input, against the
+// restored file: a file of another name writes one line, once, and the session goes on
+// reading the restored one. Only the name, <session id>.jsonl, is compared: Claude Code
+// 2.1.316 resumed in another working directory gives the path under that directory's
+// slug and appends to the restored file all the same. The caller holds mu.
+func (t *transcript) sameRestored(p string) {
+	if path.Base(p) == path.Base(t.rel) || t.warned || t.rel == "" {
+		return
+	}
+	t.warned = true
+	t.line(fmt.Sprintf("Check that the runtime resumes from ~/%s. The session reads the restored transcript there, and %s of the hook input is %q", t.rel, t.resume.PathFrom, accesskey.ShownValue(p[:min(len(p), 256)], false)))
 }
 
 // walledID takes id as the session id of a walled runtime, once: a UUID in lower case
@@ -141,6 +173,10 @@ func (t *transcript) record(rec runtimes.Record) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if p, ok := rec.Record[t.resume.PathFrom].(string); ok && t.restored {
+		t.sameRestored(p)
+		return
+	}
 	if t.root != "" {
 		if id, ok := rec.Record["session_id"].(string); ok {
 			t.walledID(id)
@@ -361,8 +397,19 @@ func readUnlinked(home, rel string, offset int64) ([]byte, int64, error) {
 // none, and the runtime's working directory dir. Behind a wall, root is the session's
 // transcript directory, which the wall binds at resume.prefix inside, and dir the
 // working directory inside; the session reads the transcript below root. A walled
-// session with no transcript directory, root empty, sends none.
-func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, root string, env []string, dir string, masker *mask.Masker, hidden *mask.Harness) *transcript {
+// session with no transcript directory, root empty, sends none. For the session that
+// restored a paused run's transcript, restore, it reads the restored file
+// ([transcript.restore]).
+func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, root string, env []string, dir string, masker *mask.Masker, hidden *mask.Harness, restore *restored) *transcript {
+	tr := r.newSessionTranscript(rt, n, walled, root, env, dir, masker, hidden)
+	if tr != nil && restore != nil {
+		tr.restore(restore.sessionID, restore.rel)
+	}
+	return tr
+}
+
+// newSessionTranscript is the transcript of [Run.sessionTranscript] before a restore.
+func (r *Run) newSessionTranscript(rt runtimes.Runtime, n int, walled bool, root string, env []string, dir string, masker *mask.Masker, hidden *mask.Harness) *transcript {
 	resumes, ok := rt.(runtimes.Resumes)
 	if !ok {
 		return nil

@@ -262,3 +262,21 @@ func TestATranscriptOverTheLimitWithNoWallStops(t *testing.T) {
 		t.Errorf("%d events, lines %q", len(s.events), s.lines)
 	}
 }
+
+// TestARestoredTranscriptIsReadWithNoWall pins the session with no wall that restored a
+// paused run's transcript: it reads the restored file from offset 0, whatever the
+// working directory's slug, and a hook input that names a file of another session id
+// writes one line.
+func TestARestoredTranscriptIsReadWithNoWall(t *testing.T) {
+	tr, s, home := newTestTranscript(t)
+	rel := ".claude/projects/-paused/s-1.jsonl"
+	appendTo(t, home, rel, []byte("{\"restored\":1}\n"))
+	tr.restore("s-1", rel)
+	tr.record(runtimes.Record{Source: runtimes.SourceHooks, Record: map[string]any{"session_id": "s-1", "transcript_path": filepath.Join(home, ".claude/projects/-workspace/s-2.jsonl")}})
+	tr.started("s-1")
+	appendTo(t, home, rel, []byte("{\"appended\":2}\n"))
+	tr.finish()
+	if got, ok := s.file(t, "~/"+rel); !ok || string(got) != "{\"restored\":1}\n{\"appended\":2}\n" || len(s.lines) != 1 || !strings.HasPrefix(s.lines[0], "Check that the runtime resumes from ~/"+rel+". ") {
+		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+	}
+}

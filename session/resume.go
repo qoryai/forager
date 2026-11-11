@@ -46,17 +46,21 @@ const resumeWait = 10 * time.Minute
 // Behind a wall, root is the session's transcript directory, which the wall binds at
 // resume.prefix inside: the session writes the bytes there itself, at resume.path's
 // <slug>/<session id>.jsonl below resume.prefix, before the agent's container starts
-// ([writeBeneath]), and adds resume.args to launch, with no script; it also returns the
-// arguments it added, which the session takes off again when the enclosure binds no
-// transcript directory ([wall.TranscriptChecker]). A resume.session_id that is not a UUID
-// in lower case, or a resume.path below resume.prefix of another shape, is a failed
-// resume. A walled session with no transcript directory, root empty, does not resume.
-func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir string, walled bool, root string, inside func(string) string, launch runtimes.Launch) (runtimes.Launch, string, []string) {
+// ([writeBeneath]), and adds resume.args to launch, with no script. A resume.session_id
+// that is not a UUID in lower case, or a resume.path below resume.prefix of another
+// shape, is a failed resume. A walled session with no transcript directory, root empty,
+// does not resume.
+//
+// A restore also returns the [restored] transcript: the session reads the transcript
+// the resumed runtime appends to at resume.path, under the paused run's slug, and the
+// session takes the arguments off again when the enclosure binds no transcript
+// directory ([wall.TranscriptChecker]).
+func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir string, walled bool, root string, inside func(string) string, launch runtimes.Launch) (runtimes.Launch, string, *restored) {
 	want := r.answer.Resume
 	if want == nil || r.resumeTried {
 		return launch, "", nil
 	}
-	failed := func(fix, cause string) (runtimes.Launch, string, []string) {
+	failed := func(fix, cause string) (runtimes.Launch, string, *restored) {
 		return launch, resumeFailed(want.RunID, fix, cause), nil
 	}
 	resumes, ok := rt.(runtimes.Resumes)
@@ -96,7 +100,7 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 			return failed("Check the session's transcript directory "+pathShown(root), fmt.Sprintf("the write to %s failed: %s", want.Path, accesskey.ShownError(err).Error()))
 		}
 		launch.Args = append(slices.Clone(launch.Args), args...)
-		return launch, "", args
+		return launch, "", &restored{sessionID: want.SessionID, rel: rel, args: args}
 	}
 	b, err := r.fetchTranscript(ctx)
 	if err != nil {
@@ -113,7 +117,17 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 	}
 	launch.Args = append([]string{script, launch.Command}, launch.Args...)
 	launch.Command = "/bin/sh"
-	return launch, "", nil
+	return launch, "", &restored{sessionID: want.SessionID, rel: rel}
+}
+
+// restored is the transcript a session restored: sessionID is resume.session_id; rel
+// is resume.path relative to the runtime's home, such as
+// .claude/projects/<slug of the paused run>/<session id>.jsonl, the file the resumed
+// runtime appends to; args are the arguments a walled session added to the launch.
+type restored struct {
+	sessionID string
+	rel       string
+	args      []string
 }
 
 // fetchFix is the fix of a resume whose read of the transcript of run runID failed.

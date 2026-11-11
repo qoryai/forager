@@ -520,7 +520,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the paused run the run answer's resume names: the launch writes its transcript under
 	// the runtime's home and resumes it. A failure starts the runtime without a resume,
 	// with resumeLine on stderr once the session started.
-	prepared, resumeLine, resumeArgs := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptDir, inside, prepared)
+	prepared, resumeLine, restore := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptDir, inside, prepared)
 	// The session's setup commands run inside, after the runtime's preparation, and then
 	// start the launch as the runtime prepared it.
 	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
@@ -752,13 +752,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		if unbound != nil {
 			transcriptDir, transcriptUnder = "", ""
-			if resumeArgs != nil {
-				added := insideAll(resumeArgs, inside)
+			if restore != nil {
+				added := insideAll(restore.args, inside)
 				if !slices.Equal(prepared.Args[max(len(prepared.Args)-len(added), 0):], added) {
 					return fail(errors.New("the launch does not end with the resume arguments the session added"))
 				}
 				prepared.Args = prepared.Args[:len(prepared.Args)-len(added)]
 				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(r.answer.Resume.RunID, unbound.Fix, unbound.Cause))+"\n"))
+				restore = nil
 			}
 			r.writeLog("stderr", n, 0, []byte(neutral(noResume(unbound.Fix, unbound.Cause))+"\n"))
 		}
@@ -846,7 +847,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if spec.Wall != nil {
 		trDir = shown.Dir
 	}
-	tr = r.sessionTranscript(rt, n, spec.Wall != nil, transcriptDir, launch.Env, trDir, masker, hidden)
+	tr = r.sessionTranscript(rt, n, spec.Wall != nil, transcriptDir, launch.Env, trDir, masker, hidden, restore)
 	stopTranscript := make(chan struct{})
 	if tr != nil {
 		go tr.run(stopTranscript)

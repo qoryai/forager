@@ -218,3 +218,44 @@ func TestAWalledTranscriptNeverWrittenWritesALine(t *testing.T) {
 		t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
 	}
 }
+
+// TestAWalledRestoredTranscriptIsReadUnderThePausedRunsSlug pins the session that
+// restored a paused run's transcript: it reads the restored file, under the paused run's
+// slug, from offset 0, not the file under its working directory's slug. A hook input
+// whose transcript path has the restored file's name agrees, under any slug; one that
+// names a file of another session id writes one line, once, and the session goes on
+// reading the restored file.
+func TestAWalledRestoredTranscriptIsReadUnderThePausedRunsSlug(t *testing.T) {
+	paused := "-paused/" + walledID + ".jsonl"
+	for name, c := range map[string]struct {
+		hook string
+		line bool
+	}{
+		"no hook path":       {"", false},
+		"the restored file":  {"/home/agent/.claude/projects/" + paused, false},
+		"another slug":       {"/home/agent/.claude/projects/" + walledRel, false},
+		"another session id": {"/home/agent/.claude/projects/-paused/5d0c6a51-3b2e-4f7a-9c1d-8e6f4a2b0c37.jsonl", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr, s, root := newWalledTestTranscript(t)
+			appendTo(t, root, paused, []byte("{\"restored\":1}\n"))
+			appendTo(t, root, walledRel, []byte("{\"other\":1}\n"))
+			tr.restore(walledID, ".claude/projects/"+paused)
+			tr.started(walledID)
+			if c.hook != "" {
+				tr.record(hookRecord(walledID, c.hook))
+				tr.record(hookRecord(walledID, c.hook))
+			}
+			tr.poll(false)
+			appendTo(t, root, paused, []byte("{\"appended\":2}\n"))
+			tr.finish()
+			got, ok := s.file(t, "~/.claude/projects/"+paused)
+			if !ok || string(got) != "{\"restored\":1}\n{\"appended\":2}\n" {
+				t.Errorf("sent %q %v; want the restored line and the appended one", got, ok)
+			}
+			if c.line != (len(s.lines) == 1) || len(s.lines) > 1 || (c.line && !strings.HasPrefix(s.lines[0], "Check that the runtime resumes from ~/.claude/projects/"+paused+". ")) {
+				t.Errorf("lines %q", s.lines)
+			}
+		})
+	}
+}
