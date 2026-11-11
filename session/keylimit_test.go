@@ -143,7 +143,7 @@ func TestTheCloseTakesModelKeyLimitOnlyAfterSuchASession(t *testing.T) {
 		t.Fatal(err)
 	}
 	limit := session.Outcome{State: "paused", Reason: "model_key_limit", ExitCode: 0}
-	if _, err := r.Close(context.Background(), limit); err == nil || !strings.Contains(err.Error(), "after a join whose last session ended with model_key_limit") {
+	if _, err := r.Close(context.Background(), limit); err == nil || !strings.Contains(err.Error(), "after a last session that ended with model_key_limit") {
 		t.Errorf("a run with no join: %v", err)
 	}
 	if _, err := r.Join(context.Background(), sp.SessionSpec); err != nil {

@@ -837,8 +837,9 @@ release may change what an existing document does, and says so under Upgrading.
   before any session, with `opened_by: "run"`. It requires only `opened_by` and
   `forager_version`, and keeps `host`, `wall`, `labels` and `about`.
 - `dev.qory.run.exited` is written once, at the close, with the caller's outcome:
-  `state` any of the three, `reason` none, `timeout`, `interrupted` or `no_session`, and
-  `exit_code` the run's exit code, no longer the runtime's exit status.
+  `state` any of the four, `paused` only with `model_key_limit`, `reason` none,
+  `timeout`, `interrupted`, `no_session` or `model_key_limit`, and `exit_code` the run's
+  exit code, no longer the runtime's exit status.
 - `dev.qory.run.policy_applied` is written at the open with an empty `variables`, at
   each join with that session's `variables`, `credential_variables` and
   `harness_hosts`, and at each reload, as before.

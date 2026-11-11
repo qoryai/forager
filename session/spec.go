@@ -506,7 +506,7 @@ func checkOutcome(o Outcome, joined bool, lastReason string) error {
 	case o.ExitCode < -1:
 		return fmt.Errorf("the outcome's exit code %d is under -1", o.ExitCode)
 	case o.State == event.StatePaused && o.Reason != event.ReasonModelKeyLimit:
-		return errors.New("an outcome paused has the reason model_key_limit")
+		return errors.New("close a paused run with the reason model_key_limit: the close writes paused with no other reason")
 	case o.Reason == refusal.ImageMissing, o.Reason == refusal.ImageUserRoot, o.Reason == refusal.ImageAccessDenied,
 		o.Reason == refusal.ImageRateLimited, o.Reason == refusal.ImageRegistryUnreachable, o.Reason == event.ReasonWorkflowNotInHarness,
 		o.Reason == event.ReasonReadNeedsWall, o.Reason == event.ReasonReadNeedsSetupOutside,
@@ -526,7 +526,7 @@ func checkOutcome(o Outcome, joined bool, lastReason string) error {
 		}
 	case o.Reason == event.ReasonModelKeyLimit:
 		if o.State != event.StatePaused || !joined || lastReason != event.ReasonModelKeyLimit {
-			return errors.New("an outcome with the reason model_key_limit is paused, after a join whose last session ended with model_key_limit")
+			return errors.New("close with model_key_limit only as paused, after a last session that ended with model_key_limit")
 		}
 	case o.Reason == event.ReasonNoSession:
 		if o.State != event.StateFailed || o.ExitCode != -1 || joined {

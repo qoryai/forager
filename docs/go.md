@@ -82,6 +82,9 @@ res, err := run.Join(ctx, session.SessionSpec{
 out := session.Outcome{State: "failed", ExitCode: -1} // the session did not start
 if err == nil {
 	out = session.Outcome{State: res.State, ExitCode: res.ExitCode}
+	if res.Reason == "model_key_limit" {          // paused at the model key limit
+		out.Reason = res.Reason
+	}
 }
 closed, cerr := run.Close(ctx, out)               // closed.Dir is the record
 g.Close(ctx)                                      // delivers the runs' last events, before the exit
@@ -1433,8 +1436,8 @@ image runs nested Docker, which is when `Docker` is true in the image `(*session
 code, or after a join, as the gateway does. Close a run whose last session ended with
 `model_key_limit` with `paused`, `model_key_limit` and that session's `ExitCode`: a
 control plane reads it as a pause of the run. `Close` returns an error for `model_key_limit` with
-another state, for `paused` with another reason, in a run with no join, and after a last
-session that ended otherwise.
+another state, for `paused` with no reason or another reason, in a run with no join, and
+after a last session that ended otherwise.
 `Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
 `session.Closed` is what the run came to:
 

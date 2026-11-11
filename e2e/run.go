@@ -78,6 +78,8 @@ func runOne(ctx context.Context, sp runSpec) (*session.Result, error) {
 		out = session.Outcome{State: event.StateCancelled, Reason: event.ReasonTimeout, ExitCode: 124}
 	case res.Reason == event.ReasonInterrupted:
 		out = session.Outcome{State: event.StateCancelled, Reason: event.ReasonInterrupted, ExitCode: res.ExitCode}
+	case res.Reason == event.ReasonModelKeyLimit:
+		out = session.Outcome{State: event.StatePaused, Reason: event.ReasonModelKeyLimit, ExitCode: res.ExitCode}
 	default:
 		out = session.Outcome{State: res.State, ExitCode: res.ExitCode}
 	}

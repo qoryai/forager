@@ -10,8 +10,7 @@
     "session": 1,
     "state": "paused",
     "exit_code": -1,
-    "signal": "SIGTERM",
-    "reason": "timeout",
+    "reason": "stopped",
     "duration_ms": 1000
   },
   "sequence": "0000000012"

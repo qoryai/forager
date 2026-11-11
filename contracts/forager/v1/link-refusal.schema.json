@@ -29,7 +29,7 @@
       "enum": ["gateway", "apiary"]
     },
     "state": {
-      "description": "On a 410 that ends a run, how the run ended at the gateway: the state of the gateway's dev.qory.run.exited of it, succeeded, failed or cancelled, which the session records in the session's dev.qory.run.exited. It is never paused: only a session's close writes paused. Absent on every other refusal, and on a 410 of a run that ended otherwise, run_closed.",
+      "description": "On a 410 that ends a run, how the run ended at the gateway: the state of the gateway's dev.qory.run.exited of it, succeeded, failed or cancelled, which the session records in the session's dev.qory.run.exited. It is never paused: only a session and the run's close write paused. Absent on every other refusal, and on a 410 of a run that ended otherwise, run_closed.",
       "type": "string",
       "enum": ["succeeded", "failed", "cancelled"]
     },

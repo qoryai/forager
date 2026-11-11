@@ -366,7 +366,7 @@ const beyondLinkSchema = "-beyond-schema-"
 // whose time has a fraction, a model keys answer without version, a link batch answer
 // whose stop has no reason or another one, a session.exited or a session's run.exited
 // failed or cancelled with model_key_limit, a session.exited paused with no reason or
-// with timeout, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
+// with stopped and exit code -1, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
 // without its session id or over 32 KiB, and a descriptor whose resume has no args, a
 // prefix outside the home or a path without {session_id}. A fixture whose name contains
 // -beyond-schema- breaks a rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
