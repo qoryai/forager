@@ -422,6 +422,9 @@ type SessionSpec struct {
 	// so a hook on its last event is still read; zero or less means 200 ms. For tests:
 	// production leaves it zero.
 	SocketGrace time.Duration
+	// transcriptPoll is how often the session reads the runtime's transcript; zero
+	// means [transcriptPoll]. A test sets it.
+	transcriptPoll time.Duration
 }
 
 // HarnessSource is one harness source a session's compose used: Source as it is
@@ -616,12 +619,13 @@ type Closed struct {
 	RunClosed bool
 	// ClosedReason is the 410's code when RunClosed, as [Result.ClosedReason] is.
 	ClosedReason string
-	// WallKept is true when removing a part of the run's wall failed at some point of
-	// the run: a session's Unwrap, RemoveSetup, or the close. A process may have kept
+	// WallKept is true when removing a container of the run's wall failed at some point
+	// of the run: a session's Unwrap, RemoveSetup, or the close. A process may have kept
 	// writing the run's binds after its session ended, so do not trust what is in them.
-	// WallKept stays true when a later removal succeeded. It is also true when the close
-	// failed only on a network or the wall's private directory, because
-	// [wall.Enclosure.Close] returns one error.
+	// WallKept stays true when a later removal succeeded. A close whose every failure
+	// matches [wall.ErrNoContainerKept], such as the Docker wall's on a network or the
+	// wall's private directory, leaves it false: nothing that runs stays. The close
+	// still reports that failure. Any other error of the close sets it.
 	WallKept bool
 }
 

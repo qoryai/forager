@@ -113,9 +113,15 @@ type Run struct {
 	// keptBy is the number of the session whose wall's removal failed, 0 for none:
 	// its entry among the walled runs still going stays, and no session joins after it.
 	keptBy int
-	// wallFailed is true once removing a part of the run's wall failed, and stays true:
-	// the close copies it to [Closed.WallKept].
-	wallFailed     bool
+	// wallFailed is true once removing a container of the run's wall failed, and stays
+	// true: the close copies it to [Closed.WallKept]. Join, RemoveSetup and Close set it
+	// under the joining lock; [Run.ContainerKept] reads it without that lock, which a
+	// Join holds while its session runs.
+	wallFailed atomic.Bool
+	// unwrapless is true from the end of a walled session whose enclosure has no Unwrap
+	// until closeWall closed the enclosure: the agent's container stays until then.
+	// [Run.ContainerKept] reads it without the joining lock, as it reads wallFailed.
+	unwrapless     atomic.Bool
 	closed         bool
 	sessionApplied map[string]any
 	// steps is the number of the run's last step, host steps and Join's alike, and
@@ -137,8 +143,8 @@ type Run struct {
 	// [Run.Setup], 0 until it wrote one, and setupFailed the number of the step of
 	// [Run.Setup] or [Run.RemoveSetup] that failed, 0 for none: no session joins after it.
 	setupFirst, setupLast, setupFailed int
-	// setupUp is the run's setup container from its start until [Run.RemoveSetup]
-	// removes it, nil otherwise.
+	// setupUp is the run's setup container from the call of StartSetup until
+	// [Run.RemoveSetup] removes it, nil otherwise.
 	setupUp setupContainer
 }
 
@@ -865,7 +871,7 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 	r.reload.stop()
 	r.stopBeat()
 	closed := r.closing.Err() != nil
-	res := &Closed{RunID: r.id, Dir: r.dir, State: out.State, Reason: out.Reason, ExitCode: out.ExitCode, WallKept: r.wallFailed}
+	res := &Closed{RunID: r.id, Dir: r.dir, State: out.State, Reason: out.Reason, ExitCode: out.ExitCode, WallKept: r.wallFailed.Load()}
 	if closed {
 		e := r.closedBy.get()
 		res.State, res.Reason = recorded(e)

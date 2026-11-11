@@ -249,12 +249,30 @@ func (w *closeFailing) Unwrap(context.Context) error {
 }
 
 func (w *closeFailing) Close(context.Context) error {
-	return errors.New("wall docker: rm: exit status 1")
+	return containerKept("wall docker: rm: exit status 1")
 }
 
+// containerKept is a failed removal of a container of the run, as the Docker wall
+// returns one: its text is s, and errors.Is matches it to wall.ErrContainerKept.
+func containerKept(s string) error { return wall.ContainerKeptError(errors.New(s)) }
+
+// noContainerKept is a failed removal of a network of the run, as the Docker wall
+// returns one: its text is the string, and errors.Is matches it to
+// wall.ErrNoContainerKept.
+type noContainerKept string
+
+func (k noContainerKept) Error() string { return string(k) }
+
+func (k noContainerKept) Is(target error) bool { return target == wall.ErrNoContainerKept }
+
 // runCloseFailing is a wall in a container engine whose agent's container is removed
-// at each session's end, and whose Close at the run's close fails.
-type runCloseFailing struct{ enginedWall }
+// at each session's end, and whose Close at the run's close fails: with closeErr when
+// it is set, and otherwise on a network alone, with an error that matches
+// wall.ErrNoContainerKept.
+type runCloseFailing struct {
+	enginedWall
+	closeErr error
+}
 
 func (w *runCloseFailing) Prepare(
 	_ context.Context, req wall.Request,
@@ -266,7 +284,10 @@ func (w *runCloseFailing) Prepare(
 func (w *runCloseFailing) Unwrap(context.Context) error { return nil }
 
 func (w *runCloseFailing) Close(context.Context) error {
-	return errors.New("wall docker: network rm: exit status 1")
+	if w.closeErr != nil {
+		return w.closeErr
+	}
+	return noContainerKept("wall docker: network rm: exit status 1")
 }
 
 // TestAnEntryStaysWhenTheRunsWallIsNotRemoved pins a run whose wall could not be
@@ -274,7 +295,7 @@ func (w *runCloseFailing) Close(context.Context) error {
 // the run's binds and no session's, and the close reports the failure.
 func TestAnEntryStaysWhenTheRunsWallIsNotRemoved(t *testing.T) {
 	root := t.TempDir()
-	w := &runCloseFailing{enginedWall{engine: leftEngine}}
+	w := &runCloseFailing{enginedWall: enginedWall{engine: leftEngine}}
 	sp := walledSpec(t, w)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
 	var reports []string

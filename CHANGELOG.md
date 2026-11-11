@@ -1489,7 +1489,13 @@ release may change what an existing document does, and says so under Upgrading.
   The method returns nil only once the setup container is gone and every process in it
   has ended, bounds its wait, and accepts a second call after an error. The session
   calls it before the run's first `Wrap` or after a session's `Unwrap`, and a later
-  `Wrap` may follow, so it leaves the rest of the enclosure as it is.
+  `Wrap` may follow, so it leaves the rest of the enclosure as it is. The session also
+  calls it after a `StartSetup` that returned an error, since the engine may have
+  started the container: a container that never started counts as removed.
+- Mark each failure of `Close` that leaves no container running, such as a network or a
+  directory that stays, in a `wall.Enclosure` outside Forager, so that `errors.Is`
+  matches it to `wall.ErrNoContainerKept`. The session counts any other error of `Close`
+  as a kept container: it sets `session.Closed.WallKept`.
 - Bind `Launch.Transcript.Path` writable at `Launch.Transcript.Under` below the agent's
   home in a wall outside Forager, and list it from `Binds`. A wall that ignores it
   leaves the session's transcript directory empty: the session sends no transcript, and
@@ -1524,10 +1530,12 @@ release may change what an existing document does, and says so under Upgrading.
   so does a session whose runtime wrote no transcript. Each poll reads only the bytes
   appended since the last one, and a line over 8 MiB stops the transcript with one
   line. With no wall a transcript over 64 MiB stops the same way, as one behind a wall
-  does. Each line on `stderr` about a transcript or a resume starts with its fix. A
-  session that restored a paused run's transcript sends the restored file, under the
-  paused run's slug, from offset 0, with or without a wall, whatever its working
-  directory, so a continuation of a continuation restores one run's chunks.
+  does. A read with no wall also reads only a regular file and opens it without waiting
+  for a writer, so a FIFO is not read. Each line on `stderr` about a transcript or a
+  resume starts with its fix. A session that restored a paused run's transcript sends
+  the restored file, under the paused run's slug, from offset 0, with or without a
+  wall, whatever its working directory, so a continuation of a continuation restores
+  one run's chunks.
   The line `the runtime's transcript lies inside the agent's container, which the
   session does not read` is gone.
 - `(*session.Run).RemoveSetup`: when no session is running and no host step is open, it
@@ -1543,10 +1551,12 @@ release may change what an existing document does, and says so under Upgrading.
   container, and returns an error that starts with the fix, with nothing removed, while
   a session or another call of the run runs, after the close, and, while the setup
   container runs, during a host step or when an agent's container could not be removed
-  and may still run. A `docker rm` that fails with `no such container` is no failure.
-  Any other failed removal, such as one with no engine socket, ends the step `failed`,
-  and no session joins the run: close the run, and run no `push` step after it. A run
-  that does not call it keeps the setup container until the run closes, as before.
+  and may still run. After a `Setup` whose start of the setup container failed, it
+  still removes the container, which the engine may have started. A `docker rm` that
+  fails with `no such container` is no failure. Any other failed removal, such as one
+  with no engine socket, ends the step `failed`, and no session joins the run: close
+  the run, and run no `push` step after it. A run that does not call it keeps the setup
+  container until the run closes, as before.
 - `wall.Request.Pull` and `wall.Puller`: before a run uses an image by reference, the
   session checks its manifest at the registry with the run's credentials, through the
   run's proxy, with or without an engine proxy; a 404 is `image_missing`, and any other
@@ -1586,6 +1596,19 @@ release may change what an existing document does, and says so under Upgrading.
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
   that is not absolute or that overlaps `/qory`.
+- `wall.ErrContainerKept`, which `errors.Is` matches on an error of the Docker wall's
+  `Unwrap`, `RemoveSetup` or `Close` when a `docker rm` of a container of the run
+  failed, or a `docker network rm` whose output contains `active endpoints`, `in use`,
+  `being used` or `associated containers` in any case, Docker's and Podman's forms: a
+  container of the run may still run. A `docker rm` whose output contains `already in
+  progress`, as when the engine removes an exited container of `docker run --rm` at the
+  same moment, runs again every 200 ms within the 30 seconds of the `Unwrap`, the
+  `RemoveSetup` or the whole `Close`, until it succeeds or shows no such container; it
+  fails when the removal has not ended by then or a `docker rm` fails another way.
+  `wall.ContainerKeptError(err)` returns an error with `err`'s text that matches it.
+- `wall.ErrNoContainerKept`, which `errors.Is` matches on an error of the Docker wall's
+  `Close` when any other `docker network rm` or the removal of the private directory
+  failed: no container runs because of it. The text of each error stays as it was.
 
 #### Changed
 
@@ -1981,12 +2004,26 @@ release may change what an existing document does, and says so under Upgrading.
 - `(*session.Run).Image`, the image of the run answer with its `Docker`, so a caller can
   close a read-only run in an image with nested Docker before its first join. It is the
   zero `session.Image` in a run with no wall or when the run answer has no image.
-- `session.Closed.WallKept`, true when removing a part of the run's wall failed at some
-  point of the run: the agent's container at a session's end, the setup container in
-  `RemoveSetup`, or anything at the close. A process may have kept writing the run's
-  binds after its session ended, so do not trust what is in them. It stays true when a
-  later removal succeeded. It is also true when the close failed only on a network or the
-  wall's private directory, because `wall.Enclosure.Close` returns one error.
+- `session.Closed.WallKept`, true when removing a container of the run's wall failed at
+  some point of the run: the agent's container at a session's end, the setup container
+  in `RemoveSetup`, or a container at the close. Any error of the wall's `Unwrap` or
+  `RemoveSetup` sets it, and so does any error of the close that is not marked
+  `wall.ErrNoContainerKept`. A process may have kept writing the run's binds after its
+  session ended, so do not trust what is in them. It stays true when a later removal
+  succeeded. A close whose every failure matches `wall.ErrNoContainerKept`, as the
+  Docker wall's failures on a network or the wall's private directory do, leaves it
+  false.
+  The run still reports the failure and keeps its entry among the walled runs still
+  going, and `(*wall.Docker).Reap` removes the network.
+- `(*session.Run).ContainerKept`, true once removing the agent's container of a session
+  or the setup container in `RemoveSetup` failed, and, with a wall whose enclosure has
+  no `Unwrap`, from the end of the first session until `Close`. During a session it
+  does not count the container of the session that runs. Run host work on the run's
+  binds, such as a push, before `Close` only after `Join` returned and `RemoveSetup`
+  returned nil, and only while `ContainerKept` is false; otherwise wait for `Close` and
+  read `session.Closed.WallKept`. After `Close` it equals `session.Closed.WallKept`.
+  `RemoveSetup`'s error for an agent's container that could not be removed matches
+  `wall.ErrContainerKept`, with its text as it was.
 
 #### Fixed
 

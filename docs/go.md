@@ -444,7 +444,9 @@ process in it has ended, and the name `qory-setup` no longer resolves, for a lat
 too. It writes the `wall` step `remove the setup container`.
 In an open run with no setup container, which includes a run where it removed that
 container, it returns nil and writes nothing, also after a join or during a host step, so
-you need no condition around it.
+you need no condition around it. After a `Setup` whose start of the setup container
+failed, it still removes the container, which the engine may have started, and writes
+the step: a container that is gone is not an error, and the setup's failure stays.
 Each error before the step starts with the fix, and removes and writes nothing. A removal
 that fails ends the step `failed`, or `cancelled` when `ctx` ended, and the setup
 container may still run and change the working folder: close the run, and run no `push`
@@ -458,6 +460,26 @@ after it, also when a later `RemoveSetup` succeeds, and `Close` tries the remova
 | the setup container runs, while step 1 is open | `Exit step 1 before you remove the setup container: one host step is open at a time.` |
 | after `Close` | `Remove the setup container before the close: the run is closed.` |
 | the removal fails | `Close the run: the setup container may still run, so no session can join: ` and the wall's error |
+
+The error for the agent's container of session 1 matches `wall.ErrContainerKept` with
+`errors.Is`, and so does the error of a removal that fails with the Docker wall.
+
+`(*session.Run).ContainerKept()` reports whether a container of the run that can write
+the run's binds may still run outside a session:
+
+- It is true once removing the agent's container of a session, as the session ended, or
+  the setup container, in `RemoveSetup`, failed, and stays true.
+- With a wall whose enclosure has no `Unwrap`, it is also true from the end of the first
+  session until `Close`, since the agent's container stays until the close.
+- During a session it does not count the container of the session that runs.
+
+Run host work on the run's binds before `Close`, such as a `push` step, only after
+`Join` returned and `RemoveSetup` returned nil, and only while `ContainerKept()` is
+false. Otherwise wait for `Close` and read `session.Closed.WallKept`. The run's image
+container, which never starts and has no network, and the relay, which binds the helper
+alone, read-only, stay until the close and do not count, since neither can write a bind.
+After `Close` it equals `session.Closed.WallKept`. It reads no file and takes no lock,
+so a call returns at once, also while a session runs.
 
 After a build of an image, write the build as a step of kind `event.StepBuild`, then
 write its result with `(*session.Run).Built(b)`. `Built` writes `dev.qory.run.built`
@@ -1446,12 +1468,17 @@ after a last session that ended otherwise.
 - `Undelivered`, how many of the run's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` and `ClosedReason`, as `session.Result` has them.
-- `WallKept`, true when removing a part of the run's wall failed at some point of the
-  run: the agent's container at a session's end, the setup container in `RemoveSetup`,
-  or anything at the close. A process may have kept writing the run's binds after its
+- `WallKept`, true when removing a container of the run's wall failed at some point of
+  the run: the agent's container at a session's end, the setup container in
+  `RemoveSetup`, or a container at the close. Any error of the wall's `Unwrap` or
+  `RemoveSetup` sets it, and so does any error of the close that is not marked
+  `wall.ErrNoContainerKept`. A process may have kept writing the run's binds after its
   session ended, so do not trust what is in them. `WallKept` stays true when a later
-  removal succeeded. It is also true when the close failed only on a network or the
-  wall's private directory, because `wall.Enclosure`'s `Close` returns one error.
+  removal succeeded. A close whose every failure matches `wall.ErrNoContainerKept`, as
+  the Docker wall's failures on a network or the wall's private directory do, leaves it
+  false. The run still reports the failure and
+  keeps its entry among the walled runs still going, and `(*wall.Docker).Reap` removes
+  the network.
 
 What reached the server is the gateway's to say: `(*gateway.Gateway).Close` returns a
 `gateway.Delivery`.

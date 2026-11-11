@@ -144,7 +144,12 @@ type Enclosure interface {
 	// proxy listens.
 	Wrap(ctx context.Context, l Launch) (Launch, error)
 	// Close removes everything the wall created, within the context's deadline. It is
-	// safe to call after a failed Wrap and more than once.
+	// safe to call after a failed Wrap and more than once. Wrap each failure that leaves
+	// no container running, such as a network or a directory that stays, so that
+	// errors.Is matches it to [ErrNoContainerKept], and match none of them to
+	// [ErrContainerKept]. The session counts an error as no container kept only when
+	// every error it wraps matches [ErrNoContainerKept], and any other error as a
+	// container that may still run and write the run's binds.
 	Close(ctx context.Context) error
 }
 
