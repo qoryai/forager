@@ -83,9 +83,11 @@ type recorder struct {
 	execOut      string
 	execErr      string
 	setupStopped bool
-	// dirs are the paths the image has, for a docker cp that checks one; copied is the
-	// tar of the last docker cp into a container.
+	// dirs are the paths the image has, for a docker cp that checks one, each a directory
+	// owned by root of mode 0755, and heads the paths with another first tar header;
+	// copied is the tar of the last docker cp into a container.
 	dirs   map[string]bool
+	heads  map[string]tar.Header
 	copied []byte
 }
 
@@ -102,9 +104,14 @@ func statPath(line string) (string, bool) {
 
 // dirTar is a tar stream of one directory, as docker cp writes one.
 func dirTar(name string) []byte {
+	return headTar(tar.Header{Name: path.Base(name) + "/", Typeflag: tar.TypeDir, Mode: 0o755})
+}
+
+// headTar is a tar stream of the one entry h, with no content.
+func headTar(h tar.Header) []byte {
 	var b bytes.Buffer
 	w := tar.NewWriter(&b)
-	w.WriteHeader(&tar.Header{Name: path.Base(name) + "/", Typeflag: tar.TypeDir, Mode: 0o755})
+	w.WriteHeader(&h)
 	w.Close()
 	return b.Bytes()
 }
@@ -161,6 +168,9 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 		return []byte("Error response from daemon: told to fail"), errors.New("exit status 1")
 	case strings.HasPrefix(line, "docker cp "):
 		if inside, ok := statPath(line); ok {
+			if h, ok := r.heads[inside]; ok {
+				return headTar(h), nil
+			}
 			if r.dirs[inside] {
 				return dirTar(inside), nil
 			}
@@ -218,8 +228,13 @@ func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error)
 	case strings.Contains(line, " image inspect ") && r.user != "":
 		return []byte(`{"Env":["PATH=/bin"],"User":` + r.user + "}\n"), nil
 	case strings.HasPrefix(line, "docker cp ") && !strings.Contains(line, " --follow-link "):
-		if inside, ok := statPath(line); ok && r.dirs[inside] && !r.fails(line) {
-			return dirTar(inside), nil
+		if inside, ok := statPath(line); ok && !r.fails(line) {
+			if h, ok := r.heads[inside]; ok {
+				return headTar(h), nil
+			}
+			if r.dirs[inside] {
+				return dirTar(inside), nil
+			}
 		}
 	case strings.Contains(line, " cp --follow-link "):
 		if r.onCopy != nil {
