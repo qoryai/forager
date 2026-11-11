@@ -1,0 +1,6 @@
+# The qory commit that CI's Wall conformance job builds for the tests of qory's
+# transcript link, TestDockerQory*, in e2e/qorylink_test.go. Lines that start with #
+# are comments; the first other line is the full commit hash.
+#
+# With no hash, CI skips the build and does not run these tests. Once qory's pull
+# request for model key limits (477) merges, write its merge commit on main here.

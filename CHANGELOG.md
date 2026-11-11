@@ -2231,6 +2231,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `TestDockerQoryLinkPausesAndResumesUnderAnotherKey` starts Claude Code 2.1.316
+  behind the wall through qory's `qory run agent-env`, with `CLAUDE_CONFIG_DIR` at
+  `/tmp/qory-agent-home` and qory's link from that folder to `~/.claude/projects`.
+  Run 1 ends `paused` with `model_key_limit` and sends its transcript; run 2 resumes
+  it under a second model key and ends `succeeded`.
+  `TestDockerQoryWithoutTheLinkSendsNoTranscript` starts run 1 without the link, and
+  the session sends no transcript. Both tests need `QORY_BIN`, the path of a Linux
+  build of qory, and skip without it.
+- CI's Wall conformance job builds qory at the commit in `e2e/testdata/qory-commit`
+  against the checkout of Forager, and runs both tests with that build. While the file
+  has no commit, the job skips the build and the tests.
 - The conformance suite checks that the helper's exec waits for the runtime as the
   agent's user, with the agent's groups, capabilities and `no_new_privs`, and no file
   descriptor above 2 but the Go runtime's poller; that `dev.qory.session.exited` has

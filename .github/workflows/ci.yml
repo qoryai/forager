@@ -198,6 +198,42 @@ jobs:
           QORY_WALL_REQUIRE: "1"
         run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
 
+      - name: Read the qory commit
+        # The tests of qory's transcript link run qory's agent-env verb behind the wall.
+        # The first line of e2e/testdata/qory-commit that is not a comment is the qory
+        # commit they build. With no such line, the two steps after this one do not run.
+        id: qory
+        run: |
+          commit=$(sed -n '/^[[:space:]]*#/d; /[^[:space:]]/{p;q;}' e2e/testdata/qory-commit | tr -d '[:space:]')
+          echo "qory commit: ${commit:-none}"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Build qory against this checkout
+        # qory's repository is public. Its go.mod points at this checkout of Forager, and
+        # -mod=mod adds any missing go.sum entry for it.
+        if: steps.qory.outputs.commit != ''
+        env:
+          QORY_COMMIT: ${{ steps.qory.outputs.commit }}
+        run: |
+          src="$RUNNER_TEMP/qory"
+          git init -q "$src"
+          git -C "$src" fetch -q --depth 1 https://github.com/qoryai/qory "$QORY_COMMIT"
+          git -C "$src" checkout -q --detach FETCH_HEAD
+          cd "$src"
+          go mod edit -replace "github.com/qoryai/forager=$GITHUB_WORKSPACE"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=mod -o "$RUNNER_TEMP/qory-linux" .
+          echo "QORY_BIN=$RUNNER_TEMP/qory-linux" >> "$GITHUB_ENV"
+
+      - name: Run the tests of qory's transcript link
+        # They take Claude Code 2.1.316 from QORY_WALL_CLAUDE_IMAGE, the image the step
+        # "Fetch Claude Code and build an image with it" builds, the version qory's agent
+        # image has. QORY_WALL_REQUIRE turns a skip into a failure, as in the suite's step.
+        if: steps.qory.outputs.commit != ''
+        env:
+          CGO_ENABLED: "0"
+          QORY_WALL_REQUIRE: "1"
+        run: go test ./e2e -count=1 -v -run '^(TestDockerQoryLinkPausesAndResumesUnderAnotherKey|TestDockerQoryWithoutTheLinkSendsNoTranscript)$'
+
   e2e-containerd:
     name: Wall conformance, containerd image store
     # On the machine itself, not in a container: the suite needs the docker command and

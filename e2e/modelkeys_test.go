@@ -231,6 +231,11 @@ func (s *keysStub) respond(w http.ResponseWriter, req *request, key string, n, r
 			s.answer(w, req, tool("echo report-check"), "tool_use", n)
 			return http.StatusOK
 		}
+	case keysPause:
+		if r := pauseRespond(s, w, req, key, n, results, tool); r != 0 {
+			return r
+		}
+		text["text"] = fmt.Sprintf("done after %d tool results", results)
 	case keysResume:
 		if results < 2 && req.offers("Bash") {
 			s.answer(w, req, tool(fmt.Sprintf("echo turn-%d", results)), "tool_use", n)
@@ -488,6 +493,12 @@ type keysSession struct {
 	dir     string
 	walled  *keysWall
 	timeout time.Duration
+	// qory, when set, is a folder that [qoryFolder] makes: the launch starts Claude Code
+	// through qory run agent-env with CLAUDE_CONFIG_DIR at qory's agent home, as a
+	// dispatched walled run of qory does. link are the verb's words between the kept
+	// file and --.
+	qory string
+	link []string
 }
 
 // run opens the run, joins one session of Claude Code and closes the run as qory does:
@@ -525,6 +536,12 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		Env:     s.env,
 		Dir:     dir,
 		Stdin:   strings.NewReader(""),
+	}
+	if s.qory != "" {
+		join.Args = append(append(append([]string{"run", "agent-env", filepath.Join(s.qory, "kept")}, s.link...), "--", join.Command), join.Args...)
+		join.Command = filepath.Join(s.qory, "qory")
+		join.Mounts = append(join.Mounts, wall.Mount{Path: s.qory, ReadOnly: true})
+		join.LaunchFixed = []string{"CLAUDE_CONFIG_DIR=/tmp/qory-agent-home"}
 	}
 	if s.walled != nil {
 		open.Wall = &wall.Docker{Command: s.walled.command, Helper: s.walled.helper, RelayArgs: RelayArgs, NestArgs: NestArgs}
