@@ -156,6 +156,9 @@ type system interface {
 	// and stderr as they come, and returns its exit status; env is as for run. An error
 	// is a command that did not start or a signal that ended it.
 	stream(ctx context.Context, argv, env []string, stdout, stderr io.Writer) (int, error)
+	// input runs a command with stdin as its standard input and returns its output,
+	// standard error included; env is as for run.
+	input(ctx context.Context, argv, env []string, stdin []byte) ([]byte, error)
 }
 
 // Sets lists the variables the enclosure's environment receives from the adapter
@@ -1114,7 +1117,10 @@ func (e *dockerEnclosure) firstUse(ctx context.Context, ca []byte) (string, erro
 // helper read-only, the socket's directory, and the launch's environment through a
 // file, so no value is on a command line. It starts the relay first when it has not
 // started, [dockerEnclosure.StartRelay], and runs the run's first use of the enclosure
-// when no container of the run's image ran it. The session calls it once for each session.
+// when no container of the run's image ran it. With a transcript directory it creates
+// the agent's container, makes the bind's parents in it, [dockerEnclosure.makeParents],
+// and returns the docker start that attaches to it in place of the docker run. The
+// session calls it once for each session.
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	mounts, dir, err := e.mounts(l)
 	if err != nil {
@@ -1150,7 +1156,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if err != nil {
 		return Launch{}, err
 	}
-	transcript, err := e.transcriptMount(ctx, l)
+	transcript, parents, err := e.transcriptMount(ctx, l)
 	if err != nil {
 		return Launch{}, err
 	}
@@ -1208,6 +1214,22 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	run = append(run, l.Args...)
 	if rm := []string{"rm", "--force", "--volumes", e.agent()}; !slices.ContainsFunc(e.made, func(c []string) bool { return slices.Equal(c, rm) }) {
 		e.made = append(e.made, rm)
+	}
+	if transcript != "" {
+		// The agent's container is created first, so the transcript bind's parents are
+		// made in it, owned by the container's user, before the engine makes them owned
+		// by root at the start; the launch then starts it.
+		run[0] = "create"
+		create, cancel := context.WithTimeout(ctx, relayWait)
+		out, err := e.docker(create, run...)
+		cancel()
+		if err != nil {
+			return Launch{}, e.unpulled(e.req.Image, out, err)
+		}
+		if err := e.makeParents(ctx, parents); err != nil {
+			return Launch{}, err
+		}
+		run = []string{"start", "--attach", "--interactive", e.agent()}
 	}
 	// The docker CLI that starts the agent's container runs without the access key's
 	// variables and the run key's, as every other command of the run's, and reaches
@@ -1541,17 +1563,19 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 // lies inside one of the launch's mounts or the hook socket's directory, and a place
 // inside that is, holds or lies inside another mount's place inside or /qory, are
 // refused: no mount of the launch's shows the directory, and the bind hides no part of
-// another one.
-func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string, error) {
+// another one. It also returns the places inside between the home and the bind's
+// place, outermost first, such as <home>/.claude for .claude/projects, which
+// [dockerEnclosure.makeParents] makes.
+func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string, []string, error) {
 	tr := l.Transcript
 	if tr.Path == "" {
-		return "", nil
+		return "", nil, nil
 	}
 	if !filepath.IsAbs(tr.Path) || filepath.Clean(tr.Path) != tr.Path {
-		return "", fmt.Errorf("wall docker: the transcript directory %s is not an absolute, clean path", accesskey.ShownValue(tr.Path, true))
+		return "", nil, fmt.Errorf("wall docker: the transcript directory %s is not an absolute, clean path", accesskey.ShownValue(tr.Path, true))
 	}
 	if tr.Under == "" || path.IsAbs(tr.Under) || path.Clean(tr.Under) != tr.Under || slices.Contains(strings.Split(tr.Under, "/"), "..") {
-		return "", fmt.Errorf("wall docker: the transcript's place below the home, %s, is not a relative, clean path", accesskey.ShownValue(tr.Under, true))
+		return "", nil, fmt.Errorf("wall docker: the transcript's place below the home, %s, is not a relative, clean path", accesskey.ShownValue(tr.Under, true))
 	}
 	var sources []string
 	dsts := []string{qoryDir}
@@ -1568,20 +1592,126 @@ func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string
 	}
 	for _, p := range sources {
 		if under(p, tr.Path) || under(tr.Path, p) {
-			return "", fmt.Errorf("wall docker: the transcript directory %s overlaps the mount %s; the session makes it outside every mount", accesskey.ShownValue(tr.Path, true), accesskey.ShownValue(p, true))
+			return "", nil, fmt.Errorf("wall docker: the transcript directory %s overlaps the mount %s; the session makes it outside every mount", accesskey.ShownValue(tr.Path, true), accesskey.ShownValue(p, true))
 		}
 	}
 	home, err := e.home(ctx, l.Env)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	dst := path.Join(home, tr.Under)
 	for _, d := range dsts {
 		if under(d, dst) || under(dst, d) {
-			return "", fmt.Errorf("wall docker: set HOME to a directory where %s overlaps no mount: the transcript directory is bound there, and it overlaps %s", accesskey.ShownValue(dst, true), accesskey.ShownValue(d, true))
+			return "", nil, fmt.Errorf("wall docker: set HOME to a directory where %s overlaps no mount: the transcript directory is bound there, and it overlaps %s", accesskey.ShownValue(dst, true), accesskey.ShownValue(d, true))
 		}
 	}
-	return mount(tr.Path, dst, false)
+	m, err := mount(tr.Path, dst, false)
+	if err != nil {
+		return "", nil, err
+	}
+	var parents []string
+	for p := path.Dir(tr.Under); p != "."; p = path.Dir(p) {
+		parents = append([]string{path.Join(home, p)}, parents...)
+	}
+	return m, parents, nil
+}
+
+// makeParents makes each of parents, the places inside between the home and the
+// transcript bind's place, outermost first, that the image does not have, in the agent's
+// container, created and not started. Each is a directory of mode 0700 owned by the
+// container's user: the wall's user, or root with nested Docker. Without them the engine
+// makes the places when it binds the transcript directory, owned by root, and the
+// runtime makes nothing beside the bind, such as Claude Code's ~/.claude/session-env. A
+// place the image has stays as it is: docker cp sets the owner and mode of a directory
+// it writes over.
+func (e *dockerEnclosure) makeParents(ctx context.Context, parents []string) error {
+	for i, p := range parents {
+		has, err := e.imageHas(ctx, p)
+		if err != nil {
+			return err
+		}
+		if !has {
+			return e.copyDirs(ctx, parents[i:])
+		}
+	}
+	return nil
+}
+
+// imageHas reports whether the image has anything at the path p, read with docker cp
+// out of the container [dockerEnclosure.filesFrom] names, under [copyWait]. It reads the
+// first tar header alone. The agent's container cannot answer: for a docker cp the
+// engine makes the places of its binds, the transcript bind's parents among them.
+func (e *dockerEnclosure) imageHas(ctx context.Context, p string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, copyWait)
+	defer cancel()
+	argv := []string{e.command(), "cp", e.filesFrom() + ":" + p, "-"}
+	if r, err := e.sys.stdout(ctx, argv, e.env); err == nil {
+		_, err := tar.NewReader(r).Next()
+		r.Close()
+		if err == nil {
+			return true, nil
+		}
+	}
+	// The path is missing, or the engine failed: the command's output tells which.
+	out, err := e.sys.run(ctx, argv, e.env)
+	switch {
+	case err == nil:
+		return true, nil
+	case noSuchPath(string(out)):
+		return false, nil
+	}
+	return false, fmt.Errorf("wall docker: the check for %s in the image: %w: %s", accesskey.ShownValue(p, true), accesskey.ShownError(err), accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
+}
+
+// noSuchPath reports whether out, the output of a docker cp out of a container that
+// failed, shows that the path is missing: "could not find the file" in any case.
+func noSuchPath(out string) bool {
+	return strings.Contains(strings.ToLower(out), "could not find the file")
+}
+
+// copyDirs writes dirs, absolute paths, into the agent's container as directories of
+// mode 0700, with docker cp --archive of a tar on standard input, so the engine sets
+// each one's owner to the container's user as it resolves --user, a name too. The
+// headers have the same ids when the user is a uid:gid.
+func (e *dockerEnclosure) copyDirs(ctx context.Context, dirs []string) error {
+	uid, gid := 0, 0
+	if !e.req.Docker {
+		u, g, _ := strings.Cut(e.user, ":")
+		if a, err := strconv.Atoi(u); err == nil {
+			if b, err := strconv.Atoi(g); err == nil {
+				uid, gid = a, b
+			}
+		}
+	}
+	var b bytes.Buffer
+	w := tar.NewWriter(&b)
+	now := time.Now()
+	for _, d := range dirs {
+		h := &tar.Header{Name: strings.TrimPrefix(d, "/") + "/", Typeflag: tar.TypeDir, Mode: 0o700, Uid: uid, Gid: gid, ModTime: now}
+		if err := w.WriteHeader(h); err != nil {
+			return err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, copyWait)
+	defer cancel()
+	argv := []string{e.command(), "cp", "--archive", "-", e.agent() + ":/"}
+	if out, err := e.sys.input(ctx, argv, e.env, b.Bytes()); err != nil {
+		return fmt.Errorf("wall docker: the directory %s beside the transcript bind: %w: %s", accesskey.ShownValue(dirs[0], true), accesskey.ShownError(err), accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
+	}
+	return nil
+}
+
+// filesFrom is the container the image's files are read out of: the relay's, of the
+// same image, or the container of the run's image that is never started, which
+// [dockerEnclosure.firstUse] creates when the relay's image is another.
+func (e *dockerEnclosure) filesFrom() string {
+	if e.relayImage() != e.req.Image {
+		return e.image()
+	}
+	return e.relay()
 }
 
 // home is the home of the agent's user inside, as the engine sets HOME: the last HOME
@@ -1613,11 +1743,7 @@ func (e *dockerEnclosure) home(ctx context.Context, env []string) (string, error
 	if e.req.Docker {
 		user = "0"
 	}
-	from := e.relay()
-	if e.relayImage() != e.req.Image {
-		from = e.image()
-	}
-	passwd, over, err := e.copyOut(ctx, from, "/etc/passwd")
+	passwd, over, err := e.copyOut(ctx, e.filesFrom(), "/etc/passwd")
 	if err != nil || over {
 		return "/", nil
 	}
@@ -1867,6 +1993,12 @@ func (hostSystem) stdout(ctx context.Context, argv, env []string) (io.ReadCloser
 		return nil, accesskey.ShownError(err)
 	}
 	return &piped{r: out, cmd: cmd, cancel: cancel}, nil
+}
+
+func (hostSystem) input(ctx context.Context, argv, env []string, stdin []byte) ([]byte, error) {
+	cmd := selectedCommand(ctx, argv, env)
+	cmd.Stdin = bytes.NewReader(stdin)
+	return cmd.CombinedOutput()
 }
 
 func (hostSystem) stream(ctx context.Context, argv, env []string, stdout, stderr io.Writer) (int, error) {

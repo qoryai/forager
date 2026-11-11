@@ -418,7 +418,11 @@ up in its parent, so two binds of one root are allowed.
   MiB, with no symbolic link on its path. For a planted link, FIFO, hard link or larger
   file it reads nothing and writes one line on `stderr`. `~` is `HOME` of the launch,
   else of the image, else the home the image's `/etc/passwd` gives the wall's user,
-  else `/`; a home where `~/.claude/projects` overlaps a mount fails the session. A bind
+  else `/`; a home where `~/.claude/projects` overlaps a mount fails the session. When
+  the image has no `~/.claude`, `wall.Docker` creates the agent's container, writes
+  `~/.claude` into it, mode `0700` and owned by the container's user, and then starts
+  it, so Claude Code can make `~/.claude/session-env` beside the bind. A `~/.claude` of
+  the image's keeps its owner and mode. A bind
   that is, holds or lies inside another walled run's run directory, whatever its mode,
   is `mount_shared_with_run`.
 - **The wall's extra binds.** For `wall.Docker` they are the helper, read-only, the hook

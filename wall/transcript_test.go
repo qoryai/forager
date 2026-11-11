@@ -1,7 +1,10 @@
 package wall
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -50,9 +53,12 @@ func TestTheTranscriptDirectoryIsBoundWritableAtTheHome(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "type=bind,src=" + l.Transcript.Path + ",dst=" + strings.TrimSuffix(c.want, "/") + "/.claude/projects"
-			if !slices.Contains(wrapped.Args, want) {
-				t.Errorf("the agent's docker run %q; want --mount %s", wrapped.Args, want)
+			want := "--mount type=bind,src=" + l.Transcript.Path + ",dst=" + strings.TrimSuffix(c.want, "/") + "/.claude/projects "
+			if create := agentCreate(rec); !strings.Contains(create, want) {
+				t.Errorf("the agent's docker create %q; want %s", create, want)
+			}
+			if got := words(wrapped.Args); got != "start --attach --interactive qory-"+runID+"-agent" {
+				t.Errorf("the launch is %q; want the docker start of the agent's container", got)
 			}
 			binds, err := e.(Binder).Binds(l)
 			if err != nil {
@@ -114,9 +120,126 @@ func TestATranscriptDirectoryThatOverlapsAMountIsRefused(t *testing.T) {
 			change(&l)
 			if _, err := e.Wrap(context.Background(), l); err == nil {
 				t.Error("the launch was wrapped")
-			} else if slices.ContainsFunc(rec.lines, func(l string) bool { return strings.Contains(l, " run --rm ") }) {
-				t.Errorf("the agent's container started: %v", err)
+			} else if slices.ContainsFunc(rec.lines, func(l string) bool { return strings.Contains(l, " run --rm ") || strings.Contains(l, " create --rm ") }) {
+				t.Errorf("the agent's container was made: %v", err)
 			}
 		})
+	}
+}
+
+// agentCreate is the docker create of the agent's container among the recorder's
+// commands, empty for none.
+func agentCreate(rec *recorder) string {
+	for _, l := range rec.lines {
+		if strings.HasPrefix(l, "docker create --rm --interactive ") {
+			return l
+		}
+	}
+	return ""
+}
+
+// copiedDirs are the entries of the tar the last docker cp wrote into a container: each
+// name, type, mode, uid and gid.
+func copiedDirs(t *testing.T, rec *recorder) []tar.Header {
+	t.Helper()
+	var out []tar.Header
+	r := tar.NewReader(bytes.NewReader(rec.copied))
+	for {
+		h, err := r.Next()
+		if err == io.EOF {
+			return out
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, tar.Header{Name: h.Name, Typeflag: h.Typeflag, Mode: h.Mode, Uid: h.Uid, Gid: h.Gid})
+	}
+}
+
+// TestTheTranscriptBindsParentIsMadeForTheAgentsUser pins the parents of the
+// transcript bind's place: each one the image does not have is written into the agent's
+// container after its docker create, as a directory of mode 0700 owned by the container's
+// user, with docker cp --archive, so the engine does not make it owned by root at the
+// start. One the image has is left as it is, and nested Docker's container user is
+// root.
+func TestTheTranscriptBindsParentIsMadeForTheAgentsUser(t *testing.T) {
+	passwd := "root:x:0:0:root:/root:/bin/sh\nagent:x:1000:1000::/home/agent:/bin/sh\n"
+	for name, c := range map[string]struct {
+		under  string
+		dirs   []string
+		docker bool
+		want   []tar.Header
+	}{
+		"none in the image": {".claude/projects", nil, false,
+			[]tar.Header{{Name: "home/agent/.claude/", Typeflag: tar.TypeDir, Mode: 0o700, Uid: 1000, Gid: 1000}}},
+		"the image has it": {".claude/projects", []string{"/home/agent/.claude"}, false, nil},
+		"the image has the first of two": {"a/b/projects", []string{"/home/agent/a"}, false,
+			[]tar.Header{{Name: "home/agent/a/b/", Typeflag: tar.TypeDir, Mode: 0o700, Uid: 1000, Gid: 1000}}},
+		"none of two in the image": {"a/b/projects", nil, false, []tar.Header{
+			{Name: "home/agent/a/", Typeflag: tar.TypeDir, Mode: 0o700, Uid: 1000, Gid: 1000},
+			{Name: "home/agent/a/b/", Typeflag: tar.TypeDir, Mode: 0o700, Uid: 1000, Gid: 1000}}},
+		"nested Docker": {".claude/projects", nil, true,
+			[]tar.Header{{Name: "home/agent/.claude/", Typeflag: tar.TypeDir, Mode: 0o700}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000"`, files: map[string]string{"/etc/passwd": passwd}, dirs: map[string]bool{}}
+			for _, d := range c.dirs {
+				rec.dirs[d] = true
+			}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, NestArgs: []string{"nest"}, sys: rec}
+			req := Request{RunID: runID, Image: "example.com/agent:1"}
+			if c.docker {
+				req.Runtime, req.Docker = "sysbox-runc", true
+			}
+			e, err := d.Prepare(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer e.Close(context.Background())
+			l := transcriptLaunch("HOME=/home/agent")
+			l.Transcript.Under = c.under
+			if _, err := e.Wrap(context.Background(), l); err != nil {
+				t.Fatal(err)
+			}
+			created := slices.IndexFunc(rec.lines, func(l string) bool { return strings.HasPrefix(l, "docker create --rm --interactive ") })
+			copied := slices.Index(rec.lines, "docker cp --archive - qory-"+runID+"-agent:/")
+			stat := slices.IndexFunc(rec.lines, func(l string) bool { _, ok := statPath(l); return ok })
+			if created < 0 || stat < 0 {
+				t.Fatalf("commands %q; want the agent's docker create and a check of the image's path", rec.lines)
+			}
+			if c.want == nil {
+				if copied >= 0 {
+					t.Errorf("a docker cp into the agent's container, of %+v; want none for a path the image has", copiedDirs(t, rec))
+				}
+				return
+			}
+			if copied < created {
+				t.Fatalf("commands %q; want a docker cp --archive into the agent's container after its docker create", rec.lines)
+			}
+			if got := copiedDirs(t, rec); !slices.EqualFunc(got, c.want, func(a, b tar.Header) bool {
+				return a.Name == b.Name && a.Typeflag == b.Typeflag && a.Mode == b.Mode && a.Uid == b.Uid && a.Gid == b.Gid
+			}) {
+				t.Errorf("the tar has %+v; want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestAFailedCheckOfTheImagesPathFailsTheWrap pins a check of the image's path that
+// fails for another reason than a missing path: the wrap fails, and nothing is written
+// into the agent's container.
+func TestAFailedCheckOfTheImagesPathFailsTheWrap(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000"`, fail: "docker cp qory-"}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	if _, err := e.Wrap(context.Background(), transcriptLaunch("HOME=/home/agent")); err == nil || !strings.Contains(err.Error(), "told to fail") {
+		t.Errorf("the wrap: %v; want the check's failure", err)
+	}
+	if slices.ContainsFunc(rec.lines, func(l string) bool { return strings.Contains(l, "cp --archive") }) {
+		t.Errorf("commands %q; want no docker cp into the agent's container", rec.lines)
 	}
 }
