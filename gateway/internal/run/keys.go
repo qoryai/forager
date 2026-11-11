@@ -105,8 +105,8 @@ func (r *Run) ModelKeys() []modelkey.Key {
 // Resume is the resume of the run configuration the run started with: the paused run
 // the run continues, whose transcript its session may read. Nil when it has none.
 func (r *Run) Resume() *server.LinkResume {
-	if d := r.cfg.Fetched.Document; d != nil {
-		return d.Resume
+	if f := r.cfg.Fetched; f != nil && f.Document != nil {
+		return f.Document.Resume
 	}
 	return nil
 }
