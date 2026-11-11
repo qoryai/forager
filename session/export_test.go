@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/qoryai/forager/wall"
@@ -23,8 +25,32 @@ func SetUserHome(dir string) string {
 	return old
 }
 
-// SetTranscriptPoll sets how often the session reads a runtime's transcript.
-func SetTranscriptPoll(d time.Duration) { transcriptPoll = d }
+// SetTranscriptPoll sets how often a join of spec reads the runtime's transcript.
+func SetTranscriptPoll(spec *SessionSpec, d time.Duration) { spec.transcriptPoll = d }
+
+// TranscriptReaders is the number of goroutines that read a runtime's transcript.
+func TranscriptReaders() int { return len(transcriptStacks()) }
+
+// transcriptStacks are the stacks of the goroutines that read a runtime's transcript:
+// those that contain [transcript.run].
+func transcriptStacks() []string {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	var readers []string
+	for g := range strings.SplitSeq(string(buf), "\n\n") {
+		if strings.Contains(g, "session.(*transcript).run(") {
+			readers = append(readers, g)
+		}
+	}
+	return readers
+}
 
 // SetCloseWait sets how long the sinks get to flush at the end of a join and at the
 // close.

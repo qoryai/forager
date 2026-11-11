@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -852,10 +853,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		trDir = shown.Dir
 	}
 	tr = r.sessionTranscript(rt, n, spec.Wall != nil, transcriptDir, launch.Env, trDir, masker, hidden, restore)
-	stopTranscript := make(chan struct{})
+	// The transcript's reads end before the join returns, on every path: the end of
+	// the runtime below, and an error or a panic in between.
+	endTranscript := func() {}
 	if tr != nil {
-		go tr.run(stopTranscript)
+		endTranscript = tr.start(cmp.Or(spec.transcriptPoll, transcriptPoll))
 	}
+	defer endTranscript()
 	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: stdout, stderr: stderr, logs: logs, masker: masker, harness: hidden, output: output, cols: cols, rows: rows, resized: resized}
 	// The limit ends the runtime and nothing else: the wall is closed on the caller's
 	// context, as after any exit. The run being closed from outside ends it the same
@@ -908,7 +912,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// The events the mapper still keeps back come before the session's exit, and so
 	// does the end of the runtime's transcript.
 	mapper.Close()
-	close(stopTranscript)
+	endTranscript()
 	if tr != nil && !closed {
 		tr.finish()
 	}

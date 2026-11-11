@@ -422,6 +422,9 @@ type SessionSpec struct {
 	// so a hook on its last event is still read; zero or less means 200 ms. For tests:
 	// production leaves it zero.
 	SocketGrace time.Duration
+	// transcriptPoll is how often the session reads the runtime's transcript; zero
+	// means [transcriptPoll]. A test sets it.
+	transcriptPoll time.Duration
 }
 
 // HarnessSource is one harness source a session's compose used: Source as it is
