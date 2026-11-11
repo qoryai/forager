@@ -64,10 +64,14 @@ func Example() {
 		Args:      []string{"--settings", "/path/to/settings.json", "-p", "Reply with the single word pong."},
 		Forwarder: []string{exe, "forward"},
 	})
-	// The close's outcome is the session's, or failed with -1 when it did not start.
+	// The close's outcome is the session's, or failed with -1 when it did not start. A
+	// session paused at the model key limit closes the run paused with model_key_limit.
 	out := session.Outcome{State: "failed", ExitCode: -1}
 	if err == nil {
 		out = session.Outcome{State: res.State, ExitCode: res.ExitCode}
+		if res.Reason == "model_key_limit" {
+			out.Reason = res.Reason
+		}
 	}
 	closed, cerr := run.Close(ctx, out)
 	// The gateway's close delivers the run's last events to the server.

@@ -340,7 +340,8 @@ func TestTheLinksRefusalsSayWhoRefused(t *testing.T) {
 // request carries its code, run_closed, stopped, session_lost or batch_refused, and
 // run_closed for another code or none, the reserved old codes among them, and who ended it, the gateway; and the state
 // and the reason of that end, Forager's own codes among them, when the state is one of
-// run.exited's and the reason, if any, a code, else neither, and neither for run_closed.
+// run.exited's but paused and the reason, if any, a code, else neither, and neither for
+// run_closed.
 // It hands on no digests; and a batch's 410 ends the run with the same end.
 func TestA410OnTheLinkEndsTheRun(t *testing.T) {
 	gw := accesskey.FromGateway
@@ -359,6 +360,7 @@ func TestA410OnTheLinkEndsTheRun(t *testing.T) {
 		`{"error":"stopped","from":"gateway","state":"cancelled","reason":"stopped"}`:             {Code: "stopped", From: gw, State: "cancelled", Reason: "stopped"},
 		`{"error":"session_lost","from":"gateway","state":"failed","reason":"session_lost"}`:      {Code: "session_lost", From: gw, State: "failed", Reason: "session_lost"},
 		`{"error":"stopped","from":"gateway","state":"lost","reason":"no_longer_needed"}`:         {Code: "stopped", From: gw},
+		`{"error":"stopped","from":"gateway","state":"paused","reason":"model_key_limit"}`:        {Code: "stopped", From: gw},
 		`{"error":"stopped","from":"gateway","state":"cancelled","reason":"No longer needed"}`:    {Code: "stopped", From: gw},
 		`{"error":"stopped","from":"gateway","state":"cancelled","reason":""}`:                    {Code: "stopped", From: gw},
 		`{"error":"stopped","from":"gateway","state":1}`:                                          {Code: "stopped", From: gw},

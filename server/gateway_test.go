@@ -556,6 +556,7 @@ func TestTheEndMember(t *testing.T) {
 		`{}`:                                 nil,
 		`not json`:                           nil,
 		`{"end":{"state":"stopped"}}`:        nil,
+		`{"end":{"state":"paused"}}`:         nil,
 		`{"end":{"reason":"x"}}`:             nil,
 		`{"end":null}`:                       nil,
 		`{"end":{"state":"failed"},"end":1}`: nil,

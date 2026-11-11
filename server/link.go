@@ -662,12 +662,13 @@ func (a *linkAnswer) end() string {
 	return accesskey.CodeRunClosed
 }
 
-// endStateSchemas are the schemas of a run.exited's state and reason, which a 410's
-// state and reason are held to.
+// endStateSchemas are the schemas a 410's state and reason are held to:
+// link-refusal.schema.json's state, a run.exited's state but paused, and a run.exited's
+// reason.
 var endStateSchemas = sync.OnceValues(func() ([2]*jsonschema.Schema, error) {
 	var out [2]*jsonschema.Schema
-	for i, member := range []string{"state", "reason"} {
-		s, err := contracts.Compile("events/run.exited.schema.json#/properties/" + member)
+	for i, name := range []string{"link-refusal.schema.json#/properties/state", "events/run.exited.schema.json#/properties/reason"} {
+		s, err := contracts.Compile(name)
 		if err != nil {
 			return out, err
 		}
@@ -677,8 +678,8 @@ var endStateSchemas = sync.OnceValues(func() ([2]*jsonschema.Schema, error) {
 })
 
 // runEnd is the end of the run a 410's body says: its code, [linkAnswer.end], who ended
-// it, and, but for run_closed, the body's state and reason when each is what
-// run.exited.schema.json holds it to, a reason with a state alone. Any other state or
+// it, and, but for run_closed, the body's state and reason when link-refusal.schema.json
+// allows each, a reason with a state alone. Any other state or
 // reason leaves both empty: the end is one without a state.
 func (a *linkAnswer) runEnd() RunEnd {
 	e := RunEnd{Code: a.end(), From: a.from()}
