@@ -520,7 +520,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the paused run the run answer's resume names: the launch writes its transcript under
 	// the runtime's home and resumes it. A failure starts the runtime without a resume,
 	// with resumeLine on stderr once the session started.
-	prepared, resumeLine := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptDir, inside, prepared)
+	prepared, resumeLine, resumeArgs := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptDir, inside, prepared)
 	// The session's setup commands run inside, after the runtime's preparation, and then
 	// start the launch as the runtime prepared it.
 	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
@@ -738,6 +738,31 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	defer closeSocket()
 	defer mapper.Close()
 
+	// The environment the enclosure's launch gets, below.
+	wrapEnv := environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key))
+	// Behind a wall the enclosure works out, once the image is there, whether it binds
+	// the session's transcript directory where the agent's user can write it. When it
+	// does not, the session binds no directory, takes off the resume arguments it added,
+	// sends no transcript and writes one line, and with a restored transcript a second
+	// one: the runtime starts without a resume.
+	if checker, ok := enclosure.(wall.TranscriptChecker); ok && transcriptDir != "" {
+		unbound, err := checker.CheckTranscript(runCtx, wrapEnv, wall.Transcript{Path: transcriptDir, Under: transcriptUnder})
+		if err != nil {
+			return fail(accesskey.ShownError(err))
+		}
+		if unbound != nil {
+			transcriptDir, transcriptUnder = "", ""
+			if resumeArgs != nil {
+				added := insideAll(resumeArgs, inside)
+				if !slices.Equal(prepared.Args[max(len(prepared.Args)-len(added), 0):], added) {
+					return fail(errors.New("the launch does not end with the resume arguments the session added"))
+				}
+				prepared.Args = prepared.Args[:len(prepared.Args)-len(added)]
+				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(r.answer.Resume.RunID, unbound.Fix, unbound.Cause))+"\n"))
+			}
+			r.writeLog("stderr", n, 0, []byte(neutral(noResume(unbound.Fix, unbound.Cause))+"\n"))
+		}
+	}
 	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
 	// starts it inside, which sets the proxy and socket variables by the addresses the
@@ -784,7 +809,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key)),
+			Env:   wrapEnv,
 			CA:    r.authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: r.relayToken,
@@ -830,8 +855,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// The limit ends the runtime and nothing else: the wall is closed on the caller's
 	// context, as after any exit. The run being closed from outside ends it the same
 	// way.
-	// A stop in the gateway's answer to a batch ends it as the limit does, with its own
-	// cause, from the runtime's start until its exit is decided.
+	// A stop in the gateway's answer to a batch ends it as the limit does, with the
+	// stop's cause, from the runtime's start until its exit is decided.
 	stoppable, stopRuntime := context.WithCancelCause(runCtx)
 	defer stopRuntime(nil)
 	limited, cancelLimit := context.WithCancel(stoppable)

@@ -53,7 +53,7 @@ func TestTheResumeScriptWritesTheTranscriptThenResumes(t *testing.T) {
 	if out != "[--print]\n" {
 		t.Errorf("the runtime got %q; want no resume arguments", out)
 	}
-	want := "The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the copy to ~/" + rel + " failed"
+	want := "Check that HOME inside is writable. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the copy to ~/" + rel + " failed"
 	last := ""
 	for sc := bufio.NewScanner(strings.NewReader(stderr)); sc.Scan(); {
 		last = sc.Text()

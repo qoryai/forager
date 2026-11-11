@@ -46,30 +46,32 @@ const resumeWait = 10 * time.Minute
 // Behind a wall, root is the session's transcript directory, which the wall binds at
 // resume.prefix inside: the session writes the bytes there itself, at resume.path's
 // <slug>/<session id>.jsonl below resume.prefix, before the agent's container starts
-// ([writeBeneath]), and adds resume.args to launch, with no script. A resume.session_id
-// that is not a UUID in lower case, or a resume.path below resume.prefix of another
-// shape, is a failed resume. A walled session with no transcript directory, root empty,
-// does not resume.
-func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir string, walled bool, root string, inside func(string) string, launch runtimes.Launch) (runtimes.Launch, string) {
+// ([writeBeneath]), and adds resume.args to launch, with no script; it also returns the
+// arguments it added, which the session takes off again when the enclosure binds no
+// transcript directory ([wall.TranscriptChecker]). A resume.session_id that is not a UUID
+// in lower case, or a resume.path below resume.prefix of another shape, is a failed
+// resume. A walled session with no transcript directory, root empty, does not resume.
+func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir string, walled bool, root string, inside func(string) string, launch runtimes.Launch) (runtimes.Launch, string, []string) {
 	want := r.answer.Resume
 	if want == nil || r.resumeTried {
-		return launch, ""
+		return launch, "", nil
 	}
-	failed := func(cause string) (runtimes.Launch, string) {
-		return launch, resumeFailed(want.RunID, cause)
+	failed := func(fix, cause string) (runtimes.Launch, string, []string) {
+		return launch, resumeFailed(want.RunID, fix, cause), nil
 	}
 	resumes, ok := rt.(runtimes.Resumes)
 	if !ok {
-		return launch, ""
+		return launch, "", nil
 	}
 	rs, ok := resumes.Resume()
 	if !ok {
-		return launch, ""
+		return launch, "", nil
 	}
 	r.resumeTried = true
+	checkPath := "Check resume.path in the run configuration"
 	rel, ok := strings.CutPrefix(want.Path, "~/")
 	if !ok || !strings.HasPrefix(want.Path, rs.Prefix) || len(want.Path) == len(rs.Prefix) || dotted(rel) {
-		return failed(fmt.Sprintf("its path %s lies outside %s", want.Path, rs.Prefix))
+		return failed(checkPath, fmt.Sprintf("its path %s lies outside %s", want.Path, rs.Prefix))
 	}
 	args := make([]string, len(rs.Args))
 	for i, a := range rs.Args {
@@ -77,47 +79,52 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 	}
 	if walled {
 		if root == "" {
-			return failed("the session has no transcript directory behind the wall")
+			return failed("Use a runtime whose resume.path is resume.prefix followed by {cwd_slug}/{session_id}.jsonl", "the session has no transcript directory behind the wall")
 		}
 		below := strings.TrimPrefix(want.Path, rs.Prefix)
 		if !walledSessionID.MatchString(want.SessionID) {
-			return failed(fmt.Sprintf("its session id %s is not a UUID in lower case", accesskey.ShownName(want.SessionID, false)))
+			return failed("Check resume.session_id in the run configuration", fmt.Sprintf("its session id %s is not a UUID in lower case", accesskey.ShownName(want.SessionID, false)))
 		}
 		if _, name, err := splitTranscript(below); err != nil || name != want.SessionID+".jsonl" {
-			return failed(fmt.Sprintf("its path %s is not %s<slug>/%s.jsonl", want.Path, rs.Prefix, want.SessionID))
+			return failed(checkPath, fmt.Sprintf("its path %s is not %s<slug>/%s.jsonl", want.Path, rs.Prefix, want.SessionID))
 		}
 		b, err := r.fetchTranscript(ctx)
 		if err != nil {
-			return failed(err.Error())
+			return failed(fetchFix(want.RunID), err.Error())
 		}
 		if err := writeBeneath(root, below, b); err != nil {
-			return failed(fmt.Sprintf("the write to %s failed: %s", want.Path, accesskey.ShownError(err).Error()))
+			return failed("Check the session's transcript directory "+pathShown(root), fmt.Sprintf("the write to %s failed: %s", want.Path, accesskey.ShownError(err).Error()))
 		}
 		launch.Args = append(slices.Clone(launch.Args), args...)
-		return launch, ""
+		return launch, "", args
 	}
 	b, err := r.fetchTranscript(ctx)
 	if err != nil {
-		return failed(err.Error())
+		return failed(fetchFix(want.RunID), err.Error())
 	}
 	transcript := filepath.Join(sessionDir, ResumeTranscript)
 	if err := runfile.Replace(transcript, b, 0o644); err != nil {
-		return failed(accesskey.ShownError(err).Error())
+		return failed("Check the session's directory "+pathShown(sessionDir), accesskey.ShownError(err).Error())
 	}
 	script := filepath.Join(sessionDir, ResumeScript)
 	text := resumeScript(want.RunID, inside(transcript), rel, args)
 	if err := runfile.Replace(script, []byte(text), 0o644); err != nil {
-		return failed(accesskey.ShownError(err).Error())
+		return failed("Check the session's directory "+pathShown(sessionDir), accesskey.ShownError(err).Error())
 	}
 	launch.Args = append([]string{script, launch.Command}, launch.Args...)
 	launch.Command = "/bin/sh"
-	return launch, ""
+	return launch, "", nil
 }
 
-// resumeFailed is the line of a resume that failed: the transcript of run runID could
-// not be restored, for cause.
-func resumeFailed(runID, cause string) string {
-	return fmt.Sprintf("The runtime starts without a resume: the transcript of run %s could not be restored: %s", runID, cause)
+// fetchFix is the fix of a resume whose read of the transcript of run runID failed.
+func fetchFix(runID string) string {
+	return "Check that the control plane has the transcript of run " + runID
+}
+
+// resumeFailed is the line of a resume that failed: fix, the change that lets it
+// resume, then that the transcript of run runID could not be restored, for cause.
+func resumeFailed(runID, fix, cause string) string {
+	return fmt.Sprintf("%s. The runtime starts without a resume: the transcript of run %s could not be restored: %s", fix, runID, cause)
 }
 
 // resumeScript is the text of [ResumeScript]: it copies transcript, a path as the
@@ -137,7 +144,7 @@ func resumeScript(runID, transcript, rel string, args []string) string {
 	fmt.Fprintf(&b, "if [ -n \"$HOME\" ] && mkdir -p \"${dst%%/*}\" && cp %s \"$dst\"; then\n", quote(transcript))
 	fmt.Fprintf(&b, "\texec \"$@\" %s\n", strings.Join(quoted, " "))
 	b.WriteString("fi\n")
-	fmt.Fprintf(&b, "echo %s >&2\n", quote(resumeFailed(runID, "the copy to ~/"+rel+" failed")))
+	fmt.Fprintf(&b, "echo %s >&2\n", quote(resumeFailed(runID, "Check that HOME inside is writable", "the copy to ~/"+rel+" failed")))
 	b.WriteString("exec \"$@\"\n")
 	return b.String()
 }

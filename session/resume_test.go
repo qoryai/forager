@@ -150,7 +150,7 @@ func TestAResumeThatFailsStartsTheRuntimeWithoutIt(t *testing.T) {
 	if strings.Contains(out, "restored: ok") || !strings.Contains(out, "args: \n") {
 		t.Errorf("the runtime's output %q", out)
 	}
-	want := "The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the gateway returned 404 not_found to the transcript request\n"
+	want := "Check that the control plane has the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the gateway returned 404 not_found to the transcript request\n"
 	if !strings.Contains(out, want) {
 		t.Errorf("no line %q in %q", want, out)
 	}
@@ -246,7 +246,7 @@ func TestAWalledResumeOfAnotherShapeFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := runLogText(t, events(t, res))
-	want := "The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: its session id s-1 is not a UUID in lower case\n"
+	want := "Check resume.session_id in the run configuration. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: its session id s-1 is not a UUID in lower case\n"
 	if !strings.Contains(out, want) || !strings.Contains(out, "args: \n") {
 		t.Errorf("the runtime's output %q; want %q", out, want)
 	}
