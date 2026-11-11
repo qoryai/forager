@@ -375,8 +375,9 @@ var errLinked = errors.New("the transcript's path is a symbolic link or no regul
 // readUnlinked reads the file at rel under home from offset on, and returns its bytes
 // and the file's size. It opens the file through an os.Root of home, so no name leads
 // out of it, and fails on a path any of whose names is a symbolic link, or that is no
-// regular file. It opens the file without blocking, so a FIFO at rel ends the read at
-// once with [errLinked] instead of waiting for a writer. A file over [maxTranscript]
+// regular file, checked before the open and again on the open file. It opens the file
+// without blocking, so a FIFO put at rel between the check and the open ends the read
+// at once with [errLinked] instead of waiting for a writer. A file over [maxTranscript]
 // bytes is [errTooLarge], as behind a wall.
 func readUnlinked(home, rel string, offset int64) ([]byte, int64, error) {
 	root, err := os.OpenRoot(home)
@@ -385,23 +386,25 @@ func readUnlinked(home, rel string, offset int64) ([]byte, int64, error) {
 	}
 	defer root.Close()
 	at := ""
+	var fi fs.FileInfo
 	for s := range strings.SplitSeq(rel, "/") {
 		at = path.Join(at, s)
-		fi, err := root.Lstat(at)
-		if err != nil {
+		if fi, err = root.Lstat(at); err != nil {
 			return nil, 0, err
 		}
 		if fi.Mode()&fs.ModeSymlink != 0 {
 			return nil, 0, errLinked
 		}
 	}
-	f, err := root.OpenFile(rel, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if !fi.Mode().IsRegular() {
+		return nil, 0, errLinked
+	}
+	f, err := root.OpenFile(rel, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOCTTY, 0)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
+	if fi, err = f.Stat(); err != nil {
 		return nil, 0, err
 	}
 	if !fi.Mode().IsRegular() {

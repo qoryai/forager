@@ -854,7 +854,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	tr = r.sessionTranscript(rt, n, spec.Wall != nil, transcriptDir, launch.Env, trDir, masker, hidden, restore)
 	// The transcript's reads end before the join returns, on every path: the end of
-	// the runtime below, and an error or a panic in between.
+	// the runtime below, and a panic in between.
 	endTranscript := func() {}
 	if tr != nil {
 		endTranscript = tr.start(cmp.Or(spec.transcriptPoll, transcriptPoll))

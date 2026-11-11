@@ -2102,15 +2102,14 @@ func (e *dockerEnclosure) remove(ctx context.Context, argv []string, gone func(o
 	case err == nil || gone(string(out)):
 		return nil
 	case argv[0] == "rm" && removing(string(out)):
-		return e.awaitRemoval(ctx, argv[len(argv)-1], err)
+		return e.awaitRemoval(ctx, argv, err)
 	case argv[0] == "rm" || attached(string(out)):
 		return ContainerKeptError(err)
 	}
 	return noContainerKept{err}
 }
 
-// removalPoll is how often [dockerEnclosure.awaitRemoval] checks whether the container
-// still exists.
+// removalPoll is how often [dockerEnclosure.awaitRemoval] runs docker rm again.
 const removalPoll = 200 * time.Millisecond
 
 // removing reports whether out, the output of a failed docker rm, contains "already in
@@ -2120,27 +2119,31 @@ func removing(out string) bool {
 	return strings.Contains(strings.ToLower(out), "already in progress")
 }
 
-// awaitRemoval waits until ctx ends for the engine to finish removing the container
-// name, whose docker rm failed with rmErr because its removal was in progress. Every
-// [removalPoll] it runs docker container inspect, and it returns nil once the output
-// shows [noSuchContainer]. A container that still exists when ctx ends, and an inspect
-// that fails otherwise, are an error that matches [ErrContainerKept].
-func (e *dockerEnclosure) awaitRemoval(ctx context.Context, name string, rmErr error) error {
+// awaitRemoval runs rm, the docker rm --force --volumes of one container, again every
+// [removalPoll] until ctx ends, since its first run failed with rmErr while a removal
+// was in progress. A run that succeeds, or whose output shows [noSuchContainer], ends
+// the wait with nil; one whose output shows another removal in progress, [removing],
+// waits for the next. Any other failure, and a removal that has not ended when ctx
+// ends, are an error that matches [ErrContainerKept]. A second removal with --force
+// also ends a removal that stopped halfway, such as of a container left dead.
+func (e *dockerEnclosure) awaitRemoval(ctx context.Context, rm []string, rmErr error) error {
+	name := rm[len(rm)-1]
 	tick := time.NewTicker(removalPoll)
 	defer tick.Stop()
 	for {
-		out, err := e.docker(ctx, "container", "inspect", "--format", "{{.Id}}", name)
-		switch {
-		case err != nil && noSuchContainer(string(out)):
-			return nil
-		case err != nil && ctx.Err() == nil:
-			return ContainerKeptError(fmt.Errorf("wall docker: check that the engine can be reached, then remove container %s with docker rm --force: %w; the check whether the container still exists failed: %w", name, rmErr, err))
-		}
 		select {
 		case <-ctx.Done():
-			return ContainerKeptError(fmt.Errorf("wall docker: remove container %s with docker rm --force once the engine ends its removal: %w; the container still existed when the wait ended", name, rmErr))
+			return ContainerKeptError(fmt.Errorf("wall docker: remove container %s with docker rm --force: %w; the container's removal had not ended when the wait ended", name, rmErr))
 		case <-tick.C:
 		}
+		out, err := e.docker(ctx, rm...)
+		switch {
+		case err == nil || noSuchContainer(string(out)):
+			return nil
+		case removing(string(out)) || ctx.Err() != nil:
+			continue
+		}
+		return ContainerKeptError(fmt.Errorf("wall docker: remove container %s with docker rm --force: %w; the next docker rm failed: %w", name, rmErr, err))
 	}
 }
 

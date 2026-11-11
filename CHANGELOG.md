@@ -1530,10 +1530,12 @@ release may change what an existing document does, and says so under Upgrading.
   so does a session whose runtime wrote no transcript. Each poll reads only the bytes
   appended since the last one, and a line over 8 MiB stops the transcript with one
   line. With no wall a transcript over 64 MiB stops the same way, as one behind a wall
-  does. Each line on `stderr` about a transcript or a resume starts with its fix. A
-  session that restored a paused run's transcript sends the restored file, under the
-  paused run's slug, from offset 0, with or without a wall, whatever its working
-  directory, so a continuation of a continuation restores one run's chunks.
+  does. A read with no wall also reads only a regular file and opens it without waiting
+  for a writer, so a FIFO is not read. Each line on `stderr` about a transcript or a
+  resume starts with its fix. A session that restored a paused run's transcript sends
+  the restored file, under the paused run's slug, from offset 0, with or without a
+  wall, whatever its working directory, so a continuation of a continuation restores
+  one run's chunks.
   The line `the runtime's transcript lies inside the agent's container, which the
   session does not read` is gone.
 - `(*session.Run).RemoveSetup`: when no session is running and no host step is open, it
@@ -1600,10 +1602,10 @@ release may change what an existing document does, and says so under Upgrading.
   `being used` or `associated containers` in any case, Docker's and Podman's forms: a
   container of the run may still run. A `docker rm` whose output contains `already in
   progress`, as when the engine removes an exited container of `docker run --rm` at the
-  same moment, waits within the removal's 30 seconds until `docker container inspect`
-  shows no such container; it fails only when the container still exists at the end of
-  the wait or the inspect fails another way. `wall.ContainerKeptError(err)` returns an
-  error with `err`'s text that matches it.
+  same moment, runs again every 200 ms within the 30 seconds of the `Unwrap`, the
+  `RemoveSetup` or the whole `Close`, until it succeeds or shows no such container; it
+  fails when the removal has not ended by then or a `docker rm` fails another way.
+  `wall.ContainerKeptError(err)` returns an error with `err`'s text that matches it.
 - `wall.ErrNoContainerKept`, which `errors.Is` matches on an error of the Docker wall's
   `Close` when any other `docker network rm` or the removal of the private directory
   failed: no container runs because of it. The text of each error stays as it was.
