@@ -2089,7 +2089,13 @@ input contains it, the session uses `resume.path`, with `{session_id}` replaced 
 `session_id` of `dev.qory.runtime.started` and `{cwd_slug}` by the runtime's working
 directory with every character other than an ASCII letter or digit replaced by `-`:
 `/workspace` becomes `-workspace`. The session reads no path outside `resume.prefix`,
-with a `..` segment or through a symbolic link.
+with a `..` segment or through a symbolic link, and no file over 67108864 bytes (64
+MiB), with a wall or without one.
+
+Each line the session writes about a transcript is one `dev.qory.run.log` line of the
+session, with `stream: stderr`, of the form `<fix>. A continuation of this run starts
+the runtime without a resume: <cause>`: the fix comes first. After such a line the
+session sends no more of the transcript.
 
 Behind a wall, the session reads the transcript in the session's transcript directory,
 `transcripts/<n>/` in the run directory, which it makes, mode `0700`, before the
@@ -2098,8 +2104,31 @@ its `resume.path` is `resume.prefix` followed by `{cwd_slug}/{session_id}.jsonl`
 Claude Code's is. The wall binds the directory writable at `resume.prefix` below the
 home of the agent's user inside. For `docker` that home is `HOME` of the launch's
 environment, else `HOME` of the image's, else the home the image's `/etc/passwd` gives
-the user the container starts as, else `/`. A home where that place is, holds or lies
-inside a mount's place inside, or `/qory`, fails the session. The session reads one path
+the user the container starts as, else `/`. That user is the wall's user, or root with
+nested Docker: the engine sets root's `HOME`, and the helper keeps it when it starts the
+agent as the wall's user. A home where that place is, holds or lies inside a mount's
+place inside, or `/qory`, fails the session. Before the wall binds the directory it
+checks that the agent can write it, and binds nothing when:
+
+- the wall's user is a name, or a uid other than the session's, since the directory is
+  mode `0700` and the session's uid's;
+- a directory from `/` down to the bind's place is a symbolic link or no directory in
+  the image, since the engine follows a link inside the image and the bind could land
+  inside another mount;
+- a directory above the bind's place does not let the agent's uid and gid search it in
+  the image, such as `/root`, mode `0700`, for nested Docker under an image that sets no
+  `HOME`.
+
+The session then starts the runtime without the descriptor's `resume.args`, sends no
+transcript and writes one line, such as `Set HOME in the image to a directory that uid
+1000 can reach, or let it search "/root". A continuation of this run starts the runtime
+without a resume: "/root" has mode 0700 and owner 0:0 in the image, so the agent,
+1000:1000, cannot reach the transcript directory below it`. The `args` of the session's
+`dev.qory.session.started`, written before the check, list them all the same; with a
+restored transcript a second line says that the restore failed (§The run API, The
+transcript of a paused run). The wall makes each directory between the home and the
+bind's place that the image does not have, such as `~/.claude`, mode `0700` and owned by
+the agent's uid and gid, before the agent's container starts. The session reads one path
 in the directory, `<slug>/<session id>.jsonl`, with `<slug>` from the working directory
 inside, and ignores `resume.path_from`. It takes the session id from the first hook input
 or `dev.qory.runtime.started` with `session_id`, and reads only under an id that is a
@@ -2107,15 +2136,22 @@ UUID in lower case, such as `5d0c6a51-3b2e-4f7a-9c1d-8e6f4a2b0c37`. It opens the
 with no symbolic link among its names and without waiting for a writer, and reads it
 only when it is a regular file with one link and at most 67108864 bytes (64 MiB). A
 session id of another shape, or any other file, sends nothing of it and writes one
-`dev.qory.run.log` line of the session, with `stream: stderr`: `A continuation of this
+line: `Use a runtime whose session ids are UUIDs in lower case. A continuation of this
 run starts the runtime without a resume: the runtime's session id "<id>" is not a UUID
 in lower case, so the session reads no transcript`, with at most the id's first 64 bytes,
-quoted, or `A continuation of this run starts
-the runtime without a resume: the session reads no transcript at <path>: <cause>`. A file
-that does not exist yet is read once it exists.
+quoted, or `<fix>. A continuation of this run starts the runtime without a resume: the
+session reads no transcript at <path>: <cause>`. A file that does not exist yet is read
+once it exists; one that still does not exist when the runtime exits writes `Check that
+the runtime writes its transcript at <path>. A continuation of this run starts the
+runtime without a resume: the file does not exist, so the session sent no transcript`.
 
-The session reads whole lines as the runtime appends them, and reads the file once more
-to its end before it writes `dev.qory.session.exited`. It masks each line whole, as a
+The session reads the bytes the runtime appends, once a second, and sends whole lines;
+the part of a line after the last newline waits for the rest of the line. It reads the
+file once more to its end before it writes `dev.qory.session.exited`. A line over
+8388608 bytes (8 MiB), with its newline or without it, writes `Keep each line of the
+transcript at most 8388608 bytes (8 MiB). A continuation of this run starts the runtime
+without a resume: a line of the transcript <path> is longer, so the session sends no
+more of it`, after the lines before it. It masks each line whole, as a
 `dev.qory.run.log` chunk is masked, a hidden harness's `[harness text: <path>]` included
 (§The record files), then cuts the masked lines into chunks of at most 32768 bytes
 (32 KiB). `offset` is the position of a chunk's first byte in the masked file. The
@@ -2123,10 +2159,10 @@ transcript is the run's chunks of one path in sequence order, and a gap in `offs
 means the file cannot be restored. Each run's chunks start at offset 0 and cover the
 whole file: a continuation sends the lines it restored again, then the lines the runtime
 appends, so a continuation of a continuation reads the chunks of one run, never of a
-chain. When the file becomes shorter than the bytes already sent, the session sends no
-more of it and writes one `dev.qory.run.log` line of the session, with `stream:
-stderr`: `A continuation of this run starts the runtime without a resume: the
-transcript <path> became shorter than the <n> bytes sent`.
+chain. When the file becomes shorter than the bytes already read, the session sends no
+more of it and writes `Let the runtime only append to its transcript. A continuation of
+this run starts the runtime without a resume: the transcript <path> became shorter than
+the <n> bytes read`.
 
 **How a run ends.** Every `dev.qory.run.exited` contains `state`, how the run ended:
 `succeeded`, the run ended well; `failed`, it ended badly; `cancelled`, it was stopped
@@ -2303,6 +2339,11 @@ compose keeps it out of git:
   - `approve-key.sh` and the copies of the `--mcp-config`, `--agents` and
     system-prompt files: what Claude Code's preparation writes, when it writes them
     (§Sequence step 6, §The descriptor).
+  - `resume.jsonl` and `resume.sh`: in a run with no wall, the paused run's transcript
+    and the script that writes it under the runtime's home and starts the runtime with
+    the descriptor's `resume.args`, for the session that resumes it (§The run API, The
+    transcript of a paused run). Behind a wall the session writes the transcript in
+    `transcripts/<n>/` and writes neither file.
 - `transcripts/<n>/`: behind a wall, the transcript directory of session `<n>` whose
   runtime has `resume`, mode `0700`, which the enclosure binds writable at
   `resume.prefix` inside. The agent writes it; the session reads the transcript there
@@ -4649,10 +4690,13 @@ Resume). Behind a wall, the session writes them in the session's transcript dire
 the slug directory, mode `0700`, and creates the file, mode `0600`, where none exists,
 with no symbolic link among its names. A `resume.session_id` that is not a UUID in lower
 case, or a `resume.path` other than `resume.prefix`, a slug, `/`, `resume.session_id`
-and `.jsonl`, is a failed resume. When the read or the write fails, the session starts the runtime without a
-resume and writes one `dev.qory.run.log` line of the session, with `stream: stderr`:
-`The runtime starts without a resume: the transcript of run <run id> could not be
-restored: <cause>`.
+and `.jsonl`, is a failed resume, and so is a walled session whose transcript directory
+the wall does not bind (§The events, A session's transcript). When the read or the write
+fails, the session starts the runtime without a resume and writes one `dev.qory.run.log`
+line of the session, with `stream: stderr`, that starts with the fix: `<fix>. The
+runtime starts without a resume: the transcript of run <run id> could not be restored:
+<cause>`, such as `Check that the control plane has the transcript of run <run id>` for
+a read that failed.
 
 **The limits.** Each run has 10 requests a second and 4 in flight through the route, and
 1 of the 4 at most is a POST. A body that stalls holds that run's POST and its part of the

@@ -1481,7 +1481,9 @@ release may change what an existing document does, and says so under Upgrading.
 - Bind `Launch.Transcript.Path` writable at `Launch.Transcript.Under` below the agent's
   home in a wall outside Forager, and list it from `Binds`. A wall that ignores it
   leaves the session's transcript directory empty: the session sends no transcript, and
-  a continuation's resume finds no transcript inside.
+  a continuation's resume finds no transcript inside. Implement
+  `wall.TranscriptChecker` when the wall cannot always bind it where the agent's user
+  writes: the session then binds none, adds no resume arguments and writes one line.
 
 #### Added
 
@@ -1489,15 +1491,28 @@ release may change what an existing document does, and says so under Upgrading.
   `transcripts/<n>/` in the run directory, which the Docker wall binds writable at the
   runtime's `resume.prefix` below the home of the agent's user inside: `HOME` of the
   launch, else of the image, else the home the image's `/etc/passwd` gives the
-  container's user, else `/`. The wall lists it among its binds, and refuses a
-  directory that overlaps a mount or a place inside that overlaps another bind's or
-  `/qory`. Behind a wall the session now reads a runtime's transcript there and sends
+  container's user, the wall's user or, with nested Docker, root, else `/`. The wall
+  lists it among its binds, and refuses a directory that overlaps a mount or a place
+  inside that overlaps another bind's or `/qory`. `wall.TranscriptChecker`,
+  `wall.Unbound`: before `Wrap` the Docker wall works out whether the agent's user can
+  write there. It binds nothing when the wall's user is a name or a uid other than the
+  session's, when a directory from `/` down to the bind's place is a symbolic link or
+  no directory in the image, or when one above the place does not let the agent's user
+  search it, such as root's `/root`, mode `0700`, under nested Docker. The session then
+  starts the runtime without the resume arguments, sends no transcript and writes one
+  line on `stderr` that starts with the fix. The wall makes the bind's parents the
+  image does not have, such as `~/.claude`, owned by the agent's user and group, nested
+  Docker included. Behind a wall the session now reads a runtime's transcript there and sends
   it as `dev.qory.session.transcript`, and writes a paused run's transcript there before
   the agent's container starts, with no shell copy inside. It reads only
   `<slug>/<session id>.jsonl` under a session id that is a UUID in lower case, opened
   with no symbolic link on its path (`openat2` with `RESOLVE_BENEATH` and
   `RESOLVE_NO_SYMLINKS` on Linux) and without waiting for a writer, and only a regular
-  file with one link of at most 64 MiB; anything else writes one line on `stderr`.
+  file with one link of at most 64 MiB; anything else writes one line on `stderr`, and
+  so does a session whose runtime wrote no transcript. Each poll reads only the bytes
+  appended since the last one, and a line over 8 MiB stops the transcript with one
+  line. With no wall a transcript over 64 MiB stops the same way, as one behind a wall
+  does. Each line on `stderr` about a transcript or a resume starts with its fix.
   The line `the runtime's transcript lies inside the agent's container, which the
   session does not read` is gone.
 - `(*session.Run).RemoveSetup`: when no session is running and no host step is open, it

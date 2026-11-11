@@ -417,12 +417,19 @@ up in its parent, so two binds of one root are allowed.
   session id that is a UUID in lower case: a regular file with one link and at most 64
   MiB, with no symbolic link on its path. For a planted link, FIFO, hard link or larger
   file it reads nothing and writes one line on `stderr`. `~` is `HOME` of the launch,
-  else of the image, else the home the image's `/etc/passwd` gives the wall's user,
-  else `/`; a home where `~/.claude/projects` overlaps a mount fails the session. When
-  the image has no `~/.claude`, `wall.Docker` creates the agent's container, writes
-  `~/.claude` into it, mode `0700` and owned by the container's user, and then starts
-  it, so Claude Code can make `~/.claude/session-env` beside the bind. A `~/.claude` of
-  the image's keeps its owner and mode. A bind
+  else of the image, else the home the image's `/etc/passwd` gives the wall's user, or
+  root's with nested Docker, else `/`; a home where `~/.claude/projects` overlaps a
+  mount fails the session. With nested Docker the agent runs as the wall's user under
+  that home, so set `HOME` in an image whose root's home is mode `0700`, as in
+  docker:dind. `wall.Docker` binds no transcript directory, and the session starts
+  Claude Code without `--resume` and writes one line on `stderr` that starts with the
+  fix, when the wall's user is not the session's uid, when `~`, `~/.claude` or
+  `~/.claude/projects` is a symbolic link or no directory in the image, or when the
+  agent's user cannot search a directory on the way. When the image has no
+  `~/.claude`, `wall.Docker` creates the agent's container, writes `~/.claude` into it,
+  mode `0700` and owned by the agent's user and group, and then starts it, so Claude
+  Code can make `~/.claude/session-env` beside the bind. A `~/.claude` of the image's
+  keeps its owner and mode. A bind
   that is, holds or lies inside another walled run's run directory, whatever its mode,
   is `mount_shared_with_run`.
 - **The wall's extra binds.** For `wall.Docker` they are the helper, read-only, the hook

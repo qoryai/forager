@@ -138,7 +138,8 @@ the session's transcript directory, `transcripts/<n>/` in the run directory, at
 `~/.claude/projects/` inside, and the session reads the file there: only
 `<slug>/<session id>.jsonl`, under a session id that is a UUID in lower case, and only a
 regular file with one link and at most 64 MiB, with no symbolic link on its path. For
-anything else it sends nothing and writes one line on `stderr` that says why. When the
+anything else it sends nothing and writes one line on `stderr` that starts with the fix
+and says why. When the
 run answer has `resume`, the run's first session whose runtime has `resume` reads the
 paused run's transcript over the gateway's link, `GET <run.url>/<run_id>/transcript`. In
 a run with no wall it writes it in the session's directory as `resume.jsonl`, and starts
@@ -147,7 +148,9 @@ descriptor's arguments, such as `--resume <session id>`. Behind a wall it writes
 the transcript directory before the agent's container starts, and adds the arguments
 itself.
 When the read or the copy fails, the runtime starts without a resume, after one line
-on `stderr` that says why, a `404` from the gateway among the causes. See the
+on `stderr` that starts with the fix and says why, a `404` from the gateway among the
+causes. Behind a wall the same happens when the wall cannot bind the transcript
+directory where the agent's user writes it. See the
 contract's §The events, A session's transcript.
 
 Behind a wall, the `dev.qory.session.exited` of a runtime that exited also has the
