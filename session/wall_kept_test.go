@@ -3,6 +3,7 @@ package session_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,12 +25,15 @@ func removeEntry(t *testing.T, runID string) {
 
 // TestWallKeptAfterASession pins Closed.WallKept for a run of one session: false with
 // no wall and with a wall whose removals succeed, true when Unwrap failed, also with a
-// close that succeeded, and true when the close failed on a container. A close that
-// failed on a network alone leaves it false and reports the failure, as every failed
-// close does.
+// close that succeeded, and true when the close failed on a container or with an error
+// of unknown kind, alone or beside a network. A close whose every failure matches
+// wall.ErrNoContainerKept, a network or the private directory, also wrapped, leaves it
+// false and reports the failure, as every failed close does.
 func TestWallKeptAfterASession(t *testing.T) {
 	failure := errors.New("wall docker: rm: exit status 1")
 	const container = "wall docker: docker rm --force: exit status 1"
+	const network = "wall docker: network rm: exit status 1"
+	const dir = "RemoveAll /run/qory-x: permission denied"
 	for name, c := range map[string]struct {
 		wall wall.Wall
 		want bool
@@ -49,8 +53,22 @@ func TestWallKeptAfterASession(t *testing.T) {
 		},
 		"the close failed on a network and a container": {
 			&runCloseFailing{enginedWall: enginedWall{engine: leftEngine}, closeErr: errors.Join(
-				errors.New("wall docker: network rm: exit status 1"), containerKept(container))},
-			true, "removing the wall: wall docker: network rm: exit status 1\n" + container,
+				noContainerKept(network), containerKept(container))},
+			true, "removing the wall: " + network + "\n" + container,
+		},
+		"the close failed on a network and the private directory": {
+			&runCloseFailing{enginedWall: enginedWall{engine: leftEngine}, closeErr: errors.Join(
+				noContainerKept(network), fmt.Errorf("wall docker: %w", noContainerKept(dir)))},
+			false, "removing the wall: " + network + "\nwall docker: " + dir,
+		},
+		"the close failed with an error of unknown kind": {
+			&runCloseFailing{enginedWall: enginedWall{engine: leftEngine}, closeErr: errors.New(network)},
+			true, "removing the wall: " + network,
+		},
+		"the close failed on a network and with an error of unknown kind": {
+			&runCloseFailing{enginedWall: enginedWall{engine: leftEngine}, closeErr: errors.Join(
+				noContainerKept(network), errors.New(dir))},
+			true, "removing the wall: " + network + "\n" + dir,
 		},
 		"Unwrap and the close failed": {&closeFailing{enginedWall{engine: leftEngine}}, true, "removing the wall: wall docker: rm: exit status 1"},
 	} {
@@ -76,11 +94,30 @@ func TestWallKeptAfterASession(t *testing.T) {
 	}
 }
 
+// unwraplessWall is an open wall with no Unwrap, whose agent's container stays until the
+// close, and whose Close returns closeErr.
+type unwraplessWall struct {
+	openWall
+	closeErr error
+}
+
+func (w *unwraplessWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *unwraplessWall) Close(ctx context.Context) error {
+	w.openWall.Close(ctx)
+	return w.closeErr
+}
+
 // TestContainerKeptBeforeAndAfterTheClose pins Run.ContainerKept for a run of one
 // session: false while the removals succeed, true from a failed Unwrap on, and false
-// before a close that fails. After the close it equals Closed.WallKept: true for a
-// container the close could not remove, and false for a network alone. A call while the
-// session runs returns without waiting for the session.
+// before a close that fails. A wall with no Unwrap keeps the agent's container until the
+// close, so it is true from the session's end until the close. After the close it equals
+// Closed.WallKept: true for a container the close could not remove, and false for a
+// network alone or a close that succeeded. A call while the session runs returns without
+// waiting for the session.
 func TestContainerKeptBeforeAndAfterTheClose(t *testing.T) {
 	ctx := context.Background()
 	failure := errors.New("wall docker: rm: exit status 1")
@@ -88,8 +125,12 @@ func TestContainerKeptBeforeAndAfterTheClose(t *testing.T) {
 		wall          wall.Wall
 		before, after bool
 	}{
-		"nothing failed": {&openWall{}, false, false},
-		"Unwrap failed":  {&keptSetupWall{unwrapErr: failure}, true, true},
+		"nothing failed":        {&keptSetupWall{}, false, false},
+		"a wall with no Unwrap": {&unwraplessWall{}, true, false},
+		"a wall with no Unwrap whose close failed on a container": {
+			&unwraplessWall{closeErr: containerKept("wall docker: docker rm --force: exit status 1")}, true, true,
+		},
+		"Unwrap failed": {&keptSetupWall{unwrapErr: failure}, true, true},
 		"the close failed on a network alone": {
 			&runCloseFailing{enginedWall: enginedWall{engine: leftEngine}}, false, false,
 		},
@@ -149,9 +190,14 @@ func TestContainerKeptBeforeAndAfterTheClose(t *testing.T) {
 // TestWallKeptAfterRemoveSetup pins Closed.WallKept and Run.ContainerKept, before and
 // after the close, for the setup container: true when RemoveSetup failed, also when a
 // later call succeeded, and false when RemoveSetup succeeded and after a setup command
-// that failed, where no removal ran.
+// that failed, where no removal ran. After a start of the setup container that failed,
+// RemoveSetup still calls the removal, and a removal that fails there sets both. The
+// error of a failed removal matches wall.ErrContainerKept after the run's masker
+// replaced a secret in its text.
 func TestWallKeptAfterRemoveSetup(t *testing.T) {
-	failure := errors.New("wall docker: docker rm --force: exit status 1")
+	const token = "fake-error-token-0123"
+	failure := wall.ContainerKeptError(errors.New("wall docker: docker rm --force: exit status 1: " + token))
+	started := errors.New("wall docker: start qory-x-setup: context canceled")
 	ctx := context.Background()
 	for _, c := range []struct {
 		name string
@@ -164,22 +210,36 @@ func TestWallKeptAfterRemoveSetup(t *testing.T) {
 		{name: "the removal failed", w: &setupWall{}, removals: []error{failure}, want: true},
 		{name: "a later removal succeeded", w: &setupWall{}, removals: []error{failure, nil}, want: true},
 		{name: "a setup command failed", w: &setupWall{codes: map[string]int{"make": 2}}, want: false},
+		{name: "a start that failed, then a removal", w: &setupWall{startErr: started}, removals: []error{nil}, want: false},
+		{name: "a start that failed, then a removal that failed", w: &setupWall{startErr: started}, removals: []error{failure}, want: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sp := spec(t, "FAKE_EXIT=0")
 			sp.Wall, sp.Image = c.w, "example.com/agent:1"
+			sp.Masker = maskerOf(t, token)
 			r, err := session.Open(ctx, opened(sp))
 			if err != nil {
 				t.Fatal(err)
 			}
 			removeEntry(t, r.ID())
-			if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); (err != nil) != (c.w.codes != nil) {
+			setupFails := c.w.codes != nil || c.w.startErr != nil
+			if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); (err != nil) != setupFails {
 				t.Fatalf("the setup: %v", err)
 			}
 			for _, removal := range c.removals {
 				c.w.removeErr = removal
-				if err := r.RemoveSetup(ctx); (err != nil) != (removal != nil) {
+				err := r.RemoveSetup(ctx)
+				if (err != nil) != (removal != nil) {
 					t.Fatalf("RemoveSetup: %v, want an error: %v", err, removal != nil)
+				}
+				if err == nil {
+					continue
+				}
+				if !errors.Is(err, wall.ErrContainerKept) {
+					t.Errorf("RemoveSetup's error %v does not match wall.ErrContainerKept", err)
+				}
+				if want := "Close the run: the setup container may still run, so no session can join: wall docker: docker rm --force: exit status 1: ***"; err.Error() != want {
+					t.Errorf("RemoveSetup: %v, want %q", err, want)
 				}
 			}
 			if c.w.removes != len(c.removals) {

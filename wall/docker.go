@@ -2056,8 +2056,10 @@ const closeWait = 30 * time.Second
 // [noSuchContainer]'s text is not an error, and neither is a network rm that fails with
 // [goneAlready]'s text. Every other failure is: a docker rm that fails because the engine
 // cannot be reached leaves the container's state unknown, and it may still run. The
-// returned error matches [ErrContainerKept] when a docker rm failed, and not when only a
-// network rm or the private directory's removal failed.
+// error of a failed docker rm matches [ErrContainerKept], and so does a network rm's
+// whose output shows a container still attached, [attached]. The error of any other
+// failed network rm, and of the private directory's removal, matches
+// [ErrNoContainerKept].
 func (e *dockerEnclosure) Close(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, closeWait)
 	defer cancel()
@@ -2073,7 +2075,9 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 	}
 	e.made = nil
 	if e.temp != "" {
-		errs = append(errs, accesskey.ShownError(os.RemoveAll(e.temp)))
+		if err := os.RemoveAll(e.temp); err != nil {
+			errs = append(errs, noContainerKept{accesskey.ShownError(err)})
+		}
 		e.temp = ""
 	}
 	return errors.Join(errs...)
@@ -2081,21 +2085,45 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 
 // remove runs one of the commands that remove what the enclosure made. A failed command
 // whose output gone accepts is not an error. The error of a failed docker rm, a
-// container's removal, matches [ErrContainerKept]; a network rm's does not.
+// container's removal, matches [ErrContainerKept], and so does a network rm's whose
+// output [attached] accepts; any other network rm's matches [ErrNoContainerKept].
 func (e *dockerEnclosure) remove(ctx context.Context, argv []string, gone func(out string) bool) error {
 	out, err := e.docker(ctx, argv...)
 	if err != nil && !gone(string(out)) {
-		if argv[0] == "rm" {
-			return containerKept{err}
+		if argv[0] == "rm" || attached(string(out)) {
+			return ContainerKeptError(err)
 		}
-		return err
+		return noContainerKept{err}
 	}
 	return nil
+}
+
+// attached reports whether out, the output of a failed network rm, contains "active
+// endpoints" or "in use" in any case: a container of the run is still attached to the
+// network, so it may still run.
+func attached(out string) bool {
+	out = strings.ToLower(out)
+	return strings.Contains(out, "active endpoints") || strings.Contains(out, "in use")
 }
 
 // ErrContainerKept is what errors.Is matches when removing a container of the run
 // failed, so the container may still run.
 var ErrContainerKept = errors.New("wall: a container of the run may still run")
+
+// ErrNoContainerKept is what errors.Is matches when removing a network or the wall's
+// private directory failed: no container runs because of it. The session counts every
+// other error of [Enclosure.Close] as a container that may still run.
+var ErrNoContainerKept = errors.New("wall: a network or the wall's private directory stays, and no container runs")
+
+// ContainerKeptError returns an error whose text is err's and that errors.Is matches to
+// [ErrContainerKept] and to what err matches, nil for a nil err: a container of the run
+// may still run.
+func ContainerKeptError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return containerKept{err}
+}
 
 // containerKept is the error of a container's removal that failed: its text is the
 // failure's, and errors.Is matches it to [ErrContainerKept].
@@ -2108,6 +2136,18 @@ func (k containerKept) Unwrap() error { return k.err }
 
 // Is reports whether target is [ErrContainerKept].
 func (k containerKept) Is(target error) bool { return target == ErrContainerKept }
+
+// noContainerKept is the error of a network's or the private directory's removal that
+// failed: its text is the failure's, and errors.Is matches it to [ErrNoContainerKept].
+type noContainerKept struct{ err error }
+
+func (k noContainerKept) Error() string { return k.err.Error() }
+
+// Unwrap returns the failure.
+func (k noContainerKept) Unwrap() error { return k.err }
+
+// Is reports whether target is [ErrNoContainerKept].
+func (k noContainerKept) Is(target error) bool { return target == ErrNoContainerKept }
 
 // goneAlready reports whether out, the output of a failed network rm, contains "no such"
 // or "not found" in any case: a network that is gone already or was never made, but also

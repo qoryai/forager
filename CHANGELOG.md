@@ -1483,7 +1483,13 @@ release may change what an existing document does, and says so under Upgrading.
   The method returns nil only once the setup container is gone and every process in it
   has ended, bounds its wait, and accepts a second call after an error. The session
   calls it before the run's first `Wrap` or after a session's `Unwrap`, and a later
-  `Wrap` may follow, so it leaves the rest of the enclosure as it is.
+  `Wrap` may follow, so it leaves the rest of the enclosure as it is. The session also
+  calls it after a `StartSetup` that returned an error, since the engine may have
+  started the container: a container that never started counts as removed.
+- Mark each failure of `Close` that leaves no container running, such as a network or a
+  directory that stays, in a `wall.Enclosure` outside Forager, so that `errors.Is`
+  matches it to `wall.ErrNoContainerKept`. The session counts any other error of `Close`
+  as a kept container: it sets `session.Closed.WallKept`.
 - Bind `Launch.Transcript.Path` writable at `Launch.Transcript.Under` below the agent's
   home in a wall outside Forager, and list it from `Binds`. A wall that ignores it
   leaves the session's transcript directory empty: the session sends no transcript, and
@@ -1537,10 +1543,12 @@ release may change what an existing document does, and says so under Upgrading.
   container, and returns an error that starts with the fix, with nothing removed, while
   a session or another call of the run runs, after the close, and, while the setup
   container runs, during a host step or when an agent's container could not be removed
-  and may still run. A `docker rm` that fails with `no such container` is no failure.
-  Any other failed removal, such as one with no engine socket, ends the step `failed`,
-  and no session joins the run: close the run, and run no `push` step after it. A run
-  that does not call it keeps the setup container until the run closes, as before.
+  and may still run. After a `Setup` whose start of the setup container failed, it
+  still removes the container, which the engine may have started. A `docker rm` that
+  fails with `no such container` is no failure. Any other failed removal, such as one
+  with no engine socket, ends the step `failed`, and no session joins the run: close
+  the run, and run no `push` step after it. A run that does not call it keeps the setup
+  container until the run closes, as before.
 - `wall.Request.Pull` and `wall.Puller`: before a run uses an image by reference, the
   session checks its manifest at the registry with the run's credentials, through the
   run's proxy, with or without an engine proxy; a 404 is `image_missing`, and any other
@@ -1582,8 +1590,12 @@ release may change what an existing document does, and says so under Upgrading.
   that is not absolute or that overlaps `/qory`.
 - `wall.ErrContainerKept`, which `errors.Is` matches on an error of the Docker wall's
   `Unwrap`, `RemoveSetup` or `Close` when a `docker rm` of a container of the run
-  failed: the container may still run. A failed `docker network rm` or removal of the
-  private directory does not match it. The text of each error stays as it was.
+  failed, or a `docker network rm` whose output contains `active endpoints` or `in use`
+  in any case: a container of the run may still run. `wall.ContainerKeptError(err)`
+  returns an error with `err`'s text that matches it.
+- `wall.ErrNoContainerKept`, which `errors.Is` matches on an error of the Docker wall's
+  `Close` when any other `docker network rm` or the removal of the private directory
+  failed: no container runs because of it. The text of each error stays as it was.
 
 #### Changed
 
@@ -1983,15 +1995,20 @@ release may change what an existing document does, and says so under Upgrading.
   some point of the run: the agent's container at a session's end, the setup container
   in `RemoveSetup`, or a container at the close, `wall.ErrContainerKept`. A process may
   have kept writing the run's binds after its session ended, so do not trust what is in
-  them. It stays true when a later removal succeeded. A close that failed only on a
-  network or the wall's private directory leaves it false. The run still reports the
-  failure and keeps its entry among the walled runs still going, and
-  `(*wall.Docker).Reap` removes the network.
+  them. It stays true when a later removal succeeded. A close whose every failure
+  matches `wall.ErrNoContainerKept`, as the Docker wall's failures on a network or the
+  wall's private directory do, leaves it false; any other error of the close sets it.
+  The run still reports the failure and keeps its entry among the walled runs still
+  going, and `(*wall.Docker).Reap` removes the network.
 - `(*session.Run).ContainerKept`, true once removing the agent's container of a session
-  or the setup container in `RemoveSetup` failed, before the close: run host work on
-  the run's binds, such as a push, only while it is false. After `Close` it equals
-  `session.Closed.WallKept`. `RemoveSetup`'s error for an agent's container that could
-  not be removed matches `wall.ErrContainerKept`, with its text as it was.
+  or the setup container in `RemoveSetup` failed, and, with a wall whose enclosure has
+  no `Unwrap`, from the end of the first session until `Close`. During a session it
+  returns false while that session's container runs. Run host work on the run's binds,
+  such as a push, before `Close` only after `Join` returned and `RemoveSetup` returned
+  nil, and only while `ContainerKept` is false; otherwise wait for `Close` and read
+  `session.Closed.WallKept`. After `Close` it equals `session.Closed.WallKept`.
+  `RemoveSetup`'s error for an agent's container that could not be removed matches
+  `wall.ErrContainerKept`, with its text as it was.
 
 #### Fixed
 

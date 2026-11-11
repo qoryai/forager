@@ -659,6 +659,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 					r.wallFailed.Store(true)
 				}
 			}()
+		} else if enclosure != nil {
+			// With no Unwrap the agent's container stays until the close, and may still
+			// run and write the run's binds after the session ended.
+			defer r.unwrapless.Store(true)
 		}
 	}
 	// Behind a wall the run's forwarder passes on what the wall's relay sends. Without

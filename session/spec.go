@@ -616,9 +616,10 @@ type Closed struct {
 	// WallKept is true when removing a container of the run's wall failed at some point
 	// of the run: a session's Unwrap, RemoveSetup, or the close. A process may have kept
 	// writing the run's binds after its session ended, so do not trust what is in them.
-	// WallKept stays true when a later removal succeeded. A close that failed only on a
-	// network or the wall's private directory leaves it false: nothing that runs stays.
-	// The close still reports that failure.
+	// WallKept stays true when a later removal succeeded. A close whose every failure
+	// matches [wall.ErrNoContainerKept], such as the Docker wall's on a network or the
+	// wall's private directory, leaves it false: nothing that runs stays. The close
+	// still reports that failure. Any other error of the close sets it.
 	WallKept bool
 }
 

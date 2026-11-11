@@ -253,17 +253,22 @@ func (w *closeFailing) Close(context.Context) error {
 }
 
 // containerKept is a failed removal of a container of the run, as the Docker wall
+// returns one: its text is s, and errors.Is matches it to wall.ErrContainerKept.
+func containerKept(s string) error { return wall.ContainerKeptError(errors.New(s)) }
+
+// noContainerKept is a failed removal of a network of the run, as the Docker wall
 // returns one: its text is the string, and errors.Is matches it to
-// wall.ErrContainerKept.
-type containerKept string
+// wall.ErrNoContainerKept.
+type noContainerKept string
 
-func (k containerKept) Error() string { return string(k) }
+func (k noContainerKept) Error() string { return string(k) }
 
-func (k containerKept) Is(target error) bool { return target == wall.ErrContainerKept }
+func (k noContainerKept) Is(target error) bool { return target == wall.ErrNoContainerKept }
 
 // runCloseFailing is a wall in a container engine whose agent's container is removed
 // at each session's end, and whose Close at the run's close fails: with closeErr when
-// it is set, and otherwise on a network alone.
+// it is set, and otherwise on a network alone, with an error that matches
+// wall.ErrNoContainerKept.
 type runCloseFailing struct {
 	enginedWall
 	closeErr error
@@ -282,7 +287,7 @@ func (w *runCloseFailing) Close(context.Context) error {
 	if w.closeErr != nil {
 		return w.closeErr
 	}
-	return errors.New("wall docker: network rm: exit status 1")
+	return noContainerKept("wall docker: network rm: exit status 1")
 }
 
 // TestAnEntryStaysWhenTheRunsWallIsNotRemoved pins a run whose wall could not be

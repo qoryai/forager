@@ -117,7 +117,11 @@ type Run struct {
 	// true: the close copies it to [Closed.WallKept]. Join, RemoveSetup and Close set it
 	// under the joining lock; [Run.ContainerKept] reads it without that lock, which a
 	// Join holds while its session runs.
-	wallFailed     atomic.Bool
+	wallFailed atomic.Bool
+	// unwrapless is true from the end of a walled session whose enclosure has no Unwrap
+	// until closeWall closed the enclosure: the agent's container stays until then.
+	// [Run.ContainerKept] reads it without the joining lock, as it reads wallFailed.
+	unwrapless     atomic.Bool
 	closed         bool
 	sessionApplied map[string]any
 	// steps is the number of the run's last step, host steps and Join's alike, and
