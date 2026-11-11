@@ -247,7 +247,7 @@ func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Resp
 		}
 		if resp.StatusCode != http.StatusTooManyRequests {
 			rs.drop()
-			g.Answered(rs.name, resp.Header)
+			g.Answered(rs.name, resp.StatusCode, resp.Header)
 			if rs.scan && resp.StatusCode == http.StatusOK && eventStream(resp.Header) {
 				resp.Body = &streamWatch{ReadCloser: resp.Body, rs: rs, header: resp.Header.Clone()}
 			}

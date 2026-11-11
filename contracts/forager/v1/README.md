@@ -995,8 +995,8 @@ the provider's default key; then the others by when they were added; then the ke
 cooldown at the claim, each with `cooldown_until`. When the group would pass 6 keys, the
 keys out of cooldown come first, then the keys in cooldown by the earliest
 `cooldown_until`. The gateway starts a key with `cooldown_until` in cooldown until that
-time, or until a later state of the key allows it: an answer of the provider to the key
-that is no limit refusal, or an entry of the key in a model keys report's answer that is
+time, or until a later state of the key allows it: a `2xx` answer of the provider to the
+key, or an entry of the key in a model keys report's answer that is
 not `rejected` and whose `observed_at` is after the run's start. The start key is never
 in cooldown: a start key whose `cooldown_until` is after the gateway's clock is
 `run_configuration_invalid`, `set model_credential to a model key out of cooldown: the

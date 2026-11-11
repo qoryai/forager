@@ -1,6 +1,6 @@
 // Package modelkey keeps the state of a run's key group: the model keys of one provider
 // the run's proxy sets one at a time, the active key, each key's limit windows as the
-// provider's answers give them, and each key's cooldown after a limit refusal (the
+// provider's answers show them, and each key's cooldown after a limit refusal (the
 // contract's §Credentials, Several model keys, and §The server, The model keys).
 package modelkey
 
@@ -29,7 +29,7 @@ const week = 7 * 24 * time.Hour
 // Key is one key of the group, from the run configuration's credentials: its name, its
 // earliest reset as the server had it, zero for none, the next reset of its weekly
 // schedule, zero for none, its pause_for_s, the end of its cooldown at the claim, zero
-// for none, and whether the model choice names it, chosen.
+// for none, and whether the model choice is this key, chosen.
 type Key struct {
 	Name             string
 	ResetsAt         time.Time
@@ -197,11 +197,12 @@ func (g *Group) coolingUntil(i int, _ time.Time) time.Time {
 }
 
 // Answered records the headers of an answer of the provider to a request with key
-// name that is not a limit refusal. A window the answer marks rejected is recorded as
-// allowed_warning: the key served the request, and only a limit refusal puts a key in
-// cooldown.
-func (g *Group) Answered(name string, h http.Header) {
-	g.record(name, h, false, "")
+// name that is not a limit refusal, and its status. A window the answer marks rejected
+// is recorded as allowed_warning: only a limit refusal puts a key in cooldown. A 2xx
+// status ends the key's cooldown_until of the run configuration: the provider served
+// the key. A 401 or a 5xx keeps it.
+func (g *Group) Answered(name string, status int, h http.Header) {
+	g.record(name, h, false, status >= 200 && status <= 299, "")
 }
 
 // Refused records a limit refusal of the provider to a request with key name, with its
@@ -209,7 +210,7 @@ func (g *Group) Answered(name string, h http.Header) {
 // active key, the first key of [Group.next] becomes active. It
 // returns the active key and whether it is out of cooldown, which a resend needs.
 func (g *Group) Refused(name string, h http.Header, code string) (string, bool) {
-	g.record(name, h, true, code)
+	g.record(name, h, true, false, code)
 	return g.switched()
 }
 
@@ -217,7 +218,7 @@ func (g *Group) Refused(name string, h http.Header, code string) (string, bool) 
 // rate_limit_error event: the key goes into cooldown as after a limit refusal, with the
 // answer's headers, and the next key becomes active.
 func (g *Group) Streamed(name string, h http.Header) {
-	g.record(name, h, true, "")
+	g.record(name, h, true, false, "")
 	g.switched()
 }
 
@@ -256,9 +257,9 @@ func (g *Group) Resume() {
 }
 
 // record reads the answer's headers into key name's windows. limit is true for a limit
-// refusal, and code is its error_code. An answer that is no limit refusal ends the
+// refusal, and code is its error_code. served is true for a 2xx answer, which ends the
 // key's cooldown_until of the run configuration: the provider served the key.
-func (g *Group) record(name string, h http.Header, limit bool, code string) {
+func (g *Group) record(name string, h http.Header, limit, served bool, code string) {
 	i := g.index(name)
 	if i < 0 {
 		return
@@ -269,7 +270,7 @@ func (g *Group) record(name string, h http.Header, limit bool, code string) {
 		g.cool(i, &r, code, now)
 	}
 	g.mu.Lock()
-	if !limit {
+	if served {
 		g.claim[i] = time.Time{}
 	}
 	changed := false

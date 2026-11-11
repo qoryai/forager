@@ -55,7 +55,7 @@ func TestABurstOfChangesSendsOneReportAGap(t *testing.T) {
 	go func() { k.run(ctx); close(done) }()
 	begin := time.Now()
 	for i := range 200 {
-		g.Answered("model", http.Header{"Anthropic-Ratelimit-Unified-5h-Status": {"allowed"}, "Anthropic-Ratelimit-Unified-5h-Utilization": {strconv.FormatFloat(float64(i%100)/100, 'f', 2, 64)}})
+		g.Answered("model", http.StatusOK, http.Header{"Anthropic-Ratelimit-Unified-5h-Status": {"allowed"}, "Anthropic-Ratelimit-Unified-5h-Utilization": {strconv.FormatFloat(float64(i%100)/100, 'f', 2, 64)}})
 		time.Sleep(2500 * time.Microsecond)
 	}
 	time.Sleep(400 * time.Millisecond)
@@ -82,7 +82,7 @@ func TestTheRunsEndSendsAWaitingReportOnce(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { k.run(ctx); close(done) }()
-	g.Answered("model", http.Header{"Anthropic-Ratelimit-Unified-5h-Status": {"allowed"}})
+	g.Answered("model", http.StatusOK, http.Header{"Anthropic-Ratelimit-Unified-5h-Status": {"allowed"}})
 	deadline := time.Now().Add(5 * time.Second)
 	for times, _ := f.sent(); len(times) == 0 && time.Now().Before(deadline); times, _ = f.sent() {
 		time.Sleep(10 * time.Millisecond)

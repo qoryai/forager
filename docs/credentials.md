@@ -222,7 +222,7 @@ model key.
 
 ### Several keys of one provider
 
-A key group lets a run go on when the model provider refuses a key at its limit. When
+A key group lets a run go on when the model provider returns a limit refusal for a key. When
 the start key comes from the control plane, its key group is the start key and every
 API credential of the run configuration with the same `format`, `auth` and `endpoint`,
 in the order of `credentials`. A key of `forager.yaml` is never in a key group.
@@ -235,12 +235,13 @@ in the order of `credentials`. A key of `forager.yaml` is never in a key group.
    for a refusal with no reset.
 
 The keys share the start key's placeholder, and the proxy sets one of them, the active
-key. When the provider answers `429` to the active key, the proxy puts the key in
+key. When the provider returns `429` for the active key, the proxy puts the key in
 cooldown until the reset in the answer's headers, makes another key out of cooldown the
 active key, and sends the request again with it. The proxy takes the key with `chosen`
 first, then a key with no known reset, by the order, then the key whose limit resets
-soonest. A key with `cooldown_until` waits until that time. The session
-sees only the answer to that second request. The proxy keeps a copy of each request
+soonest. A key with `cooldown_until` stays in cooldown until that time, or until the
+provider returns a `2xx` for it. The session gets only the answer to that second
+request. The proxy keeps a copy of each request
 body up to 8 MiB for this; a larger body goes once.
 
 When no key is left out of cooldown, the session gets the `429`, and the proxy sends no

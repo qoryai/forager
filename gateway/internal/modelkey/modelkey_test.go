@@ -58,7 +58,7 @@ func window(g *modelkey.Group, name, w string) (modelkey.Window, bool) {
 func TestTheSubscriptionHeadersGiveEachWindow(t *testing.T) {
 	g, _ := group(t)
 	reset5, reset7 := start.Add(2*time.Hour), start.Add(72*time.Hour)
-	g.Answered("model", headers(
+	g.Answered("model", http.StatusOK, headers(
 		"Anthropic-Ratelimit-Unified-5h-Status", "allowed_warning",
 		"Anthropic-Ratelimit-Unified-5h-Reset", epoch(reset5),
 		"Anthropic-Ratelimit-Unified-5h-Utilization", "0.29",
@@ -101,7 +101,7 @@ func TestTheSubscriptionHeadersGiveEachWindow(t *testing.T) {
 func TestTheAPIHeadersGiveEachFamily(t *testing.T) {
 	g, _ := group(t)
 	reset := start.Add(40 * time.Second)
-	g.Answered("model-2", headers(
+	g.Answered("model-2", http.StatusOK, headers(
 		"anthropic-ratelimit-requests-limit", "50",
 		"anthropic-ratelimit-requests-remaining", "49",
 		"anthropic-ratelimit-requests-reset", reset.Format(time.RFC3339),
@@ -254,16 +254,16 @@ func TestAnAnswerAfterTheCooldownAllowsTheWindowAgain(t *testing.T) {
 	g, c := group(t)
 	g.Refused("model", headers("anthropic-ratelimit-unified-5h-status", "rejected", "anthropic-ratelimit-unified-5h-reset", epoch(start.Add(time.Hour))), "")
 	c.now = start.Add(2 * time.Hour)
-	g.Answered("model", headers("anthropic-ratelimit-unified-5h-status", "allowed"))
+	g.Answered("model", http.StatusOK, headers("anthropic-ratelimit-unified-5h-status", "allowed"))
 	if w, _ := window(g, "model", "five_hour"); w.Status != modelkey.StatusAllowed || !w.CooldownUntil.IsZero() {
 		t.Errorf("five_hour: %+v; want allowed with no cooldown", w)
 	}
-	g.Answered("model", headers("anthropic-ratelimit-unified-7d-status", "rejected"))
+	g.Answered("model", http.StatusOK, headers("anthropic-ratelimit-unified-7d-status", "rejected"))
 	if w, _ := window(g, "model", "seven_day"); w.Status != modelkey.StatusAllowedWarning || !w.CooldownUntil.IsZero() {
 		t.Errorf("seven_day: %+v; want allowed_warning", w)
 	}
 	if g.Active() != "model-2" {
-		t.Errorf("active %s; want model-2, active since the refusal until a refusal of its own", g.Active())
+		t.Errorf("active %s; want model-2, active since the refusal until a refusal of model-2", g.Active())
 	}
 }
 
@@ -271,7 +271,7 @@ func TestAnAnswerAfterTheCooldownAllowsTheWindowAgain(t *testing.T) {
 // reset has passed.
 func TestUtilizationClearsAtItsReset(t *testing.T) {
 	g, c := group(t)
-	g.Answered("model", headers("anthropic-ratelimit-unified-5h-utilization", "0.88", "anthropic-ratelimit-unified-5h-reset", epoch(start.Add(time.Minute))))
+	g.Answered("model", http.StatusOK, headers("anthropic-ratelimit-unified-5h-utilization", "0.88", "anthropic-ratelimit-unified-5h-reset", epoch(start.Add(time.Minute))))
 	if w, _ := window(g, "model", "five_hour"); !w.HasUtilization || w.Utilization != 88 {
 		t.Errorf("before the reset: %+v; want 88", w)
 	}
@@ -289,7 +289,7 @@ func TestAChangeCallsOnChangeOnce(t *testing.T) {
 	g.OnChange(func() { n.Add(1) })
 	reset := epoch(start.Add(time.Hour))
 	answer := func(util string) {
-		g.Answered("model", headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-reset", reset, "anthropic-ratelimit-unified-5h-utilization", util))
+		g.Answered("model", http.StatusOK, headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-reset", reset, "anthropic-ratelimit-unified-5h-utilization", util))
 	}
 	steps := []struct {
 		util string
@@ -312,7 +312,7 @@ func TestAChangeCallsOnChangeOnce(t *testing.T) {
 // the group is left out, and a cooldown in it bars the key.
 func TestMergeTakesNewerEntriesAndTheirCooldowns(t *testing.T) {
 	g, _ := group(t)
-	g.Answered("model", headers("anthropic-ratelimit-unified-5h-status", "allowed"))
+	g.Answered("model", http.StatusOK, headers("anthropic-ratelimit-unified-5h-status", "allowed"))
 	g.Merge([]modelkey.Window{
 		{Credential: "model", Window: "five_hour", Status: modelkey.StatusAllowedWarning, Source: modelkey.SourceProvider, ObservedAt: start.Add(-time.Second)},
 		{Credential: "model-2", Window: "seven_day", Status: modelkey.StatusRejected, CooldownUntil: start.Add(time.Hour), Source: modelkey.SourceProvider, ObservedAt: start.Add(-time.Minute)},
@@ -392,8 +392,8 @@ func TestASwitchTakesTheChosenKeyThenNoResetThenTheClosestReset(t *testing.T) {
 		{Name: "model-5", PauseFor: time.Hour},
 	}
 	g := modelkey.New(keys, "model", c.Now)
-	// model-5's answer gives it a reset in 2 hours, before model-2's.
-	g.Answered("model-5", headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-reset", epoch(start.Add(2*time.Hour))))
+	// model-5's answer has a reset in 2 hours, before model-2's.
+	g.Answered("model-5", http.StatusOK, headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-reset", epoch(start.Add(2*time.Hour))))
 	refuse := func(name string) string {
 		t.Helper()
 		next, ok := g.Refused(name, headers("retry-after", "600"), "")
@@ -460,14 +460,14 @@ func TestAKeyInCooldownAtTheClaimWaitsForItsEnd(t *testing.T) {
 func TestAClaimOutsideTheWindowsIsLeftOut(t *testing.T) {
 	g, _ := group(t)
 	reset := start.Add(time.Hour)
-	g.Answered("model", headers("anthropic-ratelimit-unified-representative-claim", "seven_day_sonnet",
+	g.Answered("model", http.StatusOK, headers("anthropic-ratelimit-unified-representative-claim", "seven_day_sonnet",
 		"anthropic-ratelimit-unified-status", "allowed", "anthropic-ratelimit-unified-reset", epoch(reset)))
 	if w, ok := window(g, "model", "seven_day_sonnet"); !ok || !w.ResetsAt.Equal(reset) {
 		t.Errorf("seven_day_sonnet: %+v, %v", w, ok)
 	}
 	h := headers("anthropic-ratelimit-unified-representative-claim", "monthly_other",
 		"anthropic-ratelimit-unified-status", "allowed", "anthropic-ratelimit-unified-reset", epoch(reset))
-	g.Answered("model-2", h)
+	g.Answered("model-2", http.StatusOK, h)
 	if ws := g.Windows(); len(ws) != 1 {
 		t.Errorf("windows %+v; want seven_day_sonnet alone", ws)
 	}
@@ -525,7 +525,7 @@ func TestPickIsFalseWhileEveryKeyCools(t *testing.T) {
 // outside 0 to 1 is held to it.
 func TestNonFiniteHeadersAreLeftOut(t *testing.T) {
 	g, _ := group(t)
-	g.Answered("model", headers(
+	g.Answered("model", http.StatusOK, headers(
 		"anthropic-ratelimit-unified-5h-status", "allowed",
 		"anthropic-ratelimit-unified-5h-utilization", "NaN",
 		"anthropic-ratelimit-unified-5h-reset", "NaN",
@@ -541,7 +541,7 @@ func TestNonFiniteHeadersAreLeftOut(t *testing.T) {
 			t.Errorf("%s: %+v, %v; want the window with no utilization and no reset", w, got, ok)
 		}
 	}
-	g.Answered("model-2", headers(
+	g.Answered("model-2", http.StatusOK, headers(
 		"anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-utilization", "1.5",
 		"anthropic-ratelimit-unified-7d-status", "allowed", "anthropic-ratelimit-unified-7d-utilization", "-0.2",
 	))
@@ -559,7 +559,7 @@ func TestNonFiniteHeadersAreLeftOut(t *testing.T) {
 func TestAResetPastThirtyOneDaysIsCapped(t *testing.T) {
 	g, _ := group(t)
 	limit := start.Add(31 * 24 * time.Hour)
-	g.Answered("model", headers(
+	g.Answered("model", http.StatusOK, headers(
 		"anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-reset", strconv.FormatInt(1<<39, 10),
 		"anthropic-ratelimit-tokens-limit", "100", "anthropic-ratelimit-tokens-remaining", "50", "anthropic-ratelimit-tokens-reset", "9999-12-31T23:59:59Z",
 	))
@@ -615,9 +615,30 @@ func TestALaterAllowedStateEndsTheClaimsCooldown(t *testing.T) {
 	if got, ok := g.Pick(); got != "model-2" || !ok {
 		t.Errorf("Pick after a later allowed entry of model-2: %s, %v; want model-2", got, ok)
 	}
-	g.Answered("model-3", headers("anthropic-ratelimit-unified-5h-status", "allowed"))
+	g.Answered("model-3", http.StatusOK, headers("anthropic-ratelimit-unified-5h-status", "allowed"))
 	if next, ok := g.Refused("model-2", headers("retry-after", "600"), ""); next != "model-3" || !ok {
 		t.Errorf("Refused model-2: %s, %v; want model-3, which the provider served", next, ok)
+	}
+}
+
+// TestOnlyA2xxAnswerEndsTheClaimsCooldown pins cooldown_until of the run
+// configuration against the status of an answer: a 401 and a 503 of the provider to
+// the key keep it, and a 200 ends it.
+func TestOnlyA2xxAnswerEndsTheClaimsCooldown(t *testing.T) {
+	c := &clock{now: start}
+	keys := []modelkey.Key{
+		{Name: "model", PauseFor: time.Hour},
+		{Name: "model-2", PauseFor: time.Hour, CooldownUntil: start.Add(5 * time.Hour)},
+	}
+	g := modelkey.New(keys, "model", c.Now)
+	g.Answered("model-2", http.StatusUnauthorized, http.Header{})
+	g.Answered("model-2", http.StatusServiceUnavailable, http.Header{})
+	if next, ok := g.Refused("model", headers("retry-after", "600"), ""); ok {
+		t.Fatalf("Refused model after a 401 and a 503 of model-2: %s is left; want no key", next)
+	}
+	g.Answered("model-2", http.StatusOK, http.Header{})
+	if got, ok := g.Pick(); got != "model-2" || !ok {
+		t.Errorf("Pick after a 200 of model-2: %s, %v; want model-2", got, ok)
 	}
 }
 
@@ -631,7 +652,7 @@ func TestRefusalsAndSwitchesRunConcurrently(t *testing.T) {
 			for range 200 {
 				name := []string{"model", "model-2"}[i%2]
 				g.Refused(name, headers("retry-after", "600"), "")
-				g.Answered("model-3", headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-utilization", "0.5"))
+				g.Answered("model-3", http.StatusOK, headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-utilization", "0.5"))
 				g.Merge([]modelkey.Window{{Credential: "model-3", Window: "five_hour", Status: modelkey.StatusAllowed, Source: modelkey.SourceProvider, ObservedAt: start}})
 				g.Pick()
 				g.Windows()
