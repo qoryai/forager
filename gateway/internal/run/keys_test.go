@@ -13,6 +13,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/sealed"
 )
 
 // fixture is the contract's fixture at path.
@@ -138,5 +139,44 @@ func TestAKeyGroupInCooldownAtTheClaim(t *testing.T) {
 		if len(s.calls) != 0 {
 			t.Errorf("%s: %d secrets requests; want none", c.fixture, len(s.calls))
 		}
+	}
+}
+
+// TestTheCheckAndTheProxyShareTheGroup pins one decision of the key group: a key whose
+// header differs from the start key's in case alone, and whose start answer sets it on
+// two apply items, is in the group the proxy sets, and the check of pause_for_s covers
+// it too.
+func TestTheCheckAndTheProxyShareTheGroup(t *testing.T) {
+	entry := func(name, header, pause string) string {
+		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"` + header + `"}` + pause + `}`
+	}
+	doc := `{"version":1,"model_credential":"model","credentials":[` + entry("model", "x-api-key", `,"pause_for_s":60`) + `,` + entry("model-2", "X-Api-Key", "") + `]}`
+	_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Secrets: (&controlPlane{answer: harnessValue}).fetch})
+	if code, names := refusalOf(err); code != refusal.RunConfigurationInvalid || !slices.Equal(names, []string{"model-2"}) {
+		t.Errorf("Open without model-2's pause_for_s: %v; want model-2 refused", err)
+	}
+	doc = `{"version":1,"model_credential":"model","credentials":[` + entry("model", "x-api-key", `,"pause_for_s":60`) + `,` + entry("model-2", "X-Api-Key", `,"pause_for_s":60`) + `]}`
+	// The start's answer sets model-2 on two items of narrower paths: the group stays
+	// the entries'.
+	two := func(name string, call int) (answer, error) {
+		a, err := harnessValue(name, call)
+		if name == "model-2" {
+			item := func(path string) sealed.Apply {
+				return sealed.Apply{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "X-Api-Key", Paths: []string{path}}
+			}
+			a.apply = []sealed.Apply{item("/anthropic/v1/messages"), item("/anthropic/v1/files")}
+		}
+		return a, err
+	}
+	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Secrets: (&controlPlane{answer: two}).fetch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got := r.Held().Group; !slices.Equal(got, []string{"model", "model-2"}) {
+		t.Errorf("Group %v; want model and model-2", got)
+	}
+	if got := r.MessagesPath(); got != "/anthropic/v1/messages" {
+		t.Errorf("MessagesPath %q; want /anthropic/v1/messages", got)
 	}
 }

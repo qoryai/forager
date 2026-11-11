@@ -10,7 +10,7 @@
     "data": {
       "session": 1,
       "state": "failed",
-      "exit_code": 1,
+      "exit_code": -1,
       "reason": "model_key_limit",
       "duration_ms": 1000
     }

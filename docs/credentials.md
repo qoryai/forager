@@ -250,8 +250,11 @@ gateway's answer to the session's next batch has `stop`, `model_key_limit`, so t
 session stops the runtime and the run pauses. The next join gets the active key again.
 
 The gateway reports each key's limit windows to the control plane, at most once a
-second, and takes the cooldowns other runs found from the answer, so no run sends a
-request with a key at its limit. The contract's
+second, and takes the cooldowns other runs found from the answer. A run then stops
+setting a key that another run found at its limit once the answer to its next report
+arrives: until then, up to about a second after the other run's refusal and longer
+while a report waits for a retry, the run can still send a request with that key and
+get the refusal itself. The contract's
 [§The server, The model keys](../contracts/forager/v1/README.md#the-server) lists the
 report and its answers. The gateway writes one log line for each limit answer, with the
 status, the names of the limit headers and the error's type, and no value.

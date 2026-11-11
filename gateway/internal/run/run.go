@@ -1183,7 +1183,7 @@ func (r *Run) storedUses() []credential.Stored {
 		}
 		name := c.Name
 		out = append(out, credential.Stored{Name: name, Apply: r.applies[name], Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
-			ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
+			Entry: keyEntry(c), ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				b, _ := r.values.Value(name)

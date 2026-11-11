@@ -32,9 +32,9 @@ type keyReporter struct {
 	runID string
 	g     *modelkey.Group
 	send  func(ctx context.Context, rep server.ModelKeysReport) ([]server.ModelKeyState, error)
-	// report writes a line to the gateway's log, and logLine one dev.qory.run.log line to
-	// the run's record.
-	report, logLine func(string)
+	// reported writes a line to the gateway's log, and logLine one dev.qory.run.log line
+	// to the run's record.
+	reported, logLine func(string)
 	// runURL is the control plane's run endpoint, for the line of a 404.
 	runURL string
 	wake   chan struct{}
@@ -45,8 +45,8 @@ type keyReporter struct {
 
 // newKeyReporter makes the reporter of the group g of the run runID, and has g wake it
 // at each change.
-func newKeyReporter(runID, runURL string, g *modelkey.Group, send func(context.Context, server.ModelKeysReport) ([]server.ModelKeyState, error), report, logLine func(string)) *keyReporter {
-	k := &keyReporter{runID: runID, runURL: runURL, g: g, send: send, report: report, logLine: logLine, wake: make(chan struct{}, 1), gap: reportGap, backoff: reportBackoff}
+func newKeyReporter(runID, runURL string, g *modelkey.Group, send func(context.Context, server.ModelKeysReport) ([]server.ModelKeyState, error), reported, logLine func(string)) *keyReporter {
+	k := &keyReporter{runID: runID, runURL: runURL, g: g, send: send, reported: reported, logLine: logLine, wake: make(chan struct{}, 1), gap: reportGap, backoff: reportBackoff}
 	g.OnChange(k.poke)
 	return k
 }
@@ -59,23 +59,34 @@ func (k *keyReporter) poke() {
 	}
 }
 
-// run sends reports until ctx ends, the control plane answers 410, or it has no route,
-// 404.
+// lastWait is how long the last report of a run, sent once after the run ends, may take.
+const lastWait = 10 * time.Second
+
+// run sends reports until ctx ends, or the control plane returns 410 or 404. When ctx
+// ends while a change waits for its report, in the gap, in a backoff or in flight, the
+// newest state goes once more ([keyReporter.last]).
 func (k *keyReporter) run(ctx context.Context) {
 	var last time.Time
 	for {
 		select {
 		case <-ctx.Done():
+			select {
+			case <-k.wake:
+				k.last(ctx)
+			default:
+			}
 			return
 		case <-k.wake:
 		}
 		if !sleep(ctx, k.gap-time.Since(last)) {
+			k.last(ctx)
 			return
 		}
 		for try := 0; ; try++ {
 			last = time.Now()
-			keys, err := k.send(ctx, server.ModelKeysReport{Time: server.RegistrationTime(last), Keys: k.entries()})
+			keys, err := k.send(ctx, k.report())
 			if ctx.Err() != nil {
+				k.last(ctx)
 				return
 			}
 			var ae *server.ModelKeysAnswerError
@@ -90,11 +101,12 @@ func (k *keyReporter) run(ctx context.Context) {
 				return
 			case ae != nil && (ae.Status == http.StatusUnauthorized || ae.Signed && (ae.Status == http.StatusBadRequest || ae.Status == http.StatusRequestEntityTooLarge)),
 				ae == nil && !retried(err):
-				k.report(fmt.Sprintf("run %s: If this repeats, check the control plane: the model keys report was dropped: %v", k.runID, accesskey.ShownError(err)))
+				k.reported(fmt.Sprintf("run %s: If this repeats, check the control plane: the model keys report was dropped: %v", k.runID, accesskey.ShownError(err)))
 			default:
 				// A 429, a 5xx, another answer that did not verify, or none: the newest
 				// state goes again.
 				if !sleep(ctx, k.backoff[min(try, len(k.backoff)-1)]) {
+					k.last(ctx)
 					return
 				}
 				continue
@@ -102,6 +114,20 @@ func (k *keyReporter) run(ctx context.Context) {
 			break
 		}
 	}
+}
+
+// report is a report of the group's newest state, at the clock's time.
+func (k *keyReporter) report() server.ModelKeysReport {
+	return server.ModelKeysReport{Time: server.RegistrationTime(time.Now()), Keys: k.entries()}
+}
+
+// last sends the newest state once after the run's end, within [lastWait], so the
+// control plane gets the last change and a report that waited in a backoff. Its answer
+// is not merged: the run sets no more keys.
+func (k *keyReporter) last(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lastWait)
+	defer cancel()
+	k.send(ctx, k.report())
 }
 
 // retried reports whether err, a failure with no answer the table names, is one a new

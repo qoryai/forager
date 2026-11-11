@@ -505,8 +505,8 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		// The run's key group: the proxy sets its active key, sends a refused request
 		// again with the next key, and the reporter shares each key's state with the
 		// control plane.
-		lr.keys = modelkey.New(keys, nil)
-		lr.px.SetKeyGroup(lr.keys, func(line string) { g.report("run " + req.RunID + ": " + line) })
+		lr.keys = modelkey.New(keys, r.Held().Start, nil)
+		lr.px.SetKeyGroup(lr.keys, r.MessagesPath(), func(line string) { g.report("run " + req.RunID + ": " + line) })
 		if g.client != nil {
 			conf, _ := g.config()
 			rep := newKeyReporter(req.RunID, conf.Run.URL, lr.keys, func(ctx context.Context, m server.ModelKeysReport) ([]server.ModelKeyState, error) {

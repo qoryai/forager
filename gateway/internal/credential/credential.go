@@ -114,6 +114,9 @@ type Stored struct {
 	// Format, Endpoint and OAuth are an API credential's; empty for a host credential.
 	Format, Endpoint string
 	OAuth            bool
+	// Entry is the part of the credential's entry that [KeyGroup] reads; its Format is
+	// empty for a host credential.
+	Entry KeyEntry
 	// Value returns a copy of the opened value's bytes, which the caller clears once it
 	// has set them; empty once the run has ended, and once the value expired.
 	Value func() []byte
@@ -414,29 +417,43 @@ func (h *Held) startKey(start string) error {
 	return nil
 }
 
-// keyGroup is the key group of the start key, the names of stored in their order whose
-// format, endpoint and auth are the start key's; none when the start key is not of
-// stored.
-func keyGroup(stored []Stored, start string) []string {
-	i := slices.IndexFunc(stored, func(s Stored) bool { return s.Name == start })
-	if i < 0 || stored[i].Format == "" || len(stored[i].Apply) != 1 {
+// KeyEntry is the part of an entry of the run configuration's credentials that
+// [KeyGroup] reads: its name, and an API credential's format, endpoint and auth.
+// Format is empty for a host credential.
+type KeyEntry struct {
+	Name, Format, Endpoint   string
+	Scheme, Username, Header string
+	OAuth                    bool
+}
+
+// KeyGroup is the key group of the start key start: the names of entries, in their
+// order, whose format, endpoint and auth are the start key's, the header's case
+// ignored; none when start is no API credential of entries. The gateway decides the key
+// group by it alone: the check of the run configuration and the proxy's group.
+func KeyGroup(entries []KeyEntry, start string) []string {
+	i := slices.IndexFunc(entries, func(e KeyEntry) bool { return e.Name == start })
+	if i < 0 || entries[i].Format == "" {
 		return nil
 	}
-	first := stored[i]
-	same := func(s Stored) bool {
-		if s.Format != first.Format || s.Endpoint != first.Endpoint || s.OAuth != first.OAuth || len(s.Apply) != 1 {
-			return false
-		}
-		a, b := s.Apply[0], first.Apply[0]
-		return a.Scheme == b.Scheme && a.Username == b.Username && strings.EqualFold(a.Header, b.Header)
-	}
+	first := entries[i]
 	var out []string
-	for _, s := range stored {
-		if same(s) {
-			out = append(out, s.Name)
+	for _, e := range entries {
+		if e.Format == first.Format && e.Endpoint == first.Endpoint && e.OAuth == first.OAuth &&
+			e.Scheme == first.Scheme && e.Username == first.Username && strings.EqualFold(e.Header, first.Header) {
+			out = append(out, e.Name)
 		}
 	}
 	return out
+}
+
+// keyGroup is [KeyGroup] of stored.
+func keyGroup(stored []Stored, start string) []string {
+	entries := make([]KeyEntry, len(stored))
+	for i, s := range stored {
+		entries[i] = s.Entry
+		entries[i].Name = s.Name
+	}
+	return KeyGroup(entries, start)
 }
 
 // check refuses two uses that claim a host together, unless both are model keys, which
