@@ -2241,7 +2241,9 @@ release may change what an existing document does, and says so under Upgrading.
   build of qory, and skip without it.
 - CI's Wall conformance job builds qory at the commit in `e2e/testdata/qory-commit`
   against the checkout of Forager, and runs both tests with that build. While the file
-  has no commit, the job skips the build and the tests.
+  has no commit, the job skips the build and the tests. A Forager change that breaks
+  the build of the pinned qory commit fails the job until the pin moves to a qory
+  commit that builds against it.
 - The conformance suite checks that the helper's exec waits for the runtime as the
   agent's user, with the agent's groups, capabilities and `no_new_privs`, and no file
   descriptor above 2 but the Go runtime's poller; that `dev.qory.session.exited` has

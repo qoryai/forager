@@ -207,35 +207,35 @@ func walledResume(t *testing.T, same bool) {
 	noKeyValue(t, o2, s2.dir)
 }
 
-// storedTranscript joins the dev.qory.session.transcript chunks of run runID that the
-// control plane stored, in offset order, and returns the bytes, the runtime's session id
-// and the transcript's path. It fails the test when there is none, when the chunks have
-// a gap, or when they name two paths.
-func storedTranscript(t *testing.T, ctl *keysControl, runID string) ([]byte, string, string) {
+// transcriptChunk is the data of one dev.qory.session.transcript.
+type transcriptChunk struct {
+	SessionID string `json:"session_id"`
+	Path      string `json:"path"`
+	Offset    int    `json:"offset"`
+	Bytes     string `json:"bytes"`
+}
+
+// storedChunks waits up to 30 seconds until the control plane stored the
+// dev.qory.run.exited of run runID. It returns the run's dev.qory.session.transcript
+// chunks in the order stored, and whether the dev.qory.run.exited was stored.
+func storedChunks(t *testing.T, ctl *keysControl, runID string) ([]transcriptChunk, bool) {
 	t.Helper()
-	type chunk struct {
-		SessionID string `json:"session_id"`
-		Path      string `json:"path"`
-		Offset    int    `json:"offset"`
-		Bytes     string `json:"bytes"`
-	}
 	// The gateway delivers the run's events to the control plane after the run ends:
 	// the chunks are complete once its dev.qory.run.exited is stored.
-	var chunks []chunk
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
 		b, err := os.ReadFile(ctl.stored)
 		if err != nil {
 			t.Fatal(err)
 		}
-		chunks = chunks[:0]
+		var chunks []transcriptChunk
 		exited := false
 		s := bufio.NewScanner(bytes.NewReader(b))
 		s.Buffer(nil, 1<<22)
 		for s.Scan() {
 			var e struct {
-				Type    string `json:"type"`
-				Subject string `json:"subject"`
-				Data    chunk  `json:"data"`
+				Type    string          `json:"type"`
+				Subject string          `json:"subject"`
+				Data    transcriptChunk `json:"data"`
 			}
 			if json.Unmarshal(s.Bytes(), &e) != nil || e.Subject != runID {
 				continue
@@ -248,9 +248,18 @@ func storedTranscript(t *testing.T, ctl *keysControl, runID string) ([]byte, str
 			}
 		}
 		if exited || time.Now().After(deadline) {
-			break
+			return chunks, exited
 		}
 	}
+}
+
+// storedTranscript joins the dev.qory.session.transcript chunks of run runID that the
+// control plane stored, in offset order, and returns the bytes, the runtime's session id
+// and the transcript's path. It fails the test when there is none, when the chunks have
+// a gap, or when they name two paths.
+func storedTranscript(t *testing.T, ctl *keysControl, runID string) ([]byte, string, string) {
+	t.Helper()
+	chunks, _ := storedChunks(t, ctl, runID)
 	if len(chunks) == 0 {
 		t.Fatalf("the control plane stored no %s of run %s", event.SessionTranscript, runID)
 	}

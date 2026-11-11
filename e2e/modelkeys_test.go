@@ -541,7 +541,7 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		join.Args = append(append(append([]string{"run", "agent-env", filepath.Join(s.qory, "kept")}, s.link...), "--", join.Command), join.Args...)
 		join.Command = filepath.Join(s.qory, "qory")
 		join.Mounts = append(join.Mounts, wall.Mount{Path: s.qory, ReadOnly: true})
-		join.LaunchFixed = []string{"CLAUDE_CONFIG_DIR=/tmp/qory-agent-home"}
+		join.LaunchFixed = slices.Clone(qoryLaunchFixed)
 	}
 	if s.walled != nil {
 		open.Wall = &wall.Docker{Command: s.walled.command, Helper: s.walled.helper, RelayArgs: RelayArgs, NestArgs: NestArgs}

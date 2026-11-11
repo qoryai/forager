@@ -205,19 +205,23 @@ jobs:
         id: qory
         run: |
           commit=$(sed -n '/^[[:space:]]*#/d; /[^[:space:]]/{p;q;}' e2e/testdata/qory-commit | tr -d '[:space:]')
+          if [[ -n $commit && ! $commit =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Write the full 40-character qory commit in e2e/testdata/qory-commit; it has $commit"
+            exit 1
+          fi
           echo "qory commit: ${commit:-none}"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
       - name: Build qory against this checkout
-        # qory's repository is public. Its go.mod points at this checkout of Forager, and
-        # -mod=mod adds any missing go.sum entry for it.
+        # qory's repository is public. The step points qory's go.mod at this checkout
+        # with go mod edit -replace, and -mod=mod adds any missing go.sum entry for it.
         if: steps.qory.outputs.commit != ''
         env:
           QORY_COMMIT: ${{ steps.qory.outputs.commit }}
         run: |
           src="$RUNNER_TEMP/qory"
           git init -q "$src"
-          git -C "$src" fetch -q --depth 1 https://github.com/qoryai/qory "$QORY_COMMIT"
+          git -C "$src" fetch -q --depth 1 https://github.com/qoryai/qory -- "$QORY_COMMIT"
           git -C "$src" checkout -q --detach FETCH_HEAD
           cd "$src"
           go mod edit -replace "github.com/qoryai/forager=$GITHUB_WORKSPACE"
