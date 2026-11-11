@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -242,6 +243,63 @@ func TestAFailedCheckOfTheImagesPathFailsTheWrap(t *testing.T) {
 	}
 	if slices.ContainsFunc(rec.lines, func(l string) bool { return strings.HasPrefix(l, "docker cp - ") }) {
 		t.Errorf("commands %q; want no docker cp into the agent's container", rec.lines)
+	}
+}
+
+// untarred is a recorder whose docker cp out of a container exits 0 with out, which
+// has no complete tar header.
+type untarred struct {
+	*recorder
+	out []byte
+}
+
+func (u untarred) stdout(_ context.Context, argv, env []string) (io.ReadCloser, error) {
+	if _, ok := statPath(words(argv)); !ok {
+		return u.recorder.stdout(context.Background(), argv, env)
+	}
+	return io.NopCloser(bytes.NewReader(u.out)), nil
+}
+
+func (u untarred) run(ctx context.Context, argv, env []string) ([]byte, error) {
+	if _, ok := statPath(words(argv)); !ok {
+		return u.recorder.run(ctx, argv, env)
+	}
+	u.lines = append(u.lines, words(argv))
+	return u.out, nil
+}
+
+// TestACheckOfTheImagesPathWithNoTarShowsTheTarError pins a docker cp out of the image
+// that exits 0 with no tar header: an empty output and a header cut short. The check's
+// error wraps the tar's error, and its text is complete.
+func TestACheckOfTheImagesPathWithNoTarShowsTheTarError(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		out  []byte
+		want error
+	}{
+		{"no output", nil, io.EOF},
+		{"a header cut short", headTar(tar.Header{Name: "agent/", Typeflag: tar.TypeDir, Mode: 0o755})[:100], io.ErrUnexpectedEOF},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000"`}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: untarred{rec, c.out}}
+			enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer enc.Close(context.Background())
+			h, err := enc.(*dockerEnclosure).imageHeader(context.Background(), "/home/agent")
+			want := "wall docker: the check for \"/home/agent\" in the image: reading the tar of docker cp: " + c.want.Error()
+			if h != nil || err == nil || err.Error() != want {
+				t.Errorf("imageHeader: %v, %v; want %q", h, err, want)
+			}
+			if !errors.Is(err, c.want) {
+				t.Errorf("the error %v does not match %v", err, c.want)
+			}
+			if err != nil && strings.Contains(err.Error(), "%!") {
+				t.Errorf("the error %q has a formatting fault", err)
+			}
+		})
 	}
 }
 

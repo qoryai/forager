@@ -1806,13 +1806,17 @@ func (e *dockerEnclosure) imageHeader(ctx context.Context, p string) (*tar.Heade
 			return h, nil
 		}
 	}
-	// The path is missing, or the engine failed: the command's output shows which.
+	// The path is missing, or the engine failed: the command's output shows which. A
+	// docker cp that exits 0 with no tar header in its output is the tar's error; its
+	// output is not shown, since it may be part of a tar.
 	out, err := e.sys.run(ctx, argv, e.env)
 	switch {
 	case err == nil:
-		if h, err := tar.NewReader(bytes.NewReader(out)).Next(); err == nil {
+		h, err := tar.NewReader(bytes.NewReader(out)).Next()
+		if err == nil {
 			return h, nil
 		}
+		return nil, fmt.Errorf("wall docker: the check for %s in the image: reading the tar of docker cp: %w", accesskey.ShownValue(p, true), err)
 	case noSuchPath(string(out)):
 		return nil, nil
 	}
