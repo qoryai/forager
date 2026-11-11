@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -33,7 +35,7 @@ type upstreamCall struct {
 	body string
 }
 
-// provider is a fake model provider that answers each request by the key it carries,
+// provider is a fake model provider that serves each request by the key it contains,
 // with answers[key], and records each call.
 type provider struct {
 	mu      sync.Mutex
@@ -70,7 +72,7 @@ func (p *provider) taken() []upstreamCall {
 	return out
 }
 
-// limited answers a subscription's cap: a 429 whose 5h window is rejected, reset in an
+// limited returns a subscription's cap: a 429 whose 5h window is rejected, reset in an
 // hour.
 func limited(w http.ResponseWriter) {
 	w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
@@ -200,10 +202,10 @@ func TestALimitRefusalIsSentAgainWithTheNextKey(t *testing.T) {
 	}
 }
 
-// TestNoKeyLeftPassesTheRefusalAndHoldsTheRest pins the end of the group: when every
-// key refuses, the session gets the last refusal, the group holds the stop, and from
-// then on a request with the placeholder gets the gateway's 429 and reaches no
-// provider, until Resume.
+// TestNoKeyLeftPassesTheRefusalAndHoldsTheRest pins the end of the group: when the
+// provider returns a limit refusal for every key, the session gets the last refusal,
+// the group is stopped, and from then on a request with the placeholder gets the
+// gateway's 429 and reaches no provider, until Resume.
 func TestNoKeyLeftPassesTheRefusalAndHoldsTheRest(t *testing.T) {
 	f := newKeyFixture(t)
 	for name := range fakeKeys {
@@ -217,7 +219,7 @@ func TestNoKeyLeftPassesTheRefusalAndHoldsTheRest(t *testing.T) {
 		t.Errorf("the provider got %v; want each key once", got)
 	}
 	if !f.g.Passed() {
-		t.Error("the group holds no stop")
+		t.Error("the group is not stopped")
 	}
 	status, body = f.post(t, "{}")
 	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: start the run again once a model key's cooldown ends") || len(f.up.taken()) != 0 {
@@ -236,7 +238,7 @@ func TestNoKeyLeftPassesTheRefusalAndHoldsTheRest(t *testing.T) {
 
 // TestABodyOverTheCopyLimitIsNotSentAgain pins a refused body over 8 MiB: no copy, so
 // the refusal reaches the session, the key still goes into cooldown, the next key
-// becomes active, and the group holds the stop.
+// becomes active, and the group is stopped.
 func TestABodyOverTheCopyLimitIsNotSentAgain(t *testing.T) {
 	f := newKeyFixture(t)
 	f.up.answers["model"] = limited
@@ -350,7 +352,7 @@ func (f *keyFixture) postTo(t *testing.T, method, path, body string) (int, strin
 	return resp.StatusCode, string(b)
 }
 
-// streamError answers with a stream that ends with an error event of the type
+// streamError returns a stream that ends with an error event of the type
 // rate_limit_error.
 func streamError(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -389,7 +391,7 @@ func TestOnlyTheMessagesPostIsReadForAStreamError(t *testing.T) {
 
 // TestEveryKeyCoolingGetsTheProxys429 pins the state after a report's answer that puts
 // every key in cooldown: the proxy sets no key, returns its 429 without a call to the
-// provider, and holds the stop.
+// provider, and the group is stopped.
 func TestEveryKeyCoolingGetsTheProxys429(t *testing.T) {
 	f := newKeyFixture(t)
 	later := time.Now().Add(time.Hour)
@@ -406,13 +408,13 @@ func TestEveryKeyCoolingGetsTheProxys429(t *testing.T) {
 		t.Errorf("the provider got %v; want no call", calls)
 	}
 	if !f.g.Passed() {
-		t.Error("the group holds no stop")
+		t.Error("the group is not stopped")
 	}
 }
 
 // TestAResendNeedsTheNextKeysPaths pins the host rules of a resend: when the next key's
 // credential has paths that do not match the request, the refusal reaches the session,
-// the group holds the stop, and model-2 gets nothing.
+// the group is stopped, and model-2 gets nothing.
 func TestAResendNeedsTheNextKeysPaths(t *testing.T) {
 	f := newKeyFixture(t)
 	f.p.term.Load().creds[1].Paths = []string{"/v1/files"}
@@ -424,7 +426,7 @@ func TestAResendNeedsTheNextKeysPaths(t *testing.T) {
 		t.Errorf("the provider got %v; want model alone", got)
 	}
 	if !f.g.Passed() {
-		t.Error("the group holds no stop")
+		t.Error("the group is not stopped")
 	}
 }
 
@@ -450,23 +452,28 @@ func TestConcurrentRequestsSwitchKeys(t *testing.T) {
 	}
 }
 
-// answers is a round tripper that returns its answers in order, and keeps each request.
+// answers is a round tripper that returns its answers in order, and keeps each request
+// and the bytes of its body, which it reads to their end and closes, as a transport does.
 type answers struct {
 	got  []*http.Request
+	read []string
 	list []*http.Response
 }
 
 func (a *answers) RoundTrip(r *http.Request) (*http.Response, error) {
+	b, _ := io.ReadAll(r.Body)
+	r.Body.Close()
 	a.got = append(a.got, r)
+	a.read = append(a.read, string(b))
 	resp := a.list[0]
 	a.list = a.list[1:]
 	return resp, nil
 }
 
 // TestTheCopyIsDroppedWhenTheStatusArrives pins the copy of the body: once the status
-// of the answer the proxy passes on arrives, the resend has no copy, the request's body
-// and that of the resend read nothing more, and GetBody fails, so a streamed answer
-// holds no copy for as long as it lasts.
+// of the answer the proxy passes on arrives, the resend has no copy and GetBody fails,
+// and the request's body and that of the resend, each read whole and closed, have no
+// bytes of it, so no copy is kept while a streamed answer lasts.
 func TestTheCopyIsDroppedWhenTheStatusArrives(t *testing.T) {
 	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", nil)
 	one := &Credential{Name: "model", Hosts: []string{keyHost}, Scheme: "bearer", Token: func() string { return fakeKeys["model"] }}
@@ -487,8 +494,11 @@ func TestTheCopyIsDroppedWhenTheStatusArrives(t *testing.T) {
 		t.Errorf("the resend has %d bytes of copy; want none", len(rs.body))
 	}
 	for i, out := range rt.got {
-		if b, _ := io.ReadAll(out.Body); len(b) != 0 {
-			t.Errorf("request %d: its body reads %q after the status; want nothing", i, b)
+		if rt.read[i] != `{"model":"m"}` {
+			t.Errorf("request %d: the transport read %q; want the whole body", i, rt.read[i])
+		}
+		if c, ok := out.Body.(*copyReader); !ok || c.held() {
+			t.Errorf("request %d: its body %T has bytes of the copy after its Close", i, out.Body)
 		}
 	}
 	if again := rt.got[1]; again.GetBody == nil {
@@ -498,5 +508,103 @@ func TestTheCopyIsDroppedWhenTheStatusArrives(t *testing.T) {
 	}
 	if _, ok := resp.Body.(*streamWatch); !ok {
 		t.Error("the stream is not read for an error event")
+	}
+}
+
+// TestABodyStillBeingWrittenGoesWhole pins a body the transport still writes when the
+// answer's status arrives: the upstream reads every byte as sent, over HTTP/1.1 and
+// HTTP/2, for a body of 8 MiB and one over 8 MiB, after a 400 and after a 200. Over
+// HTTP/2 the transport stops the body after a 400, so the upstream reads the first
+// bytes as sent. Each reader of the copy ends with no bytes of it once the transport
+// closes the body.
+func TestABodyStillBeingWrittenGoesWhole(t *testing.T) {
+	for _, h2 := range []bool{false, true} {
+		for _, status := range []int{http.StatusBadRequest, http.StatusOK} {
+			for _, size := range []int{modelkey.MaxCopy, modelkey.MaxCopy + 4<<20} {
+				t.Run(fmt.Sprintf("h2=%v/%d/%d", h2, status, size), func(t *testing.T) {
+					answerBeforeTheBody(t, h2, status, size)
+				})
+			}
+		}
+	}
+}
+
+// answerBeforeTheBody sends a body of size bytes with a key of the group to an upstream
+// that sends status, and reads the body only after the round trip returned.
+func answerBeforeTheBody(t *testing.T, h2 bool, status, size int) {
+	sent := make([]byte, size)
+	for i := 0; i+4 <= size; i += 4 {
+		binary.BigEndian.PutUint32(sent[i:], uint32(i))
+	}
+	answered := make(chan struct{})
+	got := make(chan []byte, 1)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rc := http.NewResponseController(w)
+		_ = rc.EnableFullDuplex()
+		w.WriteHeader(status)
+		_ = rc.Flush()
+		select {
+		case <-answered:
+		case <-time.After(10 * time.Second):
+		}
+		// Over HTTP/2 the transport stops the body after a 400 and ends no stream.
+		_ = rc.SetReadDeadline(time.Now().Add(3 * time.Second))
+		b, _ := io.ReadAll(r.Body)
+		got <- b
+	}))
+	srv.EnableHTTP2 = h2
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
+	defer srv.Close()
+	rt := srv.Client().Transport
+	one := &Credential{Name: "model", Hosts: []string{keyHost}, Scheme: "bearer", Token: func() string { return fakeKeys["model"] }}
+	k := &keyGroup{g: modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil), messages: "/v1/messages", log: func(string) {}}
+	r, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/messages", io.NopCloser(bytes.NewReader(sent)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.ContentLength = int64(size)
+	r = r.WithContext((&Proxy{}).withResend(r.Context(), r, k, one, []*Credential{one}, "/v1/messages", false))
+	rs := resendOf(r)
+	body, ok := r.Body.(*copyReader)
+	if !ok {
+		t.Fatalf("the request's body is a %T; want a *copyReader", r.Body)
+	}
+	resp, err := rs.roundTrip(rt, r)
+	close(answered)
+	if err != nil {
+		t.Fatalf("roundTrip: %v", err)
+	}
+	if resp.StatusCode != status {
+		t.Errorf("the status %d; want %d", resp.StatusCode, status)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	var b []byte
+	select {
+	case b = <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the upstream read no body")
+	}
+	switch {
+	case h2 && status >= 300:
+		if !bytes.Equal(b, sent[:len(b)]) {
+			t.Errorf("the upstream read %d bytes that differ from the first bytes sent", len(b))
+		}
+	case len(b) != size:
+		t.Errorf("the upstream read %d bytes; want %d", len(b), size)
+	case !bytes.Equal(b, sent):
+		t.Error("the upstream read bytes that differ from the bytes sent")
+	}
+	for end := time.Now().Add(2 * time.Second); body.held() && time.Now().Before(end); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if body.held() {
+		t.Error("the request's body has the copy after the transport closed it")
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.body != nil {
+		t.Errorf("the resend has %d bytes of copy; want none", len(rs.body))
 	}
 }

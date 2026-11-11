@@ -31,8 +31,8 @@ type keyGroup struct {
 	log      func(string)
 }
 
-// SetKeyGroup gives p the run's key group: of the model keys whose names g has, which
-// share one placeholder, the proxy sets the group's active key on each request with the
+// SetKeyGroup sets p's key group to g, the run's: of the model keys whose names g has,
+// which share one placeholder, the proxy sets the group's active key on each request with the
 // placeholder, and sends a request again with the next key after a limit refusal.
 // messages is the clean path of the model API's messages request, [modelkey.MessagesPath]:
 // the proxy reads the streamed 200 of a POST to it with the placeholder for a
@@ -55,10 +55,10 @@ func (p *Proxy) group(name string) *keyGroup {
 	return k
 }
 
-// limitPassed answers a request with the key group's placeholder after the proxy passed
-// a limit refusal to the session, or while every key of the group is in cooldown: a 429
-// the provider never sees, until the session's join ends. d is recorded refused, with
-// no credential.
+// limitPassed returns a 429 to a request with the key group's placeholder after the
+// proxy passed a limit refusal to the session, or while every key of the group is in
+// cooldown: a 429 the provider never gets, until the session's join ends. d is recorded
+// refused, with no credential.
 func (p *Proxy) limitPassed(w http.ResponseWriter, d Decision) {
 	d.Outcome, d.Credential, d.Status = Refused, "", 0
 	p.observe(d)
@@ -82,7 +82,7 @@ type resend struct {
 	// username and header alone.
 	first *Credential
 	// clean is the request's clean path, which the paths of the next key's credential
-	// must match, as [terminator.credentialFor] decides.
+	// must match, as [terminator.credentialFor] checks.
 	clean string
 	// name is the key the request goes with, the one the proxy set last.
 	name string
@@ -94,15 +94,16 @@ type resend struct {
 
 	mu sync.Mutex
 	// body is the copy of the request's body, or of its first [modelkey.MaxCopy] + 1
-	// bytes when the body is larger; nil once dropped. Every reader of the request's
-	// body reads it through rs, so a drop leaves no reference to the bytes.
+	// bytes when the body is larger; nil once dropped. A drop removes the resend's
+	// reference alone: each body of the copy keeps one until the transport reads it to
+	// its end or closes it ([copyReader]).
 	body []byte
 	// copied is true when body is the whole body.
 	copied bool
 }
 
-// copyBody reads r's body up to [modelkey.MaxCopy] + 1 bytes into rs, and gives r a body
-// of the same bytes: the copy, or the bytes read and then the rest when the body is
+// copyBody reads r's body up to [modelkey.MaxCopy] + 1 bytes into rs, and sets r's body
+// to one of the same bytes: the copy, or the bytes read and then the rest when the body is
 // larger or its read failed, in which case rs has no copy to send again.
 func (rs *resend) copyBody(r *http.Request) {
 	if r.Body == nil || r.Body == http.NoBody {
@@ -111,12 +112,13 @@ func (rs *resend) copyBody(r *http.Request) {
 	}
 	b, err := io.ReadAll(io.LimitReader(r.Body, modelkey.MaxCopy+1))
 	rs.body = b
-	if err != nil || len(b) > modelkey.MaxCopy {
-		r.Body = readCloser{io.MultiReader(&copyReader{rs: rs}, r.Body), r.Body}
-		return
+	rs.copied = err == nil && len(b) <= modelkey.MaxCopy
+	rest := r.Body
+	if rs.copied {
+		// The body ended within the copy: the rest is read no more, and only closed.
+		rest = readCloser{http.NoBody, r.Body}
 	}
-	rs.copied = true
-	r.Body = readCloser{&copyReader{rs: rs}, r.Body}
+	r.Body = &copyReader{b: b, rest: rest}
 }
 
 // readCloser reads from Reader and closes Closer.
@@ -125,23 +127,65 @@ type readCloser struct {
 	io.Closer
 }
 
-// copyReader reads rs's copy of the body from its start, under rs.mu: it reads nothing
-// more once rs drops the copy.
+// errClosedBody is the error of a read of a body after its Close.
+var errClosedBody = errors.New("read of a request body after its Close")
+
+// copyReader is one body of the copy: its bytes from their start, then rest. It keeps
+// the bytes after a drop, so a transport that still writes the body when the status
+// arrives sends it whole, and lets them go once it read them to their end or is closed.
 type copyReader struct {
-	rs  *resend
-	off int
+	mu sync.Mutex
+	// b is the copy; nil once read to its end or closed.
+	b      []byte
+	off    int
+	closed bool
+	// rest is the rest of the request's body, read after b; nil for a resend's body.
+	rest io.ReadCloser
 }
 
-// Read reads the copy on.
+// Read reads the copy on, then the rest.
 func (c *copyReader) Read(p []byte) (int, error) {
-	c.rs.mu.Lock()
-	defer c.rs.mu.Unlock()
-	if c.off >= len(c.rs.body) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return 0, errClosedBody
+	}
+	if c.b != nil {
+		n := copy(p, c.b[c.off:])
+		c.off += n
+		if c.off >= len(c.b) {
+			c.b = nil
+		}
+		if n > 0 {
+			c.mu.Unlock()
+			return n, nil
+		}
+	}
+	rest := c.rest
+	c.mu.Unlock()
+	if rest == nil {
 		return 0, io.EOF
 	}
-	n := copy(p, c.rs.body[c.off:])
-	c.off += n
-	return n, nil
+	return rest.Read(p)
+}
+
+// Close lets the copy go and closes the rest.
+func (c *copyReader) Close() error {
+	c.mu.Lock()
+	c.b, c.closed = nil, true
+	rest := c.rest
+	c.mu.Unlock()
+	if rest != nil {
+		return rest.Close()
+	}
+	return nil
+}
+
+// held reports whether c still has bytes of the copy.
+func (c *copyReader) held() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.b != nil
 }
 
 // again is a new body of the copy, for a resend and its GetBody; errDropped once the
@@ -152,7 +196,7 @@ func (rs *resend) again() (io.ReadCloser, error) {
 	if rs.body == nil {
 		return nil, errDropped
 	}
-	return io.NopCloser(&copyReader{rs: rs}), nil
+	return &copyReader{b: rs.body}, nil
 }
 
 // resendOf is the request's [resend], nil for a request with no key of the group.
@@ -179,19 +223,20 @@ func (rs *resend) cred(name string) *Credential {
 	return nil
 }
 
-// drop forgets the copy of the body: every reader of it reads nothing more.
+// drop forgets the resend's copy of the body: a resend or a GetBody after it fails, and
+// a body of the copy that the transport still writes keeps its bytes until it ends.
 func (rs *resend) drop() {
 	rs.mu.Lock()
 	rs.body, rs.copied = nil, false
 	rs.mu.Unlock()
 }
 
-// roundTrip sends out by rt, and, while the provider answers it with a limit refusal and
+// roundTrip sends out by rt, and, while the provider returns a limit refusal for it and
 // a key of the group is left out of cooldown, sends it again from the copy of its body
 // with the next key. Every answer's headers go to the group, and the copy is dropped
 // once an answer's status arrives that the proxy passes on. The refusal reaches the
 // caller when no key is left, with no copy, or when the next key's credential does not
-// cover the request ([resend.cred]); the group then holds the stop.
+// cover the request ([resend.cred]); the group is then stopped ([modelkey.Group.Pass]).
 func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Response, error) {
 	g := rs.k.g
 	for tries := 0; ; tries++ {

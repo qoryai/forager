@@ -1013,7 +1013,8 @@ A limit refusal is a `429` from the model provider, the endpoint's host. The gat
 `429` of its run limits (§The policy, Run limits), a `5xx` and an `overloaded` error are
 not limit refusals. The proxy keeps a copy of each request body to the endpoint's host,
 up to 8 MiB, until the answer's status arrives, and then drops the copy. It sends a
-larger body without a copy. On a limit refusal of the active key, the proxy passes
+larger body without a copy. A body that the proxy is still sending when the status
+arrives goes whole and unchanged, and its bytes leave memory once it is sent or closed. On a limit refusal of the active key, the proxy passes
 nothing of the refusal to the session, and:
 
 1. Puts the key in cooldown. The cooldown ends at the reset in the refusal: the latest
