@@ -132,7 +132,8 @@ var errClosedBody = errors.New("read of a request body after its Close")
 
 // copyReader is one body of the copy: its bytes from their start, then rest. It keeps
 // the bytes after a drop, so a transport that still writes the body when the status
-// arrives sends it whole, and lets them go once it read them to their end or is closed.
+// arrives sends it whole. It sets b to nil once the bytes are read to their end or the
+// body is closed, which releases them.
 type copyReader struct {
 	mu sync.Mutex
 	// b is the copy; nil once read to its end or closed.
@@ -143,12 +144,16 @@ type copyReader struct {
 	rest io.ReadCloser
 }
 
-// Read reads the copy on, then the rest.
+// Read reads the copy on, then the rest. An empty p reads nothing and returns no error.
 func (c *copyReader) Read(p []byte) (int, error) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
 		return 0, errClosedBody
+	}
+	if len(p) == 0 {
+		c.mu.Unlock()
+		return 0, nil
 	}
 	if c.b != nil {
 		n := copy(p, c.b[c.off:])
@@ -169,7 +174,7 @@ func (c *copyReader) Read(p []byte) (int, error) {
 	return rest.Read(p)
 }
 
-// Close lets the copy go and closes the rest.
+// Close sets b to nil, which releases the copy, and closes the rest.
 func (c *copyReader) Close() error {
 	c.mu.Lock()
 	c.b, c.closed = nil, true

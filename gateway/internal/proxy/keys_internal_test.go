@@ -529,8 +529,13 @@ func TestABodyStillBeingWrittenGoesWhole(t *testing.T) {
 	}
 }
 
+// readFirst is how much of the body the upstream of [answerBeforeTheBody] reads before
+// it sends the status.
+const readFirst = 1 << 20
+
 // answerBeforeTheBody sends a body of size bytes with a key of the group to an upstream
-// that sends status, and reads the body only after the round trip returned.
+// that reads readFirst bytes of it, sends status, and reads the rest only after the
+// round trip returned.
 func answerBeforeTheBody(t *testing.T, h2 bool, status, size int) {
 	sent := make([]byte, size)
 	for i := 0; i+4 <= size; i += 4 {
@@ -541,6 +546,10 @@ func answerBeforeTheBody(t *testing.T, h2 bool, status, size int) {
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rc := http.NewResponseController(w)
 		_ = rc.EnableFullDuplex()
+		// The upstream reads the first MiB, more than one frame, before it sends status.
+		first := make([]byte, readFirst)
+		n, _ := io.ReadFull(r.Body, first)
+		first = first[:n]
 		w.WriteHeader(status)
 		_ = rc.Flush()
 		select {
@@ -549,8 +558,8 @@ func answerBeforeTheBody(t *testing.T, h2 bool, status, size int) {
 		}
 		// Over HTTP/2 the transport stops the body after a 400 and ends no stream.
 		_ = rc.SetReadDeadline(time.Now().Add(3 * time.Second))
-		b, _ := io.ReadAll(r.Body)
-		got <- b
+		rest, _ := io.ReadAll(r.Body)
+		got <- append(first, rest...)
 	}))
 	srv.EnableHTTP2 = h2
 	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
@@ -588,8 +597,8 @@ func answerBeforeTheBody(t *testing.T, h2 bool, status, size int) {
 	}
 	switch {
 	case h2 && status >= 300:
-		if !bytes.Equal(b, sent[:len(b)]) {
-			t.Errorf("the upstream read %d bytes that differ from the first bytes sent", len(b))
+		if len(b) < readFirst || !bytes.Equal(b, sent[:len(b)]) {
+			t.Errorf("the upstream read %d bytes; want at least %d, the first bytes sent", len(b), readFirst)
 		}
 	case len(b) != size:
 		t.Errorf("the upstream read %d bytes; want %d", len(b), size)
@@ -606,5 +615,17 @@ func answerBeforeTheBody(t *testing.T, h2 bool, status, size int) {
 	defer rs.mu.Unlock()
 	if rs.body != nil {
 		t.Errorf("the resend has %d bytes of copy; want none", len(rs.body))
+	}
+}
+
+// TestAnEmptyReadOfTheCopyReadsNothing pins a read of the copy into an empty buffer: it
+// returns 0 and no error while bytes of the copy are left, and the next read gets them.
+func TestAnEmptyReadOfTheCopyReadsNothing(t *testing.T) {
+	c := &copyReader{b: []byte("body")}
+	if n, err := c.Read(nil); n != 0 || err != nil {
+		t.Errorf("a read into an empty buffer: %d, %v; want 0, nil", n, err)
+	}
+	if b, err := io.ReadAll(c); string(b) != "body" || err != nil {
+		t.Errorf("the next reads: %q, %v; want the copy", b, err)
 	}
 }
