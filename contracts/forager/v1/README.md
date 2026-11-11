@@ -3284,9 +3284,10 @@ empty is the clock's now; a refusal reads `outcome <run.url>/<run_id>: <code> (s
 **The model keys.** The gateway reports the state of the run's key group (§Credentials,
 Several model keys) with a signed `POST <run.url>/<run_id>/model-keys`,
 `Content-Type: application/json`, signed by its access key under
-`qory-request-ed25519-v1`. The server accepts it from the key that a batch of the run is
-accepted from: the registering node, or the attaching instance after an attach (After
-the attach, above). Its body is a `model-keys-report.schema.json` document of at most
+`qory-request-ed25519-v1`. Only the gateway that holds the run sends a report: the
+instance of the gateway node that attached the run (After the attach, above). The
+server accepts it from that instance's active keys alone, and answers `404` to a report
+from any other sender, the node or node pool of a direct run among them. Its body is a `model-keys-report.schema.json` document of at most
 32 KiB, with at most 66 entries in `keys`: 6 keys times the 11 windows listed below. The
 cap rises with each window the list gains, in the report and in the answer:
 
