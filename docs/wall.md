@@ -967,7 +967,8 @@ if err := run.RemoveSetup(ctx); err != nil {
   stays. It writes the `wall` step `remove the setup container`. In an open run with no
   setup container it returns nil and writes no step, so you need no condition around it.
   If the removal fails, close the run: the setup container may still run and change the
-  working folder, so run no `push` step after this error.
+  working folder, so run no `push` step after this error. `run.ContainerKept()` is then
+  true, as it is after the agent's container of a session could not be removed.
 - Packages that setup installs outside the working folder stay in the setup container,
   and go with it.
 

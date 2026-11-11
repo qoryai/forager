@@ -1987,6 +1987,11 @@ release may change what an existing document does, and says so under Upgrading.
   network or the wall's private directory leaves it false. The run still reports the
   failure and keeps its entry among the walled runs still going, and
   `(*wall.Docker).Reap` removes the network.
+- `(*session.Run).ContainerKept`, true once removing the agent's container of a session
+  or the setup container in `RemoveSetup` failed, before the close: run host work on
+  the run's binds, such as a push, only while it is false. After `Close` it equals
+  `session.Closed.WallKept`. `RemoveSetup`'s error for an agent's container that could
+  not be removed matches `wall.ErrContainerKept`, with its text as it was.
 
 #### Fixed
 

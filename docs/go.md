@@ -456,6 +456,18 @@ after it, also when a later `RemoveSetup` succeeds, and `Close` tries the remova
 | after `Close` | `Remove the setup container before the close: the run is closed.` |
 | the removal fails | `Close the run: the setup container may still run, so no session can join: ` and the wall's error |
 
+The error for the agent's container of session 1 matches `wall.ErrContainerKept` with
+`errors.Is`, and so does the error of a removal that fails with the Docker wall.
+
+`(*session.Run).ContainerKept()` is true once removing the agent's container of a
+session, as the session ended, or the setup container, in `RemoveSetup`, failed, and
+stays true. Run host work on the run's binds before `Close`, such as a `push` step, only
+while it is false: a container that may still run can write the binds. The run's image
+container, which never starts and has no network, and the relay, which binds the helper
+alone, read-only, stay until the close and do not count, since neither can write a bind.
+After `Close` it equals `session.Closed.WallKept`. It reads no file and takes no lock,
+so a call returns at once, also while a session runs.
+
 After a build of an image, write the build as a step of kind `event.StepBuild`, then
 write its result with `(*session.Run).Built(b)`. `Built` writes `dev.qory.run.built`
 with the members of `session.Built`:

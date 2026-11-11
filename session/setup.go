@@ -128,6 +128,31 @@ func (r *Run) openWall(ctx context.Context) error {
 	return nil
 }
 
+// ContainerKept reports whether removing a container of the run failed: the agent's
+// container of a session, as the session ended, or the setup container, in
+// [Run.RemoveSetup]. It stays true once it is true. A container that may still run can
+// write the run's binds, so run work on them before Close, such as a push, only while
+// ContainerKept is false. The run's image container, which never starts and has no
+// network, and the relay, which binds the helper alone, read-only, stay until the close
+// and do not count: neither can write a bind. After Close it equals [Closed.WallKept],
+// which also counts a container the close could not remove. It reads no file and takes
+// no lock, so a call returns at once, also while a session runs.
+func (r *Run) ContainerKept() bool {
+	return r.wallFailed.Load()
+}
+
+// containerKept is an error whose text is err's and that errors.Is matches to
+// [wall.ErrContainerKept]: a container of the run may still run.
+type containerKept struct{ err error }
+
+func (k containerKept) Error() string { return k.err.Error() }
+
+// Unwrap returns err.
+func (k containerKept) Unwrap() error { return k.err }
+
+// Is reports whether target is [wall.ErrContainerKept].
+func (k containerKept) Is(target error) bool { return target == wall.ErrContainerKept }
+
 // closeWall removes the run's wall, the enclosure and then the run's forwarder. A wall
 // that could not be removed is reported and the run's entry among the walled runs still
 // going stays. Only a container that could not be removed, [wall.ErrContainerKept], may
@@ -136,7 +161,7 @@ func (r *Run) closeWall(ctx context.Context) {
 	if r.enclosure != nil {
 		if err := r.enclosure.Close(ctx); err != nil {
 			if errors.Is(err, wall.ErrContainerKept) {
-				r.wallFailed = true
+				r.wallFailed.Store(true)
 			}
 			r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
 			if r.listed != nil {
@@ -403,7 +428,7 @@ func (r *Run) RemoveSetup(ctx context.Context) (err error) {
 	// A session runs while Join holds r.joining, and the enclosure's Unwrap returned
 	// before Join lets go: only an Unwrap that failed leaves the agent's container behind.
 	case r.keptBy > 0:
-		return fmt.Errorf("Close the run: the agent's container of session %d could not be removed and may still run, so the setup container stays until the close.", r.keptBy)
+		return containerKept{fmt.Errorf("Close the run: the agent's container of session %d could not be removed and may still run, so the setup container stays until the close.", r.keptBy)}
 	}
 	step := r.startStep(event.StepWall, "remove the setup container")
 	// A panic that a caller recovers leaves no step open, and no session joins.
@@ -414,7 +439,7 @@ func (r *Run) RemoveSetup(ctx context.Context) (err error) {
 		}
 	}()
 	if err := r.setupUp.RemoveSetup(ctx); err != nil {
-		r.wallFailed = true
+		r.wallFailed.Store(true)
 		err = fmt.Errorf("Close the run: the setup container may still run, so no session can join: %w", accesskey.ShownError(err))
 		r.writeLog("stderr", 0, step.n, failureLine(err))
 		state := event.StateFailed

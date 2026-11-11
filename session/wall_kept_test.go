@@ -76,9 +76,80 @@ func TestWallKeptAfterASession(t *testing.T) {
 	}
 }
 
-// TestWallKeptAfterRemoveSetup pins Closed.WallKept for the setup container: true when
-// RemoveSetup failed, also when a later call succeeded, and false when RemoveSetup
-// succeeded and after a setup command that failed, where no removal ran.
+// TestContainerKeptBeforeAndAfterTheClose pins Run.ContainerKept for a run of one
+// session: false while the removals succeed, true from a failed Unwrap on, and false
+// before a close that fails. After the close it equals Closed.WallKept: true for a
+// container the close could not remove, and false for a network alone. A call while the
+// session runs returns without waiting for the session.
+func TestContainerKeptBeforeAndAfterTheClose(t *testing.T) {
+	ctx := context.Background()
+	failure := errors.New("wall docker: rm: exit status 1")
+	for name, c := range map[string]struct {
+		wall          wall.Wall
+		before, after bool
+	}{
+		"nothing failed": {&openWall{}, false, false},
+		"Unwrap failed":  {&keptSetupWall{unwrapErr: failure}, true, true},
+		"the close failed on a network alone": {
+			&runCloseFailing{enginedWall: enginedWall{engine: leftEngine}}, false, false,
+		},
+		"the close failed on a container": {
+			&runCloseFailing{
+				enginedWall: enginedWall{engine: leftEngine},
+				closeErr:    containerKept("wall docker: docker rm --force: exit status 1"),
+			}, false, true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sp := spec(t, "FAKE_EXIT=0")
+			sp.Wall, sp.Image = c.wall, "example.com/agent:1"
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			removeEntry(t, r.ID())
+			if r.ContainerKept() {
+				t.Error("ContainerKept is true before the first session")
+			}
+			// Reads while the session runs, which holds the joining lock: under -race they
+			// check that ContainerKept takes no lock and races no write.
+			done := make(chan struct{})
+			read := make(chan struct{})
+			go func() {
+				defer close(read)
+				for {
+					r.ContainerKept()
+					select {
+					case <-done:
+						return
+					case <-time.After(time.Millisecond):
+					}
+				}
+			}()
+			res, err := r.Join(ctx, sp.SessionSpec)
+			close(done)
+			<-read
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := r.ContainerKept(); got != c.before {
+				t.Errorf("ContainerKept before the close %v, want %v", got, c.before)
+			}
+			closed, err := r.Close(ctx, outcomeOf(res, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := r.ContainerKept(); got != c.after || got != closed.WallKept {
+				t.Errorf("ContainerKept after the close %v, want %v and WallKept %v", got, c.after, closed.WallKept)
+			}
+		})
+	}
+}
+
+// TestWallKeptAfterRemoveSetup pins Closed.WallKept and Run.ContainerKept, before and
+// after the close, for the setup container: true when RemoveSetup failed, also when a
+// later call succeeded, and false when RemoveSetup succeeded and after a setup command
+// that failed, where no removal ran.
 func TestWallKeptAfterRemoveSetup(t *testing.T) {
 	failure := errors.New("wall docker: docker rm --force: exit status 1")
 	ctx := context.Background()
@@ -114,12 +185,18 @@ func TestWallKeptAfterRemoveSetup(t *testing.T) {
 			if c.w.removes != len(c.removals) {
 				t.Errorf("the wall tried %d removals, want %d", c.w.removes, len(c.removals))
 			}
+			if got := r.ContainerKept(); got != c.want {
+				t.Errorf("ContainerKept before the close %v, want %v", got, c.want)
+			}
 			closed, err := r.Close(ctx, session.Outcome{State: event.StateFailed, ExitCode: -1})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if closed.WallKept != c.want {
 				t.Errorf("WallKept %v, want %v", closed.WallKept, c.want)
+			}
+			if got := r.ContainerKept(); got != c.want {
+				t.Errorf("ContainerKept after the close %v, want %v", got, c.want)
 			}
 		})
 	}

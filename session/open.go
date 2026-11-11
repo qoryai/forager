@@ -114,8 +114,10 @@ type Run struct {
 	// its entry among the walled runs still going stays, and no session joins after it.
 	keptBy int
 	// wallFailed is true once removing a container of the run's wall failed, and stays
-	// true: the close copies it to [Closed.WallKept].
-	wallFailed     bool
+	// true: the close copies it to [Closed.WallKept]. Join, RemoveSetup and Close set it
+	// under the joining lock; [Run.ContainerKept] reads it without that lock, which a
+	// Join holds while its session runs.
+	wallFailed     atomic.Bool
 	closed         bool
 	sessionApplied map[string]any
 	// steps is the number of the run's last step, host steps and Join's alike, and
@@ -865,7 +867,7 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 	r.reload.stop()
 	r.stopBeat()
 	closed := r.closing.Err() != nil
-	res := &Closed{RunID: r.id, Dir: r.dir, State: out.State, Reason: out.Reason, ExitCode: out.ExitCode, WallKept: r.wallFailed}
+	res := &Closed{RunID: r.id, Dir: r.dir, State: out.State, Reason: out.Reason, ExitCode: out.ExitCode, WallKept: r.wallFailed.Load()}
 	if closed {
 		e := r.closedBy.get()
 		res.State, res.Reason = recorded(e)

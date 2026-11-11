@@ -1089,6 +1089,12 @@ func TestRemoveSetupThatCannotStartRemovesNothing(t *testing.T) {
 			t.Fatal(err)
 		}
 		check(t, &kept.setupWall, r, got, "Close the run: the agent's container of session 1 could not be removed and may still run, so the setup container stays until the close.")
+		if !errors.Is(got, wall.ErrContainerKept) {
+			t.Errorf("the error %v does not match wall.ErrContainerKept", got)
+		}
+		if !r.ContainerKept() {
+			t.Error("ContainerKept is false after the agent's container could not be removed")
+		}
 	})
 	t.Run("a host step is open after a session", func(t *testing.T) {
 		w, sp, r := opens(t)
