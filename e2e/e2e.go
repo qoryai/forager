@@ -598,6 +598,7 @@ func Run(t *testing.T, o Options) {
 	setupRemoved(t, o, origin, outside)
 	setupRemovedAfterSession(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
+	transcriptPlanted(t, o, origin, outside)
 	terminal(t, o, origin, outside)
 
 	t.Run("the terminal crosses and a named host on this machine is reached", func(t *testing.T) {
