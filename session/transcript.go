@@ -101,6 +101,13 @@ func newWalledTranscript(rs runtimes.Resume, root, cwd string, mask func(string)
 	return &transcript{resume: rs, root: root, slug: cwdSlug(cwd), mask: mask, send: send, line: line}
 }
 
+// resumeArgsKept is the error of a session whose wall binds no transcript directory and
+// whose launch does not end with the resume arguments the session added: fix, then
+// cause, then the guard, which only a defect in Forager reaches.
+func resumeArgsKept(fix, cause string) string {
+	return fix + ", then continue the paused run again: " + cause + ". The session cannot take the resume arguments off the launch, because the launch ends with other arguments, which only a defect in Forager causes"
+}
+
 // noResume is the line of a transcript that a continuation cannot resume from: fix, the
 // change that lets it, then what follows, then cause.
 func noResume(fix, cause string) string {

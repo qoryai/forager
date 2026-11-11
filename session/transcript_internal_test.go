@@ -280,3 +280,14 @@ func TestARestoredTranscriptIsReadWithNoWall(t *testing.T) {
 		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
 	}
 }
+
+// TestTheLineOfKeptResumeArgumentsStartsWithTheFix pins the error of a launch the session
+// cannot take its resume arguments off: the fix first, then the cause, then the guard.
+func TestTheLineOfKeptResumeArgumentsStartsWithTheFix(t *testing.T) {
+	got := resumeArgsKept("Make /home/dev a directory in the image", `"/home/dev" is a file in the image`)
+	want := `Make /home/dev a directory in the image, then continue the paused run again: "/home/dev" is a file in the image. ` +
+		"The session cannot take the resume arguments off the launch, because the launch ends with other arguments, which only a defect in Forager causes"
+	if got != want {
+		t.Errorf("the line:\n%s\nwant:\n%s", got, want)
+	}
+}
