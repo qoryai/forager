@@ -517,7 +517,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
 	// The run's first session whose runtime has resume continues the runtime session of
-	// the paused run the run answer's resume names: the launch writes its transcript under
+	// the paused run in the run answer's resume: the launch writes its transcript under
 	// the runtime's home and resumes it. A failure starts the runtime without a resume,
 	// with resumeLine on stderr once the session started.
 	prepared, resumeLine, restore := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptDir, inside, prepared)
@@ -755,7 +755,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			if restore != nil {
 				added := insideAll(restore.args, inside)
 				if !slices.Equal(prepared.Args[max(len(prepared.Args)-len(added), 0):], added) {
-					return fail(errors.New("the launch does not end with the resume arguments the session added"))
+					return fail(fmt.Errorf("%s, then continue the paused run again. The session cannot take the resume arguments off the launch: the launch ends with other arguments, which only a defect in Forager causes", unbound.Fix))
 				}
 				prepared.Args = prepared.Args[:len(prepared.Args)-len(added)]
 				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(r.answer.Resume.RunID, unbound.Fix, unbound.Cause))+"\n"))
