@@ -143,8 +143,8 @@ type Run struct {
 	// [Run.Setup], 0 until it wrote one, and setupFailed the number of the step of
 	// [Run.Setup] or [Run.RemoveSetup] that failed, 0 for none: no session joins after it.
 	setupFirst, setupLast, setupFailed int
-	// setupUp is the run's setup container from its start until [Run.RemoveSetup]
-	// removes it, nil otherwise.
+	// setupUp is the run's setup container from the call of StartSetup until
+	// [Run.RemoveSetup] removes it, nil otherwise.
 	setupUp setupContainer
 }
 

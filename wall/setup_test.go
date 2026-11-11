@@ -259,6 +259,7 @@ func TestDockerCloseReadsEachKindOfRemoval(t *testing.T) {
 	const socket = "dial unix /var/run/docker.sock: connect: no such file or directory"
 	const endpoints = "Error response from daemon: error while removing network: network qory-x-inside has active endpoints"
 	const inUse = "Error: network qory-x-inside is IN USE by container 0123abcd"
+	const podmanInUse = "Error: \"qory-x-inside\" has associated containers with it. Use -f to forcibly delete containers and pods: network is being used"
 	const told = "Error response from daemon: told to fail"
 	const containerRm = "wall docker: docker rm --force: exit status 1: "
 	const networkRm = "wall docker: docker network rm: exit status 1: "
@@ -282,6 +283,8 @@ func TestDockerCloseReadsEachKindOfRemoval(t *testing.T) {
 			wantErr: networkRm + endpoints + "\n" + networkRm + endpoints, kept: []bool{true, true}},
 		{name: "a network in use", fail: "docker network rm", failOut: inUse,
 			wantErr: networkRm + inUse + "\n" + networkRm + inUse, kept: []bool{true, true}},
+		{name: "a network in use, in Podman's form", fail: "docker network rm", failOut: podmanInUse,
+			wantErr: networkRm + podmanInUse + "\n" + networkRm + podmanInUse, kept: []bool{true, true}},
 		{name: "a network and a container", fail: "docker network rm|docker rm",
 			wantErr: containerRm + told + "\n" + networkRm + told + "\n" + networkRm + told, kept: []bool{true, false, false}},
 	} {

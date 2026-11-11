@@ -471,7 +471,7 @@ the run's binds may still run outside a session:
   the setup container, in `RemoveSetup`, failed, and stays true.
 - With a wall whose enclosure has no `Unwrap`, it is also true from the end of the first
   session until `Close`, since the agent's container stays until the close.
-- During a session it returns false while that session's container runs.
+- During a session it does not count the container of the session that runs.
 
 Run host work on the run's binds before `Close`, such as a `push` step, only after
 `Join` returned and `RemoveSetup` returned nil, and only while `ContainerKept()` is
@@ -1470,12 +1470,13 @@ after a last session that ended otherwise.
 - `RunClosed` and `ClosedReason`, as `session.Result` has them.
 - `WallKept`, true when removing a container of the run's wall failed at some point of
   the run: the agent's container at a session's end, the setup container in
-  `RemoveSetup`, or a container at the close, an error that matches
-  `wall.ErrContainerKept`. A process may have kept writing the run's binds after its
+  `RemoveSetup`, or a container at the close. Any error of the wall's `Unwrap` or
+  `RemoveSetup` sets it, and so does any error of the close that is not marked
+  `wall.ErrNoContainerKept`. A process may have kept writing the run's binds after its
   session ended, so do not trust what is in them. `WallKept` stays true when a later
   removal succeeded. A close whose every failure matches `wall.ErrNoContainerKept`, as
   the Docker wall's failures on a network or the wall's private directory do, leaves it
-  false; any other error of the close sets it. The run still reports the failure and
+  false. The run still reports the failure and
   keeps its entry among the walled runs still going, and `(*wall.Docker).Reap` removes
   the network.
 

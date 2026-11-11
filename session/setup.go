@@ -134,10 +134,10 @@ func (r *Run) openWall(ctx context.Context) error {
 // session, as the session ended, or the setup container, in [Run.RemoveSetup], failed,
 // and stays true then. In a run whose wall has no Unwrap, it is also true from the end of
 // the first session until Close, since the agent's container stays until the close.
-// During a session it returns false while that session's container runs. Run work on
-// the binds before Close, such as a push, only after Join returned and RemoveSetup
-// returned nil, and only while ContainerKept is false; otherwise wait for Close and read
-// [Closed.WallKept]. The run's image container, which never starts and has no network,
+// During a session it does not count the container of the session that runs. Run work
+// on the binds before Close, such as a push, only after Join returned and RemoveSetup
+// returned nil, and only while ContainerKept is false; otherwise wait for Close and
+// read [Closed.WallKept]. The run's image container, which never starts and has no network,
 // and the relay, which binds the helper alone, read-only, stay until the close and do
 // not count: neither can write a bind. After Close it equals [Closed.WallKept], which
 // also counts a container the close could not remove. It reads no file and takes no

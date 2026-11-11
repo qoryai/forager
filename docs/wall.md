@@ -973,8 +973,8 @@ if err := run.RemoveSetup(ctx); err != nil {
   container, which the engine may have started.
 - Run a `push` step before the close only after `Join` returned and `RemoveSetup`
   returned nil, and only while `run.ContainerKept()` is false. During a session it
-  returns false while that session's container runs. Otherwise close the run first and
-  read `Closed.WallKept`.
+  does not count the container of the session that runs. Otherwise close the run
+  first and read `Closed.WallKept`.
 - Packages that setup installs outside the working folder stay in the setup container,
   and go with it.
 

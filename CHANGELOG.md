@@ -1999,20 +1999,22 @@ release may change what an existing document does, and says so under Upgrading.
   zero `session.Image` in a run with no wall or when the run answer has no image.
 - `session.Closed.WallKept`, true when removing a container of the run's wall failed at
   some point of the run: the agent's container at a session's end, the setup container
-  in `RemoveSetup`, or a container at the close, `wall.ErrContainerKept`. A process may
-  have kept writing the run's binds after its session ended, so do not trust what is in
-  them. It stays true when a later removal succeeded. A close whose every failure
-  matches `wall.ErrNoContainerKept`, as the Docker wall's failures on a network or the
-  wall's private directory do, leaves it false; any other error of the close sets it.
+  in `RemoveSetup`, or a container at the close. Any error of the wall's `Unwrap` or
+  `RemoveSetup` sets it, and so does any error of the close that is not marked
+  `wall.ErrNoContainerKept`. A process may have kept writing the run's binds after its
+  session ended, so do not trust what is in them. It stays true when a later removal
+  succeeded. A close whose every failure matches `wall.ErrNoContainerKept`, as the
+  Docker wall's failures on a network or the wall's private directory do, leaves it
+  false.
   The run still reports the failure and keeps its entry among the walled runs still
   going, and `(*wall.Docker).Reap` removes the network.
 - `(*session.Run).ContainerKept`, true once removing the agent's container of a session
   or the setup container in `RemoveSetup` failed, and, with a wall whose enclosure has
   no `Unwrap`, from the end of the first session until `Close`. During a session it
-  returns false while that session's container runs. Run host work on the run's binds,
-  such as a push, before `Close` only after `Join` returned and `RemoveSetup` returned
-  nil, and only while `ContainerKept` is false; otherwise wait for `Close` and read
-  `session.Closed.WallKept`. After `Close` it equals `session.Closed.WallKept`.
+  does not count the container of the session that runs. Run host work on the run's
+  binds, such as a push, before `Close` only after `Join` returned and `RemoveSetup`
+  returned nil, and only while `ContainerKept` is false; otherwise wait for `Close` and
+  read `session.Closed.WallKept`. After `Close` it equals `session.Closed.WallKept`.
   `RemoveSetup`'s error for an agent's container that could not be removed matches
   `wall.ErrContainerKept`, with its text as it was.
 

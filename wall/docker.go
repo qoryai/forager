@@ -2103,11 +2103,17 @@ func (e *dockerEnclosure) remove(ctx context.Context, argv []string, gone func(o
 }
 
 // attached reports whether out, the output of a failed network rm, contains "active
-// endpoints" or "in use" in any case: a container of the run is still attached to the
-// network, so it may still run.
+// endpoints", "in use", "being used" or "associated containers" in any case, Docker's
+// and Podman's forms: a container of the run is still attached to the network, so it
+// may still run.
 func attached(out string) bool {
 	out = strings.ToLower(out)
-	return strings.Contains(out, "active endpoints") || strings.Contains(out, "in use")
+	for _, s := range []string{"active endpoints", "in use", "being used", "associated containers"} {
+		if strings.Contains(out, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // ErrContainerKept is what errors.Is matches when removing a container of the run
