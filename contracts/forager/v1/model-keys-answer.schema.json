@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/model-keys-answer.schema.json",
+  "title": "Model keys answer",
+  "description": "The body of the server's signed 200, application/json, to a model keys report: for each key of the run's key group, the newest state per limit window from every gateway, under the run's credential names. The gateway takes each entry whose observed_at is newer than the state it has of that key and window, and does not set a key whose entry has a cooldown_until in the future. A member Forager does not recognise is ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version", "keys"],
+  "properties": {
+    "version": {
+      "description": "The document format. The gateway reads version 1 alone.",
+      "const": 1
+    },
+    "keys": {
+      "description": "One entry per key of the key group and limit window, each pair once: at most 66, 6 keys times the 11 windows of model-keys-report.schema.json.",
+      "type": "array",
+      "maxItems": 66,
+      "items": {"$ref": "model-keys-report.schema.json#/$defs/key_state"}
+    }
+  }
+}

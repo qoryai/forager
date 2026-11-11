@@ -10,6 +10,26 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Deploy the gateway first, then Qory Apiary. A gateway built before this change fails
+  a run with `run_configuration_invalid` when the run configuration's API credential has
+  `resets_at`, `schedule_resets_at` or `pause_for_s`, and ignores the run
+  configuration's `resume`. It also ends a run `batch_refused` for a batch with
+  `dev.qory.session.transcript`, or with `model_key_limit` as the reason of
+  `dev.qory.session.exited` or `dev.qory.run.exited`. With a control plane that sends
+  no `pause_for_s`, each key has the default cooldown in the next entry.
+- Send `pause_for_s` on a key of a key group to set its cooldown after a limit refusal
+  with no reset. A key without it has a cooldown of 60 seconds for an API key, and of
+  3600 seconds for a subscription, a key whose `auth` has `oauth`. A `pause_for_s` of 0
+  fails the run with `run_configuration_invalid`. A run configuration has at most 6 API
+  credentials.
+- Send the key group in the order that breaks ties: the key of the model choice first,
+  with `chosen: true`, when it is out of cooldown at the claim; then the provider's
+  default key; then the others by when they were added; then the keys in cooldown at the
+  claim, each with `cooldown_until`. A start key in cooldown and two keys with `chosen`
+  are each `run_configuration_invalid`.
+- Read a `dev.qory.run.exited` `cancelled` with `model_key_limit` as a pause of the run,
+  not as a person's cancel: the run's work is kept, and a continuation of the run can
+  resume its runtime session.
 - Deploy the gateway before the sessions that use it: a session's batch may contain
   `image_access_denied`, `image_rate_limited` and `image_registry_unreachable` as the
   `code` of `dev.qory.run.refused` and the `reason` of `dev.qory.session.exited` and
@@ -217,6 +237,59 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- Several model keys per run. When the start key is an API credential, the key group is
+  the start key and every API credential with its `format`, `auth` and `endpoint`, in the
+  order of `credentials`. The keys of the group share the start key's placeholder, and
+  the proxy sets one of them, the active key. The proxy keeps a copy of each request body
+  to the model endpoint, up to 8 MiB, until the answer's status arrives. On a `429` from
+  the provider it puts the key in cooldown, makes the next key of the group the active
+  key, and sends the request again from the copy, so the session does not see the
+  refusal. A cooldown ends at the reset in the refusal, at most 31 days after it, at the
+  key's `schedule_resets_at` (plus 7 days once it has passed), or `pause_for_s` seconds
+  after the refusal: without it, 60 seconds for an API key and 3600 for a subscription.
+  An `error` event of the type `rate_limit_error` in the streamed `200` of a `POST` to
+  the model API's messages path, `/v1/messages` under the endpoint, puts the key in
+  cooldown and switches the active key too. The active key stays across sessions, and a
+  join request without `model_credential` gets it. The run configuration's API
+  credential has `resets_at`, `schedule_resets_at` and `pause_for_s`. README §Credentials,
+  Several model keys.
+- The model keys report: the gateway posts the state of each limit window of the run's
+  keys, `POST <run.url>/<run_id>/model-keys`, signed by its access key, at most once a
+  second, and takes the newest state of every gateway from the answer, so a run sets no
+  key that another run found at its limit. `model-keys-report.schema.json` and
+  `model-keys-answer.schema.json` define the body and the answer. With a control plane
+  that returns `404`, the cooldowns stay within the run. A report has at most 32 KiB
+  and 66 entries, 6 keys of 11 windows, and Qory Apiary stores only those windows. For
+  a report whose `observed_at` is more than 300 seconds ahead of its clock, Qory Apiary
+  returns `400` `invalid_request`. README §The server, The model keys.
+- `model_key_limit`, a reserved reason, `event.ReasonModelKeyLimit`. When no key of the
+  group is left, or the refused body was over 8 MiB, the proxy passes the refusal to the
+  session; while every key is in cooldown, the proxy returns its `429` and sends nothing
+  to the provider. In both cases the gateway's `2xx` to the session's next batch has
+  `{"stop": {"reason": "model_key_limit"}}`, `link-batch-answer.schema.json`. The session
+  stops the runtime and writes `dev.qory.session.exited` `cancelled` with
+  `model_key_limit`. The run stays open for its host work, and its caller closes it
+  `cancelled` with `model_key_limit` and the last session's exit code.
+- `dev.qory.session.transcript`, `event.SessionTranscript`: the transcript of a runtime's
+  session, masked as `dev.qory.run.log` is, in chunks of at most 32 KiB, each run's from
+  offset 0. The descriptor's `resume` sets where the runtime writes the transcript and the
+  arguments that resume it; the Claude Code descriptor reads `transcript_path`, falls back
+  to `~/.claude/projects/{cwd_slug}/{session_id}.jsonl`, and resumes with
+  `--resume {session_id}`.
+- `GET /resume/transcript`, a sixth request of the run API, and `resume` in the run
+  configuration, which the gateway copies to `resume` of the run answer: before the
+  runtime of the run's first session whose runtime has `resume` starts, the session
+  reads the paused run's transcript over the gateway's link, `GET
+  <run.url>/<run_id>/transcript`, writes it at `resume.path` and adds the descriptor's
+  `resume.args`. The gateway reads the transcript from Qory Apiary with `GET
+  /resume/transcript` of the run API. A program behind the wall, or on `QORY_RUN_API`,
+  gets `404` for that path. When the read or the write fails, the session starts the
+  runtime without a resume.
+- The contract stays at revision 1. Fixtures: `fixtures/run-configuration/model-keys.json`
+  and `resume.json`, `fixtures/model-keys-report/`, `fixtures/model-keys-answer/`,
+  `fixtures/link/link-batch-answer-stop.json`,
+  `link-batch-exited-model-key-limit.json`, `link-batch-session-transcript.json` and
+  `link-run-answer-resume.json`, and `fixtures/descriptor/resume.yaml`.
 - `image_access_denied`, `image_rate_limited` and `image_registry_unreachable`,
   refusal codes of `refusal.Decides`, from the session's check of an image's manifest
   before its pull. Each refusal has the reference as its name and in its detail, and
@@ -965,6 +1038,23 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- Several model keys of one provider per run, a key group (docs/credentials.md, Several
+  keys of one provider). On a provider's `429` the proxy puts the active key in
+  cooldown, sends the request again with the next key, and passes the refusal only
+  when no key is left; the gateway's answer to the session's next batch then has
+  `stop`, `model_key_limit`. The gateway reports each key's limit windows to the
+  control plane with a signed `POST <run.url>/<run_id>/model-keys`, and skips a key the
+  answer has in cooldown. A control plane without the route gets one report: the run's
+  record has one line, `Upgrade the control plane to share model key cooldowns between
+  runs`, and cooldowns stay within the run.
+- The link takes a session's `dev.qory.run.exited` `cancelled` with `model_key_limit`
+  after a last `dev.qory.session.exited` with that reason.
+- `server.Client.PostModelKeys`, the signed model keys report and its answer.
+- The link's transcript request, `GET <run.url>/<run_id>/transcript`, for a run whose
+  run configuration has `resume`: the gateway reads the paused run's transcript from
+  Qory Apiary with `server.Client.ResumeTranscript`, verifies it against the signed
+  digest, and streams it as `application/x-ndjson`, at most 64 MiB. The run API's route
+  keeps `404` for `GET /resume/transcript`.
 - The gateway's route to the run API, on a run's proxy, for a run with a control plane:
   a plain `http://` request to `run-api.qory.invalid` reaches Qory Apiary, signed with
   the gateway's access key, so no key enters the run. Only five requests pass, and each
@@ -1394,9 +1484,46 @@ release may change what an existing document does, and says so under Upgrading.
   has ended, bounds its wait, and accepts a second call after an error. The session
   calls it before the run's first `Wrap` or after a session's `Unwrap`, and a later
   `Wrap` may follow, so it leaves the rest of the enclosure as it is.
+- Bind `Launch.Transcript.Path` writable at `Launch.Transcript.Under` below the agent's
+  home in a wall outside Forager, and list it from `Binds`. A wall that ignores it
+  leaves the session's transcript directory empty: the session sends no transcript, and
+  a continuation's resume finds no transcript inside. Implement
+  `wall.TranscriptChecker` when the wall cannot always bind it where the agent's user
+  writes: the session then binds none, adds no resume arguments and writes one line.
 
 #### Added
 
+- `wall.Launch.Transcript`, `wall.Transcript`: the session's transcript directory,
+  `transcripts/<n>/` in the run directory, which the Docker wall binds writable at the
+  runtime's `resume.prefix` below the home of the agent's user inside: `HOME` of the
+  launch, else of the image, else the home in the image's `/etc/passwd` of the
+  container's user, the wall's user or, with nested Docker, root, else `/`. The wall
+  lists it among its binds, and fails the session for a directory that overlaps a mount
+  or a place inside that overlaps another bind's or `/qory`. `wall.TranscriptChecker`,
+  `wall.Unbound`: before `Wrap` the Docker wall works out whether the agent's user can
+  write there. It binds nothing when the wall's user is a name or a uid other than the
+  session's, when a directory from `/` down to the bind's place is a symbolic link or
+  no directory in the image, or when one above the place does not let the agent's user
+  search it, such as root's `/root`, mode `0700`, under nested Docker. The session then
+  starts the runtime without the resume arguments, sends no transcript and writes one
+  line on `stderr` that starts with the fix. The wall makes the bind's parents the
+  image does not have, such as `~/.claude`, owned by the agent's user and group, nested
+  Docker included. Behind a wall the session now reads a runtime's transcript there and sends
+  it as `dev.qory.session.transcript`, and writes a paused run's transcript there before
+  the agent's container starts, with no shell copy inside. It reads only
+  `<slug>/<session id>.jsonl` under a session id that is a UUID in lower case, opened
+  with no symbolic link on its path (`openat2` with `RESOLVE_BENEATH` and
+  `RESOLVE_NO_SYMLINKS` on Linux) and without waiting for a writer, and only a regular
+  file with one link of at most 64 MiB; anything else writes one line on `stderr`, and
+  so does a session whose runtime wrote no transcript. Each poll reads only the bytes
+  appended since the last one, and a line over 8 MiB stops the transcript with one
+  line. With no wall a transcript over 64 MiB stops the same way, as one behind a wall
+  does. Each line on `stderr` about a transcript or a resume starts with its fix. A
+  session that restored a paused run's transcript sends the restored file, under the
+  paused run's slug, from offset 0, with or without a wall, whatever its working
+  directory, so a continuation of a continuation restores one run's chunks.
+  The line `the runtime's transcript lies inside the agent's container, which the
+  session does not read` is gone.
 - `(*session.Run).RemoveSetup`: when no session is running and no host step is open, it
   removes the setup container with `docker rm --force --volumes` and returns once the
   container is gone, so no process of it runs beside the agent or the host work that

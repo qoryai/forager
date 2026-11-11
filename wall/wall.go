@@ -190,6 +190,44 @@ type Launch struct {
 	// Limits are the resources the agent gets; the zero value leaves each to the
 	// adapter's engine.
 	Limits Limits
+	// Transcript is the session's transcript directory, which the enclosure binds
+	// writable; the zero value binds none.
+	Transcript Transcript
+}
+
+// Transcript is a directory of this machine that the session makes for one session,
+// in the run directory and outside every mount, where the runtime writes the transcript
+// of its session. The enclosure binds it writable at Under below the home of the
+// agent's user inside, so the session reads the transcript, and writes a restored one,
+// on this machine. The session checks that no mount contains it or lies inside it; an
+// adapter returns an error for a launch where one does, by path, or where its place inside is,
+// contains or lies inside another mount's place inside or a path the adapter binds for
+// itself, such as /qory for [Docker].
+type Transcript struct {
+	// Path is the directory on this machine, absolute and clean; empty binds none.
+	Path string
+	// Under is its place inside, relative to the home of the agent's user, clean, with
+	// no .. name: the runtime descriptor's resume.prefix without its ~/, such as
+	// .claude/projects for Claude Code.
+	Under string
+}
+
+// TranscriptChecker is an enclosure that works out, before [Enclosure.Wrap], whether
+// it binds a session's transcript directory where the agent's user can write it. The
+// session calls it before Wrap: a launch whose directory the enclosure does not bind
+// starts without the runtime's resume arguments and sends no transcript, and Wrap then
+// gets no Transcript.
+type TranscriptChecker interface {
+	// CheckTranscript returns why the enclosure binds no transcript directory t for a
+	// launch with the environment env, nil when it binds it. An error is a check that
+	// failed, such as a read out of the image.
+	CheckTranscript(ctx context.Context, env []string, t Transcript) (*Unbound, error)
+}
+
+// Unbound is why an enclosure binds no transcript directory: Fix is the change that
+// lets it bind one, and Cause what is so.
+type Unbound struct {
+	Fix, Cause string
 }
 
 // Limits are the resources an enclosure gives the agent. A zero field is no limit of

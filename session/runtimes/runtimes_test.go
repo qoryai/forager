@@ -332,3 +332,41 @@ func TestADescriptorSetsItsFixedVariablesInEveryLaunch(t *testing.T) {
 	}
 	runtimetest.Conforms(t, rt)
 }
+
+// TestADescriptorSaysHowItResumesThroughTheOptionalInterface pins that a descriptor's
+// resume reaches the session through [runtimes.Resumes], as a copy, with or without
+// parent, and that a descriptor without it reports none.
+func TestADescriptorSaysHowItResumesThroughTheOptionalInterface(t *testing.T) {
+	rt, err := runtimes.Described("other-agent.yaml", []byte(other), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := rt.(runtimes.Resumes); !ok {
+		t.Fatal("a described runtime is no Resumes")
+	} else if got, ok := r.Resume(); ok {
+		t.Errorf("a descriptor without resume: %+v", got)
+	}
+	resume := "resume: {path_from: transcript_path, path: '~/.other/s/{session_id}.jsonl', prefix: '~/.other/s/', args: [--resume, '{session_id}']}\n"
+	for name, doc := range map[string]string{
+		"without parent": strings.Replace(other, "rules:\n", resume+"rules:\n", 1),
+		"with parent":    strings.Replace(other, "rules:\n", resume+"parent: {source: output, match: {kind: line}, agent_id: agent, tool_use_id: call}\nrules:\n", 1),
+	} {
+		rt, err := runtimes.Described("other-agent.yaml", []byte(doc), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, ok := rt.(runtimes.Resumes)
+		if !ok {
+			t.Fatalf("%s: no Resumes", name)
+		}
+		got, ok := r.Resume()
+		want := runtimes.Resume{PathFrom: "transcript_path", Path: "~/.other/s/{session_id}.jsonl", Prefix: "~/.other/s/", Args: []string{"--resume", "{session_id}"}}
+		if !ok || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: Resume = %+v %v; want %+v", name, got, ok, want)
+		}
+		got.Args[0] = "changed"
+		if again, _ := r.Resume(); again.Args[0] != "--resume" {
+			t.Errorf("%s: a change to the returned args reached the runtime", name)
+		}
+	}
+}

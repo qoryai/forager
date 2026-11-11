@@ -114,6 +114,9 @@ type Stored struct {
 	// Format, Endpoint and OAuth are an API credential's; empty for a host credential.
 	Format, Endpoint string
 	OAuth            bool
+	// Entry is the part of the credential's entry that [KeyGroup] reads; its Format is
+	// empty for a host credential.
+	Entry KeyEntry
 	// Value returns a copy of the opened value's bytes, which the caller clears once it
 	// has set them; empty once the run has ended, and once the value expired.
 	Value func() []byte
@@ -174,7 +177,12 @@ type Held struct {
 	Uses         []*Use
 	Placeholders []string
 	Start        string
-	all          []*held
+	// Group are the names of the start key's key group, in the order of the run
+	// configuration's credentials: the start key and every credential from the server
+	// with its format, auth and endpoint. Empty when the start key is the machine's, or
+	// the run has none.
+	Group []string
+	all   []*held
 	// panics, when set, gets a panic of the renewals' goroutines ([Held.ReportPanics]).
 	panics atomic.Pointer[func(string)]
 }
@@ -368,6 +376,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		out.Close()
 		return nil, err
 	}
+	out.Group = keyGroup(stored, out.Start)
 	for _, h := range out.all {
 		h.panics = out.reportPanic
 		routine.Go(h.panics, h.renew)
@@ -406,6 +415,45 @@ func (h *Held) startKey(start string) error {
 			"set model_credential in the run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(shown, ", "), accesskey.ShownName(start, true))
 	}
 	return nil
+}
+
+// KeyEntry is the part of an entry of the run configuration's credentials that
+// [KeyGroup] reads: its name, and an API credential's format, endpoint and auth.
+// Format is empty for a host credential.
+type KeyEntry struct {
+	Name, Format, Endpoint   string
+	Scheme, Username, Header string
+	OAuth                    bool
+}
+
+// KeyGroup is the key group of the start key start: the names of entries, in their
+// order, whose format, endpoint and auth are the start key's, the header's case
+// ignored; none when start is no API credential of entries. The gateway sets the key
+// group by it alone: the check of the run configuration and the proxy's group.
+func KeyGroup(entries []KeyEntry, start string) []string {
+	i := slices.IndexFunc(entries, func(e KeyEntry) bool { return e.Name == start })
+	if i < 0 || entries[i].Format == "" {
+		return nil
+	}
+	first := entries[i]
+	var out []string
+	for _, e := range entries {
+		if e.Format == first.Format && e.Endpoint == first.Endpoint && e.OAuth == first.OAuth &&
+			e.Scheme == first.Scheme && e.Username == first.Username && strings.EqualFold(e.Header, first.Header) {
+			out = append(out, e.Name)
+		}
+	}
+	return out
+}
+
+// keyGroup is [KeyGroup] of stored.
+func keyGroup(stored []Stored, start string) []string {
+	entries := make([]KeyEntry, len(stored))
+	for i, s := range stored {
+		entries[i] = s.Entry
+		entries[i].Name = s.Name
+	}
+	return KeyGroup(entries, start)
 }
 
 // check refuses two uses that claim a host together, unless both are model keys, which

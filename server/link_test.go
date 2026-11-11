@@ -495,6 +495,83 @@ func TestARunAnswerHasTheCredentialHostsItCarries(t *testing.T) {
 	}
 }
 
+// TestARunAnswerHasTheResumeItCarries pins that the session reads resume into Resume,
+// the paused run's id, the runtime's session id and the transcript's path; that an
+// answer without it has none; and that a resume that fails the schema, here with no
+// session_id, fails the run answer.
+func TestARunAnswerHasTheResumeItCarries(t *testing.T) {
+	resume := `"resume":{"run_id":"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e","session_id":"s-1","path":"~/.claude/projects/-workspace/s-1.jsonl"},"reserved":`
+	for name, c := range map[string]struct {
+		body string
+		want *server.LinkResume
+		fail bool
+	}{
+		"with resume":        {strings.Replace(runAnswer, `"reserved":`, resume, 1), &server.LinkResume{RunID: "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e", SessionID: "s-1", Path: "~/.claude/projects/-workspace/s-1.jsonl"}, false},
+		"without resume":     {runAnswer, nil, false},
+		"with no session_id": {strings.Replace(runAnswer, `"reserved":`, `"resume":{"run_id":"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e","path":"~/a"},"reserved":`, 1), nil, true},
+	} {
+		g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, 200, c.body) }))
+		k, _ := newLink(t, g)
+		a, err := k.OpenRun(context.Background(), "http://localhost/v1/run-configuration", server.LinkRunRequest{RunID: runID})
+		if (err != nil) != c.fail {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if err == nil && !reflect.DeepEqual(a.Resume, c.want) {
+			t.Errorf("%s: resume %+v, want %+v", name, a.Resume, c.want)
+		}
+	}
+}
+
+// TestTheLinkReadsATranscript pins the transcript request on the local link: a GET of
+// <run.url>/<run_id>/transcript whose 200 is the transcript's bytes; a 404, as the
+// gateway returns for a run that continues no paused run, is an error with its status; a
+// 410 is the end of the run; and a transcript longer than the most the caller reads is
+// an error.
+func TestTheLinkReadsATranscript(t *testing.T) {
+	var got []string
+	mode := "200"
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.Path)
+		switch mode {
+		case "404":
+			answer(w, 404, `{"error":"not_found","from":"gateway","message":"no transcript"}`)
+		case "410":
+			answer(w, 410, `{"error":"run_closed","from":"gateway"}`)
+		default:
+			answer(w, 200, "{\"a\":1}\n")
+		}
+	}))
+	k, _ := newLink(t, g)
+	ctx := context.Background()
+	runURL := "http://localhost/v1/run-configuration"
+	b, err := k.Transcript(ctx, runURL, runID, 8)
+	if err != nil || string(b) != "{\"a\":1}\n" {
+		t.Errorf("the transcript %q, %v", b, err)
+	}
+	if want := "GET /v1/run-configuration/" + runID + "/transcript"; len(got) != 1 || got[0] != want {
+		t.Errorf("requests %v, want %q", got, want)
+	}
+	if _, err := k.Transcript(ctx, runURL, runID, 7); err == nil || !strings.Contains(err.Error(), "longer than 7 bytes") {
+		t.Errorf("a transcript over the most: %v", err)
+	}
+	for c, check := range map[string]func(error) bool{
+		"404": func(err error) bool {
+			var se *server.StatusError
+			return errors.As(err, &se) && se.Status == 404
+		},
+		"410": func(err error) bool { _, ok := server.Ended(err); return ok },
+	} {
+		mode = c
+		if _, err := k.Transcript(ctx, runURL, runID, 8); !check(err) {
+			t.Errorf("%s: %v", c, err)
+		}
+	}
+	if _, err := k.Transcript(ctx, runURL, "R", 8); err == nil {
+		t.Error("a run id of another form")
+	}
+}
+
 // TestTheRunAnswerNeverShowsItsProxySecret pins that a run answer prints and logs
 // without its proxy secret and its stack proxy secret under every verb, and that a link
 // prints by the place it speaks to.

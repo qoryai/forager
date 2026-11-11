@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -52,6 +53,8 @@ type recorder struct {
 	// docker cp reads out of a container, by the path inside.
 	user  string
 	files map[string]string
+	// imageHome, when set, is HOME in the Env of the image's Config.
+	imageHome string
 	// held are the repository digests the engine lists for the image a run names by its
 	// reference; nil is an engine that has no such image. down has the engine answer
 	// no image inspect of the repository digests at all.
@@ -80,6 +83,47 @@ type recorder struct {
 	execOut      string
 	execErr      string
 	setupStopped bool
+	// dirs are the paths the image has, for a docker cp that checks one, each a directory
+	// owned by root of mode 0755, and heads the paths with another first tar header;
+	// copied is the tar of the last docker cp into a container.
+	dirs   map[string]bool
+	heads  map[string]tar.Header
+	copied []byte
+}
+
+// statPath is the path inside of a docker cp that checks one, of the form docker cp
+// <container>:<path> -, and whether line is one.
+func statPath(line string) (string, bool) {
+	f := strings.Fields(line)
+	if len(f) != 4 || f[1] != "cp" || f[3] != "-" {
+		return "", false
+	}
+	_, inside, ok := strings.Cut(f[2], ":")
+	return inside, ok
+}
+
+// dirTar is a tar stream of one directory, as docker cp writes one.
+func dirTar(name string) []byte {
+	return headTar(tar.Header{Name: path.Base(name) + "/", Typeflag: tar.TypeDir, Mode: 0o755})
+}
+
+// headTar is a tar stream of the one entry h, with no content.
+func headTar(h tar.Header) []byte {
+	var b bytes.Buffer
+	w := tar.NewWriter(&b)
+	w.WriteHeader(&h)
+	w.Close()
+	return b.Bytes()
+}
+
+func (r *recorder) input(_ context.Context, argv, env []string, stdin []byte) ([]byte, error) {
+	line := words(argv)
+	r.lines, r.envs = append(r.lines, line), append(r.envs, env)
+	r.copied = slices.Clone(stdin)
+	if r.fails(line) {
+		return []byte("Error response from daemon: told to fail"), errors.New("exit status 1")
+	}
+	return nil, nil
 }
 
 func (r *recorder) stream(_ context.Context, argv, env []string, stdout, stderr io.Writer) (int, error) {
@@ -122,6 +166,16 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 		return []byte(r.failOut), errors.New("exit status 1")
 	case r.fails(line):
 		return []byte("Error response from daemon: told to fail"), errors.New("exit status 1")
+	case strings.HasPrefix(line, "docker cp "):
+		if inside, ok := statPath(line); ok {
+			if h, ok := r.heads[inside]; ok {
+				return headTar(h), nil
+			}
+			if r.dirs[inside] {
+				return dirTar(inside), nil
+			}
+			return []byte("Error response from daemon: Could not find the file " + inside + " in container " + strings.Split(strings.Fields(line)[2], ":")[0]), errors.New("exit status 1")
+		}
 	case strings.Contains(line, " version --format "):
 		if r.version == "" {
 			return []byte("28.0.0\n"), nil
@@ -169,8 +223,19 @@ func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error)
 		return []byte(`{"Env":["PATH=/bin"],"Cmd":["sh"]}` + "\n"), nil
 	case strings.Contains(line, " image inspect ") && r.user == "null":
 		return []byte("null\n"), nil
+	case strings.Contains(line, " image inspect ") && r.user != "" && r.imageHome != "":
+		return []byte(`{"Env":["PATH=/bin","HOME=` + r.imageHome + `"],"User":` + r.user + "}\n"), nil
 	case strings.Contains(line, " image inspect ") && r.user != "":
 		return []byte(`{"Env":["PATH=/bin"],"User":` + r.user + "}\n"), nil
+	case strings.HasPrefix(line, "docker cp ") && !strings.Contains(line, " --follow-link "):
+		if inside, ok := statPath(line); ok && !r.fails(line) {
+			if h, ok := r.heads[inside]; ok {
+				return headTar(h), nil
+			}
+			if r.dirs[inside] {
+				return dirTar(inside), nil
+			}
+		}
 	case strings.Contains(line, " cp --follow-link "):
 		if r.onCopy != nil {
 			r.onCopy()

@@ -220,6 +220,47 @@ A credential without `format` whose `placeholders` list a model key's variable, 
 `ANTHROPIC_API_KEY`, stops the run with `run_configuration_invalid`. Rewrite it as a
 model key.
 
+### Several keys of one provider
+
+A key group lets a run go on when the model provider returns a limit refusal for a key. When
+the start key comes from the control plane, its key group is the start key and every
+API credential of the run configuration with the same `format`, `auth` and `endpoint`,
+in the order of `credentials`. A key of `forager.yaml` is never in a key group.
+
+1. Optionally set `pause_for_s` on a key of the group: the cooldown in seconds after a
+   refusal with no reset, 1 to 604800. A key without it has a cooldown of 60 seconds
+   for an API key, and of 3600 seconds for a subscription, a key whose `auth` has
+   `oauth`. A `pause_for_s` of 0 stops the run with `run_configuration_invalid`.
+2. Optionally set `schedule_resets_at`, the time a subscription's weekly limit resets,
+   for a refusal with no reset. A key with it ignores `pause_for_s`.
+
+The keys share the start key's placeholder, and the proxy sets one of them, the active
+key. When the provider returns `429` for the active key, the proxy puts the key in
+cooldown until the reset in the answer's headers, makes another key out of cooldown the
+active key, and sends the request again with it. The proxy takes the key with `chosen`
+first, then a key with no known reset, by the order, then the key whose limit resets
+soonest. A key with `cooldown_until` stays in cooldown until that time, until the
+provider returns a `2xx` for it, or until the answer to a later model keys report has
+an entry of the key that is not `rejected`. The session gets only the answer to that
+second request. The proxy keeps a copy of each request
+body up to 8 MiB for this; a larger body goes once.
+
+When no key is left out of cooldown, the session gets the `429`, and the proxy sends no
+more requests with the placeholder until the session's join ends: each gets a `429` from
+the gateway, `qory: start the run again once a model key's cooldown ends`. The
+gateway's answer to the session's next batch has `stop`, `model_key_limit`, so the
+session stops the runtime and the run pauses. The next join gets the active key again.
+
+The gateway reports each key's limit windows to the control plane, at most once a
+second, and takes the cooldowns other runs found from the answer. A run then stops
+setting a key that another run found at its limit once the answer to its next report
+arrives: until then, up to about a second after the other run's refusal and longer
+while a report waits for a retry, the run can still send a request with that key and
+get the refusal itself. The contract's
+[§The server, The model keys](../contracts/forager/v1/README.md#the-server) lists the
+report and its answers. The gateway writes one log line for each limit answer, with the
+status, the names of the limit headers and the error's type, and no value.
+
 ## From Qory Apiary
 
 A run configuration may list `credentials`, with no value; the control plane stores the

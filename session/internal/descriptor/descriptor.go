@@ -61,8 +61,27 @@ type Descriptor struct {
 	// server to allow for a run. No code of this module applies them to a run's policy.
 	// Nil when the descriptor has none.
 	EgressHosts []string `yaml:"egress_hosts" json:"egress_hosts,omitempty"`
-	Parent      *Parent  `yaml:"parent" json:"parent,omitempty"`
-	Rules       []Rule   `yaml:"rules" json:"rules"`
+	// Resume is where the runtime writes the transcript of its session, and how the
+	// session starts the runtime again from it. Nil when the runtime has no resume.
+	Resume *Resume `yaml:"resume" json:"resume,omitempty"`
+	Parent *Parent `yaml:"parent" json:"parent,omitempty"`
+	Rules  []Rule  `yaml:"rules" json:"rules"`
+}
+
+// Resume is where the runtime writes the transcript of its session, and the arguments
+// that start the runtime again from it. Each path starts with ~/, the runtime's home.
+type Resume struct {
+	// PathFrom is the member of a hook's input that contains the transcript's path,
+	// such as transcript_path.
+	PathFrom string `yaml:"path_from" json:"path_from"`
+	// Path is the transcript's path while no hook input contains PathFrom: a template
+	// with {session_id} and {cwd_slug}. It starts with Prefix.
+	Path string `yaml:"path" json:"path"`
+	// Prefix is the directory the transcript must lie under, ending in /.
+	Prefix string `yaml:"prefix" json:"prefix"`
+	// Args are the arguments the session adds when it resumes, with {session_id} in
+	// place of the runtime's session id.
+	Args []string `yaml:"args" json:"args"`
 }
 
 // Tools is what the session copies from a tool's input onto the runtime's tool events.
@@ -325,7 +344,27 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	if err := d.checkFixed(); err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
+	if err := d.Resume.check(); err != nil {
+		return nil, fmt.Errorf("%s: %w", shown, err)
+	}
 	return &d, nil
+}
+
+// check checks what the schema cannot express of resume: path starts with prefix, and
+// neither has a .. segment. A nil Resume passes.
+func (r *Resume) check() error {
+	if r == nil {
+		return nil
+	}
+	for _, p := range []string{r.Prefix, r.Path} {
+		if slices.Contains(strings.Split(p, "/"), "..") {
+			return fmt.Errorf("resume: remove the .. segment from %s: the transcript lies under the runtime's home", accesskey.ShownValue(p, true))
+		}
+	}
+	if !strings.HasPrefix(r.Path, r.Prefix) {
+		return fmt.Errorf("resume: start path %s with prefix %s: the transcript lies under prefix", accesskey.ShownValue(r.Path, true), accesskey.ShownValue(r.Prefix, true))
+	}
+	return nil
 }
 
 // checkFixed holds the fixed variables to what the schema cannot express: no name of

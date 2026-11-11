@@ -38,6 +38,8 @@ type join struct {
 	// model_key is false: the proxy sets no model key while the join is open.
 	model string
 	noKey bool
+	// reason is the reason of the session's dev.qory.session.exited, empty for none.
+	reason string
 	// started and exited say the run's stream numbered the session's
 	// dev.qory.session.started and dev.qory.session.exited; startedAt is the time of
 	// the former.
@@ -193,6 +195,8 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		// model key in place of the start key.
 		lr.px.SetModelKey(model)
 	}
+	// A new join starts with no stop: the proxy sets the active key again.
+	lr.keys.Resume()
 	g.answerHeaders(s, w, r, digest)
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
@@ -206,15 +210,21 @@ const joinWhileOpen = "a join while another join of the run is open"
 
 // modelKey is the model key a join's session starts with: name, when it is one of the
 // model keys the gateway holds for the run, else the run's start key when name is
-// empty; empty when the run holds no model key. It reports false for a name of no
-// model key of the run's.
+// empty; empty when the run has no model key. Empty, or a key of the run's key group,
+// is the group's active key. It reports false for a name of no model key of the run's.
 func (lr *linkRun) modelKey(name string) (string, bool) {
 	held := lr.r.Held()
 	if held == nil {
 		return "", name == ""
 	}
 	if name == "" {
-		return held.Start, true
+		name = held.Start
+		if name == "" {
+			return "", true
+		}
+	}
+	if lr.keys.Has(name) {
+		return lr.keys.Active(), true
 	}
 	for _, c := range held.Credentials() {
 		if c.Format != "" && c.Name == name {

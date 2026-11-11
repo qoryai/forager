@@ -300,6 +300,11 @@ type Options struct {
 	// agent's side, and from containers the agent starts, through the Engine API and
 	// with the command.
 	Docker bool
+	// HomeImage, with Docker, is Image with HOME set to a directory the agent's user
+	// can reach: the transcript cases run in it, since the agent runs as the wall's user
+	// under the home of the enclosure's root, which an image such as docker:dind keeps
+	// at mode 0700. Empty, with Docker, skips them.
+	HomeImage string
 	// EngineID is the ID of the engine the adapter reaches, which the daemon inside must
 	// not be.
 	EngineID string
@@ -497,6 +502,11 @@ func Run(t *testing.T, o Options) {
 	check("no environment but what the run passes", !p.HostEnv && p.PassedEnv, fmt.Sprintf("the host's variable seen: %v; the run's variable seen: %v; all: %v", p.HostEnv, p.PassedEnv, p.EnvNames))
 	check("no file of the host but the mounts", !p.HostFile, "the probe read a file outside the workspace")
 	check("the settings are read-only", p.SettingsWrite != "", "the probe opened the session's settings for writing")
+	// With nested Docker the agent's container starts as root, whose home the engine
+	// sets as HOME, and the agent runs as the wall's user, so the check is of the others.
+	if !o.Docker {
+		check("the agent's user can create ~/.claude/session-env beside the transcript bind", p.SessionEnv == "", p.SessionEnv)
+	}
 	written, err := os.ReadFile(filepath.Join(r.dir, "probe-was-here"))
 	check("the workspace is the run's", err == nil && string(written) == "inside", err)
 	if runtime.GOOS == "linux" {
@@ -598,6 +608,8 @@ func Run(t *testing.T, o Options) {
 	setupRemoved(t, o, origin, outside)
 	setupRemovedAfterSession(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
+	transcriptSent(t, o, origin, outside)
+	transcriptPlanted(t, o, origin, outside)
 	terminal(t, o, origin, outside)
 
 	t.Run("the terminal crosses and a named host on this machine is reached", func(t *testing.T) {
@@ -1479,6 +1491,9 @@ type variant struct {
 	// stdout gets the session's standard output too.
 	stdin  io.Reader
 	stdout io.Writer
+	// home, with Docker, defines the machine's image as Options.HomeImage in place of
+	// Options.Image.
+	home bool
 }
 
 // run runs the probe as the runtime of a session behind the wall and reads what it
@@ -1579,7 +1594,11 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	var images []session.Image
 	selected := ""
 	if o.Runtime != "" || o.Docker {
-		images = []session.Image{{Name: "suite", Ref: o.Image, Runtime: o.Runtime, Docker: o.Docker}}
+		ref := o.Image
+		if v.home && o.Docker {
+			ref = o.HomeImage
+		}
+		images = []session.Image{{Name: "suite", Ref: ref, Runtime: o.Runtime, Docker: o.Docker}}
 		selected = "suite"
 	}
 	if v.image != "" {

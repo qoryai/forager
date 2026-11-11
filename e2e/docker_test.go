@@ -141,6 +141,19 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	if e := w.Engine(context.Background()); e.ID != strings.TrimSpace(string(engine)) {
 		t.Fatalf("the engine recorded: %+v", e)
 	}
+	// With nested Docker the agent runs as the wall's user under the home of the
+	// enclosure's root, which docker:dind keeps at mode 0700: the transcript cases run in
+	// an image of the same with HOME at /tmp, which that user can reach.
+	var homeImage string
+	if docker {
+		homeImage = fmt.Sprintf("qory-walltest-home:%d", os.Getpid())
+		build := exec.Command(command, "build", "--quiet", "--tag", homeImage, "-")
+		build.Stdin = strings.NewReader("FROM " + image + "\nENV HOME=/tmp\n")
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("the image %s: %v: %s", homeImage, err, out)
+		}
+		t.Cleanup(func() { exec.Command(command, "image", "rm", homeImage).Run() })
+	}
 	// An image by reference runs with no Docker inside, so the run of the suite with one
 	// leaves its cases to the run without.
 	var reference, rootReference, unpublished, allow string
@@ -164,6 +177,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		Image:         image,
 		Runtime:       rt,
 		Docker:        docker,
+		HomeImage:     homeImage,
 		EngineID:      strings.TrimSpace(string(engine)),
 		Recorders:     recorders,
 		Forwarder:     []string{wall.HelperPath, "forward"},

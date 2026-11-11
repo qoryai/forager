@@ -117,12 +117,38 @@ func (p *Proxy) SetModelKey(name string) { p.model.Store(&modelKey{name: name}) 
 // a session that joined with no model key.
 func (p *Proxy) SetNoModelKey() { p.model.Store(&modelKey{none: true}) }
 
-// setsModelKey reports whether the proxy sets the model key of that name: the one
+// keyChoice is the model key the proxy sets on one request, read once per request so a
+// switch of the group's active key while the request is decided changes nothing of it:
+// the key [Proxy.SetModelKey] set, the run's key group, its active key, and whether
+// that key is out of cooldown.
+type keyChoice struct {
+	m      *modelKey
+	k      *keyGroup
+	active string
+	ready  bool
+}
+
+// choice reads the model key the proxy sets on a request.
+func (p *Proxy) choice() keyChoice {
+	c := keyChoice{m: p.model.Load(), k: p.keys.Load(), ready: true}
+	if c.k != nil {
+		c.active, c.ready = c.k.g.Pick()
+	}
+	return c
+}
+
+// sets reports whether the proxy sets the model key of that name: the one
 // [Proxy.SetModelKey] set, none after [Proxy.SetNoModelKey], or any before either is
-// called.
-func (p *Proxy) setsModelKey(name string) bool {
-	m := p.model.Load()
-	return m == nil || (!m.none && m.name == name)
+// called. Of the run's key group, it sets the group's active key alone, when the key
+// set is one of the group or none was set.
+func (c keyChoice) sets(name string) bool {
+	if c.k != nil && c.k.g.Has(name) {
+		if c.m != nil && (c.m.none || !c.k.g.Has(c.m.name)) {
+			return false
+		}
+		return c.active == name
+	}
+	return c.m == nil || (!c.m.none && c.m.name == name)
 }
 
 // NodePaths sets the sides of path rules beside the policy's, each held apart: the
@@ -228,11 +254,12 @@ func (t *terminator) credentials(host string) []*Credential {
 
 // credentialFor is the credential of the host the proxy sets on a request for the
 // clean path: the first without paths, which covers every path, or whose paths match
-// the path, of the model keys only the one [Proxy.SetModelKey] set. rule is the credential's path that matched, empty for one without paths.
-// It is nil when no credential of the host matches.
-func (t *terminator) credentialFor(host, clean string) (c *Credential, rule string) {
+// the path, of the model keys only the one keys sets. rule is the credential's path
+// that matched, empty for one without paths. It is nil when no credential of the host
+// matches.
+func (t *terminator) credentialFor(host, clean string, keys keyChoice) (c *Credential, rule string) {
 	for _, c := range t.credentials(host) {
-		if c.Placeholder != "" && !t.p.setsModelKey(c.Name) {
+		if c.Placeholder != "" && !keys.sets(c.Name) {
 			// A model key of the run's that is not the one the running session starts
 			// with.
 			continue
@@ -250,10 +277,10 @@ func (t *terminator) credentialFor(host, clean string) (c *Credential, rule stri
 // unusedModelKeys reports whether every credential for the host is a model key the
 // proxy does not set, one that is not the running session's: the proxy sets none of
 // them, and replaces each one's value in every answer from the host.
-func (t *terminator) unusedModelKeys(host string) bool {
+func (t *terminator) unusedModelKeys(host string, keys keyChoice) bool {
 	creds := t.credentials(host)
 	for _, c := range creds {
-		if c.Placeholder == "" || t.p.setsModelKey(c.Name) {
+		if c.Placeholder == "" || keys.sets(c.Name) {
 			return false
 		}
 	}
@@ -330,9 +357,16 @@ func (t *terminator) covers(host string) bool {
 // set ([terminator.credentialFor]); a path no credential's paths match gets none, and
 // passes under enforce only when the run policy's path rules list the host and every
 // side that lists it matches the path, or when only unused model keys cover the host
-// ([terminator.unusedModelKeys]) and every side that lists it matches the path. The credential is set only on a path its paths match, whatever the
-// mode: observing is no reason to send a credential to a path nobody configured.
+// ([terminator.unusedModelKeys]) and every side that lists it matches the path. The
+// credential is set only on a path its paths match, whatever the mode: observing is no
+// reason to send a credential to a path nobody configured. The model key is the one the
+// proxy sets now ([Proxy.choice]).
 func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule string, allowed bool, c *Credential) {
+	return t.decide(host, escaped, mode, t.p.choice())
+}
+
+// decide is [terminator.path] with the model key of keys.
+func (t *terminator) decide(host, escaped string, mode policy.Mode, keys keyChoice) (clean, rule string, allowed bool, c *Credential) {
 	clean, ok := policy.CleanPath(escaped)
 	if !ok {
 		return escaped, AmbiguousPath, false, nil
@@ -353,14 +387,14 @@ func (t *terminator) path(host, escaped string, mode policy.Mode) (clean, rule s
 	}
 	if len(t.credentials(host)) > 0 {
 		var r string
-		c, r = t.credentialFor(host, clean)
+		c, r = t.credentialFor(host, clean, keys)
 		switch {
 		case c == nil:
 			// Only the run policy's path rules let a request pass with no credential;
 			// each other side that lists the host has matched it above. A host only
 			// unused model keys cover is a model provider's, an integration's, which a
 			// policy cannot deny: it needs no path rule.
-			if _, _, listed := policy.HostPaths(t.paths, host); !listed && !t.unusedModelKeys(host) {
+			if _, _, listed := policy.HostPaths(t.paths, host); !listed && !t.unusedModelKeys(host, keys) {
 				allowed, rule = false, ""
 			}
 		case rule == "":
@@ -412,7 +446,12 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			if d, ok := settle(resp.Request, resp, nil); ok {
 				t.p.observe(d)
 			}
-			if name, ok := resp.Request.Context().Value(keyedKey{}).(string); ok && resp.StatusCode == http.StatusUnauthorized {
+			name, ok := resp.Request.Context().Value(keyedKey{}).(string)
+			if rs := resendOf(resp.Request); rs != nil {
+				// The key the request went with last, after a resend another than the first.
+				name = rs.name
+			}
+			if ok && resp.StatusCode == http.StatusUnauthorized {
 				// The credential the proxy set on the request, of those of the host.
 				if i := slices.IndexFunc(creds, func(c *Credential) bool { return c.Name == name }); i >= 0 && creds[i].Rejected != nil {
 					creds[i].Rejected()
@@ -458,7 +497,8 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			deny(w, req)
 			return
 		}
-		clean, rule, allowed, c := t.path(d.Host, r.URL.EscapedPath(), now.Mode)
+		keys := t.p.choice()
+		clean, rule, allowed, c := t.decide(d.Host, r.URL.EscapedPath(), now.Mode, keys)
 		req.Path, req.PathRule, req.Allowed = clean, rule, allowed
 		tl := t.tool(d.Host)
 		if tl != nil {
@@ -478,6 +518,18 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		r.Header.Del(setBy)
+		group := (*keyGroup)(nil)
+		if c != nil && allowed && tl == nil && c.carries(r.Header) {
+			group = t.p.group(c.Name)
+		}
+		if group != nil && (group.g.Passed() || !keys.ready) {
+			// The proxy passed a limit refusal to the session, or every key of the group is
+			// in cooldown, which stops the session as a passed refusal does: until its join
+			// ends, no request with the placeholder reaches the provider.
+			group.g.Pass()
+			t.p.limitPassed(w, req)
+			return
+		}
 		// Every answer from a host that gets a credential has the value of each of the
 		// host's credentials replaced with its placeholder, on a path that gets none as
 		// well: the host may send back a value it received before. Each value is read
@@ -521,6 +573,10 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			// In the context, since the session's Connection header can take any header
 			// off the request before it reaches the transport, the mark among them.
 			ctx = context.WithValue(ctx, keyedKey{}, req.Credential)
+			if group != nil {
+				scan := r.Method == http.MethodPost && group.messages != "" && clean == group.messages
+				ctx = t.p.withResend(ctx, r, group, c, creds, clean, scan)
+			}
 		}
 		if mask == nil {
 			rp.ServeHTTP(w, r.WithContext(ctx))
@@ -669,20 +725,28 @@ func (u *unmark) CloseIdleConnections() {
 	closeIdle(u.keyed)
 }
 
-// RoundTrip sends the request on without the mark.
+// RoundTrip sends the request on without the mark. A request with a key of the run's
+// key group goes by its [resend], which sends it again with the next key after a
+// limit refusal.
 func (u *unmark) RoundTrip(r *http.Request) (*http.Response, error) {
 	rt := u.rt
 	if r.Context().Value(keyedKey{}) != nil {
 		rt = u.keyed
 	}
-	if r.Header.Get(setBy) == "" {
-		return rt.RoundTrip(r)
+	out := r
+	if r.Header.Get(setBy) != "" {
+		out = r.Clone(r.Context())
+		out.Header.Del(setBy)
+		// The trailer is filled once the body is read; a clone's copy would stay empty.
+		out.Trailer = r.Trailer
 	}
-	out := r.Clone(r.Context())
-	out.Header.Del(setBy)
-	// The trailer is filled once the body is read; a clone's copy would stay empty.
-	out.Trailer = r.Trailer
-	resp, err := rt.RoundTrip(out)
+	var resp *http.Response
+	var err error
+	if rs := resendOf(r); rs != nil {
+		resp, err = rs.roundTrip(rt, out)
+	} else {
+		resp, err = rt.RoundTrip(out)
+	}
 	if resp != nil {
 		resp.Request = r
 	}

@@ -152,6 +152,28 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
+      - name: Fetch Claude Code and build an image with it
+        # The tests of several model keys run Claude Code 2.1.316, the version the
+        # descriptor pins: behind the wall in this image, and without a wall from PATH.
+        # The binary is npm's linux-x64 package, checked against the SHA-512 that qory's
+        # agent image pins for it.
+        env:
+          CLAUDE_CODE_VERSION: 2.1.316
+          CLAUDE_CODE_SHA512_AMD64: 4500cce8ddbce488cd29c9a53d1ae26b2373a5390426b780c39fef054f95d11dea963910e73ebfa526f37155005ef6aca0e96fb9bd112266b7356bd2b9903c0a
+          BASE_IMAGE: ghcr.io/qoryai/ci-images:debian-trixie-20260918-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+        run: |
+          dir="$RUNNER_TEMP/claude-code"
+          mkdir -p "$dir"
+          curl -fsSLo "$RUNNER_TEMP/claude-code.tgz" "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-${CLAUDE_CODE_VERSION}.tgz"
+          echo "${CLAUDE_CODE_SHA512_AMD64}  $RUNNER_TEMP/claude-code.tgz" | sha512sum -c -
+          tar -xzf "$RUNNER_TEMP/claude-code.tgz" -C "$dir" --strip-components=1 package/claude
+          printf '%s\n' "FROM $BASE_IMAGE" 'COPY claude /usr/local/bin/claude' \
+            'RUN claude --version && mkdir -p /home/agent && chmod 1777 /home/agent' \
+            'ENV HOME=/home/agent DISABLE_AUTOUPDATER=1' \
+            | docker build --tag "qory-walltest-claude:$CLAUDE_CODE_VERSION" --file - "$dir"
+          echo "$dir" >> "$GITHUB_PATH"
+          echo "QORY_WALL_CLAUDE_IMAGE=qory-walltest-claude:$CLAUDE_CODE_VERSION" >> "$GITHUB_ENV"
+
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
@@ -165,10 +187,16 @@ jobs:
         # TestDockerSealedCredentialThroughTheWall and
         # TestDockerHarnessCredentialThroughTheStackProxy need Docker and are not subtests
         # of TestDockerConforms, so their names are in this -run too.
+        # The tests of several model keys, the walled resume,
+        # TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey, and the hook check,
+        # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker and the image
+        # the step before builds, and are listed for the same reason.
+        # TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey needs no Docker, but
+        # Claude Code on PATH, which the part job does not have.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
 
   e2e-containerd:
     name: Wall conformance, containerd image store
@@ -215,6 +243,28 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
+      - name: Fetch Claude Code and build an image with it
+        # The tests of several model keys run Claude Code 2.1.316, the version the
+        # descriptor pins: behind the wall in this image, and without a wall from PATH.
+        # The binary is npm's linux-x64 package, checked against the SHA-512 that qory's
+        # agent image pins for it.
+        env:
+          CLAUDE_CODE_VERSION: 2.1.316
+          CLAUDE_CODE_SHA512_AMD64: 4500cce8ddbce488cd29c9a53d1ae26b2373a5390426b780c39fef054f95d11dea963910e73ebfa526f37155005ef6aca0e96fb9bd112266b7356bd2b9903c0a
+          BASE_IMAGE: ghcr.io/qoryai/ci-images:debian-trixie-20260918-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+        run: |
+          dir="$RUNNER_TEMP/claude-code"
+          mkdir -p "$dir"
+          curl -fsSLo "$RUNNER_TEMP/claude-code.tgz" "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-${CLAUDE_CODE_VERSION}.tgz"
+          echo "${CLAUDE_CODE_SHA512_AMD64}  $RUNNER_TEMP/claude-code.tgz" | sha512sum -c -
+          tar -xzf "$RUNNER_TEMP/claude-code.tgz" -C "$dir" --strip-components=1 package/claude
+          printf '%s\n' "FROM $BASE_IMAGE" 'COPY claude /usr/local/bin/claude' \
+            'RUN claude --version && mkdir -p /home/agent && chmod 1777 /home/agent' \
+            'ENV HOME=/home/agent DISABLE_AUTOUPDATER=1' \
+            | docker build --tag "qory-walltest-claude:$CLAUDE_CODE_VERSION" --file - "$dir"
+          echo "$dir" >> "$GITHUB_PATH"
+          echo "QORY_WALL_CLAUDE_IMAGE=qory-walltest-claude:$CLAUDE_CODE_VERSION" >> "$GITHUB_ENV"
+
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
@@ -228,10 +278,16 @@ jobs:
         # TestDockerSealedCredentialThroughTheWall and
         # TestDockerHarnessCredentialThroughTheStackProxy need Docker and are not subtests
         # of TestDockerConforms, so their names are in this -run too.
+        # The tests of several model keys, the walled resume,
+        # TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey, and the hook check,
+        # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker and the image
+        # the step before builds, and are listed for the same reason.
+        # TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey needs no Docker, but
+        # Claude Code on PATH, which the part job does not have.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
 
   e2e-docker:
     name: Wall conformance, nested Docker

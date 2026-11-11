@@ -113,6 +113,13 @@ type report struct {
 	// RunAPI is what the probe found of the run API, when PROBE_RUN_API is 1: the probe
 	// then tries nothing else.
 	RunAPI *runAPIReport `json:"run_api,omitempty"`
+	// Transcript is what the probe planted at its transcript's path, when
+	// PROBE_TRANSCRIPT is set.
+	Transcript *transcriptReport `json:"transcript,omitempty"`
+	// SessionEnv is how the probe's mkdir of ~/.claude/session-env failed, beside the
+	// transcript bind at ~/.claude/projects, as Claude Code makes it; empty when it did
+	// not, and "no HOME" when HOME is empty.
+	SessionEnv string `json:"session_env"`
 	// Parent is what the probe sees of its parent, the helper's exec, which waits for
 	// it and then measures the enclosure.
 	Parent parentReport `json:"parent"`
@@ -439,6 +446,18 @@ func probe(args []string) int {
 		fmt.Println(probePrefix + string(b))
 		return 0
 	}
+	if kind := os.Getenv("PROBE_TRANSCRIPT"); kind != "" {
+		var settings []string
+		for i, a := range args {
+			if a == "--settings" && i+1 < len(args) {
+				settings = append(settings, args[i+1])
+			}
+		}
+		r.Transcript = probeTranscript(kind, os.Getenv("PROBE_HOST_FILE"), settings)
+		b, _ := json.Marshal(r)
+		fmt.Println(probePrefix + string(b))
+		return 0
+	}
 	// First, so what the setup command left is what it left before the probe started.
 	if b, err := os.ReadFile(preparedFile); err != nil {
 		r.PreparedErr = err.Error()
@@ -533,6 +552,11 @@ func probe(args []string) int {
 		}
 	}
 	r.HostEnv = os.Getenv(hostOnly) != ""
+	if home := os.Getenv("HOME"); home == "" {
+		r.SessionEnv = "no HOME"
+	} else if err := os.Mkdir(filepath.Join(home, ".claude", "session-env"), 0o700); err != nil && !os.IsExist(err) {
+		r.SessionEnv = err.Error()
+	}
 	r.PassedEnv = os.Getenv("PROBE_PASSED") == "yes"
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")

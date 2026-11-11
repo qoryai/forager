@@ -118,6 +118,11 @@ type Config struct {
 	// dev.qory.run.exited arrives. It is called on the worker's goroutine, once for each
 	// such answer, and must not block.
 	OnServerEnd func(server.ServerEnd)
+	// OnStop, when not nil, gets the reason of stop in each 2xx on the link whose body
+	// has one, [server.Delivery.StopReason], before the batch counts as settled, so a
+	// [Server.Flush] returns after it. It is called on the worker's goroutine and must
+	// not block.
+	OnStop func(reason string)
 	// Wait is how long a batch waits after its first event; zero means [BatchWait].
 	Wait time.Duration
 	// Link posts to the gateway's link: each event without its sequence, which the
@@ -134,6 +139,7 @@ type Server struct {
 	onDigests func(server.Digests)
 	onEnded   func(server.RunEnd)
 	onEnd     func(server.ServerEnd)
+	onStop    func(string)
 	closeOnce sync.Once
 	dir       string
 	report    func(string)
@@ -194,7 +200,7 @@ func New(c Config) *Server {
 		wait = BatchWait
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &Server{client: c.To, onDigests: c.OnDigests, onEnded: c.OnEnded, onEnd: c.OnServerEnd, dir: c.Spool, report: report, queue: make(chan queued, QueueSize), ctx: ctx, cancel: cancel, done: make(chan struct{}), sleep: sleep, wait: wait, link: c.Link,
+	w := &Server{client: c.To, onDigests: c.OnDigests, onEnded: c.OnEnded, onEnd: c.OnServerEnd, onStop: c.OnStop, dir: c.Spool, report: report, queue: make(chan queued, QueueSize), ctx: ctx, cancel: cancel, done: make(chan struct{}), sleep: sleep, wait: wait, link: c.Link,
 		changed: make(chan struct{}), flush: make(chan struct{}, 1)}
 	w.target.Store(&c.Target)
 	if c.Spool != "" {
@@ -430,7 +436,8 @@ func (w *Server) next() ([]queued, bool) {
 // of every signed answer but a 410 go to the caller. A signed 410, with any code or
 // none, stops the deliveries and nothing more: the run goes on. On the link every
 // answer is read, and an answer with an End, a 410 or a 400 invalid_request, closes the
-// run with it, which the caller hears of once.
+// run with it, which the caller hears of once. The reason of stop in an accepted
+// answer's body goes to OnStop.
 // A batch queued before the stop is dropped, as one written after it is.
 func (w *Server) deliver(batch []queued) {
 	body := encode(batch)
@@ -461,6 +468,9 @@ func (w *Server) deliver(batch []queued) {
 			w.ack(id, batch)
 			if d.ServerEnd != nil && w.onEnd != nil {
 				w.onEnd(*d.ServerEnd)
+			}
+			if d.StopReason != "" && w.onStop != nil {
+				w.onStop(d.StopReason)
 			}
 			return
 		case err == nil && d.Stop():

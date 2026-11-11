@@ -128,7 +128,7 @@ func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
 	twice := strings.Replace(storedDoc, `]}]}`, `]},{"name":"model","apply":[{"hosts":["b.example"],"scheme":"bearer"}]}]}`, 1)
 	reserved := strings.Replace(storedDoc, `"scheme":"bearer"`, `"scheme":"header","header":"Proxy-Authorization"`, 1)
 	prefixed := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}},"credentials":[` +
-		`{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-api","sk-ant-oat"]}]}`
+		`{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-api","sk-ant-oat"]}]}`
 	for name, c := range map[string]struct {
 		doc    string
 		wall   bool

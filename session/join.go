@@ -287,9 +287,11 @@ func (r *Run) wallKept() error {
 // session decides it.
 func (r *Run) refusedJoin(n int, err error) {
 	exited := map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": 0}
+	r.lastReason = ""
 	var ref *Refusal
 	if errors.As(err, &ref) && refusal.Decides(ref.Code) {
 		exited["reason"] = ref.Code
+		r.lastReason = ref.Code
 	}
 	r.write(event.SessionExited, exited)
 }
@@ -371,7 +373,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			}
 			endStep(event.StateCancelled)
 			r.own(event.SessionExited, exited)
-			r.lastExit = -1
+			r.lastExit, r.lastReason = -1, reason
 			return nil, &Refusal{Code: e.Code, Status: http.StatusGone, From: e.From, Text: endedBeforeJoin}
 		}
 		if !started {
@@ -394,7 +396,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		endStep(event.StateFailed)
 		r.write(event.SessionExited, exited)
-		r.lastExit = -1
+		r.lastExit, r.lastReason = -1, reason
 		return nil, err
 	}
 	fail := func(err error) (*Result, error) { return failWith(err, "") }
@@ -475,6 +477,16 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			r.open.Report("closing the session's output.log: " + accesskey.ShownError(err).Error())
 		}
 	}()
+	// Behind a wall, a runtime with resume gets the session's transcript directory,
+	// transcripts/<n>/ in the run directory, which the wall binds writable at
+	// resume.prefix inside: the session reads the transcript, and writes a restored one,
+	// there. It lies outside every place the enclosure binds.
+	var transcriptDir, transcriptUnder string
+	if spec.Wall != nil {
+		if transcriptDir, transcriptUnder, err = makeTranscriptDir(rt, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
+			return fail(err)
+		}
+	}
 	// The runtime prepares the launch before the variables are resolved, because what it
 	// sets is Forager's and wins over a server's variable of the same name. Behind a wall
 	// the session's directory goes in read-only, apart from every place the session
@@ -504,6 +516,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if prepared, err = rt.Prepare(attach); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
+	// The run's first session whose runtime has resume continues the runtime session of
+	// the paused run in the run answer's resume: the launch writes its transcript under
+	// the runtime's home and resumes it. A failure starts the runtime without a resume,
+	// with resumeLine on stderr once the session started.
+	prepared, resumeLine, restore := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptDir, inside, prepared)
 	// The session's setup commands run inside, after the runtime's preparation, and then
 	// start the launch as the runtime prepared it.
 	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
@@ -584,6 +601,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	endStep(event.StateSucceeded)
 	started, start = true, time.Now()
 	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, neutral, interactive, cols, rows))
+	if resumeLine != "" {
+		r.writeLog("stderr", n, 0, []byte(neutral(resumeLine)+"\n"))
+	}
 	if r.remote != nil {
 		r.open.Report(r.launchLine(spec, n, prepared))
 	}
@@ -677,7 +697,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// then cut and given its summary (shapedRecord), so a cut never splits a secret
 	// before the masker sees it whole.
 	summaries, _ := rt.(runtimes.Summaries)
+	// tr sends the runtime's transcript, for a runtime with resume; nil otherwise.
+	var tr *transcript
 	mapper := parents.New(rt, func(e runtimes.Event) {
+		if tr != nil && e.Type == "dev.qory.runtime.started" {
+			if id, ok := e.Data["session_id"].(string); ok {
+				tr.started(id)
+			}
+		}
 		masked := maskedRecord(texts{secrets: masker, harness: hidden}, e.Data)
 		r.write(e.Type, withSession(neutralRecord(e.Type, shapedRecord(e.Type, masked, summaries), neutralText), n))
 	}, parents.Real)
@@ -701,6 +728,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			}
 			return
 		}
+		if tr != nil {
+			tr.record(rec)
+		}
 		mapper.Handle(rec)
 	}
 	go sock.Serve(records, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
@@ -708,6 +738,32 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	defer closeSocket()
 	defer mapper.Close()
 
+	// The environment the enclosure's launch gets, below.
+	wrapEnv := environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key))
+	// Behind a wall the enclosure works out, once the image is there, whether it binds
+	// the session's transcript directory where the agent's user can write it. When it
+	// does not, the session binds no directory, takes off the resume arguments it added,
+	// sends no transcript and writes one line, and with a restored transcript a second
+	// one: the runtime starts without a resume.
+	if checker, ok := enclosure.(wall.TranscriptChecker); ok && transcriptDir != "" {
+		unbound, err := checker.CheckTranscript(runCtx, wrapEnv, wall.Transcript{Path: transcriptDir, Under: transcriptUnder})
+		if err != nil {
+			return fail(accesskey.ShownError(err))
+		}
+		if unbound != nil {
+			transcriptDir, transcriptUnder = "", ""
+			if restore != nil {
+				added := insideAll(restore.args, inside)
+				if !slices.Equal(prepared.Args[max(len(prepared.Args)-len(added), 0):], added) {
+					return fail(errors.New(resumeArgsKept(unbound.Fix, unbound.Cause)))
+				}
+				prepared.Args = prepared.Args[:len(prepared.Args)-len(added)]
+				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(r.answer.Resume.RunID, unbound.Fix, unbound.Cause))+"\n"))
+				restore = nil
+			}
+			r.writeLog("stderr", n, 0, []byte(neutral(noResume(unbound.Fix, unbound.Cause))+"\n"))
+		}
+	}
 	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
 	// starts it inside, which sets the proxy and socket variables by the addresses the
@@ -743,7 +799,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err := samePlan(plan, again); err != nil {
 			return fail(err)
 		}
-		binds, err := wallBinds(enclosure, sock.Path(), r.authority)
+		binds, err := wallBinds(enclosure, sock.Path(), r.authority, wall.Transcript{Path: transcriptDir, Under: transcriptUnder})
 		if err != nil {
 			return fail(err)
 		}
@@ -754,10 +810,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key)),
+			Env:   wrapEnv,
 			CA:    r.authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: r.relayToken,
+			Transcript: wall.Transcript{Path: transcriptDir, Under: transcriptUnder},
 		})
 		if err != nil {
 			return fail(accesskey.ShownError(err))
@@ -786,25 +843,40 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	resized := func(cols, rows int) {
 		r.write(event.RunResized, map[string]any{"cols": cols, "rows": rows, "session": n})
 	}
+	trDir := spec.Dir
+	if spec.Wall != nil {
+		trDir = shown.Dir
+	}
+	tr = r.sessionTranscript(rt, n, spec.Wall != nil, transcriptDir, launch.Env, trDir, masker, hidden, restore)
+	stopTranscript := make(chan struct{})
+	if tr != nil {
+		go tr.run(stopTranscript)
+	}
 	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: stdout, stderr: stderr, logs: logs, masker: masker, harness: hidden, output: output, cols: cols, rows: rows, resized: resized}
 	// The limit ends the runtime and nothing else: the wall is closed on the caller's
 	// context, as after any exit. The run being closed from outside ends it the same
 	// way.
-	limited, cancelLimit := context.WithCancel(runCtx)
+	// A stop in the gateway's answer to a batch ends it as the limit does, with the
+	// stop's cause, from the runtime's start until its exit is decided.
+	stoppable, stopRuntime := context.WithCancelCause(runCtx)
+	defer stopRuntime(nil)
+	limited, cancelLimit := context.WithCancel(stoppable)
 	if spec.Timeout > 0 {
-		limited, cancelLimit = context.WithTimeoutCause(runCtx, spec.Timeout, errTimeout)
+		limited, cancelLimit = context.WithTimeoutCause(stoppable, spec.Timeout, errTimeout)
 	}
+	r.stops.arm(stopRuntime)
 	// Whether the session was cancelled, and whether it timed out, is decided the moment
 	// the runtime's exit is observed. Cancelled: the caller's context had ended by then,
 	// and neither the limit nor the gateway's close had ended the runtime's context
 	// first; the first end is the cause. Timed out: the limit ended it first, and its
 	// stop signal reached the runtime before the exit was observed; a runtime that
 	// exited by itself before that signal, whatever its status, is decided by its exit.
-	// What ends the context later changes nothing.
+	// What ends the context later changes nothing. A stop in the gateway's answer to a
+	// batch is decided after the exit, below.
 	var cancelled, timedOut bool
 	proc.exited = func() {
 		cause := context.Cause(limited)
-		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed)
+		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed) && !errors.Is(cause, errModelKeyLimit)
 		timedOut = errors.Is(cause, errTimeout) && proc.stopped.Load()
 		if exitObserved != nil {
 			exitObserved()
@@ -815,7 +887,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// end or the run's close, was cancelled. The end of limited once the launch exited
 	// is no stop.
 	setupSteps.start(func() bool {
-		return errors.Is(context.Cause(limited), errTimeout) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
+		cause := context.Cause(limited)
+		return errors.Is(cause, errTimeout) || errors.Is(cause, errModelKeyLimit) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
 	})
 	var exit exitStatus
 	if interactive {
@@ -828,13 +901,19 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	closed := errors.Is(context.Cause(runCtx), errRunClosed)
 	cancelLimit()
 	closeSocket()
-	// The events the mapper still keeps back come before the session's exit.
+	// The events the mapper still keeps back come before the session's exit, and so
+	// does the end of the runtime's transcript.
 	mapper.Close()
+	close(stopTranscript)
+	if tr != nil && !closed {
+		tr.finish()
+	}
 	// A setup step still open when the launch ended has no exit status.
 	setupSteps.finish(closed || timedOut || cancelled)
 	if err != nil && !closed {
+		r.stops.end()
 		r.write(event.SessionExited, map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": time.Since(start).Milliseconds()})
-		r.lastExit = -1
+		r.lastExit, r.lastReason = -1, ""
 		return nil, err
 	}
 	// A runtime the close kept from starting has no status: the session ends as a
@@ -842,6 +921,15 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if err != nil {
 		exit = exitStatus{code: -1}
 	}
+	// Before the dev.qory.session.exited of a runtime that exited by itself, the
+	// session posts the batch it holds and reads the answer, so a stop that comes as the
+	// runtime exits still sets the reason.
+	if !closed && !timedOut && !cancelled {
+		flushCtx, cancelFlush := context.WithTimeout(context.WithoutCancel(ctx), closeWait)
+		r.posts.Flush(flushCtx)
+		cancelFlush()
+	}
+	keyLimit := r.stops.end() == event.ReasonModelKeyLimit
 	state, reason := event.StateFailed, ""
 	switch {
 	case closed:
@@ -852,6 +940,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	case cancelled:
 		// It was stopped from where it was started, a Ctrl-C, before it said how it went.
 		state, reason = event.StateCancelled, event.ReasonInterrupted
+	case keyLimit:
+		// The gateway's answer to a batch had stop: the run's proxy passed a model
+		// provider's limit refusal to the runtime, and the run pauses.
+		state, reason = event.StateCancelled, event.ReasonModelKeyLimit
 	case exit.code == 0:
 		state = event.StateSucceeded
 	}
@@ -869,7 +961,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if reason != "" {
 		exited["reason"] = reason
 	}
-	r.lastExit = exit.code
+	r.lastExit, r.lastReason = exit.code, reason
 	if closed {
 		// The session was open at the gateway's 410: it has no exit status in the run's
 		// record.
@@ -887,6 +979,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		r.own(event.SessionExited, exited)
 	case timedOut:
 		r.open.Report(fmt.Sprintf("the runtime was stopped at the limit of %s", spec.Timeout))
+		r.write(event.SessionExited, exited)
+	case keyLimit:
+		r.open.Report("the runtime was stopped at the model provider's limit: no model key of the run is left, and the run pauses")
 		r.write(event.SessionExited, exited)
 	default:
 		r.write(event.SessionExited, exited)

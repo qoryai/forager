@@ -14,6 +14,18 @@ func SetCgroupRoot(root string) { cgroupRoot = root }
 // has reaped it; nil for nothing.
 func SetExecHooks(before, after func()) { beforeStart, afterWait = before, after }
 
+// SetUserHome sets the home of the user the session runs as, where the session reads
+// the transcript of a runtime with resume whose launch has no HOME, and returns the
+// home it replaced.
+func SetUserHome(dir string) string {
+	old, _ := userHome()
+	userHome = func() (string, error) { return dir, nil }
+	return old
+}
+
+// SetTranscriptPoll sets how often the session reads a runtime's transcript.
+func SetTranscriptPoll(d time.Duration) { transcriptPoll = d }
+
 // SetCloseWait sets how long the sinks get to flush at the end of a join and at the
 // close.
 func SetCloseWait(d time.Duration) { closeWait = d }

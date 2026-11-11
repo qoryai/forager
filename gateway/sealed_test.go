@@ -33,7 +33,7 @@ import (
 // value Qory Apiary seals.
 const (
 	sealedPolicy = `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"machine-model"}]}`
-	modelEntry   = `{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`
+	modelEntry   = `{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`
 	sealedDoc    = `{"version":1,"security_policy":` + sealedPolicy + `,"credentials":[` + modelEntry + `]}`
 	sealedValue  = "sealed-value-of-the-test"
 	machineValue = "machine-value-of-the-test"
@@ -288,7 +288,7 @@ func TestASealedAnswerThatDoesNotOpenIsNoRun(t *testing.T) {
 // no run and has no value in the message; a value that starts with one opens the run,
 // and the proxy sets it.
 func TestASealedModelKeyWithoutItsPrefixIsNoRun(t *testing.T) {
-	entry := `{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]}`
+	entry := `{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]}`
 	doc := `{"version":1,"security_policy":` + sealedPolicy + `,"credentials":[` + entry + `]}`
 	const other, matching = "other-fake-value", "sk-ant-fake-value"
 	ctl, h := sealedGateway(t, doc, map[string]string{"model": other})

@@ -313,6 +313,9 @@ type RunConfiguration struct {
 	// path_rule, and dev.qory.run.policy_applied lists each harness credential by its name
 	// and purpose alone. False when the document has no harness_hidden.
 	HarnessHidden bool `json:"harness_hidden,omitzero"`
+	// Resume is the paused run whose runtime session the run continues; nil when the
+	// document has no resume.
+	Resume *LinkResume `json:"resume,omitzero"`
 	// Computed is sha256= and the lower-case hex SHA-256 of the bytes the document was
 	// read from, which Forager computes itself: the digest a secrets request and the
 	// open of its answer use, never the answer's header. Empty for a document not read
@@ -335,6 +338,17 @@ type RunCredential struct {
 	KeyPrefixes []string `json:"key_prefixes,omitzero"`
 	// Auth is how an API credential's value is set; zero for a host credential.
 	Auth Auth `json:"auth,omitzero"`
+	// ResetsAt is an API credential's earliest reset in a provider's answer as the
+	// server had it at the claim, RFC 3339; ScheduleResetsAt the next reset of its weekly
+	// schedule; each empty when the document has none. PauseForS is its cooldown in
+	// seconds after a limit refusal with no reset, nil when the document has none.
+	ResetsAt         string `json:"resets_at,omitzero"`
+	ScheduleResetsAt string `json:"schedule_resets_at,omitzero"`
+	PauseForS        *int   `json:"pause_for_s,omitzero"`
+	// CooldownUntil is the end of an API credential's cooldown at the claim, RFC 3339,
+	// empty for a key out of cooldown; Chosen is true for the key of the model choice.
+	CooldownUntil string `json:"cooldown_until,omitzero"`
+	Chosen        bool   `json:"chosen,omitzero"`
 	// Apply are where and how a host credential's value is set, one item per way; nil
 	// for an API credential.
 	Apply        []Apply  `json:"apply,omitzero"`
@@ -907,6 +921,11 @@ type Delivery struct {
 	// its code, status, names, who refused and its message. Nil for any other answer,
 	// and always toward the server.
 	Refusal *accesskey.Refusal
+	// StopReason is, on the link, the reason of stop in the body of a 2xx,
+	// link-batch-answer.schema.json: model_key_limit, after which the session stops its
+	// runtime and the run stays open. Empty for a body without stop, for any other
+	// answer, and always toward the server.
+	StopReason string
 	// ServerEnd is, toward the server, the end member of a signed 2xx: the outcome the
 	// run's starter gave, which the server sends on every 2xx for the run once it has
 	// recorded one, until the run's dev.qory.run.exited arrives ([ReadEnd]). Nil for any

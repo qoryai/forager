@@ -145,6 +145,17 @@ fixed:
 # The hosts Claude Code needs to reach, for a server to allow for a run. A machine's
 # policy can still block them.
 egress_hosts: [api.anthropic.com]
+# Claude Code writes the transcript of its session to the file whose path each hook's
+# input contains as transcript_path: ~/.claude/projects/, the working directory with
+# every character other than an ASCII letter or digit replaced by -, then the session
+# id and .jsonl. With that file alone in an empty home, `claude --resume <session id>`
+# continues the session under another model key, also in another working directory
+# (checked on 2.1.316 with an API key and with a subscription's token).
+resume:
+  path_from: transcript_path
+  path: ~/.claude/projects/{cwd_slug}/{session_id}.jsonl
+  prefix: ~/.claude/projects/
+  args: ["--resume", "{session_id}"]
 # A subagent's message has its agent_id and, in parent_tool_use_id, the id of the Agent
 # or Skill tool call that started the subagent.
 parent:

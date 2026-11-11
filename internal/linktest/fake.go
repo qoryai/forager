@@ -79,6 +79,10 @@ type Fake struct {
 	onReload  func(runID string) Reply
 	onBatch   func([]map[string]any) Reply
 	onJoin    func(Join) Reply
+	// onTranscript serves GET <run.url>/<run_id>/transcript; transcripts are the run
+	// ids of those requests.
+	onTranscript func(runID string) Reply
+	transcripts  []string
 	// origin is a separate gateway's, https and its one address; empty on the local
 	// link. prefix begins every path of its link, /qory-link; empty on the local link.
 	origin    string
@@ -183,6 +187,21 @@ func (f *Fake) OnReload(h func(runID string) Reply) { f.mu.Lock(); f.onReload = 
 // model_credential is 400 invalid_request, as the gateway's schema refuses it. A reply
 // of 200 or 403 numbers the join.
 func (f *Fake) OnJoin(h func(Join) Reply) { f.mu.Lock(); f.onJoin = h; f.mu.Unlock() }
+
+// OnTranscript replaces the answer to a transcript request, by default a 404
+// not_found, the answer to a run that continues no paused run.
+func (f *Fake) OnTranscript(h func(runID string) Reply) {
+	f.mu.Lock()
+	f.onTranscript = h
+	f.mu.Unlock()
+}
+
+// Transcripts are the run ids of the transcript requests received, in order.
+func (f *Fake) Transcripts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.transcripts)
+}
 
 // Joins are the join requests received, in order.
 func (f *Fake) Joins() []Join {
@@ -476,6 +495,16 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if reply.Status == 200 || reply.Status == 403 {
 			f.numbered[id]++
+		}
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, runPath+"/") && strings.HasSuffix(r.URL.Path, "/transcript"):
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, runPath+"/"), "/transcript")
+		f.transcripts = append(f.transcripts, id)
+		if h := f.onTranscript; h != nil {
+			f.mu.Unlock()
+			reply = h(id)
+			f.mu.Lock()
+		} else {
+			reply = Reply{Status: 404, Body: map[string]any{"error": "not_found", "from": "gateway", "message": "the gateway has no transcript for this run"}}
 		}
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, runPath+"/"):
 		id := strings.TrimPrefix(r.URL.Path, runPath+"/")

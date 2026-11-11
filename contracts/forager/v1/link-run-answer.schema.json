@@ -121,6 +121,10 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },
+    "resume": {
+      "description": "The run configuration's resume: the paused run whose runtime session this run continues, the runtime's session id and the path of its transcript (README §The run API, The transcript of a paused run). Before the runtime of the run's first session whose runtime has resume starts, the session reads the transcript over the link with GET <run.url>/<run_id>/transcript and writes it at path. Present when the run configuration has resume, on the local link and behind a separate gateway, and absent otherwise.",
+      "$ref": "run-configuration.schema.json#/properties/resume"
+    },
     "run_api": {
       "description": "The base URL of the run API for this run, the value of QORY_RUN_API: http://run-api.qory.invalid/v1/runs/<run_id>. It is an address of the gateway's route on the run's proxy (README §The run API), and it resolves nowhere. Present for a run with a control plane, and absent otherwise.",
       "type": "string",

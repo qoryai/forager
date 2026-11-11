@@ -19,11 +19,11 @@
       "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
     },
     "model_key": {
-      "description": "Whether the gateway sets a model key for this session's requests. When it is false, the gateway's proxy sets no model key from the join's 200 until the gateway receives the session's dev.qory.session.exited, the join answer has no model_credential, and the request may not contain model_credential. The session sends false for a session with no runtime.",
+      "description": "Whether the gateway sets a model key for this session's requests. When it is false, the gateway's proxy sets no model key, the active key neither, from the join's 200 until the gateway receives the session's dev.qory.session.exited, the join answer has no model_credential, and the request may not contain model_credential. The session sends false for a session with no runtime.",
       "type": "boolean"
     },
     "model_credential": {
-      "description": "The name of the model key the session starts with, one of the model keys the gateway holds for the run, from the server or the machine. Absent means the run's start key, the run answer's model_credential. A name of no model key of the run is invalid_request, and so is model_credential beside a model_key of false.",
+      "description": "The name of the model key the session starts with, one of the model keys the gateway holds for the run, from the server or the machine. Absent, or the name of a key of the start key's key group, means the run's active key: the start key, the run answer's model_credential, or the key of its group the proxy switched to after a limit refusal. A name of no model key of the run is invalid_request, and so is model_credential beside a model_key of false.",
       "$ref": "policy.schema.json#/properties/credentials/items/properties/name"
     }
   }

@@ -250,6 +250,9 @@ func Decide(cfg Config) (*Run, error) {
 		if err := r.checkHarness(); err != nil {
 			return nil, err
 		}
+		if err := r.checkKeyGroup(r.clock().Now()); err != nil {
+			return nil, err
+		}
 		r.takeComputed(fetched)
 		r.runDigest = pol.RunConfiguration
 	}
@@ -1180,7 +1183,7 @@ func (r *Run) storedUses() []credential.Stored {
 		}
 		name := c.Name
 		out = append(out, credential.Stored{Name: name, Apply: r.applies[name], Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
-			ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
+			Entry: keyEntry(c), ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				b, _ := r.values.Value(name)
@@ -1224,9 +1227,11 @@ func sameSelection(a, b []policy.Selected) bool {
 }
 
 // ProxyUses are held credentials as the proxy sets them, every model key among them
-// with its placeholder's value. The proxy sets one model key at a time, the one the
-// gateway names with [proxy.Proxy.SetModelKey]: the start key, [credential.Held.Start],
-// or the key a session joined with.
+// with its placeholder's value: the keys of the start key's key group,
+// [credential.Held.Group], share the start key's. The proxy sets one model key at a
+// time, the one the gateway sets with [proxy.Proxy.SetModelKey]: the start key,
+// [credential.Held.Start], or the key a session joined with; for a key of the group, the
+// group's active key.
 func ProxyUses(held *credential.Held) []proxy.Credential {
 	if held == nil {
 		return nil
@@ -1234,7 +1239,10 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 	uses := make([]proxy.Credential, 0, len(held.Uses))
 	for _, u := range held.Uses {
 		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths}
-		if u.Format != "" {
+		switch {
+		case slices.Contains(held.Group, u.Name):
+			c.Placeholder = link.KeyPlaceholder(held.Start)
+		case u.Format != "":
 			c.Placeholder = link.KeyPlaceholder(u.Name)
 		}
 		if u.Stored {
