@@ -234,11 +234,11 @@ func TestAKeyGroupResendsReportsAndStops(t *testing.T) {
 			t.Errorf("a batch after the stop: %d %q; want 202 with stop", status, body)
 		}
 	}
-	paused := ev(g.runID, event.SessionExited, map[string]any{"session": 2, "state": "cancelled", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_limit", "duration_ms": 5})
+	paused := ev(g.runID, event.SessionExited, map[string]any{"session": 2, "state": "paused", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_limit", "duration_ms": 5})
 	if status, body := g.batch(t, paused); status != http.StatusAccepted || body != "" {
 		t.Errorf("the session's end: %d %q; want 202 with no stop", status, body)
 	}
-	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "cancelled", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_limit"})); status != http.StatusAccepted {
+	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "paused", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_limit"})); status != http.StatusAccepted {
 		t.Errorf("the close: %d %q", status, body)
 	}
 	if lines := g.h.reportsWith("limit answer, status 429"); len(lines) != 3 {
@@ -302,19 +302,21 @@ func TestAReportAnsweredWithACooldownBarsTheKey(t *testing.T) {
 }
 
 // TestARunExitedModelKeyLimitNeedsThePausedSession pins the close of a paused run: a
-// dev.qory.run.exited cancelled with model_key_limit is taken after a last
-// dev.qory.session.exited with that reason, and refused in a run with no join and after
-// a last session.exited with another reason; it fails the schema with failed.
+// dev.qory.run.exited paused with model_key_limit is taken after a last
+// dev.qory.session.exited paused with that reason, and refused in a run with no join and
+// after a last session.exited with another reason; it fails the schema with failed or
+// cancelled, and paused with no reason fails it too. A session's
+// dev.qory.session.exited cancelled with model_key_limit fails the schema as well.
 func TestARunExitedModelKeyLimitNeedsThePausedSession(t *testing.T) {
 	h := start(t, gateway.Config{})
 	pausedExit := func(runID string, n int, reason string) map[string]any {
 		data := map[string]any{"session": n, "state": "succeeded", "exit_code": 0, "duration_ms": 5}
 		if reason != "" {
-			data = map[string]any{"session": n, "state": "cancelled", "exit_code": 1, "reason": reason, "duration_ms": 5}
+			data = map[string]any{"session": n, "state": "paused", "exit_code": 1, "reason": reason, "duration_ms": 5}
 		}
 		return ev(runID, event.SessionExited, data)
 	}
-	closed := map[string]any{"state": "cancelled", "exit_code": 1, "reason": "model_key_limit"}
+	closed := map[string]any{"state": "paused", "exit_code": 1, "reason": "model_key_limit"}
 	for _, c := range []struct {
 		what     string
 		sessions []string
@@ -326,6 +328,8 @@ func TestARunExitedModelKeyLimitNeedsThePausedSession(t *testing.T) {
 		{"a session that ended well", []string{""}, closed, "a run.exited model_key_limit after a last session.exited with another reason"},
 		{"no join", nil, closed, "a run.exited model_key_limit of a run with no join"},
 		{"failed", []string{"model_key_limit"}, map[string]any{"state": "failed", "exit_code": 1, "reason": "model_key_limit"}, "one link-batch.schema.json refuses"},
+		{"cancelled", []string{"model_key_limit"}, map[string]any{"state": "cancelled", "exit_code": 1, "reason": "model_key_limit"}, "one link-batch.schema.json refuses"},
+		{"paused with no reason", []string{"model_key_limit"}, map[string]any{"state": "paused", "exit_code": 1}, "one link-batch.schema.json refuses"},
 	} {
 		a := h.open(server.LinkRunRequest{})
 		if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
@@ -350,5 +354,14 @@ func TestARunExitedModelKeyLimitNeedsThePausedSession(t *testing.T) {
 		if line := "run " + a.RunID + ": the gateway refused a batch from the run's session, " + c.why + "; the run ends: failed"; !h.reported(line) {
 			t.Errorf("%s: not reported: %s", c.what, line)
 		}
+	}
+	a := h.open(server.LinkRunRequest{})
+	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	n := h.joined(a.RunID)
+	cancelled := ev(a.RunID, event.SessionExited, map[string]any{"session": n, "state": "cancelled", "exit_code": 1, "reason": "model_key_limit", "duration_ms": 5})
+	if d := h.post(sessionStarted(a.RunID, n), cancelled); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
+		t.Errorf("a session.exited cancelled with model_key_limit: %+v", d)
 	}
 }

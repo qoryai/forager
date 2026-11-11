@@ -52,7 +52,8 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 // TestReasonsAndOpenersAreTheContracts pins the constant of run.started's opened_by to
 // the enum of its schema, and Forager's reasons of run.exited to its open code: each
 // matches the reason's pattern and is named in its description among the reserved
-// codes, beside the old names Forager never writes.
+// codes, beside the old names Forager never writes; and the four state constants to the
+// state enum of run.exited and of session.exited.
 func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	for _, c := range []struct {
 		schema, member string
@@ -90,9 +91,39 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 			t.Errorf("run.exited's reason description does not name %s", code)
 		}
 	}
-	state := doc.(map[string]any)["properties"].(map[string]any)["state"].(map[string]any)
-	if got, want := fmt.Sprint(state["enum"]), fmt.Sprint([]string{event.StateSucceeded, event.StateFailed, event.StateCancelled}); got != want {
-		t.Errorf("run.exited's state enum is %s; the constants are %s", got, want)
+	states := []string{event.StateSucceeded, event.StateFailed, event.StateCancelled, event.StatePaused}
+	for _, schema := range []string{"events/run.exited.schema.json", "events/session.exited.schema.json"} {
+		doc, err := contracts.Document(schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := doc.(map[string]any)["properties"].(map[string]any)["state"].(map[string]any)
+		if got, want := fmt.Sprint(state["enum"]), fmt.Sprint(states); got != want {
+			t.Errorf("%s: the state enum is %s; the constants are %s", schema, got, want)
+		}
+	}
+}
+
+// TestStatesOfARunAndOfAStep pins IsState to the four states of a run and a session and
+// IsStepState to the three of a step: paused is a state of a run and not of a step.
+func TestStatesOfARunAndOfAStep(t *testing.T) {
+	for _, c := range []struct {
+		state     string
+		run, step bool
+	}{
+		{event.StateSucceeded, true, true},
+		{event.StateFailed, true, true},
+		{event.StateCancelled, true, true},
+		{event.StatePaused, true, false},
+		{"skipped", false, false},
+		{"", false, false},
+	} {
+		if got := event.IsState(c.state); got != c.run {
+			t.Errorf("IsState(%q) is %v; want %v", c.state, got, c.run)
+		}
+		if got := event.IsStepState(c.state); got != c.step {
+			t.Errorf("IsStepState(%q) is %v; want %v", c.state, got, c.step)
+		}
 	}
 }
 

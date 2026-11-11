@@ -501,7 +501,7 @@ var stopModelKeyLimit = []byte(`{"stop":{"reason":"` + event.ReasonModelKeyLimit
 // to run inside the agent's container, read_needs_no_nested_docker the close of a read
 // run whose image runs nested Docker, and read_needs_setup_removed the close of a read
 // run whose setup container could not be removed. It accepts model_key_limit, the pause
-// after a limit refusal, cancelled, only for a run with a join whose last
+// after a limit refusal, paused, only for a run with a join whose last
 // dev.qory.session.exited has that reason. The gateway writes the event of every other
 // end itself. joined is true when the gateway numbered a join of the run, and last is
 // the reason of the last dev.qory.session.exited the run's stream numbered, empty for
@@ -513,8 +513,8 @@ func closeRule(data map[string]any, joined bool, last string) string {
 	case !hasReason, why == event.ReasonTimeout, why == event.ReasonInterrupted:
 	case why == event.ReasonModelKeyLimit:
 		switch {
-		case data["state"] != event.StateCancelled:
-			return "a run.exited model_key_limit that is not cancelled"
+		case data["state"] != event.StatePaused:
+			return "a run.exited model_key_limit that is not paused"
 		case !joined:
 			return "a run.exited model_key_limit of a run with no join"
 		case last != event.ReasonModelKeyLimit:

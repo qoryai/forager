@@ -12,7 +12,7 @@
       "const": 1
     },
     "state": {
-      "description": "How the run ended, dev.qory.run.exited's vocabulary. Absent, the outcome is cancelled with the reason stopped.",
+      "description": "How the run ended: succeeded, failed or cancelled, dev.qory.run.exited's vocabulary but paused, which only Forager writes, with model_key_limit. Absent, the outcome is cancelled with the reason stopped.",
       "enum": ["succeeded", "failed", "cancelled"]
     },
     "reason": {

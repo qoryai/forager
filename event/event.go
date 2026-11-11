@@ -114,10 +114,9 @@ const (
 	// work, such as a fetch or a compose, failed before the first session.
 	ReasonNoSession = "no_session"
 	// ReasonModelKeyLimit is a session the session stopped after the gateway's answer to
-	// a batch had stop with this reason, cancelled: the gateway's proxy passed a model
+	// a batch had stop with this reason, paused: the gateway's proxy passed a model
 	// provider's limit refusal to the session. It is also the reason of the close of a
-	// run whose last session ended with it, cancelled, which a control plane reads as a
-	// pause of the run.
+	// run whose last session ended with it, and that close is paused too.
 	ReasonModelKeyLimit = "model_key_limit"
 )
 
@@ -142,17 +141,30 @@ const (
 	ReasonReadNeedsSetupRemoved   = "read_needs_setup_removed"
 )
 
-// The states of dev.qory.run.exited, how a run ended: it ended well, it ended badly, or
-// it was stopped before it said how it went. They are the outcomes a run's starter may
-// give too.
+// The states of dev.qory.run.exited and dev.qory.session.exited: the run or the session
+// ended well, ended badly, was stopped before it said how it went, or paused at the
+// model key limit. A step ends with the first three, and so does a run's starter's
+// outcome.
 const (
 	StateSucceeded = "succeeded"
 	StateFailed    = "failed"
 	StateCancelled = "cancelled"
+	// StatePaused is a session the session stopped after the gateway's answer to a batch
+	// had stop with model_key_limit, and the close of a run whose last session ended
+	// that way. It goes with the reason model_key_limit alone. A control plane can
+	// continue the run.
+	StatePaused = "paused"
 )
 
-// IsState reports whether s is a state of dev.qory.run.exited.
+// IsState reports whether s is a state of dev.qory.run.exited and of
+// dev.qory.session.exited: succeeded, failed, cancelled or paused.
 func IsState(s string) bool {
+	return IsStepState(s) || s == StatePaused
+}
+
+// IsStepState reports whether s is a state of dev.qory.run.step_exited: succeeded,
+// failed or cancelled.
+func IsStepState(s string) bool {
 	return s == StateSucceeded || s == StateFailed || s == StateCancelled
 }
 

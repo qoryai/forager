@@ -77,7 +77,7 @@ func outcomeOf(res *session.Result, err error) session.Outcome {
 	case res.Reason == event.ReasonInterrupted:
 		return session.Outcome{State: event.StateCancelled, Reason: event.ReasonInterrupted, ExitCode: res.ExitCode}
 	case res.Reason == event.ReasonModelKeyLimit:
-		return session.Outcome{State: event.StateCancelled, Reason: event.ReasonModelKeyLimit, ExitCode: res.ExitCode}
+		return session.Outcome{State: event.StatePaused, Reason: event.ReasonModelKeyLimit, ExitCode: res.ExitCode}
 	}
 	return session.Outcome{State: res.State, ExitCode: res.ExitCode}
 }

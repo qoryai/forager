@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-batch-answer.schema.json",
   "title": "Link batch answer",
-  "description": "The body a gateway's 2xx to a link batch may carry, application/json: on the local link unsigned, behind a separate gateway signed as every answer on a bound connection (README §The gateway's link). An empty body, or one without stop, means the session goes on. With stop, the session stops the runtime as at the run's time limit and writes dev.qory.session.exited, cancelled, with stop.reason as its reason. A member Forager does not recognise is ignored.",
+  "description": "The body a gateway's 2xx to a link batch may carry, application/json: on the local link unsigned, behind a separate gateway signed as every answer on a bound connection (README §The gateway's link). An empty body, or one without stop, means the session goes on. With stop, the session stops the runtime as at the run's time limit and writes dev.qory.session.exited, paused, with stop.reason as its reason. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "properties": {

@@ -943,7 +943,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	case keyLimit:
 		// The gateway's answer to a batch had stop: the run's proxy passed a model
 		// provider's limit refusal to the runtime, and the run pauses.
-		state, reason = event.StateCancelled, event.ReasonModelKeyLimit
+		state, reason = event.StatePaused, event.ReasonModelKeyLimit
 	case exit.code == 0:
 		state = event.StateSucceeded
 	}

@@ -569,7 +569,8 @@ func TestCloseEndsAnOpenHostStep(t *testing.T) {
 
 // TestAStepsErrorsStartWithTheFix pins what a host step refuses, each with an error
 // that starts with the fix and with nothing written: a kind other than fetch, compose,
-// build, push, machine and copy, an empty name, a state outside the three, an exit
+// build, push, machine and copy, an empty name, a state outside the three, paused, a
+// state of a run, among them, an exit
 // code below -1, a second host step while one is open, a join while one is open, a line
 // or an exit after the step exited, and a step while a session runs.
 func TestAStepsErrorsStartWithTheFix(t *testing.T) {
@@ -598,6 +599,7 @@ func TestAStepsErrorsStartWithTheFix(t *testing.T) {
 		t.Fatal(err)
 	}
 	refused("a state outside the three", s.Exit("skipped", 0), "exit the step with succeeded, failed or cancelled, not \"skipped\"")
+	refused("paused", s.Exit(event.StatePaused, 0), "exit the step with succeeded, failed or cancelled, not \"paused\"")
 	refused("an exit code of -2", s.Exit(event.StateFailed, -2), "exit the step with -1 when its process has no exit status")
 	_, err = r.StartStep(event.StepCompose, "compose the harness")
 	refused("a second host step", err, "exit step 1 before the next host step starts")

@@ -491,7 +491,7 @@ type keysSession struct {
 }
 
 // run opens the run, joins one session of Claude Code and closes the run as qory does:
-// cancelled with model_key_limit and the session's exit code after a session the
+// paused with model_key_limit and the session's exit code after a session the
 // session stopped for that reason, else with the session's state and exit code.
 func (s keysSession) run(t *testing.T) keysOutcome {
 	t.Helper()
@@ -554,7 +554,7 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 	switch {
 	case o.joined != nil || o.res.RunClosed:
 	case o.res.Reason == event.ReasonModelKeyLimit:
-		outcome = session.Outcome{State: event.StateCancelled, Reason: event.ReasonModelKeyLimit, ExitCode: o.res.ExitCode}
+		outcome = session.Outcome{State: event.StatePaused, Reason: event.ReasonModelKeyLimit, ExitCode: o.res.ExitCode}
 	default:
 		outcome = session.Outcome{State: o.res.State, ExitCode: o.res.ExitCode}
 	}
@@ -966,8 +966,8 @@ func TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError(t *testing.T) {
 // key group of model and model-b, and the stub caps both. The proxy sends the request
 // with A, then with B, and passes B's refusal on: no key is left out of cooldown.
 // Claude Code ends; the gateway's answer to the session's batch has stop, and the
-// session writes dev.qory.session.exited cancelled with model_key_limit and Claude
-// Code's exit code. The run then closes, as qory closes it, cancelled with
+// session writes dev.qory.session.exited paused with model_key_limit and Claude
+// Code's exit code. The run then closes, as qory closes it, paused with
 // model_key_limit and that exit code, and the record ends with that
 // dev.qory.run.exited.
 func TestDockerModelKeysAllCoolingStopTheSession(t *testing.T) {
@@ -977,18 +977,18 @@ func TestDockerModelKeysAllCoolingStopTheSession(t *testing.T) {
 	o := s.run(t)
 	log := k.stubLog(t, name)
 	t.Logf("the stub got:%s", keysEntries(log))
-	if o.res.State != event.StateCancelled || o.res.Reason != event.ReasonModelKeyLimit {
-		t.Errorf("the session ended %s, %q, exit %d; want cancelled, model_key_limit\nstub:%s\nstdout:\n%s",
+	if o.res.State != event.StatePaused || o.res.Reason != event.ReasonModelKeyLimit {
+		t.Errorf("the session ended %s, %q, exit %d; want paused, model_key_limit\nstub:%s\nstdout:\n%s",
 			o.res.State, o.res.Reason, o.res.ExitCode, keysEntries(log), tail(o.out, 4000))
 	}
-	if d := o.exited(); d == nil || d["state"] != event.StateCancelled || d["reason"] != event.ReasonModelKeyLimit || d["exit_code"] != float64(o.res.ExitCode) {
-		t.Errorf("dev.qory.session.exited is %v; want cancelled, model_key_limit, exit %d", d, o.res.ExitCode)
+	if d := o.exited(); d == nil || d["state"] != event.StatePaused || d["reason"] != event.ReasonModelKeyLimit || d["exit_code"] != float64(o.res.ExitCode) {
+		t.Errorf("dev.qory.session.exited is %v; want paused, model_key_limit, exit %d", d, o.res.ExitCode)
 	}
 	if o.closed != nil {
 		t.Errorf("the close with model_key_limit: %v", o.closed)
 	}
-	if es := o.of(event.RunExited); len(es) != 1 || es[0]["state"] != event.StateCancelled || es[0]["reason"] != event.ReasonModelKeyLimit {
-		t.Errorf("dev.qory.run.exited is %v; want one, cancelled with model_key_limit", es)
+	if es := o.of(event.RunExited); len(es) != 1 || es[0]["state"] != event.StatePaused || es[0]["reason"] != event.ReasonModelKeyLimit {
+		t.Errorf("dev.qory.run.exited is %v; want one, paused with model_key_limit", es)
 	}
 	if len(log) != 2 || log[0].Key != "A" || log[1].Key != "B" || log[0].Status != http.StatusTooManyRequests || log[1].Status != http.StatusTooManyRequests {
 		t.Errorf("the stub got:%s\nwant a 429 with key A, then one with key B, and nothing more", keysEntries(log))

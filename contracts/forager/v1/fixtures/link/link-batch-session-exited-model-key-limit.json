@@ -9,7 +9,7 @@
     "dataschema": "https://qory.dev/contracts/forager/v1/events/session.exited.schema.json",
     "data": {
       "session": 2,
-      "state": "cancelled",
+      "state": "paused",
       "exit_code": 1,
       "reason": "model_key_limit",
       "duration_ms": 120000
