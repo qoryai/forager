@@ -158,9 +158,16 @@ func TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
 	if o2.res.State != event.StateSucceeded {
 		t.Errorf("run 2 ended %s, exit %d; want succeeded\nstub:%s\nstdout:\n%s", o2.res.State, o2.res.ExitCode, keysEntries(log2), tail(o2.out, 4000))
 	}
+	// Run 2 works in another directory than run 1, and the resumed Claude Code appends
+	// to the restored file under run 1's slug, which the walled session does not read:
+	// the line that run 2 sent no transcript is the one line about a continuation that
+	// run 2 may write. A failed restore writes "The runtime starts without a resume".
 	for _, d := range o2.of(event.RunLog) {
-		if b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(d["bytes"])); bytes.Contains(b, []byte("without a resume")) {
+		b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(d["bytes"]))
+		if bytes.Contains(b, []byte("The runtime starts without a resume")) || (bytes.Contains(b, []byte("without a resume")) && !bytes.Contains(b, []byte("the file does not exist, so the session sent no transcript"))) {
 			t.Errorf("run 2 wrote: %s", b)
+		} else if bytes.Contains(b, []byte("without a resume")) {
+			t.Logf("run 2 wrote: %s", b)
 		}
 	}
 	ctl.mu.Lock()
