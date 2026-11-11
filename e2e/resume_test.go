@@ -33,7 +33,8 @@ import (
 // run 1's id, session id and transcript path, and key B; the control plane serves run
 // 1's chunks, joined in offset order, at <run.url>/<run_id>/resume/transcript. Run 2
 // starts in a new home and another working directory, and its first model request
-// contains run 1's turns, goes with key B, and both runs end succeeded.
+// contains run 1's turns, goes with key B, both runs end succeeded, and run 2 sends the
+// restored transcript with its turns appended from offset 0, under run 1's path.
 //
 // TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey is the same check behind the
 // wall. The proxy verifies the stub against this machine's roots, which trustRecorders
@@ -89,7 +90,7 @@ func TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
 		t.Errorf("run 2 ended %s, exit %d; want succeeded\nstub:%s\nstdout:\n%s", o2.res.State, o2.res.ExitCode, keysEntries(log2), tail(o2.out, 4000))
 	}
 	for _, d := range o2.of(event.RunLog) {
-		if b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(d["bytes"])); bytes.Contains(b, []byte("without a resume")) {
+		if b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(d["bytes"])); bytes.Contains(b, []byte("without a resume")) || bytes.Contains(b, []byte("Check that the runtime resumes from")) {
 			t.Errorf("run 2 wrote: %s", b)
 		}
 	}
@@ -108,8 +109,20 @@ func TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
 			break
 		}
 	}
+	continued(t, ctl, run2, transcript, sessionID, tpath)
 	noKeyValue(t, o1, home1)
 	noKeyValue(t, o2, home2)
+}
+
+// continued checks the transcript a continuation sent: chunks of the paused run's path
+// and session id from offset 0, with the restored bytes first and then the turns the
+// continuation appended, so a continuation of it restores one run's chunks.
+func continued(t *testing.T, ctl *keysControl, runID string, restored []byte, sessionID, tpath string) {
+	t.Helper()
+	got, id, p := storedTranscript(t, ctl, runID)
+	if p != tpath || id != sessionID || !bytes.HasPrefix(got, restored) || len(got) <= len(restored) {
+		t.Errorf("run 2's transcript: %d bytes of %s, session %s, starting with the %d restored bytes: %v; want %s, session %s, with turns after them", len(got), p, id, len(restored), bytes.HasPrefix(got, restored), tpath, sessionID)
+	}
 }
 
 // TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey runs Claude Code 2.1.316 twice
@@ -122,9 +135,17 @@ func TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
 // transcript path, and key B; the control plane serves run 1's chunks, joined in offset
 // order, at <run.url>/<run_id>/resume/transcript. The session of run 2 writes them in
 // its transcript directory before the agent's container starts. Run 2 starts in
-// another working directory; its first model request contains run 1's turns and goes
-// with key B, and both runs end succeeded.
+// another working directory, or in the same one; its first model request contains run
+// 1's turns and goes with key B, both runs end succeeded, and run 2 sends the restored
+// transcript with its turns appended from offset 0, under run 1's path.
 func TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
+	t.Run("in another working directory", func(t *testing.T) { walledResume(t, false) })
+	t.Run("in the same working directory", func(t *testing.T) { walledResume(t, true) })
+}
+
+// walledResume runs the walled case of TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey,
+// with run 2 in run 1's working directory when same is true.
+func walledResume(t *testing.T, same bool) {
 	k := newKeysWall(t)
 	name, host := k.stub(t, keysResume)
 	endpoint := "https://" + host + ":" + recorderTLS
@@ -152,22 +173,18 @@ func TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
 		map[string]any{"run_id": run1, "session_id": sessionID, "path": tpath})
 	s2 := keysSession{runID: run2, server: ctl.server, allow: []string{host}, args: []string{"--allowedTools", "Bash"},
 		prompt: "Continue with the next command.", dir: t.TempDir(), walled: &k, timeout: 4 * time.Minute}
+	if same {
+		s2.dir = s1.dir
+	}
 	o2 := s2.run(t)
 	log2 := k.stubLog(t, name)[len(log1):]
 	t.Logf("run 1's transcript: %d bytes of %s, session %s; the stub got, in run 1:%s\nin run 2:%s", len(transcript), tpath, sessionID, keysEntries(log1), keysEntries(log2))
 	if o2.res.State != event.StateSucceeded {
 		t.Errorf("run 2 ended %s, exit %d; want succeeded\nstub:%s\nstdout:\n%s", o2.res.State, o2.res.ExitCode, keysEntries(log2), tail(o2.out, 4000))
 	}
-	// Run 2 works in another directory than run 1, and the resumed Claude Code appends
-	// to the restored file under run 1's slug, which the walled session does not read:
-	// the line that run 2 sent no transcript is the one line about a continuation that
-	// run 2 may write. A failed restore writes "The runtime starts without a resume".
 	for _, d := range o2.of(event.RunLog) {
-		b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(d["bytes"]))
-		if bytes.Contains(b, []byte("The runtime starts without a resume")) || (bytes.Contains(b, []byte("without a resume")) && !bytes.Contains(b, []byte("the file does not exist, so the session sent no transcript"))) {
+		if b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(d["bytes"])); bytes.Contains(b, []byte("without a resume")) || bytes.Contains(b, []byte("Check that the runtime resumes from")) {
 			t.Errorf("run 2 wrote: %s", b)
-		} else if bytes.Contains(b, []byte("without a resume")) {
-			t.Logf("run 2 wrote: %s", b)
 		}
 	}
 	ctl.mu.Lock()
@@ -185,6 +202,7 @@ func TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
 			break
 		}
 	}
+	continued(t, ctl, run2, transcript, sessionID, tpath)
 	noKeyValue(t, o1, s1.dir)
 	noKeyValue(t, o2, s2.dir)
 }
