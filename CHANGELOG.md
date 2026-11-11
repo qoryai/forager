@@ -1596,9 +1596,14 @@ release may change what an existing document does, and says so under Upgrading.
   that is not absolute or that overlaps `/qory`.
 - `wall.ErrContainerKept`, which `errors.Is` matches on an error of the Docker wall's
   `Unwrap`, `RemoveSetup` or `Close` when a `docker rm` of a container of the run
-  failed, or a `docker network rm` whose output contains `active endpoints` or `in use`
-  in any case: a container of the run may still run. `wall.ContainerKeptError(err)`
-  returns an error with `err`'s text that matches it.
+  failed, or a `docker network rm` whose output contains `active endpoints`, `in use`,
+  `being used` or `associated containers` in any case, Docker's and Podman's forms: a
+  container of the run may still run. A `docker rm` whose output contains `already in
+  progress`, as when the engine removes an exited container of `docker run --rm` at the
+  same moment, waits within the removal's 30 seconds until `docker container inspect`
+  shows no such container; it fails only when the container still exists at the end of
+  the wait or the inspect fails another way. `wall.ContainerKeptError(err)` returns an
+  error with `err`'s text that matches it.
 - `wall.ErrNoContainerKept`, which `errors.Is` matches on an error of the Docker wall's
   `Close` when any other `docker network rm` or the removal of the private directory
   failed: no container runs because of it. The text of each error stays as it was.

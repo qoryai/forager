@@ -89,6 +89,10 @@ type recorder struct {
 	dirs   map[string]bool
 	heads  map[string]tar.Header
 	copied []byte
+	// inspects are what each docker container inspect prints, in order, the last one
+	// again once the others are used: an output that starts with "Error" or "dial" fails
+	// with exit status 1, any other is the container's id.
+	inspects []string
 }
 
 // statPath is the path inside of a docker cp that checks one, of the form docker cp
@@ -162,6 +166,15 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 		r.onPull()
 	}
 	switch {
+	case strings.Contains(line, " container inspect ") && len(r.inspects) > 0:
+		out := r.inspects[0]
+		if len(r.inspects) > 1 {
+			r.inspects = r.inspects[1:]
+		}
+		if strings.HasPrefix(out, "Error") || strings.HasPrefix(out, "dial") {
+			return []byte(out), errors.New("exit status 1")
+		}
+		return []byte(out + "\n"), nil
 	case r.fails(line) && r.failOut != "":
 		return []byte(r.failOut), errors.New("exit status 1")
 	case r.fails(line):

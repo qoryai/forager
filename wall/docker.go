@@ -1247,10 +1247,11 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 // Unwrap removes the agent's container that Wrap's launch started, within closeWait,
 // as its session ends, so the next session's container can take its name. A docker rm
 // that fails with [noSuchContainer]'s text is not an error: docker run --rm removes a
-// container that exits. Every other failure is, matches [ErrContainerKept], and the
-// container stays for Close to remove: an engine that cannot be reached leaves its state
-// unknown, and under live-restore it still runs. Everything else the enclosure made
-// stays until Close.
+// container that exits. A docker rm that fails because that removal is in progress
+// waits for its end, [dockerEnclosure.awaitRemoval]. Every other failure is an error,
+// matches [ErrContainerKept], and the container stays for Close to remove: an engine
+// that cannot be reached leaves its state unknown, and under live-restore it still
+// runs. Everything else the enclosure made stays until Close.
 func (e *dockerEnclosure) Unwrap(ctx context.Context) error {
 	return e.removeContainer(ctx, e.agent(), noSuchContainer)
 }
@@ -1398,7 +1399,8 @@ func (e *dockerEnclosure) setupRuns(ctx context.Context) error {
 // RemoveSetup removes the setup container within closeWait, with Close's docker rm
 // --force --volumes, and returns once the engine removed it: every process in it has
 // ended, and the name qory-setup no longer resolves on the internal network. A docker rm
-// that fails with [noSuchContainer]'s text is not an error. Every other failure is,
+// that fails with [noSuchContainer]'s text is not an error, and one whose removal is in
+// progress waits for its end, [dockerEnclosure.awaitRemoval]. Every other failure is,
 // matches [ErrContainerKept], and the container stays for a later call or Close to
 // remove. It touches the setup container alone, so it may follow an Unwrap, and a later
 // Wrap may follow it.
@@ -2057,12 +2059,13 @@ const closeWait = 30 * time.Second
 
 // Close removes the containers and the networks, newest first, and the private
 // directory with the environment files and the bundle. A docker rm that fails with
-// [noSuchContainer]'s text is not an error, and neither is a network rm that fails with
-// [goneAlready]'s text. Every other failure is: a docker rm that fails because the engine
-// cannot be reached leaves the container's state unknown, and it may still run. The
-// error of a failed docker rm matches [ErrContainerKept], and so does a network rm's
-// whose output shows a container still attached, [attached]. The error of any other
-// failed network rm, and of the private directory's removal, matches
+// [noSuchContainer]'s text is not an error, one whose removal is in progress waits for
+// its end, [dockerEnclosure.awaitRemoval], and a network rm that fails with
+// [goneAlready]'s text is not an error. Every other failure is: a docker rm that fails
+// because the engine cannot be reached leaves the container's state unknown, and it may
+// still run. The error of a failed docker rm matches [ErrContainerKept], and so does a
+// network rm's whose output shows a container still attached, [attached]. The error of
+// any other failed network rm, and of the private directory's removal, matches
 // [ErrNoContainerKept].
 func (e *dockerEnclosure) Close(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, closeWait)
@@ -2088,18 +2091,57 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 }
 
 // remove runs one of the commands that remove what the enclosure made. A failed command
-// whose output gone accepts is not an error. The error of a failed docker rm, a
+// whose output gone accepts is not an error. A docker rm whose output shows the
+// container's removal in progress, [removing], waits for that removal,
+// [dockerEnclosure.awaitRemoval]. The error of any other failed docker rm, a
 // container's removal, matches [ErrContainerKept], and so does a network rm's whose
 // output [attached] accepts; any other network rm's matches [ErrNoContainerKept].
 func (e *dockerEnclosure) remove(ctx context.Context, argv []string, gone func(out string) bool) error {
 	out, err := e.docker(ctx, argv...)
-	if err != nil && !gone(string(out)) {
-		if argv[0] == "rm" || attached(string(out)) {
-			return ContainerKeptError(err)
-		}
-		return noContainerKept{err}
+	switch {
+	case err == nil || gone(string(out)):
+		return nil
+	case argv[0] == "rm" && removing(string(out)):
+		return e.awaitRemoval(ctx, argv[len(argv)-1], err)
+	case argv[0] == "rm" || attached(string(out)):
+		return ContainerKeptError(err)
 	}
-	return nil
+	return noContainerKept{err}
+}
+
+// removalPoll is how often [dockerEnclosure.awaitRemoval] checks whether the container
+// still exists.
+const removalPoll = 200 * time.Millisecond
+
+// removing reports whether out, the output of a failed docker rm, contains "already in
+// progress" in any case: the engine removes the container already, as it does for a
+// container of docker run --rm that exited.
+func removing(out string) bool {
+	return strings.Contains(strings.ToLower(out), "already in progress")
+}
+
+// awaitRemoval waits until ctx ends for the engine to finish removing the container
+// name, whose docker rm failed with rmErr because its removal was in progress. Every
+// [removalPoll] it runs docker container inspect, and it returns nil once the output
+// shows [noSuchContainer]. A container that still exists when ctx ends, and an inspect
+// that fails otherwise, are an error that matches [ErrContainerKept].
+func (e *dockerEnclosure) awaitRemoval(ctx context.Context, name string, rmErr error) error {
+	tick := time.NewTicker(removalPoll)
+	defer tick.Stop()
+	for {
+		out, err := e.docker(ctx, "container", "inspect", "--format", "{{.Id}}", name)
+		switch {
+		case err != nil && noSuchContainer(string(out)):
+			return nil
+		case err != nil && ctx.Err() == nil:
+			return ContainerKeptError(fmt.Errorf("wall docker: check that the engine can be reached, then remove container %s with docker rm --force: %w; the check whether the container still exists failed: %w", name, rmErr, err))
+		}
+		select {
+		case <-ctx.Done():
+			return ContainerKeptError(fmt.Errorf("wall docker: remove container %s with docker rm --force once the engine ends its removal: %w; the container still existed when the wait ended", name, rmErr))
+		case <-tick.C:
+		}
+	}
 }
 
 // attached reports whether out, the output of a failed network rm, contains "active

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // setupLaunch is what the session starts the setup container with: the working folder,
@@ -244,6 +245,70 @@ func TestDockerUnwrapKeepsItsCheck(t *testing.T) {
 			t.Errorf("%q: Close with the failure still there: %v, want an error: %v", c.failOut, err, c.wantErr)
 		}
 		rec.fail, rec.failOut = "", ""
+	}
+}
+
+// TestDockerWaitsForARemovalInProgress pins a docker rm that fails because the engine
+// removes the container already, as it does for an exited container of docker run --rm
+// at the moment of the rm: Unwrap runs docker container inspect until the
+// output shows no such container, and then counts the container as removed. A
+// container still there when the context ends, and an inspect that fails otherwise,
+// are an error that matches ErrContainerKept and names the rm's output, and the entry
+// stays, so Close, through the same wait, removes it.
+func TestDockerWaitsForARemovalInProgress(t *testing.T) {
+	const inProgress = "Error response from daemon: removal of container qory-x-agent is already in progress"
+	const noSuch = "Error response from daemon: No such container: qory-x-agent"
+	const socket = "dial unix /var/run/docker.sock: connect: no such file or directory"
+	const id = "0123abcd"
+	for _, c := range []struct {
+		name     string
+		inspects []string
+		// wantErr is a part of Unwrap's error text, empty for no error.
+		wantErr string
+	}{
+		{name: "gone at the first check", inspects: []string{noSuch}},
+		{name: "gone at the third check", inspects: []string{id, id, noSuch}},
+		{name: "still there when the wait ends", inspects: []string{id}, wantErr: "; the container still existed when the wait ended"},
+		{name: "a check that fails", inspects: []string{socket}, wantErr: "; the check whether the container still exists failed: wall docker: docker container inspect: exit status 1: " + socket},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+			d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+			enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := enc.(*dockerEnclosure)
+			entry := []string{"rm", "--force", "--volumes", e.agent()}
+			e.made = append(e.made, entry)
+			rec.fail, rec.failOut, rec.inspects = "docker rm --force --volumes "+e.agent(), inProgress, c.inspects
+			before := len(rec.lines)
+			ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+			defer cancel()
+			err = e.Unwrap(ctx)
+			if (err != nil) != (c.wantErr != "") || (err != nil && (!strings.HasPrefix(err.Error(), "wall docker: ") || !strings.Contains(err.Error(), inProgress) || !strings.Contains(err.Error(), c.wantErr))) {
+				t.Errorf("Unwrap: %v, want an error with %q", err, c.wantErr)
+			}
+			if err != nil && !errors.Is(err, ErrContainerKept) {
+				t.Errorf("Unwrap's error %v does not match ErrContainerKept", err)
+			}
+			inspected := 0
+			for _, l := range rec.lines[before:] {
+				if strings.HasPrefix(l, "docker container inspect --format ") && strings.HasSuffix(l, " "+e.agent()) {
+					inspected++
+				}
+			}
+			if c.wantErr == "" && inspected != len(c.inspects) {
+				t.Errorf("%d inspects, want %d:\n%s", inspected, len(c.inspects), strings.Join(rec.lines[before:], "\n"))
+			}
+			if kept := slices.ContainsFunc(e.made, func(m []string) bool { return slices.Equal(m, entry) }); kept != (c.wantErr != "") {
+				t.Errorf("the container's entry in e.made: %v, want %v", kept, c.wantErr != "")
+			}
+			rec.inspects = []string{noSuch}
+			if err := e.Close(context.Background()); err != nil {
+				t.Errorf("Close once the removal ended: %v", err)
+			}
+		})
 	}
 }
 
