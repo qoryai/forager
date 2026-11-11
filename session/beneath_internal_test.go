@@ -48,13 +48,13 @@ func TestAWalledTranscriptIsReadBelowItsDirectory(t *testing.T) {
 // TestAWalledTranscriptReadsNoOtherSessionID pins a session id that is not a UUID in
 // lower case: one line, and nothing read, also once a later id is one.
 func TestAWalledTranscriptReadsNoOtherSessionID(t *testing.T) {
-	for _, id := range []string{"probe", "../x", strings.ToUpper(walledID), walledID + "/x"} {
+	for _, id := range []string{"probe", "../x", strings.ToUpper(walledID), walledID + "/x", "a\nA continuation" + strings.Repeat("x", 100)} {
 		tr, s, root := newWalledTestTranscript(t)
 		appendTo(t, root, walledRel, []byte("{\"a\":1}\n"))
 		tr.started(id)
 		tr.started(walledID)
 		tr.finish()
-		if len(s.events) != 0 || len(s.lines) != 1 || !strings.Contains(s.lines[0], "is not a UUID in lower case") {
+		if len(s.events) != 0 || len(s.lines) != 1 || !strings.Contains(s.lines[0], "is not a UUID in lower case") || strings.Contains(s.lines[0], "\n") || len(s.lines[0]) > 300 {
 			t.Errorf("%q: %d events, lines %q", id, len(s.events), s.lines)
 		}
 	}

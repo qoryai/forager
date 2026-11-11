@@ -99,7 +99,9 @@ func (t *transcript) walledID(id string) {
 	}
 	if !walledSessionID.MatchString(id) {
 		t.ended = true
-		t.line(noResume + fmt.Sprintf("the runtime's session id %s is not a UUID in lower case, so the session reads no transcript", accesskey.ShownName(id, false)))
+		// The agent chooses the id: the line has at most its first 64 bytes, quoted, so
+		// no newline in it starts another line.
+		t.line(noResume + fmt.Sprintf("the runtime's session id %q is not a UUID in lower case, so the session reads no transcript", accesskey.ShownName(id[:min(len(id), 64)], false)))
 		return
 	}
 	t.sessionID = id
