@@ -8,6 +8,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/qoryai/forager/session/runtimes"
 )
@@ -289,5 +292,83 @@ func TestTheLineOfKeptResumeArgumentsStartsWithTheFix(t *testing.T) {
 		"The session cannot take the resume arguments off the launch, because the launch ends with other arguments, which only a defect in Forager causes"
 	if got != want {
 		t.Errorf("the line:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTheEndOfATranscriptWaitsForItsReader pins the reader that start runs: end
+// returns only once the reader returned, here after the read it was in, no read
+// follows, and a second end does nothing.
+func TestTheEndOfATranscriptWaitsForItsReader(t *testing.T) {
+	tr, s, home := newTestTranscript(t)
+	rel := ".claude/projects/-workspace/s-1.jsonl"
+	tr.started("s-1")
+	appendTo(t, home, rel, []byte("{\"a\":1}\n"))
+	// With the lock held, the reader waits for it in a read.
+	tr.mu.Lock()
+	end := tr.start(time.Millisecond)
+	deadline := time.Now().Add(10 * time.Second)
+	for !slices.ContainsFunc(transcriptStacks(), func(g string) bool { return strings.Contains(g, "session.(*transcript).poll(") }) {
+		if time.Now().After(deadline) {
+			tr.mu.Unlock()
+			t.Fatal("the reader started no read within 10 seconds")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		end()
+	}()
+	select {
+	case <-ended:
+		t.Error("end returned while the reader was in a read")
+	case <-time.After(50 * time.Millisecond):
+	}
+	tr.mu.Unlock()
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("end did not return within 10 seconds of the read's end")
+	}
+	if n := TranscriptReaders(); n != 0 {
+		t.Fatalf("%d transcript readers after end", n)
+	}
+	if got, ok := s.file(t, "~/"+rel); !ok || string(got) != "{\"a\":1}\n" {
+		t.Errorf("sent %q %v; want the line of the read", got, ok)
+	}
+	n := len(s.events)
+	appendTo(t, home, rel, []byte("{\"b\":2}\n"))
+	time.Sleep(20 * time.Millisecond)
+	end()
+	if len(s.events) != n {
+		t.Errorf("%d events sent after end", len(s.events)-n)
+	}
+}
+
+// TestATranscriptAtAFIFOIsNoRead pins a transcript path with no wall that leads to a
+// FIFO with no writer: the read returns at once, sends nothing, and so cannot keep a
+// join from returning.
+func TestATranscriptAtAFIFOIsNoRead(t *testing.T) {
+	tr, s, home := newTestTranscript(t)
+	rel := ".claude/projects/-workspace/s-1.jsonl"
+	if err := os.MkdirAll(filepath.Join(home, filepath.Dir(rel)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(filepath.Join(home, rel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tr.started("s-1")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tr.finish()
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the read of a FIFO did not return within 10 seconds")
+	}
+	if len(s.events) != 0 {
+		t.Errorf("%d events from a FIFO", len(s.events))
 	}
 }

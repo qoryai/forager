@@ -89,6 +89,10 @@ type recorder struct {
 	dirs   map[string]bool
 	heads  map[string]tar.Header
 	copied []byte
+	// rms, when set, are what each docker rm prints, in place of fail and failOut, in
+	// order, the last one again once the others are used: an empty output succeeds, any
+	// other fails with exit status 1.
+	rms []string
 }
 
 // statPath is the path inside of a docker cp that checks one, of the form docker cp
@@ -162,6 +166,15 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 		r.onPull()
 	}
 	switch {
+	case strings.HasPrefix(line, "docker rm ") && len(r.rms) > 0:
+		out := r.rms[0]
+		if len(r.rms) > 1 {
+			r.rms = r.rms[1:]
+		}
+		if out != "" {
+			return []byte(out), errors.New("exit status 1")
+		}
+		return nil, nil
 	case r.fails(line) && r.failOut != "":
 		return []byte(r.failOut), errors.New("exit status 1")
 	case r.fails(line):

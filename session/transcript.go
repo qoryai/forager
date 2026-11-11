@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/mask"
@@ -27,8 +29,8 @@ const TranscriptChunk = 32 << 10
 var userHome = os.UserHomeDir
 
 // transcriptPoll is how often the session reads what the runtime appended to its
-// transcript while the runtime runs.
-var transcriptPoll = time.Second
+// transcript while the runtime runs, unless the join's spec sets another interval.
+const transcriptPoll = time.Second
 
 // transcript sends the file in which a runtime with resume writes its session, as
 // dev.qory.session.transcript events: whole lines as the runtime appends them, each
@@ -259,9 +261,24 @@ func dotted(p string) bool {
 	return false
 }
 
-// run reads the file every [transcriptPoll] until stop is closed.
-func (t *transcript) run(stop <-chan struct{}) {
-	tick := time.NewTicker(transcriptPoll)
+// start reads the file every interval in a goroutine until end runs. end returns once
+// that goroutine has returned, so no read of the file follows it; a second call of end
+// does nothing.
+func (t *transcript) start(interval time.Duration) (end func()) {
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		t.run(stop, interval)
+	}()
+	return sync.OnceFunc(func() {
+		close(stop)
+		<-done
+	})
+}
+
+// run reads the file every interval until stop is closed.
+func (t *transcript) run(stop <-chan struct{}, interval time.Duration) {
+	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
 		select {
@@ -358,7 +375,10 @@ var errLinked = errors.New("the transcript's path is a symbolic link or no regul
 // readUnlinked reads the file at rel under home from offset on, and returns its bytes
 // and the file's size. It opens the file through an os.Root of home, so no name leads
 // out of it, and fails on a path any of whose names is a symbolic link, or that is no
-// regular file. A file over [maxTranscript] bytes is [errTooLarge], as behind a wall.
+// regular file, checked before the open and again on the open file. It opens the file
+// without blocking, so a FIFO put at rel between the check and the open ends the read
+// at once with [errLinked] instead of waiting for a writer. A file over [maxTranscript]
+// bytes is [errTooLarge], as behind a wall.
 func readUnlinked(home, rel string, offset int64) ([]byte, int64, error) {
 	root, err := os.OpenRoot(home)
 	if err != nil {
@@ -366,23 +386,25 @@ func readUnlinked(home, rel string, offset int64) ([]byte, int64, error) {
 	}
 	defer root.Close()
 	at := ""
+	var fi fs.FileInfo
 	for s := range strings.SplitSeq(rel, "/") {
 		at = path.Join(at, s)
-		fi, err := root.Lstat(at)
-		if err != nil {
+		if fi, err = root.Lstat(at); err != nil {
 			return nil, 0, err
 		}
 		if fi.Mode()&fs.ModeSymlink != 0 {
 			return nil, 0, errLinked
 		}
 	}
-	f, err := root.Open(rel)
+	if !fi.Mode().IsRegular() {
+		return nil, 0, errLinked
+	}
+	f, err := root.OpenFile(rel, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOCTTY, 0)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
+	if fi, err = f.Stat(); err != nil {
 		return nil, 0, err
 	}
 	if !fi.Mode().IsRegular() {

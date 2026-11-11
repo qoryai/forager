@@ -887,33 +887,27 @@ func TestALaterJoinAfterARemovalAfterASession(t *testing.T) {
 }
 
 // TestRemoveSetupWithNoSetupContainerWritesNothing pins a run with no setup container:
-// a run with no wall, a wall that has none, a setup that never ran and a setup container
-// that did not start. RemoveSetup returns nil, calls no removal and writes no step, and
-// the join that follows starts as it would without the call.
+// a run with no wall, a wall that has none and a setup that never ran. RemoveSetup
+// returns nil, calls no removal and writes no step, and the join that follows starts as
+// it would without the call.
 func TestRemoveSetupWithNoSetupContainerWritesNothing(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {
-		name  string
-		open  func(*testing.T, *runSpec) *setupWall
-		setup bool
-		want  []string
+		name string
+		open func(*testing.T, *runSpec) *setupWall
+		want []string
 	}{
-		{"no wall", func(*testing.T, *runSpec) *setupWall { return nil }, false,
+		{"no wall", func(*testing.T, *runSpec) *setupWall { return nil },
 			[]string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started", "session 1 exited", "run exited"}},
 		{"a wall with no setup container", func(_ *testing.T, sp *runSpec) *setupWall {
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			return nil
-		}, false, []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started", "step 2 wall start the wall", "step 2 succeeded -1", "session 1 exited", "run exited"}},
+		}, []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started", "step 2 wall start the wall", "step 2 succeeded -1", "session 1 exited", "run exited"}},
 		{"a setup that never ran", func(_ *testing.T, sp *runSpec) *setupWall {
 			w := &setupWall{}
 			sp.Wall, sp.Image = w, "example.com/agent:1"
 			return w
-		}, false, []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started", "step 2 wall start the wall", "step 2 succeeded -1", "session 1 exited", "run exited"}},
-		{"a setup container that did not start", func(_ *testing.T, sp *runSpec) *setupWall {
-			w := &setupWall{startErr: errors.New("wall docker: start qory-x-setup: exit status 125")}
-			sp.Wall, sp.Image = w, "example.com/agent:1"
-			return w
-		}, true, []string{"step 1 wall start the setup container", "log <nil> 1 wall docker: start qory-x-setup: exit status 125", "step 1 failed -1", "run exited"}},
+		}, []string{"step 1 join join session 1", "step 1 succeeded -1", "session 1 started", "step 2 wall start the wall", "step 2 succeeded -1", "session 1 exited", "run exited"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sp := spec(t, "FAKE_EXIT=0")
@@ -922,27 +916,84 @@ func TestRemoveSetupWithNoSetupContainerWritesNothing(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c.setup {
-				if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands}); err == nil {
-					t.Fatal("the setup started")
-				}
-			}
 			if err := r.RemoveSetup(ctx); err != nil {
 				t.Errorf("RemoveSetup: %v", err)
 			}
-			out := session.Outcome{State: event.StateFailed, ExitCode: -1}
-			if !c.setup {
-				res, err := r.Join(ctx, sp.SessionSpec)
-				if err != nil {
-					t.Fatal(err)
-				}
-				out = session.Outcome{State: res.State, ExitCode: res.ExitCode}
+			res, err := r.Join(ctx, sp.SessionSpec)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if _, err := r.Close(ctx, out); err != nil {
+			if _, err := r.Close(ctx, session.Outcome{State: res.State, ExitCode: res.ExitCode}); err != nil {
 				t.Fatal(err)
 			}
 			if w != nil && w.removes != 0 {
 				t.Errorf("the wall removed %d setup containers", w.removes)
+			}
+			if got := stepOrder(events(t, &session.Result{Dir: r.Dir()})); !slices.Equal(got, c.want) {
+				t.Errorf("the steps:\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestRemoveSetupAfterAStartThatFailed pins a start of the setup container that returned
+// an error after the engine may have started the container, as when ctx ends during
+// docker run: RemoveSetup calls the removal and writes its step, the setup's failure
+// stays, so a join after it returns the setup's error and writes nothing, and a removal
+// that fails is the failed step from then on and sets Run.ContainerKept.
+func TestRemoveSetupAfterAStartThatFailed(t *testing.T) {
+	ctx := context.Background()
+	const started = "wall docker: start qory-x-setup: context canceled"
+	for _, c := range []struct {
+		name      string
+		removeErr error
+		want      []string
+		kept      bool
+		// failed is the step whose failure the join's error contains.
+		failed int
+	}{
+		{"the removal succeeds", nil, []string{
+			"step 1 wall start the setup container", "log <nil> 1 " + started, "step 1 failed -1",
+			"step 2 wall remove the setup container", "step 2 succeeded -1", "run exited",
+		}, false, 1},
+		{"the removal fails", errors.New("wall docker: docker rm --force: exit status 1"), []string{
+			"step 1 wall start the setup container", "log <nil> 1 " + started, "step 1 failed -1",
+			"step 2 wall remove the setup container",
+			"log <nil> 2 Close the run: the setup container may still run, so no session can join: wall docker: docker rm --force: exit status 1",
+			"step 2 failed -1", "run exited",
+		}, true, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sp := spec(t, "FAKE_EXIT=0")
+			w := &setupWall{startErr: errors.New(started), removeErr: c.removeErr}
+			sp.Wall, sp.Image = w, "example.com/agent:1"
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Remove(filepath.Join(registry(t), r.ID())) })
+			if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands}); err == nil || err.Error() != started {
+				t.Fatalf("the setup: %v, want %q", err, started)
+			}
+			if err := r.RemoveSetup(ctx); (err != nil) != (c.removeErr != nil) {
+				t.Errorf("RemoveSetup: %v, want an error: %v", err, c.removeErr != nil)
+			}
+			if w.removes != 1 {
+				t.Errorf("the wall tried %d removals, want 1", w.removes)
+			}
+			if got := r.ContainerKept(); got != c.kept {
+				t.Errorf("ContainerKept %v, want %v", got, c.kept)
+			}
+			want := fmt.Sprintf("Open another run: setup step %d of this run failed, so no session can join it.", c.failed)
+			if _, err := r.Join(ctx, sp.SessionSpec); err == nil || err.Error() != want {
+				t.Errorf("the join: %v, want %q", err, want)
+			}
+			closed, err := r.Close(ctx, session.Outcome{State: event.StateFailed, ExitCode: -1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if closed.WallKept != c.kept {
+				t.Errorf("WallKept %v, want %v", closed.WallKept, c.kept)
 			}
 			if got := stepOrder(events(t, &session.Result{Dir: r.Dir()})); !slices.Equal(got, c.want) {
 				t.Errorf("the steps:\n%q\nwant\n%q", got, c.want)
@@ -1089,6 +1140,12 @@ func TestRemoveSetupThatCannotStartRemovesNothing(t *testing.T) {
 			t.Fatal(err)
 		}
 		check(t, &kept.setupWall, r, got, "Close the run: the agent's container of session 1 could not be removed and may still run, so the setup container stays until the close.")
+		if !errors.Is(got, wall.ErrContainerKept) {
+			t.Errorf("the error %v does not match wall.ErrContainerKept", got)
+		}
+		if !r.ContainerKept() {
+			t.Error("ContainerKept is false after the agent's container could not be removed")
+		}
 	})
 	t.Run("a host step is open after a session", func(t *testing.T) {
 		w, sp, r := opens(t)

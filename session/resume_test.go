@@ -100,8 +100,8 @@ func cwdSlugOf(dir string) string {
 // dev.qory.session.transcript from offset 0, the restored bytes first, masked, between
 // the session's start and its exit.
 func TestARunWithResumeRestoresTheTranscriptAndResumes(t *testing.T) {
-	session.SetTranscriptPoll(50 * time.Millisecond)
 	sp, g, _ := resumerSpec(t, "ok\n")
+	session.SetTranscriptPoll(&sp.SessionSpec, 50*time.Millisecond)
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -191,8 +191,8 @@ func (w *transcriptWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, 
 // bytes first, masked.
 func TestAWalledRunRestoresTheTranscriptInItsDirectory(t *testing.T) {
 	t.Setenv("QORY_TEST_HOST_ONLY", "1")
-	session.SetTranscriptPoll(50 * time.Millisecond)
 	sp, _, home := resumerSpec(t, "ok\n")
+	session.SetTranscriptPoll(&sp.SessionSpec, 50*time.Millisecond)
 	w := &transcriptWall{home: home}
 	sp.Wall, sp.Image, sp.Mounts = w, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	res, err := run(context.Background(), sp)
@@ -253,4 +253,54 @@ func TestAWalledResumeOfAnotherShapeFails(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(res.Dir, "transcripts", "1", cwdSlugOf(sp.Dir), "s-1.jsonl")); err == nil {
 		t.Error("the restored file was written")
 	}
+}
+
+// TestAJoinReturnsWithNoTranscriptReaderLeft pins that Join stops the transcript's
+// reader before it returns: no goroutine reads the runtime's transcript once Join
+// returns, before the run's Close, for a runtime that exits and for one whose start
+// fails after the reads started. Both end the reads on Join's path after the runtime;
+// the deferred end, which only a panic between the start and that path reaches, is
+// not covered here.
+func TestAJoinReturnsWithNoTranscriptReaderLeft(t *testing.T) {
+	// joined opens a run of sp, joins it, counts the transcript readers, and closes the
+	// run.
+	joined := func(t *testing.T, sp runSpec) (*session.Result, int, error) {
+		t.Helper()
+		r, err := session.Open(context.Background(), opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := r.Join(context.Background(), sp.SessionSpec)
+		readers := session.TranscriptReaders()
+		if _, cerr := r.Close(context.Background(), outcomeOf(res, err)); cerr != nil {
+			t.Fatal(cerr)
+		}
+		return res, readers, err
+	}
+	t.Run("a runtime that exits", func(t *testing.T) {
+		sp, _, _ := resumerSpec(t, "ok\n")
+		session.SetTranscriptPoll(&sp.SessionSpec, time.Millisecond)
+		res, readers, err := joined(t, sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if readers != 0 {
+			t.Errorf("%d transcript readers after the join", readers)
+		}
+		if len(ofType(events(t, res), event.SessionTranscript)) == 0 {
+			t.Error("no dev.qory.session.transcript before the join returned")
+		}
+	})
+	t.Run("a runtime that does not start", func(t *testing.T) {
+		sp, _, _ := resumerSpec(t, "")
+		session.SetTranscriptPoll(&sp.SessionSpec, time.Millisecond)
+		sp.Command = filepath.Join(t.TempDir(), "none")
+		_, readers, err := joined(t, sp)
+		if err == nil || !strings.Contains(err.Error(), "no such file or directory") {
+			t.Fatalf("the join's error %v; want the failed start", err)
+		}
+		if readers != 0 {
+			t.Errorf("%d transcript readers after the join", readers)
+		}
+	})
 }
