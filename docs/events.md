@@ -42,6 +42,9 @@ passes. `qory` keeps them under its state directory and prints the path:
   alone, and the files the session writes for its runtime, such as `preparation.sh` and
   Claude Code's `settings.json` and `approve-key.sh`. A join that writes no
   `dev.qory.session.started`, such as one the gateway refuses, leaves no directory.
+- `transcripts/<n>/`: behind a wall, a directory per session whose runtime has
+  `resume`, such as Claude Code, bound writable at `~/.claude/projects/` inside. The
+  agent writes it, and the session reads the transcript from it.
 
 The files the session writes for the runtime, these and `ca-bundle.pem`, are each
 written to a new file beside it and renamed, so a link at its path is replaced, not

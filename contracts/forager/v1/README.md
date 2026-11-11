@@ -125,9 +125,10 @@ Stated so a receiver reads the record for what it is.
   the harness passes (§Variables, Denied names). What is passed in is the agent's: a
   checkout that keeps a secret in the repository's configuration passes the secret in with
   the workspace. Behind a wall the enclosure sees only the session's directory in the
-  run directory, `sessions/<n>/`, read-only, and the run directory lies outside every
-  place the run binds writable, so the agent can neither read, change nor move
-  `events.jsonl`, nor read another session's files. The server's copy is out of reach
+  run directory, `sessions/<n>/`, read-only, and, for a runtime with `resume`, the
+  session's transcript directory, `transcripts/<n>/`, writable. The rest of the run
+  directory lies outside every place the run binds writable, so the agent can neither
+  read, change nor move `events.jsonl`, nor read another session's files. The server's copy is out of reach
   as well.
 - Behind a wall the exit status is the adapter's command's. With Docker that is the
   runtime's status, except that `125` is the engine failing to start the container,
@@ -2107,8 +2108,9 @@ with no symbolic link among its names and without waiting for a writer, and read
 only when it is a regular file with one link and at most 67108864 bytes (64 MiB). A
 session id of another shape, or any other file, sends nothing of it and writes one
 `dev.qory.run.log` line of the session, with `stream: stderr`: `A continuation of this
-run starts the runtime without a resume: the runtime's session id <id> is not a UUID in
-lower case, so the session reads no transcript`, or `A continuation of this run starts
+run starts the runtime without a resume: the runtime's session id "<id>" is not a UUID
+in lower case, so the session reads no transcript`, with at most the id's first 64 bytes,
+quoted, or `A continuation of this run starts
 the runtime without a resume: the session reads no transcript at <path>: <cause>`. A file
 that does not exist yet is read once it exists.
 
@@ -2289,7 +2291,8 @@ compose keeps it out of git:
 - `sessions/<n>/`: a directory per session that started, `<n>` the session's number
   from the join answer; a join that writes no `dev.qory.session.started` has none.
   Behind a wall the enclosure binds the directory of the session that runs, read-only,
-  and nothing else of the run directory. It contains:
+  and nothing else of the run directory but the session's transcript directory. It
+  contains:
   - `output.log`: the bytes of the session's `dev.qory.run.log` chunks, those with its
     number as `session`, masked as the
     run's `output.log` is, so the session's terminal can be replayed from it alone.
@@ -2300,6 +2303,10 @@ compose keeps it out of git:
   - `approve-key.sh` and the copies of the `--mcp-config`, `--agents` and
     system-prompt files: what Claude Code's preparation writes, when it writes them
     (§Sequence step 6, §The descriptor).
+- `transcripts/<n>/`: behind a wall, the transcript directory of session `<n>` whose
+  runtime has `resume`, mode `0700`, which the enclosure binds writable at
+  `resume.prefix` inside. The agent writes it; the session reads the transcript there
+  and writes a paused run's there (§The events, A session's transcript).
 - `ca-bundle.pem`: the trusted bundle with the run's certificate, for every run with a
   certificate authority, walled or not, when the machine has a CA bundle; certificates
   only, never a key (§Credentials, Termination).
