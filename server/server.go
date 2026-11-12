@@ -349,6 +349,11 @@ type RunCredential struct {
 	// empty for a key out of cooldown; Chosen is true for the key of the model choice.
 	CooldownUntil string `json:"cooldown_until,omitzero"`
 	Chosen        bool   `json:"chosen,omitzero"`
+	// UseUpToPercent is an API credential's Use up to percentage, 1 to 99, nil when the
+	// document has none; UseUpToWindows are the limit windows it applies to, such as
+	// five_hour and seven_day, nil when the document has none.
+	UseUpToPercent *int     `json:"use_up_to_percent,omitzero"`
+	UseUpToWindows []string `json:"use_up_to_windows,omitzero"`
 	// Apply are where and how a host credential's value is set, one item per way; nil
 	// for an API credential.
 	Apply        []Apply  `json:"apply,omitzero"`

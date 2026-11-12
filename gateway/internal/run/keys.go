@@ -45,9 +45,11 @@ func keyEntry(c server.RunCredential) credential.KeyEntry {
 
 // checkKeyGroup returns a run_configuration_invalid error, with the key's name, for a
 // key group of the run configuration the run starts with that has a key with a
-// pause_for_s below 1, which fails the schema too; a start key in cooldown at now,
-// since the server picks the start key among the keys out of cooldown; and a second key
-// with chosen. A key with no pause_for_s has [modelkey.DefaultPauseFor].
+// pause_for_s below 1, a use_up_to_percent outside 1 to 99, or one of use_up_to_percent
+// and use_up_to_windows without the other, which each fail the schema too; a start key
+// in cooldown at now, since the server picks the start key among the keys out of
+// cooldown; and a second key with chosen. A key with no pause_for_s has
+// [modelkey.DefaultPauseFor].
 func (r *Run) checkKeyGroup(now time.Time) error {
 	group := storedGroup(r.stored, r.storedModel)
 	chosen := ""
@@ -55,6 +57,9 @@ func (r *Run) checkKeyGroup(now time.Time) error {
 		if c.PauseForS != nil && *c.PauseForS < 1 {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 				"set pause_for_s on the model key %s to a value from 1 to 604800, or remove it for the default cooldown: pause_for_s is %d", accesskey.ShownName(c.Name, true), *c.PauseForS)
+		}
+		if err := checkUseUpTo(c); err != nil {
+			return err
 		}
 		// The schema has refused a cooldown_until that is no RFC 3339 time.
 		if until, err := time.Parse(time.RFC3339, c.CooldownUntil); err == nil && until.After(now) && c.Name == startName(group, r.storedModel) {
@@ -72,6 +77,26 @@ func (r *Run) checkKeyGroup(now time.Time) error {
 	return nil
 }
 
+// checkUseUpTo returns a run_configuration_invalid error, with the key's name, for a
+// key c with a use_up_to_percent outside 1 to 99, a use_up_to_percent without
+// use_up_to_windows, or use_up_to_windows without use_up_to_percent. An empty
+// use_up_to_windows counts as none.
+func checkUseUpTo(c server.RunCredential) error {
+	name := accesskey.ShownName(c.Name, true)
+	switch p := c.UseUpToPercent; {
+	case p != nil && (*p < 1 || *p > 99):
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+			"set use_up_to_percent on the model key %s to a value from 1 to 99, or remove it and use_up_to_windows to use the key up to its limit: use_up_to_percent is %d", name, *p)
+	case p != nil && len(c.UseUpToWindows) == 0:
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+			"set use_up_to_windows on the model key %s to the limit windows use_up_to_percent applies to, or remove use_up_to_percent: the key has use_up_to_percent %d and no use_up_to_windows", name, *p)
+	case p == nil && c.UseUpToWindows != nil:
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+			"set use_up_to_percent on the model key %s to a value from 1 to 99, or remove use_up_to_windows: the key has use_up_to_windows and no use_up_to_percent", name)
+	}
+	return nil
+}
+
 // startName is the name of the start key of group, the key group whose
 // model_credential is model: model, or with model empty the group's one key.
 func startName(group []server.RunCredential, model string) string {
@@ -83,8 +108,9 @@ func startName(group []server.RunCredential, model string) string {
 
 // ModelKeys are the keys of the run's key group, [credential.Held.Group], in their
 // order, each with its resets_at, schedule_resets_at, pause_for_s or without it
-// [modelkey.DefaultPauseFor] of its auth, cooldown_until and chosen; none when the run's
-// start key is the machine's or the run has none. Call it after [Run.Hold].
+// [modelkey.DefaultPauseFor] of its auth, cooldown_until, chosen, use_up_to_percent and
+// use_up_to_windows; none when the run's start key is the machine's or the run has
+// none. Call it after [Run.Hold].
 func (r *Run) ModelKeys() []modelkey.Key {
 	held := r.Held()
 	if held == nil {
@@ -105,6 +131,9 @@ func (r *Run) ModelKeys() []modelkey.Key {
 		k.ResetsAt, _ = time.Parse(time.RFC3339, c.ResetsAt)
 		k.ScheduleResetsAt, _ = time.Parse(time.RFC3339, c.ScheduleResetsAt)
 		k.CooldownUntil, _ = time.Parse(time.RFC3339, c.CooldownUntil)
+		if c.UseUpToPercent != nil {
+			k.UseUpToPercent, k.UseUpToWindows = *c.UseUpToPercent, slices.Clone(c.UseUpToWindows)
+		}
 		out = append(out, k)
 	}
 	return out

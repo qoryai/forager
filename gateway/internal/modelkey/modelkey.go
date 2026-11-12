@@ -46,8 +46,9 @@ func DefaultPauseFor(oauth bool) time.Duration {
 // Key is one key of the group, from the run configuration's credentials: its name, its
 // earliest reset as the server had it, zero for none, the next reset of its weekly
 // schedule, zero for none, its pause_for_s, or [DefaultPauseFor] without one, the end of
-// its cooldown at the claim, zero for none, and chosen, true for the key of the model
-// choice.
+// its cooldown at the claim, zero for none, chosen, true for the key of the model
+// choice, and its use_up_to_percent, 0 for none, with the use_up_to_windows it applies
+// to.
 type Key struct {
 	Name             string
 	ResetsAt         time.Time
@@ -55,6 +56,8 @@ type Key struct {
 	PauseFor         time.Duration
 	CooldownUntil    time.Time
 	Chosen           bool
+	UseUpToPercent   int
+	UseUpToWindows   []string
 }
 
 // Window is the state of one limit window of one key, an entry of

@@ -233,6 +233,12 @@ in the order of `credentials`. A key of `forager.yaml` is never in a key group.
    `oauth`. A `pause_for_s` of 0 stops the run with `run_configuration_invalid`.
 2. Optionally set `schedule_resets_at`, the time a subscription's weekly limit resets,
    for a refusal with no reset. A key with it ignores `pause_for_s`.
+3. Optionally set `use_up_to_percent`, 1 to 99, with `use_up_to_windows`, the limit
+   windows it applies to, such as `["five_hour", "seven_day"]` for a subscription. Runs
+   then stop using the key once a listed window's use reaches the percentage, until
+   that window resets, and the rest of the window stays for the key's other uses.
+   Set both or neither: a percentage outside 1 to 99, or one of the two alone, stops
+   the run with `run_configuration_invalid`.
 
 The keys share the start key's placeholder, and the proxy sets one of them, the active
 key. When the provider returns `429` for the active key, the proxy puts the key in

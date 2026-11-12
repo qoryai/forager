@@ -22,6 +22,13 @@ release may change what an existing document does, and says so under Upgrading.
   3600 seconds for a subscription, a key whose `auth` has `oauth`. A `pause_for_s` of 0
   fails the run with `run_configuration_invalid`. A run configuration has at most 6 API
   credentials.
+- Deploy the gateway first, then a Qory Apiary that sends `use_up_to_percent` and
+  `use_up_to_windows` on an API credential. A gateway built before this change fails
+  such a run with `run_configuration_invalid`, because the API credential has
+  `additionalProperties: false`. Send both or neither: a `use_up_to_percent` outside 1
+  to 99, or one of the two without the other, is `run_configuration_invalid` too. Send
+  the windows of the provider's catalogue entry, and `cooldown_until`, the window's
+  reset, for a key whose stored use is at or above its percentage at the claim.
 - Send the key group in the order that breaks ties: the key of the model choice first,
   with `chosen: true`, when it is out of cooldown at the claim; then the provider's
   default key; then the others by when they were added; then the keys in cooldown at the
@@ -253,6 +260,13 @@ release may change what an existing document does, and says so under Upgrading.
   join request without `model_credential` gets it. The run configuration's API
   credential has `resets_at`, `schedule_resets_at` and `pause_for_s`. README §Credentials,
   Several model keys.
+- A key's Use up to percentage: the run configuration's API credential has
+  `use_up_to_percent`, 1 to 99, and `use_up_to_windows`, the limit windows it applies
+  to, such as `five_hour` and `seven_day`. Runs use the key while every listed window's
+  `utilization` is below the percentage; at or above it, the key is in cooldown until
+  that window's `resets_at`, whether the `utilization` came from the run's responses or
+  from another run's report. The model keys report and its answer do not change.
+  README §Credentials, Several model keys.
 - The model keys report: the gateway posts the state of each limit window of the run's
   keys, `POST <run.url>/<run_id>/model-keys`, signed by its access key, at most once a
   second, and takes the newest state of every gateway from the answer, so a run sets no
