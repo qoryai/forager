@@ -465,22 +465,35 @@ func (g *Group) Windows() []Window {
 	return out
 }
 
+// maxMerged is the cap [Group.Merge] sets on an entry's resets_at and cooldown_until:
+// a later one counts as this far after the gateway's clock. 7 days is a chosen cap, not
+// a bound of the provider's windows. A real longer cooldown from another run ends here
+// after 7 days: the run sends one request with the key, and the provider's refusal puts
+// the key in cooldown again. A reset in this run's answers keeps [maxReset].
+const maxMerged = 7 * 24 * time.Hour
+
+// maxAhead is the furthest ahead of the gateway's clock that [Group.Merge] takes an
+// entry's observed_at, the limit Qory Apiary sets on a report's observed_at. A stored
+// observed_at is then at most this far ahead, so the next report passes that check.
+const maxAhead = 300 * time.Second
+
 // Merge takes each entry of an answer to a report that is of a key of the group, of
 // one of the 11 windows, and later, by observed_at, than the state the group has of its
 // key and window. A key whose entry has a cooldown_until after now is in cooldown until
 // then. A key with use_up_to_percent whose entry is of a window in its
 // use_up_to_windows, with a utilization at or above the percentage and a resets_at
-// after now, is in cooldown until that resets_at ([Group.coolingUntil]). Each entry's
-// resets_at is held to [maxReset] after now, as a reset in an answer is. An entry that
-// is not rejected, observed after the group was made, ends the key's cooldown_until of
-// the run configuration. An entry of a status outside the three is left out.
+// after now, is in cooldown until that resets_at ([Group.coolingUntil]). [capped] caps
+// each entry's resets_at and cooldown_until at [maxMerged] after now. An entry that is not rejected, observed
+// after the group was made, ends the key's cooldown_until of the run configuration. An
+// entry of a status outside the three, or observed more than [maxAhead] after now, is
+// left out.
 func (g *Group) Merge(entries []Window) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
 	for _, e := range entries {
 		i := g.index(e.Credential)
-		if i < 0 || status(e.Status) == "" {
+		if i < 0 || status(e.Status) == "" || e.ObservedAt.After(now.Add(maxAhead)) {
 			continue
 		}
 		w := g.window(i, e.Window)
@@ -488,7 +501,8 @@ func (g *Group) Merge(entries []Window) {
 			continue
 		}
 		*w = e
-		w.ResetsAt = capped(e.ResetsAt, now)
+		w.ResetsAt = capped(e.ResetsAt, now, maxMerged)
+		w.CooldownUntil = capped(e.CooldownUntil, now, maxMerged)
 		if e.Status != StatusRejected {
 			w.CooldownUntil = time.Time{}
 			if e.ObservedAt.After(g.made) {

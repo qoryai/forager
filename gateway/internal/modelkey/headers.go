@@ -156,7 +156,7 @@ func readHeaders(h http.Header, now time.Time) read {
 				}
 				continue
 			case "reset":
-				r.overallReset = capped(epoch(value), now)
+				r.overallReset = capped(epoch(value), now, maxReset)
 				if claim != "" && !r.overallReset.IsZero() {
 					r.window(claim).resetsAt = r.overallReset
 				}
@@ -177,7 +177,7 @@ func readHeaders(h http.Header, now time.Time) read {
 					s.status = v
 				}
 			case "reset":
-				if t := capped(epoch(value), now); !t.IsZero() {
+				if t := capped(epoch(value), now, maxReset); !t.IsZero() {
 					s.resetsAt = t
 				}
 			case "utilization":
@@ -214,7 +214,7 @@ func readHeaders(h http.Header, now time.Time) read {
 				}
 			case "reset":
 				if t, err := time.Parse(time.RFC3339, value); err == nil {
-					f.reset = capped(t, now)
+					f.reset = capped(t, now, maxReset)
 				}
 			}
 		}
@@ -258,9 +258,9 @@ func epoch(v string) time.Time {
 	return time.Unix(int64(f), 0).UTC()
 }
 
-// capped is t, or [maxReset] after now when t is later; the zero time stays zero.
-func capped(t, now time.Time) time.Time {
-	if limit := now.Add(maxReset); t.After(limit) {
+// capped is t, or now plus most when t is later; the zero time stays zero.
+func capped(t, now time.Time, most time.Duration) time.Time {
+	if limit := now.Add(most); t.After(limit) {
 		return limit
 	}
 	return t
