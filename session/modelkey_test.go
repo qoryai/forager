@@ -968,7 +968,7 @@ func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 			if err := json.Unmarshal(b, &doc); err != nil {
 				t.Fatal(err)
 			}
-			if got, want := must(json.Marshal(doc.Env)), `{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"1","CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL":"1","QORY_TEST_KEPT":"kept"}`; string(got) != want {
+			if got, want := must(json.Marshal(doc.Env)), `{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"1","CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL":"1","CLAUDE_CODE_MAX_RETRIES":"15","QORY_TEST_KEPT":"kept"}`; string(got) != want {
 				t.Errorf("env is %s, want %s", got, want)
 			}
 			if !slices.Equal(reported, c.lines) {
@@ -1057,8 +1057,8 @@ func TestTheSettingsEnvSetsNoDeniedVariable(t *testing.T) {
 		walled bool
 		want   map[string]any
 	}{
-		{"walled", true, map[string]any{nonessential: "1", marketplace: "1", "QORY_TEST_KEPT": "kept"}},
-		{"unwalled", false, map[string]any{"ANTHROPIC_MODEL": "fake-model", nonessential: "1", marketplace: "1", "QORY_TEST_KEPT": "kept"}},
+		{"walled", true, map[string]any{nonessential: "1", marketplace: "1", maxRetries: "15", "QORY_TEST_KEPT": "kept"}},
+		{"unwalled", false, map[string]any{"ANTHROPIC_MODEL": "fake-model", nonessential: "1", marketplace: "1", maxRetries: "15", "QORY_TEST_KEPT": "kept"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sp, g := specGateway(t)

@@ -79,6 +79,14 @@ release may change what an existing document does, and says so under Upgrading.
   plugin is installed, and at start when it is enabled. An interactive run of 2.1.316
   without `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`, behind a wall in
   observe mode, connected to `downloads.claude.ai`.
+- Expect `CLAUDE_CODE_MAX_RETRIES=15` in every Claude Code launch, walled or not: the
+  Claude Code descriptor's `fixed` sets it, in the launch and in the `--settings` copy,
+  as it sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, and `runtimes.json` lists it. A
+  value of it from the server, `--env`, `wall.env`, a harness default or the
+  environment the run inherits no longer applies. Claude Code retries a failed API
+  request up to 15 times, up from its default of 10, so a run goes on through a longer
+  outage of its proxy, such as a separate gateway's restart: in a direct test, Claude
+  Code with 15 went on through an outage of 300 s.
 - Set the model or effort of a walled run another way than `CLAUDE_CODE_SUBAGENT_EFFORT`
   or `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`: the Claude Code descriptor's `overrides` list
   both, so a run behind a wall leaves out their values and records each as `denied`, like

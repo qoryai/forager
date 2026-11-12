@@ -5133,9 +5133,9 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`, `CLAUDE_CODE_AUTO_MODE_MODEL`,
 `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_EFFORT` and `CLAUDE_CODE_EXTRA_BODY`.
 Its `egress_hosts` lists `api.anthropic.com`.
-Its `fixed` sets two variables to `1`. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
-Claude Code 2.1.316 sends no log lines to Datadog, does not call
-`/api/claude_cli/bootstrap`, and makes no other request that its environment-variable
+Its `fixed` sets two variables to `1` and `CLAUDE_CODE_MAX_RETRIES` to `15`. With
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, Claude Code 2.1.316 sends no log lines to
+Datadog, does not call `/api/claude_cli/bootstrap`, and makes no other request that its environment-variable
 reference lists as nonessential. With
 `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`, an interactive Claude Code
 2.1.316 does not auto-install the official plugin marketplace, so it makes neither
@@ -5148,11 +5148,14 @@ only when a command asks for it, run by the agent or by a person:
 `/plugin` menu. `FORCE_AUTOUPDATE_PLUGINS` turns on the background refresh again, and
 the refreshes for a plugin missing from the marketplace's cached catalog: when that
 plugin is installed, and at start when it is enabled.
+`CLAUDE_CODE_MAX_RETRIES` is how many times Claude Code retries a failed API request,
+10 by default. The value 15 is for a separate gateway's restart: in a direct test,
+Claude Code with 15 went on through an outage of its proxy of 300 s.
 Claude Code 2.1.316 applies the `env` of its settings sources in the order user,
 project, local, `--settings`, managed, each over the ones before, so the copy's value
 wins over a workspace's `.claude/settings.json` or `.claude/settings.local.json`. A
-managed settings file, which the image or the machine provides, can still set either
-variable empty.
+managed settings file, which the image or the machine provides, can still set any of
+the three variables to another value.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,

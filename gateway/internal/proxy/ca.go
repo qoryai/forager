@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"container/list"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -8,17 +9,37 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // CA is one run's certificate authority: what lets the proxy answer as a host it
-// terminates TLS for. Its key is made for the run, lives in this process's memory and
-// nowhere else, and is gone with it. Whoever holds it can be any host to whoever trusts
-// it, which is why only the certificate, never the key, reaches an enclosure.
+// terminates TLS for. Its key is made for the run. Whoever holds it can be any host to
+// whoever trusts it, which is why only the certificate, never the key, reaches an
+// enclosure.
+//
+// The key is in two places. One is this process's memory, under the limits the
+// gateway's Start sets for the process: not dumpable, no core dump, and, with the
+// gateway's LockMemory, no page in swap. The other, once [CA.Write] wrote it, is the
+// file ca.key in the run's record directory, mode 0600, which those limits do not
+// cover: a gateway that stops while the run goes on keeps the file, and reads the
+// authority back with [ReadCA] when it reopens the run. The gateway removes both files
+// with [RemoveCA] at the run's final end, when it discards or reclaims the run's
+// record, and in a sweep of records no run is open on that have not changed for a
+// while.
 type CA struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey
@@ -156,4 +177,228 @@ func (c *CA) leaf(host string) (*tls.Certificate, error) {
 		delete(c.leaves, oldest.Value.(*cachedLeaf).host)
 	}
 	return l, nil
+}
+
+// The files of an authority in a run's record directory, as [CA.Write] writes them:
+// the certificate, and its key as a PKCS#8 PEM block of type PRIVATE KEY.
+const (
+	CACertFile = "ca.pem"
+	CAKeyFile  = "ca.key"
+)
+
+// maxCAFile is the most bytes [ReadCA] reads of either file. Each is under 1 KiB.
+const maxCAFile = 64 << 10
+
+// keyType is the PEM block type of the key file.
+const keyType = "PRIVATE KEY"
+
+// Write writes the authority to dir, which must exist: the certificate to
+// [CACertFile] and the key to [CAKeyFile], each a file that must not exist yet, made
+// with mode 0600 and synced, then dir is synced. The key goes from its DER form
+// straight into the file, with no PEM copy of it in memory, and Write overwrites the
+// DER form with zeros once written; copies the standard library makes inside its
+// encoder stay in the heap until it is reused. When a step fails, Write removes the files it
+// made, and leaves a file that existed before it as it was.
+func (c *CA) Write(dir string) error {
+	certPath, keyPath := filepath.Join(dir, CACertFile), filepath.Join(dir, CAKeyFile)
+	if err := writeNew(certPath, func(w io.Writer) error {
+		_, err := w.Write(c.pem)
+		return err
+	}); err != nil {
+		return err
+	}
+	if err := writeNew(keyPath, c.writeKey); err != nil {
+		return errors.Join(err, removeFile(certPath))
+	}
+	if err := syncDir(dir); err != nil {
+		return errors.Join(err, removeFile(keyPath), removeFile(certPath))
+	}
+	return nil
+}
+
+// writeKey writes the key to w as one PEM block of type [keyType], 64 characters a
+// line, as [pem.Encode] does. Its buffers are on the stack or overwritten with zeros
+// before it returns.
+func (c *CA) writeKey(w io.Writer) error {
+	der, err := x509.MarshalPKCS8PrivateKey(c.key)
+	if err != nil {
+		return errors.New("the authority's key does not encode as PKCS#8")
+	}
+	defer clear(der)
+	var line [65]byte
+	defer clear(line[:])
+	if _, err := io.WriteString(w, "-----BEGIN "+keyType+"-----\n"); err != nil {
+		return err
+	}
+	for rest := der; len(rest) > 0; {
+		n := min(len(rest), 48)
+		m := base64.StdEncoding.EncodedLen(n)
+		base64.StdEncoding.Encode(line[:m], rest[:n])
+		line[m] = '\n'
+		if _, err := w.Write(line[:m+1]); err != nil {
+			return err
+		}
+		rest = rest[n:]
+	}
+	_, err = io.WriteString(w, "-----END "+keyType+"-----\n")
+	return err
+}
+
+// writeNew makes the file path with mode 0600, failing when it exists, writes it with
+// write, syncs and closes it. When a step after the file is made fails, it removes the
+// file.
+func writeNew(path string, write func(io.Writer) error) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return accesskey.ShownError(err)
+	}
+	if err := errors.Join(write(f), f.Sync()); err != nil {
+		return errors.Join(fmt.Errorf("writing %s failed: %w", accesskey.ShownValue(path, false), accesskey.ShownError(err)), f.Close(), removeFile(path))
+	}
+	if err := f.Close(); err != nil {
+		return errors.Join(accesskey.ShownError(err), removeFile(path))
+	}
+	return nil
+}
+
+// removeFile removes path; a path that does not exist is no error.
+func removeFile(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return accesskey.ShownError(err)
+	}
+	return nil
+}
+
+// syncDir syncs the directory dir, so the files made or removed in it stay so after a
+// crash.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return accesskey.ShownError(err)
+	}
+	return accesskey.ShownError(errors.Join(d.Sync(), d.Close()))
+}
+
+// ReadCA reads the authority [CA.Write] wrote to dir. It fails, with no byte of either
+// file in its error, when a file is missing, is not a regular file, is larger than
+// [maxCAFile] or is not one PEM block of its type; when [CAKeyFile]'s mode lets group or
+// others read, write or run it; when the certificate is not an authority's or is past
+// its NotAfter; and when the key is not a PKCS#8 ECDSA P-256 key or is not the key of
+// the certificate. ReadCA overwrites with zeros what it read of the key file, and the
+// key's DER form, before it returns; copies the standard library makes inside its
+// parser stay in the heap until it is reused.
+func ReadCA(dir string) (*CA, error) {
+	certPath, keyPath := filepath.Join(dir, CACertFile), filepath.Join(dir, CAKeyFile)
+	certPEM, _, err := readCAFile(certPath)
+	if err != nil {
+		return nil, err
+	}
+	block, rest := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("%s is not one PEM block of type CERTIFICATE", shownPath(certPath))
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("%s does not parse as an X.509 certificate", shownPath(certPath))
+	}
+	if !cert.BasicConstraintsValid || !cert.IsCA {
+		return nil, fmt.Errorf("%s is not a certificate authority's certificate", shownPath(certPath))
+	}
+	if !time.Now().Before(cert.NotAfter) {
+		return nil, fmt.Errorf("the certificate in %s expired at %s", shownPath(certPath), cert.NotAfter.UTC().Format(time.RFC3339))
+	}
+	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok || pub.Curve != elliptic.P256() {
+		return nil, fmt.Errorf("the certificate in %s is not for an ECDSA P-256 key", shownPath(certPath))
+	}
+
+	keyPEM, info, err := readCAFile(keyPath)
+	defer clear(keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return nil, fmt.Errorf("set %s to mode 0600: its mode %#o lets group or others access it", shownPath(keyPath), perm)
+	}
+	kb, rest := pem.Decode(keyPEM)
+	if kb != nil {
+		defer clear(kb.Bytes)
+	}
+	if kb == nil || kb.Type != keyType || len(kb.Headers) != 0 || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("%s is not one PEM block of type %s", shownPath(keyPath), keyType)
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(kb.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("%s does not parse as a PKCS#8 private key", shownPath(keyPath))
+	}
+	key, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok || key.Curve != elliptic.P256() {
+		return nil, fmt.Errorf("%s is not an ECDSA P-256 key", shownPath(keyPath))
+	}
+	if !pub.Equal(&key.PublicKey) {
+		return nil, fmt.Errorf("the key in %s is not the key of the certificate in %s", shownPath(keyPath), shownPath(certPath))
+	}
+	return caOf(block.Bytes, key)
+}
+
+// readCAFile reads path whole, and the file it read. It reads only a regular file, not
+// a symbolic link to one, of at most [maxCAFile] bytes, into one buffer, which it
+// overwrites with zeros when the read fails. It opens path without waiting for a
+// writer, so a named pipe fails at once. The error of a failed read contains none of
+// the bytes read.
+func readCAFile(path string) ([]byte, os.FileInfo, error) {
+	named, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, accesskey.ShownError(err)
+	}
+	if !named.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("%s is not a regular file", shownPath(path))
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, accesskey.ShownError(err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, accesskey.ShownError(err)
+	}
+	if !os.SameFile(named, info) {
+		return nil, nil, fmt.Errorf("%s changed while it was read", shownPath(path))
+	}
+	buf := make([]byte, maxCAFile+1)
+	n, err := io.ReadFull(f, buf)
+	switch {
+	case err == nil:
+		clear(buf)
+		return nil, nil, fmt.Errorf("%s is larger than %d bytes", shownPath(path), maxCAFile)
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return buf[:n], info, nil
+	default:
+		clear(buf)
+		return nil, nil, accesskey.ShownError(err)
+	}
+}
+
+// shownPath is path as an error shows it.
+func shownPath(path string) string { return accesskey.ShownValue(path, false) }
+
+// RemoveCA removes [CACertFile] and [CAKeyFile] from dir, then syncs dir when it removed
+// one. A file that does not exist is no error, nor is a dir that does not exist.
+func RemoveCA(dir string) error {
+	removed := false
+	var errs []error
+	for _, name := range []string{CAKeyFile, CACertFile} {
+		err := os.Remove(filepath.Join(dir, name))
+		switch {
+		case err == nil:
+			removed = true
+		case !errors.Is(err, fs.ErrNotExist):
+			errs = append(errs, accesskey.ShownError(err))
+		}
+	}
+	if removed {
+		errs = append(errs, syncDir(dir))
+	}
+	return errors.Join(errs...)
 }
