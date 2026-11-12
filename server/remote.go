@@ -163,6 +163,7 @@ func NewRemoteLink(runKey string, trust RemoteTLS, userAgent string, digests fun
 		// A 3xx is a status like any other: nothing of the run goes elsewhere.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+	k.opening = waiting(k.http, OpenWait)
 	return k, nil
 }
 

@@ -219,14 +219,16 @@ type opening struct {
 	deadline time.Time
 }
 
-// The tries of the run's registration with Qory Apiary as a run opens: up to three, each
-// with the same bytes, the second openWaits[0] after the first ends and the third
-// openWaits[1] after the second, and a try starts again only within openWindow of the
-// run request's arrival. A fast answer to the last try therefore arrives by about 6.5
-// seconds, inside the 10 seconds a session waits.
+// The tries of the run's registration with Qory Apiary, or its attach, as a run opens:
+// the waits between them are openWaits, the last of them repeated, each counted from
+// the end of the try before, and a try starts again only within openWindow of the run
+// request's arrival. A Qory Apiary that restarts within those 120 seconds therefore
+// registers the run once it is back. The last try starts before the window ends and
+// has [server.Timeout] for its answer, so the run's answer reaches the session inside
+// [server.OpenWait].
 var (
-	openWaits  = []time.Duration{time.Second, 2 * time.Second}
-	openWindow = 6 * time.Second
+	openWaits  = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
+	openWindow = 120 * time.Second
 )
 
 // openDeadline is the deadline of a run's open that starts now.
@@ -261,24 +263,46 @@ func passing(err error) bool {
 	return true
 }
 
+// openClock is how the tries of a run's open read the time and wait: now, and wait,
+// which returns false when ctx ends first.
+type openClock struct {
+	now  func() time.Time
+	wait func(ctx context.Context, d time.Duration) bool
+}
+
+// wallClock is the clock of the tries outside tests.
+var wallClock = openClock{now: time.Now, wait: func(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}}
+
 // tries asks Qory Apiary with ask, again after a failure that may pass, [openWaits]
-// apart, until it answers otherwise, the tries run out, the next would start past
-// deadline, or ctx ends; the last try's error is the result.
+// apart, until it answers otherwise, the next try would start past deadline, or ctx
+// ends; the last try's error is the result.
 func (g *Gateway) tries(ctx context.Context, deadline time.Time, ask func() error) error {
 	waits := openWaits
 	if g.cfg.openWaits != nil {
 		waits = g.cfg.openWaits
 	}
+	return tryOpen(ctx, wallClock, waits, deadline, ask)
+}
+
+// tryOpen is [Gateway.tries] with the clock and the waits: the wait after try n+1 is
+// waits[n], or the last of waits once they run out.
+func tryOpen(ctx context.Context, clock openClock, waits []time.Duration, deadline time.Time, ask func() error) error {
 	for n := 0; ; n++ {
 		err := ask()
-		if err == nil || !passing(err) || n >= len(waits) || ctx.Err() != nil || time.Now().Add(waits[n]).After(deadline) {
+		if err == nil || !passing(err) || len(waits) == 0 || ctx.Err() != nil {
 			return err
 		}
-		t := time.NewTimer(waits[n])
-		select {
-		case <-t.C:
-		case <-ctx.Done():
-			t.Stop()
+		wait := waits[min(n, len(waits)-1)]
+		if clock.now().Add(wait).After(deadline) || !clock.wait(ctx, wait) {
 			return err
 		}
 	}
