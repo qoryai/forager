@@ -24,9 +24,22 @@ import (
 	"github.com/qoryai/forager/link"
 )
 
-// dialWait is how long the forwarder has to reach the gateway's proxy for one
-// connection.
+// dialWait is how long the forwarder has to reach the gateway's proxy in one try.
 const dialWait = 10 * time.Second
+
+// gatewayHold is how long a forwarder that reaches a separate gateway through the link
+// tries again to reach it for one connection, while the agent's connection stays open
+// with nothing written to it, so a gateway that restarts within it serves the
+// connection. Claude Code and Codex wait 120 s for a CONNECT held with no answer, then
+// end the turn.
+const gatewayHold = 120 * time.Second
+
+// holdFirstWait is the wait after the first failed try of a hold; each failed try
+// doubles it, up to holdMaxWait.
+const (
+	holdFirstWait = 250 * time.Millisecond
+	holdMaxWait   = 2 * time.Second
+)
 
 // forwarder is the run's own listener on this machine: every connection it accepts it
 // copies, byte for byte, to the gateway's proxy. Without a wall it opens each with the
@@ -43,7 +56,11 @@ const dialWait = 10 * time.Second
 // connection bound to a key the run key names and opened with the relay's preamble and
 // the run key, which the link's proxy dial writes: behind a wall, every connection must
 // first open with the relay's preamble and the hop secret the session gave the wall's
-// relay, which the forwarder takes off.
+// relay, which the forwarder takes off. A connection checked and admitted is then held
+// for up to [gatewayHold] while the gateway cannot be reached: the forwarder tries again
+// after every failed dial, a refused or reset connection, a TLS handshake cut short or a
+// failed binding, and writes nothing to the agent meanwhile; at the hold's end it closes
+// the connection. On one machine it dials the gateway's proxy once, for [dialWait].
 //
 // Behind a wall, a connection that shows the relay's preamble after [forwarder.setCheck]
 // set the run's check of its run API is read one request at a time, as without a wall,
@@ -84,6 +101,10 @@ type forwarding struct {
 	// dial opens one connection to the gateway's proxy: behind a separate gateway, bound
 	// and opened with the run key.
 	dial func(context.Context) (net.Conn, error)
+	// hold, when set, is how long the forwarder tries dial again for one connection
+	// after a failed try, each try for [dialWait] at most: [gatewayHold] for every
+	// dial through the link to a separate gateway. Zero tries dial once.
+	hold time.Duration
 	// secret, when set, is written in the relay's preamble at the start of every
 	// connection to the proxy.
 	secret string
@@ -389,9 +410,7 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 	}
-	ctx, cancel := context.WithTimeout(f.ctx, dialWait)
-	up, err := way.dial(ctx)
-	cancel()
+	up, err := f.dialUp(way)
 	if err != nil {
 		return
 	}
@@ -419,6 +438,36 @@ func (f *forwarder) serve(c net.Conn) {
 		return
 	}
 	pipe(c, up, src, up, way.password != "" || way.check != nil)
+}
+
+// dialUp opens the connection to the proxy with way's dial, each try for [dialWait] at
+// most. With way's hold, it tries again after every failed try until the hold ends,
+// waiting [holdFirstWait] first, then twice as long each time up to [holdMaxWait]; the
+// error is the last try's. It stops at once when the forwarder is closed.
+func (f *forwarder) dialUp(way forwarding) (net.Conn, error) {
+	ctx := f.ctx
+	if way.hold > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(f.ctx, way.hold)
+		defer cancel()
+	}
+	wait := holdFirstWait
+	for {
+		try, cancel := context.WithTimeout(ctx, dialWait)
+		up, err := way.dial(try)
+		cancel()
+		if err == nil || way.hold == 0 {
+			return up, err
+		}
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, err
+		case <-t.C:
+		}
+		wait = min(2*wait, holdMaxWait)
+	}
 }
 
 // headWait is how long a connection has to send its first request's head.

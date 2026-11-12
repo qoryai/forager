@@ -117,7 +117,7 @@ func (r *Run) openWall(ctx context.Context) error {
 		if r.relayToken, err = newForwarderSecret(); err != nil {
 			return err
 		}
-		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, hop: r.relayToken})
+		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, hold: gatewayHold, hop: r.relayToken})
 	}
 	if err != nil {
 		return err

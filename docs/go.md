@@ -954,6 +954,13 @@ run, err := session.Open(ctx, session.OpenSpec{
   forwarder takes off: see
   [the relay to a separate gateway](wall.md#the-relay-to-a-separate-gateway). The run key
   stays in the session's memory, in no environment and no file.
+- While the gateway cannot be reached, every forwarder of the session, the host proxy
+  and the engine proxy among them, holds a connection it took: it keeps the connection
+  open, writes nothing to it, and dials the gateway again for up to 120 seconds, waiting
+  250 ms after the first failed dial and twice as long after each one after it, up to
+  2 seconds. A gateway that restarts within the 120 seconds serves the connection; after
+  them the forwarder closes it. On one machine the forwarder dials the gateway's proxy
+  once, for up to 10 seconds.
 
 ### The run key from a run code
 
