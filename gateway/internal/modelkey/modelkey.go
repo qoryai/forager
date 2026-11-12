@@ -465,11 +465,11 @@ func (g *Group) Windows() []Window {
 	return out
 }
 
-// maxMerged is the cap [Group.Merge] sets on an entry's cooldown_until: a later one
-// counts as this far after the gateway's clock. 7 days is a chosen cap, not a bound of
-// the provider's windows. A real longer cooldown from another run ends here after 7
-// days: the run sends one request with the key, and the provider's refusal puts the
-// key in cooldown again.
+// maxMerged is the cap [Group.Merge] sets on an entry's resets_at and cooldown_until:
+// a later one counts as this far after the gateway's clock. 7 days is a chosen cap, not
+// a bound of the provider's windows. A real longer cooldown from another run ends here
+// after 7 days: the run sends one request with the key, and the provider's refusal puts
+// the key in cooldown again. A reset in this run's answers keeps [maxReset].
 const maxMerged = 7 * 24 * time.Hour
 
 // maxAhead is the furthest ahead of the gateway's clock that [Group.Merge] takes an
@@ -483,8 +483,7 @@ const maxAhead = 300 * time.Second
 // then. A key with use_up_to_percent whose entry is of a window in its
 // use_up_to_windows, with a utilization at or above the percentage and a resets_at
 // after now, is in cooldown until that resets_at ([Group.coolingUntil]). [capped] caps
-// each entry's resets_at at [maxReset] after now, as for a reset in an answer, and its
-// cooldown_until at [maxMerged] after now. An entry that is not rejected, observed
+// each entry's resets_at and cooldown_until at [maxMerged] after now. An entry that is not rejected, observed
 // after the group was made, ends the key's cooldown_until of the run configuration. An
 // entry of a status outside the three, or observed more than [maxAhead] after now, is
 // left out.
@@ -502,7 +501,7 @@ func (g *Group) Merge(entries []Window) {
 			continue
 		}
 		*w = e
-		w.ResetsAt = capped(e.ResetsAt, now, maxReset)
+		w.ResetsAt = capped(e.ResetsAt, now, maxMerged)
 		w.CooldownUntil = capped(e.CooldownUntil, now, maxMerged)
 		if e.Status != StatusRejected {
 			w.CooldownUntil = time.Time{}

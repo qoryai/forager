@@ -1075,11 +1075,10 @@ release may change what an existing document does, and says so under Upgrading.
   reports each key's limit windows to the control plane with a signed `POST
   <run.url>/<run_id>/model-keys`, and skips a key the answer has in cooldown. The
   gateway leaves out an answer's entry observed more than 300 seconds after the
-  gateway's clock, and caps an entry's `resets_at` at 31 days and its `cooldown_until`
-  at 7 days after that clock. A real longer cooldown from another run ends after 7
-  days, and the provider's refusal of the next request with the key puts it in
-  cooldown again. With `use_up_to_percent`, a merged `resets_at` can keep a key in
-  cooldown for up to 31 days. A control plane without the route gets one report: the
+  gateway's clock, and caps an entry's `resets_at` and `cooldown_until` at 7 days
+  after that clock. A real longer cooldown from another run ends after 7 days, and the
+  provider's refusal of the next request with the key puts it in cooldown again. A
+  control plane without the route gets one report: the
   run's record has one line, `Upgrade the control plane to share model key cooldowns
   between runs`, and cooldowns stay within the run.
 - A key with `use_up_to_percent` is in cooldown while a window in its

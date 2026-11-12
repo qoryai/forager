@@ -856,14 +856,14 @@ func TestEveryKeyAtItsUseUpToPercentPauses(t *testing.T) {
 	}
 }
 
-// TestMergeHoldsAFarResetToThirtyOneDays pins the cap of a report answer's resets_at: an
-// entry at the percentage whose resets_at is 9999-12-31 puts the key in cooldown for 31
+// TestMergeCapsAFarResetAtSevenDays pins the cap of a report answer's resets_at: an
+// entry at the percentage whose resets_at is 9999-12-31 puts the key in cooldown for 7
 // days, not until that year, and the group's windows, and so the next report, have the
 // capped reset.
-func TestMergeHoldsAFarResetToThirtyOneDays(t *testing.T) {
+func TestMergeCapsAFarResetAtSevenDays(t *testing.T) {
 	g, c := shared(t)
 	far := time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
-	limit := start.Add(31 * 24 * time.Hour)
+	limit := start.Add(7 * 24 * time.Hour)
 	g.Merge([]modelkey.Window{{Credential: "model", Window: "five_hour", Status: modelkey.StatusAllowed, ResetsAt: far, Utilization: 95, HasUtilization: true, Source: modelkey.SourceProvider, ObservedAt: start.Add(time.Second)}})
 	if w, _ := window(g, "model", "five_hour"); !w.ResetsAt.Equal(limit) {
 		t.Errorf("five_hour resets at %v; want %v", w.ResetsAt, limit)
@@ -871,9 +871,13 @@ func TestMergeHoldsAFarResetToThirtyOneDays(t *testing.T) {
 	if got, ok := g.Pick(); got != "model-2" || !ok {
 		t.Errorf("Pick after the entry: %s, %v; want model-2", got, ok)
 	}
+	c.now = limit.Add(-time.Second)
+	if got, ok := g.Pick(); got != "model-2" || !ok {
+		t.Errorf("Pick a second before the cap: %s, %v; want model-2, model in cooldown", got, ok)
+	}
 	c.now = limit
 	if next, ok := g.Refused("model-2", headers("retry-after", "3600"), ""); next != "model" || !ok {
-		t.Errorf("Refused model-2 31 days later: %s, %v; want model, out of cooldown", next, ok)
+		t.Errorf("Refused model-2 7 days later: %s, %v; want model, out of cooldown", next, ok)
 	}
 }
 

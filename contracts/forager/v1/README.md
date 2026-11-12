@@ -3397,12 +3397,11 @@ credential names.
 The gateway takes each entry of the 11 windows whose `observed_at` is later than the
 state it has of that key and window, and at most 300 seconds after the gateway's clock,
 the limit Qory Apiary sets on a report's `observed_at`. It leaves out any other entry.
-A `resets_at` later than 31 days after the gateway's clock counts as 31 days after it,
-and a `cooldown_until` later than 7 days after it counts as 7 days after it. 7 days is
-a chosen cap: a real longer cooldown from another run ends in this run after 7 days,
-the run sends one request with the key, and the provider's refusal puts the key in
-cooldown again. A merged `resets_at` still counts for up to 31 days, so with
-`use_up_to_percent` an entry at the percentage can keep a key in cooldown that long.
+A `resets_at` or `cooldown_until` later than 7 days after the gateway's clock counts as
+7 days after it; a reset in a provider's response to this run keeps its 31-day cap. 7
+days is a chosen cap: a real longer cooldown from another run ends in this run after 7
+days, the run sends one request with the key, and the provider's refusal puts the key
+in cooldown again.
 A key whose entry has a `cooldown_until` in the future is in cooldown until then, as
 after a limit refusal in this run, so a run sets no key that another run found at its
 limit. A key with
