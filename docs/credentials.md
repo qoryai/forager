@@ -263,7 +263,7 @@ a `429`.
 
 When no key is left out of cooldown, the session gets the `429`, and the proxy sends no
 more requests with the placeholder until the session's join ends: each gets a `429` from
-the gateway, `qory: the run pauses until a model key's cooldown ends`. The
+the gateway that starts `qory: the run pauses:`. The
 gateway's answer to the session's next batch has `stop`, `model_key_limit`, so the
 session stops the runtime and the run pauses. The next join gets the active key again.
 

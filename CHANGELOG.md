@@ -281,9 +281,11 @@ release may change what an existing document does, and says so under Upgrading.
   session; while every key is in cooldown, the proxy returns its `429` and sends nothing
   to the provider. In both cases the gateway's `2xx` to the session's next batch has
   `{"stop": {"reason": "model_key_limit"}}`, `link-batch-answer.schema.json`. The session
-  stops the runtime, reports `the runtime was stopped: every model key of the run is at
-  its provider's limit or at its Use up to percentage, and the run pauses until a key's
-  cooldown ends`, and writes `dev.qory.session.exited` `paused` with
+  stops the runtime, reports `the runtime was stopped and the run pauses: every model
+  key of the run is at its provider's limit or at its Use up to percentage, or the
+  gateway could not send a refused request again with the next key (a request over 8
+  MiB, or a key whose credential does not cover the path)`, and writes
+  `dev.qory.session.exited` `paused` with
   `model_key_limit`. The run stays open for its host work, and its caller closes it
   `paused` with `model_key_limit` and the last session's exit code.
 - `paused`, a state of `dev.qory.run.exited` and `dev.qory.session.exited`,
@@ -1065,9 +1067,11 @@ release may change what an existing document does, and says so under Upgrading.
   cooldown, sends the request again with the next key, and passes the refusal only when
   no key is left; the gateway's answer to the session's next batch then has `stop`,
   `model_key_limit`. From then until the session's join ends, each request with the
-  placeholder gets the proxy's `429`, `qory: the run pauses until a model key's cooldown
-  ends: every key of the run's key group is at its provider's limit or at its Use up to
-  percentage, and the gateway sends no more model requests in this session.` The gateway
+  placeholder gets the proxy's `429`, `qory: the run pauses: every model key of the
+  run's key group is at its provider's limit or at its Use up to percentage, or the
+  gateway could not send a refused request again with the next key (a request over 8
+  MiB, or a key whose credential does not cover the path), and the gateway sends no more
+  model requests in this session.` The gateway
   reports each key's limit windows to the control plane with a signed `POST
   <run.url>/<run_id>/model-keys`, and skips a key the answer has in cooldown. A control
   plane without the route gets one report: the run's record has one line, `Upgrade the
