@@ -22,6 +22,13 @@ release may change what an existing document does, and says so under Upgrading.
   3600 seconds for a subscription, a key whose `auth` has `oauth`. A `pause_for_s` of 0
   fails the run with `run_configuration_invalid`. A run configuration has at most 6 API
   credentials.
+- Deploy the gateway first, then a Qory Apiary that sends `use_up_to_percent` and
+  `use_up_to_windows` on an API credential. A gateway built before this change fails
+  such a run with `run_configuration_invalid`, because the API credential has
+  `additionalProperties: false`. Send both or neither: a `use_up_to_percent` outside 1
+  to 99, or one of the two without the other, is `run_configuration_invalid` too. Send
+  the windows of the provider's catalogue entry, and `cooldown_until`, the window's
+  reset, for a key whose stored use is at or above its percentage at the claim.
 - Send the key group in the order that breaks ties: the key of the model choice first,
   with `chosen: true`, when it is out of cooldown at the claim; then the provider's
   default key; then the others by when they were added; then the keys in cooldown at the
@@ -253,6 +260,13 @@ release may change what an existing document does, and says so under Upgrading.
   join request without `model_credential` gets it. The run configuration's API
   credential has `resets_at`, `schedule_resets_at` and `pause_for_s`. README §Credentials,
   Several model keys.
+- A key's Use up to percentage: the run configuration's API credential has
+  `use_up_to_percent`, 1 to 99, and `use_up_to_windows`, the limit windows it applies
+  to, such as `five_hour` and `seven_day`. Runs use the key while every listed window's
+  `utilization` is below the percentage; at or above it, the key is in cooldown until
+  that window's `resets_at`, whether the `utilization` came from the run's responses or
+  from another run's report. The model keys report and its answer do not change.
+  README §Credentials, Several model keys.
 - The model keys report: the gateway posts the state of each limit window of the run's
   keys, `POST <run.url>/<run_id>/model-keys`, signed by its access key, at most once a
   second, and takes the newest state of every gateway from the answer, so a run sets no
@@ -267,7 +281,11 @@ release may change what an existing document does, and says so under Upgrading.
   session; while every key is in cooldown, the proxy returns its `429` and sends nothing
   to the provider. In both cases the gateway's `2xx` to the session's next batch has
   `{"stop": {"reason": "model_key_limit"}}`, `link-batch-answer.schema.json`. The session
-  stops the runtime and writes `dev.qory.session.exited` `paused` with
+  stops the runtime, reports `the runtime was stopped and the run pauses: every model
+  key of the run is at its provider's limit or at its Use up to percentage, or the
+  gateway could not send a refused request again with the next key (a request over 8
+  MiB, or a key whose credential does not cover the path)`, and writes
+  `dev.qory.session.exited` `paused` with
   `model_key_limit`. The run stays open for its host work, and its caller closes it
   `paused` with `model_key_limit` and the last session's exit code.
 - `paused`, a state of `dev.qory.run.exited` and `dev.qory.session.exited`,
@@ -1046,13 +1064,26 @@ release may change what an existing document does, and says so under Upgrading.
 
 - Several model keys of one provider per run, a key group (docs/credentials.md, Several
   keys of one provider). On a provider's `429` the proxy puts the active key in
-  cooldown, sends the request again with the next key, and passes the refusal only
-  when no key is left; the gateway's answer to the session's next batch then has
-  `stop`, `model_key_limit`. The gateway reports each key's limit windows to the
-  control plane with a signed `POST <run.url>/<run_id>/model-keys`, and skips a key the
-  answer has in cooldown. A control plane without the route gets one report: the run's
-  record has one line, `Upgrade the control plane to share model key cooldowns between
-  runs`, and cooldowns stay within the run.
+  cooldown, sends the request again with the next key, and passes the refusal only when
+  no key is left; the gateway's answer to the session's next batch then has `stop`,
+  `model_key_limit`. From then until the session's join ends, each request with the
+  placeholder gets the proxy's `429`, `qory: the run pauses: every model key of the
+  run's key group is at its provider's limit or at its Use up to percentage, or the
+  gateway could not send a refused request again with the next key (a request over 8
+  MiB, or a key whose credential does not cover the path), and the gateway sends no more
+  model requests in this session.` The gateway
+  reports each key's limit windows to the control plane with a signed `POST
+  <run.url>/<run_id>/model-keys`, and skips a key the answer has in cooldown. A control
+  plane without the route gets one report: the run's record has one line, `Upgrade the
+  control plane to share model key cooldowns between runs`, and cooldowns stay within
+  the run.
+- A key with `use_up_to_percent` is in cooldown while a window in its
+  `use_up_to_windows` is at or above the percentage, until that window's `resets_at`
+  (docs/credentials.md, Several keys of one provider). The gateway reads the window's
+  `utilization` from the provider's responses to the run and from the answers to its
+  model keys reports, and stores no cooldown for it, so its reports do not change. The
+  next request goes with the next key; when every key is in cooldown, the proxy returns
+  its `429` with no call to the provider, and the run pauses with `model_key_limit`.
 - The link takes a session's `dev.qory.run.exited` `paused` with `model_key_limit`
   after a last `dev.qory.session.exited` with that reason.
 - `server.Client.PostModelKeys`, the signed model keys report and its answer.
@@ -2268,6 +2299,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun` runs Claude Code 2.1.316
+  behind the wall with two keys, each with `use_up_to_percent` 90. The stub serves
+  each request with the five-hour window at 90 percent: the second request goes with
+  the second key, the third gets the proxy's `429`, and the run ends `paused` with
+  `model_key_limit`, with no `429` from the stub. Both Wall conformance jobs run it.
 - `TestDockerQoryLinkPausesAndResumesUnderAnotherKey` starts Claude Code 2.1.316
   behind the wall through qory's `qory run agent-env`, with `CLAUDE_CONFIG_DIR` at
   `/tmp/qory-agent-home` and qory's link from that folder to `~/.claude/projects`.

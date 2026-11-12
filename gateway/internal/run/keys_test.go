@@ -193,6 +193,48 @@ func TestAKeyGroupInCooldownAtTheClaim(t *testing.T) {
 	}
 }
 
+// TestAKeyGroupWithUseUpTo pins the fixture of a key group whose keys have
+// use_up_to_percent and use_up_to_windows: each key of ModelKeys has them. Each fixture
+// of a use_up_to_percent outside 1 to 99, of one of the two members without the other,
+// of 12 windows, of a window twice and of a window in upper case fails the schema too,
+// and the gateway refuses it, run_configuration_invalid with the key's name and before
+// any secrets request.
+func TestAKeyGroupWithUseUpTo(t *testing.T) {
+	doc := fixture(t, "fixtures/run-configuration/model-keys-use-up-to.json")
+	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
+		Secrets: (&controlPlane{answer: harnessValue}).fetch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	keys := r.ModelKeys()
+	if len(keys) != 2 || keys[0].UseUpToPercent != 90 || !slices.Equal(keys[0].UseUpToWindows, []string{"five_hour", "seven_day"}) ||
+		keys[1].UseUpToPercent != 80 || !slices.Equal(keys[1].UseUpToWindows, []string{"five_hour"}) {
+		t.Errorf("ModelKeys %+v; want 90 of five_hour and seven_day on model, 80 of five_hour on model-2", keys)
+	}
+	for _, c := range []struct{ fixture, line string }{
+		{"zero", `set use_up_to_percent on the model key "model" to a value from 1 to 99, or remove it and use_up_to_windows to use the key up to its limit: use_up_to_percent is 0`},
+		{"hundred", `set use_up_to_percent on the model key "model" to a value from 1 to 99, or remove it and use_up_to_windows to use the key up to its limit: use_up_to_percent is 100`},
+		{"no-windows", `set use_up_to_windows on the model key "model" to the limit windows use_up_to_percent applies to, or remove use_up_to_percent: the key has use_up_to_percent 90 and no use_up_to_windows`},
+		{"windows-empty", `set use_up_to_windows on the model key "model" to the limit windows use_up_to_percent applies to, or remove use_up_to_percent: the key has use_up_to_percent 90 and no use_up_to_windows`},
+		{"windows-alone", `set use_up_to_percent on the model key "model" to a value from 1 to 99, or remove use_up_to_windows: the key has use_up_to_windows and no use_up_to_percent`},
+		{"twelve-windows", `list at most 11 windows in use_up_to_windows of the model key "model": it lists 12`},
+		{"window-twice", `list each window once in use_up_to_windows of the model key "model": "five_hour" is there twice`},
+		{"window-upper-case", `set each window in use_up_to_windows of the model key "model" to 1 to 64 of a-z, 0-9 and underscore, starting with a letter, such as five_hour: window 1 is "Five_Hour"`},
+	} {
+		s := &controlPlane{answer: harnessValue}
+		path := "fixtures/invalid/run-configuration-credentials-api-use-up-to-" + c.fixture + ".json"
+		_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, fixture(t, path), digest('1')), Secrets: s.fetch})
+		code, names := refusalOf(err)
+		if code != refusal.RunConfigurationInvalid || !slices.Equal(names, []string{"model"}) || err == nil || !strings.HasPrefix(err.Error(), c.line) {
+			t.Errorf("%s: %v; want %s", c.fixture, err, c.line)
+		}
+		if len(s.calls) != 0 {
+			t.Errorf("%s: %d secrets requests; want none", c.fixture, len(s.calls))
+		}
+	}
+}
+
 // TestTheCheckAndTheProxyShareTheGroup pins one decision of the key group: a key whose
 // header differs from the start key's in case alone, and whose start answer sets it on
 // two apply items, is in the group the proxy sets, and the check of pause_for_s covers

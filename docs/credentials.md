@@ -233,6 +233,12 @@ in the order of `credentials`. A key of `forager.yaml` is never in a key group.
    `oauth`. A `pause_for_s` of 0 stops the run with `run_configuration_invalid`.
 2. Optionally set `schedule_resets_at`, the time a subscription's weekly limit resets,
    for a refusal with no reset. A key with it ignores `pause_for_s`.
+3. Optionally set `use_up_to_percent`, 1 to 99, with `use_up_to_windows`, the limit
+   windows it applies to, such as `["five_hour", "seven_day"]` for a subscription. Runs
+   then stop using the key once a listed window's use reaches the percentage, until
+   that window resets, and the rest of the window stays for the key's other uses.
+   Set both or neither: a percentage outside 1 to 99, or one of the two alone, stops
+   the run with `run_configuration_invalid`.
 
 The keys share the start key's placeholder, and the proxy sets one of them, the active
 key. When the provider returns `429` for the active key, the proxy puts the key in
@@ -245,9 +251,19 @@ an entry of the key that is not `rejected`. The session gets only the answer to 
 second request. The proxy keeps a copy of each request
 body up to 8 MiB for this; a larger body goes once.
 
+A key with `use_up_to_percent` is also in cooldown while a window in its
+`use_up_to_windows` is at or above the percentage, until that window resets. The
+gateway reads each window's use from the provider's responses to the run and from the
+answers to its model keys reports, so a key that another run took to its percentage is
+in cooldown too. The response that took the key to its percentage reaches the session
+as the provider sent it, and the next request goes with the next key. A key can pass
+its percentage by the requests already in flight on it when that response arrives.
+When every key is in cooldown, the run pauses as below, also when no provider returned
+a `429`.
+
 When no key is left out of cooldown, the session gets the `429`, and the proxy sends no
 more requests with the placeholder until the session's join ends: each gets a `429` from
-the gateway, `qory: start the run again once a model key's cooldown ends`. The
+the gateway that starts `qory: the run pauses:`. The
 gateway's answer to the session's next batch has `stop`, `model_key_limit`, so the
 session stops the runtime and the run pauses. The next join gets the active key again.
 

@@ -196,7 +196,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
 
       - name: Read the qory commit
         # The tests of qory's transcript link run qory's agent-env verb behind the wall.
@@ -327,7 +327,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
 
   e2e-docker:
     name: Wall conformance, nested Docker

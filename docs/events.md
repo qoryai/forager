@@ -117,15 +117,18 @@ When the run ends while a session runs, that session's `dev.qory.session.exited`
 right before the run's `dev.qory.run.exited`, with the same state and reason and exit
 code -1. So every `dev.qory.session.started` has its `dev.qory.session.exited`.
 
-A session ends `paused` with `model_key_limit` when the gateway's answer to one of
-its batches has `{"stop": {"reason": "model_key_limit"}}`: the run's proxy passed a
-model provider's limit refusal to the runtime, because no model key of the run is left.
-The session stops the runtime as at the run's time limit, and the exit code is the
-runtime's. Before it writes the `dev.qory.session.exited` of a runtime that exited by
-itself, the session posts its last batch and reads the answer, so a stop that comes as
-the runtime exits still counts. The run stays open for its host work, such as a push,
-and its caller closes it `paused` with `model_key_limit`: a pause of the run, which
-a control plane can continue.
+A session ends `paused` with `model_key_limit` when the gateway's answer to one of its
+batches has `{"stop": {"reason": "model_key_limit"}}`: the run's proxy passed a model
+provider's limit refusal, or the gateway's `429`, to the runtime. It does so when
+every model key of the run is at its provider's limit or at its Use up to percentage,
+when the refused request body was over 8 MiB, so the proxy has no copy to send again,
+and when the next key's credential does not cover the request's path. The session
+stops the runtime as at the run's time limit, and the exit code is the runtime's.
+Before it writes the `dev.qory.session.exited` of a runtime that exited by itself, the
+session posts its last batch and reads the answer, so a stop that comes as the runtime
+exits still counts. The run stays open for its host work, such as a push, and its
+caller closes it `paused` with `model_key_limit`: a pause of the run, which a control
+plane can continue.
 
 A runtime whose descriptor has `resume`, such as Claude Code, writes the transcript of
 its session to a file, `~/.claude/projects/<working directory as a slug>/<session

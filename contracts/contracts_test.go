@@ -359,7 +359,10 @@ const beyondLinkSchema = "-beyond-schema-"
 // paused, and an API format outside the list, in upper case or as an
 // object; and, for several model keys and a resume, a run configuration whose API
 // credential has a pause_for_s of 0 or over a week or a resets_at that is no time, with
-// seven API credentials, a host credential with pause_for_s, or a resume without its
+// seven API credentials, a host credential with pause_for_s or with use_up_to_percent
+// and use_up_to_windows, an API credential with a use_up_to_percent of 0 or 100,
+// without use_up_to_windows, or with use_up_to_windows alone, empty, of 12 windows,
+// with a window twice or a window in upper case, or a resume without its
 // session id or with a run id in upper case, a model keys report whose entry has a
 // utilization over 100, a status, a source or a window outside the grammar, rejected
 // without cooldown_until or cooldown_until with another status, or no observed_at, or

@@ -95,8 +95,9 @@ type keyFixture struct {
 	logged []string
 }
 
-// newKeyFixture starts the fake provider and the proxy.
-func newKeyFixture(t *testing.T) *keyFixture {
+// newKeyFixture starts the fake provider and the proxy. Each of set changes every key of
+// the group.
+func newKeyFixture(t *testing.T, set ...func(*modelkey.Key)) *keyFixture {
 	t.Helper()
 	upCA, err := NewCA("upstream")
 	if err != nil {
@@ -123,7 +124,11 @@ func newKeyFixture(t *testing.T) *keyFixture {
 	for _, name := range []string{"model", "model-2", "model-3"} {
 		value := fakeKeys[name]
 		creds = append(creds, Credential{Name: name, Hosts: []string{keyHost}, Scheme: "bearer", Placeholder: placeholder, Token: func() string { return value }})
-		keys = append(keys, modelkey.Key{Name: name, PauseFor: time.Hour})
+		k := modelkey.Key{Name: name, PauseFor: time.Hour}
+		for _, f := range set {
+			f(&k)
+		}
+		keys = append(keys, k)
 	}
 	f.g = modelkey.New(keys, "model", nil)
 	f.p.SetKeyGroup(f.g, "/v1/messages", func(line string) { f.mu.Lock(); f.logged = append(f.logged, line); f.mu.Unlock() })
@@ -222,7 +227,7 @@ func TestNoKeyLeftPassesTheRefusalAndHoldsTheRest(t *testing.T) {
 		t.Error("the group is not stopped")
 	}
 	status, body = f.post(t, "{}")
-	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: start the run again once a model key's cooldown ends") || len(f.up.taken()) != 0 {
+	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage") || len(f.up.taken()) != 0 {
 		t.Errorf("after the stop: %d %q; want the gateway's 429 and no call", status, body)
 	}
 	if d := f.seen.at(-1); d.Outcome != Refused || d.Credential != "" || d.Status != 0 {
@@ -401,7 +406,43 @@ func TestEveryKeyCoolingGetsTheProxys429(t *testing.T) {
 	}
 	f.g.Merge(entries)
 	status, body := f.post(t, "{}")
-	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: start the run again once a model key's cooldown ends") {
+	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage") {
+		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
+	}
+	if calls := f.up.taken(); len(calls) != 0 {
+		t.Errorf("the provider got %v; want no call", calls)
+	}
+	if !f.g.Passed() {
+		t.Error("the group is not stopped")
+	}
+}
+
+// TestKeysAtTheirUseUpToPercentGetTheProxys429 pins the pause at use_up_to_percent:
+// each key's 200 has its five_hour window at 90, the key's percentage, so each next
+// request goes with the next key; once every key is at its percentage, the proxy sets
+// no key, returns its 429 without a call to the provider, and the group is stopped.
+func TestKeysAtTheirUseUpToPercentGetTheProxys429(t *testing.T) {
+	f := newKeyFixture(t, func(k *modelkey.Key) { k.UseUpToPercent, k.UseUpToWindows = 90, []string{"five_hour"} })
+	reset := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+	for name := range fakeKeys {
+		f.up.answers[name] = func(w http.ResponseWriter) {
+			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "allowed_warning")
+			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Utilization", "0.9")
+			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Reset", reset)
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"type":"message"}`)
+		}
+	}
+	for _, want := range []string{"model", "model-2", "model-3"} {
+		if status, body := f.post(t, "{}"); status != http.StatusOK {
+			t.Fatalf("the request for %s got %d %q; want the provider's 200", want, status, body)
+		}
+		if got := keysOf(f.up.taken()); strings.Join(got, ",") != want {
+			t.Errorf("the provider got %v; want %s alone", got, want)
+		}
+	}
+	status, body := f.post(t, "{}")
+	if want := "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, or a key whose credential does not cover the path), and the gateway sends no more model requests in this session.\n"; status != http.StatusTooManyRequests || body != want {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {

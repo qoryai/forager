@@ -64,7 +64,7 @@ func (p *Proxy) limitPassed(w http.ResponseWriter, d Decision) {
 	p.observe(d)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusTooManyRequests)
-	fmt.Fprint(w, "qory: start the run again once a model key's cooldown ends: every key of the run's key group is at its provider's limit, and the gateway sends no more model requests in this session.\n")
+	fmt.Fprint(w, "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, or a key whose credential does not cover the path), and the gateway sends no more model requests in this session.\n")
 }
 
 // resendKey marks the context of a request with a key of the group, with its [resend].

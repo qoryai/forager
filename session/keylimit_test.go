@@ -61,7 +61,7 @@ func TestAStopInABatchsAnswerStopsTheRuntime(t *testing.T) {
 	if closed.State != "paused" || closed.Reason != "model_key_limit" || closed.ExitCode != 143 {
 		t.Errorf("the close %+v", closed)
 	}
-	if !slices.ContainsFunc(reports(), func(l string) bool { return strings.Contains(l, "model provider's limit") }) {
+	if !slices.Contains(reports(), "the runtime was stopped and the run pauses: every model key of the run is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, or a key whose credential does not cover the path)") {
 		t.Errorf("reports %q", reports())
 	}
 	if own, posted := exitedOf(t, res, g); posted == nil || own["reason"] != "model_key_limit" || posted["reason"] != "model_key_limit" {
