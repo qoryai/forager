@@ -1073,10 +1073,13 @@ release may change what an existing document does, and says so under Upgrading.
   MiB, or a key whose credential does not cover the path), and the gateway sends no more
   model requests in this session.` The gateway
   reports each key's limit windows to the control plane with a signed `POST
-  <run.url>/<run_id>/model-keys`, and skips a key the answer has in cooldown. A control
-  plane without the route gets one report: the run's record has one line, `Upgrade the
-  control plane to share model key cooldowns between runs`, and cooldowns stay within
-  the run.
+  <run.url>/<run_id>/model-keys`, and skips a key the answer has in cooldown. The
+  gateway takes an answer's `resets_at` as at most 31 days, and its `cooldown_until`
+  and `observed_at` as at most 7 days, after the gateway's clock, so a wrong far-future
+  time keeps a key in cooldown, or keeps out the entries observed before it, for at
+  most 7 days. A control plane without the route gets one report: the run's record has
+  one line, `Upgrade the control plane to share model key cooldowns between runs`, and
+  cooldowns stay within the run.
 - A key with `use_up_to_percent` is in cooldown while a window in its
   `use_up_to_windows` is at or above the percentage, until that window's `resets_at`
   (docs/credentials.md, Several keys of one provider). The gateway reads the window's

@@ -465,15 +465,32 @@ func (g *Group) Windows() []Window {
 	return out
 }
 
+// maxMerged is the furthest after the gateway's clock that [Group.Merge] takes an
+// entry's cooldown_until and observed_at: a later one counts as this far. 7 days is the
+// longest window a provider reports, seven_day, and the largest pause_for_s, 604800 s,
+// so a wrong far-future time from another run keeps a key in cooldown, or keeps out
+// the entries observed before it, for at most 7 days.
+const maxMerged = 7 * 24 * time.Hour
+
+// held is t, or [maxMerged] after now when t is later; the zero time stays zero.
+func held(t, now time.Time) time.Time {
+	if limit := now.Add(maxMerged); t.After(limit) {
+		return limit
+	}
+	return t
+}
+
 // Merge takes each entry of an answer to a report that is of a key of the group, of
 // one of the 11 windows, and later, by observed_at, than the state the group has of its
 // key and window. A key whose entry has a cooldown_until after now is in cooldown until
 // then. A key with use_up_to_percent whose entry is of a window in its
 // use_up_to_windows, with a utilization at or above the percentage and a resets_at
 // after now, is in cooldown until that resets_at ([Group.coolingUntil]). Each entry's
-// resets_at is held to [maxReset] after now, as a reset in an answer is. An entry that
-// is not rejected, observed after the group was made, ends the key's cooldown_until of
-// the run configuration. An entry of a status outside the three is left out.
+// observed_at is held to [maxMerged] after now before the comparison, its resets_at to
+// [maxReset] after now, as a reset in an answer is, and its cooldown_until to
+// [maxMerged] after now. An entry that is not rejected, observed after the group was
+// made, ends the key's cooldown_until of the run configuration. An entry of a status
+// outside the three is left out.
 func (g *Group) Merge(entries []Window) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -483,12 +500,14 @@ func (g *Group) Merge(entries []Window) {
 		if i < 0 || status(e.Status) == "" {
 			continue
 		}
+		e.ObservedAt = held(e.ObservedAt, now)
 		w := g.window(i, e.Window)
 		if w == nil || !e.ObservedAt.After(w.ObservedAt) {
 			continue
 		}
 		*w = e
 		w.ResetsAt = capped(e.ResetsAt, now)
+		w.CooldownUntil = held(e.CooldownUntil, now)
 		if e.Status != StatusRejected {
 			w.CooldownUntil = time.Time{}
 			if e.ObservedAt.After(g.made) {

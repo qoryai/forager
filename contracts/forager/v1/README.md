@@ -3396,7 +3396,11 @@ credential names.
 
 The gateway takes each entry of the 11 windows whose `observed_at` is later than the
 state it has of that key and window, with its `resets_at` held to at most 31 days after
-the gateway's clock, and leaves out an entry of any other window. A key whose entry has
+the gateway's clock, and its `cooldown_until` and `observed_at` to at most 7 days after
+it, before the comparison by `observed_at`. It leaves out an entry of any other window.
+7 days is the longest window a provider reports and the largest `pause_for_s`, so a
+wrong far-future time from another run keeps a key in cooldown, or keeps out the
+entries observed before it, for at most 7 days. A key whose entry has
 a `cooldown_until` in the future is in cooldown until then, as after a limit refusal in
 this run, so a run sets no key that another run found at its limit. A key with
 `use_up_to_percent` is also in cooldown while an entry of a window in its
