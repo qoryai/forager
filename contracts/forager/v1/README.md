@@ -3990,36 +3990,52 @@ order:
 | `403` | a code of `refusal.Decides` | the gateway's decision of the run with `images`, below: `run_configuration_invalid`, `image_unknown`, `tool_unknown` and the like |
 
 A session waits 140 seconds for its run answer, on the local link and behind a
-separate gateway, where it waits ten seconds for any other answer on the link: the
-gateway tries the server for up to 120 seconds (Tries as a run opens, below), the last
-try has ten seconds for its answer, and ten seconds are left for the rest of the open.
-A run request whose session gives up opens no run: once its connection goes, the
-gateway asks the server nothing more for it, the registration among it, opens no run,
-and removes what it recorded of the run, so the same `run_id` sent again is a new run
-request, not `run_id_used` at the gateway. A registration the server accepted before
-then stays the server's. The gateway keeps the bytes it built for a `run_id` for 150
-seconds of their `time`, by the wall clock, half the server's window: when the same `run_id` comes again within them,
-with every member but `time` the same, its labels and `about` among them, it sends the
-same bytes, `time` included, which a server that accepted them under the same access key
-answers the same again. After them, or when another member differs, it builds the
-registration anew, with another `time`, and the server answers `409` `run_id_used`.
-A session that goes in the moment between the gateway's last look and the answer's
-arrival may leave a run open, which ends `session_lost` as any run whose session sends
-nothing does.
+separate gateway. On both links it waits 10 seconds for every other answer. The gateway
+tries the server's registration, or the attach, for up to 120 seconds (Tries as a run
+opens, below); the last try may start just before 120 seconds and has 10 seconds for
+its answer, which leaves 10 seconds for the rest of the open. Those 10 seconds do not
+cover every open: behind a separate gateway, a run with credentials reloads its run
+configuration after the attach and then requests its secrets, each with 10 seconds for
+its answer, so after a late attach its open may take about 150 seconds and the start of
+its tools, and on the local link a run that requests its secrets after a late
+registration may take 140 seconds and the start of its tools. Such a session stops
+waiting before the run opens.
+
+A run request whose session stops waiting opens no run: once its connection goes, the
+gateway sends the server no further request for it, the registration among them, opens
+no run, and removes what it recorded of the run, so the same `run_id` sent again opens
+as a first run request would, not `run_id_used` at the gateway. A registration the
+server accepted before then stays the server's. A gateway that closes while a run opens
+stops its tries at once: the run does not open, and its run request gets a `503`
+without a body, as one that comes while the gateway closes.
+
+The gateway keeps the bytes it built for a `run_id` for 150 seconds of their `time`, by
+the wall clock, half the server's window: when the same `run_id` comes again within
+them, with every member but `time` the same, its labels and `about` among them, it sends
+the same bytes, `time` included, which a server that accepted them under the same
+access key answers the same again. After them, or when another member differs, it builds
+the registration anew, with another `time`, and the server answers `409` `run_id_used`.
+A session that stops waiting at 140 seconds and sends the same `run_id` again at once
+has 10 of the 150 seconds left to get the same bytes. A session that goes in the moment
+between the gateway's last look and the answer's arrival may leave a run open, which
+ends `session_lost` as any run whose session sends nothing does.
 
 **Tries as a run opens.** The gateway tries the server's registration again after a
 failure that may pass, 1, 2, 4, 8 and 15 seconds after the try before ends, and then
 every 15 seconds, and starts a try again only within 120 seconds of the run request's
 arrival. A server that restarts within those 120 seconds therefore registers the run
-once it is back, and the last answer comes inside the time the session waits.
-It asks again after no answer, a transport failure or a timeout, a `5xx`, signed or not, and a
+once it is back. The attach behind a separate gateway has the same tries, and so does
+the reload of its run configuration when it has credentials, within the same 120
+seconds: when the attach ends less than a second before they end, or after them, the
+reload gets one try. The gateway asks
+again after no answer, a transport failure or a timeout, a `5xx`, signed or not, and a
 signed `429` `rate_limited`; it ignores `Retry-After`. Every other answer is final: a
 `401`, any other coded refusal, `not_found` among them, a signed answer other than a
 `5xx` with no code, and a document Forager refuses. The gateway builds the
 registration's body once, and each try sends the same bytes, `time` included, which a
-server that accepted them under the same access key answers the same again; the run's record holds
-`dev.qory.run.registered` once. Once the tries are spent the last answer is the
-session's, as without them: its code and status passed on from `apiary`, or a `500`
+server that accepted them under the same access key answers the same again; the run's
+record has `dev.qory.run.registered` once. Once the tries are spent the last answer is
+the session's, as without them: its code and status passed on from `apiary`, or a `500`
 `internal`.
 
 With `images`, the gateway then decides the run as the session decides it

@@ -1193,6 +1193,45 @@ func TestAnAttachRefusalReachesTheSession(t *testing.T) {
 	}
 }
 
+// TestCloseStopsTheTriesOfARunThatOpens pins a gateway that closes while a run's attach
+// keeps failing with a 503: Close stops the tries at once and returns within seconds,
+// not at the end of the window of the tries; the run request gets a 503 and no run
+// opens; and the server gets no attach after Close returns.
+func TestCloseStopsTheTriesOfARunThatOpens(t *testing.T) {
+	cfg := gateway.Config{}
+	gateway.SetOpenTries(&cfg, []time.Duration{100 * time.Millisecond}, time.Minute)
+	r := startRemote(t, nil, cfg)
+	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusServiceUnavailable, Code: "unavailable"})
+	closed := make(chan time.Duration, 1)
+	go func() {
+		for len(r.c.attached()) < 3 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		r.g.Close(ctx)
+		closed <- time.Since(start)
+	}()
+	runID := event.NewRunID()
+	a := r.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+	took := <-closed
+	if took > 3*time.Second {
+		t.Errorf("Close took %v; want it within 3s", took)
+	}
+	if a.status != http.StatusServiceUnavailable || len(a.body) != 0 {
+		t.Errorf("the run request: %d %s; want a 503 without a body", a.status, a.body)
+	}
+	attaches := len(r.c.attached())
+	time.Sleep(300 * time.Millisecond)
+	if got := len(r.c.attached()); got != attaches {
+		t.Errorf("%d attaches after Close returned", got-attaches)
+	}
+	if _, err := os.Stat(filepath.Join(r.cfg.Dir, "runs", runID)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the run's record after Close: %v", err)
+	}
+}
+
 // TestAnAttachedRunWhoseConfigurationIsRefusedKeepsItsRecord pins an attach the server
 // accepted whose run configuration Forager refuses: the run does not open, a 403
 // run_configuration_invalid from the gateway, but its record is kept, its first line

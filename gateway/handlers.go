@@ -149,6 +149,15 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			g.mu.Unlock()
 			return
 		}
+		if g.openCtx.Err() != nil {
+			// The gateway closes: the run did not open, and its request gets the 503 of
+			// a run request that comes while the gateway closes.
+			g.mu.Lock()
+			delete(g.used, req.RunID)
+			g.mu.Unlock()
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		if !recorded {
 			if errors.Is(err, os.ErrExist) || errors.Is(err, stream.ErrRunning) || errors.Is(err, stream.ErrOpen) {
 				// The run's record is there already: a run of another gateway's, or of

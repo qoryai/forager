@@ -583,9 +583,9 @@ type linkAnswer struct {
 
 // send sends one request on the link with hc and reads its answer, at most most bytes
 // of body: a longer one is read as no body on the local link, and behind a separate
-// gateway, past the largest document, is no answer. The request carries User-Agent and the contract
-// revision, and set's headers; no access key, instance, timestamp or signature, and
-// behind a separate gateway the run key. An error is a transport failure: no answer.
+// gateway, past the largest document, is no answer. The request has a User-Agent
+// header, the contract revision and set's headers; no access key, instance, timestamp
+// or signature, and behind a separate gateway the run key. An error is a transport failure: no answer.
 // Behind a separate gateway an answer not signed under a key the run key names, for
 // the connection it came on and the request it answers, is no answer either: a
 // [*GatewayKeyError].
@@ -957,7 +957,7 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status and
 // who refused, From. It waits [OpenWait] for the answer, where every other request of
 // the link waits [Timeout]. Once the run is open on the local link, every later batch
-// names it in X-Qory-Run-Id. The local link takes no narrowing, and a separate gateway
+// has it in X-Qory-Run-Id. The local link takes no narrowing, and a separate gateway
 // no labels or about, which are the starter's registration's.
 func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
