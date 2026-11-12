@@ -138,9 +138,28 @@ func SetOpenTries(c *Config, waits []time.Duration, window time.Duration) {
 	c.openWaits, c.openWindow = waits, window
 }
 
-// OpenTries are the gateway's own waits between the tries of Qory Apiary as a run
-// opens, and its window.
+// OpenTries are the gateway's waits between the tries of Qory Apiary as a run opens,
+// and its window.
 func OpenTries() ([]time.Duration, time.Duration) { return openWaits, openWindow }
+
+// TriesOnAFakeClock runs the tries of a run's open with the gateway's waits and window
+// on a fake clock, which each try's ask moves on by took and each wait by its length, and
+// returns when each try started, after the run request's arrival, and the result.
+func TriesOnAFakeClock(ctx context.Context, took time.Duration, ask func(n int) error) ([]time.Duration, error) {
+	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	now := t0
+	clock := openClock{now: func() time.Time { return now }, wait: func(ctx context.Context, d time.Duration) bool {
+		now = now.Add(d)
+		return ctx.Err() == nil
+	}}
+	var starts []time.Duration
+	err := tryOpen(ctx, clock, openWaits, t0.Add(openWindow), func() error {
+		starts = append(starts, now.Sub(t0))
+		now = now.Add(took)
+		return ask(len(starts))
+	})
+	return starts, err
+}
 
 // EndWords is how a line says a run ended with the state and the reason.
 func EndWords(state, reason string) string {

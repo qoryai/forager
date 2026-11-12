@@ -80,6 +80,12 @@ const WellKnown = "/.well-known/qory-configuration"
 // Timeout is how long a server has to answer one request.
 const Timeout = 10 * time.Second
 
+// OpenWait is how long a session waits for the answer to its run request on the link:
+// the gateway tries the run's registration, or its attach, for up to 120 seconds of the
+// request's arrival, the last try has [Timeout] for its answer, and 10 seconds are left
+// for the rest of the open.
+const OpenWait = 140 * time.Second
+
 // Window is how far a signed GET's timestamp may be from the receiver's clock,
 // either way.
 const Window = 300 * time.Second

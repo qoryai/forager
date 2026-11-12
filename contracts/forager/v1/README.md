@@ -184,9 +184,9 @@ One run, on a developer machine, with a server configured:
    run's run configuration; heartbeats start once the registration is accepted. A fetch
    that fails, a document the schema refuses, an answer that does not verify, or a
    registration not accepted means the run does not start: a run configured to be
-   observed never runs unobserved by accident. The gateway tries the registration up to
-   3 times as a run opens, with the same bytes each time (§The gateway's link, Tries as
-   a run opens).
+   observed never runs unobserved by accident. The gateway tries the registration again
+   for up to 120 seconds as a run opens, with the same bytes each time (§The gateway's
+   link, Tries as a run opens).
    The `--local` flag of the command runs with the file sink alone and contacts no
    server. With no server configured there is no fetch and no registration, and the run
    starts at once, files only.
@@ -3989,10 +3989,12 @@ order:
 | `403` | `wall_required` | a run without a wall whose policy selects what needs one, below; the link's code alone |
 | `403` | a code of `refusal.Decides` | the gateway's decision of the run with `images`, below: `run_configuration_invalid`, `image_unknown`, `tool_unknown` and the like |
 
-A session waits ten seconds for its run answer, as for any answer on the link. A run
-request whose session gives up opens no run: once its connection goes, the gateway asks
-the server nothing more for it, the registration among it, opens no run, and removes
-what it recorded of the run, so the same `run_id` sent again is a new run request, not
+A session waits 140 seconds for its run answer, where it waits ten seconds for any
+other answer on the link: the gateway tries the server for up to 120 seconds (Tries as
+a run opens, below), the last try has ten seconds for its answer, and ten seconds are
+left for the rest of the open. A run request whose session gives up opens no run: once
+its connection goes, the gateway asks the server nothing more for it, the registration
+among it, opens no run, and removes what it recorded of the run, so the same `run_id` sent again is a new run request, not
 `run_id_used` at the gateway. A registration the server accepted before then stays the
 server's. The gateway keeps the bytes it built for a `run_id` for 150 seconds of their
 `time`, by the wall clock, half the server's window: when the same `run_id` comes again within them,
@@ -4004,11 +4006,12 @@ A session that goes in the moment between the gateway's last look and the answer
 arrival may leave a run open, which ends `session_lost` as any run whose session sends
 nothing does.
 
-**Tries as a run opens.** The gateway tries the server's registration up to 3 times,
-the second try 1 second after the first ends and the third 2 seconds
-after the second, and starts a try again only within 6 seconds of the run request's
-arrival, so the last answer comes inside the ten seconds the session waits. It asks
-again after no answer, a transport failure or a timeout, a `5xx`, signed or not, and a
+**Tries as a run opens.** The gateway tries the server's registration again after a
+failure that may pass, 1, 2, 4, 8 and 15 seconds after the try before ends, and then
+every 15 seconds, and starts a try again only within 120 seconds of the run request's
+arrival. A server that restarts within those 120 seconds therefore registers the run
+once it is back, and the last answer comes inside the 140 seconds the session waits.
+It asks again after no answer, a transport failure or a timeout, a `5xx`, signed or not, and a
 signed `429` `rate_limited`; it ignores `Retry-After`. Every other answer is final: a
 `401`, any other coded refusal, `not_found` among them, a signed answer other than a
 `5xx` with no code, and a document Forager refuses. The gateway builds the
