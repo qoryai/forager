@@ -1067,6 +1067,18 @@ release may change what an existing document does, and says so under Upgrading.
   answer has in cooldown. A control plane without the route gets one report: the run's
   record has one line, `Upgrade the control plane to share model key cooldowns between
   runs`, and cooldowns stay within the run.
+- A key with `use_up_to_percent` is in cooldown while a window in its
+  `use_up_to_windows` is at or above the percentage, until that window's `resets_at`
+  (docs/credentials.md, Several keys of one provider). The gateway reads the window's
+  `utilization` from the provider's responses to the run and from the answers to its
+  model keys reports, and stores no cooldown for it, so its reports do not change. The
+  next request goes with the next key; when every key is in cooldown, the proxy returns
+  its `429` with no call to the provider, and the run pauses with `model_key_limit`.
+- The proxy's `429` while every key of the group is in cooldown reads `qory: the run
+  pauses until a model key's cooldown ends: every key of the run's key group is at its
+  provider's limit or at its Use up to percentage, and the gateway sends no more model
+  requests in this session.` Before, it read `qory: start the run again once a model
+  key's cooldown ends: every key of the run's key group is at its provider's limit, …`.
 - The link takes a session's `dev.qory.run.exited` `paused` with `model_key_limit`
   after a last `dev.qory.session.exited` with that reason.
 - `server.Client.PostModelKeys`, the signed model keys report and its answer.
@@ -2222,6 +2234,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- The report line of a session that the gateway's `stop`, `model_key_limit`, ended
+  reads `the runtime was stopped: every model key of the run is at its provider's limit
+  or at its Use up to percentage, and the run pauses until a key's cooldown ends`.
+  Before, it read `the runtime was stopped at the model provider's limit: no model key
+  of the run is left, and the run pauses`.
 - On one machine, the walled run's forwarder closes a connection that does not open
   with the relay's preamble and the run's proxy secret within 10 seconds, as it does
   behind a separate gateway, and writes the same preamble on toward the proxy. Before,
@@ -2282,6 +2299,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun` runs Claude Code 2.1.316
+  behind the wall with two keys, each with `use_up_to_percent` 90. The stub serves
+  each request with the five-hour window at 90 percent: the second request goes with
+  the second key, the third gets the proxy's `429`, and the run ends `paused` with
+  `model_key_limit`, with no `429` from the stub. Both Wall conformance jobs run it.
 - `TestDockerQoryLinkPausesAndResumesUnderAnotherKey` starts Claude Code 2.1.316
   behind the wall through qory's `qory run agent-env`, with `CLAUDE_CONFIG_DIR` at
   `/tmp/qory-agent-home` and qory's link from that folder to `~/.claude/projects`.

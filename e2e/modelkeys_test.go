@@ -69,6 +69,9 @@ const (
 	keysReport = "report"
 	// keysResume returns Bash calls that print turn-0 and turn-1, then a text.
 	keysResume = "resume"
+	// keysShare serves every request with a Bash call and a five_hour window at 90
+	// percent, which resets in an hour.
+	keysShare = "share"
 )
 
 // keysBusybox is the image the stub runs in: the test binary needs no more than a
@@ -236,6 +239,12 @@ func (s *keysStub) respond(w http.ResponseWriter, req *request, key string, n, r
 			return r
 		}
 		text["text"] = fmt.Sprintf("done after %d tool results", results)
+	case keysShare:
+		keysAtShare(w)
+		if req.offers("Bash") {
+			s.answer(w, req, tool(fmt.Sprintf("echo share-%d", results)), "tool_use", n)
+			return http.StatusOK
+		}
 	case keysResume:
 		if results < 2 && req.offers("Bash") {
 			s.answer(w, req, tool(fmt.Sprintf("echo turn-%d", results)), "tool_use", n)
@@ -268,6 +277,24 @@ func keysCap(w http.ResponseWriter) int {
 	w.WriteHeader(http.StatusTooManyRequests)
 	io.WriteString(w, `{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}}`)
 	return http.StatusTooManyRequests
+}
+
+// keysAtShare sets a subscription's headers of a served request: the five-hour window
+// at 90 percent, allowed with a warning, which resets in an hour, and the seven-day
+// window at 40 percent.
+func keysAtShare(w http.ResponseWriter) {
+	hd := w.Header()
+	hour := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+	week := strconv.FormatInt(time.Now().Add(72*time.Hour).Unix(), 10)
+	hd.Set("anthropic-ratelimit-unified-status", "allowed_warning")
+	hd.Set("anthropic-ratelimit-unified-representative-claim", "five_hour")
+	hd.Set("anthropic-ratelimit-unified-reset", hour)
+	hd.Set("anthropic-ratelimit-unified-5h-status", "allowed_warning")
+	hd.Set("anthropic-ratelimit-unified-5h-utilization", "0.9")
+	hd.Set("anthropic-ratelimit-unified-5h-reset", hour)
+	hd.Set("anthropic-ratelimit-unified-7d-status", "allowed")
+	hd.Set("anthropic-ratelimit-unified-7d-utilization", "0.4")
+	hd.Set("anthropic-ratelimit-unified-7d-reset", week)
 }
 
 // answer writes a Messages API answer with one block, streamed when the request sets
@@ -1009,6 +1036,49 @@ func TestDockerModelKeysAllCoolingStopTheSession(t *testing.T) {
 	}
 	if len(log) != 2 || log[0].Key != "A" || log[1].Key != "B" || log[0].Status != http.StatusTooManyRequests || log[1].Status != http.StatusTooManyRequests {
 		t.Errorf("the stub got:%s\nwant a 429 with key A, then one with key B, and nothing more", keysEntries(log))
+	}
+	noKeyValue(t, o, s.dir)
+}
+
+// TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun runs Claude Code behind the wall
+// with the key group of model and model-b, each with use_up_to_percent 90 of five_hour
+// and seven_day. The stub serves every request with a Bash call and the five_hour
+// window at 90 percent. The first request goes with A, the second, after A's answer,
+// with B; after B's answer both keys are at their percentage, so the proxy sends no
+// third request to the stub and returns its 429. The session ends paused with
+// model_key_limit, the run closes paused with model_key_limit, and the stub got no
+// request that it refused.
+func TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun(t *testing.T) {
+	k := newKeysWall(t)
+	name, host := k.stub(t, keysShare)
+	s, ctl := k.groupRun(t, host, 2, "--allowedTools", "Bash")
+	s.prompt = "Run the command you are given."
+	endpoint := "https://" + host + ":" + recorderTLS
+	var creds []map[string]any
+	for _, n := range []string{"model", "model-b"} {
+		c := keysCredential(n, endpoint)
+		c["use_up_to_percent"], c["use_up_to_windows"] = 90, []string{"five_hour", "seven_day"}
+		creds = append(creds, c)
+	}
+	ctl.configure(t, s.runID, host, creds, []string{keyA, keyB}, nil)
+	o := s.run(t)
+	log := k.stubLog(t, name)
+	t.Logf("the stub got:%s", keysEntries(log))
+	if o.res.State != event.StatePaused || o.res.Reason != event.ReasonModelKeyLimit {
+		t.Errorf("the session ended %s, %q, exit %d; want paused, model_key_limit\nstub:%s\nstdout:\n%s",
+			o.res.State, o.res.Reason, o.res.ExitCode, keysEntries(log), tail(o.out, 4000))
+	}
+	if d := o.exited(); d == nil || d["state"] != event.StatePaused || d["reason"] != event.ReasonModelKeyLimit {
+		t.Errorf("dev.qory.session.exited is %v; want paused, model_key_limit", d)
+	}
+	if es := o.of(event.RunExited); len(es) != 1 || es[0]["state"] != event.StatePaused || es[0]["reason"] != event.ReasonModelKeyLimit {
+		t.Errorf("dev.qory.run.exited is %v; want one, paused with model_key_limit", es)
+	}
+	if len(log) != 2 || log[0].Key != "A" || log[1].Key != "B" || log[0].Status != http.StatusOK || log[1].Status != http.StatusOK {
+		t.Errorf("the stub got:%s\nwant a 200 with key A, then a 200 with key B, and nothing more", keysEntries(log))
+	}
+	if strings.Contains(o.lines, "limit answer, status 429") {
+		t.Errorf("the gateway's log has a limit answer of the provider:\n%s", o.lines)
 	}
 	noKeyValue(t, o, s.dir)
 }

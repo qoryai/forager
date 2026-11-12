@@ -989,7 +989,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		r.open.Report(fmt.Sprintf("the runtime was stopped at the limit of %s", spec.Timeout))
 		r.write(event.SessionExited, exited)
 	case keyLimit:
-		r.open.Report("the runtime was stopped at the model provider's limit: no model key of the run is left, and the run pauses")
+		r.open.Report("the runtime was stopped: every model key of the run is at its provider's limit or at its Use up to percentage, and the run pauses until a key's cooldown ends")
 		r.write(event.SessionExited, exited)
 	default:
 		r.write(event.SessionExited, exited)

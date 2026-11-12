@@ -694,3 +694,163 @@ func TestRefusalsAndSwitchesRunConcurrently(t *testing.T) {
 		t.Errorf("Pick: %s, %v; want model-3", got, ok)
 	}
 }
+
+// shared is a group of model and model-2, each with use_up_to_percent 90 of five_hour
+// and seven_day, on a fake clock at start.
+func shared(t *testing.T) (*modelkey.Group, *clock) {
+	t.Helper()
+	c := &clock{now: start}
+	both := []string{"five_hour", "seven_day"}
+	keys := []modelkey.Key{
+		{Name: "model", PauseFor: time.Hour, UseUpToPercent: 90, UseUpToWindows: both},
+		{Name: "model-2", PauseFor: time.Hour, UseUpToPercent: 90, UseUpToWindows: both},
+	}
+	return modelkey.New(keys, "model", c.Now), c
+}
+
+// use is a subscription's headers of a 200: the window at infix 5h or 7d used to the
+// fraction, resetting at reset.
+func use(infix, fraction string, reset time.Time) http.Header {
+	p := "anthropic-ratelimit-unified-" + infix + "-"
+	return headers(p+"status", "allowed", p+"utilization", fraction, p+"reset", epoch(reset))
+}
+
+// TestAKeyAtItsUseUpToPercentRests pins the cooldown at use_up_to_percent: a key whose
+// listed window is below the percentage stays active; at or above it, the next request
+// goes with the next key, and the key rests until that window's reset. No cooldown is
+// stored: the window keeps the status of the answer.
+func TestAKeyAtItsUseUpToPercentRests(t *testing.T) {
+	reset := start.Add(2 * time.Hour)
+	for _, c := range []struct {
+		fraction string
+		want     string
+	}{
+		{"0.89", "model"},
+		{"0.9", "model-2"},
+		{"0.97", "model-2"},
+	} {
+		t.Run(c.fraction, func(t *testing.T) {
+			g, clk := shared(t)
+			g.Answered("model", http.StatusOK, use("5h", c.fraction, reset))
+			if got, ok := g.Pick(); got != c.want || !ok {
+				t.Errorf("Pick after model's five_hour at %s: %s, %v; want %s", c.fraction, got, ok, c.want)
+			}
+			w, _ := window(g, "model", "five_hour")
+			if w.Status != modelkey.StatusAllowed || !w.CooldownUntil.IsZero() || w.Source != modelkey.SourceProvider {
+				t.Errorf("five_hour %+v; want allowed from the provider, with no cooldown_until", w)
+			}
+			if c.want == "model" {
+				return
+			}
+			// model-2 goes into cooldown too, so the active key stays model-2 until a key
+			// is out of cooldown.
+			g.Refused("model-2", headers("retry-after", "36000"), "")
+			clk.now = reset.Add(-time.Second)
+			if _, ok := g.Pick(); ok {
+				t.Error("Pick a second before model's reset: a key; want none")
+			}
+			clk.now = reset
+			if got, ok := g.Pick(); got != "model" || !ok {
+				t.Errorf("Pick at model's reset: %s, %v; want model", got, ok)
+			}
+		})
+	}
+}
+
+// TestUseUpToCountsOnlyItsWindows pins the windows the percentage applies to: a window
+// outside use_up_to_windows at 100 rests nothing, and neither does a listed window at
+// the percentage whose reset has passed or that has no reset.
+func TestUseUpToCountsOnlyItsWindows(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		h    http.Header
+	}{
+		{"seven_day at 100, outside the list", use("7d", "1.0", start.Add(72*time.Hour))},
+		{"five_hour at 60, its reset passed", use("5h", "0.6", start.Add(-time.Minute))},
+		{"five_hour at 60, no reset", headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-utilization", "0.6")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := modelkey.New([]modelkey.Key{
+				{Name: "model", PauseFor: time.Hour, UseUpToPercent: 50, UseUpToWindows: []string{"five_hour"}},
+				{Name: "model-2", PauseFor: time.Hour},
+			}, "model", (&clock{now: start}).Now)
+			g.Answered("model", http.StatusOK, c.h)
+			if got, ok := g.Pick(); got != "model" || !ok {
+				t.Errorf("Pick: %s, %v; want model", got, ok)
+			}
+		})
+	}
+}
+
+// TestUseUpToRestsUntilTheFurthestReset pins two listed windows at the percentage: the
+// key rests until the later of their resets.
+func TestUseUpToRestsUntilTheFurthestReset(t *testing.T) {
+	g, c := shared(t)
+	h := use("5h", "0.95", start.Add(2*time.Hour))
+	for k, v := range use("7d", "0.91", start.Add(72*time.Hour)) {
+		h[k] = v
+	}
+	g.Answered("model", http.StatusOK, h)
+	g.Answered("model-2", http.StatusOK, use("5h", "0.95", start.Add(time.Hour)))
+	if _, ok := g.Pick(); ok {
+		t.Fatal("Pick with both keys at 90: a key; want none")
+	}
+	c.now = start.Add(3 * time.Hour)
+	if got, ok := g.Pick(); got != "model-2" || !ok {
+		t.Errorf("Pick after five_hour's reset, before seven_day's: %s, %v; want model-2", got, ok)
+	}
+}
+
+// TestUseUpToCountsAReportsAnswer pins a utilization from the answer to a report: an
+// entry of another run's allowed window at the percentage rests the key, and its
+// cooldown_until of the run configuration, which the entry ends, does not wake it.
+func TestUseUpToCountsAReportsAnswer(t *testing.T) {
+	c := &clock{now: start}
+	both := []string{"five_hour", "seven_day"}
+	g := modelkey.New([]modelkey.Key{
+		{Name: "model", PauseFor: time.Hour, UseUpToPercent: 90, UseUpToWindows: both},
+		{Name: "model-2", PauseFor: time.Hour, UseUpToPercent: 90, UseUpToWindows: both, CooldownUntil: start.Add(time.Hour)},
+		{Name: "model-3", PauseFor: time.Hour},
+	}, "model", c.Now)
+	reset := start.Add(2 * time.Hour)
+	g.Merge([]modelkey.Window{
+		{Credential: "model", Window: "five_hour", Status: modelkey.StatusAllowed, ResetsAt: reset, Utilization: 90, HasUtilization: true, Source: modelkey.SourceProvider, ObservedAt: start.Add(time.Second)},
+		{Credential: "model-2", Window: "seven_day", Status: modelkey.StatusAllowedWarning, ResetsAt: reset, Utilization: 93, HasUtilization: true, Source: modelkey.SourceProvider, ObservedAt: start.Add(time.Second)},
+	})
+	if got, ok := g.Pick(); got != "model-3" || !ok {
+		t.Errorf("Pick after the answer: %s, %v; want model-3, model and model-2 at their percentage", got, ok)
+	}
+	g.Refused("model-3", headers("retry-after", "60"), "")
+	if _, ok := g.Pick(); ok {
+		t.Error("Pick with model-3 in cooldown: a key; want none")
+	}
+	c.now = reset
+	if got, ok := g.Pick(); got != "model-3" || !ok {
+		t.Errorf("Pick at the windows' reset: %s, %v; want model-3, the active key", got, ok)
+	}
+}
+
+// TestEveryKeyAtItsUseUpToPercentPauses pins the pause: when the active key reaches the
+// percentage, the next request goes with the next key; when that one reaches it too,
+// Pick reports no key, as while every key is in cooldown after a refusal, with no
+// refusal of the provider.
+func TestEveryKeyAtItsUseUpToPercentPauses(t *testing.T) {
+	g, _ := shared(t)
+	reset := start.Add(2 * time.Hour)
+	g.Answered("model", http.StatusOK, use("5h", "0.9", reset))
+	if got, ok := g.Pick(); got != "model-2" || !ok {
+		t.Fatalf("Pick after model at 90: %s, %v; want model-2", got, ok)
+	}
+	g.Answered("model-2", http.StatusOK, use("7d", "0.92", reset))
+	if _, ok := g.Pick(); ok {
+		t.Error("Pick with both keys at their percentage: a key; want none")
+	}
+	if g.Passed() {
+		t.Error("Passed: true; want false until the proxy passes a refusal or its 429")
+	}
+	for _, w := range g.Windows() {
+		if w.Status == modelkey.StatusRejected || !w.CooldownUntil.IsZero() {
+			t.Errorf("window %+v; want no rejected window and no cooldown_until", w)
+		}
+	}
+}

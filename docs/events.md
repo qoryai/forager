@@ -118,8 +118,9 @@ right before the run's `dev.qory.run.exited`, with the same state and reason and
 code -1. So every `dev.qory.session.started` has its `dev.qory.session.exited`.
 
 A session ends `paused` with `model_key_limit` when the gateway's answer to one of
-its batches has `{"stop": {"reason": "model_key_limit"}}`: the run's proxy passed a
-model provider's limit refusal to the runtime, because no model key of the run is left.
+its batches has `{"stop": {"reason": "model_key_limit"}}`: every model key of the run
+is at its provider's limit or at its Use up to percentage, and the run's proxy passed
+the provider's limit refusal, or the gateway's `429`, to the runtime.
 The session stops the runtime as at the run's time limit, and the exit code is the
 runtime's. Before it writes the `dev.qory.session.exited` of a runtime that exited by
 itself, the session posts its last batch and reads the answer, so a stop that comes as

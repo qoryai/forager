@@ -214,13 +214,24 @@ func (g *Group) knownReset(i int, now time.Time) time.Time {
 	return earliest
 }
 
-// coolingUntil is the end of key i's cooldown: the latest cooldown_until of its
-// windows and of the run configuration. Called with g.mu held.
-func (g *Group) coolingUntil(i int, _ time.Time) time.Time {
+// coolingUntil is the end of key i's cooldown as of now, the furthest of: the
+// cooldown_until of its rejected windows and of the run configuration; and, for a key
+// with use_up_to_percent, the resets_at after now of each window in its
+// use_up_to_windows whose utilization is at or above the percentage. A window with no
+// utilization as of now counts for none. Nothing stores the cooldown at the percentage:
+// it is read from the windows on each call, so a utilization from a response to the
+// run and one from [Group.Merge] count alike. Called with g.mu held.
+func (g *Group) coolingUntil(i int, now time.Time) time.Time {
 	until := g.claim[i]
+	k := g.keys[i]
 	for _, w := range g.windows[i] {
 		if w.Status == StatusRejected && w.CooldownUntil.After(until) {
 			until = w.CooldownUntil
+		}
+		if k.UseUpToPercent > 0 && w.ResetsAt.After(now) && w.ResetsAt.After(until) && slices.Contains(k.UseUpToWindows, w.Window) {
+			if u, ok := utilization(*w, now); ok && u >= k.UseUpToPercent {
+				until = w.ResetsAt
+			}
 		}
 	}
 	return until
@@ -228,9 +239,10 @@ func (g *Group) coolingUntil(i int, _ time.Time) time.Time {
 
 // Answered records the headers of an answer of the provider to a request with key
 // name that is not a limit refusal, and its status. A window the answer marks rejected
-// is recorded as allowed_warning: only a limit refusal puts a key in cooldown. A 2xx
-// status ends the key's cooldown_until of the run configuration: the provider served
-// the key. A 401 or a 5xx keeps it.
+// is recorded as allowed_warning: only a limit refusal stores a cooldown. A
+// utilization at or above the key's use_up_to_percent puts it in cooldown
+// ([Group.coolingUntil]). A 2xx status ends the key's cooldown_until of the run
+// configuration: the provider served the key. A 401 or a 5xx keeps it.
 func (g *Group) Answered(name string, status int, h http.Header) {
 	g.record(name, h, false, status >= 200 && status <= 299, "")
 }
@@ -453,9 +465,10 @@ func (g *Group) Windows() []Window {
 // Merge takes each entry of an answer to a report that is of a key of the group, of
 // one of the 11 windows, and later, by observed_at, than the state the group has of its
 // key and window. A key whose entry has a cooldown_until after now is in cooldown until
-// then. An entry that is not rejected, observed after the group was made, ends the
-// key's cooldown_until of the run configuration. An entry of a status outside the
-// three is left out.
+// then, and so is a key whose entry has a utilization at or above its use_up_to_percent
+// ([Group.coolingUntil]). An entry that is not rejected, observed after the group was
+// made, ends the key's cooldown_until of the run configuration. An entry of a status
+// outside the three is left out.
 func (g *Group) Merge(entries []Window) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

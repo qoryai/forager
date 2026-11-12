@@ -251,9 +251,19 @@ an entry of the key that is not `rejected`. The session gets only the answer to 
 second request. The proxy keeps a copy of each request
 body up to 8 MiB for this; a larger body goes once.
 
+A key with `use_up_to_percent` is in cooldown too while a window in its
+`use_up_to_windows` is at or above the percentage, until that window resets. The
+gateway reads each window's use from the provider's responses to the run and from the
+answers to its model keys reports, so a key that another run took to its percentage
+rests as well. The response that took the key to its percentage reaches the session as
+the provider sent it, and the next request goes with the next key. A key can pass its
+percentage by the requests already in flight on it when that response arrives. When
+every key is in cooldown, the run pauses as below, also when no provider returned a
+`429`.
+
 When no key is left out of cooldown, the session gets the `429`, and the proxy sends no
 more requests with the placeholder until the session's join ends: each gets a `429` from
-the gateway, `qory: start the run again once a model key's cooldown ends`. The
+the gateway, `qory: the run pauses until a model key's cooldown ends`. The
 gateway's answer to the session's next batch has `stop`, `model_key_limit`, so the
 session stops the runtime and the run pauses. The next join gets the active key again.
 

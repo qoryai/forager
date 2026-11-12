@@ -1411,11 +1411,12 @@ request asks the gateway for, for this session.
     caller, which ends the context, `cancelled` and `interrupted`, with `Cancelled`.
     `ExitCode` and `Signal` are the runtime's, whatever they are.
   - When the gateway's answer to a batch had `stop`, `model_key_limit`, `paused` and
-    `model_key_limit`: no model key of the run is left, and the session stopped the
-    runtime as at its time limit. A stop in the answer to the batch the session posts
-    once the runtime exited by itself counts too. `ExitCode` and `Signal` are the
-    runtime's. The run stays open: run its host work, such as a push, then close it
-    `paused` with `model_key_limit` and `ExitCode`.
+    `model_key_limit`: every model key of the run is at its provider's limit or at its
+    Use up to percentage, and the session stopped the runtime as at its time limit. A
+    stop in the answer to the batch the session posts once the runtime exited by itself
+    counts too. `ExitCode` and `Signal` are the runtime's. The run stays open: run its
+    host work, such as a push, then close it `paused` with `model_key_limit` and
+    `ExitCode`.
   - A runtime that exits 0 at the session's stop, at the context's end or at the
     limit, has exited 0: `Join` records its `dev.qory.session.exited` and returns its
     `Result`, with no error.
