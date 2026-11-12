@@ -208,13 +208,15 @@ func resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	return res, nil
 }
 
-// recorded is one event of events.jsonl and what Resend reads of it.
+// recorded is one event of events.jsonl and what Resend and [Stream.Reopen] read of it.
 type recorded struct {
+	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Sequence string `json:"sequence"`
 	Time     string `json:"time"`
 	// Data is the event's data, of which Resend reads the session number of a
-	// dev.qory.session.started or dev.qory.session.exited ([recorded.session]).
+	// dev.qory.session.started or dev.qory.session.exited ([recorded.session]), and
+	// which Reopen passes on.
 	Data json.RawMessage `json:"data"`
 	line []byte
 	seq  uint64
@@ -491,18 +493,30 @@ func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func
 		return false, err
 	}
 	defer f.Close()
-	if rec.size > rec.whole {
-		if rec.tailKept {
-			write = append([]byte{'\n'}, write...)
-		} else if err := f.Truncate(rec.whole); err != nil {
-			return false, err
-		}
+	first, err := mendTail(f, rec)
+	if err != nil {
+		return false, err
 	}
-	if _, err := f.Write(write); err != nil {
+	if _, err := f.Write(append(first, write...)); err != nil {
 		return false, err
 	}
 	for i, ev := range evs {
-		rec.lines = append(rec.lines, recorded{Type: ev.Type, Sequence: ev.Sequence, Time: ev.Time, line: lines[i]})
+		rec.lines = append(rec.lines, recorded{ID: ev.ID, Type: ev.Type, Sequence: ev.Sequence, Time: ev.Time, line: lines[i]})
 	}
 	return true, f.Sync()
+}
+
+// mendTail makes a last line of the record that the gateway did not finish a line, so
+// the next write starts its own: one that holds a whole event gets its newline, which
+// mendTail returns for the caller to write first, and one that holds none is cut off
+// the file, being no event. Nothing else of the file is changed. f is the record, open
+// for append.
+func mendTail(f *os.File, rec *recordFile) ([]byte, error) {
+	if rec.size <= rec.whole {
+		return nil, nil
+	}
+	if rec.tailKept {
+		return []byte{'\n'}, nil
+	}
+	return nil, f.Truncate(rec.whole)
 }
