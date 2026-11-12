@@ -367,13 +367,13 @@ func TestTheGatewayTriesForTwoMinutes(t *testing.T) {
 	}
 }
 
-// TestTheSessionWaitsForTheTries pins that a session waits for its run answer at least
-// as long as the gateway tries Qory Apiary: the window and the last try's time for its
-// answer.
+// TestTheSessionWaitsForTheTries pins that a session waits for its run answer longer
+// than the gateway tries Qory Apiary: the window, the last try's time for its answer,
+// and 10 seconds for the rest of the open.
 func TestTheSessionWaitsForTheTries(t *testing.T) {
 	_, window := gateway.OpenTries()
-	if server.OpenWait < window+server.Timeout {
-		t.Errorf("a session waits %v for its run answer; want at least %v", server.OpenWait, window+server.Timeout)
+	if server.OpenWait < window+server.Timeout+10*time.Second {
+		t.Errorf("a session waits %v for its run answer; want at least %v", server.OpenWait, window+server.Timeout+10*time.Second)
 	}
 }
 

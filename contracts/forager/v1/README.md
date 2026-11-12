@@ -3989,16 +3989,16 @@ order:
 | `403` | `wall_required` | a run without a wall whose policy selects what needs one, below; the link's code alone |
 | `403` | a code of `refusal.Decides` | the gateway's decision of the run with `images`, below: `run_configuration_invalid`, `image_unknown`, `tool_unknown` and the like |
 
-A session waits 130 seconds for its run answer, on the local link and behind a
+A session waits 140 seconds for its run answer, on the local link and behind a
 separate gateway, where it waits ten seconds for any other answer on the link: the
-gateway tries the server for up to 120 seconds (Tries as a run opens, below), and the
-last try has ten seconds for its answer. A run request whose session gives up opens no
-run: once its connection goes, the gateway asks the server nothing more for it, the
-registration among it, opens no run, and removes what it recorded of the run, so the
-same `run_id` sent again is a new run request, not `run_id_used` at the gateway. A
-registration the server accepted before then stays the server's. The gateway keeps the
-bytes it built for a `run_id` for 150 seconds of their
-`time`, by the wall clock, half the server's window: when the same `run_id` comes again within them,
+gateway tries the server for up to 120 seconds (Tries as a run opens, below), the last
+try has ten seconds for its answer, and ten seconds are left for the rest of the open.
+A run request whose session gives up opens no run: once its connection goes, the
+gateway asks the server nothing more for it, the registration among it, opens no run,
+and removes what it recorded of the run, so the same `run_id` sent again is a new run
+request, not `run_id_used` at the gateway. A registration the server accepted before
+then stays the server's. The gateway keeps the bytes it built for a `run_id` for 150
+seconds of their `time`, by the wall clock, half the server's window: when the same `run_id` comes again within them,
 with every member but `time` the same, its labels and `about` among them, it sends the
 same bytes, `time` included, which a server that accepted them under the same access key
 answers the same again. After them, or when another member differs, it builds the

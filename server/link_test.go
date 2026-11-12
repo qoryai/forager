@@ -718,13 +718,13 @@ func TestABatchNamesItsRunOnceItOpened(t *testing.T) {
 }
 
 // TestTheRunRequestWaitsForTheGatewaysTries pins how long the link waits for an
-// answer: OpenWait, 130 seconds, for the run request, while the gateway tries Qory
+// answer: OpenWait, 140 seconds, for the run request, while the gateway tries Qory
 // Apiary, and Timeout for every other request, on the local link and behind a separate
 // gateway; with shorter test waits, a run answer slower than Timeout
 // still arrives, and a reload as slow does not.
 func TestTheRunRequestWaitsForTheGatewaysTries(t *testing.T) {
-	if server.OpenWait != 130*time.Second {
-		t.Errorf("OpenWait %v; want 2m10s", server.OpenWait)
+	if server.OpenWait != 140*time.Second {
+		t.Errorf("OpenWait %v; want 2m20s", server.OpenWait)
 	}
 	f := linktest.StartRemoteFake(t)
 	remote := remoteLink(t, f, f.RunKey(t, remoteRunID))
