@@ -134,6 +134,10 @@ type Gateway struct {
 	used  map[string]bool
 	runs  map[string]*linkRun
 	opens sync.WaitGroup
+	// reopening are the reopens of suspended runs in flight, by run id. A reopen is
+	// added here before it reads the run's CA files, and the CA key sweep removes no
+	// file of a run here or in runs ([Gateway.sweep]).
+	reopening map[string]*reopenCall
 	// spent are the runs on the one address that ended and were let go of, by their run
 	// id, each kept for [keepEnded]; each and the delivery hold what they came to, for
 	// Close. lapsedErrs are the errors of the first [keepLapsedErrs] spent runs past
@@ -240,7 +244,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if report == nil {
 		report = func(line string) { fmt.Fprintln(os.Stderr, "qory run:", line) }
 	}
-	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{}),
+	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, reopening: map[string]*reopenCall{}, closed: make(chan struct{}),
 		spent: map[string]spentRun{}}
 	g.quiet = 3 * cfg.Heartbeat
 	if cfg.quiet != 0 {

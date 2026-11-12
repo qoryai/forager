@@ -308,6 +308,13 @@ func (g *Gateway) stopSweep() {
 // Dir/runs that meets both: the gateway does not hold its run, and its events.jsonl has
 // not changed for more than age as of now. A record without events.jsonl counts its CA
 // files' time in place of it.
+//
+// The sweep and a reopen do not race: the sweep checks that the run is neither in
+// g.runs nor in g.reopening and removes the files with g.mu held, and a reopen adds
+// itself to g.reopening with g.mu held before it reads them. Either the sweep removes
+// the files first, and the reopen finds none and fails for good, as for a record past
+// its age, or the sweep leaves the record alone. g.mu is held for two removals and a
+// sync of the directory, for a record unchanged for caSweepAge alone.
 func (g *Gateway) sweep(now time.Time, age time.Duration) {
 	root := filepath.Join(g.cfg.Dir, "runs")
 	entries, err := os.ReadDir(root)
@@ -326,12 +333,6 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 		if err != nil || ca.IsZero() {
 			continue
 		}
-		g.mu.Lock()
-		_, held := g.runs[id]
-		g.mu.Unlock()
-		if held {
-			continue
-		}
 		changed, err := newestOf(dir, sink.EventsFile)
 		if err != nil {
 			continue
@@ -342,7 +343,16 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 		if now.Sub(changed) <= age {
 			continue
 		}
-		if err := proxy.RemoveCA(dir); err != nil {
+		g.mu.Lock()
+		held := g.runs[id] != nil || g.reopening[id] != nil
+		if !held {
+			err = proxy.RemoveCA(dir)
+		}
+		g.mu.Unlock()
+		if held {
+			continue
+		}
+		if err != nil {
 			g.report(fmt.Sprintf("run %s: removing its CA files: %v", accesskey.ShownValue(id, false), err))
 			continue
 		}
@@ -367,4 +377,13 @@ func newestOf(dir string, names ...string) (time.Time, error) {
 		}
 	}
 	return newest, nil
+}
+
+// reopenCall is one reopen of a suspended run in flight: every request of the run waits
+// for done, then finds the run in lr, nil when the reopen failed, and final true when
+// it failed for good.
+type reopenCall struct {
+	done  chan struct{}
+	lr    *linkRun
+	final bool
 }
