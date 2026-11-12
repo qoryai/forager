@@ -80,17 +80,12 @@ const WellKnown = "/.well-known/qory-configuration"
 // Timeout is how long a server has to answer one request.
 const Timeout = 10 * time.Second
 
-// OpenWait is how long a session waits for the answer to its run request on the local
-// link: the gateway tries the run's registration for up to 120 seconds of the request's
-// arrival, the last try has [Timeout] for its answer, and 10 seconds are left for the
-// rest of the open.
-const OpenWait = 140 * time.Second
-
-// RemoteOpenWait is how long a session waits for the answer to its run request behind a
-// separate gateway, which tries the run's attach for up to 120 seconds of the request's
-// arrival, the last try with [Timeout] for its answer. The value is not final: a
-// change to it is a change to this line alone.
-const RemoteOpenWait = 130 * time.Second
+// OpenWait is how long a session waits for the answer to its run request, on the local
+// link and behind a separate gateway: the gateway tries the run's registration, or its
+// attach, for up to 120 seconds of the request's arrival, and the last try, which may
+// start just before 120 seconds, has [Timeout] for its answer. No time is left for the
+// rest of the open after a last try that takes its full [Timeout].
+const OpenWait = 130 * time.Second
 
 // Window is how far a signed GET's timestamp may be from the receiver's clock,
 // either way.

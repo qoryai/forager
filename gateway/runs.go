@@ -217,7 +217,7 @@ type opening struct {
 // request's arrival. A Qory Apiary that restarts within those 120 seconds therefore
 // registers the run once it is back. The last try starts before the window ends and
 // has [server.Timeout] for its answer, so the run's answer reaches the session inside
-// [server.OpenWait], or behind a separate gateway [server.RemoteOpenWait].
+// [server.OpenWait].
 var (
 	openWaits  = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
 	openWindow = 120 * time.Second

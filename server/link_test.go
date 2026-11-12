@@ -718,13 +718,13 @@ func TestABatchNamesItsRunOnceItOpened(t *testing.T) {
 }
 
 // TestTheRunRequestWaitsForTheGatewaysTries pins how long the link waits for an
-// answer: for the run request, while the gateway tries Qory Apiary, OpenWait, 140
-// seconds, on the local link and RemoteOpenWait behind a separate gateway, and Timeout
-// for every other request; with shorter test waits, a run answer slower than Timeout
+// answer: OpenWait, 130 seconds, for the run request, while the gateway tries Qory
+// Apiary, and Timeout for every other request, on the local link and behind a separate
+// gateway; with shorter test waits, a run answer slower than Timeout
 // still arrives, and a reload as slow does not.
 func TestTheRunRequestWaitsForTheGatewaysTries(t *testing.T) {
-	if server.OpenWait != 140*time.Second {
-		t.Errorf("OpenWait %v; want 2m20s", server.OpenWait)
+	if server.OpenWait != 130*time.Second {
+		t.Errorf("OpenWait %v; want 2m10s", server.OpenWait)
 	}
 	f := linktest.StartRemoteFake(t)
 	remote := remoteLink(t, f, f.RunKey(t, remoteRunID))
@@ -739,12 +739,9 @@ func TestTheRunRequestWaitsForTheGatewaysTries(t *testing.T) {
 		}
 	}))
 	local, _ := newLink(t, g)
-	for name, c := range map[string]struct {
-		k    *server.Link
-		open time.Duration
-	}{"local": {local, server.OpenWait}, "remote": {remote, server.RemoteOpenWait}} {
-		if each, open := server.LinkWaits(c.k); each != server.Timeout || open != c.open {
-			t.Errorf("%s: the link waits %v for an answer and %v for the run answer; want %v and %v", name, each, open, server.Timeout, c.open)
+	for name, k := range map[string]*server.Link{"local": local, "remote": remote} {
+		if each, open := server.LinkWaits(k); each != server.Timeout || open != server.OpenWait {
+			t.Errorf("%s: the link waits %v for an answer and %v for the run answer; want %v and %v", name, each, open, server.Timeout, server.OpenWait)
 		}
 	}
 	server.SetLinkWaits(local, 100*time.Millisecond, 5*time.Second)
