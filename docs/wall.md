@@ -291,6 +291,10 @@ system's roots, or the authorities of its CA file, and its pin when one is set.
   the run key inside TLS, before what the relay sent.
 - So the run key is in no file of the wall's and never leaves the machine outside TLS,
   and the hop secret opens nothing at the gateway.
+- While the gateway cannot be reached, the forwarder keeps the relay's connection open,
+  writes nothing to it, and dials the gateway again for up to 120 seconds; after them it
+  closes the connection. See
+  [the session behind a separate gateway](go.md#the-session-behind-a-separate-gateway).
 
 On one machine nothing changes: the relay sends the run's proxy secret, and the
 forwarder passes the connection on to the gateway's proxy on loopback as it is.

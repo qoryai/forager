@@ -2243,6 +2243,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- Behind a separate gateway, every forwarder of the session holds a connection it took
+  while the gateway cannot be reached: it keeps the agent's connection open, writes
+  nothing to it, and dials the gateway again for up to 120 seconds, waiting 250 ms after
+  the first failed dial and twice as long after each one after it, up to 2 seconds. A
+  gateway that restarts within the 120 seconds serves the connection; after them the
+  forwarder closes it. Before, the forwarder dialed once, for up to 10 seconds, and
+  closed the connection when that dial failed. On one machine nothing changes.
 - On one machine, the walled run's forwarder closes a connection that does not open
   with the relay's preamble and the run's proxy secret within 10 seconds, as it does
   behind a separate gateway, and writes the same preamble on toward the proxy. Before,

@@ -137,7 +137,7 @@ func (r *Run) listenEngine(p *EngineProxy) (*forwarder, error) {
 	if r.remote == nil {
 		fwd, err = listenForwarder(p.Addr, r.disc.Proxy.Address, r.answer.ProxySecret, p.Password)
 	} else {
-		fwd, err = listenForwarding(p.Addr, forwarding{dial: r.link.DialProxy, password: p.Password})
+		fwd, err = listenForwarding(p.Addr, forwarding{dial: r.link.DialProxy, hold: gatewayHold, password: p.Password})
 	}
 	if err != nil {
 		return nil, unlistened(p.Addr, err)

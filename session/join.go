@@ -676,7 +676,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if r.remote == nil {
 			fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.ProxySecret, password)
 		} else {
-			fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, password: password})
+			fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, hold: gatewayHold, password: password})
 		}
 		if err != nil {
 			return fail(err)

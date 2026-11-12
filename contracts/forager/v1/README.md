@@ -4581,9 +4581,15 @@ without one, opens every connection to the gateway's one address over TLS 1.3, w
 the link is (The binding, above), and with `QORY-RELAY`, a space, the run key and a
 newline. Behind a wall the forwarder takes the relay's connection, which opens with
 `QORY-RELAY` and a value the session makes for the run's forwarder alone, and takes that
-line off before anything reaches the gateway. Without a wall, on one machine as behind a
-separate gateway, the agent's proxy URL is the forwarder's address on loopback with a
-password, `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session
+line off before anything reaches the gateway. While the gateway's one address cannot be
+reached, a connection refused or reset, a TLS handshake cut short or a binding that
+fails, the forwarder keeps the connection it took open, writes nothing to it, and dials
+again for up to 120 seconds, waiting 250 ms after the first failed dial and twice as
+long after each one after it, up to 2 seconds; after them it closes the connection. On
+each connection it sends the run key only once the binding passed. Without a wall, on
+one machine as behind a separate gateway, the agent's proxy URL is the forwarder's
+address on loopback with a password, `http://qory:<password>@127.0.0.1:<port>`, the
+password a secret the session
 makes for the run's forwarder alone, 32 bytes from the system's random source in
 base64url, which lives as long as the run. The session writes the password into no
 event. Where the runtime prints it, as is or as the base64 of `qory:<password>`, the
