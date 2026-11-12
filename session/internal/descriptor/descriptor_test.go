@@ -560,8 +560,8 @@ func TestEgressHostsAreListed(t *testing.T) {
 // and optionally agent, each place being exactly one of flag, setting and variable, and
 // optionally overrides. The claude runtime has a model with overrides, and its fixed
 // sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and
-// CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL to 1, and nothing else, and its
-// egress_hosts is api.anthropic.com alone. Every built-in descriptor is one runtime, in
+// CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL to 1 and CLAUDE_CODE_MAX_RETRIES
+// to 15, and nothing else, and its egress_hosts is api.anthropic.com alone. Every built-in descriptor is one runtime, in
 // name order.
 func TestRuntimesJSONShape(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
@@ -662,7 +662,7 @@ func TestRuntimesJSONShape(t *testing.T) {
 				t.Errorf("fixed %s of %v is %v; want a string", name, rt["name"], v)
 			}
 		}
-		if want := map[string]any{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1"}; rt["name"] == "claude" && !reflect.DeepEqual(fixed, want) {
+		if want := map[string]any{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1", "CLAUDE_CODE_MAX_RETRIES": "15"}; rt["name"] == "claude" && !reflect.DeepEqual(fixed, want) {
 			t.Errorf("the claude runtime's fixed is %v; want %v", fixed, want)
 		}
 		for _, k := range []string{"reserves", "denies", "credential_files"} {

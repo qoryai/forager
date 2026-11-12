@@ -119,10 +119,10 @@ tools:
     Skill: skill
     Agent: description
     Task: description
-# The session sets each of these variables to 1 in every launch, walled or not, in place
-# of a value of the server, the run, the machine, the harness or the environment the run
-# inherits, and sets it in the env object of the --settings copy, which Claude Code
-# applies over the env of the workspace's settings files.
+# The session sets each of these variables to its value in fixed in every launch,
+# walled or not, in place of a value of the server, the run, the machine, the harness or
+# the environment the run inherits, and sets it in the env object of the --settings
+# copy, which Claude Code applies over the env of the workspace's settings files.
 # With CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, Claude Code sends no log lines to
 # Datadog and makes no other request the environment-variable reference lists as
 # nonessential. Without it, a walled run of 2.1.316 in observe mode connected to
@@ -139,9 +139,13 @@ tools:
 # when that plugin is installed, and at start when it is enabled.
 # Without CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL, an interactive walled
 # run of 2.1.316 in observe mode connected to downloads.claude.ai.
+# CLAUDE_CODE_MAX_RETRIES is how many times Claude Code retries a failed API request,
+# 10 by default. The value 15 is for a separate gateway's restart: in a direct test,
+# Claude Code with 15 went on through an outage of its proxy of 300 s.
 fixed:
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
   CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: "1"
+  CLAUDE_CODE_MAX_RETRIES: "15"
 # The hosts Claude Code needs to reach, for a server to allow for a run. A machine's
 # policy can still block them.
 egress_hosts: [api.anthropic.com]

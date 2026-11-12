@@ -10,16 +10,17 @@ import (
 )
 
 // nonessential and marketplace are the variables the Claude Code descriptor's fixed
-// sets to 1.
+// sets to 1, and maxRetries the one it sets to 15.
 const (
 	nonessential = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
 	marketplace  = "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL"
+	maxRetries   = "CLAUDE_CODE_MAX_RETRIES"
 )
 
 // TestEveryClaudeCodeLaunchSetsTheFixedVariables pins the Claude Code descriptor's
 // fixed end to end, through each source, for the first of its variables:
 // CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC reaches the agent as 1,
-// walled or not, though the image sets it empty. Behind a wall, a value of it from the
+// walled or not, though the image sets it empty, and CLAUDE_CODE_MAX_RETRIES as 15. Behind a wall, a value of it from the
 // server, the run (--env), the machine (wall.env) or the harness's defaults is left
 // out, and the record lists the name as fixed with that source lost as fixed; so is
 // the inherited one when the run sets it too. A value the harness computes loses to it
@@ -79,6 +80,9 @@ func TestEveryClaudeCodeLaunchSetsTheFixedVariables(t *testing.T) {
 			if got := envOf(t, out)[nonessential]; got != "1" {
 				t.Errorf("%s=%q reached the agent, want 1", nonessential, got)
 			}
+			if got := envOf(t, out)[maxRetries]; got != "15" {
+				t.Errorf("%s=%q reached the agent, want 15", maxRetries, got)
+			}
 		})
 	}
 	for _, c := range []struct {
@@ -112,6 +116,9 @@ func TestEveryClaudeCodeLaunchSetsTheFixedVariables(t *testing.T) {
 			}
 			if got := envOf(t, out)[nonessential]; got != "1" {
 				t.Errorf("%s=%q reached the agent, want 1", nonessential, got)
+			}
+			if got := envOf(t, out)[maxRetries]; got != "15" {
+				t.Errorf("%s=%q reached the agent, want 15", maxRetries, got)
 			}
 		})
 	}
