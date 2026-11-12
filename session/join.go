@@ -236,14 +236,15 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 }
 
 // joinRequest sends the join request and returns the gateway's answer and the
-// session's number. A failure ends step, the join step: failed with -1, or cancelled
-// with -1 when the run ended. A 403 with a code, numbered by the gateway as the next
-// join, writes the refused join's dev.qory.session.exited after it. A 410 ends the
-// run. A failure that leaves unknown whether the gateway numbered the join keeps the
-// close from writing no_session. The request asks the gateway to set no model key for
-// a session with no runtime, which has no start key.
+// session's number. A try with no answer, or a 503, is sent again, [Run.tryJoin]. A
+// failure ends step, the join step: failed with -1, or cancelled with -1 when the run
+// ended. A 403 with a code, numbered by the gateway as the next join, writes the
+// refused join's dev.qory.session.exited after it. A 410 ends the run. A failure that
+// leaves unknown whether the gateway numbered the join keeps the close from writing
+// no_session. The request asks the gateway to set no model key for a session with no
+// runtime, which has no start key.
 func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.LinkJoinAnswer, int, error) {
-	answer, err := r.link.Join(ctx, r.disc.Run.URL, r.id, server.LinkJoinRequest{Passes: passes(s), ModelKey: s.Runtime != nil, ModelCredential: s.ModelCredential})
+	answer, unanswered, err := r.tryJoin(ctx, server.LinkJoinRequest{Passes: passes(s), ModelKey: s.Runtime != nil, ModelCredential: s.ModelCredential})
 	if err == nil {
 		r.numbered = answer.Session
 		return answer, answer.Session, nil
@@ -263,12 +264,74 @@ func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.L
 		r.refusedJoin(r.numbered, ref)
 		return nil, 0, ref
 	}
+	// A try with no answer, an answer document the session refuses, or an answer
+	// under a key the run key does not name may follow a join the gateway numbered.
 	var status *server.StatusError
-	if !errors.As(err, &status) && !errors.As(err, &ref) {
+	if unanswered || !errors.As(err, &status) && !errors.As(err, &ref) {
 		r.maybeJoined = true
 	}
 	step.end(event.StateFailed, -1)
 	return nil, 0, err
+}
+
+// tryJoin sends the join request req, and sends it again while a try gets no answer
+// ([joinUnanswered]) or a 503, for up to joinWindow, with joinWaits between the tries:
+// a separate gateway may be restarting. Before each try after the first, the session's
+// batches are flushed for the rest of the window, so the previous session's
+// dev.qory.session.exited reaches the gateway before the join. It returns the last
+// try's answer or error, and unanswered when any try got no answer, which leaves
+// unknown whether the gateway numbered the join. The context ending stops the tries.
+//
+// A try that got no answer may have reached the gateway, which then numbered the join.
+// The tries rely on the gateway's answer to a join request equal to the last one it
+// accepted, whose session has neither started nor exited: 200 again, with the same
+// session number and model key, and nothing numbered anew.
+//
+// On the local link the gateway runs in qory's process and a try fails only when that
+// gateway is gone: the tries cost time and change nothing.
+func (r *Run) tryJoin(ctx context.Context, req server.LinkJoinRequest) (*server.LinkJoinAnswer, bool, error) {
+	window, cancel := context.WithTimeout(ctx, joinWindow)
+	defer cancel()
+	unanswered := false
+	for i := 0; ; i++ {
+		answer, err := r.link.Join(ctx, r.disc.Run.URL, r.id, req)
+		if err == nil {
+			return answer, unanswered, nil
+		}
+		none := joinUnanswered(err)
+		unanswered = unanswered || none
+		var status *server.StatusError
+		busy := errors.As(err, &status) && status.Status == http.StatusServiceUnavailable
+		if ctx.Err() != nil || !none && !busy {
+			return nil, unanswered, err
+		}
+		t := time.NewTimer(joinWaits[min(i, len(joinWaits)-1)])
+		select {
+		case <-t.C:
+		case <-window.Done():
+			t.Stop()
+			return nil, unanswered, err
+		}
+		if r.posts.Flush(window) != nil {
+			return nil, unanswered, err
+		}
+	}
+}
+
+// joinUnanswered reports whether a join request's error is a try that got no answer:
+// a connection that did not open, its TLS or its binding failing, a connection reset,
+// or no answer in time. An answer is a 410, a refusal with a code, a status, an answer
+// document the session refuses, or a separate gateway's answer under a key the run key
+// does not name.
+func joinUnanswered(err error) bool {
+	var key *server.GatewayKeyError
+	if errors.As(err, &key) {
+		return key.Unproven
+	}
+	var ref *Refusal
+	var status *server.StatusError
+	var doc *server.DocumentError
+	return !errors.As(err, &ref) && !errors.As(err, &status) && !errors.As(err, &doc)
 }
 
 // wallKept is the error of a call that must not run beside the wall of a session whose

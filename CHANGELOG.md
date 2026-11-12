@@ -2250,6 +2250,13 @@ release may change what an existing document does, and says so under Upgrading.
   gateway that restarts within the 120 seconds serves the connection; after them the
   forwarder closes it. Before, the forwarder dialed once, for up to 10 seconds, and
   closed the connection when that dial failed. On one machine nothing changes.
+- `Join` sends the join request again, unchanged, after a try that gets no answer or a
+  `503` with no code, for up to 120 seconds, with waits of 1, 2, 4 and 8 seconds, then
+  8 seconds each, and flushes the run's events before each try after the first. Behind
+  a separate gateway, `Close` waits up to 180 seconds for the gateway to accept the
+  run's last events, and returns as soon as it accepts them or answers `410`. Both
+  cover a separate gateway that restarts in up to 120 seconds. Before, a join was tried
+  once and the close waited 15 seconds.
 - On one machine, the walled run's forwarder closes a connection that does not open
   with the relay's preamble and the run's proxy secret within 10 seconds, as it does
   behind a separate gateway, and writes the same preamble on toward the proxy. Before,

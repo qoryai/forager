@@ -824,7 +824,8 @@ func (r *Run) setApplied(m map[string]any) {
 // Close writes the run's dev.qory.run.exited with the caller's outcome, once, and
 // closes the run: a host step still open ends cancelled with -1 first, then the run's
 // wall is removed, the heartbeats and the reloads stop, the sinks are flushed within 15
-// seconds, and the lock, the registry entry and the link are let go. A wall that could
+// seconds, 180 behind a separate gateway, which may be restarting, and the lock, the
+// registry entry and the link are let go. A wall that could
 // not be removed is reported, and its entry among the walled runs still going stays. A
 // failed outcome with no reason of a run no session joined is written as failed with
 // no_session and -1. A run the gateway closed
@@ -891,7 +892,12 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 	} else {
 		r.write(event.RunExited, exited)
 	}
-	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeWait)
+	// A separate gateway may be restarting while the last batch is tried.
+	wait := closeWait
+	if r.remote != nil {
+		wait = finalWait
+	}
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
 	if err := r.closeSinks(closeCtx); err != nil {
 		r.open.Report("closing the sinks: " + accesskey.ShownError(err).Error())

@@ -53,8 +53,29 @@ func transcriptStacks() []string {
 }
 
 // SetCloseWait sets how long the sinks get to flush at the end of a join and at the
-// close.
-func SetCloseWait(d time.Duration) { closeWait = d }
+// close, and returns the wait it replaced.
+func SetCloseWait(d time.Duration) time.Duration {
+	old := closeWait
+	closeWait = d
+	return old
+}
+
+// SetFinalWait sets how long the sinks get to flush at the close of a run behind a
+// separate gateway, and returns the wait it replaced.
+func SetFinalWait(d time.Duration) time.Duration {
+	old := finalWait
+	finalWait = d
+	return old
+}
+
+// SetJoinRetry sets how long a join request is sent again after a try with no answer
+// or a 503, and the waits between the tries, the last one repeated; it returns a
+// function that sets back what it replaced.
+func SetJoinRetry(window time.Duration, waits ...time.Duration) (restore func()) {
+	oldWindow, oldWaits := joinWindow, joinWaits
+	joinWindow, joinWaits = window, waits
+	return func() { joinWindow, joinWaits = oldWindow, oldWaits }
+}
 
 // SetRegisterPause sets what a run calls between its check against the registry of
 // walled runs and the writing of its entry, under the registry's lock; nil for nothing.

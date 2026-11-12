@@ -269,6 +269,10 @@ One run, on a developer machine, with a server configured:
    time (§The events, The measure of the enclosure). When the caller closes the
    run, the session emits `dev.qory.run.exited` with the caller's outcome, waits up to
    fifteen seconds for the sinks to flush, and reports what the server has not accepted.
+   Behind a separate gateway it waits up to 180 seconds: the 120 seconds a restart of
+   the gateway may take, and the 60 seconds the session may wait between two tries of a
+   batch. It stops waiting as soon as the gateway accepts the last batch or answers
+   `410`.
    A runtime killed by a signal exits as `-1` with `signal` set.
 
 A run may have a time limit, which covers the run's host work and every session. When
@@ -4254,6 +4258,15 @@ join that the gateway answers with a `403`, or that fails those checks, writes
 `dev.qory.session.exited` with `state: failed`, `exit_code: -1`, the refusal's code as
 `reason` and `duration_ms: 0`, and no `dev.qory.session.started` (§Sequence, The run and
 its sessions). The run stays open.
+
+The session sends a join request again, unchanged, after a try that gets no answer
+(the connection does not open, its TLS or its binding fails, or it resets or times
+out) and after a `503` with no code: a separate gateway may be restarting. It tries for
+up to 120 seconds, with waits of 1, 2, 4 and 8 seconds, then 8 seconds each. Before
+each try after the first it flushes its batches, so the previous session's
+`dev.qory.session.exited` reaches the gateway before the join. Every other answer, a
+`400`, `403` or `410` among them, it takes as the answer to the join. A join with no
+answer after 120 seconds fails as after one try.
 
 **Events.** The session posts its events to `events.url`, in batches cut as toward the
 server (§The server, Delivery), with `Content-Type: application/cloudevents-batch+json`.
