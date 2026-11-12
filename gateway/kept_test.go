@@ -313,10 +313,10 @@ func fakeRecord(t *testing.T, dir string, changed time.Time, types ...string) st
 }
 
 // TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn pins the CA key sweep: at Start and
-// on each tick it removes the CA files of a record the gateway does not hold, with no
-// final event, whose events.jsonl has not changed for longer than the sweep's age;
-// a record that changed since, one with run.exited or run.refused, and the record of
-// a run the gateway holds keep theirs.
+// on each tick it removes the CA files of a record the gateway does not hold whose
+// events.jsonl has not changed for longer than the sweep's age, with a final event or
+// without; a record that changed since and the record of a run the gateway holds keep
+// theirs.
 func TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn(t *testing.T) {
 	dir := t.TempDir()
 	old := time.Now().Add(-2 * time.Minute)
@@ -347,10 +347,12 @@ func TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn(t *testing.T) {
 	}
 	later := fakeRecord(t, dir, old, event.RunRegistered)
 	gateway.SweepCA(r.g, time.Now())
-	if !gone(later) {
-		t.Error("a record not held, with no final event, unchanged for 2 minutes keeps its CA files")
+	for name, runID := range map[string]string{"with no final event": later, "with run.exited": exitedRec, "with run.refused": refusedRec} {
+		if !gone(runID) {
+			t.Errorf("a record not held, %s, unchanged for 2 minutes keeps its CA files", name)
+		}
 	}
-	for name, runID := range map[string]string{"held": held, "run.exited": exitedRec, "run.refused": refusedRec, "changed now": fresh} {
+	for name, runID := range map[string]string{"held": held, "changed now": fresh} {
 		if gone(runID) {
 			t.Errorf("the record %s lost its CA files", name)
 		}

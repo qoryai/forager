@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
-	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
@@ -37,11 +36,12 @@ const (
 )
 
 // The CA key sweep (the user's "545 (a)", 2026-11-13): a gateway removes the CA files
-// of a run record it does not hold, with no final event, whose events.jsonl has not
-// changed for more than caSweepAge, at Start and every caSweepEvery. A live run's
+// of a run record it does not hold whose events.jsonl has not changed for more than
+// caSweepAge, at Start and every caSweepEvery. A live run's
 // session sends a heartbeat at least every server.MaxInterval, 300 s, so its record
 // changes at least 3 times within caSweepAge; a record that does not is of a run that
-// no session reopens, and its key goes from the disk.
+// no session reopens, and its key goes from the disk. A record with a final event is
+// never reopened, so its key goes too.
 const (
 	caSweepEvery = 10 * time.Minute
 	caSweepAge   = 15 * time.Minute
@@ -305,10 +305,9 @@ func (g *Gateway) stopSweep() {
 }
 
 // sweep removes [proxy.CACertFile] and [proxy.CAKeyFile] from each record under
-// Dir/runs that meets all three: the gateway does not hold its run, its events.jsonl
-// has no final event, run.exited or run.refused, and events.jsonl has not changed for
-// more than age as of now. A record without events.jsonl counts its CA files' time in
-// place of it.
+// Dir/runs that meets both: the gateway does not hold its run, and its events.jsonl has
+// not changed for more than age as of now. A record without events.jsonl counts its CA
+// files' time in place of it.
 func (g *Gateway) sweep(now time.Time, age time.Duration) {
 	root := filepath.Join(g.cfg.Dir, "runs")
 	entries, err := os.ReadDir(root)
@@ -343,14 +342,11 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 		if now.Sub(changed) <= age {
 			continue
 		}
-		if final, err := hasFinal(filepath.Join(dir, sink.EventsFile)); err != nil || final {
-			continue
-		}
 		if err := proxy.RemoveCA(dir); err != nil {
 			g.report(fmt.Sprintf("run %s: removing its CA files: %v", accesskey.ShownValue(id, false), err))
 			continue
 		}
-		g.report(fmt.Sprintf("run %s: removed its CA files: its record has no final event and has not changed for %s", accesskey.ShownValue(id, false), age))
+		g.report(fmt.Sprintf("run %s: removed its CA files: its record has not changed for %s", accesskey.ShownValue(id, false), age))
 	}
 }
 
@@ -371,24 +367,4 @@ func newestOf(dir string, names ...string) (time.Time, error) {
 		}
 	}
 	return newest, nil
-}
-
-// hasFinal reports whether the record file contains a run's final event, run.exited or
-// run.refused, in a whole line. No file is no final event.
-func hasFinal(file string) (bool, error) {
-	final := false
-	var torn int
-	err := readKeptLines(file, func(line []byte) bool {
-		var ev struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(line, &ev) != nil {
-			return false
-		}
-		if ev.Type == event.RunExited || ev.Type == event.RunRefused {
-			final = true
-		}
-		return true
-	}, &torn)
-	return final, err
 }
