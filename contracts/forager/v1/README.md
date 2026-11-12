@@ -3989,14 +3989,16 @@ order:
 | `403` | `wall_required` | a run without a wall whose policy selects what needs one, below; the link's code alone |
 | `403` | a code of `refusal.Decides` | the gateway's decision of the run with `images`, below: `run_configuration_invalid`, `image_unknown`, `tool_unknown` and the like |
 
-A session waits 140 seconds for its run answer, where it waits ten seconds for any
-other answer on the link: the gateway tries the server for up to 120 seconds (Tries as
-a run opens, below), the last try has ten seconds for its answer, and ten seconds are
+A session waits 140 seconds for its run answer on the local link, and 130 seconds
+behind a separate gateway, where it waits ten seconds for any other answer on the link:
+the gateway tries the server for up to 120 seconds (Tries as a run opens, below), and
+the last try has ten seconds for its answer. On the local link ten seconds more are
 left for the rest of the open. A run request whose session gives up opens no run: once
 its connection goes, the gateway asks the server nothing more for it, the registration
-among it, opens no run, and removes what it recorded of the run, so the same `run_id` sent again is a new run request, not
-`run_id_used` at the gateway. A registration the server accepted before then stays the
-server's. The gateway keeps the bytes it built for a `run_id` for 150 seconds of their
+among it, opens no run, and removes what it recorded of the run, so the same `run_id`
+sent again is a new run request, not `run_id_used` at the gateway. A registration the
+server accepted before then stays the server's. The gateway keeps the bytes it built
+for a `run_id` for 150 seconds of their
 `time`, by the wall clock, half the server's window: when the same `run_id` comes again within them,
 with every member but `time` the same, its labels and `about` among them, it sends the
 same bytes, `time` included, which a server that accepted them under the same access key
@@ -4010,7 +4012,7 @@ nothing does.
 failure that may pass, 1, 2, 4, 8 and 15 seconds after the try before ends, and then
 every 15 seconds, and starts a try again only within 120 seconds of the run request's
 arrival. A server that restarts within those 120 seconds therefore registers the run
-once it is back, and the last answer comes inside the 140 seconds the session waits.
+once it is back, and the last answer comes inside the time the session waits.
 It asks again after no answer, a transport failure or a timeout, a `5xx`, signed or not, and a
 signed `429` `rate_limited`; it ignores `Retry-After`. Every other answer is final: a
 `401`, any other coded refusal, `not_found` among them, a signed answer other than a

@@ -458,8 +458,8 @@ type Link struct {
 	// uid is the user the local link's socket's peer must be.
 	uid  int
 	http *http.Client
-	// opening is http with [OpenWait] for one request in place of [Timeout]: the run
-	// request's client.
+	// opening is http with [OpenWait], or behind a separate gateway [RemoteOpenWait],
+	// for one request in place of [Timeout]: the run request's client.
 	opening *http.Client
 	// runID holds the run's id once the run is open on the local link, which every
 	// batch names; it holds nil before.
@@ -955,8 +955,8 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // OpenRun posts the run request to runURL, the discovery's run.url, and returns the
 // run answer: a 200 the schema accepts, whose run_id is the request's. A 410 is the end
 // of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status and
-// who refused, From. It waits [OpenWait] for the answer, where every other request of
-// the link waits [Timeout]. Once the run is open on the local link, every later batch
+// who refused, From. It waits [OpenWait] for the answer, behind a separate gateway
+// [RemoteOpenWait], where every other request of the link waits [Timeout]. Once the run is open on the local link, every later batch
 // names it in X-Qory-Run-Id. The local link takes no narrowing, and a separate gateway no labels
 // or about, which are the starter's registration's.
 func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {
