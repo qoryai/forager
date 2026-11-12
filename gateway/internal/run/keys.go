@@ -1,6 +1,7 @@
 package run
 
 import (
+	"regexp"
 	"slices"
 	"time"
 
@@ -77,22 +78,42 @@ func (r *Run) checkKeyGroup(now time.Time) error {
 	return nil
 }
 
+// windowShape is the grammar of a limit window's name, the window of
+// model-keys-report.schema.json.
+var windowShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// maxUseUpToWindows is the most windows use_up_to_windows lists, the 11 windows of a
+// model keys report.
+const maxUseUpToWindows = 11
+
 // checkUseUpTo returns a run_configuration_invalid error, with the key's name, for a
-// key c with a use_up_to_percent outside 1 to 99, a use_up_to_percent without
-// use_up_to_windows, or use_up_to_windows without use_up_to_percent. An empty
-// use_up_to_windows counts as none.
+// key c that breaks a rule of the schema on use_up_to_percent and use_up_to_windows: a
+// use_up_to_percent outside 1 to 99; a use_up_to_percent without use_up_to_windows, or
+// with an empty one; use_up_to_windows, empty or not, without use_up_to_percent; and
+// use_up_to_windows with more than 11 windows, a window twice, or a window outside the
+// grammar of a model keys report's window.
 func checkUseUpTo(c server.RunCredential) error {
 	name := accesskey.ShownName(c.Name, true)
+	invalid := func(format string, args ...any) error {
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name), format, args...)
+	}
 	switch p := c.UseUpToPercent; {
 	case p != nil && (*p < 1 || *p > 99):
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-			"set use_up_to_percent on the model key %s to a value from 1 to 99, or remove it and use_up_to_windows to use the key up to its limit: use_up_to_percent is %d", name, *p)
+		return invalid("set use_up_to_percent on the model key %s to a value from 1 to 99, or remove it and use_up_to_windows to use the key up to its limit: use_up_to_percent is %d", name, *p)
 	case p != nil && len(c.UseUpToWindows) == 0:
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-			"set use_up_to_windows on the model key %s to the limit windows use_up_to_percent applies to, or remove use_up_to_percent: the key has use_up_to_percent %d and no use_up_to_windows", name, *p)
+		return invalid("set use_up_to_windows on the model key %s to the limit windows use_up_to_percent applies to, or remove use_up_to_percent: the key has use_up_to_percent %d and no use_up_to_windows", name, *p)
 	case p == nil && c.UseUpToWindows != nil:
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-			"set use_up_to_percent on the model key %s to a value from 1 to 99, or remove use_up_to_windows: the key has use_up_to_windows and no use_up_to_percent", name)
+		return invalid("set use_up_to_percent on the model key %s to a value from 1 to 99, or remove use_up_to_windows: the key has use_up_to_windows and no use_up_to_percent", name)
+	case len(c.UseUpToWindows) > maxUseUpToWindows:
+		return invalid("list at most %d windows in use_up_to_windows of the model key %s: it lists %d", maxUseUpToWindows, name, len(c.UseUpToWindows))
+	}
+	for i, w := range c.UseUpToWindows {
+		if !windowShape.MatchString(w) {
+			return invalid("set each window in use_up_to_windows of the model key %s to 1 to 64 of a-z, 0-9 and underscore, starting with a letter, such as five_hour: window %d is %s", name, i+1, accesskey.ShownName(w, true))
+		}
+		if slices.Contains(c.UseUpToWindows[:i], w) {
+			return invalid("list each window once in use_up_to_windows of the model key %s: %s is there twice", name, accesskey.ShownName(w, true))
+		}
 	}
 	return nil
 }

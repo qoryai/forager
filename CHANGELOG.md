@@ -281,7 +281,9 @@ release may change what an existing document does, and says so under Upgrading.
   session; while every key is in cooldown, the proxy returns its `429` and sends nothing
   to the provider. In both cases the gateway's `2xx` to the session's next batch has
   `{"stop": {"reason": "model_key_limit"}}`, `link-batch-answer.schema.json`. The session
-  stops the runtime and writes `dev.qory.session.exited` `paused` with
+  stops the runtime, reports `the runtime was stopped: every model key of the run is at
+  its provider's limit or at its Use up to percentage, and the run pauses until a key's
+  cooldown ends`, and writes `dev.qory.session.exited` `paused` with
   `model_key_limit`. The run stays open for its host work, and its caller closes it
   `paused` with `model_key_limit` and the last session's exit code.
 - `paused`, a state of `dev.qory.run.exited` and `dev.qory.session.exited`,
@@ -1060,13 +1062,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 - Several model keys of one provider per run, a key group (docs/credentials.md, Several
   keys of one provider). On a provider's `429` the proxy puts the active key in
-  cooldown, sends the request again with the next key, and passes the refusal only
-  when no key is left; the gateway's answer to the session's next batch then has
-  `stop`, `model_key_limit`. The gateway reports each key's limit windows to the
-  control plane with a signed `POST <run.url>/<run_id>/model-keys`, and skips a key the
-  answer has in cooldown. A control plane without the route gets one report: the run's
-  record has one line, `Upgrade the control plane to share model key cooldowns between
-  runs`, and cooldowns stay within the run.
+  cooldown, sends the request again with the next key, and passes the refusal only when
+  no key is left; the gateway's answer to the session's next batch then has `stop`,
+  `model_key_limit`. From then until the session's join ends, each request with the
+  placeholder gets the proxy's `429`, `qory: the run pauses until a model key's cooldown
+  ends: every key of the run's key group is at its provider's limit or at its Use up to
+  percentage, and the gateway sends no more model requests in this session.` The gateway
+  reports each key's limit windows to the control plane with a signed `POST
+  <run.url>/<run_id>/model-keys`, and skips a key the answer has in cooldown. A control
+  plane without the route gets one report: the run's record has one line, `Upgrade the
+  control plane to share model key cooldowns between runs`, and cooldowns stay within
+  the run.
 - A key with `use_up_to_percent` is in cooldown while a window in its
   `use_up_to_windows` is at or above the percentage, until that window's `resets_at`
   (docs/credentials.md, Several keys of one provider). The gateway reads the window's
@@ -1074,11 +1080,6 @@ release may change what an existing document does, and says so under Upgrading.
   model keys reports, and stores no cooldown for it, so its reports do not change. The
   next request goes with the next key; when every key is in cooldown, the proxy returns
   its `429` with no call to the provider, and the run pauses with `model_key_limit`.
-- The proxy's `429` while every key of the group is in cooldown reads `qory: the run
-  pauses until a model key's cooldown ends: every key of the run's key group is at its
-  provider's limit or at its Use up to percentage, and the gateway sends no more model
-  requests in this session.` Before, it read `qory: start the run again once a model
-  key's cooldown ends: every key of the run's key group is at its provider's limit, …`.
 - The link takes a session's `dev.qory.run.exited` `paused` with `model_key_limit`
   after a last `dev.qory.session.exited` with that reason.
 - `server.Client.PostModelKeys`, the signed model keys report and its answer.
@@ -2234,11 +2235,6 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
-- The report line of a session that the gateway's `stop`, `model_key_limit`, ended
-  reads `the runtime was stopped: every model key of the run is at its provider's limit
-  or at its Use up to percentage, and the run pauses until a key's cooldown ends`.
-  Before, it read `the runtime was stopped at the model provider's limit: no model key
-  of the run is left, and the run pauses`.
 - On one machine, the walled run's forwarder closes a connection that does not open
   with the relay's preamble and the run's proxy secret within 10 seconds, as it does
   behind a separate gateway, and writes the same preamble on toward the proxy. Before,

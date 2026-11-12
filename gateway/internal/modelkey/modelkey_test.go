@@ -715,11 +715,11 @@ func use(infix, fraction string, reset time.Time) http.Header {
 	return headers(p+"status", "allowed", p+"utilization", fraction, p+"reset", epoch(reset))
 }
 
-// TestAKeyAtItsUseUpToPercentRests pins the cooldown at use_up_to_percent: a key whose
-// listed window is below the percentage stays active; at or above it, the next request
-// goes with the next key, and the key rests until that window's reset. No cooldown is
-// stored: the window keeps the status of the answer.
-func TestAKeyAtItsUseUpToPercentRests(t *testing.T) {
+// TestAKeyAtItsUseUpToPercentIsInCooldown pins the cooldown at use_up_to_percent: a
+// key whose listed window is below the percentage stays active; at or above it, the
+// next request goes with the next key, and the key is in cooldown until that window's
+// reset. No cooldown is stored: the window keeps the status of the answer.
+func TestAKeyAtItsUseUpToPercentIsInCooldown(t *testing.T) {
 	reset := start.Add(2 * time.Hour)
 	for _, c := range []struct {
 		fraction string
@@ -757,9 +757,9 @@ func TestAKeyAtItsUseUpToPercentRests(t *testing.T) {
 	}
 }
 
-// TestUseUpToCountsOnlyItsWindows pins the windows the percentage applies to: a window
-// outside use_up_to_windows at 100 rests nothing, and neither does a listed window at
-// the percentage whose reset has passed or that has no reset.
+// TestUseUpToCountsOnlyItsWindows pins the windows the percentage applies to: neither
+// a window outside use_up_to_windows at 100, nor a listed window at the percentage
+// whose reset has passed or that has no reset, puts the key in cooldown.
 func TestUseUpToCountsOnlyItsWindows(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -783,8 +783,8 @@ func TestUseUpToCountsOnlyItsWindows(t *testing.T) {
 }
 
 // TestUseUpToRestsUntilTheFurthestReset pins two listed windows at the percentage: the
-// key rests until the later of their resets.
-func TestUseUpToRestsUntilTheFurthestReset(t *testing.T) {
+// key is in cooldown until the later of their resets.
+func TestUseUpToCoolsUntilTheFurthestReset(t *testing.T) {
 	g, c := shared(t)
 	h := use("5h", "0.95", start.Add(2*time.Hour))
 	for k, v := range use("7d", "0.91", start.Add(72*time.Hour)) {
@@ -802,8 +802,9 @@ func TestUseUpToRestsUntilTheFurthestReset(t *testing.T) {
 }
 
 // TestUseUpToCountsAReportsAnswer pins a utilization from the answer to a report: an
-// entry of another run's allowed window at the percentage rests the key, and its
-// cooldown_until of the run configuration, which the entry ends, does not wake it.
+// entry of another run's allowed window at the percentage puts the key in cooldown, and
+// the entry, which ends its cooldown_until of the run configuration, leaves it in
+// cooldown.
 func TestUseUpToCountsAReportsAnswer(t *testing.T) {
 	c := &clock{now: start}
 	both := []string{"five_hour", "seven_day"}
@@ -852,5 +853,26 @@ func TestEveryKeyAtItsUseUpToPercentPauses(t *testing.T) {
 		if w.Status == modelkey.StatusRejected || !w.CooldownUntil.IsZero() {
 			t.Errorf("window %+v; want no rejected window and no cooldown_until", w)
 		}
+	}
+}
+
+// TestMergeHoldsAFarResetToThirtyOneDays pins the cap of a report answer's resets_at: an
+// entry at the percentage whose resets_at is 9999-12-31 puts the key in cooldown for 31
+// days, not until that year, and the group's windows, and so the next report, have the
+// capped reset.
+func TestMergeHoldsAFarResetToThirtyOneDays(t *testing.T) {
+	g, c := shared(t)
+	far := time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+	limit := start.Add(31 * 24 * time.Hour)
+	g.Merge([]modelkey.Window{{Credential: "model", Window: "five_hour", Status: modelkey.StatusAllowed, ResetsAt: far, Utilization: 95, HasUtilization: true, Source: modelkey.SourceProvider, ObservedAt: start.Add(time.Second)}})
+	if w, _ := window(g, "model", "five_hour"); !w.ResetsAt.Equal(limit) {
+		t.Errorf("five_hour resets at %v; want %v", w.ResetsAt, limit)
+	}
+	if got, ok := g.Pick(); got != "model-2" || !ok {
+		t.Errorf("Pick after the entry: %s, %v; want model-2", got, ok)
+	}
+	c.now = limit
+	if next, ok := g.Refused("model-2", headers("retry-after", "3600"), ""); next != "model" || !ok {
+		t.Errorf("Refused model-2 31 days later: %s, %v; want model, out of cooldown", next, ok)
 	}
 }

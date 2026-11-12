@@ -1046,8 +1046,9 @@ func TestDockerModelKeysAllCoolingStopTheSession(t *testing.T) {
 // window at 90 percent. The first request goes with A, the second, after A's answer,
 // with B; after B's answer both keys are at their percentage, so the proxy sends no
 // third request to the stub and returns its 429. The session ends paused with
-// model_key_limit, the run closes paused with model_key_limit, and the stub got no
-// request that it refused.
+// model_key_limit and Claude Code's exit code, the run closes paused with
+// model_key_limit, the record lists model with 200 and then model-b with 200 to the
+// stub, and the stub got no request that it refused.
 func TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun(t *testing.T) {
 	k := newKeysWall(t)
 	name, host := k.stub(t, keysShare)
@@ -1068,14 +1069,20 @@ func TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun(t *testing.T) {
 		t.Errorf("the session ended %s, %q, exit %d; want paused, model_key_limit\nstub:%s\nstdout:\n%s",
 			o.res.State, o.res.Reason, o.res.ExitCode, keysEntries(log), tail(o.out, 4000))
 	}
-	if d := o.exited(); d == nil || d["state"] != event.StatePaused || d["reason"] != event.ReasonModelKeyLimit {
-		t.Errorf("dev.qory.session.exited is %v; want paused, model_key_limit", d)
+	if d := o.exited(); d == nil || d["state"] != event.StatePaused || d["reason"] != event.ReasonModelKeyLimit || d["exit_code"] != float64(o.res.ExitCode) {
+		t.Errorf("dev.qory.session.exited is %v; want paused, model_key_limit, exit %d", d, o.res.ExitCode)
+	}
+	if o.closed != nil {
+		t.Errorf("the close with model_key_limit: %v", o.closed)
 	}
 	if es := o.of(event.RunExited); len(es) != 1 || es[0]["state"] != event.StatePaused || es[0]["reason"] != event.ReasonModelKeyLimit {
 		t.Errorf("dev.qory.run.exited is %v; want one, paused with model_key_limit", es)
 	}
 	if len(log) != 2 || log[0].Key != "A" || log[1].Key != "B" || log[0].Status != http.StatusOK || log[1].Status != http.StatusOK {
 		t.Errorf("the stub got:%s\nwant a 200 with key A, then a 200 with key B, and nothing more", keysEntries(log))
+	}
+	if got := o.egress(host); len(got) < 2 || got[0] != "model 200" || got[1] != "model-b 200" {
+		t.Errorf("the record lists %q to the stub; want a request with model and 200, then one with model-b and 200", got)
 	}
 	if strings.Contains(o.lines, "limit answer, status 429") {
 		t.Errorf("the gateway's log has a limit answer of the provider:\n%s", o.lines)

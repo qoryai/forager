@@ -195,9 +195,10 @@ func TestAKeyGroupInCooldownAtTheClaim(t *testing.T) {
 
 // TestAKeyGroupWithUseUpTo pins the fixture of a key group whose keys have
 // use_up_to_percent and use_up_to_windows: each key of ModelKeys has them. Each fixture
-// of a use_up_to_percent outside 1 to 99, or of one of the two members without the
-// other, fails the schema too, and the gateway refuses it, run_configuration_invalid
-// with the key's name and before any secrets request.
+// of a use_up_to_percent outside 1 to 99, of one of the two members without the other,
+// of 12 windows, of a window twice and of a window in upper case fails the schema too,
+// and the gateway refuses it, run_configuration_invalid with the key's name and before
+// any secrets request.
 func TestAKeyGroupWithUseUpTo(t *testing.T) {
 	doc := fixture(t, "fixtures/run-configuration/model-keys-use-up-to.json")
 	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
@@ -217,6 +218,9 @@ func TestAKeyGroupWithUseUpTo(t *testing.T) {
 		{"no-windows", `set use_up_to_windows on the model key "model" to the limit windows use_up_to_percent applies to, or remove use_up_to_percent: the key has use_up_to_percent 90 and no use_up_to_windows`},
 		{"windows-empty", `set use_up_to_windows on the model key "model" to the limit windows use_up_to_percent applies to, or remove use_up_to_percent: the key has use_up_to_percent 90 and no use_up_to_windows`},
 		{"windows-alone", `set use_up_to_percent on the model key "model" to a value from 1 to 99, or remove use_up_to_windows: the key has use_up_to_windows and no use_up_to_percent`},
+		{"twelve-windows", `list at most 11 windows in use_up_to_windows of the model key "model": it lists 12`},
+		{"window-twice", `list each window once in use_up_to_windows of the model key "model": "five_hour" is there twice`},
+		{"window-upper-case", `set each window in use_up_to_windows of the model key "model" to 1 to 64 of a-z, 0-9 and underscore, starting with a letter, such as five_hour: window 1 is "Five_Hour"`},
 	} {
 		s := &controlPlane{answer: harnessValue}
 		path := "fixtures/invalid/run-configuration-credentials-api-use-up-to-" + c.fixture + ".json"

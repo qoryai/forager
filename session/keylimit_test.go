@@ -61,9 +61,7 @@ func TestAStopInABatchsAnswerStopsTheRuntime(t *testing.T) {
 	if closed.State != "paused" || closed.Reason != "model_key_limit" || closed.ExitCode != 143 {
 		t.Errorf("the close %+v", closed)
 	}
-	if !slices.ContainsFunc(reports(), func(l string) bool {
-		return strings.Contains(l, "at its provider's limit or at its Use up to percentage")
-	}) {
+	if !slices.Contains(reports(), "the runtime was stopped: every model key of the run is at its provider's limit or at its Use up to percentage, and the run pauses until a key's cooldown ends") {
 		t.Errorf("reports %q", reports())
 	}
 	if own, posted := exitedOf(t, res, g); posted == nil || own["reason"] != "model_key_limit" || posted["reason"] != "model_key_limit" {

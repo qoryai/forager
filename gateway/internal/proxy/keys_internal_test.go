@@ -442,7 +442,7 @@ func TestKeysAtTheirUseUpToPercentGetTheProxys429(t *testing.T) {
 		}
 	}
 	status, body := f.post(t, "{}")
-	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: the run pauses until a model key's cooldown ends: every key of the run's key group is at its provider's limit or at its Use up to percentage") {
+	if want := "qory: the run pauses until a model key's cooldown ends: every key of the run's key group is at its provider's limit or at its Use up to percentage, and the gateway sends no more model requests in this session.\n"; status != http.StatusTooManyRequests || body != want {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {

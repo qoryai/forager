@@ -1411,10 +1411,12 @@ request asks the gateway for, for this session.
     caller, which ends the context, `cancelled` and `interrupted`, with `Cancelled`.
     `ExitCode` and `Signal` are the runtime's, whatever they are.
   - When the gateway's answer to a batch had `stop`, `model_key_limit`, `paused` and
-    `model_key_limit`: every model key of the run is at its provider's limit or at its
-    Use up to percentage, and the session stopped the runtime as at its time limit. A
-    stop in the answer to the batch the session posts once the runtime exited by itself
-    counts too. `ExitCode` and `Signal` are the runtime's. The run stays open: run its
+    `model_key_limit`: the run's proxy passed a model provider's limit refusal, or the
+    gateway's `429`, to the runtime, because every model key of the run is at its
+    provider's limit or at its Use up to percentage, the refused request body was over
+    8 MiB, or the next key's credential does not cover the request's path; and the
+    session stopped the runtime as at its time limit. A stop in the answer to the batch
+    the session posts once the runtime exited by itself counts too. `ExitCode` and `Signal` are the runtime's. The run stays open: run its
     host work, such as a push, then close it `paused` with `model_key_limit` and
     `ExitCode`.
   - A runtime that exits 0 at the session's stop, at the context's end or at the
