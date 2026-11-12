@@ -268,7 +268,8 @@ gateway's answer to the session's next batch has `stop`, `model_key_limit`, so t
 session stops the runtime and the run pauses. The next join gets the active key again.
 
 The gateway reports each key's limit windows to the control plane, at most once a
-second, and takes the cooldowns other runs found from the answer. A run then stops
+second, and takes the cooldowns other runs found from the answer. A cooldown from
+another run counts for at most 7 days, and a reset for at most 31. A run then stops
 setting a key that another run found at its limit once the answer to its next report
 arrives: until then, up to about a second after the other run's refusal and longer
 while a report waits for a retry, the run can still send a request with that key and

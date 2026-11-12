@@ -877,11 +877,11 @@ func TestMergeHoldsAFarResetToThirtyOneDays(t *testing.T) {
 	}
 }
 
-// TestMergeHoldsAFarCooldownToSevenDays pins the cap of a report answer's
+// TestMergeCapsAFarCooldownAtSevenDays pins the cap of a report answer's
 // cooldown_until: a rejected entry with cooldown_until 9999-12-31 puts the key in
 // cooldown for 7 days after the gateway's clock, not until that year, and a switch
 // sets the key again after them.
-func TestMergeHoldsAFarCooldownToSevenDays(t *testing.T) {
+func TestMergeCapsAFarCooldownAtSevenDays(t *testing.T) {
 	g, c := group(t)
 	far := time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
 	limit := start.Add(7 * 24 * time.Hour)
@@ -899,41 +899,47 @@ func TestMergeHoldsAFarCooldownToSevenDays(t *testing.T) {
 	}
 }
 
-// TestMergeHoldsAFarObservedAtToSevenDays pins the cap of a report answer's
-// observed_at: an entry observed in 9999 is stored as observed 7 days after the
-// gateway's clock, an entry observed before that time is left out, and one observed
-// after it replaces the entry.
-func TestMergeHoldsAFarObservedAtToSevenDays(t *testing.T) {
+// TestMergeLeavesOutAnEntryObservedOver300SecondsAhead pins the check of a report
+// answer's observed_at against the gateway's clock: an entry observed 301 seconds ahead,
+// or in 9999, is left out, with no cooldown and no change of the window, and so is no
+// later than the next real entry; an entry observed 300 seconds ahead is taken.
+func TestMergeLeavesOutAnEntryObservedOver300SecondsAhead(t *testing.T) {
 	g, c := group(t)
 	far := time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
-	limit := start.Add(7 * 24 * time.Hour)
-	g.Merge([]modelkey.Window{{Credential: "model", Window: "five_hour", Status: modelkey.StatusAllowed, Source: modelkey.SourceProvider, ObservedAt: far}})
-	if w, _ := window(g, "model", "five_hour"); !w.ObservedAt.Equal(limit) {
-		t.Errorf("five_hour observed at %v; want %v", w.ObservedAt, limit)
+	g.Merge([]modelkey.Window{
+		{Credential: "model", Window: "five_hour", Status: modelkey.StatusRejected, CooldownUntil: start.Add(time.Hour), Source: modelkey.SourceProvider, ObservedAt: start.Add(301 * time.Second)},
+		{Credential: "model", Window: "seven_day", Status: modelkey.StatusRejected, CooldownUntil: far, Source: modelkey.SourceProvider, ObservedAt: far},
+	})
+	for _, name := range []string{"five_hour", "seven_day"} {
+		if w, ok := window(g, "model", name); ok {
+			t.Errorf("%s: %+v; want the entry left out", name, w)
+		}
 	}
-	c.now = start.Add(time.Hour)
+	if g.Active() != "model" {
+		t.Errorf("active %s; want model, out of cooldown", g.Active())
+	}
+	g.Merge([]modelkey.Window{{Credential: "model", Window: "five_hour", Status: modelkey.StatusAllowedWarning, Source: modelkey.SourceProvider, ObservedAt: start.Add(300 * time.Second)}})
+	if w, _ := window(g, "model", "five_hour"); w.Status != modelkey.StatusAllowedWarning || !w.ObservedAt.Equal(start.Add(300*time.Second)) {
+		t.Errorf("five_hour after an entry 300 seconds ahead: %+v; want it taken", w)
+	}
+	c.now = start.Add(10 * time.Minute)
 	g.Merge([]modelkey.Window{{Credential: "model", Window: "five_hour", Status: modelkey.StatusRejected, CooldownUntil: c.now.Add(time.Hour), Source: modelkey.SourceProvider, ObservedAt: c.now}})
-	if w, _ := window(g, "model", "five_hour"); w.Status != modelkey.StatusAllowed {
-		t.Errorf("five_hour after an entry observed before the cap: %+v; want allowed kept", w)
-	}
-	c.now = limit.Add(time.Minute)
-	g.Merge([]modelkey.Window{{Credential: "model", Window: "five_hour", Status: modelkey.StatusRejected, CooldownUntil: c.now.Add(time.Hour), Source: modelkey.SourceProvider, ObservedAt: limit.Add(time.Second)}})
-	if w, _ := window(g, "model", "five_hour"); w.Status != modelkey.StatusRejected || !w.ObservedAt.Equal(limit.Add(time.Second)) {
-		t.Errorf("five_hour after an entry observed after the cap: %+v; want it rejected, observed at %v", w, limit.Add(time.Second))
-	}
 	if g.Active() != "model-2" {
-		t.Errorf("active %s; want model-2, model in cooldown from the entry", g.Active())
+		t.Errorf("active %s; want model-2, model in cooldown from the real entry", g.Active())
+	}
+	g.Merge([]modelkey.Window{{Credential: "model", Window: "five_hour", Status: modelkey.StatusRejected, CooldownUntil: far, Source: modelkey.SourceProvider, ObservedAt: far}})
+	if w, _ := window(g, "model", "five_hour"); !w.CooldownUntil.Equal(c.now.Add(time.Hour)) || !w.ObservedAt.Equal(c.now) {
+		t.Errorf("five_hour after the far entry again: %+v; want the real entry kept", w)
 	}
 }
 
-// TestMergeKeepsTimesWithinSevenDays pins that the caps change no cooldown_until or
-// observed_at at most 7 days after the gateway's clock.
-func TestMergeKeepsTimesWithinSevenDays(t *testing.T) {
+// TestMergeKeepsACooldownWithinSevenDays pins that the cap changes no cooldown_until at
+// most 7 days after the gateway's clock.
+func TestMergeKeepsACooldownWithinSevenDays(t *testing.T) {
 	g, _ := group(t)
 	limit := start.Add(7 * 24 * time.Hour)
-	g.Merge([]modelkey.Window{{Credential: "model", Window: "seven_day", Status: modelkey.StatusRejected, CooldownUntil: limit, Source: modelkey.SourceProvider, ObservedAt: limit.Add(-time.Minute)}})
-	w, _ := window(g, "model", "seven_day")
-	if !w.CooldownUntil.Equal(limit) || !w.ObservedAt.Equal(limit.Add(-time.Minute)) {
-		t.Errorf("seven_day: cooldown until %v, observed at %v; want %v, %v", w.CooldownUntil, w.ObservedAt, limit, limit.Add(-time.Minute))
+	g.Merge([]modelkey.Window{{Credential: "model", Window: "seven_day", Status: modelkey.StatusRejected, CooldownUntil: limit, Source: modelkey.SourceProvider, ObservedAt: start.Add(time.Minute)}})
+	if w, _ := window(g, "model", "seven_day"); !w.CooldownUntil.Equal(limit) || !w.ObservedAt.Equal(start.Add(time.Minute)) {
+		t.Errorf("seven_day: cooldown until %v, observed at %v; want %v, %v", w.CooldownUntil, w.ObservedAt, limit, start.Add(time.Minute))
 	}
 }

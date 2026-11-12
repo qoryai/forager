@@ -3395,14 +3395,17 @@ credential names.
 ```
 
 The gateway takes each entry of the 11 windows whose `observed_at` is later than the
-state it has of that key and window, with its `resets_at` held to at most 31 days after
-the gateway's clock, and its `cooldown_until` and `observed_at` to at most 7 days after
-it, before the comparison by `observed_at`. It leaves out an entry of any other window.
-7 days is the longest window a provider reports and the largest `pause_for_s`, so a
-wrong far-future time from another run keeps a key in cooldown, or keeps out the
-entries observed before it, for at most 7 days. A key whose entry has
-a `cooldown_until` in the future is in cooldown until then, as after a limit refusal in
-this run, so a run sets no key that another run found at its limit. A key with
+state it has of that key and window, and at most 300 seconds after the gateway's clock,
+the limit Qory Apiary sets on a report's `observed_at`. It leaves out any other entry.
+A `resets_at` later than 31 days after the gateway's clock counts as 31 days after it,
+and a `cooldown_until` later than 7 days after it counts as 7 days after it. 7 days is
+a chosen cap: a real longer cooldown from another run ends in this run after 7 days,
+the run sends one request with the key, and the provider's refusal puts the key in
+cooldown again. A merged `resets_at` still counts for up to 31 days, so with
+`use_up_to_percent` an entry at the percentage can keep a key in cooldown that long.
+A key whose entry has a `cooldown_until` in the future is in cooldown until then, as
+after a limit refusal in this run, so a run sets no key that another run found at its
+limit. A key with
 `use_up_to_percent` is also in cooldown while an entry of a window in its
 `use_up_to_windows` has a `utilization` at or above the percentage and a `resets_at` in
 the future (§Credentials, Several model keys). The server keeps the newest state per key
