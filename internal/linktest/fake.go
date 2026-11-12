@@ -41,6 +41,10 @@ type Reply struct {
 	// Signing is how a separate gateway signs this answer, [SignedOwn] by default, which
 	// [Fake.AnswerUnderUnnamedKey] changes for every answer.
 	Signing Signing
+	// Drop closes the request's connection with no answer, as a gateway that stops
+	// while the request is on its way. A join with Drop and the status 200 or 403 is
+	// numbered all the same.
+	Drop bool
 }
 
 // Signing is how a fake separate gateway signs one answer.
@@ -536,6 +540,12 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	digest := f.runDigest
 	rm := f.remote
 	f.mu.Unlock()
+	if reply.Drop {
+		if c, _, err := http.NewResponseController(w).Hijack(); err == nil {
+			c.Close()
+		}
+		return
+	}
 	for k, v := range reply.Header {
 		w.Header()[k] = v
 	}

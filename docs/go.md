@@ -130,7 +130,9 @@ At each `Join` the session:
 1. starts the join step, `join session <n>`, and sends the join request: the names,
    never the values, of the variables it passes a value for, and the session's model
    credential when `ModelCredential` is set; the answer has the session's number, 1 for
-   the run's first join;
+   the run's first join. After a try that gets no answer, or a `503`, the session
+   flushes the run's events and sends the same join request again, for up to 120
+   seconds: a separate gateway may be restarting;
 2. checks the session's places, prepares the runtime and resolves the variables, then
    ends the join step `succeeded` with `-1`;
 3. records `dev.qory.session.started`, with the runtime, the command, `terminal`, the
@@ -1469,7 +1471,10 @@ after a last session that ended otherwise.
 - `RunID` and `Dir`, the run directory with the record.
 - `State`, `Reason` and `ExitCode`, those of the run's `dev.qory.run.exited`.
 - `Undelivered`, how many of the run's events the gateway did not accept; behind a
-  separate gateway they are under the run directory's `undelivered/`.
+  separate gateway they are under the run directory's `undelivered/`. `Close` waits up
+  to 15 seconds for the gateway to accept the run's last events, and behind a separate
+  gateway up to 180 seconds, so a gateway that restarts in 120 seconds still receives
+  them. It returns as soon as the gateway accepts them or answers `410`.
 - `RunClosed` and `ClosedReason`, as `session.Result` has them.
 - `WallKept`, true when removing a container of the run's wall failed at some point of
   the run: the agent's container at a session's end, the setup container in

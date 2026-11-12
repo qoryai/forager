@@ -90,8 +90,11 @@ func TestMain(m *testing.M) {
 		os.Exit(fakeRuntime())
 	}
 	// A fake gateway that does not accept a batch holds a join and a close for 3 s,
-	// not 15 s.
+	// not 15 s, or 180 s behind a separate gateway.
 	session.SetCloseWait(3 * time.Second)
+	session.SetFinalWait(3 * time.Second)
+	// A join request with no answer is sent again for 3 s, not 120 s.
+	session.SetJoinRetry(3*time.Second, 100*time.Millisecond, 200*time.Millisecond, 400*time.Millisecond)
 	// The registry of walled runs is the tests' own, not this user's.
 	state, err := os.MkdirTemp("", "session-state-")
 	if err != nil {
