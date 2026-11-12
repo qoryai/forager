@@ -142,6 +142,10 @@ type Gateway struct {
 	lapsedErrs []error
 	lapsedMore int
 
+	// sweepStop stops the CA key sweep, and sweepDone is closed once it stopped; both
+	// nil without a sweep ([Gateway.sweepCA]).
+	sweepStop, sweepDone chan struct{}
+
 	closed   chan struct{}
 	delivery Delivery
 	closeErr error
@@ -278,6 +282,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		if g.svc, err = g.startService(certs); err != nil {
 			return nil, err
 		}
+		g.sweepCA()
 		ok = true
 		return g, nil
 	}
@@ -565,6 +570,7 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	}
 	g.closing = true
 	g.mu.Unlock()
+	g.stopSweep()
 	g.opens.Wait()
 	g.mu.Lock()
 	runs := make([]*linkRun, 0, len(g.runs))
@@ -573,7 +579,7 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	}
 	g.mu.Unlock()
 	for _, lr := range runs {
-		lr.end(ending{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
+		lr.end(gatewayClosed)
 	}
 	var errs []error
 	for _, lr := range runs {

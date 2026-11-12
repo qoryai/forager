@@ -229,3 +229,16 @@ func StackTokens(g *Gateway, runID string) map[string]string {
 	}
 	return out
 }
+
+// SetCASweep makes every how often the CA key sweep runs, and age how long a record it
+// sweeps has not changed, in place of caSweepEvery and caSweepAge.
+func SetCASweep(c *Config, every, age time.Duration) { c.caSweepEvery, c.caSweepAge = every, age }
+
+// SweepCA runs one pass of g's CA key sweep as of now, with the age g has.
+func SweepCA(g *Gateway, now time.Time) {
+	age := caSweepAge
+	if g.cfg.caSweepAge != 0 {
+		age = g.cfg.caSweepAge
+	}
+	g.sweep(now, age)
+}

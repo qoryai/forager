@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -38,6 +39,8 @@ type join struct {
 	// model_key is false: the proxy sets no model key while the join is open.
 	model string
 	noKey bool
+	// credential is the join request's model_credential, empty for none.
+	credential string
 	// reason is the reason of the session's dev.qory.session.exited, empty for none.
 	reason string
 	// started and exited say the run's stream numbered the session's
@@ -50,6 +53,13 @@ type join struct {
 // open reports whether the join is open: answered 200, and its
 // dev.qory.session.exited not numbered.
 func (j *join) open() bool { return j.accepted && !j.exited }
+
+// replays reports whether req is the join request of j sent again, whose 200 its
+// session may not have had: j was answered 200, neither its session.started nor its
+// session.exited is numbered, and req has its passes, model_key and model_credential.
+func (j *join) replays(req *server.LinkJoinRequest) bool {
+	return j.accepted && !j.started && !j.exited && slices.Equal(j.passes, req.Passes) && j.noKey == !req.ModelKey && j.credential == req.ModelCredential
+}
 
 // passing reports whether an open join of the run passes a value for the variable:
 // the run's [run.Config.Passes], which a reload checks against the placeholders of the
@@ -103,7 +113,9 @@ func readJoinRequest(body []byte) (*server.LinkJoinRequest, bool) {
 }
 
 // joinSession answers a join request of the run runID: 200 with the session's number,
-// in the order the run's joins arrive; 403 placeholder_conflict, numbered too, for
+// in the order the run's joins arrive; on the one address, 200 again with the same
+// number and model key for the run's last join sent again ([join.replays]), which
+// numbers nothing; 403 placeholder_conflict, numbered too, for
 // passes that contain a placeholder of a credential or a tool the gateway holds for
 // the run, which leaves the run open; 410 for a run that ended at the gateway; and 400
 // invalid_request for a body the schema refuses, model_credential beside a model_key
@@ -172,12 +184,37 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		gone(w, end)
 		return
 	}
+	if n := len(lr.joins); lr.remote && n > 0 && lr.joins[n-1].replays(req) {
+		// The session sends a join again when it had no answer, a gateway that stopped
+		// as it answered say: the same answer, and nothing more numbered.
+		last := *lr.joins[n-1]
+		digest := lr.reloadDigest
+		lr.mu.Unlock()
+		lr.joinAnswer(s, w, r, digest, last.session, last.model)
+		return
+	}
 	if lr.openJoin() != nil {
 		lr.mu.Unlock()
 		refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway, joinWhileOpen)
 		return
 	}
-	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes), model: model, noKey: !req.ModelKey}
+	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes), model: model, noKey: !req.ModelKey, credential: req.ModelCredential}
+	lr.mu.Unlock()
+	if lr.remote {
+		// The decision is in the record before its answer goes, for a gateway that
+		// starts again. lr.joining keeps the joins in order meanwhile.
+		if err := appendKept(lr.st.Dir(), joinsFile, j.kept()); err != nil {
+			refuseOpen(w, fmt.Errorf("run %s: writing its join to its record: %w", lr.id, err))
+			return
+		}
+	}
+	lr.mu.Lock()
+	if lr.ended {
+		end := lr.how
+		lr.mu.Unlock()
+		gone(w, end)
+		return
+	}
 	lr.joins = append(lr.joins, j)
 	digest := lr.reloadDigest
 	lr.mu.Unlock()
@@ -197,10 +234,15 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	}
 	// A new join starts with no stop: the proxy sets the active key again.
 	lr.keys.Resume()
-	g.answerHeaders(s, w, r, digest)
+	lr.joinAnswer(s, w, r, digest, j.session, model)
+}
+
+// joinAnswer answers a join 200 with the session's number and its model key.
+func (lr *linkRun) joinAnswer(s *side, w http.ResponseWriter, r *http.Request, digest string, session int, model string) {
+	lr.g.answerHeaders(s, w, r, digest)
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
-	b, _ := json.Marshal(server.LinkJoinAnswer{Version: 1, Session: j.session, ModelCredential: model})
+	b, _ := json.Marshal(server.LinkJoinAnswer{Version: 1, Session: session, ModelCredential: model})
 	w.Write(b)
 }
 

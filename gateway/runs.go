@@ -127,7 +127,15 @@ type ending struct {
 	code, from string
 	// closed says the run ended before its session ended it.
 	closed bool
+	// keep is true for the end of [Gateway.Close]: the run's record keeps its CA files,
+	// so a gateway that starts again on its directory can reopen the run. Every other
+	// end removes them on the one address.
+	keep bool
 }
+
+// gatewayClosed ends a run as [Gateway.Close] does: no run.exited, a 410 run_closed to
+// its later requests, and its CA files kept.
+var gatewayClosed = ending{code: accesskey.CodeRunClosed, from: accesskey.FromGateway, keep: true}
 
 // runEnd is how a run ended at the gateway, as its later requests learn it: the code and
 // the from of its 410, and the state and the reason of the gateway's
@@ -307,6 +315,12 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		if _, cerr := st.Close(g.base); cerr != nil {
 			g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(cerr)))
 		}
+		if remote {
+			// A run that did not open is never reopened: its CA key goes from the disk.
+			if rerr := proxy.RemoveCA(st.Dir()); rerr != nil {
+				g.report(fmt.Sprintf("run %s: removing its CA files: %v", req.RunID, rerr))
+			}
+		}
 		cancel()
 		return nil, true, err
 	}
@@ -420,10 +434,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if how.request != nil && how.request.Err() != nil {
 		return fail(how.request.Err())
 	}
-	var narrowing *run.Narrowing
-	if n := req.Narrowing; n != nil {
-		narrowing = &run.Narrowing{Allow: n.Egress.Allow, Deny: n.Egress.Deny}
-	}
+	narrowing := narrowingOf(req.Narrowing)
 	var selects []run.Selection
 	if remote {
 		// The gateway's selection is for a run that attached with a run key alone.
@@ -442,6 +453,12 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		return fail(err)
 	}
 	lr.r = r
+	if remote {
+		// What Decide read of the run request, for a gateway that starts again.
+		if err := writeRequest(st.Dir(), req); err != nil {
+			return fail(fmt.Errorf("run %s: writing its run request to its record: %w", req.RunID, err))
+		}
+	}
 	if lr.live != nil {
 		lr.live.read = r.Read
 		lr.live.holds(r.RunConfiguration())
@@ -493,6 +510,13 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		if ca, err = proxy.NewCA(req.RunID); err != nil {
 			return fail(err)
 		}
+		if remote {
+			// The authority's files, read back by a gateway that starts again; removed at
+			// the run's end ([linkRun.end]).
+			if err := ca.Write(st.Dir()); err != nil {
+				return fail(fmt.Errorf("run %s: writing its CA to its record: %w", req.RunID, err))
+			}
+		}
 		lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
 		authority = ca.PEM()
 	}
@@ -506,6 +530,17 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		// again with the next key, and the reporter shares each key's state with the
 		// control plane.
 		lr.keys = modelkey.New(keys, r.Held().Start, nil)
+		if remote {
+			// The mark that the proxy passed a limit refusal to the session, for a
+			// gateway that starts again. Called on the proxy's request path: a write
+			// that fails is reported, and the request goes on.
+			dir := st.Dir()
+			lr.keys.OnPassed(func(passed bool) {
+				if err := markLimit(dir, passed); err != nil {
+					g.report(fmt.Sprintf("run %s: writing its model key mark: %v", req.RunID, err))
+				}
+			})
+		}
 		lr.px.SetKeyGroup(lr.keys, r.MessagesPath(), func(line string) { g.report("run " + req.RunID + ": " + line) })
 		if g.client != nil {
 			conf, _ := g.config()
@@ -531,10 +566,13 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		return fail(err)
 	}
 	lr.mu.Lock()
-	lr.refresh()
+	err = lr.refresh()
 	lr.opened = true
 	lr.last = time.Now()
 	lr.mu.Unlock()
+	if err != nil {
+		return fail(fmt.Errorf("run %s: writing its policy members to its record: %w", req.RunID, err))
+	}
 	lr.mu.Lock()
 	lr.answer = newSecretValue(string(lr.runAnswer(authority)))
 	lr.mu.Unlock()
@@ -932,6 +970,13 @@ func (lr *linkRun) end(e ending) {
 			lr.st.Emit(event.RunExited, ended(e, 0, startedAt))
 		}
 		lr.result, lr.err = lr.st.Close(lr.g.base)
+		if lr.remote && !e.keep {
+			// The run ended for good: no gateway reopens it, and its CA key goes from
+			// the disk.
+			if err := proxy.RemoveCA(lr.st.Dir()); err != nil {
+				lr.g.report(fmt.Sprintf("run %s: removing its CA files: %v", lr.id, err))
+			}
+		}
 		lr.cancel()
 		if lr.remote {
 			// Flushed: the gateway lets go of it.
@@ -996,9 +1041,11 @@ type reloadAnswerDoc struct {
 }
 
 // refresh makes the reload answer of the policy in force, and adds the members of its
-// dev.qory.run.policy_applied the gateway decides to those it gave the run. Called with
-// lr.mu held.
-func (lr *linkRun) refresh() {
+// dev.qory.run.policy_applied the gateway decides to those it gave the run. On the one
+// address each is also added to the record's given.jsonl, before the session can have
+// the reload answer; the error is that write's. Called with lr.mu held.
+func (lr *linkRun) refresh() error {
+	n := len(lr.given)
 	pol := lr.r.Policy()
 	applied := appliedOf(pol, lr.r.Beside(), lr.r.Held(), lr.r.Chosen(), lr.px.Terminated())
 	if hosts := lr.r.StackHosts(); !lr.opened && len(hosts) > 0 {
@@ -1027,6 +1074,16 @@ func (lr *linkRun) refresh() {
 	})
 	sum := sha256.Sum256(lr.reloadBody)
 	lr.reloadDigest = "sha256=" + hex.EncodeToString(sum[:])
+	if !lr.remote {
+		return nil
+	}
+	for _, a := range lr.given[n:] {
+		// Shown names and values alone, as the event's data: no credential's value.
+		if err := appendKept(lr.st.Dir(), givenFile, a); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // runAnswer is the run answer, with the run's authority when it has one. Called with
@@ -1303,7 +1360,11 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	lr.posts.SetRunDigest(d.Policy.RunConfiguration)
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
-	lr.refresh()
+	if err := lr.refresh(); err != nil {
+		// The policy is in force: the run goes on, and a gateway that starts again
+		// misses these members.
+		lr.g.report(fmt.Sprintf("run %s: writing its policy members to its record: %v", lr.id, err))
+	}
 	// Before the session can see the new digest, so its policy_applied finds the hold
 	// waiting for it; the tunnels the policy closed go first.
 	data := make([]any, len(refused))
