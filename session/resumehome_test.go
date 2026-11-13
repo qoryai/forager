@@ -136,6 +136,46 @@ func TestAnUnwalledHomeVariableResumesBelowALinkedHome(t *testing.T) {
 	startedFrom(t, evs, "startup")
 }
 
+// TestTheHomeVariableIsReadFromTheRuntimesEnvironment pins where an unwalled session
+// reads resume.home_var: in the environment the runtime gets. A HOMER_HOME that the
+// session inherits, with none among the launch's fixed values, resumes below it. A
+// HOMER_HOME in the descriptor's fixed variables, which the runtime's preparation sets,
+// wins over the launch's fixed value of the name, as in the runtime's environment.
+func TestTheHomeVariableIsReadFromTheRuntimesEnvironment(t *testing.T) {
+	const below = "2025/01/02/rollout-p-" + rolloutID + ".jsonl"
+	resumesAt := func(t *testing.T, sp runSpec, homeVar string) {
+		t.Helper()
+		res, err := run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evs := events(t, res)
+		if out := runLogText(t, evs); !strings.Contains(out, "restored: ok\n") || strings.Contains(out, "without a resume") {
+			t.Errorf("the runtime's output %q", out)
+		}
+		if path, _ := transcriptOf(t, evs); path != homeVar+"/sessions/"+below {
+			t.Errorf("the transcript's path %s; want it below %s", path, homeVar)
+		}
+	}
+	t.Run("inherited", func(t *testing.T) {
+		homeVar := t.TempDir()
+		sp := homerSpec(t, "-", "/srv/another-home/sessions/"+below)
+		sp.Env = append(sp.Env, "HOMER_HOME="+homeVar)
+		resumesAt(t, sp, homeVar)
+	})
+	t.Run("prepared", func(t *testing.T) {
+		prepared := t.TempDir()
+		sp := homerSpec(t, t.TempDir(), "/srv/another-home/sessions/"+below)
+		doc := strings.Replace(homer, "resume:\n", "fixed:\n  HOMER_HOME: "+prepared+"\nresume:\n", 1)
+		rt, err := runtimes.Described("homer.yaml", []byte(doc), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sp.Runtime = rt
+		resumesAt(t, sp, prepared)
+	})
+}
+
 // startedFrom checks that evs have one dev.qory.runtime.started, with source.
 func startedFrom(t *testing.T, evs []map[string]any, source string) {
 	t.Helper()
