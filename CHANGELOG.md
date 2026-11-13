@@ -1257,9 +1257,13 @@ release may change what an existing document does, and says so under Upgrading.
   with `run_closed` on the local link, or is kept behind a separate gateway, as in the
   next entry.
 - A separate gateway that restarts on the same directory keeps its runs, so the agent
-  sessions behind it go on. `Close` suspends every live run at once, in parallel: it
-  flushes the run's events, writes no `dev.qory.run.exited`, and keeps the run's record.
-  A reopen in flight stops as an open does, and its run keeps its record. When a run's
+  sessions behind it go on. From its start, `Close` gives every request of a run a `503`
+  with no body, and suspends every live run at once, in parallel: it flushes the run's
+  events, writes no `dev.qory.run.exited`, and keeps the run's record. A reopen in
+  flight stops as an open does, its waiting requests get a `503` at once, and its run
+  keeps its record. A run whose open or reopen ends while `Close` goes on is suspended
+  as soon as it opens. Within the bounds in code, `Close` takes 27 seconds at most,
+  within a container's stop grace of 40 seconds. When a run's
   tool does not listen, the gateway stops it together with the run's tools that started,
   in at most 10 seconds; before, it stopped that tool first, then the others. The
   gateway that starts again reopens the run at its first request whose run key verifies,

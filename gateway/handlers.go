@@ -211,6 +211,9 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		g.discard(lr)
 		return
 	}
+	lr.mu.Lock()
+	lr.answering = true
+	lr.mu.Unlock()
 	g.mu.Lock()
 	g.runs[lr.id] = lr
 	g.mu.Unlock()
@@ -242,7 +245,31 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	// On the one address the record is marked answered, and the answer may still go
 	// once the handler returns: the run is kept as answered, and ends as any run whose
 	// session sends nothing.
-	lr.arm()
+	g.settle(lr)
+}
+
+// settle arms the run lr that just opened or reopened, which its opener put into the
+// runs with lr.answering set, so Close left it alone, then clears lr.answering: when
+// Close started, a run of the one address is suspended instead, at once, and one of the
+// local link left to Close, which ends it. Close suspends the runs whose answering it
+// finds clear, and one whose answering it found set is suspended here: either way after
+// arm, so no reload loop starts on a suspended run.
+func (g *Gateway) settle(lr *linkRun) {
+	g.mu.Lock()
+	closing := g.closing
+	g.mu.Unlock()
+	if !closing {
+		lr.arm()
+	}
+	lr.mu.Lock()
+	lr.answering = false
+	lr.mu.Unlock()
+	g.mu.Lock()
+	closing = g.closing
+	g.mu.Unlock()
+	if closing && lr.remote {
+		lr.suspend()
+	}
 }
 
 // discard lets go of a run that opened whose session gave up before it had the run

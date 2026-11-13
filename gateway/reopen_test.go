@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -343,6 +344,101 @@ func TestCloseStopsAReopenPastItsAttach(t *testing.T) {
 				t.Errorf("a batch at the gateway that starts next: %d %s", a.status, a.body)
 			}
 		})
+	}
+}
+
+// TestCloseSuspendsBesideTheOpensItStops pins Close in its worst case, in real time:
+// a live run whose tool ignores SIGTERM and whose last batch the server has not
+// accepted, a reopen that resent an event the server does not accept and waits for its
+// tool to listen, and an open that waits for its tool to listen. Close returns within
+// the 40 seconds of the container's stop grace (the user's "543 (a)"), the waiting
+// requests get a 503 with no body, the live run and the reopened one keep their
+// records, and the open's record goes.
+//
+// The bounds, run side by side from the start of Close:
+//   - the live run: its two proxies close within 1 s each, its tool goes at its SIGKILL
+//     after the tool package's stopGrace of 5 s and within 5 s more, 10 s, and its
+//     stream flushes the batch the server does not accept within stream.CloseWait,
+//     15 s: 2 + 10 + 15 = 27 s;
+//   - the reopen: its tool 10 s, then its stream's flush 15 s, 25 s, and the one
+//     address closes after it within 1 s: 26 s;
+//   - the open: its tool 10 s.
+//
+// So Close takes 27 s at most. In series, the opens and the reopens first, then the one
+// address, then the suspends, it took up to 25 + 1 + 27 = 53 s. Measured on a laptop on
+// 2026-11-13, where each tool went at its SIGKILL at once: 20 s, and 40 s in series.
+func TestCloseSuspendsBesideTheOpensItStops(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := t.TempDir()
+	t.Setenv(envTool, "serve")
+	c := gatewayControl(t)
+	serveToolAndKeys(c)
+	var fail atomic.Bool
+	failDeliveries(c, &fail)
+	svc := []gateway.Tool{{Name: "svc", Command: []string{exe}, Serves: []string{"svc.example"}}}
+	first := gateway.Config{Dir: t.TempDir(), Tools: svc}
+	gateway.SetCloseWait(&first, 300*time.Millisecond)
+	before := startRemote(t, c, first)
+	reopened := event.NewRunID()
+	e := before.open(t, runKeyFor(t, reopened, nil), server.LinkRunRequest{Wall: true})
+	eventually(t, "the first batch at the server", func() bool { return len(c.lines(t)) == 2 })
+	fail.Store(true)
+	if got := e.post(t, heartbeat(reopened)); got.status != http.StatusAccepted {
+		t.Fatalf("the batch before the stop: %d %s", got.status, got.body)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if d, err := before.g.Close(ctx); d.RunClosed {
+		t.Fatalf("the first gateway's Close: %+v, %v", d, err)
+	}
+
+	// From here on every tool ignores SIGTERM.
+	t.Setenv(envToolDir, tools)
+	cfg := gateway.Config{Dir: first.Dir, Tools: svc}
+	r := startRemote(t, c, cfg)
+	e.r = r
+	live := event.NewRunID()
+	l := r.open(t, runKeyFor(t, live, nil), server.LinkRunRequest{Wall: true})
+	if got := l.post(t, heartbeat(live)); got.status != http.StatusAccepted {
+		t.Fatalf("the live run's batch: %d %s", got.status, got.body)
+	}
+	if err := os.WriteFile(filepath.Join(tools, "hold"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opened := event.NewRunID()
+	opening, reopening := make(chan answer, 1), make(chan answer, 1)
+	go func() { opening <- r.tryOpen(t, runKeyFor(t, opened, nil), server.LinkRunRequest{Wall: true}) }()
+	go func() { reopening <- e.post(t, heartbeat(reopened)) }()
+	eventually(t, "the two tools that do not listen", func() bool {
+		entries, _ := os.ReadDir(tools)
+		return len(entries) > 2
+	})
+
+	begin := time.Now()
+	d, err := r.g.Close(ctx)
+	took := time.Since(begin)
+	t.Logf("Close took %s: %+v, %v", took, d, err)
+	if took > 40*time.Second {
+		t.Errorf("Close took %s; want it within 40s", took)
+	}
+	if d.RunClosed {
+		t.Errorf("Close closed a run: %+v", d)
+	}
+	for name, got := range map[string]<-chan answer{"run request": opening, "batch that reopens": reopening} {
+		if a := <-got; a.status != http.StatusServiceUnavailable || len(a.body) != 0 {
+			t.Errorf("the %s: %d %s; want a 503 without a body", name, a.status, a.body)
+		}
+	}
+	for _, runID := range []string{live, reopened} {
+		if left := secretsLeft(cfg.Dir, runID); len(left) != len(secretNames) {
+			t.Errorf("run %s keeps only %v", runID, left)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Dir, "runs", opened)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the record of the open Close stopped: %v", err)
 	}
 }
 

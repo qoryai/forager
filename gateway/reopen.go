@@ -41,7 +41,7 @@ func (g *Gateway) reopenable(runID string) bool {
 // run once it is open; else final is true when the reopen failed for good or the run
 // is spent, both read with g.mu held, and false when the reopen is still going, failed
 // in a way that may pass, the sweep removes the record's files now, or the gateway is
-// closing.
+// closing: the start of Close ends the wait at once, whatever ctx allows.
 func (g *Gateway) reopenRun(ctx context.Context, runID string, p presented) (lr *linkRun, final bool) {
 	g.mu.Lock()
 	if lr := g.runs[runID]; lr != nil {
@@ -75,17 +75,25 @@ func (g *Gateway) reopenRun(ctx context.Context, runID string, p presented) (lr 
 		return c.lr, c.final
 	case <-ctx.Done():
 		return nil, false
+	case <-g.openCtx.Done():
+		return nil, false
 	}
 }
 
 // reopen runs the reopen c of runID and ends it: the run goes into the gateway's runs
-// and is armed; a reopen that failed for good leaves the run spent, so its later
-// requests are a 410 run_closed with no reopen, for [keepEnded]. Either way c leaves
-// the reopens in flight, then its waiters are woken.
+// and is armed, or, once Close started, suspended at once; a reopen that failed for
+// good leaves the run spent, so its later requests are a 410 run_closed with no reopen,
+// for [keepEnded]. Either way c leaves the reopens in flight, then its waiters are
+// woken.
 func (g *Gateway) reopen(c *reopenCall, runID string, p presented) {
 	var lr *linkRun
 	final := false
 	defer func() {
+		if lr != nil {
+			lr.mu.Lock()
+			lr.answering = true
+			lr.mu.Unlock()
+		}
 		g.mu.Lock()
 		delete(g.reopening, runID)
 		if lr != nil {
@@ -97,7 +105,7 @@ func (g *Gateway) reopen(c *reopenCall, runID string, p presented) {
 		}
 		g.mu.Unlock()
 		if lr != nil {
-			lr.arm()
+			g.settle(lr)
 		}
 		c.lr, c.final = lr, final
 		close(c.done)

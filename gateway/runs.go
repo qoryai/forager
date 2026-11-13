@@ -113,6 +113,11 @@ type linkRun struct {
 	// suspended is true once the gateway's Close suspended the run ([linkRun.suspend]):
 	// it does not end here, and a gateway that starts again reopens it.
 	suspended bool
+	// answering is true from the moment the run's open or reopen puts it into the
+	// gateway's runs until it is armed: while the run request's handler marks the record
+	// answered and writes the run answer, and while a reopen ends. Close leaves the run
+	// to [Gateway.settle], which suspends it after it is armed.
+	answering bool
 
 	// done is closed once the run's gateway side is over and its stream flushed; result
 	// and err are then set.
@@ -1120,10 +1125,11 @@ func (lr *linkRun) end(e ending) {
 // ending the run, once: the run is not ended or suspended here, its timer stops, and in
 // the background it lets go of what it holds, as [linkRun.end] does, then its stream
 // is suspended under lr.batch, so no batch is numbered meanwhile ([stream.Run.Suspend]):
-// no session.exited, no run.exited, and its record's files kept. It never blocks.
+// no session.exited, no run.exited, and its record's files kept. A run not yet armed is
+// left to [Gateway.settle] ([linkRun.answering]). It never blocks.
 func (lr *linkRun) suspend() {
 	lr.mu.Lock()
-	if lr.ended || !lr.opened || lr.suspended {
+	if lr.ended || !lr.opened || lr.suspended || lr.answering {
 		lr.mu.Unlock()
 		return
 	}

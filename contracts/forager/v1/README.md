@@ -3876,18 +3876,24 @@ refusal or no answer, leaves nothing of the run at the gateway: the run request 
 comes again, with the same run key, asks for the attach again.
 
 **A restart.** A separate gateway's `Close` keeps its runs for the gateway that starts
-again on the same directory. From the start of `Close`, a run request and every request
-that would reopen a run get a `503` with no body. A run that is opening stops at any
-step before its run answer, and its run request gets a `503` (Tries as a run opens); a
-reopen stops the same way, a failure that may pass, and the run keeps its record. Then
-the one address closes, and every live run is suspended at once, in parallel: the
-gateway lets go of the run's proxy, tools and credentials, flushes the run's events
-toward the server as at a run's end, writes no `dev.qory.session.exited` and no
-`dev.qory.run.exited`, and keeps the run's record with the files of a reopen (The record
-files). With tools that stop at `SIGTERM` and a server that takes the last events, a
-`Close` with runs live and opening takes a few seconds; the bounds in code are 5
-seconds from a tool's `SIGTERM` to its `SIGKILL`, and 5 more for it to exit, 1 second
-for the one address and for each proxy, and 15 seconds for each run's flush.
+again on the same directory. From the start of `Close`, every request of a run, every
+request that waits for a reopen and every connection to a run's proxy or stack proxy
+gets a `503` with no body or is closed. A run that is opening stops at any step before
+its run answer, and its run request gets a `503` (Tries as a run opens); a reopen stops
+the same way, a failure that may pass, and the run keeps its record. At the same time
+every live run is suspended, all in parallel: the gateway lets go of the run's proxy,
+tools and credentials, flushes the run's events toward the server as at a run's end,
+writes no `dev.qory.session.exited` and no `dev.qory.run.exited`, and keeps the run's
+record with the files of a reopen (The record files). A run whose open or reopen was
+past those steps is suspended as soon as it opens. Once the opens and the reopens
+ended, the one address closes. With tools that stop at `SIGTERM` and a server that takes
+the last events, a `Close` with runs live and opening takes a few seconds. The bounds in
+code are 5 seconds from a tool's `SIGTERM` to its `SIGKILL` and 5 more for it to exit, 1
+second for the one address and for each proxy, and 15 seconds for each run's flush, so
+a `Close` takes 27 seconds at most for a live run's two proxies, tools and flush, while
+a stopped reopen's tools and flush, and then the one address, take 26 seconds beside it.
+A credential adapter whose child holds its output open, and a server that never
+answers a flush's last try, are not within these bounds.
 
 The gateway that starts again reopens a suspended run at the first request of it whose
 run key verifies: a batch, a reload, a join, a transcript request, or a connection to
