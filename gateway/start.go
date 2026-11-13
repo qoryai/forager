@@ -139,9 +139,12 @@ type Gateway struct {
 	used  map[string]bool
 	runs  map[string]*linkRun
 	opens sync.WaitGroup
-	// reopening are the reopens of suspended runs in flight, by run id. A reopen is
-	// added here before it reads the run's CA files, and the CA key sweep removes no
-	// file of a run here or in runs ([Gateway.sweep]).
+	// opening are the run ids of the run requests whose open is in flight, from before
+	// the open makes the run's record until its run request is answered. reopening are
+	// the reopens of suspended runs in flight, by run id. A reopen is added here before
+	// it reads the run's CA files. The CA key sweep removes no file of a run in opening,
+	// reopening or runs ([Gateway.sweep]).
+	opening   map[string]bool
 	reopening map[string]*reopenCall
 	// sweeping are the runs whose records the CA key sweep removes files from now, by
 	// run id: no reopen of them starts meanwhile ([Gateway.sweep]).
@@ -254,7 +257,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if report == nil {
 		report = func(line string) { fmt.Fprintln(os.Stderr, "qory run:", line) }
 	}
-	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, reopening: map[string]*reopenCall{}, sweeping: map[string]bool{}, closed: make(chan struct{}),
+	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, opening: map[string]bool{}, reopening: map[string]*reopenCall{}, sweeping: map[string]bool{}, closed: make(chan struct{}),
 		spent: map[string]spentRun{}}
 	g.quiet = 3 * cfg.Heartbeat
 	if cfg.quiet != 0 {

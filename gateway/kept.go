@@ -400,15 +400,16 @@ func (g *Gateway) stopSweep() {
 
 // sweep removes the files kept to reopen a run ([stream.RemoveKept]) from each
 // record under [Gateway.sweptDir] that meets all of these: it is the record directory
-// of its name's run, the gateway does not hold its run, and its events.jsonl has not
-// changed for more than age as of now. A record without events.jsonl counts the time
-// of those files in place of it.
+// of its name's run, the gateway neither holds nor opens its run, and its events.jsonl
+// has not changed for more than age as of now. A record without events.jsonl counts
+// the time of those files in place of it.
 //
-// The sweep and a reopen do not race: with g.mu held, the sweep checks that the run is
-// neither in g.runs nor in g.reopening and adds it to g.sweeping, and a reopen checks
-// that the run is not in g.sweeping and adds itself to g.reopening. The sweep removes
-// the files with g.mu free, then takes the run from g.sweeping. A request that comes
-// meanwhile gets a 503, and the next one a 410, as for any record past its age.
+// The sweep, an open and a reopen do not race: with g.mu held, the sweep checks that
+// the run is in none of g.runs, g.opening and g.reopening and adds it to g.sweeping,
+// and a run request or a reopen checks that the run is not in g.sweeping and adds
+// itself to g.opening or g.reopening. The sweep removes the files with g.mu free, then
+// takes the run from g.sweeping. A request that comes meanwhile gets a 503; the next
+// reopen gets a 410, as for any record past its age.
 func (g *Gateway) sweep(now time.Time, age time.Duration) {
 	root := g.sweptDir()
 	entries, err := os.ReadDir(root)
@@ -441,7 +442,7 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 			continue
 		}
 		g.mu.Lock()
-		held := g.runs[id] != nil || g.reopening[id] != nil
+		held := g.runs[id] != nil || g.opening[id] || g.reopening[id] != nil
 		if !held {
 			g.sweeping[id] = true
 		}

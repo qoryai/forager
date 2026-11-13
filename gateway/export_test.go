@@ -300,6 +300,19 @@ func SweepCA(g *Gateway, now time.Time) {
 	g.sweep(now, age)
 }
 
+// Sweeping marks the run id as one whose record the CA key sweep removes files from
+// now, as [Gateway.sweep] does, and returns what ends the mark.
+func Sweeping(g *Gateway, runID string) func() {
+	g.mu.Lock()
+	g.sweeping[runID] = true
+	g.mu.Unlock()
+	return func() {
+		g.mu.Lock()
+		delete(g.sweeping, runID)
+		g.mu.Unlock()
+	}
+}
+
 // SetSweepTicker makes the CA key sweep's ticker with tick in place of time.NewTicker:
 // tick gets the sweep's interval and returns the ticker's channel.
 func SetSweepTicker(c *Config, tick func(every time.Duration) <-chan time.Time) {

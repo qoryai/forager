@@ -1418,6 +1418,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- The CA key sweep removed the files kept to reopen a run whose open was in flight,
+  `ca.key` among them, when its record had not changed for 15 minutes. The sweep now
+  skips a run from the arrival of its run request until its run answer, as it skips a
+  run the gateway holds or reopens. A run request that comes while the sweep removes
+  the files of a record of its run id gets a `503` with no body, as the run's other
+  requests do.
 - The gateway refused a batch with a session's `dev.qory.run.exited` whose reason is
   `workflow_not_in_harness` or `image_user_root`, so a run that qory closed with one of
   them ended `batch_refused`. The gateway now accepts both as it accepts

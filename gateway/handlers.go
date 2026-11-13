@@ -139,8 +139,21 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway, gatewayText(refusal.RunIDUsed))
 		return
 	}
+	if g.sweeping[req.RunID] {
+		// The CA key sweep removes the files of a record of the run id now: the run
+		// request that comes again opens it, or is refused as for any record there.
+		g.mu.Unlock()
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
 	g.used[req.RunID] = true
+	g.opening[req.RunID] = true
 	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		delete(g.opening, req.RunID)
+		g.mu.Unlock()
+	}()
 	if s.remote {
 		// The run key passed and the run id is this request's alone: the connection no
 		// longer counts against the bounds of its source and its /48 while the run waits

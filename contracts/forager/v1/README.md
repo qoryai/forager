@@ -2460,14 +2460,16 @@ the record until the record is removed. A record without `request.json` is not r
 and its requests get a `410` `run_closed`.
 
 **The sweep.** A separate gateway removes the files of a reopen of each record whose run
-it neither holds nor reopens and whose `events.jsonl` has not changed for 15 minutes, at
-its start and every 10 minutes. It reads the records under its directory, or, with
+it neither holds, opens nor reopens and whose `events.jsonl` has not changed for 15
+minutes, at its start and every 10 minutes. A run opens from the arrival of its run
+request until its run answer. It reads the records under its directory, or, with
 `RunDir`, those in the directory `RunDir` makes each record in as
 `<directory>/<run id>`. A live run's session sends a heartbeat at least every 300
 seconds, so a live run's record changes within those 15 minutes. The sweep and a reopen
-of the same run never run at once: the sweep skips a run that is reopening, a request
-that comes while the sweep removes a record's files gets a `503` with no body, and a
-request after the sweep gets a `410` `run_closed`.
+of the same run never run at once, and neither do the sweep and an open: the sweep skips
+a run that is opening or reopening, a request, a run request among them, that comes
+while the sweep removes a record's files gets a `503` with no body, and a request after
+the sweep gets a `410` `run_closed`.
 
 **A hidden harness.** In a run whose harness is hidden, `[harness text: <path>]`
 replaces the text of each file in a session's harness home, after the forwarders'

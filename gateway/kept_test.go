@@ -435,6 +435,54 @@ func TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn(t *testing.T) {
 	}
 }
 
+// TestTheSweepKeepsTheCAOfARunThatOpens pins the CA key sweep on a run whose open is in
+// flight: a pass after the open wrote the run's CA files and request.json, before the
+// run request is answered, removes none of them, however old the record is. A run
+// request that comes while the sweep removes the files of a record of its run id gets
+// a 503 with no body, and opens once the sweep is done.
+func TestTheSweepKeepsTheCAOfARunThatOpens(t *testing.T) {
+	c := gatewayControl(t)
+	cfg := caConfig(t, c)
+	cfg.Dir = t.TempDir()
+	opening := event.NewRunID()
+	var mu sync.Mutex
+	var g *gateway.Gateway
+	var left []string
+	gateway.SetOpened(&cfg, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if g == nil || left != nil {
+			return
+		}
+		gateway.SweepCA(g, time.Now().Add(time.Hour))
+		left = []string{}
+		for _, name := range []string{"ca.pem", "ca.key", "request.json"} {
+			if exists(filepath.Join(cfg.Dir, "runs", opening, name)) {
+				left = append(left, name)
+			}
+		}
+	})
+	r := startRemote(t, c, cfg)
+	mu.Lock()
+	g = r.g
+	mu.Unlock()
+	r.open(t, runKeyFor(t, opening, nil), server.LinkRunRequest{Wall: true})
+	mu.Lock()
+	kept := left
+	mu.Unlock()
+	if len(kept) != 3 {
+		t.Errorf("a sweep as the run opened left %v; want ca.pem, ca.key and request.json", kept)
+	}
+
+	runID := event.NewRunID()
+	done := gateway.Sweeping(r.g, runID)
+	if a := r.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true}); a.status != http.StatusServiceUnavailable || len(a.body) != 0 {
+		t.Errorf("a run request during the sweep of its record: %d %s; want a 503 with no body", a.status, a.body)
+	}
+	done()
+	r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
+}
+
 // TestTheSweepRunsEvery10MinutesOnRecordsOlderThan15 pins the CA key sweep's values,
 // the user's "545 (a)": the sweep's ticker has an interval of 10 minutes, and a pass
 // removes the kept files of a record whose events.jsonl has not changed for more than
