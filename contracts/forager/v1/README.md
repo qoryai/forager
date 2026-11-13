@@ -5258,7 +5258,10 @@ hook input is "<path>"`, and the session goes on reading the restored file. A
 `resume.session_id` that is not a UUID in lower case, or a `resume.path` other than `resume.prefix`, a slug, `/`, `resume.session_id`
 and `.jsonl`, is a failed resume, and so is a walled session whose transcript directory
 the wall does not bind, or whose absolute `resume.prefix` lies inside a read-only mount
-(§The events, A session's transcript). When the read or the write
+(§The events, A session's transcript). With a wall or without one, a
+`resume.session_id` that starts with `-`, which the runtime would read as an option, is
+a failed resume, with the cause `its session id <id> starts with -, so the runtime
+would read it as an option`. When the read or the write
 fails, the session starts the runtime without a resume and writes one `dev.qory.run.log`
 line of the session, with `stream: stderr`, that starts with the fix: `<fix>. The
 runtime starts without a resume: the transcript of run <run id> could not be restored:

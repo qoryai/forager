@@ -256,6 +256,39 @@ func TestAWalledResumeOfAnotherShapeFails(t *testing.T) {
 	}
 }
 
+// TestAResumeWhoseSessionIdStartsWithADashFails pins a run answer whose resume has a
+// session id that starts with -, with a wall and without one: the runtime starts without
+// the resume arguments, with the line of a failed resume, and the session reads no
+// transcript over the link.
+func TestAResumeWhoseSessionIdStartsWithADashFails(t *testing.T) {
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			t.Setenv("QORY_TEST_HOST_ONLY", "1")
+			sp, g, home := resumerSpec(t, "ok\n")
+			g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+				a := linktest.RunAnswer(req)
+				a["resume"] = map[string]any{"run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "session_id": "--help", "path": "~/.resumer/" + cwdSlugOf(sp.Dir) + "/--help.jsonl"}
+				return linktest.Reply{Status: 200, Body: a}
+			})
+			if walled {
+				sp.Wall, sp.Image, sp.Mounts = &transcriptWall{home: home}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
+			}
+			res, err := run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := runLogText(t, events(t, res))
+			want := "Check resume.session_id in the run configuration. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: its session id --help starts with -, so the runtime would read it as an option\n"
+			if !strings.Contains(out, want) || !strings.Contains(out, "args: \n") {
+				t.Errorf("the runtime's output %q; want %q", out, want)
+			}
+			if got := g.Transcripts(); len(got) != 0 {
+				t.Errorf("transcript requests %v; want none", got)
+			}
+		})
+	}
+}
+
 // TestAJoinReturnsWithNoTranscriptReaderLeft pins that Join stops the transcript's
 // reader before it returns: no goroutine reads the runtime's transcript once Join
 // returns, before the run's Close, for a runtime that exits and for one whose start

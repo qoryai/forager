@@ -92,6 +92,11 @@ func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir st
 	if !ok || !strings.HasPrefix(want.Path, rs.Prefix) || len(want.Path) == len(rs.Prefix) || dotted(rel) {
 		return failed(checkPath, fmt.Sprintf("its path %s lies outside %s", want.Path, rs.Prefix))
 	}
+	// The session id goes into the runtime's arguments: one that starts with - would be
+	// read as an option. Behind a wall it must also be a UUID, below.
+	if strings.HasPrefix(want.SessionID, "-") {
+		return failed("Check resume.session_id in the run configuration", fmt.Sprintf("its session id %s starts with -, so the runtime would read it as an option", accesskey.ShownName(want.SessionID, false)))
+	}
 	args := make([]string, len(rs.Args))
 	for i, a := range rs.Args {
 		args[i] = strings.ReplaceAll(a, "{session_id}", want.SessionID)
