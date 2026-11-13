@@ -223,7 +223,7 @@ func TestAStopForAKeyOutAfterA401EndsTheSession(t *testing.T) {
 	}{
 		{"model_key_switch", "paused", "the runtime was stopped and the run pauses: the model provider returned 401 for the session's model key, and the run continues with another key of the run", 0},
 		{"model_key_switch", "paused", "", 3},
-		{"model_key_unauthorized", "failed", "the runtime was stopped and the run fails: the model provider returned 401 for every model key of the run, and no renewal of a key ended it", 0},
+		{"model_key_unauthorized", "failed", "Renew or replace the run's model keys: the model provider returned 401 for every model key of the run, and no renewal of a key ended it. The runtime was stopped and the run fails", 0},
 		{"model_key_unauthorized", "failed", "", 3},
 	} {
 		t.Run(fmt.Sprintf("%s %d", c.reason, c.exit), func(t *testing.T) {
@@ -316,8 +316,8 @@ func TestTheCloseTakesAKeyReasonOnlyAfterSuchASession(t *testing.T) {
 // dev.qory.session.exited: a runtime that writes nothing and exits 0 after the
 // gateway's proxy passed a refusal, here the file flag the runtime makes, still ends
 // paused with model_key_switch. The session posts a heartbeat after the exit, whose
-// answer has the stop, before the batch with dev.qory.session.exited, which no stop
-// answers: the gateway takes the stop back once it accepts that event.
+// answer has the stop, before the batch with dev.qory.session.exited, whose answer has
+// no stop: the gateway takes the stop back once it accepts that event.
 func TestTheStopIsReadBeforeTheExitOfASilentRuntime(t *testing.T) {
 	flag := filepath.Join(t.TempDir(), "refused")
 	sp, g, _ := remoteSpec(t, 0)
@@ -350,6 +350,6 @@ func TestTheStopIsReadBeforeTheExitOfASilentRuntime(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(order) < 2 || order[0] != "stop" || order[len(order)-1] != "exited" {
-		t.Errorf("batches after the runtime's flag %q; want a stop answered, then the batch with session.exited", order)
+		t.Errorf("batches after the runtime's flag %q; want an answer with the stop, then the batch with session.exited", order)
 	}
 }

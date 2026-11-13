@@ -361,10 +361,11 @@ func (w *Server) settle(n int) {
 	w.changed = make(chan struct{})
 }
 
-// Queued is the count of events put on the queue since the sink was made, and Posting
-// the count of them in batches whose first post began. The worker posts the events in
-// the order they were queued, so when Queued is above a Posting read earlier, an event
-// goes out in a batch posted after that read.
+// Queued is the count of events [Server.Write] put on the queue since the sink was
+// made, lines of [Server.Resend] left out, and Posting the count of queued events in
+// batches whose first post began. The worker posts the events in the order they were
+// queued, so when Queued is above a Posting read earlier, an event goes out in a batch
+// posted after that read.
 func (w *Server) Queued() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
