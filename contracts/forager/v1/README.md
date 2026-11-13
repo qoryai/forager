@@ -2432,19 +2432,13 @@ gateway that starts again on the same directory can reopen the run (§The gatewa
 A restart). The local link writes none of them.
 
 - `request.json`: the members of the run request that set the run's wall, narrowing
-  and images, written as the run opens: `version`, `wall`, and the session's `narrowing` and `images` when the
-  request has them. An image reference may contain a registry's credentials, as the
-  run request does.
+  and images, written as the run opens: `version`, `wall`, and the session's
+  `narrowing` and `images` when the request has them. An image reference may contain a
+  registry's credentials, as the run request does.
 - `ca.pem` and `ca.key`: the certificate and the private key of the run's certificate
   authority, for a run with one, written as the run opens. A reopen reads them only
   when the certificate's common name is `qory run <run id>` and the gateway's user owns
   `ca.key`.
-
-The gateway removes `request.json`, `ca.pem` and `ca.key` together: at the run's end,
-when the run's open fails, when a reopen fails for good, and by the sweep below. `qory
-run resend` removes them too once it writes the run's `dev.qory.run.exited`. A record
-without `request.json` is not reopened, and its requests get a `410` `run_closed`.
-
 - `given.jsonl`: the members of each `dev.qory.run.policy_applied` the gateway decided,
   one JSON object per line, as the event's data has them: shown names and values, never
   a credential's value.
@@ -2458,6 +2452,10 @@ without `request.json` is not reopened, and its requests get a `410` `run_closed
   `dev.qory.run.started` when the gateway stopped, one per line. The reopen reads it
   back and removes it.
 
+The gateway removes `request.json`, `ca.pem` and `ca.key` together: at the run's end,
+when the run's open fails, when a reopen fails for good, and by the sweep below. `qory
+run resend` removes them too once it writes the run's `dev.qory.run.exited`. A record
+without `request.json` is not reopened, and its requests get a `410` `run_closed`.
 The other files stay with the record until the record is removed.
 **The sweep.** A separate gateway removes `request.json`, `ca.pem` and `ca.key` of each
 record whose run it neither holds nor reopens and whose `events.jsonl` has not changed
@@ -3889,9 +3887,9 @@ run key verifies: a batch, a reload, a join, a transcript request, or a connecti
 the run's proxy or stack proxy. One reopen of a run runs at a time, and every request
 of the run waits for it. The reopen reads the record back, attaches the run again under
 the run key of that request, with the tries of an open (Tries as a run opens, below),
-sends again what the server has not accepted, sets the run up again from `request.json`
-and the run configuration in the attach's answer, with the run's certificate authority from
-`ca.pem` and `ca.key`, and goes on numbering the record after its last `sequence`. The
+sets the run up again from `request.json` and the run configuration in the attach's
+answer, with the run's certificate authority from `ca.pem` and `ca.key`, and goes on
+numbering the record after its last `sequence`. The
 reopen reads the certificate authority before the attach, so a record whose CA files
 do not read back ends the run with no attach. It sends again what the server has not
 accepted within the attach's window of 120 seconds. A connection that waits on a
@@ -3909,8 +3907,8 @@ for a newer connection. The reopen's answers to the requests that wait:
   `wrong_gateway` or `workspace_not_served`, and a run configuration that fails
   Forager's checks; a record the gateway cannot read, one with the run's final event,
   and one the server stopped are final too. Any other signed `4xx` of the attach, a
-  `401` among them, is tried again within the 120 seconds, and is final when the
-  window ends on it. Only tries that `Close` stopped count as a stop by `Close`: a final
+  `401`, signed or not, among them, is tried again within the 120 seconds, and is
+  final when the window ends on it. Only tries that `Close` stopped count as a stop by `Close`: a final
   refusal that came first keeps its `410`.
 
 A connection to the run's proxy that waited on a reopen that did not open the run is

@@ -1254,27 +1254,28 @@ release may change what an existing document does, and says so under Upgrading.
   tries opens, and then ends with `run_closed` on the local link or is kept behind a
   separate gateway, as in the next entry.
 - A separate gateway that restarts on the same directory keeps its runs, so the agent
-  sessions behind it go on. `Close` suspends each live run: it flushes the run's
-  events, writes no `dev.qory.run.exited`, and keeps the run's record. The gateway
-  that starts again reopens the run at its first request whose run key verifies, a
-  batch, a reload, a join, a transcript request or a proxy connection: it attaches the
-  run again with the tries of an open and goes on numbering the record. While the
-  reopen is tried, or after it fails in a way that may pass, a request gets a `503`
-  with no body; after a final failure, a `410` `run_closed`. The attach of a reopen is
-  final at once on a signed `410`, `run_attached`, `wrong_gateway`,
-  `workspace_not_served` or a run configuration that fails Forager's checks; any other
-  signed `4xx` is tried again for up to 120 seconds, and is final when that window ends
-  on it; a `5xx` or no answer is a `503`. While a connection waits on a reopen, it
-  counts against the bound of 4096 connections and not against its source's bounds. To
-  reopen a run the gateway keeps `request.json`, `ca.pem`, `ca.key`, `given.jsonl`,
-  `joins.jsonl`, `model-key-limit` and `held.jsonl` in its record, each mode `0600`.
-  `request.json` may contain a registry's credentials in an image reference.
-  `request.json` and the CA files go together: at the run's end, when its open or a
-  reopen fails for good, when `qory run resend` ends the run, and in a sweep every 10
-  minutes of each record unchanged for 15 minutes. A join request that repeats the last
-  join the gateway numbered, answered `200` or `403` `placeholder_conflict`, gets the
-  same answer, across a restart too. Before, a run open at a gateway that stopped was
-  over, and `qory run resend` ended it with `gateway_lost`.
+  sessions behind it go on. `Close` suspends each live run: it flushes the run's events,
+  writes no `dev.qory.run.exited`, and keeps the run's record. The gateway that starts
+  again reopens the run at its first request whose run key verifies, a batch, a reload,
+  a join, a transcript request or a proxy connection: it attaches the run again with the
+  tries of an open and goes on numbering the record. While the reopen is tried, or after
+  it fails in a way that may pass, a request gets a `503` with no body; after a final
+  failure, a `410` `run_closed`. The attach of a reopen is final at once on a signed
+  `410`, `run_attached`, `wrong_gateway`, `workspace_not_served` or a run configuration
+  that fails Forager's checks; any other signed `4xx`, and a `401` signed or not, is
+  tried again for up to 120 seconds, and is final when that window ends on it; a `5xx`,
+  no answer, a `429` `rate_limited`, and an unsigned answer other than a `401` give a
+  `503`. While a connection waits on a reopen, it counts against the bound of 4096
+  connections and not against its source's bounds. To reopen a run the gateway keeps
+  `request.json`, `ca.pem`, `ca.key`, `given.jsonl`, `joins.jsonl`, `model-key-limit`
+  and `held.jsonl` in its record, each mode `0600`. `request.json` may contain a
+  registry's credentials in an image reference. `request.json` and the CA files go
+  together: at the run's end, when its open or a reopen fails for good, when
+  `qory run resend` ends the run, and in a sweep every 10 minutes of each record
+  unchanged for 15 minutes. A join request that repeats the last join the gateway
+  numbered, answered `200` or `403` `placeholder_conflict`, gets the same answer, across
+  a restart too. Before, a run open at a gateway that stopped was over, and
+  `qory run resend` ended it with `gateway_lost`.
 - A run request behind a separate gateway counts against the bounds of 64 connections
   of one source and 256 of one IPv6 /48 only until its open starts, once its run key
   passes and its body is read. It counts against the bound of 4096 connections until
@@ -1282,8 +1283,8 @@ release may change what an existing document does, and says so under Upgrading.
   three until its run answer, which may take 140 seconds while Qory Apiary restarts: 64
   runs that opened behind one address, such as a NAT's, then made the gateway close
   each connection accepted after that from that address, the batch and proxy
-  connections of its live runs among them. A run request whose run key fails counts against all three, as
-  before.
+  connections of its live runs among them. A run request whose run key fails counts
+  against all three, as before.
 - An adapter's output that fails `credential.schema.json` is refused with `Fix the
   output of the adapter <PATH> to match credential.schema.json: <LOCATIONS>`, where
   `<LOCATIONS>` lists each failing location and keyword, such as `/apply/0/header fails
