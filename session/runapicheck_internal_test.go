@@ -190,8 +190,8 @@ func TestARefusedPostGetsTheChecksReply(t *testing.T) {
 }
 
 // TestACheckThatFailsGetsA503 pins the 503 of a check that returns an error, panics,
-// returns a refusal with no code, a 407 or a status outside 400 to 499, holds a POST to
-// /artifacts, outlasts its 90 seconds, here shortened, whether it watches its context or
+// returns a refusal with no code, a 407 or a status outside 400 to 499, returns a hold
+// for a POST to /artifacts, outlasts its 90 seconds, here shortened, whether it watches its context or
 // not, or runs as the run closes; a panic is a Report line, and nothing reaches the
 // proxy.
 func TestACheckThatFailsGetsA503(t *testing.T) {
@@ -276,6 +276,32 @@ func TestACheckThatFailsGetsA503(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if opened, received := u.seen(); opened != 0 {
 		t.Errorf("the proxy got %d connections, %q", opened, received)
+	}
+}
+
+// TestAHoldAfterTheContextEndedIsNoHold pins a hold that the check returns once its
+// context ended: the call returns the context's error and never the hold, whichever of
+// the two the call reads first. The check ends the parent context, then returns the
+// hold, 2000 times.
+func TestAHoldAfterTheContextEndedIsNoHold(t *testing.T) {
+	held := 0
+	for range 2000 {
+		ctx, cancel := context.WithCancel(context.Background())
+		k := &runAPICheck{runID: checkRunID, check: func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
+			cancel()
+			return nil, ErrRunAPIHold
+		}}
+		_, err := k.call(ctx, RunAPIRequest{Path: "/verdict"})
+		cancel()
+		if errors.Is(err, ErrRunAPIHold) {
+			held++
+		}
+		if err == nil {
+			t.Fatal("a call returned no error")
+		}
+	}
+	if held != 0 {
+		t.Errorf("%d of 2000 calls returned the hold", held)
 	}
 }
 

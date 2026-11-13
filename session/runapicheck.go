@@ -63,9 +63,9 @@ var ErrRunAPIHold = errors.New("hold the run API POST")
 // check. When it returns nil, nil, the forwarder sends the POST on, the bytes check got
 // with Connection: close added to the head, and the gateway's route checks it as any
 // other. A [RunAPIRefusal] goes to the program instead, with its Status, and nothing
-// reaches the gateway. With [ErrRunAPIHold], or an error that wraps it, the check holds
-// a POST to /verdict: the program gets a 202 with the body of Qory Apiary's 201 for a
-// stored verdict, with null for the artifact's version, and nothing reaches the
+// reaches the gateway. When check returns [ErrRunAPIHold], or an error that wraps it,
+// a POST to /verdict is held: the program gets a 202 with the body of Qory Apiary's 201
+// for a stored verdict, with null for the artifact's version, and nothing reaches the
 // gateway. Any other error, a hold of another path, a panic, which is a Report line, a
 // refusal with no Code, a Status of 407 or outside 400 to 499, or a call that outlasts
 // its context gets a 503, {"error":"push_check_unavailable",...}, and nothing reaches
@@ -74,9 +74,9 @@ var ErrRunAPIHold = errors.New("hold the run API POST")
 // Return when ctx ends: the forwarder reads and checks one POST of the run at a time
 // and takes the next one once the context ends, so a check that ignores ctx may still
 // run beside the next POST's check. A POST that waits 90 seconds for its turn gets the
-// 503 too. The forwarder takes the POSTs of a run in the order they reach it, so check
-// gets the verdicts of a program that sends each after the reply to the one before in
-// the order the program sent them.
+// 503 too. The forwarder checks one POST of a run at a time, so the check gets the
+// verdicts of a program that sends each after the reply to the one before in the order
+// sent.
 //
 // With the check set, the forwarder passes one request per connection through the
 // wall, with no plain-HTTP keep-alive or pipelining: a CONNECT and its tunnel, or one

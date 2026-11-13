@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 )
@@ -207,14 +209,22 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 }
 
 // TestARunConfigurationsResumeRunsAreChecked pins resume.runs: a document with a resume
-// is read with runs, whose last item is run_id, and without them; one whose runs end in
-// another run, list a run twice, list 257 runs or list a run id in upper case is
-// run_configuration_invalid at runs.
+// is read with runs, whose last item is run_id, and without them, as is the fixture
+// resume-runs.json; one whose runs end in another run, as the fixture
+// run-configuration-beyond-schema-resume-runs-last.json does, list a run twice, list
+// 257 runs or list a run id in upper case is run_configuration_invalid at runs.
 func TestARunConfigurationsResumeRunsAreChecked(t *testing.T) {
 	const (
 		paused  = "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d"
 		earlier = "0192f0a7-1c2d-7e3f-8a4b-5c6d7e8f9a0b"
 	)
+	fixture := func(name string) string {
+		b, err := fs.ReadFile(contracts.FS, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
 	doc := func(runs ...string) string {
 		d := `{"version":1,"resume":{"run_id":"` + paused + `","session_id":"s-1","path":"~/.claude/projects/-workspace/s-1.jsonl"`
 		if runs != nil {
@@ -228,6 +238,8 @@ func TestARunConfigurationsResumeRunsAreChecked(t *testing.T) {
 	}{
 		"with runs":    {doc(earlier, paused), []string{earlier, paused}},
 		"without runs": {doc(), nil},
+		"the fixture": {fixture("fixtures/run-configuration/resume-runs.json"),
+			[]string{earlier, "0192f0b3-4d5e-7f6a-8b7c-9d0e1f2a3b4c", paused}},
 	} {
 		v := newVerified(t)
 		v.runDoc = c.doc
@@ -245,6 +257,7 @@ func TestARunConfigurationsResumeRunsAreChecked(t *testing.T) {
 		"a run twice":      {doc(earlier, earlier, paused), "/resume/runs (uniqueItems)"},
 		"257 runs":         {doc(append(many, paused)...), "/resume/runs (maxItems)"},
 		"a run upper case": {doc(strings.ToUpper(earlier), paused), "/resume/runs/0 (pattern)"},
+		"the fixture":      {fixture("fixtures/invalid/run-configuration-beyond-schema-resume-runs-last.json"), "set the last item of /resume/runs to /resume/run_id"},
 	} {
 		v := newVerified(t)
 		v.runDoc = c.doc

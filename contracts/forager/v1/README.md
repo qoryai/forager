@@ -5045,8 +5045,8 @@ wall before anything of it reaches the gateway: qory checks a push of artifacts 
 the run's push checks. The check is set after the run opens, before its setup and its
 first session; a run without one passes every connection through the wall as it
 arrives, byte for byte. The run's forwarder reads the POST whole, then the check lets it
-go on, holds a verdict, or returns a refusal, which the program that sent the POST gets
-at once:
+go on, returns a hold for a verdict, or returns a refusal, which the program that sent
+the POST gets at once:
 
 | Status | `error` | When |
 |---|---|---|
@@ -5068,8 +5068,8 @@ them. A POST with `Expect: 100-continue` gets two `100 Continue` replies, the
 forwarder's before the body and the route's once the body goes on. The check gets no POST
 outside the run's path, no GET and no other method.
 
-A held verdict is a `POST /verdict` that the check keeps, so that a check after the
-agent's last session sets the run's end. The program gets `202 Accepted`, with
+A held verdict is a `POST /verdict` for which the check returns a hold, so that a check
+after the agent's last session sets the run's end. The program gets `202 Accepted`, with
 `Content-Type: application/json`, `Content-Length` and `Connection: close`, and nothing
 of the POST reaches the gateway. The body is the body of Qory Apiary's `201` for a
 stored verdict, with `null` for the artifact's version, since a held verdict has no
@@ -5080,9 +5080,8 @@ run API answer:
 {"version":1,"artifact":{"type":"verdict","name":"main","version":null}}
 ```
 
-The forwarder checks the POSTs of a run one at a time, in the order they reach it, so
-the check gets the verdicts of a program that sends each after the reply to the one
-before in the order the program sent them. A hold that the check returns after 90
+The forwarder checks one POST of a run at a time, so the check gets the verdicts of a
+program that sends each after the reply to the one before in the order sent. A hold that the check returns after 90
 seconds or the run's close gets the `503`.
 
 **No tunnel.** A `CONNECT` to `run-api.qory.invalid` is denied with a `403` and, where the

@@ -682,10 +682,9 @@ too.
 Hold a verdict when a check after the agent's last session sets the run's end: keep
 `req.Body` of a POST to `/verdict` and return `nil, session.ErrRunAPIHold`. The program
 gets a `202` with the body of Qory Apiary's `201` for a stored verdict, with `null` for
-the artifact's version, since a held verdict has no stored version. The forwarder takes
-the POSTs of a run in the order they reach it, so the check gets the verdicts of a
-program that sends each after the reply to the one before in the order the program sent
-them. A hold returned after the check's context ended gets the `503`.
+the artifact's version, since a held verdict has no stored version. The forwarder checks
+one POST of a run at a time, so the check gets the verdicts of a program that sends each
+after the reply to the one before in the order sent. A hold returned after the check's context ended gets the `503`.
 
 ```go
 err := run.SetRunAPICheck(func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error) {
