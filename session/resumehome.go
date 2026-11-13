@@ -35,7 +35,8 @@ type sessionResume struct {
 // read from env: the last value of the name counts, as in the environment the runtime
 // gets. A value that is not set, is empty, is no absolute path in its shortest form
 // ([path.Clean]), has a . or .. name, a space, a character that is not printable, a *,
-// a $, a { or a }, or is no UTF-8, leaves the resume with unset.
+// a $, a {, a }, a comma or a double quote, or is no UTF-8, leaves the resume with
+// unset. The wall's bind of the transcript directory takes no comma or double quote.
 func resumeOf(rt runtimes.Runtime, env []string) *sessionResume {
 	resumes, ok := rt.(runtimes.Resumes)
 	if !ok {
@@ -54,8 +55,8 @@ func resumeOf(rt runtimes.Runtime, env []string) *sessionResume {
 	value, set := lookupEnv(env, rs.HomeVar)
 	if cause := homeFault(rs.HomeVar, value, set); cause != "" {
 		s.unset = &wall.Unbound{
-			Fix:   fmt.Sprintf("Set %s to an absolute path in the launch's environment, with no . or .. name and no space, *, $, { or }", rs.HomeVar),
-			Cause: fmt.Sprintf("%s, so the session cannot find resume.prefix %s", cause, rs.Prefix),
+			Fix:   fmt.Sprintf("Set %s to an absolute path in UTF-8 in the launch's environment, with no . or .. name, no // or / at its end, and no space, non-printable character, *, $, {, }, comma or double quote", rs.HomeVar),
+			Cause: fmt.Sprintf("%s, so resume.prefix %s has no value", cause, rs.Prefix),
 		}
 		return s
 	}
@@ -85,7 +86,7 @@ func homeFault(name, value string, set bool) string {
 	case value == "":
 		return name + " is empty"
 	case !strings.HasPrefix(value, "/") || path.Clean(value) != value || !utf8.ValidString(value) ||
-		strings.ContainsAny(value, "*${}") || strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) || !unicode.IsPrint(r) }):
+		strings.ContainsAny(value, "*${},\"") || strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) || !unicode.IsPrint(r) }):
 		// The value is the launch's: at most its first 256 bytes, quoted, so no newline in
 		// it starts another line.
 		return fmt.Sprintf("%s is %q", name, value[:min(len(value), 256)])

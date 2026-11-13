@@ -25,9 +25,9 @@ func homeResume(t *testing.T, tail, below string, env []string) *sessionResume {
 // TestTheHomeVariableResolvesFromTheLaunchsEnvironment pins resumeOf: the last value of
 // home_var in the environment replaces ${<home_var>} in the prefix and the path, / as
 // the value included; a value that is unset, empty, relative, not in its shortest form,
-// or has a . or .. name, a space, a newline, a *, a $, a { or a } leaves the resume
-// unset, with the fix first and the variable's name in it, and the value quoted in the
-// cause.
+// or has a . or .. name, a space, a newline, a *, a $, a {, a }, a comma or a double
+// quote leaves the resume unset, with the fix first and the variable's name in it, and
+// the value quoted in the cause.
 func TestTheHomeVariableResolvesFromTheLaunchsEnvironment(t *testing.T) {
 	const below = "*/rollout-*-{session_id}.jsonl"
 	for value, prefix := range map[string]string{
@@ -41,12 +41,12 @@ func TestTheHomeVariableResolvesFromTheLaunchsEnvironment(t *testing.T) {
 	}
 	for _, env := range [][]string{
 		nil, {"AMP_HOME="}, {"AMP_HOME=rel"}, {"AMP_HOME=/a/../b"}, {"AMP_HOME=/a/./b"}, {"AMP_HOME=/a/"}, {"AMP_HOME=/a//b"},
-		{"AMP_HOME=/a b"}, {"AMP_HOME=/a\nb"}, {"AMP_HOME=/a*"}, {"AMP_HOME=/a$b"}, {"AMP_HOME=/{session_id}"}, {"AMP_HOME=/a/}"},
+		{"AMP_HOME=/a b"}, {"AMP_HOME=/a\nb"}, {"AMP_HOME=/a*"}, {"AMP_HOME=/a$b"}, {"AMP_HOME=/{session_id}"}, {"AMP_HOME=/a/}"}, {"AMP_HOME=/a,b"}, {"AMP_HOME=/a\"b"},
 		{"AMP_HOME=/ok", "AMP_HOME=rel"},
 	} {
 		rs := homeResume(t, "sessions/", below, env)
 		if u := rs.unset; u == nil || !strings.HasPrefix(u.Fix, "Set AMP_HOME to an absolute path") || !strings.HasPrefix(u.Cause, "AMP_HOME is ") ||
-			strings.Contains(u.Cause, "\n") || !strings.HasSuffix(u.Cause, ", so the session cannot find resume.prefix ${AMP_HOME}/sessions/") {
+			strings.Contains(u.Cause, "\n") || !strings.HasSuffix(u.Cause, ", so resume.prefix ${AMP_HOME}/sessions/ has no value") {
 			t.Errorf("%q: unset %+v", env, u)
 		}
 	}

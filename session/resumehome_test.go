@@ -227,7 +227,7 @@ func TestAWalledHomeVariableFollowsTheMountRules(t *testing.T) {
 // transcript, each starting with the fix that contains the variable's name. The
 // runtime's start keeps source startup.
 func TestAHomeVariableWithNoUsableValueGetsNoResume(t *testing.T) {
-	fix := "Set HOMER_HOME to an absolute path in the launch's environment, with no . or .. name and no space, *, $, { or }"
+	fix := "Set HOMER_HOME to an absolute path in UTF-8 in the launch's environment, with no . or .. name, no // or / at its end, and no space, non-printable character, *, $, {, }, comma or double quote"
 	for _, c := range []struct{ value, cause string }{
 		{"-", "HOMER_HOME is not set"},
 		{"", "HOMER_HOME is empty"},
@@ -249,7 +249,7 @@ func TestAHomeVariableWithNoUsableValueGetsNoResume(t *testing.T) {
 				}
 				evs := events(t, res)
 				out := runLogText(t, evs)
-				cause := c.cause + ", so the session cannot find resume.prefix ${HOMER_HOME}/sessions/"
+				cause := c.cause + ", so resume.prefix ${HOMER_HOME}/sessions/ has no value"
 				failed := fix + ". The runtime starts without a resume: the transcript of run " + pausedRun + " could not be restored: " + cause + "\n"
 				none := fix + ". A continuation of this run starts the runtime without a resume: " + cause + "\n"
 				if i, j := strings.Index(out, failed), strings.Index(out, none); i < 0 || j < i || !strings.Contains(out, "args: exec --json\n") || strings.Contains(out, "restored: ok") {

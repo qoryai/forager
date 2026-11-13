@@ -2308,13 +2308,14 @@ such as `CODEX_HOME`, which qory sets as a fixed value of the launch:
 `/var/lib/qory-codex-home/sessions/`. From there on the session reads it as that
 absolute prefix, with a wall or without one, and `path` in
 `dev.qory.session.transcript` is the absolute path the runtime writes. A value that is
-not set, is empty, is no absolute path in its shortest form, has a `.` or `..` name, or
-has a space, a character that is not printable, `*`, `$`, `{` or `}`, gives no
-transcript: the session starts the runtime without the descriptor's `resume.args`,
-sends no transcript and writes one line, `Set CODEX_HOME to an absolute path in the
-launch's environment, with no . or .. name and no space, *, $, { or }. A continuation
-of this run starts the runtime without a resume: CODEX_HOME is not set, so the session
-cannot find resume.prefix ${CODEX_HOME}/sessions/`, or `CODEX_HOME is empty`, or
+not set, is empty, is no absolute path in its shortest form, has a `.` or `..` name, is
+no UTF-8, or has a space, a character that is not printable, `*`, `$`, `{`, `}`, a
+comma or a double quote, gives no transcript: the session starts the runtime without
+the descriptor's `resume.args`, sends no transcript and writes one line, `Set CODEX_HOME
+to an absolute path in UTF-8 in the launch's environment, with no . or .. name, no // or
+/ at its end, and no space, non-printable character, *, $, {, }, comma or double quote.
+A continuation of this run starts the runtime without a resume: CODEX_HOME is not set,
+so resume.prefix ${CODEX_HOME}/sessions/ has no value`, or `CODEX_HOME is empty`, or
 `CODEX_HOME is "<value>"` with at most the value's first 256 bytes; with a restored
 transcript, a line before it reports that the restore failed. The session reads no path outside `resume.prefix` or
 with a `..` segment, and no file over 67108864 bytes (64 MiB), with a wall or without
