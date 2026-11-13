@@ -1944,8 +1944,8 @@ func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t T
 
 // inQory is why the agent's container binds no transcript directory at dst, the
 // bind's place inside, when dst is or lies inside /qory, where the wall mounts its
-// helper, hooks and bundle; nil when it lies outside. abs says the place is absolute, so
-// the fix is the place, not HOME.
+// helper, hooks and bundle; nil when it lies outside. abs is true for an absolute
+// place, whose fix is about resume.prefix, not HOME.
 func inQory(dst string, abs bool) *Unbound {
 	if !under(qoryDir, dst) {
 		return nil

@@ -2307,10 +2307,10 @@ such as `CODEX_HOME`, which a composer sets as a fixed value of the launch:
 `${CODEX_HOME}/sessions/` with `CODEX_HOME=/var/lib/qory-codex-home` is
 `/var/lib/qory-codex-home/sessions/`. From there on the session reads it as that
 absolute prefix, with a wall or without one, and `path` in
-`dev.qory.session.transcript` is the absolute path the runtime writes. A value that is
+`dev.qory.session.transcript` is the absolute path the runtime writes. When the value is
 not set, is empty, is no absolute path in its shortest form, has a `.` or `..` name, is
 no UTF-8, or has a space, a character that is not printable, `*`, `$`, `{`, `}`, a
-comma or a double quote, gives no transcript: the session starts the runtime without
+comma or a double quote, the session starts the runtime without
 the descriptor's `resume.args`, sends no transcript and writes one line, `Set CODEX_HOME
 to an absolute path in UTF-8 in the launch's environment, with no . or .. name, no // or
 / at its end, and no space, non-printable character, *, $, {, }, comma or double quote.
@@ -5246,7 +5246,7 @@ behind a wall. A `resume.path` that is not absolute, has an empty, `.` or `..` n
 whose names above those are not the names of `resume.prefix` after `${<home_var>}/`,
 `sessions` for Codex, is a failed resume. When the runtime starts with the
 descriptor's `resume.args`, its first `dev.qory.runtime.started` has `source` `resume`
-where the descriptor's rule gives `startup`, when its `session_id` is
+where the descriptor's rule sets `startup`, when its `session_id` is
 `resume.session_id`: Codex prints the same `thread.started` for `codex exec` and `codex
 exec resume`, and its rule sets `startup`. A later `dev.qory.runtime.started`, and one
 with another `session_id`, such as that of a runtime the resume script started without

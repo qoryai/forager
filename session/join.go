@@ -852,7 +852,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	var tr *transcript
 	// resumedID is the restored session id, a string, once the launch keeps the resume
 	// arguments the session added. The runtime's first dev.qory.runtime.started then
-	// has source resume where its rule gives startup, as Codex's thread.started does
+	// has source resume where its rule sets startup, as Codex's thread.started does
 	// whether codex exec started or resumed the session, when its session_id is that
 	// id: a runtime that started a session of another id did not resume. firstSeen is
 	// true once that first event was seen.

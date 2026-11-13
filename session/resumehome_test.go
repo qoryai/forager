@@ -218,8 +218,8 @@ echo '{"type":"start","session_id":"'$id'","source":"exec"}'
 // TestAPausedRunsPathOutsideTheHomesNamesFails pins a run answer whose resume.path
 // does not move below this run's HOMER_HOME: one with other names above the date
 // directories, and one below the home with ~/. The runtime starts without the resume
-// arguments, and the line of the failed resume starts with the fix and names the names
-// the path must end in.
+// arguments, and the line of the failed resume starts with the fix and contains the
+// names the path must end in.
 func TestAPausedRunsPathOutsideTheHomesNamesFails(t *testing.T) {
 	const below = "2025/01/02/rollout-p-" + rolloutID + ".jsonl"
 	for _, paused := range []string{"/srv/another-home/other/" + below, "~/sessions/" + below} {
