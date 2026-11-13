@@ -1923,7 +1923,8 @@ lines. Each join writes its steps:
    join the gateway refuses, or that fails the session's checks, ends it `failed` with
    `-1`; then the session writes the join's `dev.qory.session.exited`, with the
    refusal's code when the failure has one. A session does not lie inside a join step.
-2. **The image step**, `image`, with the image's reference as its name, behind a wall
+2. **The image step**, `image`, with the image's reference without its user information
+   (§The gateway's link, the run request's `images`) as its name, behind a wall
    when the policy's image is a reference and no step fetched it before the join. It
    comes after `dev.qory.session.started` and the session's
    `dev.qory.run.policy_applied`. The session writes that
@@ -4094,10 +4095,14 @@ and `about` are the starter's registration's, and the run request carries neithe
   and 64 lower-case hexadecimal digits or `@sha512:` and 128, or before its end when it has no digest:
   `docker://me@example.com:pa/ss@registry.example/base@sha256:…` has
   `docker://me@example.com:pa/ss@`, `u:p@base:latest` has `u:p@`, while
-  `registry.example:5000/base@sha256:…` and `base@sha256:…` have none. A reload answer,
-  the record's `request.json`, `dev.qory.session.started`'s `image`, the wall's errors
-  and refusals, and a run answer as Go's `server.LinkRunAnswer` prints it contain each
-  reference without it; the run answer and the wall's pull use the reference whole.
+  `registry.example:5000/base@sha256:…` and `base@sha256:…` have none. These contain
+  each reference without it: a reload answer; the record's `request.json`;
+  `dev.qory.session.started`'s `image` and the image step's name; the manifest check's
+  request, errors and refusals; the wall's errors and refusals, the docker command's
+  output in them included; a reload's refusal of another image; the refusal of a run
+  configuration's image that is not pinned; and a run answer as Go's
+  `server.LinkRunAnswer` prints it. The run answer and the wall's pull use the reference
+  whole.
   Absent means none.
 - `narrowing`, behind a separate gateway alone: the session's narrowing of the policy,
   `egress` with `allow`, `deny` or both, each in the grammar of the policy's
@@ -5555,7 +5560,8 @@ the check of its user; its
 selects or names one.
 
 **An image pulled through the gateway.** `(*session.Run).FetchImage` fetches the image
-by reference as a host step of kind `image`, named after the reference, before the first
+by reference as a host step of kind `image`, named after the reference without its user
+information, before the first
 join or between joins. The step first checks the image at its registry: the session
 sends `HEAD /v2/<repository>/manifests/<digest>` through the run's proxy, with or
 without an engine proxy, so the gateway sets the run's credentials on it. The host is

@@ -142,3 +142,17 @@ func TestAReloadKeepsTheImageTheRunConfigurationNamed(t *testing.T) {
 		t.Errorf("one without a wall: %v", err)
 	}
 }
+
+// TestAReloadPrintsTheStartImageWithoutUserInformation pins the reload's refusal of an
+// image the run configuration names, for a run started in the machine's default given
+// as a reference with a registry's credentials in its user information: the refusal
+// has the reference without them.
+func TestAReloadPrintsTheStartImageWithoutUserInformation(t *testing.T) {
+	observe := `{"version":1,"egress":{"mode":"observe"}}`
+	images := run.Images{Default: "user:pw@" + pinned, Allow: []string{"registry.example/agents/"}}
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Images: images, Fetched: served(observe, digest('1'))})
+	_, err := reload(t, r, named(pinned, "", digest('2')))
+	if want := "the run configuration names the image " + pinned + ", and the run started in " + pinned; err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "pw") {
+		t.Errorf("%v, want %q and no login", err, want)
+	}
+}

@@ -255,8 +255,11 @@ release may change what an existing document does, and says so under Upgrading.
 - `policy.ImageWithoutUserInfo` returns an image reference without the user
   information it may start with: everything up to and with the last `@` before a
   trailing `@sha256:`, `@sha512:` or `@blake3:` digest, a scheme in front of it too.
-  The gateway uses it for `request.json` and the reload answer, the session for
-  `dev.qory.session.started`, and the wall for its errors and refusals.
+  The gateway uses it for `request.json`, the reload answer and the reload's refusal of
+  another image; the server package for a run answer that `fmt` or `encoding/json`
+  prints and for the refusal of a run configuration's image that is not pinned; the
+  session for `dev.qory.session.started`, the image step's name and the manifest
+  check; and the wall for its errors and refusals.
 - Several model keys per run. When the start key is an API credential, the key group is
   the start key and every API credential with its `format`, `auth` and `endpoint`, in the
   order of `credentials`. The keys of the group share the start key's placeholder, and
@@ -973,9 +976,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
-- A run answer as `fmt` prints `server.LinkRunAnswer` and `encoding/json` writes it has
-  the image's `ref` and `relay_image` without their user information. Before, a log of
-  the run answer printed a registry's credentials in either.
+- `fmt` and `encoding/json` print `server.LinkRunAnswer` with the image's `ref` and
+  `relay_image` without their user information. Before, a log of the run answer printed
+  a registry's credentials in either.
+- `server.CheckConfigurationImage` names a run configuration's image that is not pinned
+  without its user information: `user:pw@registry.example/agent:1` is
+  `registry.example/agent:1` in the refusal. The gateway's log of a failed reopen and
+  the session's report of a failed reload print that refusal. Before, they printed the
+  registry's credentials.
 - The server package printed a value as written in these messages, and now prints `(a
   value that contains an access key secret)` or `(a value that contains a run key)` in
   place of a value that contains `qak_` or `qrk_` in any case: a server document's name
@@ -1430,6 +1438,10 @@ release may change what an existing document does, and says so under Upgrading.
   so a burst of changes made two reports, and the run's end made a third. The reporter
   now sends one report per burst of changes: a wake for changes that the last report,
   sent or dropped, already contains sends nothing.
+- A reload's refusal of another image than the run started in printed the start image
+  whole, with a registry's credentials in its user information, for a run that started
+  in the machine's default given as a reference. It now prints the reference without
+  its user information.
 - The gateway refused a batch with a session's `dev.qory.run.exited` whose reason is
   `workflow_not_in_harness` or `image_user_root`, so a run that qory closed with one of
   them ended `batch_refused`. The gateway now accepts both as it accepts
@@ -1752,10 +1764,15 @@ release may change what an existing document does, and says so under Upgrading.
 #### Fixed
 
 - The Docker wall's errors and refusals print an image's reference without its user
-  information: the errors of a reference it refuses, of `image inspect` and of an image
-  the engine does not hold, and the names and detail of `image_missing` and
-  `image_user_root`. Before, they printed the reference whole, with a registry's
-  credentials in it. The pull still uses the reference whole.
+  information: the error of a reference that is not an image reference, a failed
+  `docker pull` with its command and the engine's output, a failed `image inspect`
+  with what the engine said, an image the engine does not hold by its digest at its
+  first container, an image the engine does not have under `NeverPull`, and the names
+  and detail of `image_missing` and `image_user_root`. The output of any docker command
+  in an error has the run's image and relay image without their user information too.
+  Before, a failed pull printed the reference whole, with a registry's credentials in
+  it, and the session wrote that error to the record as a `dev.qory.run.log` line. The
+  pull still uses the reference whole.
 - `wall.Docker`, the engine check, the nest and the relay printed a value as written in
   their errors, and now print a phrase in place of one that contains `qak_` or `qrk_` in
   any case: the name's phrase for a run id, an image, a container runtime, a user, a
@@ -2164,10 +2181,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
-- `dev.qory.session.started` has the image's reference without its user information,
-  as `request.json` has it: `user:pw@registry.example/agent@sha256:…` is recorded as
-  `registry.example/agent@sha256:…`. Before, the event had the reference whole, with
-  the registry's credentials in it. The wall still pulls the reference whole.
+- `dev.qory.session.started` and the image step's `dev.qory.run.step_started` have the
+  image's reference without its user information, as `request.json` has it:
+  `user:pw@registry.example/agent@sha256:…` is recorded as
+  `registry.example/agent@sha256:…`. The manifest check reads that reference too, so its
+  errors and its `image_missing`, `image_access_denied`, `image_rate_limited` and
+  `image_registry_unreachable` refusals have no user information, and it asks the
+  registry the reference names. Before, the record had the reference whole, with the
+  registry's credentials in it, and the check read the user information as a Docker Hub
+  repository and sent it in the path of a request to `registry-1.docker.io`. The wall
+  still pulls the reference whole.
 - `approve-key.sh` writes to the file Claude Code 2.1.316 reads. With an empty `.config.json`
   beside a `.claude.json`, it writes the approval to `.claude.json`, and with an empty
   `.config.json` that has no write bit, it writes to `.claude.json` too. Before, the script

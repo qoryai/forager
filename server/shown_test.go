@@ -223,6 +223,16 @@ func TestAServerErrorPrintsAPhraseForASecret(t *testing.T) {
 	}
 }
 
+// TestARefusedConfigurationImageHasNoUserInformation pins the refusal of a run
+// configuration's image that is not pinned: it names the image without the registry's
+// credentials of its user information.
+func TestARefusedConfigurationImageHasNoUserInformation(t *testing.T) {
+	err := server.CheckConfigurationImage("user:pw@registry.example/agent:1")
+	if err == nil || !strings.HasPrefix(err.Error(), "the image registry.example/agent:1 is not a reference pinned by digest") || strings.Contains(err.Error(), "pw") {
+		t.Errorf("the refusal: %v", err)
+	}
+}
+
 // TestALinkRunAnswerPrintsImagesWithoutUserInformation pins a run answer's relay
 // image as fmt prints it, and its image and relay image as encoding/json writes them:
 // each reference without the registry's credentials of its user information.

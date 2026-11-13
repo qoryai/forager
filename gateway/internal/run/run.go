@@ -1021,7 +1021,7 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 // imageMoved refuses a reload whose run configuration names the image named, or none,
 // when the start's named another, or none: the image a run starts in is fixed.
 func (r *Run) imageMoved(named string) error {
-	started := r.img.Ref
+	started := policy.ImageWithoutUserInfo(r.img.Ref)
 	if r.img.Name != "" {
 		started = r.img.Name
 	}

@@ -67,7 +67,7 @@ func (r *Run) FetchImage(ctx context.Context) (err error) {
 	if err := checkEngineProxy(r.open.EngineProxy); err != nil {
 		return err
 	}
-	r.hostStep = r.startStep(event.StepImage, r.img.Ref)
+	r.hostStep = r.startStep(event.StepImage, r.imageShown())
 	step := r.hostStep
 	// A panic that a caller recovers leaves no host step open; end does nothing for a
 	// step that ended.

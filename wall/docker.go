@@ -471,14 +471,34 @@ func (e *dockerEnclosure) image() string   { return e.base + "-image" }
 func (e *dockerEnclosure) setup() string   { return e.base + "-setup" }
 func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunID }
 
-// docker runs one docker command; a failure carries what the command printed.
+// docker runs one docker command; a failure carries what the command printed. The
+// failure's command and output have the run's image references without their user
+// information ([dockerEnclosure.withoutLogins]): docker pull's argument is one.
 func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, error) {
 	argv := append([]string{e.command()}, args...)
 	out, err := e.sys.run(ctx, argv, e.env)
 	if err != nil {
-		return out, fmt.Errorf("wall docker: %s: %w: %s", accesskey.ShownValue(strings.Join(argv[:min(3, len(argv))], " "), false), accesskey.ShownError(err), accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
+		shown := e.withoutLogins(strings.Join(argv[:min(3, len(argv))], " "))
+		return out, fmt.Errorf("wall docker: %s: %w: %s", accesskey.ShownValue(shown, false), accesskey.ShownError(err), accesskey.ShownValue(e.withoutLogins(string(bytes.TrimSpace(out))), false))
 	}
 	return out, nil
+}
+
+// withoutLogins is s with the user information of the run's image and relay image
+// left out ([policy.ImageWithoutUserInfo]): each reference as a whole, then its user
+// information wherever else it is, such as in an engine's message that quotes part of
+// the reference. A registry's credentials may be in that user information.
+func (e *dockerEnclosure) withoutLogins(s string) string {
+	for _, ref := range []string{e.req.Image, e.req.RelayImage} {
+		bare := policy.ImageWithoutUserInfo(ref)
+		if bare == ref {
+			continue
+		}
+		// The user information is the part of ref before bare.
+		s = strings.ReplaceAll(s, ref, bare)
+		s = strings.ReplaceAll(s, ref[:len(ref)-len(bare)], "")
+	}
+	return s
 }
 
 func (e *dockerEnclosure) command() string { return e.d.command() }
@@ -804,6 +824,7 @@ func (e *dockerEnclosure) held(ctx context.Context) (bool, error) {
 		if errors.As(err, &exit) {
 			said = string(bytes.TrimSpace(exit.Stderr))
 		}
+		said = e.withoutLogins(said)
 		if noSuchImage(said) {
 			return false, nil
 		}

@@ -788,25 +788,83 @@ func TestDockerSaysHowToFixACertificateItCannotWriteOrRemove(t *testing.T) {
 
 // TestTheWallPrintsAnImageWithoutUserInformation pins the image in the wall's errors
 // and refusals for a reference with a registry's credentials in its user information:
-// the pull gets the reference whole, and image_missing and the error of a reference
-// the wall refuses have it without them.
+// the pull gets the reference whole, and each of these has it without them, the engine's
+// output they quote included: image_missing; a pull that fails otherwise;
+// image_user_root; an image inspect that fails; an image the engine does not hold by its
+// digest at the first use; an image the engine does not have under NeverPull; and a
+// reference that is not an image reference.
 func TestTheWallPrintsAnImageWithoutUserInformation(t *testing.T) {
 	const login = "user:pw@"
-	out := "Error response from daemon: repository registry.example/agents/app not found: name unknown: repository name not known to registry\n"
-	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`, fail: "docker pull", failOut: out}
-	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
-	err := d.Pull(context.Background(), Request{RunID: runID, Image: login + byReference, RelayImage: "example.com/agent:1", Pull: true}, nil, nil)
+	ctx := context.Background()
+	pull := func(rec *recorder) error {
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+		return d.Pull(ctx, Request{RunID: runID, Image: login + byReference, RelayImage: "example.com/agent:1", Pull: true}, nil, nil)
+	}
+	wrap := func(rec *recorder) error {
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+		e, err := d.Prepare(ctx, Request{RunID: runID, Image: login + byReference, RelayImage: "example.com/agent:1", Pull: true})
+		if err != nil {
+			return err
+		}
+		defer e.Close(ctx)
+		_, err = e.Wrap(ctx, launch())
+		return err
+	}
+	noLogin := func(name string, err error, wants ...string) {
+		t.Helper()
+		if err == nil || strings.Contains(err.Error(), "pw") {
+			t.Errorf("%s: %v, want an error with no login", name, err)
+			return
+		}
+		for _, want := range wants {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: %v, want %q", name, err, want)
+			}
+		}
+	}
+
+	missing := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`, fail: "docker pull",
+		failOut: "Error response from daemon: repository registry.example/agents/app not found: name unknown: repository name not known to registry\n"}
+	err := pull(missing)
 	var r *accesskey.Refusal
-	if at(rec.lines, "docker pull "+login+byReference) != 0 {
-		t.Errorf("the pull is not of the reference whole:\n%s", strings.Join(rec.lines, "\n"))
+	if at(missing.lines, "docker pull "+login+byReference) != 0 {
+		t.Errorf("the pull is not of the reference whole:\n%s", strings.Join(missing.lines, "\n"))
 	}
 	if !errors.As(err, &r) || r.Code != refusal.ImageMissing || !slices.Equal(r.Names, []string{byReference}) ||
 		r.Detail != "the image "+byReference+" is not in its registry" {
 		t.Errorf("%v, want image_missing of %s", err, byReference)
 	}
+
+	denied := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`, fail: "docker pull",
+		failOut: `Error response from daemon: failed to resolve reference "` + login + byReference + `": unauthorized for ` + login + "registry.example\n"}
+	noLogin("a pull that fails", pull(denied), "docker pull "+byReference+": exit status 1: Error response from daemon: failed to resolve reference \""+byReference+"\": unauthorized for registry.example")
+
+	root := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"root"`}
+	err = pull(root)
+	if !errors.As(err, &r) || r.Code != refusal.ImageUserRoot || !slices.Equal(r.Names, []string{byReference}) || strings.Contains(r.Detail, "pw") {
+		t.Errorf("an image whose user is root: %v, want image_user_root of %s", err, byReference)
+	}
+
+	noLogin("an image inspect that fails", wrap(&recorder{t: t, gateway: "172.30.0.1", uid: 1000, stderr: "permission denied for " + login + byReference}),
+		"wall docker: image inspect "+byReference+": ", ": permission denied for "+byReference)
+	noLogin("an image not held", wrap(&recorder{t: t, gateway: "172.30.0.1", uid: 1000}),
+		"wall docker: fetch "+byReference+" with Pull before its first container starts: the engine does not hold it by its digest")
+
+	const relay = "example.com/relay:1"
+	never := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, fail: "-relay ", failOut: "Error response from daemon: No such image: " + login + relay}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, HoldArgs: []string{"hold"}, sys: never}
+	e, err := d.Prepare(ctx, Request{RunID: runID, Image: "example.com/agent:1", RelayImage: login + relay, NeverPull: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noLogin("an image the engine does not have", e.(*dockerEnclosure).StartSetup(ctx, setupLaunch()), "the engine has no image "+relay+",")
+	if err := e.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
 	d = &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: &recorder{t: t, uid: 1000}}
 	for _, req := range []Request{{RunID: runID, Image: "-" + login + "x"}, {RunID: runID, Image: "i", RelayImage: "-" + login + "x"}} {
-		_, err := d.Prepare(context.Background(), req)
+		_, err := d.Prepare(ctx, req)
 		if err == nil || err.Error() != `wall docker: "x" is not an image reference` {
 			t.Errorf("Prepare of %+v: %v", req, err)
 		}

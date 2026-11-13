@@ -20,7 +20,6 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/mask"
-	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/parents"
@@ -756,7 +755,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		// check of the image's manifest, the wall's pull and the check of its user. After a fetch, the wall finds
 		// the image by its digest and the join writes no image step.
 		if puller, ok := spec.Wall.(wall.Puller); ok && r.byReference && r.imageStep == 0 {
-			open = r.startStep(event.StepImage, r.img.Ref)
+			open = r.startStep(event.StepImage, r.imageShown())
 			if err := r.pullImage(runCtx, puller); err != nil {
 				return refused(err)
 			}
@@ -1174,7 +1173,7 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 		started["terminal"] = map[string]any{"cols": cols, "rows": rows}
 	}
 	if spec.Wall != nil {
-		started["image"] = accesskey.ShownName(policy.ImageWithoutUserInfo(r.img.Ref), false)
+		started["image"] = accesskey.ShownName(r.imageShown(), false)
 		if r.img.Name != "" {
 			started["image_name"] = accesskey.ShownName(r.img.Name, false)
 		}
