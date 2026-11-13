@@ -624,9 +624,10 @@ func syncDirs(dirs ...string) error {
 // keptFiles are the files the gateway writes in a run's record directory beside the
 // stream's, so that a gateway that starts again can reopen the run: the run request,
 // the run's CA certificate and key, the policy members given, the join decisions, the
-// mark of a model key past its limit, and the egress held at a suspend ([heldFile]).
-// [Run.Discard] and [Stream.Reclaim] remove them by name.
-var keptFiles = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", heldFile}
+// mark of a model key past its limit or out of use after a 401, the keys out of use
+// after a 401, and the egress held at a suspend ([heldFile]). [Run.Discard] and
+// [Stream.Reclaim] remove them by name.
+var keptFiles = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", "model-keys-unauthorized.json", heldFile}
 
 // secretFiles are the kept files whose contents may act for the run: the run request,
 // whose image references may contain a registry's credentials, and the run's CA

@@ -252,14 +252,34 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		var mayPass holdError
 		return fail(!errors.As(err, &mayPass), err)
 	}
-	marked, err := limitMarked(dir)
+	reason, marked, err := limitMarked(dir)
 	if err != nil {
 		return fail(true, err)
 	}
-	if marked && lr.keys != nil {
-		// The proxy passed a limit refusal to the session before the stop: the first
-		// batch's answer has stop again. A run configuration with no key group now has
-		// no key to stop.
+	if lr.keys != nil {
+		// The keys out of use after a 401 stay so; a key whose renewal was pending is
+		// renewed again, and one whose value no longer expires leaves the group.
+		keys, err := readUnauthorized(dir)
+		if err != nil {
+			g.report(fmt.Sprintf("run %s: reading its model keys after a 401: %v; the run sets them again", runID, err))
+		}
+		lr.keys.Restore(keys)
+		for _, k := range keys {
+			if lr.keys.Pending(k.Credential) && !lr.r.Renew(k.Credential) {
+				lr.keys.Revoked(k.Credential)
+			}
+		}
+	}
+	switch {
+	case !marked || lr.keys == nil:
+		// A run configuration with no key group now has no key to stop.
+	case reason != "":
+		// The answers to the session had stop before the stop of the gateway: the
+		// first batch's answer has stop again, with the same reason.
+		lr.keys.PassWith(reason)
+	default:
+		// The proxy passed a limit refusal or a 401 to the session, and no answer had
+		// the stop yet: the first batch's answer has it, its reason as of then.
 		lr.keys.Pass()
 	}
 	lr.mu.Lock()

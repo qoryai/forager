@@ -509,7 +509,7 @@ func TestReclaimAndDiscardRemoveTheKeptFiles(t *testing.T) {
 	if _, err := os.Stat(other); err != nil {
 		t.Errorf("a file of another is gone: %v", err)
 	}
-	if want := []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", "held.jsonl"}; !slices.Equal(keptFiles, want) {
+	if want := []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", "model-keys-unauthorized.json", "held.jsonl"}; !slices.Equal(keptFiles, want) {
 		t.Errorf("the kept files %q, want %q", keptFiles, want)
 	}
 }

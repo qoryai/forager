@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/credential"
+	"github.com/qoryai/forager/gateway/internal/modelkey"
 	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
@@ -43,6 +45,13 @@ func (machineClock) After(d time.Duration) <-chan time.Time { return time.After(
 // renewal that fails keeps the value and is reported; at expires_at with no renewal the
 // run's record gets one line, and the value is set no more. It lives on the [Run], so a
 // reload, which resolves the credentials again, starts no second one.
+//
+// A model key of the run's key group that the model provider answered 401 to
+// ([modelkey.Group.Reject]) is renewed with its name in the request's unauthorized, and
+// again every RetryWait until the server answers: a value puts the key back in the
+// group ([modelkey.Group.Renewed]); the server's signed 409, or the value's expires_at
+// with no renewal, takes it out for the run ([modelkey.Group.Revoked]); any other
+// failure, such as a 503 or no answer, keeps it out of use until the next try.
 type renewer struct {
 	r       *Run
 	clock   Clock
@@ -57,6 +66,8 @@ type renewer struct {
 	mu sync.Mutex
 	// entries are the credentials with expires_at, in the document's order.
 	entries []*renewal
+	// group is the run's key group, [Run.SetKeyGroup]; nil for none.
+	group *modelkey.Group
 }
 
 // renewal is one credential's state: when its value expires, when it was last asked
@@ -121,6 +132,12 @@ func (w *renewer) rejected(name string) func() {
 		default:
 		}
 	}
+}
+
+// pending reports whether name is a model key of the group whose renewal is pending
+// after a 401 ([modelkey.Group.Pending]). Called with w.mu held.
+func (w *renewer) pending(name string) bool {
+	return w.group != nil && w.group.Pending(name)
 }
 
 // refused marks name, unless it expired, as refused by a host.
@@ -199,7 +216,7 @@ func (w *renewer) plan(now time.Time) (due []string, next time.Time, gone []*ren
 	defer w.mu.Unlock()
 	at := func(e *renewal) time.Time {
 		least := e.asked.Add(credential.RetryWait)
-		if e.stale {
+		if e.stale || w.pending(e.name) {
 			return least
 		}
 		if t := e.expires.Add(-credential.RenewBefore); t.After(least) {
@@ -246,6 +263,10 @@ func (w *renewer) plan(now time.Time) (due []string, next time.Time, gone []*ren
 func (w *renewer) expire(e *renewal) {
 	r := w.r
 	r.dropValue(e.name)
+	if g := w.keyGroup(); g != nil {
+		// A key whose renewal after a 401 is pending gets no more renewals.
+		g.Revoked(e.name)
+	}
 	if r.cfg.Log != nil {
 		r.cfg.Log(fmt.Sprintf("Start another run once the control plane answers: credential %s expired at %s",
 			accesskey.ShownName(e.name, true), e.expires.UTC().Format(time.RFC3339)))
@@ -259,11 +280,28 @@ func (r *Run) dropValue(name string) {
 	r.values.Drop(name)
 }
 
+// keyGroup is the run's key group, nil for none.
+func (w *renewer) keyGroup() *modelkey.Group {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.group
+}
+
 // renew asks the server for the values of names under the digest of the run
-// configuration in force, and puts each one that meets the start's rules in place of
-// the one the run has. Each one refused, and every one of a request that failed, keeps
-// its value and is reported.
+// configuration in force, with the model keys among them that wait for their renewal
+// after a 401 as unauthorized, and puts each one that meets the start's rules in place
+// of the one the run has. Each one refused, and every one of a request that failed,
+// keeps its value and is reported. A model key that was unauthorized goes back in the
+// key group with its value, out of it at the server's signed 409, and stays out of use
+// after any other failure, until the next try RetryWait later ([renewer]).
 func (w *renewer) renew(names []string, now time.Time) {
+	g := w.keyGroup()
+	var unauthorized []string
+	for _, name := range names {
+		if g != nil && g.Pending(name) {
+			unauthorized = append(unauthorized, name)
+		}
+	}
 	w.asking(names, now)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -275,11 +313,16 @@ func (w *renewer) renew(names []string, now time.Time) {
 		}
 	}()
 	r := w.r
-	values, err := r.cfg.Secrets(ctx, r.computedDigest(), names)
+	values, err := r.cfg.Secrets(ctx, r.computedDigest(), names, unauthorized)
 	defer values.Clear()
+	revoked := err != nil && conflict(err)
 	for _, name := range names {
 		if !w.has(name) {
 			// A harness credential whose renewals stopped at the run's first join request.
+			continue
+		}
+		if revoked && slices.Contains(unauthorized, name) {
+			w.revoke(name, err)
 			continue
 		}
 		if err != nil {
@@ -293,6 +336,37 @@ func (w *renewer) renew(names []string, now time.Time) {
 		at, _ := values.ExpiresAt(name)
 		r.replaceValue(name, values)
 		w.renewedAt(name, at)
+		if slices.Contains(unauthorized, name) {
+			g.Renewed(name)
+		}
+	}
+}
+
+// conflict reports whether err is the server's signed 409 to a secrets request, with
+// a code or with none.
+func conflict(err error) bool {
+	var rf *accesskey.Refusal
+	if errors.As(err, &rf) {
+		return rf.Status == http.StatusConflict && rf.Code != accesskey.CodeAnswerUnsigned
+	}
+	var ae *server.AnswerError
+	return errors.As(err, &ae) && ae.Status == http.StatusConflict
+}
+
+// revoke takes the model key name out of the run's key group after the server's signed
+// 409, err, to its renewal after a 401: its renewals stop, and the run's record gets
+// one line.
+func (w *renewer) revoke(name string, err error) {
+	select {
+	case <-w.done:
+		return
+	default:
+	}
+	w.keyGroup().Revoked(name)
+	w.drop([]string{name})
+	if w.r.cfg.Log != nil {
+		w.r.cfg.Log(fmt.Sprintf("Store in the control plane a value of the model key %s that its provider accepts; the run sets the key no more: the provider returned 401 for it, and its renewal was refused: %v",
+			accesskey.ShownName(name, true), accesskey.ShownError(err)))
 	}
 }
 
@@ -510,4 +584,29 @@ func checkOpened(c server.RunCredential, values sealed.Values, now time.Time) er
 			"Tell whoever runs the control plane: credential %s %s", accesskey.ShownName(c.Name, true), why)
 	}
 	return nil
+}
+
+// SetKeyGroup gives the run's renewals its key group, g: a model key of g that the
+// model provider answered 401 to is renewed as unauthorized ([renewer]). The gateway
+// calls it once, after the group is made and before the run's first request.
+func (r *Run) SetKeyGroup(g *modelkey.Group) {
+	if r.renew == nil {
+		return
+	}
+	r.renew.mu.Lock()
+	defer r.renew.mu.Unlock()
+	r.renew.group = g
+}
+
+// Renew asks for the value of the model key name again as after the model provider's
+// 401, for a gateway that reopens a run whose record has the key waiting for its
+// renewal. It reports false for a key whose value does not expire, which has no
+// renewal.
+func (r *Run) Renew(name string) bool {
+	f := r.renew.rejected(name)
+	if f == nil {
+		return false
+	}
+	f()
+	return true
 }

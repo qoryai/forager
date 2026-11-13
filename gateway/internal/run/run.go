@@ -93,9 +93,11 @@ type Config struct {
 	// their names in the document's order, under digest, the digest Forager computed of
 	// that document's bytes, and opens them: the secrets request. The run sends it when
 	// it starts, for every credential, and again for each credential whose value has
-	// expires_at ([renewer]). Nil when the server's discovery lists no secrets endpoint;
-	// a run configuration with credentials is then refused.
-	Secrets func(ctx context.Context, digest string, credentials []string) (sealed.Values, error)
+	// expires_at ([renewer]). unauthorized are the model keys among credentials whose
+	// renewal follows a 401 of the model provider, in the same order; nil for none. Nil
+	// when the server's discovery lists no secrets endpoint; a run configuration with
+	// credentials is then refused.
+	Secrets func(ctx context.Context, digest string, credentials, unauthorized []string) (sealed.Values, error)
 	// Clock is the time renewals are judged by; nil is this machine's clock.
 	Clock Clock
 	// StackHosts are the gateway's gateway.stack_hosts, which the run's stack proxy
@@ -395,7 +397,7 @@ func (r *Run) open(ctx context.Context) error {
 	if d := r.cfg.Fetched.Document; d != nil {
 		digest = d.Computed
 	}
-	values, err := r.cfg.Secrets(ctx, digest, names)
+	values, err := r.cfg.Secrets(ctx, digest, names, nil)
 	if err != nil {
 		return err
 	}

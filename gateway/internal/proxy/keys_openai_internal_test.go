@@ -102,7 +102,7 @@ func TestAnOpenAIRefusalReachesTheSessionAndHoldsTheRest(t *testing.T) {
 		}
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "" || !strings.HasPrefix(string(b), "qory: the run pauses:") {
+		if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "" || !strings.HasPrefix(string(b), "qory: the gateway sends no more model requests in this session:") {
 			t.Errorf("%s after the stop: %d, Retry-After %q, %q; want the gateway's 429 with no Retry-After", path, resp.StatusCode, resp.Header.Get("Retry-After"), b)
 		}
 	}
