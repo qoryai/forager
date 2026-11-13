@@ -101,10 +101,13 @@ type Config struct {
 	// Clock is the time renewals are judged by; nil is this machine's clock.
 	Clock Clock
 	// Revoked are the model keys a reopened run's record has out of the key group after
-	// a 401 ([modelkey.Group.Revoked]). The secrets request leaves them out, since the
+	// a 401 ([modelkey.Group.Revoked]), and Pending those whose renewal after a 401 is
+	// pending ([modelkey.Group.Pending]). The secrets request leaves both out, since the
 	// server returns 409 with no value to a whole request that has a name it cannot
-	// seal; they get no value and no renewal. Nil for an open.
-	Revoked []string
+	// seal. A revoked key gets no value and no renewal; a pending key gets its value
+	// from its renewal, once the run's key group has it pending ([renewer]). Nil for
+	// an open.
+	Revoked, Pending []string
 	// StackHosts are the gateway's gateway.stack_hosts, which the run's stack proxy
 	// allows beside the run configuration's stack_hosts: each host of a harness
 	// credential must be one of the two lists allows ([Run.StackAllows]).
@@ -392,13 +395,13 @@ func (r *Run) takeComputed(p *policy.Loaded) string {
 // a value that expired before the run started, and one whose apply is outside its
 // entry ([checkOpened]). A model key with account_claim whose value has no string at it
 // leaves the key group ([Run.KeysOut]), with a line in the run's record; when no key of
-// the group is left, the run is refused. The keys of [Config.Revoked] are left out of
-// the request and of these checks.
+// the group is left, the run is refused. The keys of [Config.Revoked] and
+// [Config.Pending] are left out of the request and of these checks.
 func (r *Run) open(ctx context.Context) error {
 	var names []string
 	var entries []server.RunCredential
 	for _, c := range r.stored {
-		if slices.Contains(r.cfg.Revoked, c.Name) {
+		if r.leftOut(c.Name) {
 			continue
 		}
 		names = append(names, c.Name)
@@ -442,7 +445,7 @@ func (r *Run) open(ctx context.Context) error {
 	for _, c := range r.stored {
 		r.applies[c.Name] = effectiveApply(c, values)
 	}
-	r.renew = newRenewer(r, values, now)
+	r.renew = newRenewer(r, values, r.cfg.Pending, now)
 	r.mu.Lock()
 	r.values = values
 	r.mu.Unlock()
@@ -453,12 +456,12 @@ func (r *Run) open(ctx context.Context) error {
 // values has no string at it ([credential.AccountClaim]), with a line in the run's
 // record that contains why, never the value or the claim. It refuses the run,
 // run_configuration_invalid, when no key of the run's key group is left and none is
-// out after a 401 ([Config.Revoked]): a reopened run whose keys a 401 took out stops
-// with model_key_unauthorized.
+// out or pending after a 401 ([Config.Revoked], [Config.Pending]): a reopened run
+// whose keys a 401 took out stops with model_key_unauthorized.
 func (r *Run) checkClaims(values sealed.Values) error {
 	var out []string
 	for _, c := range r.stored {
-		if c.Auth.AccountClaim == "" || slices.Contains(r.cfg.Revoked, c.Name) {
+		if c.Auth.AccountClaim == "" || r.leftOut(c.Name) {
 			continue
 		}
 		v, _ := values.Value(c.Name)
@@ -474,16 +477,22 @@ func (r *Run) checkClaims(values sealed.Values) error {
 	}
 	group := storedGroup(r.stored, r.storedModel)
 	left := func(c server.RunCredential) bool {
-		return !slices.Contains(out, c.Name) && !slices.Contains(r.cfg.Revoked, c.Name)
+		return !slices.Contains(out, c.Name) && !r.leftOut(c.Name)
 	}
-	revoked := slices.ContainsFunc(group, func(c server.RunCredential) bool { return slices.Contains(r.cfg.Revoked, c.Name) })
-	if len(group) > 0 && !revoked && !slices.ContainsFunc(group, left) {
+	after401 := slices.ContainsFunc(group, func(c server.RunCredential) bool { return r.leftOut(c.Name) })
+	if len(group) > 0 && !after401 && !slices.ContainsFunc(group, left) {
 		start := startName(group, r.storedModel)
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
 			"run configuration %s: store in the control plane a value of a model key of the key group of %s with a string at its account_claim: no key of the group has one", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(start, true))
 	}
 	r.keysOut = out
 	return nil
+}
+
+// leftOut reports whether the credential name is left out of the start's secrets
+// request: a model key out or pending after a 401 ([Config.Revoked], [Config.Pending]).
+func (r *Run) leftOut(name string) bool {
+	return slices.Contains(r.cfg.Revoked, name) || slices.Contains(r.cfg.Pending, name)
 }
 
 // KeysOut are the model keys whose value opened with no string at their account_claim,
@@ -1248,7 +1257,7 @@ func (r *Run) storedUses() []credential.Stored {
 		}
 		name := c.Name
 		out = append(out, credential.Stored{Name: name, Apply: r.applies[name], Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
-			AccountHeader: c.Auth.AccountHeader, AccountClaim: c.Auth.AccountClaim, Entry: keyEntry(c), ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
+			AccountHeader: c.Auth.AccountHeader, AccountClaim: c.Auth.AccountClaim, Entry: keyEntry(c), Rejected: r.renew.rejected(name), Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				b, _ := r.values.Value(name)

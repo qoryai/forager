@@ -21,6 +21,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 )
 
@@ -307,22 +308,68 @@ func TestAReopenKeepsTheStopsReasonAndTheKeysOut(t *testing.T) {
 }
 
 // TestAReopenRenewsAKeyWaitingForItsRenewal pins a record whose key waits for its
-// renewal after a 401: the reopened run requests it again, and a key whose value no
-// longer expires, as here, leaves the group, so the next join gets model-2.
+// renewal after a 401: the reopen's secrets request leaves model out, then model is
+// renewed in a request that names it alone, with model as unauthorized. A value with
+// no expires_at, as here, cannot be set, so model leaves the group, and the next join
+// gets model-2.
 func TestAReopenRenewsAKeyWaitingForItsRenewal(t *testing.T) {
 	o := startOpenAIRemote(t)
+	reopenPending(t, o)
+	if status, key := o.join(t); status != http.StatusOK || key != "model-2" {
+		t.Fatalf("the join after the reopen: %d %s; want 200 with model-2", status, key)
+	}
+	keyOut(t, o)
+}
+
+// TestAReopenSurvivesA409ToAPendingKey pins a record whose key waits for its renewal
+// after a 401, and a control plane that cannot seal the key: the reopen's secrets
+// request leaves model out and the run reopens; model's renewal alone gets a signed
+// 409, so model ends out, and the next join gets model-2.
+func TestAReopenSurvivesA409ToAPendingKey(t *testing.T) {
+	o := startOpenAIRemote(t)
+	o.c.mu.Lock()
+	o.c.secretsAnswer = func(req server.SecretsRequest, _ string) (int, []byte) {
+		if slices.Contains(req.Credentials, "model") && !slices.Equal(req.Credentials, []string{"model", "model-2"}) {
+			return http.StatusConflict, []byte(`{"error":"credential_revoked"}`)
+		}
+		return http.StatusOK, o.c.seal(req, map[string]string{"model": "model-value", "model-2": "model-2-value"}, sealed.Expiry(time.Now()))
+	}
+	o.c.mu.Unlock()
+	reopenPending(t, o)
+	keyOut(t, o)
+	if status, key := o.join(t); status != http.StatusOK || key != "model-2" {
+		t.Errorf("the join after the reopen: %d %s; want 200 with model-2", status, key)
+	}
+}
+
+// reopenPending restarts o's gateway with model's renewal after a 401 pending in the
+// run's record, and checks the secrets requests: the reopen's names model-2 alone, and
+// model's renewal names model alone, with model as unauthorized.
+func reopenPending(t *testing.T, o *openaiRemote) {
+	t.Helper()
 	kept := `{"version":1,"keys":[{"credential":"model","at":"2026-11-13T12:00:04Z","out":false}]}` + "\n"
 	if err := os.WriteFile(filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-keys-unauthorized.json"), []byte(kept), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	before := len(o.c.requests(t))
 	o.r = o.r.restart(t, o.cfg)
 	o.e.r = o.r
 	o.posted(t, heartbeat(o.runID()))
-	if status, key := o.join(t); status != http.StatusOK || key != "model-2" {
-		t.Fatalf("the join after the reopen: %d %s; want 200 with model-2", status, key)
+	eventually(t, "the reopen's request and model's renewal", func() bool { return len(o.c.requests(t)) >= before+2 })
+	reqs := o.c.requests(t)[before:]
+	if !slices.Equal(reqs[0].Credentials, []string{"model-2"}) || reqs[0].Unauthorized != nil {
+		t.Errorf("the reopen's request names %v, unauthorized %v; want model-2 alone", reqs[0].Credentials, reqs[0].Unauthorized)
 	}
-	b, err := os.ReadFile(filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-keys-unauthorized.json"))
-	if err != nil || !strings.Contains(string(b), `"out":true`) {
-		t.Errorf("the keys out after the reopen: %s, %v; want model out", b, err)
+	if !slices.Equal(reqs[1].Credentials, []string{"model"}) || !slices.Equal(reqs[1].Unauthorized, []string{"model"}) {
+		t.Errorf("the renewal names %v, unauthorized %v; want model in both", reqs[1].Credentials, reqs[1].Unauthorized)
 	}
+}
+
+// keyOut waits until o's record has model out after a 401.
+func keyOut(t *testing.T, o *openaiRemote) {
+	t.Helper()
+	eventually(t, "model out in the record", func() bool {
+		b, err := os.ReadFile(filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-keys-unauthorized.json"))
+		return err == nil && strings.Contains(string(b), `"out":true`)
+	})
 }

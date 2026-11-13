@@ -570,9 +570,9 @@ type decision struct {
 	images    *server.LinkImages
 	fetched   *run.Fetched
 	labels    map[string]string
-	// revoked are the model keys a reopened run's record has out after a 401
-	// ([run.Config.Revoked]); nil for an open.
-	revoked []string
+	// revoked and pending are the model keys a reopened run's record has out, and with
+	// their renewal pending, after a 401 ([run.Config.Revoked]); nil for an open.
+	revoked, pending []string
 }
 
 // holdError is a failure of [run.Run.Hold] that may pass: a fetch of the run's values
@@ -604,7 +604,7 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 		RunID: lr.id, Node: g.cfg.Policy, Server: g.client != nil, Fetched: d.fetched, Labels: d.labels, Wall: d.wall,
 		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(d.images), Passes: lr.passing, Report: g.report,
 		Narrowing: narrowingOf(d.narrowing), Secrets: secrets, Log: lr.logLine, Clock: g.cfg.renewClock, StackHosts: g.cfg.StackHosts,
-		Revoked: d.revoked,
+		Revoked: d.revoked, Pending: d.pending,
 	})
 	if err != nil {
 		return nil, err

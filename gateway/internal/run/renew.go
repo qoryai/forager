@@ -78,15 +78,22 @@ type renewal struct {
 	asked   time.Time
 	stale   bool
 	expired bool
+	// valueless is true for a model key of [Config.Pending] until its first renewal
+	// brings a value: it has no expires_at, and is due only while the key group has its
+	// renewal pending.
+	valueless bool
 }
 
-// newRenewer is the renewer of the opened values, asked for at now; nil when none has
-// expires_at.
-func newRenewer(r *Run, values sealed.Values, now time.Time) *renewer {
+// newRenewer is the renewer of the opened values, asked for at now, and of the model
+// keys pending, which have no value yet; nil when none has expires_at and none is
+// pending.
+func newRenewer(r *Run, values sealed.Values, pending []string, now time.Time) *renewer {
 	w := &renewer{r: r, clock: r.clock(), wake: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{})}
 	for _, c := range r.stored {
 		if at, ok := values.ExpiresAt(c.Name); ok {
 			w.entries = append(w.entries, &renewal{name: c.Name, expires: at, asked: now})
+		} else if slices.Contains(pending, c.Name) {
+			w.entries = append(w.entries, &renewal{name: c.Name, valueless: true})
 		}
 	}
 	if len(w.entries) == 0 {
@@ -101,21 +108,6 @@ func (r *Run) clock() Clock {
 		return r.cfg.Clock
 	}
 	return machineClock{}
-}
-
-// expiresAt is when the value of the credential name expires, zero when it does not.
-func (w *renewer) expiresAt(name string) time.Time {
-	if w == nil {
-		return time.Time{}
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, e := range w.entries {
-		if e.name == name {
-			return e.expires
-		}
-	}
-	return time.Time{}
 }
 
 // rejected is what a host's 401 to a request the value of name was set on calls: the
@@ -233,10 +225,10 @@ func (w *renewer) plan(now time.Time) (due []string, next time.Time, gone []*ren
 	}
 	first := false
 	for _, e := range w.entries {
-		if e.expired {
+		if e.expired || e.valueless && !w.pending(e.name) {
 			continue
 		}
-		if !now.Before(e.expires) {
+		if !e.valueless && !now.Before(e.expires) {
 			e.expired = true
 			gone = append(gone, e)
 			continue
@@ -246,7 +238,7 @@ func (w *renewer) plan(now time.Time) (due []string, next time.Time, gone []*ren
 		}
 	}
 	for _, e := range w.entries {
-		if e.expired {
+		if e.expired || e.valueless && !w.pending(e.name) {
 			continue
 		}
 		t := at(e)
@@ -255,7 +247,9 @@ func (w *renewer) plan(now time.Time) (due []string, next time.Time, gone []*ren
 			continue
 		}
 		earliest(t)
-		earliest(e.expires)
+		if !e.valueless {
+			earliest(e.expires)
+		}
 	}
 	return due, next, gone
 }
@@ -317,7 +311,8 @@ func (w *renewer) keyGroup() *modelkey.Group {
 // every one of a request that failed, keeps its value and is reported. A model key that
 // was unauthorized goes back in the key group with its value, out of it at the server's
 // signed 409, and stays out of use after any other failure, until the next try
-// RetryWait later ([renewer]).
+// RetryWait later ([renewer]). A model key with no value yet that the start's rules
+// refuse leaves the key group as at a 409.
 func (w *renewer) renew(names []string, now time.Time) {
 	g := w.keyGroup()
 	var unauthorized []string
@@ -354,6 +349,11 @@ func (w *renewer) renew(names []string, now time.Time) {
 			continue
 		}
 		if err := r.renewed(name, values, w.clock.Now()); err != nil {
+			if w.valueless(name) {
+				// No value to keep until the next try: the key cannot be set.
+				w.revoke(name, err)
+				continue
+			}
 			w.notRenewed(name, err)
 			continue
 		}
@@ -412,7 +412,7 @@ func (w *renewer) renewedAt(name string, at time.Time) {
 	defer w.mu.Unlock()
 	for _, e := range w.entries {
 		if e.name == name {
-			e.expires = at
+			e.expires, e.valueless = at, false
 		}
 	}
 }
@@ -437,6 +437,13 @@ func (w *renewer) drop(names []string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.entries = slices.DeleteFunc(w.entries, func(e *renewal) bool { return slices.Contains(names, e.name) })
+}
+
+// valueless reports whether name is a model key with no value yet ([renewal]).
+func (w *renewer) valueless(name string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.ContainsFunc(w.entries, func(e *renewal) bool { return e.name == name && e.valueless })
 }
 
 // has reports whether name is renewed still.

@@ -3,6 +3,7 @@ package run_test
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -276,5 +277,69 @@ func TestARevokedKeyIsLeftOutOfTheReopen(t *testing.T) {
 	}
 	if len(s.called()) < 2 {
 		t.Error("no renewal of forge")
+	}
+}
+
+// TestAPendingKeyIsRenewedAloneAfterTheReopen pins Config.Pending, a reopened run whose
+// record has model's renewal after a 401 pending: the secrets request leaves model out,
+// model has no value and no renewal until the key group has it pending, then one
+// request names model alone with model as unauthorized. A 200 puts model back in the
+// group with its value; a signed 409 takes it out, with no value and no renewal.
+func TestAPendingKeyIsRenewedAloneAfterTheReopen(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		fail  error
+		value string
+	}{
+		{"200", nil, "model-1"},
+		{"409", &server.AnswerError{What: "secrets https://apiary.example/v1/secrets", Status: http.StatusConflict}, "(none)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clock := &fakeClock{now: start}
+			s := &controlPlane{answer: expiring, fail: func(call int) error {
+				if call == 1 {
+					return c.fail
+				}
+				return nil
+			}}
+			f := document(t, twoKeysDoc, digest('1'))
+			f.Document.Computed = digest('c')
+			n := clock.count()
+			r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: f, Secrets: s.fetch, Clock: clock, Report: (&reports{}).report, Log: (&reports{}).report, Pending: []string{"model"}})
+			clock.idle(t, n)
+			if got := s.called(); len(got) != 1 || !slices.Equal(got[0], []string{digest('c'), "model-2", "forge"}) {
+				t.Fatalf("the reopen's request %v; want model-2 and forge", got)
+			}
+			if value(r, "model") != "(none)" {
+				t.Errorf("model's value before its renewal %s; want none", value(r, "model"))
+			}
+			g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", clock.Now)
+			r.SetKeyGroup(g)
+			g.Restore([]modelkey.Unauthorized{{Credential: "model", At: start}})
+			n = clock.count()
+			if !r.Renew("model") {
+				t.Fatal("Renew of the pending key reports no renewal")
+			}
+			clock.idle(t, n)
+			calls := s.called()
+			s.mu.Lock()
+			unauth := slices.Clone(s.unauth)
+			s.mu.Unlock()
+			if len(calls) != 2 || !slices.Equal(calls[1][1:], []string{"model"}) || !slices.Equal(unauth[1], []string{"model"}) {
+				t.Fatalf("the requests %v, unauthorized %v; want model alone as unauthorized", calls, unauth)
+			}
+			if got := value(r, "model"); got != c.value {
+				t.Errorf("model's value %s; want %s", got, c.value)
+			}
+			u := g.Unauthorized()
+			switch {
+			case c.fail == nil && u != nil:
+				t.Errorf("after the 200: %+v; want model back", u)
+			case c.fail != nil && (len(u) != 1 || !u[0].Out):
+				t.Errorf("after the 409: %+v; want model out", u)
+			case c.fail != nil && r.Renew("model"):
+				t.Error("a renewal of model after the 409")
+			}
+		})
 	}
 }
