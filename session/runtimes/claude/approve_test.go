@@ -364,3 +364,14 @@ func TestAModelKeysPlaceholderIsApprovedAsTheStandIn(t *testing.T) {
 		}
 	}
 }
+
+// TestApprovedKeyIsTheEntryClaudeCodeKeeps pins ApprovedKey to the entry Claude Code
+// 2.1.316 keeps for the stand-in, the value approve-key.sh writes.
+func TestApprovedKeyIsTheEntryClaudeCodeKeeps(t *testing.T) {
+	if got := claude.ApprovedKey(); got != approvedEntry {
+		t.Fatalf("ApprovedKey() = %q; want %q", got, approvedEntry)
+	}
+	if want := strings.TrimSpace(runtimes.Placeholder); !strings.HasSuffix(want, claude.ApprovedKey()) {
+		t.Fatalf("ApprovedKey() = %q is not the end of the stand-in %q", claude.ApprovedKey(), want)
+	}
+}
