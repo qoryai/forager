@@ -1129,6 +1129,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if err != nil {
 		return Launch{}, err
 	}
+	if err := e.targetLinks(ctx, l.Mounts); err != nil {
+		return Launch{}, err
+	}
 	helper, err := mount(e.d.Helper, HelperPath, true)
 	if err != nil {
 		return Launch{}, err
@@ -1564,6 +1567,59 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 	return out, host, nil
 }
 
+// targetLinks fails a launch with a mount whose Target goes through a symbolic link in
+// the image: each name from / down to the Target, read out of the image with
+// [dockerEnclosure.imageHeader], that is a symbolic link is refused, since the engine
+// follows it and the bind could land over another mount or /qory. A name that lies
+// inside another mount's place inside is that mount's on this machine, not the image's,
+// and the session checks it; the walk down to a Target stops there, and at the first
+// name the image does not have, which the engine makes.
+func (e *dockerEnclosure) targetLinks(ctx context.Context, mounts []Mount) error {
+	inside := func(q string) bool {
+		return slices.ContainsFunc(mounts, func(m Mount) bool {
+			at := m.Path
+			if m.Target != "" {
+				at = filepath.Clean(m.Target)
+			}
+			return at != q && under(at, q)
+		})
+	}
+	// found is whether the image has a name already read: a missing one ends the walk.
+	found := map[string]bool{}
+	for _, m := range mounts {
+		if m.Target == "" {
+			continue
+		}
+		var names []string
+		for q := path.Clean(m.Target); q != "/"; q = path.Dir(q) {
+			names = append([]string{q}, names...)
+		}
+		for _, q := range names {
+			if inside(q) {
+				break
+			}
+			if has, ok := found[q]; ok {
+				if !has {
+					break
+				}
+				continue
+			}
+			h, err := e.imageHeader(ctx, q)
+			if err != nil {
+				return err
+			}
+			if found[q] = h != nil; h == nil {
+				break
+			}
+			if h.Typeflag == tar.TypeSymlink {
+				why := unreachable(h, q, true, true, 0, 0)
+				return fmt.Errorf("wall docker: %s: %s", why.Fix, why.Cause)
+			}
+		}
+	}
+	return nil
+}
+
 // transcriptMount is the --mount of the launch's transcript directory, empty for a
 // launch with none: the directory, writable, at Under below the home of the agent's
 // user inside, or at an absolute Under, [dockerEnclosure.transcriptPlace]. A directory
@@ -1669,7 +1725,7 @@ func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t T
 		return e.placed, nil
 	}
 	if t.Under == "" || t.Under == "/" || path.Clean(t.Under) != t.Under || slices.Contains(strings.Split(t.Under, "/"), "..") {
-		return nil, fmt.Errorf("wall docker: the transcript's place, %s, is not a clean path below the home or below /", accesskey.ShownValue(t.Under, true))
+		return nil, fmt.Errorf("wall docker: set the transcript's place to a clean path below the home or below /: %s is not one", accesskey.ShownValue(t.Under, true))
 	}
 	p := &transcriptPlace{key: key}
 	uid, gid, unbound, err := e.agentIDs(ctx)

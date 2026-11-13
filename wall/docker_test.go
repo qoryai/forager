@@ -990,6 +990,73 @@ func TestDockerBindsMountsAtTheirTargets(t *testing.T) {
 	}
 }
 
+// TestATargetThroughALinkInTheImageIsRefused pins the check of the names from / down to
+// each Target in the image: a symbolic link among them, which the engine follows, fails
+// the wrap before the agent's container is made, with the fix and cause of the
+// transcript bind's check, at another mount's place too; a name inside another mount's
+// place inside is not read, nor one below a name the image does not have.
+func TestATargetThroughALinkInTheImageIsRefused(t *testing.T) {
+	dir := tar.Header{Typeflag: tar.TypeDir, Mode: 0o755}
+	link := tar.Header{Typeflag: tar.TypeSymlink, Linkname: "lib", Mode: 0o777}
+	home := []Mount{{Path: "/runs/r1/home", Target: "/var/lib/agent-home"},
+		{Path: "/runs/r1/hooks.json", ReadOnly: true, Target: "/var/lib/agent-home/hooks.json"}}
+	for name, c := range map[string]struct {
+		heads  map[string]tar.Header
+		mounts []Mount
+		want   string
+		read   []string
+	}{
+		"a parent that is a link": {map[string]tar.Header{"/var": dir, "/var/lib": link}, home,
+			`wall docker: Make "/var/lib" a directory in the image, not a symbolic link: "/var/lib" is a symbolic link in the ` +
+				"image, which the engine follows, so the bind could land inside another mount", []string{"/var", "/var/lib"}},
+		"the target is a link": {map[string]tar.Header{"/var": dir, "/var/lib": dir, "/var/lib/agent-home": link}, home,
+			`wall docker: Make "/var/lib/agent-home" a directory in the image, not a symbolic link`, nil},
+		"a link inside another mount": {map[string]tar.Header{"/var": dir, "/var/lib": dir, "/var/lib/agent-home": dir,
+			"/var/lib/agent-home/hooks.json": link}, home, "", []string{"/var", "/var/lib", "/var/lib/agent-home"}},
+		"a link below a missing name": {map[string]tar.Header{"/var": dir, "/var/lib/agent-home": link}, home, "",
+			[]string{"/var", "/var/lib"}},
+		"a link at another mount's place": {map[string]tar.Header{"/work": link},
+			[]Mount{{Path: "/runs/r1/config", Target: "/work/.config"}},
+			`wall docker: Make "/work" a directory in the image, not a symbolic link`, nil},
+		"a link inside the workspace": {map[string]tar.Header{"/work": dir, "/work/.config": link},
+			[]Mount{{Path: "/runs/r1/config", Target: "/work/.config"}}, "", []string{"/work"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, heads: c.heads}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+			e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer e.Close(context.Background())
+			l := launch()
+			l.Socket, l.Mounts = "", append([]Mount{{Path: "/work"}}, c.mounts...)
+			_, err = e.Wrap(context.Background(), l)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatal(err)
+			case c.want != "" && (err == nil || !strings.HasPrefix(err.Error(), c.want)):
+				t.Fatalf("the wrap: %v; want an error that starts with %q", err, c.want)
+			case c.want != "" && slices.ContainsFunc(rec.lines, func(l string) bool { return strings.Contains(l, " run --rm ") || strings.Contains(l, " create --rm ") }):
+				t.Errorf("the agent's container was made: %q", rec.lines)
+			}
+			if c.read == nil {
+				return
+			}
+			var read []string
+			for _, line := range rec.lines {
+				// A docker cp of a name the image does not have runs twice.
+				if q, ok := statPath(line); ok && (len(read) == 0 || read[len(read)-1] != q) {
+					read = append(read, q)
+				}
+			}
+			if !slices.Equal(read, c.read) {
+				t.Errorf("the names read out of the image %q; want %q", read, c.read)
+			}
+		})
+	}
+}
+
 // TestDockerListsItsOwnBinds pins the adapter's own binds: the helper, read-only, the
 // hook socket's directory, writable, and the private directory it writes the run's
 // files in, read-only, the one Wrap then writes them in.

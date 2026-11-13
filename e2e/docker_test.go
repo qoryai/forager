@@ -45,6 +45,7 @@ func TestDockerConforms(t *testing.T) {
 	t.Run("the relay listens on the inside network alone", relayListensInsideAlone)
 	t.Run("the relay takes a connection from the inside network alone", relayTakesInsideAlone)
 	t.Run("a read-only file over a writable target stays", readOnlyFileOverWritableTarget)
+	t.Run("a target through a link in the image is refused", targetThroughImageLink)
 }
 
 // TestDockerNestedConforms runs the suite against an image with a Docker of the agent's
@@ -753,6 +754,38 @@ cat hooks.json`
 	}
 	if _, err := os.Stat(filepath.Join(home, "other.json")); err != nil {
 		t.Errorf("the writable directory on this machine: %v", err)
+	}
+}
+
+// targetThroughImageLink requires that a launch with a mount whose Target goes through a
+// symbolic link of the image, /lib64 to lib in busybox, is refused before the agent's
+// container is made: the engine follows the link, so the bind would land at /lib.
+func targetThroughImageLink(t *testing.T) {
+	command, helper := relayEngine(t)
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs}
+	runID := fmt.Sprintf("walltest-relay-%d-%d", os.Getpid(), time.Now().UnixNano())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	e, err := w.Prepare(ctx, wall.Request{RunID: runID, Image: busybox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	proxy, err := net.Listen("tcp", e.ProxyAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	dir, home := t.TempDir(), t.TempDir()
+	_, err = e.Wrap(ctx, wall.Launch{Command: "sh", Args: []string{"-c", "true"}, Dir: dir,
+		Mounts: []wall.Mount{{Path: dir}, {Path: home, Target: "/lib64/agent-home"}}, Proxy: proxy.Addr().String(), ProxyToken: relaySecret})
+	want := `wall docker: Make "/lib64" a directory in the image, not a symbolic link: "/lib64" is a symbolic link in the image`
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("the wrap: %v; want an error that starts with %q", err, want)
+	}
+	out, err := exec.Command(command, "ps", "--all", "--quiet", "--filter", "name=qory-"+runID+"-agent").CombinedOutput()
+	if err != nil || len(strings.TrimSpace(string(out))) != 0 {
+		t.Errorf("the agent's container: %q, %v", out, err)
 	}
 }
 
