@@ -649,7 +649,7 @@ func TestAWalledAbsolutePrefixInAReadOnlyMountGetsNoTranscript(t *testing.T) {
 	evs := events(t, res)
 	out := runLogText(t, evs)
 	fix := "Show resume.prefix in a writable mount, or use a descriptor whose resume.prefix lies outside read-only mounts"
-	cause := "resume.prefix " + prefix + " lies inside it, at " + homeInside + ", read-only, so the runtime cannot write its transcript there"
+	cause := "resume.prefix " + prefix + " lies inside the mount " + home + ", shown at " + homeInside + ", read-only, so the runtime cannot write its transcript there"
 	failed := fix + ". The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: " + cause + "\n"
 	none := fix + ". A continuation of this run starts the runtime without a resume: " + cause + "\n"
 	if i, j := strings.Index(out, failed), strings.Index(out, none); i < 0 || j < i || !strings.Contains(out, "args: \n") || strings.Contains(out, "restored: ok") {

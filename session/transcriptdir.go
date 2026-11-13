@@ -138,8 +138,8 @@ func inMount(prefix, place string, mounts []wall.Mount) (*transcriptRoot, error)
 	if holder.ReadOnly {
 		return &transcriptRoot{unbound: &wall.Unbound{
 			Fix: "Show resume.prefix in a writable mount, or use a descriptor whose resume.prefix lies outside read-only mounts",
-			Cause: fmt.Sprintf("resume.prefix %s lies inside it, at %s, read-only, so the runtime cannot write its "+
-				"transcript there", pathShown(prefix), pathShown(at)),
+			Cause: fmt.Sprintf("resume.prefix %s lies inside the mount %s, shown at %s, read-only, so the runtime "+
+				"cannot write its transcript there", pathShown(prefix), pathShown(holder.Path), pathShown(at)),
 		}}, nil
 	}
 	rel, err := filepath.Rel(at, place)

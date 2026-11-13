@@ -613,6 +613,12 @@ func TestAMountTargetIsAbsoluteCleanAndApartFromQory(t *testing.T) {
 		"/sys/fs/cgroup":         "Set the target of the mount " + home + " to a place apart from /sys",
 		"/dev":                   "Set the target of the mount " + home + " to a place apart from /dev: \"/dev\" overlaps it, and the engine mounts the container's devices there",
 		"/dev/shm":               "Set the target of the mount " + home + " to a place apart from /dev",
+		"/etc/hosts":             "Set the target of the mount " + home + " to a place apart from /etc/hosts: \"/etc/hosts\" overlaps it, and the engine binds the container's name lookup files there",
+		"/etc/hostname":          "Set the target of the mount " + home + " to a place apart from /etc/hostname: \"/etc/hostname\" overlaps it, and the engine binds the container's name lookup files there",
+		"/etc/resolv.conf":       "Set the target of the mount " + home + " to a place apart from /etc/resolv.conf: \"/etc/resolv.conf\" overlaps it, and the engine binds the container's name lookup files there",
+		"/etc":                   "Set the target of the mount " + home + " to a place apart from /etc/hosts: \"/etc\" overlaps it",
+		"/sbin/docker-init":      "Set the target of the mount " + home + " to a place apart from /sbin/docker-init: \"/sbin/docker-init\" overlaps it, and the engine binds the init process there under nested Docker",
+		"/sbin":                  "Set the target of the mount " + home + " to a place apart from /sbin/docker-init: \"/sbin\" overlaps it",
 		"/var/lib/agent,home":    "Remove the comma, double quote or newline from the target of the mount " + home,
 		"/var/lib/agent\"home":   "Remove the comma, double quote or newline from the target of the mount " + home,
 		"/var/lib/agent\nhome":   "Remove the comma, double quote or newline from the target of the mount " + home,
@@ -739,16 +745,16 @@ func TestTargetConflictsAreNoRun(t *testing.T) {
 		{"a read-only file two names inside a writable target", "mount_mode_conflict",
 			[]wall.Mount{{Path: home, Target: homeInside}, {Path: other, ReadOnly: true, Target: homeInside + "/a/hooks.json"}},
 			[]string{other, home},
-			"the mount " + other + " at " + homeInside + "/a/hooks.json (read-only) lies inside the mount " + home + " at " +
-				homeInside + " (writable), below " + homeInside + "/a, which the agent can rename: a read-only place lies " +
-				"one name below a writable one, or below read-only places alone"},
+			"Show the mount " + other + " at " + homeInside + "/a/hooks.json one name below the mount " + home + " at " +
+				homeInside + ", or make each directory between them a read-only place: the agent can rename " + homeInside +
+				"/a, and the bind moves with it"},
 		{"a read-only file below a writable place inside a writable target", "mount_mode_conflict",
 			[]wall.Mount{{Path: home, Target: homeInside}, {Path: mid, Target: homeInside + "/a"},
 				{Path: other, ReadOnly: true, Target: homeInside + "/a/hooks.json"}},
 			[]string{other, home},
-			"the mount " + other + " at " + homeInside + "/a/hooks.json (read-only) lies inside the mount " + home + " at " +
-				homeInside + " (writable), below " + homeInside + "/a, which the agent can rename: a read-only place lies " +
-				"one name below a writable one, or below read-only places alone"},
+			"Show the mount " + other + " at " + homeInside + "/a/hooks.json one name below the mount " + home + " at " +
+				homeInside + ", or make each directory between them a read-only place: the agent can rename " + homeInside +
+				"/a, and the bind moves with it"},
 		{"a target at the workspace's path on this machine", "mount_target_conflict",
 			[]wall.Mount{{Path: inWS, Target: homeInside}},
 			[]string{inWS, ws},
@@ -870,5 +876,56 @@ func TestALinkInAWritableTargetOnTheWayToAPlaceIsNoRun(t *testing.T) {
 				t.Error("the wall was wrapped")
 			}
 		})
+	}
+}
+
+// TestALinkBetweenReadOnlyPlacesIsNoRun pins the check of the names on this machine from
+// a read-only place's path down to a place inside it: a symbolic link there, which the
+// engine follows to bind the inner place, is mount_target_conflict, as in a writable
+// place. The walk from an outer place stops at a nearer place, whose pair with the inner
+// one checks the rest: a link in the outer place's directory below the nearer place's
+// place inside is not on the way to the bind.
+func TestALinkBetweenReadOnlyPlacesIsNoRun(t *testing.T) {
+	outer, inner := t.TempDir(), t.TempDir()
+	symlink(t, t.TempDir(), filepath.Join(outer, "c"))
+	w := &openWall{}
+	sp := walledSpec(t, w)
+	sp.Mounts = []wall.Mount{{Path: outer, ReadOnly: true, Target: homeInside}, {Path: inner, ReadOnly: true, Target: homeInside + "/c"}}
+	r := refusalOf(t, "mount_target_conflict", runErr(sp))
+	want := "Remove the symbolic link " + filepath.Join(outer, "c") + " from the mount " + outer + " at " + homeInside +
+		": the engine binds the mount " + inner + " at " + homeInside + "/c through it and follows the link, so the bind " +
+		"could land outside the mount"
+	if !slices.Equal(r.Names, []string{inner, outer}) || r.Detail != want {
+		t.Errorf("names %q, detail %q\nwant %q", r.Names, r.Detail, want)
+	}
+	if w.wrapped {
+		t.Error("the wall was wrapped")
+	}
+
+	// A writable home, a read-only folder at b in it and a read-only file at b/c in the
+	// folder: a link at b/c in the home's directory lies under the folder's bind.
+	home, folder, file := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "c")
+	if err := os.WriteFile(file, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mkdirs(t, filepath.Join(home, "b"))
+	symlink(t, t.TempDir(), filepath.Join(home, "b", "c"))
+	w = &openWall{}
+	sp = walledSpec(t, w)
+	sp.Mounts = []wall.Mount{{Path: home, Target: homeInside}, {Path: folder, ReadOnly: true, Target: homeInside + "/b"},
+		{Path: file, ReadOnly: true, Target: homeInside + "/b/c"}}
+	if _, err := run(context.Background(), sp); err != nil {
+		t.Fatalf("a link under the folder's bind: %v", err)
+	}
+
+	// The same link in the folder's directory is on the way to the file's bind.
+	symlink(t, t.TempDir(), filepath.Join(folder, "c"))
+	w = &openWall{}
+	sp = walledSpec(t, w)
+	sp.Mounts = []wall.Mount{{Path: home, Target: homeInside}, {Path: folder, ReadOnly: true, Target: homeInside + "/b"},
+		{Path: file, ReadOnly: true, Target: homeInside + "/b/c"}}
+	r = refusalOf(t, "mount_target_conflict", runErr(sp))
+	if !slices.Equal(r.Names, []string{file, folder}) || !strings.HasPrefix(r.Detail, "Remove the symbolic link "+filepath.Join(folder, "c")+" from the mount "+folder+" at "+homeInside+"/b:") {
+		t.Errorf("names %q, detail %q", r.Names, r.Detail)
 	}
 }

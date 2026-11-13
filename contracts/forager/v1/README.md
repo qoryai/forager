@@ -2368,8 +2368,9 @@ the session starts the runtime without the descriptor's `resume.args`, sends no
 transcript and writes one line, such as `Show resume.prefix in a writable mount, or use
 a descriptor whose resume.prefix lies outside read-only mounts. A continuation of this
 run starts the runtime without a resume: resume.prefix
-/var/lib/qory-codex-home/sessions/ lies inside it, at /var/lib/qory-codex-home,
-read-only, so the runtime cannot write its transcript there`; with a restored
+/var/lib/qory-codex-home/sessions/ lies inside the mount /srv/runs/r1/codex-home, shown
+at /var/lib/qory-codex-home, read-only, so the runtime cannot write its transcript
+there`; with a restored
 transcript, a line before it reports that the restore failed. A mount whose place
 inside lies inside an absolute `resume.prefix` fails the session.
 
@@ -6026,14 +6027,23 @@ up in its parent, so two binds of one root are allowed:
   bind is one the agent replaces, and a writable part of a read-only one writes what the
   run shows read-only;
 - a mount may set `Target`, its place inside: an absolute, clean path, apart from
-  `/qory`, `/var/lib/docker`, `/proc`, `/sys` and `/dev`, with no comma, double quote or
-  newline. Empty, the place inside is its path. A target that breaks this fails the join,
-  with no code. A name from `/` down to a target that is a symbolic link in the image,
-  such as `/lib64` in an image where it links to `lib`, fails the session: the engine
-  follows it, so the bind could land over another mount. A name inside another mount's
-  place inside is not read from the image. A mount with a target is always
-  bound, never reached through another bind, and its path on the machine is, contains and
-  lies inside no other place's: `mount_mode_conflict` for the other mode, otherwise
+  `/qory`, `/var/lib/docker`, `/proc`, `/sys`, `/dev`, `/etc/hosts`, `/etc/hostname`,
+  `/etc/resolv.conf` and `/sbin/docker-init`, so neither `/etc`, `/sbin` nor `/`, with no
+  comma, double quote or newline. Empty, the place inside is its path. A target that
+  breaks this fails the join, with no code. A name from `/` down to a target that is a
+  symbolic link in the image, such as `/lib64` in an image where it links to `lib`,
+  fails the session: the engine follows it, so the bind could land over another mount or
+  over `/qory`. A name inside another mount's place inside is not read from the image.
+  For a read-only mount with a target, a directory of the image above the outermost
+  mount whose place inside contains the target, other than `/`, that the agent's uid or
+  gid may write fails the session, such as `/x` owned by uid 1000 above a read-only
+  `/x/y/conf`: the agent could rename `/x/y`, and the bind moves with it. A directory
+  with the sticky bit passes unless the agent owns the next name on the way. Under a
+  wall's user that is a name, or a uid other than the session's, a directory that a
+  user other than root owns and may write, or that its group or the others may write,
+  counts as one the agent writes. A mount with a target is always bound, never reached
+  through another bind, and its path on the machine is, contains and lies inside no
+  other place's: `mount_mode_conflict` for the other mode, otherwise
   `mount_target_conflict`. So the agent cannot change a read-only file through a
   writable directory of the machine.
   Inside, places are nested by their places inside, when one of them has a target: a
@@ -6045,14 +6055,14 @@ up in its parent, so two binds of one root are allowed:
   `mount_mode_conflict`. Under nested Docker this is unverified: the enclosure's root,
   which the agent reaches through the inner Docker daemon, may remount a read-only place
   writable (Nested Docker, below). A symbolic link on the machine among the names from a
-  writable place's path down to a place inside it, such as a link at
+  place's path down to a place inside it, of either mode, such as a link at
   `/srv/runs/r1/codex-home/hooks.json` that an agent of an earlier session made, is
   `mount_target_conflict`, at the join and again before the wall step: the engine
-  follows it. Two places at one place inside,
+  follows it. The names below a nearer place are checked from that place's path. Two places at one place inside,
   and a target that is, contains or lies inside the workspace inside, or the session's
   directory, are `mount_target_conflict`, with the inner place and the outer one as its
-  names, in that order, the session's directory last. For a run whose policy gives its
-  image by reference the workspace inside is `/workspace`. The session lists the binds
+  names, in that order, the session's directory last. For a run whose policy sets its
+  image by reference, the workspace inside is `/workspace`. The session lists the binds
   in the order of their places inside, fewer names first, so a bind comes after the
   one whose place inside contains it;
 - a session with `SessionSpec.WorkspaceReadOnly` binds the workspace read-only for its

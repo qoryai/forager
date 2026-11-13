@@ -132,7 +132,7 @@ func TestAnAbsolutePrefixIsReadInTheMountThatHoldsIt(t *testing.T) {
 		resume string
 		mounts []wall.Mount
 		want   transcriptRoot
-		// at is the place inside of the read-only mount the cause gives, empty for a
+		// at is the place inside of the read-only mount in the cause, empty for a
 		// writable one.
 		at string
 	}{
@@ -159,7 +159,7 @@ func TestAnAbsolutePrefixIsReadInTheMountThatHoldsIt(t *testing.T) {
 			}
 			if c.at != "" {
 				const fix = "Show resume.prefix in a writable mount, or use a descriptor whose resume.prefix lies outside read-only mounts"
-				if got.unbound == nil || got.unbound.Fix != fix || !strings.Contains(got.unbound.Cause, ", at "+c.at+", read-only") ||
+				if got.unbound == nil || got.unbound.Fix != fix || !strings.Contains(got.unbound.Cause, ", shown at "+c.at+", read-only") ||
 					got.dir != "" || got.bind != "" {
 					t.Errorf("%+v; want unbound with the fix %q and the place %s", got, fix, c.at)
 				}
@@ -178,7 +178,7 @@ func TestAnAbsolutePrefixIsReadInTheMountThatHoldsIt(t *testing.T) {
 	if err != nil || u.unbound == nil {
 		t.Fatalf("%+v, %v", u, err)
 	}
-	if want := "resume.prefix " + home + "/sessions/ lies inside it, at " + home + ", read-only, so the runtime cannot write its transcript there"; u.unbound.Cause != want {
+	if want := "resume.prefix " + home + "/sessions/ lies inside the mount " + hostHome + ", shown at " + home + ", read-only, so the runtime cannot write its transcript there"; u.unbound.Cause != want {
 		t.Errorf("the cause %q; want %q", u.unbound.Cause, want)
 	}
 

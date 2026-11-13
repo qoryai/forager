@@ -534,13 +534,13 @@ func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 			return mountPlan{}, nil, &Refusal{
 				Code:  refusal.MountTargetConflict,
 				Names: pathsShown(m.Path, p.workspace),
-				Detail: fmt.Sprintf("the mount %s at %s overlaps %s, where a run whose policy gives its image by "+
-					"reference sees the workspace %s: a mount's target can't overlap the workspace inside",
-					pathShown(m.Path), pathShown(m.Target), workspaceInside, pathShown(p.workspace)),
+				Detail: fmt.Sprintf("the mount %s at %s overlaps the workspace %s of a run whose policy sets its "+
+					"image by reference, where the workspace inside is %s: a mount's target can't overlap the workspace inside",
+					pathShown(m.Path), pathShown(m.Target), pathShown(p.workspace), workspaceInside),
 			}
 		}
-		return mountPlan{}, nil, fmt.Errorf("%s is shown at the same path inside, which overlaps %s, where a run "+
-			"whose policy gives its image by reference sees its workspace", pathShown(m.Path), workspaceInside)
+		return mountPlan{}, nil, fmt.Errorf("%s is shown at the same path inside, which overlaps the workspace of a "+
+			"run whose policy sets its image by reference, where the workspace inside is %s", pathShown(m.Path), workspaceInside)
 	}
 	inside := func(s string) string { return translate(s, p.root, workspaceInside) }
 	out.Dir = inside(p.Dir)
@@ -942,14 +942,19 @@ func placeInside(m wall.Mount) string {
 var qoryInside = filepath.Dir(wall.HelperPath)
 
 // wallPlaces are the places inside that a mount's Target is, contains or lies inside of
-// none of, each with why: the wall's /qory, the store of nested Docker, and the file
-// systems the engine mounts in every container.
+// none of, each with why: the wall's /qory, the store of nested Docker, the file systems
+// the engine mounts in every container, the name lookup files it binds, and the init
+// process it binds under nested Docker.
 var wallPlaces = []struct{ place, why string }{
 	{qoryInside, "the wall shows its helper there"},
 	{"/var/lib/docker", "the wall keeps the store of nested Docker there"},
 	{"/proc", "the engine mounts a kernel file system there"},
 	{"/sys", "the engine mounts a kernel file system there"},
 	{"/dev", "the engine mounts the container's devices there"},
+	{"/etc/hosts", "the engine binds the container's name lookup files there"},
+	{"/etc/hostname", "the engine binds the container's name lookup files there"},
+	{"/etc/resolv.conf", "the engine binds the container's name lookup files there"},
+	{"/sbin/docker-init", "the engine binds the init process there under nested Docker"},
 }
 
 // checkMountTarget fails a mount whose Target is set and is not absolute and clean, is,
@@ -982,8 +987,8 @@ func checkMountTarget(m wall.Mount) error {
 // mount_mode_conflict. A read-only place inside a writable one passes when it lies one
 // name below it, or when each directory between them is a read-only place: the agent
 // can rename any other directory of the writable place, and the bind moves with it. A
-// symbolic link on this machine among the names from a writable place's path down to
-// the place inside it is mount_target_conflict ([linkBelow]). A Target that is,
+// symbolic link on this machine among the names from a place's path down to a place
+// inside it, of either mode, is mount_target_conflict ([linkBelow]). A Target that is,
 // contains or lies inside sessionDir, the session's directory, is mount_target_conflict
 // too. Places neither of which has a Target are checked by their paths on this machine
 // alone.
@@ -1008,21 +1013,17 @@ func checkPlaces(places []shown, sessionDir string) error {
 			if in.bindsWritable() && !out.bindsWritable() {
 				return modeConflict(in, out, false)
 			}
-			if !out.bindsWritable() {
-				continue
-			}
-			if !in.bindsWritable() {
+			if out.bindsWritable() && !in.bindsWritable() {
 				if dir, ok := movable(places, out.place, in.place); ok {
 					return &Refusal{
 						Code:  refusal.MountModeConflict,
 						Names: pathsShown(in.path, out.path),
-						Detail: fmt.Sprintf("%s (read-only) lies inside %s (writable), below %s, which the agent can "+
-							"rename: a read-only place lies one name below a writable one, or below read-only places alone",
-							in.shownAs(), out.shownAs(), pathShown(dir)),
+						Detail: fmt.Sprintf("Show %s one name below %s, or make each directory between them a read-only "+
+							"place: the agent can rename %s, and the bind moves with it", in.shownAs(), out.shownAs(), pathShown(dir)),
 					}
 				}
 			}
-			if err := linkBelow(in, out); err != nil {
+			if err := linkBelow(in, out, places); err != nil {
 				return err
 			}
 		}
@@ -1056,34 +1057,40 @@ func movable(places []shown, outer, inner string) (string, bool) {
 	return "", false
 }
 
-// linkBelow fails the place in, whose place inside lies inside the writable place out's,
-// when a name from out's path on this machine down to in's place inside is a symbolic
-// link on this machine: the engine follows it to bind in, so an agent of an earlier
-// session that wrote the link chooses where in is bound. The check stops at the first
-// name that does not exist, which the engine makes.
-func linkBelow(in, out shown) error {
+// linkBelow fails the place in, whose place inside lies inside the place out's, of
+// either mode, when a name from out's path on this machine down to in's place inside is
+// a symbolic link on this machine: the engine follows it to bind in, so whoever wrote
+// the link, an agent of an earlier session say, chooses where in is bound. The check
+// stops at the first name that does not exist, which the engine makes, and at the first
+// name whose place inside is another place of places: the names below it lie in that
+// place, and the pair of in and that place checks them.
+func linkBelow(in, out shown, places []shown) error {
 	rel, err := filepath.Rel(out.place, in.place)
 	if err != nil {
 		return err
 	}
-	// at is the name as it resolves, which is checked, and shown the name below out's
-	// path as passed, which a refusal words.
-	at, shown := out.at.String(), out.path
+	// at is the name as it resolves, which is checked, named the name below out's path
+	// as passed, which a refusal words, and inside its place inside.
+	at, named, inside := out.at.String(), out.path, out.place
 	for _, name := range parts(rel) {
-		at, shown = filepath.Join(at, name), filepath.Join(shown, name)
+		at, named, inside = filepath.Join(at, name), filepath.Join(named, name), filepath.Join(inside, name)
+		if inside != in.place && slices.ContainsFunc(places, func(p shown) bool { return p.place == inside }) {
+			return nil
+		}
 		fi, err := os.Lstat(at)
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("cannot check %s on the way to %s: %w", pathShown(shown), in.shownAs(), accesskey.ShownError(err))
+			return fmt.Errorf("Fix the error at the end of this message, then run the command again. Cannot check %s "+
+				"on the way to %s: %w", pathShown(named), in.shownAs(), accesskey.ShownError(err))
 		}
 		if fi.Mode()&fs.ModeSymlink != 0 {
 			return &Refusal{
 				Code:  refusal.MountTargetConflict,
 				Names: pathsShown(in.path, out.path),
 				Detail: fmt.Sprintf("Remove the symbolic link %s from %s: the engine binds %s through it and follows "+
-					"the link, so the bind could land outside the mount", pathShown(shown), out.shownAs(), in.shownAs()),
+					"the link, so the bind could land outside the mount", pathShown(named), out.shownAs(), in.shownAs()),
 			}
 		}
 	}
