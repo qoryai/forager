@@ -628,6 +628,9 @@ func syncDirs(dirs ...string) error {
 // [Run.Discard] and [Stream.Reclaim] remove them by name.
 var keptFiles = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", heldFile}
 
+// KeptFiles is the names of the files [RemoveKept] removes, in order.
+func KeptFiles() []string { return slices.Clone(keptFiles) }
+
 // RemoveKept removes every file the gateway keeps to reopen a run ([keptFiles]) from
 // the run record directory dir, then syncs dir when it removed one: a run that ended
 // for good, which no gateway reopens. events.jsonl, the delivery state and the lock

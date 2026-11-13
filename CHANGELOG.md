@@ -1257,43 +1257,43 @@ release may change what an existing document does, and says so under Upgrading.
   with `run_closed` on the local link, or is kept behind a separate gateway, as in the
   next entry.
 - A separate gateway that restarts on the same directory keeps its runs, so the agent
-  sessions behind it go on. From its start, `Close` gives every request of a run a `503`
-  with no body, and suspends every live run at once, in parallel: it flushes the run's
-  events, writes no `dev.qory.run.exited`, and keeps the run's record. A reopen in
-  flight stops as an open does, its waiting requests get a `503` at once, and its run
-  keeps its record. A run whose open or reopen ends while `Close` goes on is suspended
-  as soon as it opens. Within the bounds in code, `Close` takes 27 seconds at most,
-  within a container's stop grace of 40 seconds. When a run's
-  tool does not listen, the gateway stops it together with the run's tools that started,
-  in at most 10 seconds; before, it stopped that tool first, then the others. The
-  gateway that starts again reopens the run at its first request whose run key verifies,
-  a batch, a reload, a join, a transcript request or a proxy connection: it attaches the
-  run again with the tries of an open and goes on numbering the record. Every request of
-  the run waits for the reopen while its connection stays open. It gets a `503` with no
-  body after a failure that may pass, and a `410` `run_closed` after a final failure; a
-  request whose connection closes first, such as one of a session that stopped waiting
-  after 10 seconds, gets no answer, and the reopen goes on. The attach of a reopen is
-  final at once on a signed `410`, `run_attached`, `wrong_gateway`,
-  `workspace_not_served` or a run configuration that fails Forager's checks; any other
-  signed `4xx`, and a `401` signed or not, is tried again for up to 120 seconds, and is
-  final when that window ends on it; a `5xx`, no answer, a `429` `rate_limited`, and an
-  unsigned answer other than a `401` give a `503`. A fetch of the run's secrets in a
-  reopen gives a `503` when it gets no answer, a `5xx` or a `429` `rate_limited`, and a
-  `410` `run_closed` on any other `4xx`. While a connection waits on a reopen, it counts
+  sessions behind it go on. From the start of `Close`, every request of a run gets a
+  `503` with no body, and `Close` suspends every live run at once, in parallel: it
+  flushes the run's events, writes no `dev.qory.run.exited`, and keeps the run's record.
+  A reopen in flight stops as an open does, its waiting requests get a `503` at once,
+  and its run keeps its record. A run whose open or reopen ends while `Close` goes on is
+  suspended as soon as it opens. Within the bounds in code, `Close` takes 27 seconds at
+  most, within a container's stop grace of 40 seconds. When a run's tool does not
+  listen, the gateway stops it together with the run's tools that started, in at most 10
+  seconds; before, it stopped that tool first, then the others. The gateway that starts
+  again reopens the run at its first request whose run key verifies, a batch, a reload,
+  a join, a transcript request or a proxy connection: it attaches the run again with the
+  tries of an open and goes on numbering the record. Every request of the run waits for
+  the reopen while its connection stays open. It gets a `503` with no body after a
+  failure that may pass, and a `410` `run_closed` after a final failure; a request whose
+  connection closes first, such as one of a session that stopped waiting after 10
+  seconds, gets no answer, and the reopen goes on. The attach of a reopen is final at
+  once on a signed `410`, `run_attached`, `wrong_gateway`, `workspace_not_served` or a
+  run configuration that fails Forager's checks; any other signed `4xx`, and a `401`
+  signed or not, is tried again for up to 120 seconds, and is final when that window
+  ends on it; a `5xx`, no answer, a `429` `rate_limited`, and an unsigned answer other
+  than a `401` give a `503`. In a reopen, the request gets a `503` when the fetch of the
+  run's secrets gets no answer, a `5xx` or a `429` `rate_limited`, and a `410`
+  `run_closed` on any other `4xx`. While a connection waits on a reopen, it counts
   against the bound of 4096 connections and not against its source's bounds. To reopen a
   run the gateway keeps `request.json`, `ca.pem`, `ca.key`, `given.jsonl`,
   `joins.jsonl`, `model-key-limit` and `held.jsonl` in its record, each mode `0600`.
-  `request.json` contains each image reference without its user information, its part up
-  to and with a first `@` that comes before the first `/` and is not followed by
-  `sha256:`, so no registry's credentials reach the disk. The reload answer's
-  `image.ref` leaves that part out too, at every open: before, it was the run answer's
-  reference whole. All seven go together: at the run's end, when its open or a reopen
-  fails for good, when `qory run resend` ends the run, and in a sweep every 10 minutes
-  of each record unchanged for 15 minutes. `events.jsonl`, `delivered.log`,
-  `undelivered/` and `gateway.lock` stay. A join request that repeats the last join the
-  gateway numbered, answered `200` or `403` `placeholder_conflict`, gets the same
-  answer, across a restart too. Before, a run open at a gateway that stopped was over,
-  and `qory run resend` ended it with `gateway_lost`. To deploy such a gateway:
+  `request.json` contains each image reference without its user information: everything
+  up to and with the last `@` before a trailing `@sha256:` digest, a scheme in front of
+  it too, so no registry's credentials reach the disk. The reload answer's `image.ref`
+  leaves that part out too, at every open: before, it was the run answer's reference
+  whole. All seven go together: at the run's end, when its open or a reopen fails for
+  good, when `qory run resend` ends the run, and in a sweep every 10 minutes of each
+  record unchanged for 15 minutes. `events.jsonl`, `delivered.log`, `undelivered/` and
+  `gateway.lock` stay. A join request that repeats the last join the gateway numbered,
+  answered `200` or `403` `placeholder_conflict`, gets the same answer, across a restart
+  too. Before, a run open at a gateway that stopped was over, and `qory run resend`
+  ended it with `gateway_lost`. To deploy such a gateway:
   - keep the gateway's state directory, with the instance id it signs with and the run
     records, on a volume that outlives the gateway's container;
   - do not run `qory run resend` on a gateway's record during a deploy: it ends the run

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -59,24 +60,30 @@ type keptRequest struct {
 	Images    *server.LinkImages    `json:"images,omitempty"`
 }
 
+// digestSuffix is a reference's trailing digest, @sha256: and 64 lower-case
+// hexadecimal digits.
+var digestSuffix = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
+
 // withoutUserInfo is the image reference ref without the user information it may start
-// with, user@ or user:password@, which may contain a registry's credentials: when the
-// first @ of ref comes before its first /, and what follows that @ is not a digest,
-// sha256:, the part up to and with that @ is left out. Any other reference is returned
-// as it is: one whose first @ comes after its first /, as in host/name@sha256:…, one
-// with no / at all, as in name@sha256:…, and one with no @. A port, host:5000/name, is
-// no user information.
+// with, which may contain a registry's credentials: its trailing digest is set aside,
+// everything up to and with the last @ of the rest is left out, a scheme in front of
+// the user information too, and the digest is put back. A password may contain / and @,
+// and a user may be an email address. A reference with no @ before its digest is
+// returned as it is, and so is a result of withoutUserInfo.
 func withoutUserInfo(ref string) string {
-	at, slash := strings.IndexByte(ref, '@'), strings.IndexByte(ref, '/')
-	if at <= 0 || slash < 0 || at > slash || strings.HasPrefix(ref[at+1:], "sha256:") {
-		return ref
+	rest, digest := ref, ""
+	if loc := digestSuffix.FindStringIndex(ref); loc != nil {
+		rest, digest = ref[:loc[0]], ref[loc[0]:]
 	}
-	return ref[at+1:]
+	if at := strings.LastIndexByte(rest, '@'); at >= 0 {
+		rest = rest[at+1:]
+	}
+	return rest + digest
 }
 
 // imagesWithoutUserInfo is a copy of the session's images with each reference, the
 // default's when it is one and each definition's, without its user information
-// ([withoutUserInfo]); nil for nil. The allowed prefixes, which name no user
+// ([withoutUserInfo]); nil for nil. The allowed prefixes, which contain no user
 // information ([policy.CheckImagePrefix]), stay as they are.
 func imagesWithoutUserInfo(li *server.LinkImages) *server.LinkImages {
 	if li == nil {
@@ -88,6 +95,14 @@ func imagesWithoutUserInfo(li *server.LinkImages) *server.LinkImages {
 		out.Definitions = append(out.Definitions, d)
 	}
 	return out
+}
+
+// keptNotRemoved is the report of the run runID whose kept files [stream.RemoveKept]
+// did not remove from its record dir, the fix first.
+func keptNotRemoved(runID, dir string, err error) string {
+	names := stream.KeptFiles()
+	list := strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	return fmt.Sprintf("run %s: remove %s from %s by hand: removing them failed: %v", accesskey.ShownValue(runID, false), list, accesskey.ShownValue(dir, false), accesskey.ShownError(err))
 }
 
 // narrowingOf is the session's narrowing of the run request as [run.Config] takes it,
@@ -459,7 +474,7 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 		delete(g.sweeping, id)
 		g.mu.Unlock()
 		if err != nil {
-			g.report(fmt.Sprintf("run %s: removing the files kept to reopen it: %v", accesskey.ShownValue(id, false), err))
+			g.report(keptNotRemoved(id, dir, err))
 			continue
 		}
 		g.report(fmt.Sprintf("run %s: removed the files kept to reopen it: its record has not changed for %s", accesskey.ShownValue(id, false), age))

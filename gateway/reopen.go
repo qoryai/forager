@@ -315,7 +315,7 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 // fails, and returns err.
 func (g *Gateway) dropKept(runID, dir string, err error) error {
 	if rerr := stream.RemoveKept(dir); rerr != nil {
-		g.report(fmt.Sprintf("run %s: removing the files kept to reopen it: %v", runID, rerr))
+		g.report(keptNotRemoved(runID, dir, rerr))
 	}
 	return err
 }

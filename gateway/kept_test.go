@@ -280,13 +280,15 @@ func TestARefusedJoinSentAgainGetsItsRefusalAgain(t *testing.T) {
 func TestTheReloadAnswerIsTheSameAfterAReopen(t *testing.T) {
 	const digest = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 	const bare = "registry.example/agents/base" + digest
+	// A password with / and @ in it.
+	const secret = "user:pa/ss@wo@rd@"
 	c := gatewayControl(t)
 	cfg := gateway.Config{Dir: t.TempDir()}
 	before := startRemote(t, c, cfg)
 	runID := event.NewRunID()
-	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: "user:password@" + bare, Runtime: "sysbox-runc"}}}
+	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: secret + bare, Runtime: "sysbox-runc"}}}
 	e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true, Images: images})
-	if e.a.Image == nil || e.a.Image.Ref != "user:password@"+bare {
+	if e.a.Image == nil || e.a.Image.Ref != secret+bare {
 		t.Errorf("the run answer's image: %+v", e.a.Image)
 	}
 	first := e.reload(t)
@@ -294,7 +296,7 @@ func TestTheReloadAnswerIsTheSameAfterAReopen(t *testing.T) {
 	if err := json.Unmarshal(first.body, &reloaded); first.status != http.StatusOK || err != nil || reloaded.Image == nil || reloaded.Image.Ref != bare {
 		t.Fatalf("the reload: %d %s", first.status, first.body)
 	}
-	if b, err := os.ReadFile(filepath.Join(cfg.Dir, "runs", runID, "request.json")); err != nil || strings.Contains(string(b), "password") {
+	if b, err := os.ReadFile(filepath.Join(cfg.Dir, "runs", runID, "request.json")); err != nil || strings.Contains(string(b), "pa/ss") {
 		t.Errorf("request.json: %s, %v", b, err)
 	}
 	held := strings.Trim(first.header.Get("ETag"), `"`)

@@ -600,7 +600,7 @@ func (g *Gateway) reserved() []string {
 // tools within 10 seconds and flushes its record within stream.CloseWait, 25 seconds,
 // and the one address then closes within 1 second, 26; an open that Close stops stops
 // its tools within 10 seconds. A credential adapter whose child holds its output open,
-// and a server that never answers a flush's last try, are not bounded here.
+// and a server that returns nothing to a flush's last try, are not bounded here.
 //
 // The Delivery is what the runs came to: their undelivered events, and who closed a
 // run that ended at the gateway, and how it ended. Close again waits for the first.

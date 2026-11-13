@@ -3885,15 +3885,15 @@ every live run is suspended, all in parallel: the gateway lets go of the run's p
 tools and credentials, flushes the run's events toward the server as at a run's end,
 writes no `dev.qory.session.exited` and no `dev.qory.run.exited`, and keeps the run's
 record with the files of a reopen (The record files). A run whose open or reopen was
-past those steps is suspended as soon as it opens. Once the opens and the reopens
-ended, the one address closes. With tools that stop at `SIGTERM` and a server that takes
-the last events, a `Close` with runs live and opening takes a few seconds. The bounds in
-code are 5 seconds from a tool's `SIGTERM` to its `SIGKILL` and 5 more for it to exit, 1
-second for the one address and for each proxy, and 15 seconds for each run's flush, so
-a `Close` takes 27 seconds at most for a live run's two proxies, tools and flush, while
-a stopped reopen's tools and flush, and then the one address, take 26 seconds beside it.
-A credential adapter whose child holds its output open, and a server that never
-answers a flush's last try, are not within these bounds.
+past those steps is suspended as soon as it opens. Once the opens and the reopens ended,
+the one address closes. The bounds in code are 5 seconds from a tool's `SIGTERM` to its
+`SIGKILL` and 5 more for it to exit, 1 second for the one address and for each proxy,
+and 15 seconds for each run's flush, so a `Close` takes 27 seconds at most for a live
+run's two proxies, tools and flush, while a stopped reopen's tools and flush, and then
+the one address, take 26 seconds beside it. A test of that case, whose tools exit at
+their `SIGKILL` at once, measures 20 seconds. A credential adapter whose child holds its
+output open, and a server that returns nothing to a flush's last try, are not within
+these bounds.
 
 The gateway that starts again reopens a suspended run at the first request of it whose
 run key verifies: a batch, a reload, a join, a transcript request, or a connection to
@@ -3922,11 +3922,11 @@ reopen's answers to the requests that wait:
   are final at once are a signed `410`, a signed refusal `run_attached`, `wrong_gateway`
   or `workspace_not_served`, and a run configuration that fails Forager's checks; a
   record the gateway cannot read, one with the run's final event, one the server
-  stopped, and a fetch of the run's secrets refused with a `4xx` other than a `429`
-  `rate_limited` are final too. Any other signed `4xx` of the attach, a `401`, signed or
-  not, among them, is tried again within the 120 seconds, and is final when the window
-  ends on it. Only a reopen that `Close` stopped counts as a stop by `Close`: a final
-  refusal of the attach that came first keeps its `410`.
+  stopped, and a `4xx` other than a `429` `rate_limited` that the server returns to a
+  fetch of the run's secrets are final too. Any other signed `4xx` of the attach, a
+  `401`, signed or not, among them, is tried again within the 120 seconds, and is final
+  when the window ends on it. Only a reopen that `Close` stopped counts as a stop by
+  `Close`: a final refusal of the attach that came first keeps its `410`.
 
 A connection to the run's proxy that waited on a reopen that did not open the run is
 closed unanswered. The run request of a reopened run stays `409` `run_attached`. A
@@ -3939,15 +3939,15 @@ To deploy a separate gateway so its runs go on across the restart:
 
 - Keep the gateway's state directory on a volume that outlives the gateway's
   container. It contains the instance id the gateway signs with, `X-Qory-Instance-Id`,
-  and the run records under `Dir`. A gateway that starts with another instance id gets
-  its attach refused, and the run ends; one without the run records answers every
-  request of a run with a `410` `run_closed`.
+  and the run records under `Dir`. For a gateway that starts with another instance id,
+  the server returns a `4xx` to its attach, and the run ends; with a gateway that starts
+  without the run records, every request of a run gets a `410` `run_closed`.
 - Do not run `qory run resend` on a record of a gateway during a deploy: it writes the
   run's `dev.qory.run.exited` with `gateway_lost`, and the run ends.
 - The first deploy onto a gateway that keeps its runs still ends the runs that are open:
   the gateway it replaces ends them as it stops.
-- A rollback to a gateway that does not keep its runs ends each suspended run: that
-  gateway answers its requests with a `410` `run_closed`.
+- A rollback to a gateway that does not keep its runs ends each suspended run: every
+  request of a run gets a `410` `run_closed`.
 
 **No local sessions.** A separate gateway serves other machines alone: with `Listen`
 it makes no local link, in memory or on a socket, and no proxy listener on loopback,
@@ -4083,11 +4083,13 @@ and `about` are the starter's registration's, and the run request carries neithe
   or a reference; and `definitions`, the images the machine defines, each with `name`,
   `ref`, its reference, `runtime` when the definition sets one, and `docker: true` for
   nested Docker; and `allow`, the machine's `images.allow`, the prefixes of the
-  references a policy may name. A reference is not secret, but it may carry a registry's
-  credentials in its user information: the gateway never logs or reports one. The user
-  information of a reference is its part up to and with its first `@`, when that `@`
-  comes before the reference's first `/` and is not followed by a digest, `sha256:`:
-  `user:password@registry.example/base@sha256:…` has `user:password@`, while
+  references a policy may name. A reference is not secret, but it may contain a
+  registry's credentials in its user information: the gateway never logs or reports
+  one. The user information of a reference, with a scheme in front of it, is everything
+  up to and with the last `@` before the reference's trailing digest, `@sha256:` and 64
+  lower-case hexadecimal digits, or before its end when it has no digest:
+  `docker://me@example.com:pa/ss@registry.example/base@sha256:…` has
+  `docker://me@example.com:pa/ss@`, `u:p@base:latest` has `u:p@`, while
   `registry.example:5000/base@sha256:…` and `base@sha256:…` have none. A reload answer
   and the record's `request.json` contain each reference without it. Absent means none.
 - `narrowing`, behind a separate gateway alone: the session's narrowing of the policy,

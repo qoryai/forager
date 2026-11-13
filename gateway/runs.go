@@ -385,7 +385,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			// A run that did not open is never reopened: the files kept to reopen it, its
 			// CA key and run request among them, go from the disk.
 			if rerr := stream.RemoveKept(st.Dir()); rerr != nil {
-				g.report(fmt.Sprintf("run %s: removing the files kept to reopen it: %v", req.RunID, rerr))
+				g.report(keptNotRemoved(req.RunID, st.Dir(), rerr))
 			}
 		}
 		cancel()
@@ -1110,7 +1110,7 @@ func (lr *linkRun) end(e ending) {
 			// The run ended for good: no gateway reopens it, and the files kept to reopen
 			// it, its CA key and run request among them, go from the disk.
 			if err := stream.RemoveKept(lr.st.Dir()); err != nil {
-				lr.g.report(fmt.Sprintf("run %s: removing the files kept to reopen it: %v", lr.id, err))
+				lr.g.report(keptNotRemoved(lr.id, lr.st.Dir(), err))
 			}
 		}
 		lr.cancel()
