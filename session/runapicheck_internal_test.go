@@ -190,9 +190,10 @@ func TestARefusedPostGetsTheChecksReply(t *testing.T) {
 }
 
 // TestACheckThatFailsGetsA503 pins the 503 of a check that returns an error, panics,
-// returns a refusal with no code, a 407 or a status outside 400 to 499, outlasts its 90 seconds, here shortened, whether
-// it watches its context or not, or runs as the run closes; a panic is a Report line, and
-// nothing reaches the proxy.
+// returns a refusal with no code, a 407 or a status outside 400 to 499, holds a POST to
+// /artifacts, outlasts its 90 seconds, here shortened, whether it watches its context or
+// not, or runs as the run closes; a panic is a Report line, and nothing reaches the
+// proxy.
 func TestACheckThatFailsGetsA503(t *testing.T) {
 	const want = `{"error":"push_check_unavailable","message":"Run the push again: the check before the push did not finish."}`
 	u := startUpstream(t)
@@ -225,6 +226,12 @@ func TestACheckThatFailsGetsA503(t *testing.T) {
 		"the deadline, unwatched": func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
 			time.Sleep(2 * time.Second)
 			return nil, nil
+		},
+		"a hold of another path": func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
+			return nil, ErrRunAPIHold
+		},
+		"a wrapped hold of another path": func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
+			return nil, fmt.Errorf("kept: %w", ErrRunAPIHold)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -266,6 +273,121 @@ func TestACheckThatFailsGetsA503(t *testing.T) {
 			t.Errorf("the program got %d %q", resp.StatusCode, body)
 		}
 	})
+	time.Sleep(100 * time.Millisecond)
+	if opened, received := u.seen(); opened != 0 {
+		t.Errorf("the proxy got %d connections, %q", opened, received)
+	}
+}
+
+// heldVerdict is the exact body of the 202 for a held verdict.
+const heldVerdict = `{"version":1,"artifact":{"type":"verdict","name":"main","version":null}}`
+
+// TestAHeldVerdictGetsA202AndGoesNowhere pins a hold of a POST to /verdict, with
+// ErrRunAPIHold or an error that wraps it: the check gets the whole body as sent, the
+// program gets a 202 with the body of a stored verdict and null for the artifact's
+// version, as JSON with Content-Length and Connection: close, and nothing reaches the
+// proxy. A hold after the check's context ended gets the 503, and a verdict that the
+// check lets pass still goes on.
+func TestAHeldVerdictGetsA202AndGoesNowhere(t *testing.T) {
+	p := startProxyStandIn(t, checkSecret, nil)
+	const body = `{"verdict":"passed","points":[{"text":"Add a test."}]}`
+	for name, hold := range map[string]error{
+		"the hold":       ErrRunAPIHold,
+		"a wrapped hold": fmt.Errorf("held for the end check: %w", ErrRunAPIHold),
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := &checkCalls{answer: func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) { return nil, hold }}
+			f := checkedForwarder(t, p.Addr().String(), &runAPICheck{check: k.check, runID: checkRunID})
+			out := relaySend(t, f, post(checkTarget("/verdict"), body, "Content-Type: application/json"))
+			resp, got := replyOf(t, out)
+			if resp.StatusCode != http.StatusAccepted || got != heldVerdict || resp.Header.Get("Content-Type") != "application/json" ||
+				resp.ContentLength != int64(len(heldVerdict)) || !resp.Close {
+				t.Errorf("the program got %q", out)
+			}
+			if calls := k.got(); len(calls) != 1 || calls[0].Path != "/verdict" || string(calls[0].Body) != body {
+				t.Errorf("the check got %+v", calls)
+			}
+		})
+	}
+	time.Sleep(100 * time.Millisecond)
+	if raw, _ := p.seen(); len(raw) != 0 {
+		t.Errorf("the proxy got %q", raw)
+	}
+
+	// A hold after the check's context ended is a check that outlasted it.
+	late := &checkCalls{answer: func(ctx context.Context, _ RunAPIRequest) (*RunAPIRefusal, error) {
+		<-ctx.Done()
+		return nil, ErrRunAPIHold
+	}}
+	f := checkedForwarder(t, p.Addr().String(), &runAPICheck{check: late.check, runID: checkRunID, wait: 200 * time.Millisecond})
+	if resp, got := replyOf(t, relaySend(t, f, post(checkTarget("/verdict"), body))); resp.StatusCode != http.StatusServiceUnavailable ||
+		!strings.Contains(got, `"push_check_unavailable"`) {
+		t.Errorf("a late hold got %d %q", resp.StatusCode, got)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if raw, _ := p.seen(); len(raw) != 0 {
+		t.Errorf("the proxy got %q", raw)
+	}
+
+	pass := &checkCalls{}
+	f = checkedForwarder(t, p.Addr().String(), &runAPICheck{check: pass.check, runID: checkRunID})
+	if resp, got := replyOf(t, relaySend(t, f, post(checkTarget("/verdict"), body))); resp.StatusCode != http.StatusOK || got != fmt.Sprintf("ok %d", len(body)) {
+		t.Errorf("a passed verdict got %d %q", resp.StatusCode, got)
+	}
+	if _, requests := p.seen(); len(requests) != 1 || !strings.HasSuffix(requests[0], "/verdict "+body) {
+		t.Errorf("the proxy got %q", requests)
+	}
+}
+
+// TestTheCheckGetsHeldVerdictsInOrder pins the order of held verdicts: verdicts that
+// reach the forwarder one after another, while the check of the first runs, are checked
+// one at a time in that order, each gets the 202, and none reaches the proxy.
+func TestTheCheckGetsHeldVerdictsInOrder(t *testing.T) {
+	u := startUpstream(t)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	running, most := 0, 0
+	k := &checkCalls{answer: func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
+		mu.Lock()
+		running++
+		most = max(most, running)
+		mu.Unlock()
+		<-release
+		mu.Lock()
+		running--
+		mu.Unlock()
+		return nil, ErrRunAPIHold
+	}}
+	f := checkedForwarder(t, u.ln.Addr().String(), &runAPICheck{check: k.check, runID: checkRunID})
+	const n = 4
+	outs := make(chan string, n)
+	var sent []string
+	for i := range n {
+		body := fmt.Sprintf(`{"verdict":"escalate","points":[{"text":"point %d"}]}`, i)
+		sent = append(sent, body)
+		go func() { outs <- relaySend(t, f, post(checkTarget("/verdict"), body)) }()
+		// Each verdict reaches the forwarder before the next one.
+		time.Sleep(150 * time.Millisecond)
+	}
+	if got := len(k.got()); got != 1 {
+		t.Errorf("%d checks started while the first ran", got)
+	}
+	close(release)
+	for range n {
+		if resp, body := replyOf(t, <-outs); resp.StatusCode != http.StatusAccepted || body != heldVerdict {
+			t.Errorf("a verdict got %d %q", resp.StatusCode, body)
+		}
+	}
+	var checked []string
+	for _, c := range k.got() {
+		checked = append(checked, string(c.Body))
+	}
+	if !slices.Equal(checked, sent) {
+		t.Errorf("the check got %q\nwant %q", checked, sent)
+	}
+	if most != 1 {
+		t.Errorf("%d checks ran at once", most)
+	}
 	time.Sleep(100 * time.Millisecond)
 	if opened, received := u.seen(); opened != 0 {
 		t.Errorf("the proxy got %d connections, %q", opened, received)
