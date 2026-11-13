@@ -377,16 +377,68 @@ up in its parent, so two binds of one root are allowed.
   every bind to the enclosure, each path clean, and the working directory lies in one of
   them, by its names, or the run fails; `wall.Docker` binds nothing of the caller's the
   launch does not list, and refuses a launch whose `Dir` no mount holds.
-- **Nested places.** A mount, or the workspace, inside another one of the same mode is
-  reached through the outer one, which alone is bound. One inside another of the other
-  mode is no run, `mount_mode_conflict`, and `Names` holds the inner path, then the
-  outer one. Its sentence reads: "the mount /work/vendor (read-only) lies inside the
-  mount /work (writable): a part of a writable mount can't be read-only". When the
-  outer place is the workspace, it says "place" for "mount".
+- **Nested places.** Each mount has a place inside: its `Target`, or else its path on
+  this machine. A mount, or the workspace, inside another one of the same mode, by
+  their paths on this machine, is reached through the outer one, which alone is bound,
+  when neither has a `Target`. One inside another of the other mode is no run,
+  `mount_mode_conflict`, and `Names` holds the inner path, then the outer one. Its
+  sentence reads: "the mount /work/vendor (read-only) lies inside the mount /work
+  (writable): a part of a writable mount can't be read-only". When the outer place is
+  the workspace, it says "place" for "mount". A writable place inside a read-only one
+  is refused the same way, and so are two places of one path in both modes.
+- **Mounts at a target.** Set `SessionSpec.Mounts[].Target` to show a mount at another
+  place inside, such as a composed home at `/var/lib/agent-home`. A `Target` is an
+  absolute, clean path with no comma, double quote or newline. It is, contains and lies
+  inside none of `/qory`, `/var/lib/docker`, `/proc`, `/sys`, `/dev`, `/etc/hosts`,
+  `/etc/hostname`, `/etc/resolv.conf` and `/sbin/docker-init`, so it is neither `/`,
+  `/etc` nor `/sbin`. A `Target` that breaks these rules fails the join with an error
+  that starts with the fix. A mount with a `Target` is always bound on its own line,
+  never reached through another bind, and its path on this machine is, contains and
+  lies inside no other place's: of the other mode that is `mount_mode_conflict`,
+  otherwise `mount_target_conflict`.
 
-  A writable place inside a read-only one is refused the same way: a part of a
-  read-only mount can't be writable. Two places of one path in both modes are refused
-  too.
+  When one of two places has a `Target`, they nest by their places inside:
+  - A read-only place may lie one name inside a writable one, such as a read-only
+    `/var/lib/agent-home/hooks.json` in a writable `/var/lib/agent-home`. It may lie
+    deeper only when each directory between them is a read-only place. Otherwise it is
+    `mount_mode_conflict`: the agent could rename a directory of the writable place, and
+    the bind would move with it.
+  - A writable place inside a read-only one is `mount_mode_conflict`.
+  - Two places at one place inside, and a `Target` that is, contains or lies inside the
+    workspace inside or the session's directory, are `mount_target_conflict`. For a run
+    whose image is named by its reference, the workspace inside is `/workspace`.
+
+  Under nested Docker these rules are unverified: the enclosure's root, which the agent
+  reaches through the inner Docker daemon, may remount a read-only place writable.
+- **Links on the way to a target.** The engine follows a symbolic link when it binds,
+  so a link could move a bind over another mount or over `/qory`:
+  - A symbolic link on this machine among the names from a place's path down to a place
+    inside it, of either mode, is `mount_target_conflict`, at the join and again before
+    the wall step. Such a link can be one that an agent of an earlier session wrote,
+    such as `/srv/runs/r1/agent-home/hooks.json`. The names below a nearer place are
+    checked from that place's path.
+  - `wall.Docker` reads each name from `/` down to each `Target` in the image, and a
+    symbolic link fails the session before the agent's container is made, such as
+    `/lib64/agent-home` in an image where `/lib64` links to `lib`. A name inside another
+    mount's place inside is not read from the image.
+- **The image rename check.** For a read-only mount with a `Target`, `wall.Docker` fails
+  the session when the agent can rename a directory of the image on the way to the
+  outermost mount whose place inside contains the target, such as `/x` owned by uid
+  1000 above a read-only `/x/y/conf`: the agent could rename `/x/y`, and the bind moves
+  with it. The agent can rename in a directory it owns, whatever the mode, and in one
+  its group or the others may write, unless the directory has the sticky bit and the
+  agent does not own the next name. For a wall's user that is a uid with no group, the
+  engine adds the groups the image's `/etc/group` gives it, so a directory any group
+  may write counts. For a wall's user that is a name, or a uid other than the
+  session's, a directory that a user other than root owns, or that its group or the
+  others may write, counts. A directory the wall makes for the transcript directory,
+  such as `~/.claude`, counts too: it is the agent's, mode `0700`. The parent of the
+  outermost place is not checked, since its entry for the place is a mount point, which
+  no rename moves. The check does not read `/`, so an image whose `/` the agent's user
+  can write passes it.
+- **The order of binds.** The session lists the binds in the order of their places
+  inside, fewer names first, so a bind comes after the one whose place inside contains
+  it.
 - **Places through a link.** A mount, or the workspace, of either mode, whose path goes
   through a link inside a writable place of the run's, and that does not resolve into
   that place, is no run, `mount_through_link`: the agent that writes the link would
@@ -414,22 +466,30 @@ up in its parent, so two binds of one root are allowed.
 - **The run directory.** The runs directory is one of Forager's files, so the run
   directory lies inside no place the run lists. Of the run directory, only the
   directory of the session that runs, `sessions/<n>/`, is bound, read-only, to that
-  session's enclosure: the agent reads no record and no file of another session. For
-  Claude Code the session also makes `transcripts/<n>/`, mode `0700`, which is bound
-  writable at `~/.claude/projects/` inside, so the session reads the transcript and
-  restores a paused run's there. It reads only `<slug>/<session id>.jsonl`, under a
-  session id that is a UUID in lower case: a regular file with one link and at most 64
-  MiB, with no symbolic link on its path. For a planted link, FIFO, hard link or larger
+  session's enclosure: the agent reads no record and no file of another session. For a
+  runtime whose descriptor has `resume`, such as Claude Code or Codex, the session also
+  makes `transcripts/<n>/`, mode `0700`, which is bound writable at `resume.prefix`
+  inside, `~/.claude/projects/` for Claude Code, so the session reads the transcript
+  and restores a paused run's there. An absolute `resume.prefix`, such as
+  `${CODEX_HOME}/sessions/` with `CODEX_HOME` set in the launch, inside a writable
+  mount's place inside gets no bind: the session reads the transcript in that mount on
+  this machine. Inside a read-only mount's place, the runtime starts without a resume,
+  and the session writes one line on `stderr`. The session reads only the file of
+  `resume.path`, such as `<slug>/<session id>.jsonl`, or the one file its `*` pattern
+  matches, under a session id that is a UUID in lower case: a regular file with one
+  link and at most 64 MiB, with no symbolic link on its path. For a planted link, FIFO, hard link or larger
   file it reads nothing and writes one line on `stderr`. `~` is `HOME` of the launch,
   else of the image, else the home of the wall's user in the image's `/etc/passwd`, or
   root's with nested Docker, else `/`; a home where `~/.claude/projects` overlaps a
   mount fails the session. With nested Docker the agent runs as the wall's user under
   that home, so set `HOME` in an image whose root's home is mode `0700`, as in
   docker:dind. `wall.Docker` binds no transcript directory, and the session starts
-  Claude Code without `--resume` and writes one line on `stderr` that starts with the
-  fix, when the wall's user is not the session's uid, when `~`, `~/.claude` or
-  `~/.claude/projects` is a symbolic link or no directory in the image, or when the
-  agent's user cannot search a directory on the way. When the image has no
+  the runtime without the descriptor's `resume.args`, such as Claude Code without
+  `--resume`, and writes one line on `stderr` that starts with the fix, when the
+  transcript's place is or lies inside `/qory`, when the wall's user is not the
+  session's uid, when a directory from `/` down to the transcript's place, such as `~`,
+  `~/.claude` or `~/.claude/projects`, is a symbolic link or no directory in the image,
+  or when the agent's user cannot search a directory on the way. When the image has no
   `~/.claude`, `wall.Docker` creates the agent's container, writes `~/.claude` into it,
   mode `0700` and owned by the agent's user and group, and then starts it, so Claude
   Code can make `~/.claude/session-env` beside the bind. A `~/.claude` of the image's
