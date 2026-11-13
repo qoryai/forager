@@ -877,9 +877,7 @@ func TestASearchSkipsADirectoryItCannotRead(t *testing.T) {
 // TestAnUnwalledSearchStartsThroughLinks pins the base of a search with no wall: a
 // home, or a resume.prefix below it, that is a symbolic link is followed, and the file
 // below is found; behind a wall, a transcript directory that is a link finds nothing.
-// The file under a linked home is sent. The file under a linked prefix is not: the
-// read refuses a symbolic link among the names below the home ([readUnlinked]), as it
-// does for Claude Code's fixed path, so the session sends nothing and writes no line.
+// The file under a linked home, and under a linked prefix, is sent.
 func TestAnUnwalledSearchStartsThroughLinks(t *testing.T) {
 	p := newPathPattern("*/*/*/rollout-*-{session_id}.jsonl", walledID, "", false)
 	real := t.TempDir()
@@ -911,7 +909,7 @@ func TestAnUnwalledSearchStartsThroughLinks(t *testing.T) {
 		sent string
 	}{
 		"a linked home":   {linkedHome, "{\"a\":1}\n"},
-		"a linked prefix": {home, ""},
+		"a linked prefix": {home, "{\"a\":1}\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := &sentTranscript{}
@@ -922,5 +920,163 @@ func TestAnUnwalledSearchStartsThroughLinks(t *testing.T) {
 				t.Errorf("sent %q %v, lines %q; want %q", got, ok, s.lines, c.sent)
 			}
 		})
+	}
+}
+
+// codexResume is a resume with Codex's prefix and pattern: Codex writes the rollout of
+// a session at ~/.codex/sessions/<year>/<month>/<day>/rollout-<time>-<id>.jsonl.
+var codexResume = runtimes.Resume{Path: "~/.codex/sessions/*/*/*/rollout-*-{session_id}.jsonl", Prefix: "~/.codex/sessions/", Args: []string{"resume", "{session_id}"}, After: "exec"}
+
+// TestAnUnwalledReadFollowsLinksToThePrefix pins the read of a run with no wall, for
+// Claude Code's resume and Codex's: a home, or a resume.prefix below it, that is a
+// symbolic link is followed, as is a link at an inner name of resume.prefix, such as
+// ~/.claude itself, and the transcript is read and sent; a symbolic link among the
+// names below resume.prefix, a directory or the file, sends nothing and writes no line. Behind a wall, a transcript directory that is a symbolic link sends
+// nothing and writes one line.
+func TestAnUnwalledReadFollowsLinksToThePrefix(t *testing.T) {
+	const content = "{\"a\":1}\n"
+	for runtime, r := range map[string]struct {
+		resume runtimes.Resume
+		prefix string // resume.prefix below the home
+		below  string // the transcript's path below resume.prefix
+	}{
+		"Claude Code": {claudeResume, ".claude/projects", "-workspace/" + walledID + ".jsonl"},
+		"Codex":       {codexResume, ".codex/sessions", rolloutRel},
+	} {
+		first, rest, _ := strings.Cut(r.below, "/")
+		for name, c := range map[string]struct {
+			home func(t *testing.T) string
+			sent string
+		}{
+			"a linked prefix": {func(t *testing.T) string {
+				real, home := t.TempDir(), t.TempDir()
+				appendTo(t, real, r.below, []byte(content))
+				makeDir(t, filepath.Dir(filepath.Join(home, r.prefix)))
+				symlink(t, real, filepath.Join(home, r.prefix))
+				return home
+			}, content},
+			"a linked inner name of the prefix": {func(t *testing.T) string {
+				real, home := t.TempDir(), t.TempDir()
+				inner, below, _ := strings.Cut(r.prefix, "/")
+				appendTo(t, real, below+"/"+r.below, []byte(content))
+				symlink(t, real, filepath.Join(home, inner))
+				return home
+			}, content},
+			"a linked home": {func(t *testing.T) string {
+				real, home := t.TempDir(), filepath.Join(t.TempDir(), "home")
+				appendTo(t, real, r.prefix+"/"+r.below, []byte(content))
+				symlink(t, real, home)
+				return home
+			}, content},
+			"a linked directory below the prefix": {func(t *testing.T) string {
+				outside, home := t.TempDir(), t.TempDir()
+				appendTo(t, outside, rest, []byte(content))
+				makeDir(t, filepath.Join(home, r.prefix))
+				symlink(t, outside, filepath.Join(home, r.prefix, first))
+				return home
+			}, ""},
+			"a linked file": {func(t *testing.T) string {
+				outside, home := t.TempDir(), t.TempDir()
+				appendTo(t, outside, "t.jsonl", []byte(content))
+				makeDir(t, filepath.Dir(filepath.Join(home, r.prefix, r.below)))
+				symlink(t, filepath.Join(outside, "t.jsonl"), filepath.Join(home, r.prefix, r.below))
+				return home
+			}, ""},
+		} {
+			t.Run(runtime+", "+name, func(t *testing.T) {
+				s := &sentTranscript{}
+				tr := newTranscript(r.resume, c.home(t), "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+				tr.started(walledID)
+				tr.finish()
+				got, ok := s.file(t, "~/"+r.prefix+"/"+r.below)
+				if !ok || string(got) != c.sent || len(s.lines) != 0 || (c.sent == "") != (len(s.events) == 0) {
+					t.Errorf("sent %q %v %v, lines %q; want %q", got, ok, s.events, s.lines, c.sent)
+				}
+			})
+		}
+		t.Run(runtime+", behind a wall, a linked transcript directory", func(t *testing.T) {
+			real := t.TempDir()
+			appendTo(t, real, r.below, []byte(content))
+			root := filepath.Join(t.TempDir(), "transcripts")
+			symlink(t, real, root)
+			s := &sentTranscript{}
+			tr := newWalledTranscript(r.resume, root, "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+			tr.started(walledID)
+			tr.finish()
+			if len(s.events) != 0 || len(s.lines) != 1 {
+				t.Errorf("sent %v, lines %q", s.events, s.lines)
+			}
+		})
+	}
+}
+
+// TestTheReadRefusesALinkAfterTheSearch pins a link put below resume.prefix after the
+// search of a pattern found the file, with no wall: the search finds the file and the
+// session sends it, then the date directory becomes a symbolic link to a copy with
+// more lines, and the read sends none of them and writes no line.
+func TestTheReadRefusesALinkAfterTheSearch(t *testing.T) {
+	home := t.TempDir()
+	s := &sentTranscript{}
+	tr := newTranscript(codexResume, home, "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+	appendTo(t, home, ".codex/sessions/"+rolloutRel, []byte("{\"a\":1}\n"))
+	tr.started(walledID)
+	tr.poll(false)
+	if tr.rel != ".codex/sessions/"+rolloutRel {
+		t.Fatalf("the search set %q", tr.rel)
+	}
+	outside := filepath.Join(t.TempDir(), "2026")
+	if err := os.Rename(filepath.Join(home, ".codex/sessions/2026"), outside); err != nil {
+		t.Fatal(err)
+	}
+	appendTo(t, filepath.Dir(outside), rolloutRel, []byte("{\"b\":2}\n"))
+	symlink(t, outside, filepath.Join(home, ".codex/sessions/2026"))
+	tr.finish()
+	if got, ok := s.file(t, "~/.codex/sessions/"+rolloutRel); !ok || string(got) != "{\"a\":1}\n" || len(s.lines) != 0 {
+		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+	}
+}
+
+// TestAFIFOAtThePrefixIsNoRead pins a FIFO with no writer at resume.prefix, or a
+// symbolic link to one there, with no wall, for Claude Code's resume and Codex's: the
+// read returns at once and sends nothing, and so cannot keep a join from returning.
+func TestAFIFOAtThePrefixIsNoRead(t *testing.T) {
+	for runtime, r := range map[string]struct {
+		resume runtimes.Resume
+		prefix string
+	}{
+		"Claude Code": {claudeResume, ".claude/projects"},
+		"Codex":       {codexResume, ".codex/sessions"},
+	} {
+		for _, linked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, linked %v", runtime, linked), func(t *testing.T) {
+				home := t.TempDir()
+				makeDir(t, filepath.Dir(filepath.Join(home, r.prefix)))
+				fifo := filepath.Join(home, r.prefix)
+				if linked {
+					fifo = filepath.Join(t.TempDir(), "fifo")
+					symlink(t, fifo, filepath.Join(home, r.prefix))
+				}
+				if err := unix.Mkfifo(fifo, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				s := &sentTranscript{}
+				tr := newTranscript(r.resume, home, "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					tr.started(walledID)
+					tr.poll(false)
+					tr.finish()
+				}()
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+					t.Fatal("the read did not return within 10 seconds")
+				}
+				if len(s.events) != 0 {
+					t.Errorf("sent %v", s.events)
+				}
+			})
+		}
 	}
 }
