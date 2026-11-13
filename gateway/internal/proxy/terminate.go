@@ -459,11 +459,12 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			name, ok := resp.Request.Context().Value(keyedKey{}).(string)
 			rs := resendOf(resp.Request)
 			if rs != nil {
-				// The key the request went with last, after a resend another than the first.
+				// A resend may have sent the request with another key: name is the key
+				// of the response.
 				name = rs.name
 			}
-			// A 401 on the model API's path requested the key's value again in the
-			// resend ([resend.reject]); a 401 on another path does it here.
+			// For a 401 on the model API's path, [resend.reject] has requested the
+			// key's value again; for a 401 on another path, this code requests it.
 			if ok && (rs == nil || !rs.model) && resp.StatusCode == http.StatusUnauthorized {
 				// The credential the proxy set on the request, of those of the host.
 				if i := slices.IndexFunc(creds, func(c *Credential) bool { return c.Name == name }); i >= 0 && creds[i].Rejected != nil {

@@ -64,7 +64,8 @@ type renewer struct {
 	report func(string)
 
 	mu sync.Mutex
-	// entries are the credentials with expires_at, in the document's order.
+	// entries are the credentials the run renews, in the document's order: those with
+	// expires_at, and the model keys of [Config.Pending].
 	entries []*renewal
 	// group is the run's key group, [Run.SetKeyGroup]; nil for none.
 	group *modelkey.Group
@@ -111,8 +112,8 @@ func (r *Run) clock() Clock {
 }
 
 // rejected is what a host's 401 to a request the value of name was set on calls: the
-// value is asked for again once RetryWait has passed since the last asking. Nil for a
-// credential without expires_at, whose 401 asks for nothing.
+// value is requested again once RetryWait has passed since the last request. Nil for
+// a credential the run does not renew, whose 401 requests nothing.
 func (w *renewer) rejected(name string) func() {
 	if w == nil || !w.has(name) {
 		return nil
@@ -363,6 +364,9 @@ func (w *renewer) renew(names []string, now time.Time) {
 			continue
 		}
 		at, _ := values.ExpiresAt(name)
+		if w.valueless(name) {
+			r.firstApply(name, values)
+		}
 		taken = r.replaceValue(name, values) || taken
 		w.renewedAt(name, at)
 		if slices.Contains(unauthorized, name) {
@@ -512,10 +516,40 @@ func (r *Run) renewed(name string, values sealed.Values, now time.Time) error {
 	case !at.After(now):
 		return errExpiresPassed
 	}
-	if !reflect.DeepEqual(effectiveApply(r.stored[i], values), r.applies[name]) {
+	// A model key with no value yet has the apply of its entry's items: its first value
+	// may set another apply within its entry, which becomes the key's.
+	if r.renew.valueless(name) {
+		if why, ok := outside(r.stored[i], values); ok {
+			return errors.New(why)
+		}
+		return nil
+	}
+	if !reflect.DeepEqual(effectiveApply(r.stored[i], values), r.applyOf(name)) {
 		return errApplyMoved
 	}
 	return nil
+}
+
+// applyOf is where the value of the credential name is set ([Run.open]), or where its
+// first renewal set it for a model key with no value at the start ([Run.firstApply]).
+func (r *Run) applyOf(name string) []credential.StoredApply {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.applies[name]
+}
+
+// firstApply sets where the value of the model key name is set to the apply of its
+// first value, in values: a key with no value at the start had its entry's items.
+// The proxy's credentials take it at the run's next resolve ([Run.hold]).
+func (r *Run) firstApply(name string, values sealed.Values) {
+	i := slices.IndexFunc(r.stored, func(c server.RunCredential) bool { return c.Name == name })
+	if i < 0 {
+		return
+	}
+	a := effectiveApply(r.stored[i], values)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.applies[name] = a
 }
 
 // effectiveApply is where the value of c is set: the answer's apply, or c's items when

@@ -171,3 +171,26 @@ func TestA401OnAnotherPathKeepsTheKey(t *testing.T) {
 		})
 	}
 }
+
+// TestA401OnAnotherPathAfterAResendRenewsTheLastKey pins the key whose value a 401 on
+// another path than the model API's requests again: a request that model's 429 sent
+// again with model-2 gets model-2's 401, and model-2's value is requested again, not
+// model's.
+func TestA401OnAnotherPathAfterAResendRenewsTheLastKey(t *testing.T) {
+	r := &renewals{}
+	f := newKeyFixtureWith(t, modelkey.FormatAnthropicMessages, "/v1/messages", r.rejected)
+	f.up.answers["model"] = limited
+	f.up.answers["model-2"] = unauthorizedAnswer
+	if status, _ := f.postTo(t, http.MethodGet, "/v1/accounts/check", ""); status != http.StatusUnauthorized {
+		t.Errorf("the session got %d; want model-2's 401", status)
+	}
+	if got := strings.Join(keysOf(f.up.taken()), ","); got != "model,model-2" {
+		t.Errorf("the provider got %s; want model, then model-2", got)
+	}
+	if got := r.taken(); !slices.Equal(got, []string{"model-2"}) {
+		t.Errorf("the renewals requested %v; want model-2 once", got)
+	}
+	if got := f.g.Unauthorized(); got != nil {
+		t.Errorf("unauthorized %+v; want none", got)
+	}
+}

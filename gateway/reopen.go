@@ -247,7 +247,7 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 	// is renewed alone once the key group has it pending.
 	keys, err := readUnauthorized(dir)
 	if err != nil {
-		g.report(fmt.Sprintf("run %s: start another run to stop setting its model keys after a 401: reading them failed, and the run sets them again: %v", runID, err))
+		g.report(fmt.Sprintf("run %s: start another run if this reopen fails: reading its model keys after a 401 failed, so its secrets request names every key, and the server returns 409 to it when it cannot seal one: %v", runID, err))
 	}
 	var revoked, pending []string
 	for _, k := range keys {

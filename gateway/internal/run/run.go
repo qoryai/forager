@@ -1265,7 +1265,7 @@ func (r *Run) storedUses() []credential.Stored {
 			continue
 		}
 		name := c.Name
-		out = append(out, credential.Stored{Name: name, Apply: r.applies[name], Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
+		out = append(out, credential.Stored{Name: name, Apply: r.applyOf(name), Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
 			AccountHeader: c.Auth.AccountHeader, AccountClaim: c.Auth.AccountClaim, Entry: keyEntry(c), Rejected: r.renew.rejected(name), Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
@@ -1334,8 +1334,8 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 			c.Account = func(v []byte) (string, error) { return credential.AccountClaim(v, claim) }
 		}
 		if u.Stored {
-			// The server's value has no Token, so it stays bytes. A host's 401 asks for it
-			// again only when it has expires_at.
+			// The server's value has no Token, so it stays bytes. A host's 401 requests it
+			// again only when the run renews it.
 			c.Value, c.Stored = u.Value, true
 			if u.Renewed {
 				c.Rejected = u.Rejected

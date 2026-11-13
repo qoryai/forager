@@ -13,6 +13,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/modelkey"
 	"github.com/qoryai/forager/gateway/internal/run"
+	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 )
 
@@ -390,5 +391,56 @@ func TestAReopenWithEveryKeyLeftOutSendsNoRequest(t *testing.T) {
 	}
 	if u := g.Unauthorized(); u != nil {
 		t.Errorf("after the renewals: %+v; want both keys back", u)
+	}
+}
+
+// TestAPendingKeysFirstApplyIsTaken pins the apply of a model key with no value
+// at the reopen: its first value may set an apply within its entry other than the
+// entry's items, and the key goes back in the group; the next renewal, with the same
+// apply, puts its value in place. A first value whose apply is outside the entry
+// takes the key out.
+func TestAPendingKeysFirstApplyIsTaken(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		host  string
+		value string
+	}{
+		{"within", "api.model.example", "model-2"},
+		{"outside", "other.example", "(none)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clock := &fakeClock{now: start}
+			apply := []sealed.Apply{{Hosts: []string{c.host}, Scheme: "header", Header: "x-api-key", Paths: []string{"/anthropic/*"}}}
+			s := &controlPlane{answer: func(name string, call int) (answer, error) {
+				if name == "model" {
+					return answer{value: fmt.Sprintf("model-%d", call), expires: start.Add(time.Hour), apply: apply}, nil
+				}
+				return renewing(name, call)
+			}}
+			f := document(t, twoKeysDoc, digest('1'))
+			f.Document.Computed = digest('c')
+			r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: f, Secrets: s.fetch, Clock: clock, Report: (&reports{}).report, Log: (&reports{}).report, Pending: []string{"model"}})
+			g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", clock.Now)
+			r.SetKeyGroup(g)
+			g.Restore([]modelkey.Unauthorized{{Credential: "model", At: start}})
+			renew := func() {
+				t.Helper()
+				n := clock.count()
+				if !r.Renew("model") {
+					return
+				}
+				clock.idle(t, n)
+			}
+			renew()
+			clock.advance(credential.RetryWait)
+			g.Reject("model", true)
+			renew()
+			if got := value(r, "model"); got != c.value {
+				t.Errorf("model's value %s; want %s", got, c.value)
+			}
+			if u := g.Unauthorized(); (c.value == "(none)") != (len(u) == 1 && u[0].Out) {
+				t.Errorf("the keys after a 401 %+v", u)
+			}
+		})
 	}
 }

@@ -97,7 +97,7 @@ type Use struct {
 	// entry, whose value Qory Apiary sealed to the access key.
 	Stored bool
 	// Renewed is true when the server's value is fetched again before it expires and
-	// after a host refuses it: a value with expires_at, whose rejected asks for it again.
+	// after a host refuses it: a value the run renews, whose rejected requests it again.
 	Renewed bool
 	// Format, Endpoint and OAuth are a model key's, from the server or the machine;
 	// empty for every other credential. AccountHeader and AccountClaim, of a model key
