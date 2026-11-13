@@ -149,9 +149,11 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			g.mu.Unlock()
 			return
 		}
-		if s.remote && g.stopping.Err() != nil {
-			// The gateway's Close ended the attach's tries: the session asks the
-			// gateway that starts again.
+		if errors.Is(err, errClosing) {
+			// Close stopped the run's tries: the run did not open, and its request gets
+			// the 503 of a run request that comes while the gateway closes. Behind a
+			// separate gateway the session sends it again to the gateway that starts
+			// again.
 			g.mu.Lock()
 			delete(g.used, req.RunID)
 			g.mu.Unlock()

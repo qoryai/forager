@@ -1247,9 +1247,11 @@ release may change what an existing document does, and says so under Upgrading.
   after the try before, then every 15 seconds, within 120 seconds of the run request's
   arrival. Before, it tried 3 times within 6 seconds. The session waits 140 seconds
   for its run answer, `server.OpenWait`, on the local link and behind a separate
-  gateway, where it waits 10 seconds for any other answer on the link. A session built
-  before this change still gives up after 10 seconds, and the gateway then stops its
-  tries.
+  gateway. On both links it waits 10 seconds for every other answer. A session built
+  before this change stops waiting after 10 seconds, and the gateway then stops its
+  tries. A gateway that closes while a run's registration or attach is still being
+  tried stops its tries at once, and the run request gets a `503`; a run past its
+  tries opens and then ends with `run_closed`.
 - An adapter's output that fails `credential.schema.json` is refused with `Fix the
   output of the adapter <PATH> to match credential.schema.json: <LOCATIONS>`, where
   `<LOCATIONS>` lists each failing location and keyword, such as `/apply/0/header fails

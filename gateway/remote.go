@@ -199,7 +199,7 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func
 	g.mu.Unlock()
 	if _, spent := g.spentOf(k.RunID); lr == nil && !spent && g.reopenable(k.RunID) {
 		c.SetDeadline(time.Time{})
-		lr, _ = g.reopenRun(g.stopping, k.RunID, presented{raw: value, key: k})
+		lr, _ = g.reopenRun(g.openCtx, k.RunID, presented{raw: value, key: k})
 	}
 	if lr == nil || !lr.remote || lr.px == nil {
 		return false

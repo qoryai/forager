@@ -226,9 +226,15 @@ type opening struct {
 // the waits between them are openWaits, the last of them repeated, each counted from
 // the end of the try before, and a try starts again only within openWindow of the run
 // request's arrival. A Qory Apiary that restarts within those 120 seconds therefore
-// registers the run once it is back. The last try starts before the window ends and
-// has [server.Timeout] for its answer, so the run's answer reaches the session inside
-// [server.OpenWait].
+// registers the run once it is back. The last try may start just before the window
+// ends and has [server.Timeout] for its answer, which leaves 10 seconds of
+// [server.OpenWait] for the rest of the open. Those 10 seconds do not cover every open.
+// Behind a separate gateway, a run with credentials after a late attach makes its
+// reload, which shares the window and then gets one try, and its secrets request, up
+// to [server.Timeout] each, so its open may take about 150 seconds and the start of
+// its tools. On the local link, a run that requests its secrets after a late
+// registration may take 140 seconds and the start of its tools. Either passes the
+// session's wait.
 var (
 	openWaits  = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
 	openWindow = 120 * time.Second
@@ -266,6 +272,25 @@ func passing(err error) bool {
 	return true
 }
 
+// errClosing is the failure of a run whose tries of Qory Apiary Close stopped: the run
+// did not open, and its run request gets a 503.
+var errClosing = errors.New("the gateway closes")
+
+// stoppedByClose reports whether a run's open failed with err because Close stopped its
+// tries: Close started, the session's run request is there, and err is a failure the
+// tries would have tried again. A final refusal that came before Close keeps its answer.
+func stoppedByClose(request, opens context.Context, err error) bool {
+	return request.Err() == nil && opens.Err() != nil && passing(err)
+}
+
+// closing is err as the failure of a run whose tries Close stopped.
+func closing(err error) error {
+	if err == nil {
+		return errClosing
+	}
+	return fmt.Errorf("%w: %w", errClosing, err)
+}
+
 // openClock is how the tries of a run's open read the time and wait: now, and wait,
 // which returns false when ctx ends first.
 type openClock struct {
@@ -286,8 +311,8 @@ var wallClock = openClock{now: time.Now, wait: func(ctx context.Context, d time.
 }}
 
 // tries asks Qory Apiary with ask, again after a failure that may pass, [openWaits]
-// apart, until it answers otherwise, the next try would start past deadline, or ctx
-// ends; the last try's error is the result.
+// apart, until a try returns a final result, the next try would start past deadline,
+// or ctx ends; the last try's error is the result.
 func (g *Gateway) tries(ctx context.Context, deadline time.Time, ask func() error) error {
 	waits := openWaits
 	if g.cfg.openWaits != nil {
@@ -351,26 +376,29 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		cancel()
 		return nil, true, err
 	}
-	// ask is the context of the run's registration or attach: on the one address it
-	// ends when the gateway's Close starts, so Close does not wait for the tries.
+	// ask is the context of the run's registration or attach: it ends when the
+	// gateway's Close starts, so Close does not wait for the tries.
 	ask, stopAsk := context.WithCancel(ctx)
 	defer stopAsk()
-	if remote {
-		defer context.AfterFunc(g.stopping, stopAsk)()
-	}
+	defer context.AfterFunc(g.openCtx, stopAsk)()
 	if how.request != nil {
-		// Once the session's run request goes, the run's registration is tried no
-		// longer, and the run does not open: nothing more is written of
-		// it, and what its stream wrote goes too, so a retry of the run id opens.
+		// Once the session's run request goes, or the gateway closes, the run's
+		// registration is tried no longer, and the run does not open: nothing more is
+		// written of it, and what its stream wrote goes too, so a retry of the run id
+		// opens.
 		failed := fail
 		fail = func(err error) (*linkRun, bool, error) {
-			if how.request.Err() == nil {
+			gone := how.request.Err()
+			if stoppedByClose(how.request, g.openCtx, err) {
+				err, gone = closing(err), errClosing
+			}
+			if gone == nil {
 				return failed(err)
 			}
 			if err == nil {
 				// No failure comes without an error now; should one, the session's going
 				// is the error, so no caller takes the missing run for one that opened.
-				err = how.request.Err()
+				err = gone
 			}
 			lr.release()
 			if derr := st.Discard(g.base); derr != nil {
@@ -404,6 +432,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 					g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(derr)))
 				}
 				cancel()
+				if stoppedByClose(how.request, g.openCtx, regErr) {
+					return nil, false, closing(codeless(regErr))
+				}
 				return nil, false, codeless(regErr)
 			}
 		} else {

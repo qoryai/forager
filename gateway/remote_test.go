@@ -1194,6 +1194,45 @@ func TestAnAttachRefusalReachesTheSession(t *testing.T) {
 	}
 }
 
+// TestCloseStopsTheTriesOfARunThatOpens pins a gateway that closes while a run's attach
+// keeps failing with a 503: Close stops the tries at once and returns within seconds,
+// not at the end of the window of the tries; the run request gets a 503 and no run
+// opens; and the server gets no attach after Close returns.
+func TestCloseStopsTheTriesOfARunThatOpens(t *testing.T) {
+	cfg := gateway.Config{}
+	gateway.SetOpenTries(&cfg, []time.Duration{100 * time.Millisecond}, time.Minute)
+	r := startRemote(t, nil, cfg)
+	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusServiceUnavailable, Code: "unavailable"})
+	closed := make(chan time.Duration, 1)
+	go func() {
+		for len(r.c.attached()) < 3 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		r.g.Close(ctx)
+		closed <- time.Since(start)
+	}()
+	runID := event.NewRunID()
+	a := r.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+	took := <-closed
+	if took > 3*time.Second {
+		t.Errorf("Close took %v; want it within 3s", took)
+	}
+	if a.status != http.StatusServiceUnavailable || len(a.body) != 0 {
+		t.Errorf("the run request: %d %s; want a 503 without a body", a.status, a.body)
+	}
+	attaches := len(r.c.attached())
+	time.Sleep(300 * time.Millisecond)
+	if got := len(r.c.attached()); got != attaches {
+		t.Errorf("%d attaches after Close returned", got-attaches)
+	}
+	if _, err := os.Stat(filepath.Join(r.cfg.Dir, "runs", runID)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the run's record after Close: %v", err)
+	}
+}
+
 // TestAnAttachedRunWhoseConfigurationIsRefusedKeepsItsRecord pins an attach the server
 // accepted whose run configuration Forager refuses: the run does not open, a 403
 // run_configuration_invalid from the gateway, but its record is kept, its first line
@@ -2238,51 +2277,6 @@ func TestAReopenWhoseAttachFails(t *testing.T) {
 			t.Errorf("%d attaches; want 2", got)
 		}
 	})
-}
-
-// TestCloseEndsTheTriesOfAnOpen pins Close of a separate gateway while a run opens
-// and its attach is answered 503 again and again: Close ends the tries, the run
-// request is a 503, and Close returns within seconds.
-func TestCloseEndsTheTriesOfAnOpen(t *testing.T) {
-	c := gatewayControl(t)
-	c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusServiceUnavailable, Code: "unavailable"})
-	r := startRemote(t, c, gateway.Config{})
-	runID := event.NewRunID()
-	key := runKeyFor(t, runID, nil)
-	b, err := r.bind(t, gatewayKeys())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer b.Close()
-	status := make(chan int, 1)
-	go func() {
-		body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: runID})
-		req, _ := http.NewRequest(http.MethodPost, "https://gateway.example:8443/qory-link/run-configuration", bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+key)
-		req.Header.Set("Content-Type", server.LinkContentType)
-		if req.Write(b.c) != nil {
-			status <- 0
-			return
-		}
-		resp, err := http.ReadResponse(b.r, req)
-		if err != nil {
-			status <- 0
-			return
-		}
-		resp.Body.Close()
-		status <- resp.StatusCode
-	}()
-	eventually(t, "the first attach", func() bool { return len(c.attached()) > 0 })
-	begin := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	r.g.Close(ctx)
-	if took := time.Since(begin); took > 5*time.Second {
-		t.Errorf("Close took %s", took)
-	}
-	if got := <-status; got != http.StatusServiceUnavailable {
-		t.Errorf("the run request: %d; want 503", got)
-	}
 }
 
 // TestARecordFromBeforeIsNotReopened pins a run record with no request.json, as a

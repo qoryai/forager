@@ -170,7 +170,7 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 	}
 
 	// The attach's tries end when the gateway's Close starts.
-	ask, stopAsk := context.WithCancel(g.stopping)
+	ask, stopAsk := context.WithCancel(g.openCtx)
 	defer stopAsk()
 	how := opening{remote: true, runKey: p.raw, key: p.key, deadline: g.openDeadline()}
 	rc, digest, _, labels, err := g.attach(ask, conf, runID, how)

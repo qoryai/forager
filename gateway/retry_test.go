@@ -137,15 +137,16 @@ func gaps(seen []seenRequest) []time.Duration {
 }
 
 // TestTheTriesOfQoryApiaryAsARunOpens pins the tries of the run's registration as a
-// run opens, with test waits of 100 and 200 milliseconds and a window of 450 that fits
-// 3 tries: a signed 503 or 429 rate_limited, an unsigned 5xx and no answer are asked
-// again, every try with the same bytes, its time included, and an answer on a later try
+// run opens, with test waits of 100 milliseconds, 200 milliseconds and 10 seconds and a
+// window of 5 seconds, which fit 3 tries whatever the time a try takes: a signed 503 or
+// 429 rate_limited, an unsigned 5xx and no answer are asked again, every try with the
+// same bytes, its time included, and an answer on a later try
 // opens the run, whose record has one run.registered, its first line; a refusal with
 // any other code, an unsigned answer other than a 5xx, a signed answer without a code
 // and a 410, signed or not, with a code or none, are asked once, the 410 a failure
 // without a code; and the last try's refusal is the session's, as before the tries.
 func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
-	waits := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}
+	waits := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 10 * time.Second}
 	for _, c := range []struct {
 		name    string
 		path    string
@@ -180,7 +181,7 @@ func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 			ctl := newControl(t)
 			ctl.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
 			cfg := gateway.Config{Server: ctl.server()}
-			gateway.SetOpenTries(&cfg, waits, 450*time.Millisecond)
+			gateway.SetOpenTries(&cfg, waits, 5*time.Second)
 			h := start(t, cfg)
 			s := script(ctl)
 			s.then(c.path, c.replies...)
@@ -277,16 +278,25 @@ func TestTheTriesStopWhenTheSessionGoes(t *testing.T) {
 
 // TestTheWindowOfTheTries pins the window of the tries of Qory Apiary as a run opens: a
 // try starts again only within the window of the run request's arrival, and the last
-// wait repeats until then.
+// wait repeats until then. Each case has more than a second between the start of its
+// last try and the window's end, and between the window's end and the next try's start.
 func TestTheWindowOfTheTries(t *testing.T) {
-	waits := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}
+	ms := time.Millisecond
 	for _, c := range []struct {
+		waits  []time.Duration
 		window time.Duration
 		tries  int
-	}{{650 * time.Millisecond, 4}, {450 * time.Millisecond, 3}, {250 * time.Millisecond, 2}} {
+	}{
+		// Tries at 0, 0.1, 3.1 and 6.1 seconds; the next would start at 9.1.
+		{[]time.Duration{100 * ms, 3 * time.Second}, 7500 * ms, 4},
+		// Tries at 0, 0.1 and 0.3 seconds; the next would start at 10.3.
+		{[]time.Duration{100 * ms, 200 * ms, 10 * time.Second}, 5 * time.Second, 3},
+		// Tries at 0 and 0.1 seconds; the next would start at 10.1.
+		{[]time.Duration{100 * ms, 10 * time.Second}, 5 * time.Second, 2},
+	} {
 		ctl := newControl(t)
 		cfg := gateway.Config{Server: ctl.server()}
-		gateway.SetOpenTries(&cfg, waits, c.window)
+		gateway.SetOpenTries(&cfg, c.waits, c.window)
 		h := start(t, cfg)
 		s := script(ctl)
 		s.then(runPath, coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable"))
@@ -367,9 +377,48 @@ func TestTheGatewayTriesForTwoMinutes(t *testing.T) {
 	}
 }
 
+// TestARefusalBeforeCloseKeepsItsAnswer pins which failed opens Close stopped, so their
+// run requests get a 503: a failure the tries would have tried again, after Close
+// started, while the session's run request is there. A final refusal keeps its answer
+// whenever it came, and a session that went is no stop by Close.
+func TestARefusalBeforeCloseKeepsItsAnswer(t *testing.T) {
+	live, gone := context.Background(), canceled()
+	unavailable := &accesskey.Refusal{Code: "unavailable", Status: 503, From: accesskey.FromApiary}
+	final := &accesskey.Refusal{Code: "instance_limit", Status: 409, From: accesskey.FromApiary}
+	for _, c := range []struct {
+		name           string
+		request, opens context.Context
+		err            error
+		stopped        bool
+	}{
+		{"a 503 after Close", live, gone, unavailable, true},
+		{"a try in flight that Close cut", live, gone, context.Canceled, true},
+		{"a final refusal after Close", live, gone, final, false},
+		{"a 410 after Close", live, gone, server.ErrNotAccepted, false},
+		{"a 503 without Close", live, live, unavailable, false},
+		{"a session that went", gone, gone, unavailable, false},
+	} {
+		stopped, err := gateway.StoppedByClose(c.request, c.opens, c.err)
+		if stopped != c.stopped || errors.Is(err, gateway.ErrClosing) != c.stopped || !errors.Is(err, c.err) {
+			t.Errorf("%s: stopped %v with %v; want %v", c.name, stopped, err, c.stopped)
+		}
+	}
+}
+
+// canceled is a context that ended.
+func canceled() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
 // TestTheSessionWaitsForTheTries pins that a session waits for its run answer longer
-// than the gateway tries Qory Apiary: the window, the last try's time for its answer,
-// and 10 seconds for the rest of the open.
+// than the tries of the registration or the attach take: the window, the last try's
+// time for its answer, and 10 seconds for the rest of the open. The wait does not cover
+// a run with credentials whose attach ends late, behind a separate gateway: its reload
+// and its secrets request take up to server.Timeout each after that, about 150 seconds
+// and the start of its tools. Nor does it cover a run on the local link that requests
+// its secrets after a late registration: 140 seconds and the start of its tools.
 func TestTheSessionWaitsForTheTries(t *testing.T) {
 	_, window := gateway.OpenTries()
 	if server.OpenWait < window+server.Timeout+10*time.Second {

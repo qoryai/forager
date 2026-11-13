@@ -112,11 +112,11 @@ type Gateway struct {
 	// base is the context of everything a run starts, cancelled when Close is done.
 	base   context.Context
 	cancel context.CancelFunc
-	// stopping ends when Close of a gateway with Listen starts, with stopTries: the
-	// tries of the attaches of runs that open or reopen end with it, so Close waits
-	// for none of them.
-	stopping  context.Context
-	stopTries context.CancelFunc
+	// openCtx is the context of the tries of Qory Apiary as runs open or reopen,
+	// cancelled by stopOpens as Close starts, so a run that is opening or reopening
+	// stops its tries at once, and Close waits for none of them.
+	openCtx   context.Context
+	stopOpens context.CancelFunc
 
 	dir     string
 	ln      net.Listener
@@ -280,7 +280,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		g.client, g.conf, g.confDigest = client, conf, digest
 	}
 	g.base, g.cancel = context.WithCancel(context.WithoutCancel(ctx))
-	g.stopping, g.stopTries = context.WithCancel(g.base)
+	g.openCtx, g.stopOpens = context.WithCancel(g.base)
 	ok := false
 	defer func() {
 		if !ok {
@@ -565,20 +565,24 @@ func (g *Gateway) reserved() []string {
 	return out
 }
 
-// Close stops taking runs and ends the gateway. On the local link it is called once
-// the session is over, so it waits for no session: a run still live ends at once,
-// without an exit, which a resend of its record completes as gateway_lost, and lets go
-// of its secret, proxy, tools and credentials. Each run's events are flushed toward
-// the server within [stream.CloseWait] (or the Config's bound), whatever ctx allows,
-// whose values alone pass on; then the link's directory is removed and the proxy stops.
+// Close stops taking runs and ends the gateway. A run whose registration or attach is
+// still being tried stops its tries of Qory Apiary and does not open, its run request
+// a 503, while a run past its tries opens and then ends or is suspended as a live one.
+//
+// On the local link Close is called once the session is over, so it waits for no
+// session: a run still live ends at once, without an exit, which a resend of its
+// record completes as gateway_lost, and lets go of its secret, proxy, tools and
+// credentials. Each run's events are flushed toward the server within
+// [stream.CloseWait] (or the Config's bound), whatever ctx allows, whose values alone
+// pass on; then the link's directory is removed and the proxy stops.
 //
 // A gateway with Listen keeps its runs instead, for a gateway that starts again on the
 // same directory: a run request or a reopen gets a 503 from now on, the tries of the
-// attaches of runs that open or reopen end, and Close waits for those opens and
-// reopens to end. Then the one address closes, and each run is suspended
-// ([linkRun.suspend]): it lets go of what it holds, and its stream is flushed as above
-// and kept ([stream.Run.Suspend]), with no session.exited or run.exited, and with its
-// CA files and every file a reopen reads ([Gateway.reopen]).
+// reopens end as those of the opens do, and Close waits for those opens and reopens to
+// end. Then the one address closes, and each run is suspended ([linkRun.suspend]): it
+// lets go of what it holds, and its stream is flushed as above and kept
+// ([stream.Run.Suspend]), with no session.exited or run.exited, and with its CA files
+// and every file a reopen reads ([Gateway.reopen]).
 //
 // The Delivery is what the runs came to: their undelivered events, and who closed a
 // run that ended at the gateway, and how it ended. Close again waits for the first.
@@ -592,10 +596,11 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.closing = true
 	g.mu.Unlock()
 	g.stopSweep()
+	// A run whose registration, attach or reopen is still being tried stops its tries of
+	// Qory Apiary, and its run request gets a 503, as one that comes while the gateway
+	// closes.
+	g.stopOpens()
 	keep := g.svc != nil
-	if keep {
-		g.stopTries()
-	}
 	g.opens.Wait()
 	g.reopens.Wait()
 	var errs []error
