@@ -710,38 +710,44 @@ func TestTargetConflictsAreNoRun(t *testing.T) {
 		{"one target twice", "mount_target_conflict",
 			[]wall.Mount{{Path: home, Target: homeInside}, {Path: other, Target: homeInside}},
 			[]string{other, home},
-			"the mount " + other + " at " + homeInside + " is at the place inside of the mount " + home + " at " +
+			"Show the mount " + other + " at " + homeInside + " at another place inside than the mount " + home + " at " +
 				homeInside + ": one place inside can't show two places"},
 		{"a target at a mount's path", "mount_target_conflict",
 			[]wall.Mount{{Path: home}, {Path: other, ReadOnly: true, Target: home}},
 			[]string{other, home},
-			"the mount " + other + " at " + home + " is at the place inside of the mount " + home +
+			"Show the mount " + other + " at " + home + " at another place inside than the mount " + home +
 				": one place inside can't show two places"},
 		{"a target at the workspace", "mount_target_conflict",
 			[]wall.Mount{{Path: other, Target: ws}},
 			[]string{other, ws},
-			"the mount " + other + " at " + ws + " is at the place inside of the workspace " + ws +
+			"Show the mount " + other + " at " + ws + " at another place inside than the workspace " + ws +
 				": one place inside can't show two places"},
 		{"a target inside the workspace", "mount_target_conflict",
 			[]wall.Mount{{Path: other, ReadOnly: true, Target: ws + "/config"}},
 			[]string{other, ws},
-			"the mount " + other + " at " + ws + "/config lies inside the workspace " + ws +
-				": a mount's target can't overlap the workspace inside"},
+			"Show the mount " + other + " at " + ws + "/config at a place inside apart from the workspace " + ws +
+				": the mount " + other + " at " + ws + "/config lies inside the workspace " + ws +
+				", and a mount's target can't overlap the workspace inside"},
 		{"a target around the workspace", "mount_target_conflict",
 			[]wall.Mount{{Path: other, Target: filepath.Dir(ws)}},
 			[]string{ws, other},
-			"the workspace " + ws + " lies inside the mount " + other + " at " + filepath.Dir(ws) +
-				": a mount's target can't overlap the workspace inside"},
+			"Show the mount " + other + " at " + filepath.Dir(ws) + " at a place inside apart from the workspace " + ws +
+				": the workspace " + ws + " lies inside the mount " + other + " at " + filepath.Dir(ws) +
+				", and a mount's target can't overlap the workspace inside"},
 		{"a read-only file in a writable folder on this machine", "mount_mode_conflict",
 			[]wall.Mount{{Path: home}, {Path: filepath.Join(home, "hooks.json"), ReadOnly: true, Target: homeInside + "/hooks.json"}},
 			[]string{filepath.Join(home, "hooks.json"), home},
-			"the mount " + filepath.Join(home, "hooks.json") + " at " + homeInside + "/hooks.json (read-only) lies inside the mount " +
-				home + " (writable) on this machine: a mount with a target can't share a path with a place of the other mode"},
+			"List the mount " + filepath.Join(home, "hooks.json") + " at " + homeInside + "/hooks.json and the mount " + home +
+				" with paths on this machine apart from each other: the mount " + filepath.Join(home, "hooks.json") + " at " +
+				homeInside + "/hooks.json (read-only) lies inside the mount " + home +
+				" (writable) on this machine, and a mount with a target can't share a path with a place of the other mode"},
 		{"a writable target in a writable folder on this machine", "mount_target_conflict",
 			[]wall.Mount{{Path: home, Target: homeInside}, {Path: filepath.Join(home, "sessions")}},
 			[]string{filepath.Join(home, "sessions"), home},
-			"the mount " + filepath.Join(home, "sessions") + " (writable) lies inside the mount " + home + " at " + homeInside +
-				" (writable) on this machine: a mount with a target can't share a path with another place"},
+			"List the mount " + filepath.Join(home, "sessions") + " and the mount " + home + " at " + homeInside +
+				" with paths on this machine apart from each other: the mount " + filepath.Join(home, "sessions") +
+				" (writable) lies inside the mount " + home + " at " + homeInside +
+				" (writable) on this machine, and a mount with a target can't share a path with another place"},
 		{"a read-only file two names inside a writable target", "mount_mode_conflict",
 			[]wall.Mount{{Path: home, Target: homeInside}, {Path: other, ReadOnly: true, Target: homeInside + "/a/hooks.json"}},
 			[]string{other, home},
@@ -758,8 +764,10 @@ func TestTargetConflictsAreNoRun(t *testing.T) {
 		{"a target at the workspace's path on this machine", "mount_target_conflict",
 			[]wall.Mount{{Path: inWS, Target: homeInside}},
 			[]string{inWS, ws},
-			"the mount " + inWS + " at " + homeInside + " (writable) lies inside the workspace " + ws +
-				" (writable) on this machine: a mount with a target can't share a path with another place"},
+			"List the mount " + inWS + " at " + homeInside + " and the workspace " + ws +
+				" with paths on this machine apart from each other: the mount " + inWS + " at " + homeInside +
+				" (writable) lies inside the workspace " + ws +
+				" (writable) on this machine, and a mount with a target can't share a path with another place"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := &openWall{}
@@ -781,8 +789,8 @@ func TestTargetConflictsAreNoRun(t *testing.T) {
 	sp.Mounts = []wall.Mount{{Path: other, ReadOnly: true, Target: sp.RunsDir}}
 	r := refusalOf(t, "mount_target_conflict", runErr(sp))
 	if len(r.Names) != 2 || r.Names[0] != other || !strings.HasPrefix(r.Names[1], sp.RunsDir+"/") ||
-		r.Detail != "the mount "+other+" at "+sp.RunsDir+" overlaps the session's directory "+r.Names[1]+
-			", which the enclosure shows at its path: a mount's target can't overlap the session's directory" {
+		r.Detail != "Set the target of the mount "+other+" at "+sp.RunsDir+" outside the session's directory "+r.Names[1]+
+			": the enclosure shows that directory at its path, and a mount's target can't overlap it" {
 		t.Errorf("names %q, detail %q", r.Names, r.Detail)
 	}
 	if w.wrapped {

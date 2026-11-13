@@ -279,8 +279,8 @@ func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	w = &targetWall{}
 	sp.Wall, sp.Image, sp.ImagesAllow = w, "example.com/agent:1", []string{"registry.example/"}
 	sp.Mounts = []wall.Mount{{Path: "/workspace/tools", ReadOnly: true}}
-	want := "/workspace/tools is shown at the same path inside, which overlaps the workspace of a run whose policy " +
-		"sets its image by reference, where the workspace inside is /workspace"
+	want := "Give the mount /workspace/tools a target outside /workspace: the mount is shown at its path, which " +
+		"overlaps the workspace inside of a run whose policy sets its image by reference"
 	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), want) || len(w.pulls) != 0 || w.wrapped {
 		t.Errorf("a mount at /workspace: %v; the wall pulled %+v, wrapped %v", err, w.pulls, w.wrapped)
 	}
@@ -443,8 +443,8 @@ func TestATargetAtTheWorkspaceInsideOfAnImageByReferenceIsNoRun(t *testing.T) {
 			continue
 		}
 		r := refusalOf(t, "mount_target_conflict", err)
-		want := "the mount " + home + " at " + target + " overlaps the workspace " + sp.Dir + " of a run whose policy sets its " +
-			"image by reference, where the workspace inside is /workspace: a mount's target can't overlap the workspace inside"
+		want := "Set the target of the mount " + home + " outside /workspace, the workspace inside: a run whose policy " +
+			"sets its image by reference shows the workspace " + sp.Dir + " there, and the target " + target + " overlaps it"
 		if !slices.Equal(r.Names, []string{home, sp.Dir}) || r.Detail != want {
 			t.Errorf("the target %s: names %q, detail %q", target, r.Names, r.Detail)
 		}

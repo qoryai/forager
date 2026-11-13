@@ -534,13 +534,13 @@ func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 			return mountPlan{}, nil, &Refusal{
 				Code:  refusal.MountTargetConflict,
 				Names: pathsShown(m.Path, p.workspace),
-				Detail: fmt.Sprintf("the mount %s at %s overlaps the workspace %s of a run whose policy sets its "+
-					"image by reference, where the workspace inside is %s: a mount's target can't overlap the workspace inside",
-					pathShown(m.Path), pathShown(m.Target), pathShown(p.workspace), workspaceInside),
+				Detail: fmt.Sprintf("Set the target of the mount %s outside %s, the workspace inside: a run whose policy "+
+					"sets its image by reference shows the workspace %s there, and the target %s overlaps it",
+					pathShown(m.Path), workspaceInside, pathShown(p.workspace), pathShown(m.Target)),
 			}
 		}
-		return mountPlan{}, nil, fmt.Errorf("%s is shown at the same path inside, which overlaps the workspace of a "+
-			"run whose policy sets its image by reference, where the workspace inside is %s", pathShown(m.Path), workspaceInside)
+		return mountPlan{}, nil, fmt.Errorf("Give the mount %s a target outside %s: the mount is shown at its path, which "+
+			"overlaps the workspace inside of a run whose policy sets its image by reference", pathShown(m.Path), workspaceInside)
 	}
 	inside := func(s string) string { return translate(s, p.root, workspaceInside) }
 	out.Dir = inside(p.Dir)
@@ -1036,8 +1036,8 @@ func checkPlaces(places []shown, sessionDir string) error {
 			return &Refusal{
 				Code:  refusal.MountTargetConflict,
 				Names: pathsShown(p.path, sessionDir),
-				Detail: fmt.Sprintf("%s overlaps the session's directory %s, which the enclosure shows at its path: "+
-					"a mount's target can't overlap the session's directory", p.shownAs(), pathShown(sessionDir)),
+				Detail: fmt.Sprintf("Set the target of %s outside the session's directory %s: the enclosure shows that "+
+					"directory at its path, and a mount's target can't overlap it", p.shownAs(), pathShown(sessionDir)),
 			}
 		}
 	}
@@ -1101,14 +1101,21 @@ func linkBelow(in, out shown, places []shown) error {
 // inside, when one of them has a Target: two places at one place inside, or a Target
 // that overlaps the workspace.
 func targetConflict(in, out shown, same bool) *Refusal {
-	how, why := "lies inside", "a mount's target can't overlap the workspace inside"
+	// The fix moves the mount, never the workspace.
+	m, o := in, out
+	if in.what == "the workspace" {
+		m, o = out, in
+	}
+	detail := fmt.Sprintf("Show %s at a place inside apart from %s: %s lies inside %s, and a mount's target "+
+		"can't overlap the workspace inside", m.shownAs(), o.shownAs(), in.shownAs(), out.shownAs())
 	if same {
-		how, why = "is at the place inside of", "one place inside can't show two places"
+		detail = fmt.Sprintf("Show %s at another place inside than %s: one place inside can't show two places",
+			in.shownAs(), out.shownAs())
 	}
 	return &Refusal{
 		Code:   refusal.MountTargetConflict,
 		Names:  pathsShown(in.path, out.path),
-		Detail: fmt.Sprintf("%s %s %s: %s", in.shownAs(), how, out.shownAs(), why),
+		Detail: detail,
 	}
 }
 
@@ -1129,7 +1136,8 @@ func hostConflict(in, out shown, same bool) *Refusal {
 	return &Refusal{
 		Code:  code,
 		Names: pathsShown(in.path, out.path),
-		Detail: fmt.Sprintf("%s (%s) %s %s (%s) on this machine: %s", in.shownAs(), mode(in.bindsWritable()), how,
+		Detail: fmt.Sprintf("List %s and %s with paths on this machine apart from each other: %s (%s) %s %s (%s) "+
+			"on this machine, and %s", in.shownAs(), out.shownAs(), in.shownAs(), mode(in.bindsWritable()), how,
 			out.shownAs(), mode(out.bindsWritable()), why),
 	}
 }
