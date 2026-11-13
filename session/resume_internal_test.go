@@ -62,3 +62,92 @@ func TestTheResumeScriptWritesTheTranscriptThenResumes(t *testing.T) {
 		t.Errorf("stderr %q; want its last line %q", stderr, want)
 	}
 }
+
+// TestTheResumeScriptInsertsTheArgumentsAfterHead pins the script with the resume
+// arguments after the first head words: the runtime gets them right after exec, the
+// words after it kept in order, spaces and quotes included; with a home it cannot
+// write, it gets its arguments as they were.
+func TestTheResumeScriptInsertsTheArgumentsAfterHead(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, ResumeTranscript)
+	if err := os.WriteFile(transcript, []byte("{\"a\":1}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, ResumeScript)
+	rel := ".rollouts/sessions/2026/11/13/rollout-a-s.jsonl"
+	launch := []string{"/bin/sh", "-c", `for a; do echo "[$a]"; done`, "sh", "exec", "--json", "it's a 'prompt'"}
+	at := resumeAt(launch[1:], "exec")
+	text := resumeScriptAt("0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", transcript, rel, []string{"resume", "s 1"}, 1+at)
+	if err := os.WriteFile(script, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(home string) string {
+		t.Helper()
+		cmd := exec.Command("/bin/sh", append([]string{script}, launch...)...)
+		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	if out, want := run(t.TempDir()), "[exec]\n[resume]\n[s 1]\n[--json]\n[it's a 'prompt']\n"; out != want {
+		t.Errorf("the runtime got %q; want %q", out, want)
+	}
+	blocked := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocked, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, want := run(blocked), "[exec]\n[--json]\n[it's a 'prompt']\n"; out != want {
+		t.Errorf("without a resume the runtime got %q; want %q", out, want)
+	}
+}
+
+// TestResumeAtFollowsAfter pins where the resume arguments go: right after the first
+// argument equal to resume.after, else at the end.
+func TestResumeAtFollowsAfter(t *testing.T) {
+	args := []string{"exec", "--json", "exec"}
+	for after, want := range map[string]int{"exec": 1, "--json": 2, "": 3, "resume": 3} {
+		if got := resumeAt(args, after); got != want {
+			t.Errorf("after %q: %d; want %d", after, got, want)
+		}
+	}
+	if got := resumeAt(nil, "exec"); got != 0 {
+		t.Errorf("no arguments: %d", got)
+	}
+}
+
+// TestAWalledRestoreMatchesResumePath pins the shape check of a walled restore's
+// resume.path below resume.prefix: Claude Code's <slug>/<session id>.jsonl with a
+// slug of any working directory, and a pattern with *, each with the run
+// configuration's session id. Other shapes, another session id and a . or .. name fail.
+func TestAWalledRestoreMatchesResumePath(t *testing.T) {
+	const id = "0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e"
+	claude := newPathPattern("{cwd_slug}/{session_id}.jsonl", id, "", true)
+	for rel, want := range map[string]bool{
+		"-paused/" + id + ".jsonl":                      true,
+		"-workspace/probe.jsonl":                        false,
+		id + ".jsonl":                                   false,
+		"-w/x/" + id + ".jsonl":                         false,
+		"../" + id + ".jsonl":                           false,
+		"-w/5d0c6a51-3b2e-4f7a-9c1d-8e6f4a2b0c37.jsonl": false,
+		"-w/" + strings.ToUpper(id) + ".jsonl":          false,
+		"we!rd/" + id + ".jsonl":                        false,
+		strings.Repeat("a", 256) + "/" + id + ".jsonl":  false,
+		strings.Repeat("a", 255) + "/" + id + ".jsonl":  true,
+	} {
+		if got := claude.matches(rel); got != want {
+			t.Errorf("Claude Code's, %s: %v; want %v", rel, got, want)
+		}
+	}
+	rollout := newPathPattern("*/*/*/rollout-*-{session_id}.jsonl", id, "", true)
+	for rel, want := range map[string]bool{
+		"2026/11/13/rollout-2026-11-13T10-00-00-" + id + ".jsonl": true,
+		"2026/11/rollout-a-" + id + ".jsonl":                      false,
+		"2026/../13/rollout-a-" + id + ".jsonl":                   false,
+	} {
+		if got := rollout.matches(rel); got != want {
+			t.Errorf("a pattern, %s: %v; want %v", rel, got, want)
+		}
+	}
+}

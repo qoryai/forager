@@ -22,22 +22,25 @@ func describedResume(t *testing.T, resume string) runtimes.Runtime {
 	return rt
 }
 
-// TestTheTranscriptDirectoryComesFromResume pins guard 2: a runtime whose resume.path is
-// <prefix>{cwd_slug}/{session_id}.jsonl gets transcripts/<n>/ in the run directory, mode
-// 0700, at the prefix without ~/; a runtime without resume, or with a path of another
-// shape, gets none, and nothing is made.
+// TestTheTranscriptDirectoryComesFromResume pins guard 2: a runtime with resume gets
+// transcripts/<n>/ in the run directory, mode 0700, at the prefix without ~/, whatever
+// the shape of its resume.path below the prefix, a * in it included; a runtime without
+// resume, or whose prefix is the home itself, gets none, and nothing is made.
 func TestTheTranscriptDirectoryComesFromResume(t *testing.T) {
 	resume := func(path string) string {
 		return "resume:\n  path_from: transcript_path\n  path: " + path + "\n  prefix: ~/.claude/projects/\n  args: [--resume, '{session_id}']\n"
 	}
+	home := "resume:\n  path: '~//{session_id}.jsonl'\n  prefix: ~//\n  args: [--resume, '{session_id}']\n"
 	for name, c := range map[string]struct {
 		resume string
 		under  string
 	}{
 		"Claude Code's": {resume("'~/.claude/projects/{cwd_slug}/{session_id}.jsonl'"), ".claude/projects"},
 		"no resume":     {"", ""},
-		"a flat path":   {resume("'~/.claude/projects/{session_id}.jsonl'"), ""},
-		"a deeper path": {resume("'~/.claude/projects/{cwd_slug}/x/{session_id}.jsonl'"), ""},
+		"a flat path":   {resume("'~/.claude/projects/{session_id}.jsonl'"), ".claude/projects"},
+		"a deeper path": {resume("'~/.claude/projects/{cwd_slug}/x/{session_id}.jsonl'"), ".claude/projects"},
+		"a pattern":     {resume("'~/.claude/projects/*/*/rollout-*-{session_id}.jsonl'"), ".claude/projects"},
+		"the home":      {home, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			runDir, workspace := t.TempDir(), t.TempDir()

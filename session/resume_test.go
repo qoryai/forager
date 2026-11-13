@@ -3,6 +3,7 @@ package session_test
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -303,4 +304,187 @@ func TestAJoinReturnsWithNoTranscriptReaderLeft(t *testing.T) {
 			t.Errorf("%d transcript readers after the join", readers)
 		}
 	})
+}
+
+// rollouter is a runtime with resume, written as data alone, that writes its transcript
+// as Codex writes its rollouts: below ~/.rollouter/ in a directory for each date, with
+// the session id at the end of the file's name. Its resume has no path_from, and its
+// arguments follow exec.
+const rollouter = `version: 1
+runtime: rollouter
+runtime_version: "1"
+sources:
+  output: {format: jsonl}
+resume:
+  path: ~/.rollouter/*/*/*/rollout-*-{session_id}.jsonl
+  prefix: ~/.rollouter/
+  args: [resume, "{session_id}"]
+  after: exec
+rules:
+  - source: output
+    match: {type: start}
+    type: dev.qory.runtime.started
+    data: {session_id: session_id, source: source}
+`
+
+// rolloutID is the rollouter's session id.
+const rolloutID = "0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e"
+
+// rollouterScript is the rollouter's program: it prints the transcript it finds under
+// its home and its arguments, then its start, then appends two lines to its
+// transcript, a new file in a dated directory when it found none.
+const rollouterScript = `f=$(ls "$HOME"/.rollouter/*/*/*/rollout-*-` + rolloutID + `.jsonl 2>/dev/null | head -n 1)
+if [ -n "$f" ]; then echo "restored: $(cat "$f")"; else f="$HOME/.rollouter/2026/11/13/rollout-t-` + rolloutID + `.jsonl"; mkdir -p "${f%/*}"; fi
+echo "args: $*"
+echo '{"type":"start","session_id":"` + rolloutID + `","source":"exec"}'
+echo '{"line":1}' >> "$f"
+sleep 0.3
+echo '{"line":2}' >> "$f"
+`
+
+// rollouterSpec is a session of the rollouter, started as exec --json, on the fake
+// local link g, with a home that no other session has. With paused not empty, the run
+// answer has resume with paused as its path, and the transcript request gets ok.
+func rollouterSpec(t *testing.T, paused string) (runSpec, string) {
+	t.Helper()
+	sp, g := specGateway(t)
+	rt, err := runtimes.Described("rollouter.yaml", []byte(rollouter), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	sp.Runtime, sp.Forwarder = rt, nil
+	sp.Command, sp.Args = "/bin/sh", []string{"-c", rollouterScript, "sh", "exec", "--json"}
+	sp.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
+	session.SetTranscriptPoll(&sp.SessionSpec, 50*time.Millisecond)
+	if paused != "" {
+		g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+			a := linktest.RunAnswer(req)
+			a["resume"] = map[string]any{"run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "session_id": rolloutID, "path": paused}
+			return linktest.Reply{Status: 200, Body: a}
+		})
+		g.OnTranscript(func(string) linktest.Reply { return linktest.Reply{Status: 200, Body: []byte("ok\n")} })
+	}
+	return sp, home
+}
+
+// transcriptOf is the file the dev.qory.session.transcript chunks of evs contain, in
+// order, and the one path they have.
+func transcriptOf(t *testing.T, evs []map[string]any) (string, string) {
+	t.Helper()
+	var file []byte
+	path := ""
+	for _, c := range ofType(evs, event.SessionTranscript) {
+		d := data(c)
+		if path == "" {
+			path, _ = d["path"].(string)
+		}
+		if d["path"] != path || d["offset"] != float64(len(file)) {
+			t.Fatalf("chunk %v after %d bytes of %s", d, len(file), path)
+		}
+		b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+		file = append(file, b...)
+	}
+	return path, string(file)
+}
+
+// TestARolloutRunResumesWithItsArgumentsAfterExec pins a runtime whose resume.path has
+// a * and whose resume has after, with a wall and without one: the session restores
+// the paused run's transcript at the run configuration's resume.path, in dated
+// directories, inserts the resume arguments right after exec, and sends the restored
+// file as the transcript, the restored bytes first.
+func TestARolloutRunResumesWithItsArgumentsAfterExec(t *testing.T) {
+	paused := "~/.rollouter/2025/01/02/rollout-p-" + rolloutID + ".jsonl"
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			sp, home := rollouterSpec(t, paused)
+			if walled {
+				t.Setenv("QORY_TEST_HOST_ONLY", "1")
+				sp.Wall, sp.Image, sp.Mounts = &transcriptWall{home: home}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
+			}
+			res, err := run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			evs := events(t, res)
+			out := runLogText(t, evs)
+			if !strings.Contains(out, "restored: ok\n") || !strings.Contains(out, "args: exec resume "+rolloutID+" --json\n") || strings.Contains(out, "without a resume") {
+				t.Errorf("the runtime's output %q", out)
+			}
+			if path, file := transcriptOf(t, evs); path != paused || file != "ok\n{\"line\":1}\n{\"line\":2}\n" {
+				t.Errorf("the transcript %s %q", path, file)
+			}
+			if _, err := os.Stat(filepath.Join(res.SessionDir, session.ResumeScript)); (err == nil) == walled {
+				t.Errorf("the resume script: %v", err)
+			}
+		})
+	}
+}
+
+// TestARolloutTranscriptIsFoundByItsPattern pins a runtime whose resume.path has a *,
+// with no resume in the run answer: the session finds the file the runtime makes in
+// a dated directory and sends it, with a wall and without one.
+func TestARolloutTranscriptIsFoundByItsPattern(t *testing.T) {
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			sp, home := rollouterSpec(t, "")
+			if walled {
+				t.Setenv("QORY_TEST_HOST_ONLY", "1")
+				sp.Wall, sp.Image, sp.Mounts = &transcriptWall{home: home}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
+			}
+			res, err := run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			evs := events(t, res)
+			if out := runLogText(t, evs); !strings.Contains(out, "args: exec --json\n") || strings.Contains(out, "without a resume") {
+				t.Errorf("the runtime's output %q", out)
+			}
+			want := "~/.rollouter/2026/11/13/rollout-t-" + rolloutID + ".jsonl"
+			if path, file := transcriptOf(t, evs); path != want || file != "{\"line\":1}\n{\"line\":2}\n" {
+				t.Errorf("the transcript %s %q; want %s", path, file, want)
+			}
+		})
+	}
+}
+
+// unboundWall is an open wall that binds no transcript directory: the agent's user
+// cannot reach its place inside.
+type unboundWall struct{ openWall }
+
+func (w *unboundWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *unboundWall) CheckTranscript(context.Context, []string, wall.Transcript) (*wall.Unbound, error) {
+	return &wall.Unbound{Fix: "Set HOME in the image", Cause: "the home is a file in the image"}, nil
+}
+
+// TestAnUnboundWallTakesTheInsertedArgumentsOff pins a walled resume whose wall binds no
+// transcript directory: the session takes the resume arguments off at the place it
+// inserted them, after exec, so the runtime starts with exec --json, and writes the
+// two lines of a failed resume.
+func TestAnUnboundWallTakesTheInsertedArgumentsOff(t *testing.T) {
+	t.Setenv("QORY_TEST_HOST_ONLY", "1")
+	sp, _ := rollouterSpec(t, "~/.rollouter/2025/01/02/rollout-p-"+rolloutID+".jsonl")
+	w := &unboundWall{}
+	sp.Wall, sp.Image, sp.Mounts = w, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := runLogText(t, events(t, res))
+	for _, want := range []string{
+		"args: exec --json\n",
+		"Set HOME in the image. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the home is a file in the image\n",
+		"Set HOME in the image. A continuation of this run starts the runtime without a resume: the home is a file in the image\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in the output %q", want, out)
+		}
+	}
+	if w.got.Transcript != (wall.Transcript{}) {
+		t.Errorf("the launch's transcript directory %+v", w.got.Transcript)
+	}
 }

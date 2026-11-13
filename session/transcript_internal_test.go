@@ -3,10 +3,12 @@ package session
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -289,7 +291,7 @@ func TestARestoredTranscriptIsReadWithNoWall(t *testing.T) {
 func TestTheLineOfKeptResumeArgumentsStartsWithTheFix(t *testing.T) {
 	got := resumeArgsKept("Make /home/dev a directory in the image", `"/home/dev" is a file in the image`)
 	want := `Make /home/dev a directory in the image, then continue the paused run again: "/home/dev" is a file in the image. ` +
-		"The session cannot take the resume arguments off the launch, because the launch ends with other arguments, which only a defect in Forager causes"
+		"The session cannot take the resume arguments off the launch, because the launch has other arguments where they were added, which only a defect in Forager causes"
 	if got != want {
 		t.Errorf("the line:\n%s\nwant:\n%s", got, want)
 	}
@@ -370,5 +372,257 @@ func TestATranscriptAtAFIFOIsNoRead(t *testing.T) {
 	}
 	if len(s.events) != 0 {
 		t.Errorf("%d events from a FIFO", len(s.events))
+	}
+}
+
+// rolloutResume is a resume whose path has a * in three directory names and in the
+// file's name, as Codex writes its rollouts, and whose arguments follow exec.
+var rolloutResume = runtimes.Resume{Path: "~/.rollouts/sessions/*/*/*/rollout-*-{session_id}.jsonl", Prefix: "~/.rollouts/sessions/", Args: []string{"resume", "{session_id}"}, After: "exec"}
+
+// rolloutRel is a file that rolloutResume's path matches for walledID, below the
+// prefix.
+const rolloutRel = "2026/11/13/rollout-2026-11-13T10-00-00-" + walledID + ".jsonl"
+
+// TestAPathPatternMatchesInsideOneName pins the pattern of a resume.path: a * matches
+// any characters inside one name and never a /, a name is never . or .., the session
+// id is literal, a * in it included, and {cwd_slug} matches a slug alone when any slug
+// is allowed.
+func TestAPathPatternMatchesInsideOneName(t *testing.T) {
+	below := strings.TrimPrefix(rolloutResume.Path, rolloutResume.Prefix)
+	p := newPathPattern(below, walledID, "", false)
+	for rel, want := range map[string]bool{
+		rolloutRel:                                                        true,
+		"x/y/z/rollout--" + walledID + ".jsonl":                           true,
+		"2026/11/13/x/rollout-a-" + walledID + ".jsonl":                   false,
+		"2026/11/rollout-a-" + walledID + ".jsonl":                        false,
+		"../11/13/rollout-a-" + walledID + ".jsonl":                       false,
+		"2026/./13/rollout-a-" + walledID + ".jsonl":                      false,
+		"2026//13/rollout-a-" + walledID + ".jsonl":                       false,
+		"2026/11/13/rollout-a-" + walledID + ".jsonl.bak":                 false,
+		"2026/11/13/rollout-a-5d0c6a51-3b2e-4f7a-9c1d-8e6f4a2b0c37.jsonl": false,
+		"2026/11/13/rollout" + walledID + ".jsonl":                        false,
+	} {
+		if got := p.matches(rel); got != want {
+			t.Errorf("%s: %v; want %v", rel, got, want)
+		}
+	}
+	if p.shown != "*/*/*/rollout-*-"+walledID+".jsonl" {
+		t.Errorf("shown %q", p.shown)
+	}
+	for _, name := range []string{".", ".."} {
+		if newPathPattern("*", "", "", false).matchName(0, name) {
+			t.Errorf("* matches %q", name)
+		}
+	}
+	literal := newPathPattern("{session_id}.jsonl", "a*b", "", false)
+	if !literal.matches("a*b.jsonl") || literal.matches("axxb.jsonl") {
+		t.Error("a * of the session id matches as a pattern")
+	}
+	slashed := newPathPattern("{session_id}.jsonl", "a/b", "", false)
+	if slashed.matches("a/b.jsonl") {
+		t.Error("a session id with / matches two names")
+	}
+	anySlug := newPathPattern("{cwd_slug}/{session_id}.jsonl", walledID, "", true)
+	for rel, want := range map[string]bool{
+		"-workspace/" + walledID + ".jsonl": true,
+		"-paused/" + walledID + ".jsonl":    true,
+		"we!rd/" + walledID + ".jsonl":      false,
+		"../" + walledID + ".jsonl":         false,
+		"-w/x/" + walledID + ".jsonl":       false,
+		walledID + ".jsonl":                 false,
+		"-workspace/probe.jsonl":            false,
+	} {
+		if got := anySlug.matches(rel); got != want {
+			t.Errorf("any slug, %s: %v; want %v", rel, got, want)
+		}
+	}
+}
+
+// TestFindMatchesFollowsNoLink pins the search of a pattern: the files that match, at
+// most two; a directory a * matches is followed only when it is a directory, never a
+// symbolic link; the last name matches an entry of any type; a start below a link,
+// and a start that does not exist, find nothing.
+func TestFindMatchesFollowsNoLink(t *testing.T) {
+	p := newPathPattern("*/*/*/rollout-*-{session_id}.jsonl", walledID, "", false)
+	base := t.TempDir()
+	if got, err := findMatches(base, "none/", p); err != nil || len(got) != 0 {
+		t.Errorf("a start that does not exist: %v %v", got, err)
+	}
+	appendTo(t, base, "s/"+rolloutRel, []byte("{}\n"))
+	appendTo(t, base, "s/2026/11/13/rollout-x-other.jsonl", []byte("{}\n"))
+	if got, err := findMatches(base, "s/", p); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+		t.Errorf("one file: %v %v", got, err)
+	}
+	outside := t.TempDir()
+	appendTo(t, outside, "11/13/rollout-y-"+walledID+".jsonl", []byte("{}\n"))
+	symlink(t, outside, filepath.Join(base, "s", "2025"))
+	if got, err := findMatches(base, "s/", p); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+		t.Errorf("through a linked directory: %v %v", got, err)
+	}
+	symlink(t, outside, filepath.Join(base, "linked"))
+	if got, err := findMatches(base, "linked/", p); err == nil || len(got) != 0 {
+		t.Errorf("a start below a link: %v %v", got, err)
+	}
+	symlink(t, filepath.Join(outside, "11/13/rollout-y-"+walledID+".jsonl"), filepath.Join(base, "s/2026/11/13/rollout-z-"+walledID+".jsonl"))
+	got, err := findMatches(base, "s/", p)
+	slices.Sort(got)
+	if want := []string{rolloutRel, "2026/11/13/rollout-z-" + walledID + ".jsonl"}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("a link as the file: %v %v; want %v", got, err, want)
+	}
+	for i := range 3 {
+		appendTo(t, base, fmt.Sprintf("s/2027/01/0%d/rollout-a-%s.jsonl", i, walledID), []byte("{}\n"))
+	}
+	if got, err := findMatches(base, "s/", p); err != nil || len(got) != 2 {
+		t.Errorf("five files: %v %v; want two", got, err)
+	}
+}
+
+// newRolloutTranscript is a transcript of rolloutResume, walled when walled is true,
+// whose home or transcript directory is a new directory.
+func newRolloutTranscript(t *testing.T, walled bool) (*transcript, *sentTranscript, string) {
+	t.Helper()
+	dir := t.TempDir()
+	s := &sentTranscript{}
+	mask := func(l string) string { return strings.ReplaceAll(l, "sk-fake-secret", "[secret]") }
+	send, line := func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) }
+	if walled {
+		return newWalledTranscript(rolloutResume, dir, "/workspace", mask, send, line), s, dir
+	}
+	return newTranscript(rolloutResume, dir, "/workspace", mask, send, line), s, dir
+}
+
+// TestATranscriptIsFoundByItsPattern pins a resume.path with a *, with a wall and
+// without one: a read before the file exists finds nothing and writes no line; once the
+// file exists the session reads it and sends it under its path, masked.
+func TestATranscriptIsFoundByItsPattern(t *testing.T) {
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := newRolloutTranscript(t, walled)
+			below := rolloutRel
+			if !walled {
+				below = ".rollouts/sessions/" + rolloutRel
+			}
+			tr.started(walledID)
+			tr.poll(false)
+			appendTo(t, dir, below, []byte("{\"a\":\"sk-fake-secret\"}\n"))
+			tr.poll(false)
+			appendTo(t, dir, below, []byte("{\"b\":2}\n"))
+			tr.finish()
+			got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel)
+			if !ok || string(got) != "{\"a\":\"[secret]\"}\n{\"b\":2}\n" || len(s.lines) != 0 {
+				t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+			}
+		})
+	}
+}
+
+// TestATranscriptPatternWithTwoFilesReadsNone pins two files that match: one line, and
+// nothing sent, with a wall and without one, also once one of them is gone.
+func TestATranscriptPatternWithTwoFilesReadsNone(t *testing.T) {
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := newRolloutTranscript(t, walled)
+			at := ""
+			if !walled {
+				at = ".rollouts/sessions/"
+			}
+			appendTo(t, dir, at+rolloutRel, []byte("{\"a\":1}\n"))
+			appendTo(t, dir, at+"2026/11/14/rollout-b-"+walledID+".jsonl", []byte("{\"b\":1}\n"))
+			tr.started(walledID)
+			tr.poll(false)
+			if err := os.Remove(filepath.Join(dir, at+rolloutRel)); err != nil {
+				t.Fatal(err)
+			}
+			tr.finish()
+			want := "Keep one transcript of the runtime's session at ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl. A continuation of this run starts the runtime without a resume: more than one file matches it, so the session reads none of them"
+			if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
+				t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
+			}
+		})
+	}
+}
+
+// TestAWalledTranscriptPatternRefusesWhatTheAgentPlants pins the checks of a file a
+// pattern found behind a wall, as for Claude Code's path: a symbolic link, a FIFO,
+// which the session opens without blocking, a file with a second hard link, and one
+// over 64 MiB each send nothing and write one line; a file below a linked directory
+// is not found, and the end writes that no file matches.
+func TestAWalledTranscriptPatternRefusesWhatTheAgentPlants(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "secret.jsonl")
+	if err := os.WriteFile(outside, []byte("{\"host\":\"secret\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirOf := filepath.Dir(rolloutRel)
+	for name, c := range map[string]struct {
+		plant func(t *testing.T, root string)
+		want  string
+	}{
+		"a symbolic link": {func(t *testing.T, root string) {
+			makeDir(t, filepath.Join(root, dirOf))
+			symlink(t, outside, filepath.Join(root, rolloutRel))
+		}, "the session reads no transcript at ~/.rollouts/sessions/" + rolloutRel + ": a name on its path is a symbolic link or no directory"},
+		"a FIFO": {func(t *testing.T, root string) {
+			makeDir(t, filepath.Join(root, dirOf))
+			if err := syscall.Mkfifo(filepath.Join(root, rolloutRel), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, "the session reads no transcript at ~/.rollouts/sessions/" + rolloutRel + ": it is no regular file"},
+		"a hard link": {func(t *testing.T, root string) {
+			makeDir(t, filepath.Join(root, dirOf))
+			if err := os.Link(outside, filepath.Join(root, rolloutRel)); err != nil {
+				t.Skip("no hard link between the test's directories:", err)
+			}
+		}, "the session reads no transcript at ~/.rollouts/sessions/" + rolloutRel + ": it has 2 hard links"},
+		"a file over 64 MiB": {func(t *testing.T, root string) {
+			makeDir(t, filepath.Join(root, dirOf))
+			f, err := os.Create(filepath.Join(root, rolloutRel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			if err := f.Truncate(maxTranscript + 1); err != nil {
+				t.Fatal(err)
+			}
+		}, "the session reads no transcript at ~/.rollouts/sessions/" + rolloutRel + ": it is over 67108864 bytes (64 MiB)"},
+		"a linked directory": {func(t *testing.T, root string) {
+			dir := t.TempDir()
+			appendTo(t, dir, "13/"+filepath.Base(rolloutRel), []byte("{\"linked\":1}\n"))
+			makeDir(t, filepath.Join(root, "2026"))
+			symlink(t, dir, filepath.Join(root, "2026", "11"))
+		}, "Check that the runtime writes its transcript at ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl. A continuation of this run starts the runtime without a resume: no file matches, so the session sent no transcript"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr, s, root := newRolloutTranscript(t, true)
+			c.plant(t, root)
+			tr.started(walledID)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				tr.poll(false)
+				tr.finish()
+			}()
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the read blocks")
+			}
+			if len(s.events) != 0 || len(s.lines) != 1 || !strings.Contains(s.lines[0], c.want) {
+				t.Errorf("%d events, lines %q; want none and %q", len(s.events), s.lines, c.want)
+			}
+		})
+	}
+}
+
+// TestAResumePathWithNoPathFromIgnoresHooks pins a resume with no path_from: a hook
+// input's transcript_path sets nothing, and the session reads resume.path.
+func TestAResumePathWithNoPathFromIgnoresHooks(t *testing.T) {
+	tr, s, home := newRolloutTranscript(t, false)
+	appendTo(t, home, ".rollouts/sessions/"+rolloutRel, []byte("{\"a\":1}\n"))
+	appendTo(t, home, ".rollouts/sessions/hook.jsonl", []byte("{\"hook\":1}\n"))
+	tr.record(hookRecord(walledID, filepath.Join(home, ".rollouts/sessions/hook.jsonl")))
+	tr.started(walledID)
+	tr.finish()
+	if got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel); !ok || string(got) != "{\"a\":1}\n" || len(s.lines) != 0 {
+		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
 	}
 }

@@ -877,10 +877,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			transcriptDir, transcriptUnder = "", ""
 			if restore != nil {
 				added := insideAll(restore.args, inside)
-				if !slices.Equal(prepared.Args[max(len(prepared.Args)-len(added), 0):], added) {
+				end := len(prepared.Args) - restore.after
+				if end < len(added) || !slices.Equal(prepared.Args[end-len(added):end], added) {
 					return fail(errors.New(resumeArgsKept(unbound.Fix, unbound.Cause)))
 				}
-				prepared.Args = prepared.Args[:len(prepared.Args)-len(added)]
+				prepared.Args = slices.Delete(slices.Clone(prepared.Args), end-len(added), end)
 				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(r.answer.Resume.RunID, unbound.Fix, unbound.Cause))+"\n"))
 				restore = nil
 			}
