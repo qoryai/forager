@@ -4116,7 +4116,9 @@ To deploy a separate gateway so its runs go on across the restart:
 - The first deploy onto a gateway that keeps its runs still ends the runs that are open:
   the gateway it replaces ends them as it stops.
 - A rollback to a gateway that does not keep its runs ends each suspended run: every
-  request of a run gets a `410` `run_closed`.
+  request of a run gets a `410` `run_closed`. The CA keys stay in the run records until a
+  gateway that keeps its runs removes them, or until you delete the run records under
+  `Dir`.
 
 **No local sessions.** A separate gateway serves other machines alone: with `Listen`
 it makes no local link, in memory or on a socket, and no proxy listener on loopback,

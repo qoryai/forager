@@ -1395,7 +1395,8 @@ release may change what an existing document does, and says so under Upgrading.
   - expect the first deploy onto this release to end the runs that are open, because
     the gateway it replaces ends them as it stops;
   - expect a rollback to an earlier gateway to end each suspended run with a `410`
-    `run_closed`.
+    `run_closed`. The CA keys stay in the run records until a gateway that keeps its
+    runs removes them, or until you delete the run records under `Dir`.
 - A run request behind a separate gateway counts against the bounds of 64 connections
   of one source and 256 of one IPv6 /48 only until its open starts, once its run key
   passes and its body is read. It counts against the bound of 4096 connections until
