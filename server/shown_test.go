@@ -224,7 +224,7 @@ func TestAServerErrorPrintsAPhraseForASecret(t *testing.T) {
 }
 
 // TestARefusedConfigurationImageHasNoUserInformation pins the refusal of a run
-// configuration's image that is not pinned: it names the image without the registry's
+// configuration's image that is not pinned: it shows the image without the registry's
 // credentials of its user information.
 func TestARefusedConfigurationImageHasNoUserInformation(t *testing.T) {
 	err := server.CheckConfigurationImage("user:pw@registry.example/agent:1")

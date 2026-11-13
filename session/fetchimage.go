@@ -16,13 +16,13 @@ import (
 )
 
 // FetchImage fetches the run's image by reference, the policy's image pinned by digest,
-// as a host step of kind event.StepImage with the reference as its name, before the
-// first join or between joins. The session first requests the image's manifest from
-// its registry through the run's proxy, with the run's credentials, with or without an
-// engine proxy: the engine may answer a pull from an image it holds by that digest
-// without such a request. Then the wall's [wall.Puller] pulls the image, also when the
-// engine holds it, and checks its user. With OpenSpec.EngineProxy the engine
-// sends the pull through the run's proxy. For the step alone, a forwarder listens at
+// as a host step of kind event.StepImage with the reference without its user
+// information as its name, before the first join or between joins. The session first
+// requests the image's manifest from its registry through the run's proxy, with the
+// run's credentials, with or without an engine proxy: the engine may answer a pull
+// from an image it holds by that digest without such a request. Then the wall's
+// [wall.Puller] pulls the image, also when the engine holds it, and checks its user.
+// With OpenSpec.EngineProxy the engine sends the pull through the run's proxy. For the step alone, a forwarder listens at
 // its Addr, passes on only a request with its Password, and reaches the gateway's proxy
 // as the host proxy does, and, for a run with a certificate authority, the engine
 // trusts the run's certificate for the image's registry host and for each host of the

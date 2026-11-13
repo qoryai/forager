@@ -979,8 +979,8 @@ release may change what an existing document does, and says so under Upgrading.
 - `fmt` and `encoding/json` print `server.LinkRunAnswer` with the image's `ref` and
   `relay_image` without their user information. Before, a log of the run answer printed
   a registry's credentials in either.
-- `server.CheckConfigurationImage` names a run configuration's image that is not pinned
-  without its user information: `user:pw@registry.example/agent:1` is
+- The refusal of `server.CheckConfigurationImage` shows a run configuration's image
+  that is not pinned without its user information: `user:pw@registry.example/agent:1` is
   `registry.example/agent:1` in the refusal. The gateway's log of a failed reopen and
   the session's report of a failed reload print that refusal. Before, they printed the
   registry's credentials.
@@ -1768,7 +1768,7 @@ release may change what an existing document does, and says so under Upgrading.
 - The Docker wall's errors and refusals print an image's reference without its user
   information: the error of a reference that is not an image reference, a failed
   `docker pull` with its command and the engine's output, a failed `image inspect`
-  with what the engine said, an image the engine does not hold by its digest at its
+  with the engine's output, an image the engine does not hold by its digest at its
   first container, an image the engine does not have under `NeverPull`, and the names
   and detail of `image_missing` and `image_user_root`. The output of any docker command
   in an error has the run's image and relay image without their user information too.
@@ -2188,8 +2188,8 @@ release may change what an existing document does, and says so under Upgrading.
   `user:pw@registry.example/agent@sha256:…` is recorded as
   `registry.example/agent@sha256:…`. The manifest check reads that reference too, so its
   errors and its `image_missing`, `image_access_denied`, `image_rate_limited` and
-  `image_registry_unreachable` refusals have no user information, and it asks the
-  registry the reference names. Before, the record had the reference whole, with the
+  `image_registry_unreachable` refusals have no user information, and it sends its
+  request to the registry in the reference. Before, the record had the reference whole, with the
   registry's credentials in it, and the check read the user information as a Docker Hub
   repository and sent it in the path of a request to `registry-1.docker.io`. The wall
   still pulls the reference whole.

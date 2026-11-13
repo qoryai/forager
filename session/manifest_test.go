@@ -553,8 +553,8 @@ func TestTheManifestIsAtTheRegistrysAPIHost(t *testing.T) {
 // TestTheImageStepAndTheCheckHaveTheImageWithoutUserInformation pins the image of a
 // reference with a registry's credentials in its user information in the record of a
 // join: the image step's name, and the image_access_denied refusal of the check and its
-// detail, have the reference without them, and the check asks the registry the reference
-// names. The record contains no part of the credentials.
+// detail, have the reference without them, and the check sends its request to the
+// registry in the reference. The record contains no part of the credentials.
 func TestTheImageStepAndTheCheckHaveTheImageWithoutUserInformation(t *testing.T) {
 	reg := startRegistry(&scripted{status: http.StatusForbidden})
 	defer reg.Close()

@@ -471,7 +471,7 @@ func (e *dockerEnclosure) image() string   { return e.base + "-image" }
 func (e *dockerEnclosure) setup() string   { return e.base + "-setup" }
 func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunID }
 
-// docker runs one docker command; a failure carries what the command printed. The
+// docker runs one docker command; a failure contains what the command printed. The
 // failure's command and output have the run's image references without their user
 // information ([dockerEnclosure.withoutLogins]): docker pull's argument is one.
 func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, error) {

@@ -204,7 +204,7 @@ func ReservedHeader(name string) bool {
 // pinned by digest, NAME@sha256: and 64 lower-case hexadecimal digits, with
 // run_configuration_invalid: a reference with a tag or without a digest, one in upper
 // case, and the machine's name for an image, which a run configuration never names.
-// The refusal names the image without its user information
+// The refusal shows the image without its user information
 // ([policy.ImageWithoutUserInfo]), as printable ASCII when it is, quoted otherwise: the
 // gateway's log and the session's report may print the refusal, and a registry's
 // credentials may be in that user information.

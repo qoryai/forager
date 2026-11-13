@@ -144,7 +144,7 @@ func TestAReloadKeepsTheImageTheRunConfigurationNamed(t *testing.T) {
 }
 
 // TestAReloadPrintsTheStartImageWithoutUserInformation pins the reload's refusal of an
-// image the run configuration names, for a run started in the machine's default given
+// image in the run configuration, for a run started in the machine's default given
 // as a reference with a registry's credentials in its user information: the refusal
 // has the reference without them.
 func TestAReloadPrintsTheStartImageWithoutUserInformation(t *testing.T) {
