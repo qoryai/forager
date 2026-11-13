@@ -15,12 +15,14 @@ release may change what an existing document does, and says so under Upgrading.
   `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a
   runtime, `{prefix, path}`, where `path` may have `*`, which matches inside one path
   name; it is absent for a runtime with no resume.
-- Write each path of an API credential's `paths` without a `.` or `..` segment, such as
-  `/a/../b`: `server.CheckCredentials` refuses such a path with
-  `run_configuration_invalid`, since the proxy denies every request path with one. It
-  also refuses an `account_header` that `server.ReservedHeader` reports, or
-  `Authorization`, in a run configuration not read from bytes, which the schema
-  refuses in one that is.
+- Write each path of an API credential's `paths` without a part the proxy denies in a
+  request's path: a `.` or `..` segment, such as `/a/../b`, an empty segment, a
+  backslash, or an encoded slash, backslash, dot or percent sign.
+  `server.CheckCredentials` refuses such a path with `run_configuration_invalid`, since
+  the proxy denies every request path with one. In a run configuration not read from
+  bytes, it also refuses what the schema refuses in one that is: an `account_header`
+  without `account_claim`, the reverse, either without `oauth`, and an
+  `account_header` that `server.ReservedHeader` reports or that is `Authorization`.
 - Expect `model_key_switch` and `model_key_unauthorized` to be reserved codes of
   `dev.qory.run.exited`. A run's starter's outcome reason that is either code is
   dropped, its outcome kept, as for every reserved code, and `(*session.Run).Close`
@@ -1296,6 +1298,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A request to a host that gets a credential goes upstream with no trailer: the
+  proxy drops every trailer the session sends, also on a host with a host credential
+  alone. A trailer could carry a header the proxy sets, such as a model key's account
+  header, beside the proxy's value. A request to a host a tool serves keeps its
+  trailer.
 - A run that opens while Qory Apiary restarts opens once Qory Apiary is back. The
   gateway tries the run's registration, or its attach, again 1, 2, 4, 8 and 15 seconds
   after the try before, then every 15 seconds, within 120 seconds of the run request's
