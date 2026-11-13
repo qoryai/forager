@@ -704,7 +704,7 @@ func codexExited(t *testing.T, o keysOutcome, state, reason string) {
 // TestDockerCodexResumesAPausedRunUnderAnotherKey runs Codex 0.167.2 twice behind the
 // wall, with CODEX_HOME at /var/lib/qory-codex-home as a fixed value of the launch and
 // an empty environment otherwise, as qory starts it, and the sandbox off as a --config
-// pair ([codexResumable]). Run 1, with one key, says hi; its
+// pair ([codexResumable]). Run 1, with one key, prints the stub's Hi; its
 // session finds the rollout below ${CODEX_HOME}/sessions/, in the transcript directory
 // the wall binds there, and sends it as dev.qory.session.transcript chunks, which the
 // control plane stores. Run 2's run configuration has resume, with run 1's id, thread id

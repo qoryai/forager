@@ -5669,9 +5669,10 @@ value of `home_var`, `${CODEX_HOME}/sessions/`. `path` starts with `prefix`.
 `home_var`, optional, is the variable of the launch's environment that contains the
 runtime's home, `CODEX_HOME` for Codex. With it, `prefix` and `path` start with exactly
 `${<home_var>}/`; without it, they start with `~/` or `/`. Neither contains a `$`
-anywhere else: the schema refuses one, and the session refuses a descriptor whose
-`prefix` or `path` starts with another variable, `resume: start "${OTHER}/s/" with
-"${CODEX_HOME}/": home_var is CODEX_HOME, and the transcript lies below its value`. The
+anywhere else: a descriptor with one fails the schema, and one whose `prefix` or
+`path` starts with another variable fails to load with `resume: start "${OTHER}/s/"
+with "${CODEX_HOME}/": home_var is CODEX_HOME, and the transcript lies below its
+value`. The
 session replaces `${<home_var>}` with the variable's value in the launch's environment,
 the one the runtime gets (§The events, A session's transcript). `args` are the arguments the session adds when it resumes,
 `["--resume", "{session_id}"]`. `after`, optional, is the argument of the runtime's that

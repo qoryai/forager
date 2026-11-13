@@ -878,10 +878,11 @@ func TestResumeDecodes(t *testing.T) {
 }
 
 // TestAResumeHomeVariableDecodes pins resume.home_var: a prefix and a path that start
-// with ${<home_var>}/ decode as they are, the home itself as the prefix included. The
-// schema refuses a variable without home_var, a home_var whose prefix or path starts
-// with ~/ or /, and a $ anywhere but in that ${<home_var>}/; Parse returns an error that
-// starts with the fix for a prefix or path that starts with another variable.
+// with ${<home_var>}/ decode as they are, the home itself as the prefix included. A
+// descriptor fails the schema with a variable without home_var, a home_var whose
+// prefix or path starts with ~/ or /, or a $ anywhere but in that ${<home_var>}/; Parse
+// returns an error that starts with the fix for a prefix or path that starts with
+// another variable.
 func TestAResumeHomeVariableDecodes(t *testing.T) {
 	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
 		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
