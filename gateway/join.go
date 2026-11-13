@@ -171,8 +171,11 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	lr.touch()
 	// A join with no model key gets none; the schema has refused one that names one.
 	var model string
+	// grouped is true when model is a key of the run's key group: the group's key for
+	// the join is taken once the join is accepted.
+	var grouped bool
 	if req.ModelKey {
-		if model, ok = lr.modelKey(req.ModelCredential); !ok {
+		if model, grouped, ok = lr.modelKey(req.ModelCredential); !ok {
 			invalid(w)
 			return
 		}
@@ -205,6 +208,16 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		lr.mu.Unlock()
 		refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway, joinWhileOpen)
 		return
+	}
+	if grouped {
+		// After the replay and the join while another is open: neither moves the
+		// group's active key. A refused join records the key a request would get,
+		// [modelkey.Group.Active], which keeps an openai-responses key in cooldown.
+		if conflict == nil {
+			model = lr.keys.JoinKey()
+		} else {
+			model = lr.keys.Active()
+		}
 	}
 	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes), model: model, noKey: !req.ModelKey, credential: req.ModelCredential}
 	lr.mu.Unlock()
@@ -260,28 +273,28 @@ const joinWhileOpen = "a join while another join of the run is open"
 
 // modelKey is the model key a join's session starts with: name, when it is one of the
 // model keys the gateway holds for the run, else the run's start key when name is
-// empty; empty when the run has no model key. Empty, or a key of the run's key group,
-// is the group's key for a join, [modelkey.Group.JoinKey]. It reports false for a name
-// of no model key of the run's.
-func (lr *linkRun) modelKey(name string) (string, bool) {
+// empty; empty when the run has no model key. When that key is one of the run's key
+// group, grouped is true: the caller takes the group's key for the join,
+// [modelkey.Group.JoinKey], once it accepts the join. ok is false for a name of no
+// model key of the run's.
+func (lr *linkRun) modelKey(name string) (key string, grouped, ok bool) {
 	held := lr.r.Held()
 	if held == nil {
-		return "", name == ""
+		return "", false, name == ""
 	}
 	if name == "" {
 		name = held.Start
 		if name == "" {
-			return "", true
+			return "", false, true
 		}
 	}
 	if lr.keys.Has(name) {
-		// The join is where the group's active key may change for every format.
-		return lr.keys.JoinKey(), true
+		return name, true, true
 	}
 	for _, c := range held.Credentials() {
 		if c.Format != "" && c.Name == name {
-			return name, true
+			return name, false, true
 		}
 	}
-	return "", false
+	return "", false, false
 }
