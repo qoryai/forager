@@ -1570,54 +1570,157 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 // targetLinks fails a launch with a mount whose Target goes through a symbolic link in
 // the image: each name from / down to the Target, read out of the image with
 // [dockerEnclosure.imageHeader], that is a symbolic link is refused, since the engine
-// follows it and the bind could land over another mount or /qory. A name that lies
+// follows it and the bind could land over another mount or over /qory. A name that lies
 // inside another mount's place inside is that mount's on this machine, not the image's,
 // and the session checks it; the walk down to a Target stops there, and at the first
 // name the image does not have, which the engine makes.
+//
+// It also fails a launch with a read-only mount with a Target when a directory of the
+// image above the outermost mount whose place inside contains that Target lets the
+// agent's user or group write it ([agentWrites]): the agent could rename the directory
+// below it on the way to the mount, and the bind would move with it. A directory with
+// the sticky bit lets the agent rename only what it owns, so it passes when the next
+// name on the way is not the agent's. The walk stops at the first name the image does
+// not have: the engine makes it and those below it, owned by root and mode 0755. / is
+// not read.
 func (e *dockerEnclosure) targetLinks(ctx context.Context, mounts []Mount) error {
-	inside := func(q string) bool {
-		return slices.ContainsFunc(mounts, func(m Mount) bool {
-			at := m.Path
-			if m.Target != "" {
-				at = filepath.Clean(m.Target)
-			}
-			return at != q && under(at, q)
-		})
+	placeOf := func(m Mount) string {
+		if m.Target != "" {
+			return filepath.Clean(m.Target)
+		}
+		return m.Path
 	}
-	// found is whether the image has a name already read: a missing one ends the walk.
-	found := map[string]bool{}
+	inside := func(q string) bool {
+		return slices.ContainsFunc(mounts, func(m Mount) bool { at := placeOf(m); return at != q && under(at, q) })
+	}
+	// heads are the names already read out of the image, nil for one it does not have.
+	heads := map[string]*tar.Header{}
+	head := func(q string) (*tar.Header, error) {
+		if h, ok := heads[q]; ok {
+			return h, nil
+		}
+		h, err := e.imageHeader(ctx, q)
+		if err == nil {
+			heads[q] = h
+		}
+		return h, err
+	}
+	// above are the names from / down to q, / and q left out, outermost first.
+	above := func(q string) []string {
+		var names []string
+		for q = path.Dir(q); q != "/"; q = path.Dir(q) {
+			names = append([]string{q}, names...)
+		}
+		return names
+	}
 	for _, m := range mounts {
 		if m.Target == "" {
 			continue
 		}
-		var names []string
-		for q := path.Clean(m.Target); q != "/"; q = path.Dir(q) {
-			names = append([]string{q}, names...)
-		}
-		for _, q := range names {
+		for _, q := range append(above(path.Clean(m.Target)), path.Clean(m.Target)) {
 			if inside(q) {
 				break
 			}
-			if has, ok := found[q]; ok {
-				if !has {
-					break
-				}
-				continue
-			}
-			h, err := e.imageHeader(ctx, q)
+			h, err := head(q)
 			if err != nil {
 				return err
 			}
-			if found[q] = h != nil; h == nil {
+			if h == nil {
 				break
 			}
 			if h.Typeflag == tar.TypeSymlink {
-				why := unreachable(h, q, true, true, 0, 0)
-				return fmt.Errorf("wall docker: %s: %s", why.Fix, why.Cause)
+				shown := accesskey.ShownValue(q, true)
+				return fmt.Errorf("wall docker: Make %s a directory or file in the image, not a symbolic link: %s is a "+
+					"symbolic link in the image, which the engine follows, so the bind could land over another mount or "+
+					"over /qory", shown, shown)
 			}
 		}
 	}
+	idsRead := false
+	uid, gid := -1, -1
+	for _, m := range mounts {
+		if m.Target == "" || !m.ReadOnly {
+			continue
+		}
+		outer := placeOf(m)
+		for _, o := range mounts {
+			if at := placeOf(o); under(at, outer) {
+				outer = at
+			}
+		}
+		if !idsRead {
+			u, g, unbound, err := e.agentIDs(ctx)
+			if err != nil {
+				return err
+			}
+			if unbound == nil {
+				uid, gid = u, g
+			}
+			idsRead = true
+		}
+		names := append(above(outer), outer)
+		for k, q := range names[:len(names)-1] {
+			h, err := head(q)
+			if err != nil {
+				return err
+			}
+			if h == nil {
+				break
+			}
+			if !agentWrites(h, uid, gid) {
+				continue
+			}
+			if h.Mode&0o1000 != 0 {
+				next, err := head(names[k+1])
+				if err != nil {
+					return err
+				}
+				if next == nil || !ownedByAgent(next, uid) {
+					continue
+				}
+			}
+			agent := accesskey.ShownName(e.user, true)
+			if uid >= 0 {
+				agent = fmt.Sprintf("%d:%d", uid, gid)
+			}
+			shown := accesskey.ShownValue(q, true)
+			return fmt.Errorf("wall docker: Make %s writable by root alone in the image, or show the mount %s at a place "+
+				"outside it: %s has mode %04o and owner %d:%d in the image, so the agent, %s, can rename the directory "+
+				"in it on the way to the read-only mount at %s, and the bind moves with it", shown,
+				accesskey.ShownValue(m.Path, true), shown, h.Mode&0o7777, h.Uid, h.Gid, agent, accesskey.ShownValue(m.Target, true))
+		}
+	}
 	return nil
+}
+
+// agentWrites reports whether the agent, uid and gid inside, can write the directory of
+// the image whose first tar header is h: the owner's bit counts for the owner, the
+// group's for the group and the others' for the rest. A uid below 0 is an agent whose
+// ids are not known, the wall's user being a name or a uid other than the session's: a
+// directory that the group or the others may write, or that a user other than root owns
+// and may write, counts as one it writes.
+func agentWrites(h *tar.Header, uid, gid int) bool {
+	if uid < 0 {
+		return h.Mode&0o022 != 0 || (h.Uid != 0 && h.Mode&0o200 != 0)
+	}
+	bit := int64(0o002)
+	switch {
+	case h.Uid == uid:
+		bit = 0o200
+	case h.Gid == gid:
+		bit = 0o020
+	}
+	return h.Mode&bit != 0
+}
+
+// ownedByAgent reports whether the agent, uid inside, owns the name of the image whose
+// first tar header is h; for an agent whose uid is not known, whether a user other than
+// root owns it.
+func ownedByAgent(h *tar.Header, uid int) bool {
+	if uid < 0 {
+		return h.Uid != 0
+	}
+	return h.Uid == uid
 }
 
 // transcriptMount is the --mount of the launch's transcript directory, empty for a

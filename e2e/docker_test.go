@@ -779,7 +779,7 @@ func targetThroughImageLink(t *testing.T) {
 	dir, home := t.TempDir(), t.TempDir()
 	_, err = e.Wrap(ctx, wall.Launch{Command: "sh", Args: []string{"-c", "true"}, Dir: dir,
 		Mounts: []wall.Mount{{Path: dir}, {Path: home, Target: "/lib64/agent-home"}}, Proxy: proxy.Addr().String(), ProxyToken: relaySecret})
-	want := `wall docker: Make "/lib64" a directory in the image, not a symbolic link: "/lib64" is a symbolic link in the image`
+	want := `wall docker: Make "/lib64" a directory or file in the image, not a symbolic link: "/lib64" is a symbolic link in the image`
 	if err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Errorf("the wrap: %v; want an error that starts with %q", err, want)
 	}
