@@ -628,14 +628,15 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 			return g.client.RunAPI(ctx, conf.Run.URL, runID, method, path, body, file)
 		}})
 	}
-	// Every run's counters are its own, at the limits Start checked.
+	// Each run has a set of counters that no other run shares, at the limits Start
+	// checked.
 	lr.px.SetLimits(proxy.Limits{Connections: g.cfg.RunLimits.Connections, RequestsPerSecond: g.cfg.RunLimits.RequestsPerSecond, Burst: g.cfg.RunLimits.Burst})
 	if g.cfg.upstreamRoots != nil {
 		lr.px.TrustUpstream(g.cfg.upstreamRoots)
 	}
 	if d.wall || lr.remote {
-		// The proxy serves something that is not on this machine, so this machine's own
-		// addresses and the private network addresses are not its to reach: an
+		// The proxy serves something that is not on this machine, so the addresses of
+		// this machine and the private network addresses are not its to reach: an
 		// enclosure, or another machine. The names are entries of the node's policy,
 		// never of a server's policy or a session's narrowing: neither opens any of
 		// these addresses.
