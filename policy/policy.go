@@ -632,7 +632,10 @@ func CoversPath(entry, other string) bool {
 // read one way only. escaped is the path as sent. It is refused when it holds an
 // encoded slash, backslash, dot or percent sign, a backslash, an empty segment, or a
 // dot segment: a proxy and a server that disagree on any of those disagree on which
-// rule applies.
+// rule applies. A segment counts by its part before its first ; or %3B, since a server
+// such as Tomcat drops a segment's parameters from the ; on: /a/..;/b and /a/.;x/b have
+// a dot segment there, and /a/;x/b an empty one. The empty part after a final slash is
+// no segment.
 func CleanPath(escaped string) (string, bool) {
 	if escaped == "" {
 		return "/", true
@@ -648,6 +651,13 @@ func CleanPath(escaped string) (string, bool) {
 	}
 	for i := 0; i < len(escaped); i++ {
 		if c := escaped[i]; c < 0x21 || c == 0x7f {
+			return "", false
+		}
+	}
+	for segment := range strings.SplitSeq(lower[1:], "/") {
+		name, _, _ := strings.Cut(segment, ";")
+		name, _, _ = strings.Cut(name, "%3b")
+		if segment != "" && (name == "" || name == "." || name == "..") {
 			return "", false
 		}
 	}

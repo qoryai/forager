@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -553,6 +554,99 @@ func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 		if d.Path == "/other-org/repo" && (d.Allowed || d.Outcome != proxy.Refused) {
 			t.Errorf("the denied path was recorded as %+v", d)
 		}
+	}
+}
+
+// TestADotSegmentBeforeASemicolonGetsNoCredential pins the refusal of a path with a
+// segment that a server such as Tomcat reads as a dot segment or an empty one, since it
+// drops a segment's parameters from the ; on: /allowed/..;/secret matches /allowed/* as
+// written but reaches /secret there. Each form, raw and percent-encoded, gets the
+// wall's 403 with the ambiguous-path line and a record with no credential, in either
+// mode, and never reaches the host; a ; after a name, such as ;jsessionid=, is a
+// parameter of a normal segment and gets the credential.
+func TestADotSegmentBeforeASemicolonGetsNoCredential(t *testing.T) {
+	var mu sync.Mutex
+	var reached []string
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reached = append(reached, r.URL.EscapedPath()+"|"+r.Header.Get("Authorization"))
+		mu.Unlock()
+		io.WriteString(w, "from the origin")
+	}))
+	defer origin.Close()
+	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	roots := x509.NewCertPool()
+	roots.AddCert(origin.Certificate())
+	refused := []string{
+		"/allowed/..;/secret", "/allowed/.;/secret", "/allowed/..;x/secret", "/allowed/.;x=1/secret", "/allowed/;x/secret", "/allowed/..;",
+		"/allowed/../secret", "/allowed/./secret", "/allowed//secret", "/allowed/..",
+		"/allowed/%2e%2e;/secret", "/allowed/%2E;/secret", "/allowed/..%3b/secret", "/allowed/.%3Bx/secret", "/allowed/%3bx/secret",
+		"/allowed/%2e%2e/secret", "/allowed/%2e/secret",
+	}
+	passed := []string{"/allowed/a;jsessionid=0123/b", "/allowed/a;jsessionid=0123", "/allowed/..a;x/b", "/allowed/.well-known;x"}
+	for _, mode := range []policy.Mode{policy.Enforce, policy.Observe} {
+		mu.Lock()
+		reached = nil
+		mu.Unlock()
+		var decisions []proxy.Decision
+		p, err := proxy.Listen("", mode, []string{host}, nil, func(d proxy.Decision) { mu.Lock(); decisions = append(decisions, d); mu.Unlock() })
+		if err != nil {
+			t.Fatal(err)
+		}
+		ca, err := proxy.NewCA("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.TrustUpstream(roots)
+		p.Terminate(ca, []proxy.Credential{{Name: "product", Hosts: []string{host}, Scheme: "bearer", Paths: []string{"/allowed/*"},
+			Token: func() string { return "the-token" }}}, nil, nil)
+		trusted := x509.NewCertPool()
+		trusted.AppendCertsFromPEM(ca.PEM())
+		proxyURL, _ := url.Parse(p.URL())
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
+		get := func(path string) (int, string) {
+			resp, err := client.Get("https://" + net.JoinHostPort(host, port) + path)
+			if err != nil {
+				t.Fatalf("%s %s: %v", mode, path, err)
+			}
+			defer resp.Body.Close()
+			b, _ := io.ReadAll(resp.Body)
+			return resp.StatusCode, string(b)
+		}
+		for _, path := range refused {
+			if code, body := get(path); code != http.StatusForbidden || !strings.Contains(body, "the path could be read two ways") {
+				t.Errorf("%s %s: %d %q, want the wall's 403 for an ambiguous path", mode, path, code, body)
+			}
+		}
+		for _, path := range passed {
+			if code, body := get(path); code != http.StatusOK || body != "from the origin" {
+				t.Errorf("%s %s: %d %q, want it passed", mode, path, code, body)
+			}
+		}
+		p.Close()
+		client.CloseIdleConnections()
+		mu.Lock()
+		if len(reached) != len(passed) {
+			t.Errorf("%s: the host was reached by %q, want only the passed paths", mode, reached)
+		}
+		for _, r := range reached {
+			if !strings.HasSuffix(r, "|Bearer the-token") {
+				t.Errorf("%s: the host saw %q, want the credential", mode, r)
+			}
+		}
+		for _, d := range decisions {
+			if d.Method != "HTTPS" {
+				continue
+			}
+			ambiguous := d.PathRule == proxy.AmbiguousPath
+			if ambiguous != slices.Contains(refused, d.Path) {
+				t.Errorf("%s: the request %s was recorded with the path rule %q", mode, d.Path, d.PathRule)
+			}
+			if ambiguous && (d.Allowed || d.Outcome != proxy.Refused || d.Credential != "") {
+				t.Errorf("%s: the ambiguous request was recorded as %+v, want refused with no credential", mode, d)
+			}
+		}
+		mu.Unlock()
 	}
 }
 
