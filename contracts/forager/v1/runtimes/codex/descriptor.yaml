@@ -7,8 +7,8 @@
 # Codex has no hook a forwarder can be installed as, so the standard output is the only
 # source. codex exec --json prints thread.started first, with the thread's id, the id
 # codex exec resume takes. The lines of a turn, turn.started, item.*, turn.completed,
-# turn.failed and error, contain no thread id, and every runtime event has a session_id,
-# so no rule maps them.
+# turn.failed and error, contain no thread id, so the rules of the turn take session_id
+# from the session's dev.qory.runtime.started (from_started).
 version: 1
 runtime: codex
 title: Codex
@@ -71,11 +71,28 @@ config:
     otel.metrics_exporter: none
     web_search: disabled
 rules:
-  # thread.started has no member for how the session started, so source is a copy of
-  # the record's type, thread.started.
+  # thread.started has no member for how the session started. codex exec --json starts
+  # a session, so source is startup.
   - source: output
     match: {type: thread.started}
     type: dev.qory.runtime.started
     data:
       session_id: thread_id
-      source: type
+    set:
+      source: startup
+  - source: output
+    match: {type: turn.completed}
+    type: dev.qory.runtime.turn_finished
+    from_started: [session_id]
+  # turn.failed has the error's message and no kind of error, so error is unknown.
+  - source: output
+    match: {type: turn.failed}
+    type: dev.qory.runtime.turn_failed
+    data:
+      message: error.message
+    set:
+      error: unknown
+    from_started: [session_id]
+  # No rule maps an error line: Codex 0.167.2 prints one for each retry of a request,
+  # "Reconnecting... 1/5", in a turn that may still finish, and prints turn.failed for
+  # every turn that fails.

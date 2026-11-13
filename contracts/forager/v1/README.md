@@ -5473,8 +5473,9 @@ boolean is `true` or `false`; an integer is written in decimal. For Codex,
 `codex exec --json -m gpt-x "Fix the test"` starts as `codex --config
 analytics.enabled=false ... --config model_providers.qory.base_url="https://api.openai.com/v1"
 ... --config web_search="disabled" exec --json -m gpt-x "Fix the test"`. Codex 0.167.2
-reads pairs before its subcommand for every subcommand, and a pair of the same key
-later in the launch's arguments overrides one of them. The pairs come before the
+reads pairs before its subcommand for every subcommand. A later `--config` or `-c` of
+the same key in the launch's arguments wins over the session's pair, so a composer
+refuses a run whose arguments set a key of `fixed` or the endpoint's setting. The pairs come before the
 resume's `args` are inserted and before the session's setup wraps the launch, and the
 session's record of the launch lists them.
 

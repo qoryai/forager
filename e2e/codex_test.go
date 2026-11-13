@@ -368,6 +368,7 @@ func (k codexWall) run(t *testing.T, login bool, keys ...[2]string) (keysOutcome
 	log := k.log(t, before)
 	t.Logf("the session ended %s, reason %q, exit %d; the stub got:%s", o.res.State, o.res.Reason, o.res.ExitCode, codexEntries(log))
 	t.Logf("the run's egress:%s", codexEgress(o))
+	t.Logf("the turns: finished %v, failed %v", o.of("dev.qory.runtime.turn_finished"), o.of("dev.qory.runtime.turn_failed"))
 	return o, log, s
 }
 
@@ -437,7 +438,8 @@ func codexNoKeyValue(t *testing.T, o keysOutcome, values []string, roots ...stri
 // key's placeholder. Codex answers with the stub's text and the session succeeds; each
 // request the stub gets is a POST to /v1/responses with the key as a bearer, and with
 // the token, the account header from its claim. The run's events contain
-// dev.qory.runtime.started with Codex's thread id, and Codex wrote its transcript at
+// dev.qory.runtime.started from startup with Codex's thread id, and
+// dev.qory.runtime.turn_finished with the same id, and Codex wrote its transcript at
 // CODEX_HOME/sessions/<yyyy>/<mm>/<dd>/rollout-<time>-<thread id>.jsonl, the path the
 // resume of the descriptor is to match. The run reaches no host but the stub, and the
 // test logs every request of the run's egress. No file of the run, the workspace or
@@ -470,10 +472,13 @@ func TestDockerCodexThroughTheWall(t *testing.T) {
 				}
 			}
 			started := o.of("dev.qory.runtime.started")
-			if len(started) != 1 || started[0]["source"] != "thread.started" {
-				t.Fatalf("dev.qory.runtime.started is %v; want one, from thread.started", started)
+			if len(started) != 1 || started[0]["source"] != "startup" {
+				t.Fatalf("dev.qory.runtime.started is %v; want one, from startup", started)
 			}
 			id, _ := started[0]["session_id"].(string)
+			if finished := o.of("dev.qory.runtime.turn_finished"); len(finished) != 1 || id == "" || finished[0]["session_id"] != id {
+				t.Errorf("dev.qory.runtime.turn_finished is %v; want one, with the thread id %q of the start", finished, id)
+			}
 			rollout := regexp.MustCompile(`(?m)^rollout=` + regexp.QuoteMeta(codexHome) + `/sessions/[0-9]{4}/[0-9]{2}/[0-9]{2}/rollout-[^/]*-` +
 				regexp.QuoteMeta(id) + `\.jsonl\r?$`)
 			if id == "" || !rollout.MatchString(o.errs) {
@@ -503,7 +508,8 @@ func TestDockerCodexThroughTheWall(t *testing.T) {
 // on which the stub returns a usage limit: a 429 with the x-codex-* headers. The
 // gateway cools the key and passes the 429 on, Codex ends its turn, and the gateway's
 // answer to the session's batch stops the session: dev.qory.session.exited and the
-// run's dev.qory.run.exited are paused with model_key_limit.
+// run's dev.qory.run.exited are paused with model_key_limit. Codex's turn.failed is a
+// dev.qory.runtime.turn_failed with the start's session id.
 func TestDockerCodexPausesOnAUsageLimit(t *testing.T) {
 	k := newCodexWall(t)
 	o, log, s := k.run(t, true, [2]string{"model", codexToken(codexLimit)})
@@ -512,6 +518,7 @@ func TestDockerCodexPausesOnAUsageLimit(t *testing.T) {
 			o.res.State, o.res.Reason, o.res.ExitCode, tail(o.errs, 4000), tail(o.out, 4000))
 	}
 	codexExited(t, o, event.StatePaused, event.ReasonModelKeyLimit)
+	codexTurnFailed(t, o)
 	if len(log) == 0 || log[0].Key != codexLimit || log[0].Status != http.StatusTooManyRequests {
 		t.Errorf("the stub got:%s\nwant a 429 with the key first", codexEntries(log))
 	}
@@ -538,6 +545,7 @@ func TestDockerCodexEndsOrSwitchesOnARejectedKey(t *testing.T) {
 				o.res.State, o.res.Reason, o.res.ExitCode, tail(o.errs, 4000), tail(o.out, 4000))
 		}
 		codexExited(t, o, event.StateFailed, event.ReasonModelKeyUnauthorized)
+		codexTurnFailed(t, o)
 		if len(log) == 0 || log[0].Key != codexUnauthorized || log[0].Status != http.StatusUnauthorized {
 			t.Errorf("the stub got:%s\nwant a 401 with the key first", codexEntries(log))
 		}
@@ -550,6 +558,7 @@ func TestDockerCodexEndsOrSwitchesOnARejectedKey(t *testing.T) {
 				o.res.State, o.res.Reason, o.res.ExitCode, tail(o.errs, 4000), tail(o.out, 4000))
 		}
 		codexExited(t, o, event.StatePaused, event.ReasonModelKeySwitch)
+		codexTurnFailed(t, o)
 		if len(log) == 0 || log[0].Key != codexUnauthorized || log[0].Status != http.StatusUnauthorized {
 			t.Errorf("the stub got:%s\nwant a 401 with the first key first", codexEntries(log))
 		}
@@ -560,6 +569,16 @@ func TestDockerCodexEndsOrSwitchesOnARejectedKey(t *testing.T) {
 		}
 		codexNoKeyValue(t, o, []string{codexKey(codexUnauthorized), codexKey(codexServe)}, s.dir)
 	})
+}
+
+// codexTurnFailed checks that the run's events contain one dev.qory.runtime.turn_failed,
+// with error unknown and the session id of the one dev.qory.runtime.started.
+func codexTurnFailed(t *testing.T, o keysOutcome) {
+	t.Helper()
+	started, failed := o.of("dev.qory.runtime.started"), o.of("dev.qory.runtime.turn_failed")
+	if len(started) != 1 || len(failed) != 1 || failed[0]["error"] != "unknown" || failed[0]["session_id"] != started[0]["session_id"] {
+		t.Errorf("dev.qory.runtime.turn_failed is %v after the start %v; want one, error unknown, with the start's session_id", failed, started)
+	}
 }
 
 // codexExited checks that the session's dev.qory.session.exited and the run's one

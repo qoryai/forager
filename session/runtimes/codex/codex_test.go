@@ -1,11 +1,14 @@
 package codex_test
 
 import (
+	"encoding/json"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/session/internal/parents"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/session/runtimes/codex"
 	"github.com/qoryai/forager/session/runtimes/runtimetest"
@@ -127,4 +130,69 @@ func TestCodexPassesTheProviderQoryAsConfigPairs(t *testing.T) {
 	if !slices.Equal(pairs, want) {
 		t.Errorf("pairs\n%q\nwant\n%q", pairs, want)
 	}
+}
+
+// TestCodexMapsItsTurnsWithTheThreadID pins the rules: thread.started is a
+// dev.qory.runtime.started from startup with the thread's id; turn.completed and
+// turn.failed, which contain no thread id, take it from that start, and each event's
+// data passes the contract's schema for its type; an error line, which Codex prints for
+// each retry too, maps to nothing.
+func TestCodexMapsItsTurnsWithTheThreadID(t *testing.T) {
+	rt, err := codex.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "01a1d1f8-0000-7000-8000-00000000f1a3"
+	var got []runtimes.Event
+	m := parents.New(rt, func(e runtimes.Event) { got = append(got, e) }, parents.Real)
+	for i, r := range []map[string]any{
+		{"type": "thread.started", "thread_id": id},
+		{"type": "turn.started"},
+		{"type": "error", "message": "Reconnecting... 1/5 (stream disconnected before completion)"},
+		{"type": "turn.completed", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}},
+		{"type": "turn.failed", "error": map[string]any{"message": "unexpected status 401 Unauthorized"}},
+	} {
+		m.Handle(runtimes.Record{Source: runtimes.SourceOutput, Record: r, Line: i + 1})
+	}
+	m.Close()
+	want := []struct {
+		typ  string
+		data map[string]any
+	}{
+		{"dev.qory.runtime.started", map[string]any{"session_id": id, "source": "startup", "line": 1}},
+		{"dev.qory.runtime.turn_finished", map[string]any{"session_id": id, "line": 4}},
+		{"dev.qory.runtime.turn_failed", map[string]any{"session_id": id, "error": "unknown", "message": "unexpected status 401 Unauthorized", "line": 5}},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("events %+v; want %d, and none for the error line", got, len(want))
+	}
+	for i, w := range want {
+		if got[i].Type != w.typ || !reflect.DeepEqual(got[i].Data, w.data) {
+			t.Errorf("event %d: %s %v; want %s %v", i, got[i].Type, got[i].Data, w.typ, w.data)
+		}
+		schema, err := contracts.Compile("events/" + strings.TrimPrefix(w.typ, "dev.qory.") + ".schema.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(roundTrip(t, got[i].Data)); err != nil {
+			t.Errorf("event %d: %s data: %v", i, w.typ, err)
+		}
+	}
+	if events := rt.Map(runtimes.Record{Source: runtimes.SourceOutput, Record: map[string]any{"type": "error", "message": "unexpected status 401 Unauthorized"}}); len(events) != 0 {
+		t.Errorf("an error line maps to %+v; want nothing", events)
+	}
+}
+
+// roundTrip is v as JSON decodes it, the form the schema validates.
+func roundTrip(t *testing.T, v any) any {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out any
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
