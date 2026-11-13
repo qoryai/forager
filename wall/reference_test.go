@@ -785,3 +785,30 @@ func TestDockerSaysHowToFixACertificateItCannotWriteOrRemove(t *testing.T) {
 		t.Errorf("a certificate that cannot be removed: %v, want %s", err, want)
 	}
 }
+
+// TestTheWallPrintsAnImageWithoutUserInformation pins the image in the wall's errors
+// and refusals for a reference with a registry's credentials in its user information:
+// the pull gets the reference whole, and image_missing and the error of a reference
+// the wall refuses have it without them.
+func TestTheWallPrintsAnImageWithoutUserInformation(t *testing.T) {
+	const login = "user:pw@"
+	out := "Error response from daemon: repository registry.example/agents/app not found: name unknown: repository name not known to registry\n"
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`, fail: "docker pull", failOut: out}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	err := d.Pull(context.Background(), Request{RunID: runID, Image: login + byReference, RelayImage: "example.com/agent:1", Pull: true}, nil, nil)
+	var r *accesskey.Refusal
+	if at(rec.lines, "docker pull "+login+byReference) != 0 {
+		t.Errorf("the pull is not of the reference whole:\n%s", strings.Join(rec.lines, "\n"))
+	}
+	if !errors.As(err, &r) || r.Code != refusal.ImageMissing || !slices.Equal(r.Names, []string{byReference}) ||
+		r.Detail != "the image "+byReference+" is not in its registry" {
+		t.Errorf("%v, want image_missing of %s", err, byReference)
+	}
+	d = &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: &recorder{t: t, uid: 1000}}
+	for _, req := range []Request{{RunID: runID, Image: "-" + login + "x"}, {RunID: runID, Image: "i", RelayImage: "-" + login + "x"}} {
+		_, err := d.Prepare(context.Background(), req)
+		if err == nil || err.Error() != `wall docker: "x" is not an image reference` {
+			t.Errorf("Prepare of %+v: %v", req, err)
+		}
+	}
+}

@@ -117,6 +117,29 @@ func TestTheImageIsTheOneTheGatewayAnswers(t *testing.T) {
 	}
 }
 
+// TestSessionStartedHasTheImageWithoutUserInformation pins the image of
+// dev.qory.session.started for a reference with a registry's credentials in its user
+// information: the record has the reference without them, and the wall gets it whole.
+func TestSessionStartedHasTheImageWithoutUserInformation(t *testing.T) {
+	const digest = "@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	ref := "user:pw@registry.example/agent" + digest
+	w := &openWall{}
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	selecting(g, "login")
+	sp.Wall, sp.Image, sp.Images = w, "login", []session.Image{{Name: "login", Ref: ref}}
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.req.Image != ref {
+		t.Errorf("the wall was asked for %q, want %q", w.req.Image, ref)
+	}
+	started := data(ofType(events(t, res), "dev.qory.session.started")[0])
+	if want := "registry.example/agent" + digest; started["image"] != want {
+		t.Errorf("session.started has the image %v, want %q", started["image"], want)
+	}
+}
+
 // TestTheRunGivesTheImageTheGatewayAnswers pins Run.Image: the image of a walled run's
 // answer from the open on, the same after the close, and the zero Image without a wall.
 func TestTheRunGivesTheImageTheGatewayAnswers(t *testing.T) {

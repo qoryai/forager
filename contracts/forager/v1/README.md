@@ -4090,8 +4090,11 @@ and `about` are the starter's registration's, and the run request carries neithe
   and 64 lower-case hexadecimal digits or `@sha512:` and 128, or before its end when it has no digest:
   `docker://me@example.com:pa/ss@registry.example/base@sha256:…` has
   `docker://me@example.com:pa/ss@`, `u:p@base:latest` has `u:p@`, while
-  `registry.example:5000/base@sha256:…` and `base@sha256:…` have none. A reload answer
-  and the record's `request.json` contain each reference without it. Absent means none.
+  `registry.example:5000/base@sha256:…` and `base@sha256:…` have none. A reload answer,
+  the record's `request.json`, `dev.qory.session.started`'s `image`, the wall's errors
+  and refusals, and a run answer as Go's `server.LinkRunAnswer` prints it contain each
+  reference without it; the run answer and the wall's pull use the reference whole.
+  Absent means none.
 - `narrowing`, behind a separate gateway alone: the session's narrowing of the policy,
   `egress` with `allow`, `deny` or both, each in the grammar of the policy's
   `egress.allow`, and no other member. It only narrows: it can only remove what the
@@ -5537,7 +5540,8 @@ it at `/qory/seed`, and `qory` copies it into the workspace; Forager copies none
 reports from inside, which such an image can change or forge (§Images). Every other run
 sees its workspace at the same path as on the machine.
 
-**The record.** `dev.qory.session.started` contains `image`, the reference, and when the
+**The record.** `dev.qory.session.started` contains `image`, the reference without its
+user information (§The gateway's link, the run request's `images`), and when the
 image is one the machine defines `image_name`, `container_runtime` when the definition
 sets one, and `docker: true` when the enclosure has nested Docker. For an image by
 reference, the run's image step spans the check of the image's manifest, its fetch and

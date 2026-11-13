@@ -130,3 +130,41 @@ func TestAnAllowEntryIsTheStartOfAReference(t *testing.T) {
 		}
 	}
 }
+
+// TestImageWithoutUserInfo pins the rule for the user information of an image reference:
+// with a trailing digest set aside, everything up to and with the last @ goes, a
+// scheme too, and the digest comes back; a port, a digest and a reference with no user
+// information stay. A second pass changes nothing.
+func TestImageWithoutUserInfo(t *testing.T) {
+	sha512 := "@sha512:" + strings.Repeat("0", 128)
+	blake3 := "@blake3:" + strings.Repeat("0", 64)
+	for ref, want := range map[string]string{
+		"user:password@registry.example/agents/base" + digest: "registry.example/agents/base" + digest,
+		"token@registry.example:5000/base" + digest:           "registry.example:5000/base" + digest,
+		"user:password@registry.example/base:1":               "registry.example/base:1",
+		"user:pa/ss@registry.example/base" + digest:           "registry.example/base" + digest,
+		"user:p@ss@registry.example/base" + digest:            "registry.example/base" + digest,
+		"me@example.com:pw@registry.example/base:1":           "registry.example/base:1",
+		"docker://u:p@registry.example/x" + digest:            "registry.example/x" + digest,
+		"https://u:p@registry.example/x":                      "registry.example/x",
+		"u:p@base:latest":                                     "base:latest",
+		"u:p@base" + digest:                                   "base" + digest,
+		"user:pass@registry.example/img" + sha512:             "registry.example/img" + sha512,
+		"user:pass@registry.example/img" + blake3:             "registry.example/img" + blake3,
+		"@registry.example/base":                              "registry.example/base",
+		"registry.example:5000/base" + digest:                 "registry.example:5000/base" + digest,
+		"registry.example/agents/base" + digest:               "registry.example/agents/base" + digest,
+		"base" + digest:                                       "base" + digest,
+		"registry.example/base:1":                             "registry.example/base:1",
+		"ubuntu:24.04":                                        "ubuntu:24.04",
+		"":                                                    "",
+	} {
+		got := policy.ImageWithoutUserInfo(ref)
+		if got != want {
+			t.Errorf("policy.ImageWithoutUserInfo(%q) = %q; want %q", ref, got, want)
+		}
+		if again := policy.ImageWithoutUserInfo(got); again != got {
+			t.Errorf("policy.ImageWithoutUserInfo(%q) = %q; a second pass gives %q", ref, got, again)
+		}
+	}
+}

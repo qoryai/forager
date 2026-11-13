@@ -31,6 +31,7 @@ import (
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/policy"
 )
 
 // LocalOrigin is the origin of every URL of the local link: the session sends every
@@ -327,10 +328,10 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	}
 	if a.Image != nil {
 		img := *a.Image
-		img.Name, img.Ref, img.Runtime = accesskey.ShownName(img.Name, false), accesskey.ShownName(img.Ref, false), accesskey.ShownName(img.Runtime, false)
+		img.Name, img.Ref, img.Runtime = accesskey.ShownName(img.Name, false), accesskey.ShownName(policy.ImageWithoutUserInfo(img.Ref), false), accesskey.ShownName(img.Runtime, false)
 		s.Image = &img
 	}
-	s.RelayImage = accesskey.ShownName(a.RelayImage, false)
+	s.RelayImage = accesskey.ShownName(policy.ImageWithoutUserInfo(a.RelayImage), false)
 	return s
 }
 

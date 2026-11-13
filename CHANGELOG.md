@@ -252,6 +252,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `policy.ImageWithoutUserInfo` returns an image reference without the user
+  information it may start with: everything up to and with the last `@` before a
+  trailing `@sha256:`, `@sha512:` or `@blake3:` digest, a scheme in front of it too.
+  The gateway uses it for `request.json` and the reload answer, the session for
+  `dev.qory.session.started`, and the wall for its errors and refusals.
 - Several model keys per run. When the start key is an API credential, the key group is
   the start key and every API credential with its `format`, `auth` and `endpoint`, in the
   order of `credentials`. The keys of the group share the start key's placeholder, and
@@ -968,6 +973,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- A run answer as `fmt` prints `server.LinkRunAnswer` and `encoding/json` writes it has
+  the image's `ref` and `relay_image` without their user information. Before, a log of
+  the run answer printed a registry's credentials in either.
 - The server package printed a value as written in these messages, and now prints `(a
   value that contains an access key secret)` or `(a value that contains a run key)` in
   place of a value that contains `qak_` or `qrk_` in any case: a server document's name
@@ -1731,6 +1739,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- The Docker wall's errors and refusals print an image's reference without its user
+  information: the errors of a reference it refuses, of `image inspect` and of an image
+  the engine does not hold, and the names and detail of `image_missing` and
+  `image_user_root`. Before, they printed the reference whole, with a registry's
+  credentials in it. The pull still uses the reference whole.
 - `wall.Docker`, the engine check, the nest and the relay printed a value as written in
   their errors, and now print a phrase in place of one that contains `qak_` or `qrk_` in
   any case: the name's phrase for a run id, an image, a container runtime, a user, a
@@ -2139,6 +2152,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- `dev.qory.session.started` has the image's reference without its user information,
+  as `request.json` has it: `user:pw@registry.example/agent@sha256:…` is recorded as
+  `registry.example/agent@sha256:…`. Before, the event had the reference whole, with
+  the registry's credentials in it. The wall still pulls the reference whole.
 - `approve-key.sh` writes to the file Claude Code 2.1.316 reads. With an empty `.config.json`
   beside a `.claude.json`, it writes the approval to `.claude.json`, and with an empty
   `.config.json` that has no write bit, it writes to `.claude.json` too. Before, the script

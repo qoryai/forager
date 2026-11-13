@@ -20,6 +20,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/mask"
+	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/parents"
@@ -1173,7 +1174,7 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 		started["terminal"] = map[string]any{"cols": cols, "rows": rows}
 	}
 	if spec.Wall != nil {
-		started["image"] = accesskey.ShownName(r.img.Ref, false)
+		started["image"] = accesskey.ShownName(policy.ImageWithoutUserInfo(r.img.Ref), false)
 		if r.img.Name != "" {
 			started["image_name"] = accesskey.ShownName(r.img.Name, false)
 		}
