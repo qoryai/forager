@@ -39,17 +39,19 @@ const resumeWait = 10 * time.Minute
 // [ResumeScript] in
 // the session's directory, and starts launch through the script, which writes the
 // bytes at resume.path under the runtime's home and adds the descriptor's resume.args,
-// {session_id} replaced by resume.session_id. inside is a path on this machine as the
-// runtime reads it. A failure of the script's write starts the runtime without the
-// arguments, after the same line from the script.
+// {session_id} replaced by resume.session_id, right after the first argument equal to
+// the descriptor's resume.after, or at the end ([resumeAt]). inside is a path on this
+// machine as the runtime reads it. A failure of the script's write starts the runtime
+// without the arguments, after the same line from the script.
 //
 // Behind a wall, root is the session's transcript directory, which the wall binds at
-// resume.prefix inside: the session writes the bytes there itself, at resume.path's
-// <slug>/<session id>.jsonl below resume.prefix, before the agent's container starts
-// ([writeBeneath]), and adds resume.args to launch, with no script. A resume.session_id
-// that is not a UUID in lower case, or a resume.path below resume.prefix of another
-// shape, is a failed resume. A walled session with no transcript directory, root empty,
-// does not resume.
+// resume.prefix inside: the session writes the bytes there itself, at the run
+// configuration's resume.path below resume.prefix, before the agent's container starts
+// ([writeBeneath]), and inserts resume.args in launch the same way, with no script. A
+// resume.session_id that is not a UUID in lower case is a failed resume, and so is a
+// walled session with no transcript directory, root empty. With a wall or without one,
+// a resume.path that does not match the descriptor's resume.path with
+// resume.session_id, {cwd_slug} any slug, is a failed resume.
 //
 // A restore also returns the [restored] transcript: the session reads the transcript
 // the resumed runtime appends to at resume.path, under the paused run's slug, and the
@@ -81,17 +83,20 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 	for i, a := range rs.Args {
 		args[i] = strings.ReplaceAll(a, "{session_id}", want.SessionID)
 	}
+	at := resumeAt(launch.Args, rs.After)
+	below := strings.TrimPrefix(want.Path, rs.Prefix)
 	if walled {
 		if root == "" {
-			return failed("Use a runtime whose resume.path is resume.prefix followed by {cwd_slug}/{session_id}.jsonl", "the session has no transcript directory behind the wall")
+			return failed("Use a runtime whose resume.prefix is a directory below the runtime's home", "the session has no transcript directory behind the wall")
 		}
-		below := strings.TrimPrefix(want.Path, rs.Prefix)
 		if !walledSessionID.MatchString(want.SessionID) {
 			return failed("Check resume.session_id in the run configuration", fmt.Sprintf("its session id %s is not a UUID in lower case", accesskey.ShownName(want.SessionID, false)))
 		}
-		if _, name, err := splitTranscript(below); err != nil || name != want.SessionID+".jsonl" {
-			return failed(checkPath, fmt.Sprintf("its path %s is not %s<slug>/%s.jsonl", want.Path, rs.Prefix, want.SessionID))
-		}
+	}
+	if pattern := newPathPattern(strings.TrimPrefix(rs.Path, rs.Prefix), want.SessionID, "", true); !pattern.matches(below) {
+		return failed(checkPath, fmt.Sprintf("its path %s does not match %s%s, with {cwd_slug} a slug", want.Path, rs.Prefix, pattern.shown))
+	}
+	if walled {
 		b, err := r.fetchTranscript(ctx)
 		if err != nil {
 			return failed(fetchFix(want.RunID), err.Error())
@@ -99,8 +104,8 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 		if err := writeBeneath(root, below, b); err != nil {
 			return failed("Check the session's transcript directory "+pathShown(root), fmt.Sprintf("the write to %s failed: %s", want.Path, accesskey.ShownError(err).Error()))
 		}
-		launch.Args = append(slices.Clone(launch.Args), args...)
-		return launch, "", &restored{sessionID: want.SessionID, rel: rel, args: args}
+		launch.Args = slices.Concat(launch.Args[:at], args, launch.Args[at:])
+		return launch, "", &restored{sessionID: want.SessionID, rel: rel, args: args, after: len(launch.Args) - at - len(args)}
 	}
 	b, err := r.fetchTranscript(ctx)
 	if err != nil {
@@ -111,7 +116,13 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 		return failed("Check the session's directory "+pathShown(sessionDir), accesskey.ShownError(err).Error())
 	}
 	script := filepath.Join(sessionDir, ResumeScript)
-	text := resumeScript(want.RunID, inside(transcript), rel, args)
+	// The script keeps the command and the arguments up to the one equal to
+	// resume.after before the resume arguments: 1 + at words of its arguments.
+	head := 0
+	if at < len(launch.Args) {
+		head = 1 + at
+	}
+	text := resumeScriptAt(want.RunID, inside(transcript), rel, args, head)
 	if err := runfile.Replace(script, []byte(text), 0o644); err != nil {
 		return failed("Check the session's directory "+pathShown(sessionDir), accesskey.ShownError(err).Error())
 	}
@@ -123,11 +134,25 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 // restored is the transcript a session restored: sessionID is resume.session_id; rel
 // is resume.path relative to the runtime's home, such as
 // .claude/projects/<slug of the paused run>/<session id>.jsonl, the file the resumed
-// runtime appends to; args are the arguments a walled session added to the launch.
+// runtime appends to; args are the arguments a walled session added to the launch, and
+// after the count of the launch's arguments that follow them, 0 when args are last.
 type restored struct {
 	sessionID string
 	rel       string
 	args      []string
+	after     int
+}
+
+// resumeAt is where the resume arguments go in args, a launch's arguments: right after
+// the first one equal to after, or at the end when after is empty or no argument
+// equals it.
+func resumeAt(args []string, after string) int {
+	if after != "" {
+		if i := slices.Index(args, after); i >= 0 {
+			return i + 1
+		}
+	}
+	return len(args)
 }
 
 // fetchFix is the fix of a resume whose read of the transcript of run runID failed.
@@ -143,9 +168,15 @@ func resumeFailed(runID, fix, cause string) string {
 
 // resumeScript is the text of [ResumeScript]: it copies transcript, a path as the
 // runtime reads it, to rel under $HOME, the runtime's home, then starts its arguments, the
-// runtime's command and arguments, with args added; when the copy fails, it writes the
-// line of a failed resume on stderr and starts them without args.
+// runtime's command and arguments, with args added at the end; when the copy fails, it
+// writes the line of a failed resume on stderr and starts them without args.
 func resumeScript(runID, transcript, rel string, args []string) string {
+	return resumeScriptAt(runID, transcript, rel, args, 0)
+}
+
+// resumeScriptAt is [resumeScript] with args inserted after the first head words of
+// its arguments, the command among them; at the end when head is 0.
+func resumeScriptAt(runID, transcript, rel string, args []string, head int) string {
 	quoted := make([]string, len(args))
 	for i, a := range args {
 		quoted[i] = quote(a)
@@ -156,7 +187,17 @@ func resumeScript(runID, transcript, rel string, args []string) string {
 	b.WriteString("# arguments, or without them when the write fails.\n")
 	fmt.Fprintf(&b, "dst=\"$HOME\"/%s\n", quote(rel))
 	fmt.Fprintf(&b, "if [ -n \"$HOME\" ] && mkdir -p \"${dst%%/*}\" && cp %s \"$dst\"; then\n", quote(transcript))
-	fmt.Fprintf(&b, "\texec \"$@\" %s\n", strings.Join(quoted, " "))
+	if head == 0 {
+		fmt.Fprintf(&b, "\texec \"$@\" %s\n", strings.Join(quoted, " "))
+	} else {
+		// Each word moves from the front to the end in turn, the resume arguments
+		// before the word that follows the first head words.
+		fmt.Fprintf(&b, "\tk=%d\n", head)
+		b.WriteString("\tfor a do\n\t\tshift\n")
+		fmt.Fprintf(&b, "\t\tif [ \"$k\" -eq 0 ]; then set -- \"$@\" %s; fi\n", strings.Join(quoted, " "))
+		b.WriteString("\t\tset -- \"$@\" \"$a\"\n\t\tk=$((k - 1))\n\tdone\n")
+		b.WriteString("\texec \"$@\"\n")
+	}
 	b.WriteString("fi\n")
 	fmt.Fprintf(&b, "echo %s >&2\n", quote(resumeFailed(runID, "Check that HOME inside is writable", "the copy to ~/"+rel+" failed")))
 	b.WriteString("exec \"$@\"\n")

@@ -71,6 +71,8 @@ type Run struct {
 	posts      *sink.Server
 	reload     *reloader
 	stopBeat   func()
+	// beat writes one dev.qory.run.heartbeat at once, until stopBeat runs.
+	beat       func()
 	unlock     func()
 	startedAt  time.Time
 	closedBy   ended
@@ -402,7 +404,7 @@ func (r *Run) start(ctx context.Context) (err error) {
 	r.sinks = sink.Multi{r.files}
 	// The heartbeats run from the link's discovery, every interval it announces, until
 	// the run's final event, and end with the run being closed from outside.
-	r.stopBeat = heartbeat(r.closing, interval, discovered, r.write)
+	r.stopBeat, r.beat = heartbeat(r.closing, interval, discovered, r.write)
 	// quit ends a run that does not open: the heartbeats stop, and the sinks are closed,
 	// within closeWait.
 	quit := func(err error) error {

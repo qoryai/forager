@@ -144,7 +144,8 @@ func TestAWalledTranscriptNotThereYetIsReadLater(t *testing.T) {
 
 // TestWriteBeneathCreatesTheFileOnce pins the restore's write: the slug directory and
 // the file made, modes 0700 and 0600; a file that exists, a linked slug directory and
-// a path of another shape are refused, and nothing is written through a link.
+// a path with an empty, . or .. name are refused, and nothing is written through a
+// link. The shape of the path is the restore's check, [TestAWalledRestoreMatchesResumePath].
 func TestWriteBeneathCreatesTheFileOnce(t *testing.T) {
 	root := t.TempDir()
 	if err := writeBeneath(root, walledRel, []byte("ok\n")); err != nil {
@@ -179,7 +180,7 @@ func TestWriteBeneathCreatesTheFileOnce(t *testing.T) {
 	if _, err := os.Stat(target); err == nil {
 		t.Error("the link's target was created")
 	}
-	for _, rel := range []string{"../x/" + walledID + ".jsonl", "-workspace/probe.jsonl", walledID + ".jsonl", "-w/x/" + walledID + ".jsonl"} {
+	for _, rel := range []string{"../x/" + walledID + ".jsonl", "-w/./" + walledID + ".jsonl", "-w//" + walledID + ".jsonl", "", "-w/"} {
 		if err := writeBeneath(root, rel, []byte("x")); err == nil {
 			t.Errorf("%s was written", rel)
 		}

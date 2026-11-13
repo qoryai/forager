@@ -22,17 +22,19 @@ const transcriptsDir = "transcripts"
 // makeTranscriptDir makes the transcript directory of walled session n, transcripts/<n>
 // in the run directory runDir, mode 0700 and owned by the user the session runs as, and
 // returns it with its place below the home inside, resume.prefix without ~/ and its
-// last /. A runtime without resume, or whose resume.path is not
-// <prefix>{cwd_slug}/{session_id}.jsonl, gets none: both are empty. The directory
-// must lie in the run directory and outside workspace and every one of binds, the places
-// the enclosure binds, as [checkTranscriptDir] checks; otherwise the join fails.
+// last /. A runtime without resume, or whose resume.prefix is the home itself or
+// whose resume.path has an empty, . or .. name below resume.prefix, gets none: both
+// are empty. The directory must lie in the run directory and outside workspace and
+// every one of binds, the places the enclosure binds, as [checkTranscriptDir] checks;
+// otherwise the join fails.
 func makeTranscriptDir(rt runtimes.Runtime, runDir string, n int, workspace string, binds []bindSource) (string, string, error) {
 	resumes, ok := rt.(runtimes.Resumes)
 	if !ok {
 		return "", "", nil
 	}
 	rs, ok := resumes.Resume()
-	if !ok || rs.Path != rs.Prefix+"{cwd_slug}/{session_id}.jsonl" {
+	below, isBelow := strings.CutPrefix(rs.Path, rs.Prefix)
+	if !ok || !isBelow || below == "" || dotted(below) {
 		return "", "", nil
 	}
 	under := strings.TrimSuffix(strings.TrimPrefix(rs.Prefix, "~/"), "/")

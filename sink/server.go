@@ -162,8 +162,10 @@ type Server struct {
 	// and replaced each time settled grows. flush asks the worker to post what it holds
 	// without waiting for the batch's wait.
 	queued, settled int
-	changed         chan struct{}
-	flush           chan struct{}
+	// posting counts the events of the batches whose first post began.
+	posting int
+	changed chan struct{}
+	flush   chan struct{}
 }
 
 // queued is one event in the queue: its line and its sequence, which the record of
@@ -344,6 +346,9 @@ func (w *Server) batches() (again bool) {
 // it, a panic included.
 func (w *Server) deliverAll(batch []queued) {
 	defer w.settle(len(batch))
+	w.mu.Lock()
+	w.posting += len(batch)
+	w.mu.Unlock()
 	w.deliver(batch)
 }
 
@@ -354,6 +359,24 @@ func (w *Server) settle(n int) {
 	w.settled += n
 	close(w.changed)
 	w.changed = make(chan struct{})
+}
+
+// Queued is the count of events [Server.Write] put on the queue since the sink was
+// made, lines of [Server.Resend] left out, and Posting the count of queued events in
+// batches whose first post began. The worker posts the events in the order they were
+// queued, so when Queued is above a Posting read earlier, an event goes out in a batch
+// posted after that read.
+func (w *Server) Queued() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.queued
+}
+
+// Posting is the count of events in batches whose first post began; see [Server.Queued].
+func (w *Server) Posting() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.posting
 }
 
 // Flush posts the events written so far without waiting for the batch's wait, tries

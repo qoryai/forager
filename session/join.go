@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -876,10 +877,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			transcriptDir, transcriptUnder = "", ""
 			if restore != nil {
 				added := insideAll(restore.args, inside)
-				if !slices.Equal(prepared.Args[max(len(prepared.Args)-len(added), 0):], added) {
+				end := len(prepared.Args) - restore.after
+				if end < len(added) || !slices.Equal(prepared.Args[end-len(added):end], added) {
 					return fail(errors.New(resumeArgsKept(unbound.Fix, unbound.Cause)))
 				}
-				prepared.Args = prepared.Args[:len(prepared.Args)-len(added)]
+				prepared.Args = slices.Delete(slices.Clone(prepared.Args), end-len(added), end)
 				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(r.answer.Resume.RunID, unbound.Fix, unbound.Cause))+"\n"))
 				restore = nil
 			}
@@ -999,9 +1001,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// What ends the context later changes nothing. A stop in the gateway's answer to a
 	// batch is decided after the exit, below.
 	var cancelled, timedOut bool
+	// postingAtExit is the count of events on the link in batches whose post began when
+	// the runtime's exit was observed, -1 until then.
+	var postingAtExit atomic.Int64
+	postingAtExit.Store(-1)
 	proc.exited = func() {
+		postingAtExit.Store(int64(r.posts.Posting()))
 		cause := context.Cause(limited)
-		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed) && !errors.Is(cause, errModelKeyLimit)
+		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed) && !errors.Is(cause, errModelKeyStop)
 		timedOut = errors.Is(cause, errTimeout) && proc.stopped.Load()
 		if exitObserved != nil {
 			exitObserved()
@@ -1013,7 +1020,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// is no stop.
 	setupSteps.start(func() bool {
 		cause := context.Cause(limited)
-		return errors.Is(cause, errTimeout) || errors.Is(cause, errModelKeyLimit) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
+		return errors.Is(cause, errTimeout) || errors.Is(cause, errModelKeyStop) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
 	})
 	var exit exitStatus
 	if interactive {
@@ -1048,13 +1055,21 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	// Before the dev.qory.session.exited of a runtime that exited by itself, the
 	// session posts the batch it holds and reads the answer, so a stop that comes as the
-	// runtime exits still sets the reason.
+	// runtime exits still sets the reason. The gateway puts the stop in the answer to a
+	// batch that reaches it after the proxy passed the refusal, and the runtime exited
+	// after that refusal: so at least one batch is posted after the exit. When every
+	// event queued so far was in a batch whose post began before the exit, the session
+	// writes a heartbeat for that batch. The gateway takes a stop back once it accepts
+	// dev.qory.session.exited, so the answer is read before that event is written.
 	if !closed && !timedOut && !cancelled {
+		if at := postingAtExit.Load(); at < 0 || int64(r.posts.Queued()) == at {
+			r.beat()
+		}
 		flushCtx, cancelFlush := context.WithTimeout(context.WithoutCancel(ctx), closeWait)
 		r.posts.Flush(flushCtx)
 		cancelFlush()
 	}
-	keyLimit := r.stops.end() == event.ReasonModelKeyLimit
+	stopReason := r.stops.end()
 	state, reason := event.StateFailed, ""
 	switch {
 	case closed:
@@ -1065,10 +1080,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	case cancelled:
 		// It was stopped from where it was started, a Ctrl-C, before it said how it went.
 		state, reason = event.StateCancelled, event.ReasonInterrupted
-	case keyLimit:
+	case stopReason != "":
 		// The gateway's answer to a batch had stop: the run's proxy passed a model
-		// provider's limit refusal to the runtime, and the run pauses.
-		state, reason = event.StatePaused, event.ReasonModelKeyLimit
+		// provider's limit refusal or 401 to the runtime. The run pauses, or with
+		// model_key_unauthorized fails, whatever the runtime's exit status.
+		state, reason = stopReasons[stopReason], stopReason
 	case exit.code == 0:
 		state = event.StateSucceeded
 	}
@@ -1105,8 +1121,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	case timedOut:
 		r.open.Report(fmt.Sprintf("the runtime was stopped at the limit of %s", spec.Timeout))
 		r.write(event.SessionExited, exited)
-	case keyLimit:
-		r.open.Report("the runtime was stopped and the run pauses: every model key of the run is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, or a key whose credential does not cover the path)")
+	case stopReason != "":
+		r.open.Report(stopReports[stopReason])
 		r.write(event.SessionExited, exited)
 	default:
 		r.write(event.SessionExited, exited)
