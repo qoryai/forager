@@ -138,8 +138,9 @@
               "hosts": {"description": "The hosts the value is set on: exact DNS names, no wildcard, no IP literal.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/exact_host"}},
               "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
               "auth": {
-                "description": "How the value is set on a request, a scheme from the closed set. A variable that is also a key's in model.keys has the same auth there.",
-                "$ref": "auth.schema.json"
+                "description": "How the value is set on a request, a scheme from the closed set, without account_header and account_claim, which only an API credential of a run configuration has. A variable that is also a key's in model.keys has the same auth there.",
+                "$ref": "auth.schema.json",
+                "not": {"anyOf": [{"required": ["account_header"]}, {"required": ["account_claim"]}]}
               }
             }
           }
@@ -227,7 +228,7 @@
             "required": ["format", "auth", "variable"],
             "properties": {
               "format": {"description": "The API format the key is for.", "$ref": "api-format.schema.json"},
-              "auth": {"description": "How the runtime sends the key.", "$ref": "auth.schema.json"},
+              "auth": {"description": "How the runtime sends the key, without account_header and account_claim, which only an API credential of a run configuration has.", "$ref": "auth.schema.json", "not": {"anyOf": [{"required": ["account_header"]}, {"required": ["account_claim"]}]}},
               "variable": {"description": "The variable the runtime reads the key from.", "$ref": "#/$defs/key_variable"}
             }
           }

@@ -178,8 +178,7 @@ type Declaration = descriptor.Declaration
 
 // Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
 // the header of header, Username the fixed user of basic, and OAuth marks a bearer as
-// an OAuth token. AccountHeader and AccountClaim are the header the proxy sets beside
-// an OAuth token and the JSON pointer of its value in the token's JWT payload.
+// an OAuth token.
 type Auth = descriptor.Auth
 
 // Group is a set of declarations of which the runtime needs one at most, and exactly
@@ -247,11 +246,13 @@ type Resumes interface {
 	Resume() (Resume, bool)
 }
 
-// Resume is a descriptor's resume: PathFrom, the member of a hook's input that contains
-// the transcript's path; Path, the path while no hook input contains it, a template
-// with {session_id} and {cwd_slug}; Prefix, the directory the transcript must lie
-// under; and Args, the arguments the session adds when it resumes, with {session_id}.
-// Each path starts with ~/, the runtime's home.
+// Resume is a descriptor's resume: PathFrom, optional, the member of a hook's input
+// that contains the transcript's path; Path, the path while no hook input contains it,
+// a template with {session_id} and {cwd_slug}, in which a * matches any characters
+// other than / inside one path name; Prefix, the directory the transcript must lie
+// under; Args, the arguments the session adds when it resumes, with {session_id}; and
+// After, optional, the argument Args follow, at the end when it is empty. Each path
+// starts with ~/, the runtime's home.
 type Resume = descriptor.Resume
 
 // Parents is implemented by a runtime that reports which tool call started a subagent.

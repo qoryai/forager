@@ -236,16 +236,13 @@ type Declaration struct {
 
 // Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
 // the header of header, Username the fixed user of basic, and OAuth marks a bearer as
-// an OAuth token. AccountHeader and AccountClaim, both or neither and only with OAuth,
-// are the header the proxy sets beside the value and the JSON pointer of its value in
-// the token's JWT payload.
+// an OAuth token. A descriptor's auth has no account_header or account_claim: only an
+// API credential of a run configuration has them.
 type Auth struct {
-	Scheme        string `yaml:"scheme" json:"scheme"`
-	Header        string `yaml:"header" json:"header,omitempty"`
-	Username      string `yaml:"username" json:"username,omitempty"`
-	OAuth         bool   `yaml:"oauth" json:"oauth,omitempty"`
-	AccountHeader string `yaml:"account_header" json:"account_header,omitempty"`
-	AccountClaim  string `yaml:"account_claim" json:"account_claim,omitempty"`
+	Scheme   string `yaml:"scheme" json:"scheme"`
+	Header   string `yaml:"header" json:"header,omitempty"`
+	Username string `yaml:"username" json:"username,omitempty"`
+	OAuth    bool   `yaml:"oauth" json:"oauth,omitempty"`
 }
 
 // Group is a set of declarations of which the runtime needs at most one, and exactly
@@ -380,15 +377,14 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	return &d, nil
 }
 
-// checkConfig holds config to what the schema cannot express, and makes each fixed
-// value a string, a bool or an int64, whether the document was YAML or JSON: no fixed
-// key is a setting of the model section, and no fixed key or model setting is a dotted
-// prefix of another, since a TOML key has a value or a table of keys, not both. A nil
-// Config passes.
+// checkConfig holds the settings to what the schema cannot express, and makes each
+// fixed value of config a string, a bool or an int64, whether the document was YAML or
+// JSON. The settings of the model section, the model id's, the run's effort's and the
+// endpoint's, are distinct, and none is a dotted prefix of another; with config, no
+// fixed key is a setting of the model section, and no fixed key and no other fixed key
+// or model setting is a dotted prefix of the other. A TOML key, or a key of the JSON
+// settings file, has a value or a table of keys, not both.
 func (d *Descriptor) checkConfig() error {
-	if d.Config == nil {
-		return nil
-	}
 	var settings []string
 	if m := d.Model; m != nil {
 		settings = append(settings, m.Model.Setting, m.Endpoint.Setting)
@@ -396,6 +392,17 @@ func (d *Descriptor) checkConfig() error {
 			settings = append(settings, m.Effort.Run.Setting)
 		}
 		settings = slices.DeleteFunc(settings, func(s string) bool { return s == "" })
+	}
+	for i, a := range settings {
+		for _, b := range settings[i+1:] {
+			if a == b || strings.HasPrefix(a, b+".") || strings.HasPrefix(b, a+".") {
+				return fmt.Errorf("model: place the values of %s and %s in two settings, neither inside the other: a key has a value or a table of keys, not both",
+					accesskey.ShownName(a, false), accesskey.ShownName(b, false))
+			}
+		}
+	}
+	if d.Config == nil {
+		return nil
 	}
 	keys := slices.Sorted(maps.Keys(d.Config.Fixed))
 	for _, k := range keys {
@@ -409,12 +416,16 @@ func (d *Descriptor) checkConfig() error {
 		if slices.Contains(settings, k) {
 			return fmt.Errorf("config.fixed: remove %s: it is a setting of the model section", shown)
 		}
-		for _, o := range append(slices.Clone(keys), settings...) {
-			if strings.HasPrefix(o, k+".") {
-				return fmt.Errorf("config.fixed: remove %s or %s: a TOML key has a value or a table of keys, not both, and %s lies inside %s", shown, accesskey.ShownName(o, false), accesskey.ShownName(o, false), shown)
+		for _, o := range settings {
+			if strings.HasPrefix(o, k+".") || strings.HasPrefix(k, o+".") {
+				return fmt.Errorf("config.fixed: remove %s: a TOML key has a value or a table of keys, not both, and %s is a setting of the model section",
+					shown, accesskey.ShownName(o, false))
 			}
-			if strings.HasPrefix(k, o+".") {
-				return fmt.Errorf("config.fixed: remove %s: a TOML key has a value or a table of keys, not both, and %s lies inside %s", shown, shown, accesskey.ShownName(o, false))
+		}
+		for _, o := range keys {
+			if strings.HasPrefix(o, k+".") {
+				return fmt.Errorf("config.fixed: remove %s or %s: a TOML key has a value or a table of keys, not both, and %s lies inside %s",
+					shown, accesskey.ShownName(o, false), accesskey.ShownName(o, false), shown)
 			}
 		}
 	}

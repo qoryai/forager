@@ -405,7 +405,12 @@ func chosen(rt runtimes.Runtime, bare bool, credentials []server.LinkCredentialH
 		if !slices.Contains(names, variable) {
 			names = append(names, variable)
 		}
-		key = keyed{Variable: variable + "=" + link.KeyPlaceholder(c.Name), Endpoint: places.Endpoint.Variable + "=" + c.Endpoint}
+		key = keyed{Variable: variable + "=" + link.KeyPlaceholder(c.Name)}
+		// An endpoint that is a setting sets no variable: it goes in the runtime's
+		// settings.
+		if places.Endpoint.Variable != "" {
+			key.Endpoint = places.Endpoint.Variable + "=" + c.Endpoint
+		}
 		for _, k := range keyVariables(rt) {
 			if k != variable {
 				key.Others = append(key.Others, k)

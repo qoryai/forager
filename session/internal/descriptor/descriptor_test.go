@@ -557,7 +557,7 @@ func TestEgressHostsAreListed(t *testing.T) {
 // scheme, the header of a header scheme and the username of a basic scheme, and paths
 // when it has some; per group id, required and of; model when the descriptor has
 // one, with formats, model, endpoint with exactly one of its variable and its setting,
-// keys whose auth has account_header and account_claim only together, and optionally effort, with run
+// keys whose auth has no account_header or account_claim, and optionally effort, with run
 // and optionally agent, each place being exactly one of flag, setting and variable, and
 // optionally overrides; and resume when the descriptor has one, with its prefix and its
 // path alone. The claude runtime has a model with overrides, its resume's prefix and path, and its fixed
@@ -714,12 +714,9 @@ func TestRuntimesJSONShape(t *testing.T) {
 			keys, _ := model["keys"].([]any)
 			for _, k := range keys {
 				key := members("key", k, []string{"format", "auth", "variable"})
-				auth := members("auth", key["auth"], []string{"scheme"}, "header", "username", "oauth", "account_header", "account_claim")
-				_, header := auth["account_header"]
-				_, claim := auth["account_claim"]
-				if header != claim || (header && auth["oauth"] != true) {
-					t.Errorf("auth %v: account_header and account_claim come together, with oauth", auth)
-				}
+				// A descriptor's auth has no account_header or account_claim: only an
+				// API credential of a run configuration has them.
+				members("auth", key["auth"], []string{"scheme"}, "header", "username", "oauth")
 			}
 			if len(keys) == 0 && rt["name"] == "claude" {
 				t.Error("the claude runtime's model has no keys")
@@ -853,5 +850,31 @@ func TestConfigDecodes(t *testing.T) {
 	}
 	if _, err := descriptor.Parse("amp.yaml", []byte(head+"config: {flag: --config, fixed: {providers.qory.name: qory, a.b: 1}}\n")); err != nil {
 		t.Errorf("fixed keys beside the model's settings: %v", err)
+	}
+	// Against a model setting, the fix is the fixed key alone: the model setting stays.
+	for fixed, want := range map[string]string{
+		"{providers.qory: x}": "amp.yaml: config.fixed: remove providers.qory: a TOML key has a value or a table of keys, not both, and providers.qory.base_url is a setting of the model section",
+		"{model.name: x}":     "amp.yaml: config.fixed: remove model.name: a TOML key has a value or a table of keys, not both, and model is a setting of the model section",
+	} {
+		_, err := descriptor.Parse("amp.yaml", []byte(head+"config: {flag: --config, fixed: "+fixed+"}\n"))
+		if err == nil || err.Error() != want {
+			t.Errorf("%s: %v; want %s", fixed, err, want)
+		}
+	}
+	// The model section's settings are distinct, and none lies inside another, with or
+	// without config.
+	const settings = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n" +
+		"model:\n  formats: [openai-responses]\n  model: {setting: %s}\n  endpoint: {setting: %s}\n"
+	for _, c := range []struct{ model, endpoint string }{{"a", "a.b"}, {"a.b", "a"}, {"a", "a"}} {
+		for _, config := range []string{"", "config: {flag: --config}\n"} {
+			doc := fmt.Sprintf(settings, c.model, c.endpoint) + config
+			if _, err := descriptor.Parse("amp.yaml", []byte(doc)); err == nil || !strings.HasPrefix(err.Error(), "amp.yaml: model: place the values of ") {
+				t.Errorf("model %s, endpoint %s, %q: %v; want an error that starts with the fix", c.model, c.endpoint, config, err)
+			}
+		}
+	}
+	if _, err := descriptor.Parse("amp.yaml", []byte(fmt.Sprintf(settings, "a", "ab.c"))); err != nil {
+		t.Errorf("model a, endpoint ab.c: %v", err)
 	}
 }

@@ -29,7 +29,7 @@
       "items": {"$ref": "#/$defs/key_state"}
     },
     "unauthorized": {
-      "description": "The keys of the key group the gateway sets no more because the model provider returned 401 to a request with the key's value, and no renewal brought it back, each once: 1 to 6, one per key of the group at most. Each report has every such key, so a key that a renewal brought back is absent from the next report. Absent when the group has none.",
+      "description": "The keys of the key group the gateway no longer sets because the model provider returned 401 to a request with the key's value, and no renewal brought it back: 1 to 6, each credential at most once. Each report has every such key, so a key that a renewal brought back is absent from the next report. The server ignores an entry whose credential is not one of the run's credentials, and treats the report as if that entry were absent; more than 6 entries, an entry twice or an entry of the wrong type is 400 invalid_request. Absent when the group has none.",
       "type": "array",
       "minItems": 1,
       "maxItems": 6,

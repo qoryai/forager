@@ -165,8 +165,8 @@ const (
 	StateCancelled = "cancelled"
 	// StatePaused is a session the session stopped after the gateway's answer to a batch
 	// had stop with model_key_limit, and the close of a run whose last session ended
-	// that way. It goes with the reason model_key_limit alone. A control plane can
-	// continue the run. The contract also pairs it with model_key_switch.
+	// that way. It goes with model_key_limit, and in the contract also with
+	// model_key_switch. A control plane can continue the run.
 	StatePaused = "paused"
 )
 

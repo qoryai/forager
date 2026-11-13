@@ -378,17 +378,21 @@ const beyondLinkSchema = "-beyond-schema-"
 // prefix outside the home or a path without {session_id}. For model keys of another
 // format: a run configuration whose API credential has account_header or account_claim
 // alone, both without oauth, with oauth false or beside a header scheme, an
-// account_claim that is no JSON pointer or has an escape other than ~0 and ~1, an
-// account_header with a space, or paths that are empty, 33, twice, with an inner * or
+// account_claim that is no JSON pointer, / alone, with a control character or with an
+// escape other than ~0 and ~1, an account_header with a space or that is a reserved
+// header, Authorization, Host, Content-Length with _, Cookie, a Proxy-, X-Qory- or
+// Qory- header, or paths that are empty, 33, twice, with an inner * or
 // relative; a secrets request whose unauthorized is empty, of 7, twice or not a name; a
 // model keys report whose unauthorized is empty, of 7, a list of names, or has an entry
 // without at or credential, with an at that is no time or with a member it does not
 // define; a link batch, a session.exited or a run.exited with model_key_switch and a
 // state other than paused, or with model_key_unauthorized and a state other than
 // failed; and a descriptor whose endpoint is a flag or two places, whose config has no
-// flag, a short flag, an empty fixed or a fixed value that is a fraction, a table or a
-// string with a line feed, or a key with a space, or whose resume has a prefix with *
-// or an empty after. A fixture whose name contains
+// flag, a short flag, a member it does not define, an empty fixed or one of 65 keys, a
+// fixed value that is a fraction, a table, an integer over 2^53-1, or a string with a
+// line feed or over 4096 characters, or a key with a space, whose model key or
+// declared secret has an account_header, or whose resume has a prefix with * or an
+// empty after. A fixture whose name contains
 // -beyond-schema- breaks a rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
 // the schema, so run-configuration-variable-value-not-string is held to the run
 // configuration and not to a schema named run.
@@ -1332,6 +1336,24 @@ func TestAMeasureRecordValidates(t *testing.T) {
 		}
 		if err := s.Validate(doc); err != nil {
 			t.Errorf("%s: %v", b, err)
+		}
+	}
+}
+
+// TestAccountHeaderIsNoReservedHeader pins account_header of auth.schema.json to
+// server.ReservedHeader and Authorization: the schema refuses every header
+// server.ReservedHeader reports and Authorization, in any letter case and with _ for -,
+// and accepts a header that only starts or ends like one of them.
+func TestAccountHeaderIsNoReservedHeader(t *testing.T) {
+	s := compile(t, "auth.schema.json")["auth.schema.json"]
+	claim := "/https:~1~1api.openai.com~1auth/chatgpt_account_id"
+	for _, h := range []string{"authorization", "AUTHORIZATION", "Host", "content_length", "Transfer-Encoding", "connection", "TE",
+		"trailer", "Upgrade", "keep_alive", "Expect", "Cookie", "proxy-authorization", "Proxy_Connection", "X-Qory-Run", "x_qory_token", "qory-key", "Qory_Run",
+		"chatgpt-account-id", "hostname", "x-host", "tea", "x-qory", "qory", "proxyish", "cookies"} {
+		reserved := server.ReservedHeader(h) || strings.EqualFold(h, "authorization")
+		err := s.Validate(map[string]any{"scheme": "bearer", "oauth": true, "account_header": h, "account_claim": claim})
+		if reserved != (err != nil) {
+			t.Errorf("account_header %s: schema error %v; server.ReservedHeader or Authorization: %v", h, err, reserved)
 		}
 	}
 }

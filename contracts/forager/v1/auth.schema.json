@@ -11,7 +11,7 @@
     "header": {"type": "string", "maxLength": 64, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
     "username": {"type": "string", "minLength": 1, "pattern": "^[^:\\s]+$"},
     "oauth": {"const": true},
-    "account_header": {"description": "The HTTP header the proxy sets to the value of account_claim on every request it sets the value on, such as chatgpt-account-id.", "type": "string", "maxLength": 64, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
+    "account_header": {"description": "The HTTP header the proxy sets to the value of account_claim on every request it sets the value on, such as chatgpt-account-id. A header that frames the request, is hop-by-hop or that the proxy sets is run_configuration_invalid: Authorization, Host, Content-Length, Transfer-Encoding, Connection, TE, Trailer, Upgrade, Keep-Alive, Expect, Cookie, and any header that starts with Proxy-, X-Qory- or Qory-, with case ignored and an underscore read as a dash, the headers of server.ReservedHeader and Authorization.", "type": "string", "maxLength": 64, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", "not": {"$ref": "#/$defs/reserved_header"}},
     "account_claim": {"description": "Where the header's value lies in the payload of the value, a JWT: a JSON pointer, RFC 6901, into the payload's JSON object, with ~1 for / and ~0 for ~ inside a member name, such as /https:~1~1api.openai.com~1auth/chatgpt_account_id. The member it points at is a string.", "type": "string", "minLength": 2, "maxLength": 256, "pattern": "^(/([^/~\\x00-\\x1f]|~[01])*)+$"}
   },
   "dependentRequired": {"account_header": ["account_claim", "oauth"], "account_claim": ["account_header", "oauth"]},
@@ -20,5 +20,8 @@
     {"if": {"properties": {"scheme": {"const": "basic"}}},
      "then": {"required": ["username"]}, "else": {"not": {"required": ["username"]}}},
     {"if": {"properties": {"scheme": {"const": "bearer"}}}, "then": {}, "else": {"not": {"required": ["oauth"]}}}
-  ]
+  ],
+  "$defs": {
+    "reserved_header": {"description": "The headers account_header may not be: those server.ReservedHeader reports, and Authorization, in any letter case and with _ in place of -.", "type": "string", "pattern": "^(([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt]|[Cc][Oo][Nn][Tt][Ee][Nn][Tt][-_][Ll][Ee][Nn][Gg][Tt][Hh]|[Tt][Rr][Aa][Nn][Ss][Ff][Ee][Rr][-_][Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]|[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Tt][Ee]|[Tt][Rr][Aa][Ii][Ll][Ee][Rr]|[Uu][Pp][Gg][Rr][Aa][Dd][Ee]|[Kk][Ee][Ee][Pp][-_][Aa][Ll][Ii][Vv][Ee]|[Ee][Xx][Pp][Ee][Cc][Tt]|[Cc][Oo][Oo][Kk][Ii][Ee])$|[Pp][Rr][Oo][Xx][Yy][-_]|[Xx][-_][Qq][Oo][Rr][Yy][-_]|[Qq][Oo][Rr][Yy][-_])"}
+  }
 }
