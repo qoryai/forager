@@ -14,7 +14,7 @@ import (
 // ConfigArgs are the arguments that pass settings to a runtime that reads them as TOML:
 // c.Flag and key=value for each setting of c.Fixed and of set together, sorted by key,
 // each value written by [TOMLValue]. A key of set that c.Fixed has too is an error, and
-// so is a value TOMLValue refuses. Nil when there is no setting.
+// so is a value TOMLValue returns an error for. Nil when there is no setting.
 func ConfigArgs(c Config, set map[string]any) ([]string, error) {
 	all := maps.Clone(c.Fixed)
 	if all == nil {

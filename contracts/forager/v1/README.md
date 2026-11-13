@@ -1584,9 +1584,10 @@ forager.yaml: the run leaves out the value that <SOURCE> passes, since
 denied-variables.json lists it as a forge token.` (or `a model key`) for the node's
 sources; a placeholder of the run has no line. `model_keys` has every variable a runtime
 descriptor's `model.keys` lists, and `CODEX_API_KEY`, which Codex reads a key from
-beside `OPENAI_API_KEY` and which its descriptor denies. It holds every row of the
+beside `OPENAI_API_KEY` and which its descriptor denies. It contains every row of the
 table but the rows that depend on the node and the run: the names the wall sets for
-the run's bundle, and the runtime's `denies` and `overrides`, which `runtimes.json` lists.
+the run's bundle, and the runtime's `denies` and `overrides`, which `runtimes.json`
+lists.
 
 | Name | Why |
 |---|---|
@@ -5470,14 +5471,15 @@ and, in a run with a start key whose `endpoint` is a setting, the start key's en
 in that setting, sorted by key. A string is a TOML basic string in quotes, in which a
 quote, a backslash and every control character are escaped, so the pair is one line; a
 boolean is `true` or `false`; an integer is written in decimal. For Codex,
-`codex exec --json -m gpt-x "Fix the test"` starts as `codex --config
+`codex exec --json --model gpt-x "Fix the test"` starts as `codex --config
 analytics.enabled=false ... --config model_providers.qory.base_url="https://api.openai.com/v1"
-... --config web_search="disabled" exec --json -m gpt-x "Fix the test"`. Codex 0.167.2
-reads pairs before its subcommand for every subcommand. A later `--config` or `-c` of
-the same key in the launch's arguments wins over the session's pair, so a composer
-refuses a run whose arguments set a key of `fixed` or the endpoint's setting. The pairs come before the
-resume's `args` are inserted and before the session's setup wraps the launch, and the
-session's record of the launch lists them.
+... --config web_search="disabled" exec --json --model gpt-x "Fix the test"`. Codex
+0.167.2 reads pairs before its subcommand for every subcommand. A later `--config` or
+`-c` of the same key in the launch's arguments wins over the session's pair. Refuse
+such a run in the composer: one whose arguments set a key of `fixed` or the
+endpoint's setting. The pairs come before the resume's `args` are inserted and before
+the session's setup wraps the launch, and the session's record of the launch lists
+them.
 
 **Fixed**, optional: variables the session sets for the runtime in every launch, by
 name, walled or not, `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`: 1 to 64 names,

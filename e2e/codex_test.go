@@ -32,10 +32,10 @@ import (
 // proxy on the paths of its credential alone. The stub reads the key's mark in the
 // value, -SERV-, -LIMT- or -UNAU-, and serves each POST to /v1/responses by it: a
 // streamed answer with a text, a 429 with the x-codex-* headers and the body of a
-// usage limit, or a 401. It answers every other request with 404.
+// usage limit, or a 401. It returns 404 for every other request.
 
 // The stub's mode, the file it logs each request to inside its container, and the
-// marks of its answers.
+// marks that choose what it serves.
 const (
 	modeCodexStub = "codex-stub"
 	codexStubLog  = "/tmp/e2e-codex-stub.jsonl"
@@ -65,8 +65,9 @@ const codexHome = "/var/lib/qory-codex-home"
 const codexRun = "codex-run"
 
 // codexArgs are the arguments of the launch before the test's and the prompt: codex
-// exec --json with no sandbox of its own, as qory starts it behind the wall, in a
-// workspace that is no git repository, with a model id the stub accepts.
+// exec --json with Codex's sandbox off (--sandbox danger-full-access), as qory starts
+// it behind the wall, in a workspace that is no git repository, with a model id the
+// stub accepts.
 var codexArgs = []string{"exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-e2e"}
 
 func init() {
@@ -435,7 +436,7 @@ func codexNoKeyValue(t *testing.T, o keysOutcome, values []string, roots ...stri
 // API key and with a subscription login's token, each a fake key of the run
 // configuration on the stub, set on /v1/responses alone. The session passes the
 // provider qory and the key's endpoint as --config pairs, and OPENAI_API_KEY is the
-// key's placeholder. Codex answers with the stub's text and the session succeeds; each
+// key's placeholder. Codex prints the stub's text and the session succeeds; each
 // request the stub gets is a POST to /v1/responses with the key as a bearer, and with
 // the token, the account header from its claim. The run's events contain
 // dev.qory.runtime.started from startup with Codex's thread id, and
@@ -531,7 +532,7 @@ func TestDockerCodexPausesOnAUsageLimit(t *testing.T) {
 }
 
 // TestDockerCodexEndsOrSwitchesOnARejectedKey runs Codex 0.167.2 behind the wall with
-// a key the stub answers 401. With that key alone, the gateway takes it out, no key is
+// a key for which the stub returns 401. With that key alone, the gateway takes it out, no key is
 // left, and the session and the run end failed with model_key_unauthorized. With a
 // second key, the gateway passes the 401 on and sends nothing with the second key in
 // that session: the session and the run end paused with model_key_switch, for the

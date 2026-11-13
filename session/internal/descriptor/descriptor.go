@@ -301,7 +301,7 @@ type Rule struct {
 	Type  string         `yaml:"type" json:"type"`
 	// Data holds the event's fields and the record paths their values are copied from.
 	Data map[string]string `yaml:"data" json:"data"`
-	// Set holds event fields with a value of the descriptor's, a string, a number or a
+	// Set maps event fields to values of the descriptor's, a string, a number or a
 	// bool, for a field the record has no member for, such as source: startup.
 	Set map[string]any `yaml:"set" json:"set,omitempty"`
 	// FromStarted lists the event's fields the session copies from the session's last
@@ -389,7 +389,7 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	return &d, nil
 }
 
-// checkRules holds the rules to what the schema cannot express: a field of an event
+// checkRules checks what the schema cannot express of the rules: a field of an event
 // comes from one of data, set and from_started.
 func (d *Descriptor) checkRules() error {
 	for i, rule := range d.Rules {
@@ -414,7 +414,7 @@ func (d *Descriptor) checkRules() error {
 	return nil
 }
 
-// checkConfig holds the settings to what the schema cannot express, and makes each
+// checkConfig checks what the schema cannot express of the settings, and makes each
 // fixed value of config a string, a bool or an int64, whether the document was YAML or
 // JSON. The settings of the model section, the model id's, the run's effort's and the
 // endpoint's, are distinct, and none is a dotted prefix of another; with config, no
@@ -486,7 +486,7 @@ func (r *Resume) check() error {
 	return nil
 }
 
-// checkFixed holds the fixed variables to what the schema cannot express: no name of
+// checkFixed checks what the schema cannot express of the fixed variables: no name of
 // fixed matches the built-in deny list, denied-variables.json, whose names Forager, the
 // wall and the gateway set or leave out; and none is a variable that secrets declares,
 // reserves or denies, or that model reads a key or its endpoint from or lists in

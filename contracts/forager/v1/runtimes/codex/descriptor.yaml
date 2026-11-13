@@ -23,7 +23,7 @@ stop:
 # Codex reads its model key from the variable of model.keys, below. The denied variables
 # move where requests go (OPENAI_BASE_URL, the *_BASE_URL and *_URL_OVERRIDE variables,
 # CODEX_OSS_PORT, and CODEX_EXEC_SERVER_URL, which moves where commands run), add a
-# header (CODEX_INTERNAL_ORIGINATOR_OVERRIDE), give Codex another key (CODEX_API_KEY,
+# header (CODEX_INTERNAL_ORIGINATOR_OVERRIDE), set another key for Codex (CODEX_API_KEY,
 # CODEX_ACCESS_TOKEN), change the trust of TLS connections (CODEX_CA_CERTIFICATE), or
 # move its home and state (CODEX_HOME, CODEX_SQLITE_HOME). Each is in the 0.167.2 binary.
 # A composer sets CODEX_HOME through the launch's fixed variables, which denies does

@@ -62,7 +62,7 @@ func TestCodexReadsItsKeyFromOpenAIAPIKey(t *testing.T) {
 }
 
 // TestCodexDeniesTheVariablesThatMoveItsRequests pins the denies that move requests,
-// give Codex another key, change its trust of TLS or move its home, and that
+// set another key for Codex, change its trust of TLS or move its home, and that
 // denied-variables.json lists both variables Codex reads a model key from, so a value
 // a server or a machine passes for either is left out.
 func TestCodexDeniesTheVariablesThatMoveItsRequests(t *testing.T) {
