@@ -2282,9 +2282,11 @@ member that `resume.path_from` is set to, Claude Code's `transcript_path`. Until
 input contains it, the session uses `resume.path`, with `{session_id}` replaced by
 `session_id` of `dev.qory.runtime.started` and `{cwd_slug}` by the runtime's working
 directory with every character other than an ASCII letter or digit replaced by `-`:
-`/workspace` becomes `-workspace`. The session reads no path outside `resume.prefix`,
-with a `..` segment or through a symbolic link, and no file over 67108864 bytes (64
-MiB), with a wall or without one. The session that restored a paused run's transcript
+`/workspace` becomes `-workspace`. The session reads no path outside `resume.prefix` or
+with a `..` segment, and no file over 67108864 bytes (64 MiB), with a wall or without
+one. Without a wall it reaches `resume.prefix` under the runtime's home through any
+symbolic link, such as a `~/.claude/projects` that is a link, and reads no path with a
+symbolic link among the names below `resume.prefix`. The session that restored a paused run's transcript
 reads `resume.path` instead, under the paused run's slug (§The run API, The transcript of
 a paused run).
 

@@ -47,8 +47,9 @@ const transcriptPoll = time.Second
 // one, and until then from resume.Path with the runtime's session id and the slug of
 // its working directory. A resume.Path with a * is a pattern: each read searches for
 // the file until one matches ([findMatches]), and more than one writes one line and
-// sends nothing. The session reads no path outside resume.Prefix, with a .. segment, or
-// through a symbolic link.
+// sends nothing. The session reads no path outside resume.Prefix or with a .. segment.
+// Without a wall it reaches resume.Prefix under the home through any symbolic link, and
+// reads no path with a symbolic link among the names below resume.Prefix.
 //
 // Behind a wall, root is the session's transcript directory, which the wall binds at
 // resume.Prefix inside, and home is empty: the file's path is resume.Path below root
@@ -349,7 +350,8 @@ func (t *transcript) poll(final bool) {
 	if t.root != "" {
 		b, size, err = readBeneath(t.root, strings.TrimPrefix(t.rel, strings.TrimPrefix(t.resume.Prefix, "~/")), t.read)
 	} else {
-		b, size, err = readUnlinked(t.home, t.rel, t.read)
+		prefix := strings.TrimPrefix(t.resume.Prefix, "~/")
+		b, size, err = readUnlinked(filepath.Join(t.home, prefix), strings.TrimPrefix(t.rel, prefix), t.read)
 	}
 	var refused *beneathRefused
 	if errors.As(err, &refused) {
@@ -454,15 +456,17 @@ func sendablePath(p string, mask func(string) string) bool {
 // regular file.
 var errLinked = errors.New("the transcript's path is a symbolic link or no regular file")
 
-// readUnlinked reads the file at rel under home from offset on, and returns its bytes
-// and the file's size. It opens the file through an os.Root of home, so no name leads
-// out of it, and fails on a path any of whose names is a symbolic link, or that is no
-// regular file, checked before the open and again on the open file. It opens the file
-// without blocking, so a FIFO put at rel between the check and the open ends the read
-// at once with [errLinked] instead of waiting for a writer. A file over [maxTranscript]
-// bytes is [errTooLarge], as behind a wall.
-func readUnlinked(home, rel string, offset int64) ([]byte, int64, error) {
-	root, err := os.OpenRoot(home)
+// readUnlinked reads the file at rel below base from offset on, and returns its bytes
+// and the file's size. A run with no wall reads with base the directory of
+// resume.prefix under the home, so a symbolic link in the home's path or among the
+// names of resume.prefix is followed. It opens the file through an os.Root of base, so
+// no name leads out of it, and fails on a path below base any of whose names is a
+// symbolic link, or that is no regular file, checked before the open and again on the
+// open file. It opens the file without blocking, so a FIFO put at rel between the check
+// and the open ends the read at once with [errLinked] instead of waiting for a writer.
+// A file over [maxTranscript] bytes is [errTooLarge], as behind a wall.
+func readUnlinked(base, rel string, offset int64) ([]byte, int64, error) {
+	root, err := os.OpenRoot(base)
 	if err != nil {
 		return nil, 0, err
 	}
