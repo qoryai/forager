@@ -251,7 +251,7 @@ func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID 
 	}
 	var ans *server.AttachAnswer
 	var digest string
-	err = g.tries(ctx, how.deadline, func() (err error) {
+	err = g.tries(ctx, how.deadline, how.retry, func() (err error) {
 		ans, digest, err = g.client.Attach(ctx, conf.Run.URL, runID, body)
 		return err
 	})
@@ -266,7 +266,7 @@ func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID 
 		// credentials and computes the digest from them.
 		var rc *server.RunConfiguration
 		var reloaded string
-		err = g.tries(ctx, how.deadline, func() (err error) {
+		err = g.tries(ctx, how.deadline, how.retry, func() (err error) {
 			rc, reloaded, err = g.client.RunConfiguration(ctx, conf.Run.URL, runID)
 			return err
 		})

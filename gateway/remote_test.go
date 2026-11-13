@@ -2208,7 +2208,9 @@ func TestAReopenedRunKeepsItsStop(t *testing.T) {
 
 // TestAReopenedRunUnderAnotherPolicy pins a policy put in force while the gateway was
 // stopped: the reopened run's reload has it, a policy_applied of the policy before is
-// still accepted, and so is one of the policy now in force.
+// still accepted, and so is one of the policy now in force. A run.egress through the
+// reopened proxy is numbered after the session's policy_applied of the policy now in
+// force, not before it.
 func TestAReopenedRunUnderAnotherPolicy(t *testing.T) {
 	c := gatewayControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
@@ -2229,8 +2231,22 @@ func TestAReopenedRunUnderAnotherPolicy(t *testing.T) {
 	if json.Unmarshal(a.body, &reloaded); a.status != http.StatusOK || !bytes.Contains(reloaded.Applied, []byte("other.example")) {
 		t.Fatalf("the reload: %d %s", a.status, a.body)
 	}
+	resp, err := after.relay(t, e.key).Get("http://denied.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	time.Sleep(200 * time.Millisecond)
+	if rec := after.record(runID); slices.Contains(types(rec), event.RunEgress) {
+		t.Fatalf("a run.egress before the policy_applied of the policy now in force: %v", types(rec))
+	}
 	if got := e.post(t, applied(runID, reloaded.Applied)); got.status != http.StatusAccepted {
 		t.Errorf("a policy_applied of the policy now in force: %d %s", got.status, got.body)
+	}
+	eventually(t, "the run.egress", func() bool { return slices.Contains(types(after.record(runID)), event.RunEgress) })
+	rec := after.record(runID)
+	if got, want := types(rec[len(rec)-2:]), []string{event.PolicyApplied, event.RunEgress}; !slices.Equal(got, want) || !bytes.Contains([]byte(fmt.Sprint(rec[len(rec)-2].Data["allow"])), []byte("other.example")) {
+		t.Errorf("the record ends %v %v; want the policy_applied of the policy now in force, then the run.egress", got, rec[len(rec)-2].Data["allow"])
 	}
 }
 

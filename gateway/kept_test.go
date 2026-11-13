@@ -285,7 +285,7 @@ func TestACAIsKeptUntilTheRunsFinalEnd(t *testing.T) {
 }
 
 // fakeRecord makes a run record under dir/runs with events.jsonl of the event types
-// given, changed at changed, and CA files with fake contents.
+// given, changed at changed, and a run request and CA files with fake contents.
 func fakeRecord(t *testing.T, dir string, changed time.Time, types ...string) string {
 	t.Helper()
 	runID := event.NewRunID()
@@ -301,7 +301,7 @@ func fakeRecord(t *testing.T, dir string, changed time.Time, types ...string) st
 	if err := os.WriteFile(events, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"ca.pem", "ca.key"} {
+	for _, name := range []string{"request.json", "ca.pem", "ca.key"} {
 		if err := os.WriteFile(filepath.Join(rec, name), []byte("fake "+name+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -313,10 +313,10 @@ func fakeRecord(t *testing.T, dir string, changed time.Time, types ...string) st
 }
 
 // TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn pins the CA key sweep: at Start and
-// on each tick it removes the CA files of a record the gateway does not hold whose
-// events.jsonl has not changed for longer than the sweep's age, with a final event or
-// without; a record that changed since and the record of a run the gateway holds keep
-// theirs.
+// on each tick it removes the run request and the CA files of a record the gateway
+// does not hold whose events.jsonl has not changed for longer than the sweep's age,
+// with a final event or without; a record that changed since and the record of a run
+// the gateway holds keep theirs.
 func TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn(t *testing.T) {
 	dir := t.TempDir()
 	old := time.Now().Add(-2 * time.Minute)
@@ -327,10 +327,7 @@ func TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn(t *testing.T) {
 	cfg := gateway.Config{Dir: dir}
 	gateway.SetCASweep(&cfg, time.Hour, time.Minute)
 	r := startRemote(t, nil, cfg)
-	gone := func(runID string) bool {
-		rec := filepath.Join(dir, "runs", runID)
-		return !exists(filepath.Join(rec, "ca.pem")) && !exists(filepath.Join(rec, "ca.key"))
-	}
+	gone := func(runID string) bool { return len(secretsLeft(dir, runID)) == 0 }
 	eventually(t, "the sweep at Start", func() bool { return gone(atStart) })
 
 	// A run the gateway holds, its record unchanged as long, with CA files.

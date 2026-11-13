@@ -183,7 +183,7 @@ func TriesOnAFakeClock(ctx context.Context, took time.Duration, ask func(n int) 
 		return ctx.Err() == nil
 	}}
 	var starts []time.Duration
-	err := tryOpen(ctx, clock, openWaits, t0.Add(openWindow), func() error {
+	err := tryOpen(ctx, clock, openWaits, t0.Add(openWindow), passing, func() error {
 		starts = append(starts, now.Sub(t0))
 		now = now.Add(took)
 		return ask(len(starts))

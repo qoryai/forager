@@ -220,6 +220,9 @@ type opening struct {
 	// deadline is the latest a try of the run's registration with Qory Apiary may start
 	// again: [openWindow] after the run request came.
 	deadline time.Time
+	// retry reports whether a failed try of the attach is tried again; nil is
+	// [passing]. A reopen sets [reopenRetried].
+	retry func(error) bool
 }
 
 // The tries of the run's registration with Qory Apiary, or its attach, as a run opens:
@@ -312,23 +315,27 @@ var wallClock = openClock{now: time.Now, wait: func(ctx context.Context, d time.
 	}
 }}
 
-// tries asks Qory Apiary with ask, again after a failure that may pass, [openWaits]
-// apart, until a try returns a final result, the next try would start past deadline,
-// or ctx ends; the last try's error is the result.
-func (g *Gateway) tries(ctx context.Context, deadline time.Time, ask func() error) error {
+// tries asks Qory Apiary with ask, again after a failure for which retry returns true,
+// [passing] when retry is nil, [openWaits] apart, until a try returns a final result,
+// the next try would start past deadline, or ctx ends; the last try's error is the
+// result.
+func (g *Gateway) tries(ctx context.Context, deadline time.Time, retry func(error) bool, ask func() error) error {
 	waits := openWaits
 	if g.cfg.openWaits != nil {
 		waits = g.cfg.openWaits
 	}
-	return tryOpen(ctx, wallClock, waits, deadline, ask)
+	if retry == nil {
+		retry = passing
+	}
+	return tryOpen(ctx, wallClock, waits, deadline, retry, ask)
 }
 
 // tryOpen is [Gateway.tries] with the clock and the waits: the wait after try n+1 is
 // waits[n], or the last of waits once they run out.
-func tryOpen(ctx context.Context, clock openClock, waits []time.Duration, deadline time.Time, ask func() error) error {
+func tryOpen(ctx context.Context, clock openClock, waits []time.Duration, deadline time.Time, retry func(error) bool, ask func() error) error {
 	for n := 0; ; n++ {
 		err := ask()
-		if err == nil || !passing(err) || len(waits) == 0 || ctx.Err() != nil {
+		if err == nil || !retry(err) || len(waits) == 0 || ctx.Err() != nil {
 			return err
 		}
 		wait := waits[min(n, len(waits)-1)]
@@ -370,9 +377,10 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(cerr)))
 		}
 		if remote {
-			// A run that did not open is never reopened: its CA key goes from the disk.
-			if rerr := proxy.RemoveCA(st.Dir()); rerr != nil {
-				g.report(fmt.Sprintf("run %s: removing its CA files: %v", req.RunID, rerr))
+			// A run that did not open is never reopened: its CA key and run request go
+			// from the disk.
+			if rerr := stream.RemoveKept(st.Dir()); rerr != nil {
+				g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", req.RunID, rerr))
 			}
 		}
 		cancel()
@@ -452,7 +460,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			if err != nil {
 				return fail(err)
 			}
-			regErr = g.tries(ask, how.deadline, func() (err error) {
+			regErr = g.tries(ask, how.deadline, nil, func() (err error) {
 				rc, digest, err = g.client.Register(ask, conf.Run.URL, body)
 				return err
 			})
@@ -540,11 +548,11 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		return fail(err)
 	}
 	lr.mu.Lock()
-	err = lr.refresh()
+	given := lr.refresh()
 	lr.opened = true
 	lr.last = time.Now()
 	lr.mu.Unlock()
-	if err != nil {
+	if err := lr.keep(given); err != nil {
 		return fail(fmt.Errorf("run %s: writing its policy members to its record: %w", req.RunID, err))
 	}
 	lr.mu.Lock()
@@ -1082,10 +1090,10 @@ func (lr *linkRun) end(e ending) {
 		}
 		lr.result, lr.err = lr.st.Close(lr.g.base)
 		if lr.remote && !e.keep {
-			// The run ended for good: no gateway reopens it, and its CA key goes from
-			// the disk.
-			if err := proxy.RemoveCA(lr.st.Dir()); err != nil {
-				lr.g.report(fmt.Sprintf("run %s: removing its CA files: %v", lr.id, err))
+			// The run ended for good: no gateway reopens it, and its CA key and run
+			// request go from the disk.
+			if err := stream.RemoveKept(lr.st.Dir()); err != nil {
+				lr.g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", lr.id, err))
 			}
 		}
 		lr.cancel()
@@ -1185,11 +1193,10 @@ type reloadAnswerDoc struct {
 	Applied      map[string]any             `json:"applied"`
 }
 
-// refresh makes the reload answer of the policy in force, and adds the members of its
-// dev.qory.run.policy_applied the gateway decides to those it gave the run. On the one
-// address each is also added to the record's given.jsonl, before the session can have
-// the reload answer; the error is that write's. Called with lr.mu held.
-func (lr *linkRun) refresh() error {
+// refresh makes the reload answer of the policy in force, adds the members of its
+// dev.qory.run.policy_applied the gateway decides to those it gave the run, and returns
+// the members it added, for [linkRun.keep] once lr.mu is free. Called with lr.mu held.
+func (lr *linkRun) refresh() []map[string]any {
 	n := len(lr.given)
 	pol := lr.r.Policy()
 	applied := appliedOf(pol, lr.r.Beside(), lr.r.Held(), lr.r.Chosen(), lr.px.Terminated())
@@ -1219,10 +1226,19 @@ func (lr *linkRun) refresh() error {
 	})
 	sum := sha256.Sum256(lr.reloadBody)
 	lr.reloadDigest = "sha256=" + hex.EncodeToString(sum[:])
+	return slices.Clone(lr.given[n:])
+}
+
+// keep adds each of given, the members [linkRun.refresh] added, to the record's
+// given.jsonl on the one address, in order; the error is the first write's that
+// failed. It writes with lr.mu free, so no request of the run waits on the disk: the
+// open and the reopen call it before the run is held, and a reload under lr.joining,
+// so the lines of two calls never interleave.
+func (lr *linkRun) keep(given []map[string]any) error {
 	if !lr.remote {
 		return nil
 	}
-	for _, a := range lr.given[n:] {
+	for _, a := range given {
 		// Shown names and values alone, as the event's data: no credential's value.
 		if err := appendKept(lr.st.Dir(), givenFile, a); err != nil {
 			return err
@@ -1504,12 +1520,7 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	lr.r.Commit(d)
 	lr.posts.SetRunDigest(d.Policy.RunConfiguration)
 	lr.mu.Lock()
-	defer lr.mu.Unlock()
-	if err := lr.refresh(); err != nil {
-		// The policy is in force: the run goes on, and a gateway that starts again
-		// misses these members.
-		lr.g.report(fmt.Sprintf("run %s: writing its policy members to its record: %v", lr.id, err))
-	}
+	given := lr.refresh()
 	// Before the session can see the new digest, so its policy_applied finds the hold
 	// waiting for it; the tunnels the policy closed go first.
 	data := make([]any, len(refused))
@@ -1517,6 +1528,12 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 		data[i] = run.Egress(dec)
 	}
 	lr.st.Await(hold, appliedIs(lr.given[len(lr.given)-1]), event.RunEgress, data...)
+	lr.mu.Unlock()
+	if err := lr.keep(given); err != nil {
+		// The policy is in force: the run goes on, and a gateway that starts again
+		// misses these members.
+		lr.g.report(fmt.Sprintf("run %s: writing its policy members to its record: %v", lr.id, err))
+	}
 	return nil
 }
 

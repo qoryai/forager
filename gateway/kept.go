@@ -18,6 +18,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
+	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/sink"
 )
@@ -36,8 +37,8 @@ const (
 )
 
 // The CA key sweep (the user's "545 (a)", 2026-11-13): a gateway removes the CA files
-// of a run record it does not hold whose events.jsonl has not changed for more than
-// caSweepAge, at Start and every caSweepEvery. A live run's
+// and the run request of a run record it does not hold whose events.jsonl has not
+// changed for more than caSweepAge, at Start and every caSweepEvery. A live run's
 // session sends a heartbeat at least every server.MaxInterval, 300 s, so its record
 // changes at least 3 times within caSweepAge; a record that does not is of a run that
 // no session reopens, and its key goes from the disk. A record with a final event is
@@ -90,7 +91,7 @@ func readRequest(dir string) (keptRequest, error) {
 }
 
 // keptJoin is one line of joins.jsonl: one join decision, written before the gateway
-// answers it, with names alone. Session is the join's number; Accepted is true for a
+// writes its answer, with names alone. Session is the join's number; Accepted is true for a
 // 200, false for a 403; Passes are the request's passes; Model is the model key the
 // answer starts the session with, empty for none; NoKey is the request's model_key
 // false; and ModelCredential is the request's model_credential, empty for none, which
@@ -190,21 +191,29 @@ func readKeptLines(file string, take func([]byte) bool, torn *int) error {
 }
 
 // writeKept writes b to dir's file name, made or emptied, mode 0600, synced, then
-// syncs dir.
+// syncs dir. When the write or the sync fails, it removes the file, so no part of b
+// stays on the disk.
 func writeKept(dir, name string, b []byte) error {
-	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
+	path := filepath.Join(dir, name)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return accesskey.ShownError(err)
 	}
 	_, werr := f.Write(b)
 	if err := errors.Join(werr, f.Sync(), f.Close()); err != nil {
+		if rerr := os.Remove(path); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			err = errors.Join(err, rerr)
+		}
 		return accesskey.ShownError(err)
 	}
 	return syncDir(dir)
 }
 
 // appendKept adds v's JSON as one line to dir's file name, made with mode 0600 when it
-// does not exist, and syncs it; dir is synced when the file was made.
+// does not exist, and syncs it; dir is synced when the file was made. A file whose last
+// line has no newline, a write the gateway did not finish, gets one first, so v starts
+// a line, as [stream.Stream.Reopen] mends events.jsonl. When the append fails, the file
+// is cut back to its size before it.
 func appendKept(dir, name string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -213,12 +222,35 @@ func appendKept(dir, name string, v any) error {
 	path := filepath.Join(dir, name)
 	_, err = os.Lstat(path)
 	made := errors.Is(err, fs.ErrNotExist)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return accesskey.ShownError(err)
 	}
-	_, werr := f.Write(append(b, '\n'))
-	if err := errors.Join(werr, f.Sync(), f.Close()); err != nil {
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return accesskey.ShownError(err)
+	}
+	size := info.Size()
+	line := append(b, '\n')
+	if size > 0 {
+		last := make([]byte, 1)
+		if _, err := f.ReadAt(last, size-1); err != nil {
+			f.Close()
+			return accesskey.ShownError(err)
+		}
+		if last[0] != '\n' {
+			line = append([]byte{'\n'}, line...)
+		}
+	}
+	_, werr := f.Write(line)
+	if err := errors.Join(werr, f.Sync()); err != nil {
+		// What the failed write left goes, so the next line does not follow a part of
+		// this one.
+		err = errors.Join(err, f.Truncate(size), f.Close())
+		return accesskey.ShownError(err)
+	}
+	if err := f.Close(); err != nil {
 		return accesskey.ShownError(err)
 	}
 	if made {
@@ -262,11 +294,11 @@ func syncDir(dir string) error {
 	return nil
 }
 
-// sweepCA starts the CA key sweep of a separate gateway's records under Dir/runs: one
-// pass now, then one every caSweepEvery until [Gateway.stopSweep].
+// sweepCA starts the CA key sweep of a separate gateway's records: one pass now, then
+// one every caSweepEvery until [Gateway.stopSweep]. The records are those under
+// [Gateway.sweptDir].
 func (g *Gateway) sweepCA() {
-	if g.cfg.Dir == "" || g.cfg.RunDir != nil {
-		// The records are not under Dir/runs.
+	if g.sweptDir() == "" {
 		return
 	}
 	every, age := caSweepEvery, caSweepAge
@@ -294,6 +326,23 @@ func (g *Gateway) sweepCA() {
 	})
 }
 
+// sweptDir is the directory whose entries are the run record directories the sweep
+// reads: Dir/runs, or with RunDir the directory RunDir makes each record in, when
+// RunDir makes it as <directory>/<run id>; empty for none.
+func (g *Gateway) sweptDir() string {
+	if g.cfg.RunDir == nil {
+		if g.cfg.Dir == "" {
+			return ""
+		}
+		return filepath.Join(g.cfg.Dir, "runs")
+	}
+	const none = "00000000-0000-0000-0000-000000000000"
+	if dir := g.cfg.RunDir(none); filepath.Base(dir) == none {
+		return filepath.Dir(dir)
+	}
+	return ""
+}
+
 // stopSweep stops the CA key sweep and waits for a pass in flight.
 func (g *Gateway) stopSweep() {
 	if g.sweepStop == nil {
@@ -304,19 +353,19 @@ func (g *Gateway) stopSweep() {
 	g.sweepStop = nil
 }
 
-// sweep removes [proxy.CACertFile] and [proxy.CAKeyFile] from each record under
-// Dir/runs that meets both: the gateway does not hold its run, and its events.jsonl has
-// not changed for more than age as of now. A record without events.jsonl counts its CA
-// files' time in place of it.
+// sweep removes the run request and the CA files ([stream.RemoveKept]) from each
+// record under [Gateway.sweptDir] that meets all of these: it is the record directory
+// of its name's run, the gateway does not hold its run, and its events.jsonl has not
+// changed for more than age as of now. A record without events.jsonl counts the time
+// of those files in place of it.
 //
-// The sweep and a reopen do not race: the sweep checks that the run is neither in
-// g.runs nor in g.reopening and removes the files with g.mu held, and a reopen adds
-// itself to g.reopening with g.mu held before it reads them. Either the sweep removes
-// the files first, and the reopen finds none and fails for good, as for a record past
-// its age, or the sweep leaves the record alone. g.mu is held for two removals and a
-// sync of the directory, for a record unchanged for caSweepAge alone.
+// The sweep and a reopen do not race: with g.mu held, the sweep checks that the run is
+// neither in g.runs nor in g.reopening and adds it to g.sweeping, and a reopen checks
+// that the run is not in g.sweeping and adds itself to g.reopening. The sweep removes
+// the files with g.mu free, then takes the run from g.sweeping. A request that comes
+// meanwhile gets a 503, and the next one a 410, as for any record past its age.
 func (g *Gateway) sweep(now time.Time, age time.Duration) {
-	root := filepath.Join(g.cfg.Dir, "runs")
+	root := g.sweptDir()
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -329,8 +378,11 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 			continue
 		}
 		id, dir := e.Name(), filepath.Join(root, e.Name())
-		ca, err := newestOf(dir, proxy.CAKeyFile, proxy.CACertFile)
-		if err != nil || ca.IsZero() {
+		if g.stream.Dir(id) != dir {
+			continue
+		}
+		kept, err := newestOf(dir, proxy.CAKeyFile, proxy.CACertFile, requestFile)
+		if err != nil || kept.IsZero() {
 			continue
 		}
 		changed, err := newestOf(dir, sink.EventsFile)
@@ -338,7 +390,7 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 			continue
 		}
 		if changed.IsZero() {
-			changed = ca
+			changed = kept
 		}
 		if now.Sub(changed) <= age {
 			continue
@@ -346,17 +398,21 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 		g.mu.Lock()
 		held := g.runs[id] != nil || g.reopening[id] != nil
 		if !held {
-			err = proxy.RemoveCA(dir)
+			g.sweeping[id] = true
 		}
 		g.mu.Unlock()
 		if held {
 			continue
 		}
+		err = stream.RemoveKept(dir)
+		g.mu.Lock()
+		delete(g.sweeping, id)
+		g.mu.Unlock()
 		if err != nil {
-			g.report(fmt.Sprintf("run %s: removing its CA files: %v", accesskey.ShownValue(id, false), err))
+			g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", accesskey.ShownValue(id, false), err))
 			continue
 		}
-		g.report(fmt.Sprintf("run %s: removed its CA files: its record has not changed for %s", accesskey.ShownValue(id, false), age))
+		g.report(fmt.Sprintf("run %s: removed its CA files and run request: its record has not changed for %s", accesskey.ShownValue(id, false), age))
 	}
 }
 
