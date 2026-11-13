@@ -675,7 +675,7 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			}
 		}
 		switch ev.Type {
-		case event.RunRegistered, event.RunEgress:
+		case event.RunRegistered, event.RunEgress, event.RunTargetWrite:
 			return "an event of a type the gateway writes"
 		case event.RunStarted:
 			if data["opened_by"] != event.OpenedByRun {

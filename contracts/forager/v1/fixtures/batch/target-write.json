@@ -1,0 +1,106 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000521",
+    "source": "urn:qory:run:0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "type": "dev.qory.run.target_write",
+    "subject": "0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "time": "2026-11-13T10:00:19.100Z",
+    "sequence": "0000000021",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.target_write.schema.json",
+    "data": {
+      "system": "git.example",
+      "path": "example-org/app",
+      "state": "started",
+      "request_id": "0123456789abcdef0123456789abc0a1"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000522",
+    "source": "urn:qory:run:0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "type": "dev.qory.run.egress",
+    "subject": "0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "time": "2026-11-13T10:00:19.900Z",
+    "sequence": "0000000022",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.egress.schema.json",
+    "data": {
+      "host": "git.example",
+      "port": 443,
+      "method": "HTTPS",
+      "request_method": "POST",
+      "path": "/example-org/app.git/git-receive-pack",
+      "credential": "forge",
+      "request_id": "0123456789abcdef0123456789abc0a1",
+      "status": 200,
+      "decision": "allowed",
+      "outcome": "connected",
+      "mode": "enforce",
+      "rule": "git.example"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000523",
+    "source": "urn:qory:run:0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "type": "dev.qory.run.target_write",
+    "subject": "0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "time": "2026-11-13T10:00:20.000Z",
+    "sequence": "0000000023",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.target_write.schema.json",
+    "data": {
+      "system": "git.example",
+      "path": "example-org/app",
+      "state": "changed",
+      "request_id": "0123456789abcdef0123456789abc0a1"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000524",
+    "source": "urn:qory:run:0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "type": "dev.qory.run.target_write",
+    "subject": "0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "time": "2026-11-13T10:00:21.100Z",
+    "sequence": "0000000024",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.target_write.schema.json",
+    "data": {
+      "system": "git.example",
+      "path": "example-org/lib",
+      "state": "started",
+      "request_id": "0123456789abcdef0123456789abc0b2"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000525",
+    "source": "urn:qory:run:0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "type": "dev.qory.run.target_write",
+    "subject": "0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "time": "2026-11-13T10:00:30.050Z",
+    "sequence": "0000000025",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.target_write.schema.json",
+    "data": {
+      "system": "git.example",
+      "path": "example-org/lib",
+      "state": "cut",
+      "request_id": "0123456789abcdef0123456789abc0b2"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000526",
+    "source": "urn:qory:run:0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "type": "dev.qory.run.exited",
+    "subject": "0198c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "time": "2026-11-13T10:00:30.060Z",
+    "sequence": "0000000026",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.exited.schema.json",
+    "data": {
+      "state": "cancelled",
+      "exit_code": -1,
+      "reason": "stopped",
+      "duration_ms": 30060
+    }
+  }
+]

@@ -10,6 +10,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Deploy a Qory Apiary that accepts `dev.qory.run.target_write` before the gateway that
+  writes it. A Qory Apiary built with an older contract does not have the type.
 - Deploy the gateway first, then Qory Apiary. A gateway built before this change fails
   a run with `run_configuration_invalid` when the run configuration's API credential has
   `resets_at`, `schedule_resets_at` or `pause_for_s`, and ignores the run
@@ -252,6 +254,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `dev.qory.run.target_write`, with `system`, `path`, `state` and `request_id`: one
+  write the run sent to a place in another system, and whether it took effect. The
+  gateway writes `started` when the write begins and `changed`, `refused` or `cut` when
+  it ends, before `dev.qory.run.exited`. `request_id` is that of the request's
+  `dev.qory.run.egress`. A link batch with the type is refused, as one with
+  `dev.qory.run.egress` is. README §The events, Writes to a target.
 - Several model keys per run. When the start key is an API credential, the key group is
   the start key and every API credential with its `format`, `auth` and `endpoint`, in the
   order of `credentials`. The keys of the group share the start key's placeholder, and

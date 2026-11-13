@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/run.target_write.schema.json",
+  "title": "dev.qory.run.target_write",
+  "description": "One state of one write the run sent through the proxy to a place in another system: started when the write begins, then one of changed, refused or cut when it ends. The gateway writes it, for a request the proxy reads: a request inside a connection the proxy terminates, or a plain request. It recognises one kind of write, a git push over HTTP: a POST whose path ends in /git-receive-pack. Every write with a started has its end before dev.qory.run.exited, unless the gateway stops while the write is open; a receiver reads a started with no end in a run that ended as cut.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["system", "path", "state"],
+  "properties": {
+    "system": {"description": "The system the write went to: the request's host, as the host of the request's dev.qory.run.egress, a lower-case name or an IP literal in canonical form, without the port. For a git push it is the forge label qory gives a run whose origin remote is on that host. A value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case is a phrase in its place, as in dev.qory.run.egress.", "type": "string", "minLength": 1},
+    "path": {"description": "The place in the system the write went to. For a git push, the request's path, decoded, without /git-receive-pack at its end, without its leading and trailing slash and without a .git at its end: the repository label qory gives a run whose origin remote has that path, such as example-org/app for /example-org/app.git/git-receive-pack. A value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case is a phrase in its place, as in dev.qory.run.egress.", "type": "string", "minLength": 1},
+    "state": {"description": "started: the write began, the request went to the system. changed: the system reported the write done, for a git push every ref ok. refused: the system reported the write not done: for a git push the unpack failed, a ref was ng, the answer was a fatal error, or the status was 4xx; a push with some refs ok and some ng is refused. cut: the write ended without a report the gateway could read, such as when the transport failed, the answer could not be read, or the run ended during the write; the system may have applied it.", "type": "string", "enum": ["started", "changed", "refused", "cut"]},
+    "request_id": {"description": "The proxy's id of the request: the request_id of the request's dev.qory.run.egress. The same on the write's started and on its end.", "type": "string", "pattern": "^[0-9a-f]{32}$"}
+  }
+}
