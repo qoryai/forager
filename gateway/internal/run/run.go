@@ -1305,6 +1305,18 @@ func Egress(d proxy.Decision) map[string]any {
 	return data
 }
 
+// TargetWrite is the data of the dev.qory.run.target_write of one state of a write.
+// The system and the path are sent as [Egress] sends the host and the path: a value
+// that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or qecd_ in any case is
+// accesskey.ShownValue's phrase in its place.
+func TargetWrite(w proxy.Write) map[string]any {
+	data := map[string]any{"system": accesskey.ShownValue(w.System, false), "path": accesskey.ShownValue(w.Path, false), "state": w.State}
+	if w.RequestID != "" {
+		data["request_id"] = w.RequestID
+	}
+	return data
+}
+
 // startOf is the start key of held, empty when held is nil or has none.
 func startOf(held *credential.Held) string {
 	if held == nil {

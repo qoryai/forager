@@ -46,6 +46,8 @@ type linkRun struct {
 	// keys is the run's key group, nil when the run has none: the start key's, from the
 	// run configuration's credentials.
 	keys *modelkey.Group
+	// writes numbers the git pushes the run's proxy reads, nil until the proxy is made.
+	writes *writeLog
 	// secret is the run's proxy secret, held so that no print of the run shows it.
 	secret secretValue
 	tools  *tool.Set
@@ -646,6 +648,8 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 	}
 	lr.px.ReportPanics(routine.ForRun(g.report, lr.id))
 	lr.px.AllowFirst(pol.Policy.Egress.AllowFirst)
+	lr.writes = &writeLog{emit: func(data map[string]any) { lr.st.Emit(event.RunTargetWrite, data) }}
+	lr.px.ObserveWrites(lr.writes.observe)
 	if g.client != nil {
 		runID := lr.id
 		lr.px.SetRunAPI(&proxy.RunAPI{RunID: runID, Limits: &g.runAPILimits, Send: func(ctx context.Context, method, path string, body []byte, file bool) (*server.RunAPIAnswer, error) {
@@ -1085,6 +1089,9 @@ func (lr *linkRun) end(e ending) {
 			lr.cancel()
 			return
 		}
+		// The proxy is closed, so no write starts any more: each one still open ends
+		// cut, before the run's dev.qory.run.exited.
+		lr.writes.cutOpen()
 		if e.state != "" && lr.st.Started() {
 			// A join still open with its session.started: its session's end comes first,
 			// with the run's state and reason, as each session.exited follows its

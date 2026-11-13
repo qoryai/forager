@@ -82,6 +82,7 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.run.log`            | One per chunk of a session's output, or of host work outside a session     |
 | `dev.qory.run.resized`        | The pseudo-terminal was resized                                            |
 | `dev.qory.run.egress`         | One per connection, or per request on a terminated host                    |
+| `dev.qory.run.target_write`   | A git push began, then whether it changed, was refused or was cut          |
 | `dev.qory.run.heartbeat`      | Every interval while the run is open, 30 seconds by default                |
 | `dev.qory.session.transcript` | One per chunk of the transcript of a runtime with `resume`                 |
 | `dev.qory.session.exited`     | A session ended, its join was refused, or the run ended while it ran       |

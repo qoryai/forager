@@ -345,7 +345,7 @@ const beyondLinkSchema = "-beyond-schema-"
 // or whose credential_hosts entry has a member it does not define, no hosts, no
 // placeholders, a format without an endpoint or an endpoint without a format, a link reload answer with the proxy secret, the stack proxy secret or the
 // certificate authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
-// run.registered or a run.egress, a run.started opened by a gateway or a session, a run.exited with one of Forager's reasons
+// run.registered, a run.egress or a run.target_write, a run.started opened by a gateway or a session, a run.exited with one of Forager's reasons
 // other than timeout, interrupted and no_session, its old names among them, or with timeout and a state other than cancelled
 // or an exit code other than 124, a session.exited cancelled with no reason, succeeded with exit status 1, with stopped,
 // succeeded with no exit status or cancelled with a refusal's code, or a run.refused with a gateway's code,
@@ -372,7 +372,9 @@ const beyondLinkSchema = "-beyond-schema-"
 // failed or cancelled with model_key_limit, a session.exited paused with no reason or
 // with stopped and exit code -1, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
 // without its session id or over 32 KiB, and a descriptor whose resume has no args, a
-// prefix outside the home or a path without {session_id}. A fixture whose name contains
+// prefix outside the home or a path without {session_id}, and a run.target_write with a
+// state outside the four, without its path, with an empty system, with a ref or with a
+// request id in upper case. A fixture whose name contains
 // -beyond-schema- breaks a rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
 // the schema, so run-configuration-variable-value-not-string is held to the run
 // configuration and not to a schema named run.

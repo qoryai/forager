@@ -128,7 +128,8 @@ func TestStatesOfARunAndOfAStep(t *testing.T) {
 }
 
 // TestStepKindsAndStatesAreTheContracts pins the step kind constants to the kind enum of
-// run.step_started, in order, and the states to the state enum of run.step_exited.
+// run.step_started, in order, the states to the state enum of run.step_exited, and the
+// write states to the state enum of run.target_write.
 func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
 	for _, c := range []struct {
 		schema, member string
@@ -136,6 +137,7 @@ func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
 	}{
 		{"events/run.step_started.schema.json", "kind", []string{event.StepFetch, event.StepCompose, event.StepImage, event.StepSetup, event.StepJoin, event.StepWall, event.StepBuild, event.StepPush, event.StepMachine, event.StepCopy}},
 		{"events/run.step_exited.schema.json", "state", []string{event.StateSucceeded, event.StateFailed, event.StateCancelled}},
+		{"events/run.target_write.schema.json", "state", []string{event.WriteStarted, event.WriteChanged, event.WriteRefused, event.WriteCut}},
 	} {
 		doc, err := contracts.Document(c.schema)
 		if err != nil {
