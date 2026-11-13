@@ -1898,7 +1898,9 @@ one at a time, apart from one case: a session with no runtime, `bare: true` in i
 numbered on from the `copy` step, start and end inside the `copy` step, as the session
 does, and the caller exits the `copy` step after the session. A session with a runtime
 does not join during a `copy` step, and no session joins during a step of another
-kind. The host lines of a step are `dev.qory.run.log` events with the step's
+kind. A session with no runtime may also join after the last session, outside every
+step. Behind a wall it runs in a fresh container from the run's image, which has none
+of the files an earlier session wrote in its HOME. The host lines of a step are `dev.qory.run.log` events with the step's
 number as `step`, between its `dev.qory.run.step_started` and its
 `dev.qory.run.step_exited`. A host line outside every step has no `step`. `step` is
 optional on `dev.qory.run.log`, so a record with no steps validates. `setup` is the
