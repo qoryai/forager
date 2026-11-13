@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,16 @@ import (
 // AmbiguousPath is the rule a denial names when a request's path could be read two
 // ways: not a path entry, the proxy's own refusal, in either mode.
 const AmbiguousPath = "wall:ambiguous-path"
+
+// sentPath is the path of u as the proxy forwards it: the opaque text of a target such
+// as https:..;/secret, which the transport sends as the request's path, or the escaped
+// path. An opaque text never starts with a slash, so [policy.CleanPath] refuses it.
+func sentPath(u *url.URL) string {
+	if u.Opaque != "" {
+		return u.Opaque
+	}
+	return u.EscapedPath()
+}
 
 // EchoMethod is the rule a denial names of a TRACE or a TRACK, which echo the
 // request's headers back, to a host a credential is for: a refusal of the proxy's, in
@@ -480,7 +491,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 				return errUnaskedSwitch
 			}
 			if coding := encoded(resp); coding != "" {
-				clean, _ := policy.CleanPath(resp.Request.URL.EscapedPath())
+				clean, _ := policy.CleanPath(sentPath(resp.Request.URL))
 				withheld(resp, coding, resp.Request.Method, d.Host, clean)
 			}
 			return nil
@@ -498,9 +509,9 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		req.Method, req.RequestMethod, req.Mode, req.Rule, req.RequestID = "HTTPS", r.Method, now.Mode, now.Rule, newRequestID()
 		if !now.Allowed {
 			// A host the policy refuses reaches no tool and has no path decision.
-			clean, ok := policy.CleanPath(r.URL.EscapedPath())
+			clean, ok := policy.CleanPath(sentPath(r.URL))
 			if !ok {
-				clean = r.URL.EscapedPath()
+				clean = sentPath(r.URL)
 			}
 			req.Path, req.Allowed, req.Outcome = clean, false, Refused
 			if rated != nil {
@@ -512,7 +523,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		keys := t.p.choice()
-		clean, rule, allowed, c := t.decide(d.Host, r.URL.EscapedPath(), now.Mode, keys)
+		clean, rule, allowed, c := t.decide(d.Host, sentPath(r.URL), now.Mode, keys)
 		req.Path, req.PathRule, req.Allowed = clean, rule, allowed
 		tl := t.tool(d.Host)
 		if tl != nil {

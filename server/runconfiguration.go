@@ -122,7 +122,7 @@ func CheckCredentials(creds []RunCredential, model string) error {
 			for _, p := range a.Paths {
 				if UnclearPath(p) {
 					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-						"the document is refused: write the path %s of the credential %s without a . or .. segment, an empty segment, a backslash or an encoded slash, backslash, dot or percent sign, a segment read up to its first ; or %%3B; the proxy denies every request whose path has one, so the path would match none", accesskey.ShownValue(p, true), name)
+						"the document is refused: write the path %s of the credential %s without a . or .. segment or an empty segment, each read up to its first ; or %%3B, a backslash, or an encoded slash, backslash, dot or percent sign; the proxy denies every request whose path has one, so the path would match none", accesskey.ShownValue(p, true), name)
 				}
 			}
 		}

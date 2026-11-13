@@ -631,7 +631,7 @@ func TestADotSegmentBeforeASemicolonGetsNoCredential(t *testing.T) {
 		}
 		for _, r := range reached {
 			if !strings.HasSuffix(r, "|Bearer the-token") {
-				t.Errorf("%s: the host saw %q, want the credential", mode, r)
+				t.Errorf("%s: the request reached the host as %q, want it with the credential", mode, r)
 			}
 		}
 		for _, d := range decisions {
@@ -644,6 +644,76 @@ func TestADotSegmentBeforeASemicolonGetsNoCredential(t *testing.T) {
 			}
 			if ambiguous && (d.Allowed || d.Outcome != proxy.Refused || d.Credential != "") {
 				t.Errorf("%s: the ambiguous request was recorded as %+v, want refused with no credential", mode, d)
+			}
+		}
+		mu.Unlock()
+	}
+}
+
+// TestAnOpaqueTargetGetsNoCredential pins the refusal of a request target with no
+// slash after its scheme, such as https:..;/secret, inside a terminated connection: Go
+// reads it as an opaque URL with an empty path, which reads as /, and the transport
+// forwards the opaque text as the request's path. Each gets the wall's 403 with the
+// ambiguous-path line and a record with no credential, in either mode, and never
+// reaches the host, though the credential's paths cover /.
+func TestAnOpaqueTargetGetsNoCredential(t *testing.T) {
+	var mu sync.Mutex
+	var reached []string
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reached = append(reached, r.RequestURI+"|"+r.Header.Get("Authorization"))
+		mu.Unlock()
+		io.WriteString(w, "from the origin")
+	}))
+	defer origin.Close()
+	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	at := net.JoinHostPort(host, port)
+	roots := x509.NewCertPool()
+	roots.AddCert(origin.Certificate())
+	refused := []string{"https:..;/secret", "https:secret/data"}
+	for _, mode := range []policy.Mode{policy.Enforce, policy.Observe} {
+		mu.Lock()
+		reached = nil
+		mu.Unlock()
+		var decisions []proxy.Decision
+		p, err := proxy.Listen("", mode, []string{host}, nil, func(d proxy.Decision) { mu.Lock(); decisions = append(decisions, d); mu.Unlock() })
+		if err != nil {
+			t.Fatal(err)
+		}
+		ca, err := proxy.NewCA("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.TrustUpstream(roots)
+		p.Terminate(ca, []proxy.Credential{{Name: "product", Hosts: []string{host}, Scheme: "bearer", Paths: []string{"/"},
+			Token: func() string { return "the-token" }}}, nil, nil)
+		trusted := x509.NewCertPool()
+		trusted.AppendCertsFromPEM(ca.PEM())
+		get := terminated(t, p, at, trusted)
+		for _, target := range refused {
+			code, body, err := get(target)
+			if err != nil || code != http.StatusForbidden || !strings.Contains(body, "the path could be read two ways") {
+				t.Errorf("%s %s: %d %q %v, want the wall's 403 for an ambiguous path", mode, target, code, body, err)
+			}
+		}
+		if code, body, err := get("/"); err != nil || code != http.StatusOK || body != "from the origin" {
+			t.Errorf("%s /: %d %q %v, want it passed", mode, code, body, err)
+		}
+		p.Close()
+		mu.Lock()
+		if len(reached) != 1 || reached[0] != "/|Bearer the-token" {
+			t.Errorf("%s: the requests reached the host as %q, want / alone, with the credential", mode, reached)
+		}
+		for _, d := range decisions {
+			if d.Method != "HTTPS" {
+				continue
+			}
+			ambiguous := d.PathRule == proxy.AmbiguousPath
+			if ambiguous != slices.Contains(refused, "https:"+d.Path) {
+				t.Errorf("%s: the request %s was recorded with the path rule %q", mode, d.Path, d.PathRule)
+			}
+			if ambiguous && (d.Allowed || d.Outcome != proxy.Refused || d.Credential != "") {
+				t.Errorf("%s: the opaque request was recorded as %+v, want refused with no credential", mode, d)
 			}
 		}
 		mu.Unlock()

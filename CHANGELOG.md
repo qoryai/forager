@@ -1683,7 +1683,9 @@ release may change what an existing document does, and says so under Upgrading.
   `wall:ambiguous-path` and a `403`, in either mode, and sets no credential on it. A
   server such as Tomcat drops a segment's parameters from the `;` on, so it read that
   path as `/secret` while the proxy matched `/allowed/*` and set the credential. A `;`
-  after a name, such as `;jsessionid=`, passes as before.
+  after a name, such as `;jsessionid=`, passes as before. A request target with no
+  slash after its scheme, such as `https:..;/secret`, is denied the same way: the
+  proxy read its path as `/` and sent the text after the scheme upstream as the path.
 - Build Forager with Go 1.27.3 or above: go.mod requires `go 1.27.3`. Go 1.27.3 has
   security fixes to `crypto/x509`, which the gateway's proxy uses to check the
   certificates of upstream hosts.

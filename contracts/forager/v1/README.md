@@ -548,7 +548,9 @@ empty segment, a dot segment. A segment counts by its part before its first `;` 
 `%3B`, since a server such as Tomcat drops a segment's parameters from the `;` on and
 reads `/allowed/..;/secret` as `/secret`: `..;`, `.;`, `..;x` and `..%3B` are dot
 segments, and `;x` an empty one. A `;` after a name, such as `/a/b;jsessionid=1/c`,
-starts a parameter of a normal segment, and the path passes. On a host that gets a credential, a `TRACE` or `TRACK`
+starts a parameter of a normal segment, and the path passes. A request target with no
+slash after its scheme, such as `https:..;/secret`, is denied the same way: its text is
+sent upstream as the path. On a host that gets a credential, a `TRACE` or `TRACK`
 through `CONNECT` is denied in either mode with a `405`, with the rule
 `wall:echo-method` (§Credentials, The answer). Under `observe` a path no entry matches is recorded as
 allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
@@ -1193,7 +1195,7 @@ sign, such as `/a/../b`, is `run_configuration_invalid`: the proxy denies every
 request path with one (`wall:ambiguous-path`), so the path would match none. A segment
 counts by its part before its first `;` or `%3B` (§The policy, Matching a path), so
 `/a/..;/b` and `/a/;x/b` are refused, and `/a/b;jsessionid=1/c` is taken. The same
-holds for each path of a host credential's `apply` items. In a path that ends in `*`,
+rule applies to each path of a host credential's `apply` items. In a path that ends in `*`,
 the text after the last slash is the start of a segment, so `/a/.*` is taken, and
 `/a/..;*` is refused.
 
