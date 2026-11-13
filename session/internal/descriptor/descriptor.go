@@ -301,12 +301,21 @@ type Rule struct {
 	Type  string         `yaml:"type" json:"type"`
 	// Data holds the event's fields and the record paths their values are copied from.
 	Data map[string]string `yaml:"data" json:"data"`
+	// Set holds event fields with a value of the descriptor's, a string, a number or a
+	// bool, for a field the record has no member for, such as source: startup.
+	Set map[string]any `yaml:"set" json:"set,omitempty"`
+	// FromStarted lists the event's fields the session copies from the session's last
+	// dev.qory.runtime.started of the main agent, for a record that does not contain
+	// them, such as session_id. Only a rule of the output source has it.
+	FromStarted []string `yaml:"from_started" json:"from_started,omitempty"`
 }
 
-// Event is one event a rule produces: its type and its data.
+// Event is one event a rule produces: its type, its data, and FromStarted, the rule's
+// fields the session copies from its dev.qory.runtime.started.
 type Event struct {
-	Type string
-	Data map[string]any
+	Type        string
+	Data        map[string]any
+	FromStarted []string
 }
 
 // Record is one unit of runtime output as a descriptor reads it.
@@ -374,7 +383,35 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	if err := d.checkConfig(); err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
+	if err := d.checkRules(); err != nil {
+		return nil, fmt.Errorf("%s: %w", shown, err)
+	}
 	return &d, nil
+}
+
+// checkRules holds the rules to what the schema cannot express: a field of an event
+// comes from one of data, set and from_started.
+func (d *Descriptor) checkRules() error {
+	for i, rule := range d.Rules {
+		seen := map[string]string{}
+		for _, m := range []struct {
+			member string
+			fields []string
+		}{
+			{"data", slices.Sorted(maps.Keys(rule.Data))},
+			{"set", slices.Sorted(maps.Keys(rule.Set))},
+			{"from_started", rule.FromStarted},
+		} {
+			for _, f := range m.fields {
+				if other, ok := seen[f]; ok {
+					return fmt.Errorf("rules[%d]: set the field %s in one of data, set and from_started, not in %s and %s",
+						i, accesskey.ShownName(f, false), other, m.member)
+				}
+				seen[f] = m.member
+			}
+		}
+	}
+	return nil
 }
 
 // checkConfig holds the settings to what the schema cannot express, and makes each
@@ -621,7 +658,7 @@ func (d *Descriptor) Map(r Record) []Event {
 		}
 		if rule.Each == "" {
 			if matches(rule.Match, r.Record, nil) {
-				return []Event{{Type: rule.Type, Data: copied(rule.Data, r.Record, nil)}}
+				return []Event{rule.event(r.Record, nil)}
 			}
 			continue
 		}
@@ -636,7 +673,7 @@ func (d *Descriptor) Map(r Record) []Event {
 			for j := i; j < len(d.Rules); j++ {
 				other := &d.Rules[j]
 				if other.Source == r.Source && other.Each == rule.Each && matches(other.Match, r.Record, element) {
-					events = append(events, Event{Type: other.Type, Data: copied(other.Data, r.Record, element)})
+					events = append(events, other.event(r.Record, element))
 					break
 				}
 			}
@@ -666,6 +703,16 @@ func (d *Descriptor) Link(r Record) (agentID, toolUseID string, ok bool) {
 
 // eachPrefix is how a path of a rule with each starts when it reads the element.
 const eachPrefix = "each."
+
+// event is the rule's event for the record, or for the element when it is not nil:
+// the fields of Data whose path exists, with their values, and the fields of Set.
+func (rule *Rule) event(record map[string]any, element *any) Event {
+	data := copied(rule.Data, record, element)
+	for field, v := range rule.Set {
+		data[field] = v
+	}
+	return Event{Type: rule.Type, Data: data, FromStarted: slices.Clone(rule.FromStarted)}
+}
 
 // copied is the data of a rule's event: each field whose path exists, with its value.
 func copied(data map[string]string, record map[string]any, element *any) map[string]any {

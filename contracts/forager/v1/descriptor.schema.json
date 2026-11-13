@@ -327,9 +327,20 @@
         "required": [
           "source",
           "match",
-          "type",
-          "data"
+          "type"
         ],
+        "anyOf": [
+          {"required": ["data"]},
+          {"required": ["set"]},
+          {"required": ["from_started"]}
+        ],
+        "if": {"required": ["from_started"]},
+        "then": {
+          "properties": {
+            "source": {"const": "output"},
+            "type": {"not": {"const": "dev.qory.runtime.started"}}
+          }
+        },
         "properties": {
           "source": {
             "type": "string",
@@ -376,6 +387,29 @@
               "type": "string",
               "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
             }
+          },
+          "set": {
+            "description": "Fields of the event's data with a value of the descriptor's, for a field the record has no member for, such as {source: startup}: each key is a field of the type's data, each value a string, a number or a boolean set there as it is. A field is in one of data, set and from_started.",
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "not": {"enum": ["session", "line", "truncated", "summary"]}
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {"type": "string", "minLength": 1, "maxLength": 256},
+                {"type": "number"},
+                {"type": "boolean"}
+              ]
+            }
+          },
+          "from_started": {
+            "description": "Fields of the event's data the session copies from the session's last dev.qory.runtime.started of the main agent, the one without agent_id, for a runtime whose records after the start do not contain them, such as [session_id]. Only a rule of the output source that produces another type has it. The session writes no event of the rule before such a dev.qory.runtime.started.",
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"enum": ["session_id"]}
           }
         }
       }

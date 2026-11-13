@@ -374,8 +374,11 @@ const beyondLinkSchema = "-beyond-schema-"
 // whose stop has no reason or another one, a session.exited or a session's run.exited
 // failed or cancelled with model_key_limit, a session.exited paused with no reason or
 // with stopped and exit code -1, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
-// without its session id or over 32 KiB, and a descriptor whose resume has no args, a
-// prefix outside the home or a path without {session_id}. For model keys of another
+// without its session id or over 32 KiB, a descriptor whose resume has no args, a
+// prefix outside the home or a path without {session_id}, and a descriptor rule whose
+// set sets session or a field to an object, whose from_started lists agent_id or is on
+// a hook rule or a rule of runtime.started, or with none of data, set and
+// from_started. For model keys of another
 // format: a run configuration whose API credential has account_header or account_claim
 // alone, both without oauth, with oauth false or beside a header scheme, an
 // account_claim that is no JSON pointer, / alone, with a control character or with an
