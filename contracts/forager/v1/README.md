@@ -4005,20 +4005,22 @@ A run request whose session stops waiting opens no run: once its connection goes
 gateway sends the server no further request for it, the registration among them, opens
 no run, and removes what it recorded of the run, so the same `run_id` sent again opens
 as a first run request would, not `run_id_used` at the gateway. A registration the
-server accepted before then stays the server's. A gateway that closes while a run opens
-stops its tries at once: the run does not open, and its run request gets a `503`
-without a body, as one that comes while the gateway closes.
+server accepted before then stays the server's. A gateway that closes while a run's
+registration or attach is still being tried stops its tries at once: the run does not
+open, and its run request gets a `503` without a body, as one that comes while the
+gateway closes. A run past its tries opens, gets its `200`, and the closing gateway
+then ends it with `run_closed`, as any live run.
 
 The gateway keeps the bytes it built for a `run_id` for 150 seconds of their `time`, by
 the wall clock, half the server's window: when the same `run_id` comes again within
 them, with every member but `time` the same, its labels and `about` among them, it sends
-the same bytes, `time` included, which a server that accepted them under the same
-access key answers the same again. After them, or when another member differs, it builds
-the registration anew, with another `time`, and the server answers `409` `run_id_used`.
-A session that stops waiting at 140 seconds and sends the same `run_id` again at once
-has 10 of the 150 seconds left to get the same bytes. A session that goes in the moment
-between the gateway's last look and the answer's arrival may leave a run open, which
-ends `session_lost` as any run whose session sends nothing does.
+the same bytes, `time` included, for which a server that accepted them under the same
+access key returns the same answer. After them, or when another member differs, it
+builds the registration anew, with another `time`, and the server returns `409`
+`run_id_used`. A session that stops waiting at 140 seconds and sends the same `run_id`
+again at once has 10 of the 150 seconds left to get the same bytes. A session that goes
+in the moment between the gateway's last look and the answer's arrival may leave a run
+open, which ends `session_lost` as any run whose session sends nothing does.
 
 **Tries as a run opens.** The gateway tries the server's registration again after a
 failure that may pass, 1, 2, 4, 8 and 15 seconds after the try before ends, and then
@@ -4027,16 +4029,15 @@ arrival. A server that restarts within those 120 seconds therefore registers the
 once it is back. The attach behind a separate gateway has the same tries, and so does
 the reload of its run configuration when it has credentials, within the same 120
 seconds: when the attach ends less than a second before they end, or after them, the
-reload gets one try. The gateway asks
-again after no answer, a transport failure or a timeout, a `5xx`, signed or not, and a
-signed `429` `rate_limited`; it ignores `Retry-After`. Every other answer is final: a
-`401`, any other coded refusal, `not_found` among them, a signed answer other than a
-`5xx` with no code, and a document Forager refuses. The gateway builds the
-registration's body once, and each try sends the same bytes, `time` included, which a
-server that accepted them under the same access key answers the same again; the run's
-record has `dev.qory.run.registered` once. Once the tries are spent the last answer is
-the session's, as without them: its code and status passed on from `apiary`, or a `500`
-`internal`.
+reload gets one try. The gateway tries again after no answer, a transport failure or a
+timeout, a `5xx`, signed or not, and a signed `429` `rate_limited`; it ignores
+`Retry-After`. Every other answer is final: a `401`, any other coded refusal,
+`not_found` among them, a signed answer other than a `5xx` with no code, and a document
+Forager refuses. The gateway builds the registration's body once, and each try sends
+the same bytes, `time` included, for which a server that accepted them under the same
+access key returns the same answer; the run's record has `dev.qory.run.registered`
+once. Once the tries are spent the last answer is the session's, as without them: its
+code and status passed on from `apiary`, or a `500` `internal`.
 
 With `images`, the gateway then decides the run as the session decides it
 on one machine today, in the same order, and before it sets anything: the policy in

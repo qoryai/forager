@@ -142,9 +142,22 @@ func SetOpenTries(c *Config, waits []time.Duration, window time.Duration) {
 // and its window.
 func OpenTries() ([]time.Duration, time.Duration) { return openWaits, openWindow }
 
+// StoppedByClose reports whether a run's open that failed with err, with the session's
+// run request and the context of opens, failed because Close stopped its tries, and
+// the error the run request then gets.
+func StoppedByClose(request, opens context.Context, err error) (bool, error) {
+	if !stoppedByClose(request, opens, err) {
+		return false, err
+	}
+	return true, closing(err)
+}
+
+// ErrClosing is the failure of a run whose tries Close stopped.
+var ErrClosing = errClosing
+
 // TriesOnAFakeClock runs the tries of a run's open with the gateway's waits and window
-// on a fake clock, which each try's ask moves on by took and each wait by its length, and
-// returns when each try started, after the run request's arrival, and the result.
+// on a fake clock, which each try's ask moves on by took and each wait by its length,
+// and returns when each try started, after the run request's arrival, and the result.
 func TriesOnAFakeClock(ctx context.Context, took time.Duration, ask func(n int) error) ([]time.Duration, error) {
 	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	now := t0

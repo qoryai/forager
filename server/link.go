@@ -585,10 +585,10 @@ type linkAnswer struct {
 // of body: a longer one is read as no body on the local link, and behind a separate
 // gateway, past the largest document, is no answer. The request has a User-Agent
 // header, the contract revision and set's headers; no access key, instance, timestamp
-// or signature, and behind a separate gateway the run key. An error is a transport failure: no answer.
-// Behind a separate gateway an answer not signed under a key the run key names, for
-// the connection it came on and the request it answers, is no answer either: a
-// [*GatewayKeyError].
+// or signature, and behind a separate gateway the run key. An error is a transport
+// failure: no answer. Behind a separate gateway an answer not signed under a key the
+// run key names, for the connection it came on and the request it answers, is no
+// answer either: a [*GatewayKeyError].
 func (k *Link) send(ctx context.Context, hc *http.Client, method, u string, body []byte, most int, set func(http.Header)) (*linkAnswer, error) {
 	var rd io.Reader
 	if body != nil {

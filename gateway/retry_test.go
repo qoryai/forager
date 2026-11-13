@@ -138,8 +138,9 @@ func gaps(seen []seenRequest) []time.Duration {
 
 // TestTheTriesOfQoryApiaryAsARunOpens pins the tries of the run's registration as a
 // run opens, with test waits of 100 milliseconds, 200 milliseconds and 10 seconds and a
-// window of 5 seconds, which fit 3 tries whatever the time a try takes: a signed 503 or 429 rate_limited, an unsigned 5xx and no answer are asked
-// again, every try with the same bytes, its time included, and an answer on a later try
+// window of 5 seconds, which fit 3 tries whatever the time a try takes: a signed 503 or
+// 429 rate_limited, an unsigned 5xx and no answer are asked again, every try with the
+// same bytes, its time included, and an answer on a later try
 // opens the run, whose record has one run.registered, its first line; a refusal with
 // any other code, an unsigned answer other than a 5xx, a signed answer without a code
 // and a 410, signed or not, with a code or none, are asked once, the 410 a failure
@@ -376,11 +377,48 @@ func TestTheGatewayTriesForTwoMinutes(t *testing.T) {
 	}
 }
 
+// TestARefusalBeforeCloseKeepsItsAnswer pins which failed opens Close stopped, so their
+// run requests get a 503: a failure the tries would have tried again, after Close
+// started, while the session's run request is there. A final refusal keeps its answer
+// whenever it came, and a session that went is no stop by Close.
+func TestARefusalBeforeCloseKeepsItsAnswer(t *testing.T) {
+	live, gone := context.Background(), canceled()
+	unavailable := &accesskey.Refusal{Code: "unavailable", Status: 503, From: accesskey.FromApiary}
+	final := &accesskey.Refusal{Code: "instance_limit", Status: 409, From: accesskey.FromApiary}
+	for _, c := range []struct {
+		name           string
+		request, opens context.Context
+		err            error
+		stopped        bool
+	}{
+		{"a 503 after Close", live, gone, unavailable, true},
+		{"a try in flight that Close cut", live, gone, context.Canceled, true},
+		{"a final refusal after Close", live, gone, final, false},
+		{"a 410 after Close", live, gone, server.ErrNotAccepted, false},
+		{"a 503 without Close", live, live, unavailable, false},
+		{"a session that went", gone, gone, unavailable, false},
+	} {
+		stopped, err := gateway.StoppedByClose(c.request, c.opens, c.err)
+		if stopped != c.stopped || errors.Is(err, gateway.ErrClosing) != c.stopped || !errors.Is(err, c.err) {
+			t.Errorf("%s: stopped %v with %v; want %v", c.name, stopped, err, c.stopped)
+		}
+	}
+}
+
+// canceled is a context that ended.
+func canceled() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
 // TestTheSessionWaitsForTheTries pins that a session waits for its run answer longer
 // than the tries of the registration or the attach take: the window, the last try's
 // time for its answer, and 10 seconds for the rest of the open. The wait does not cover
-// a run with credentials whose attach ends late: its reload and its secrets request
-// take up to server.Timeout each after that, about 150 seconds in all.
+// a run with credentials whose attach ends late, behind a separate gateway: its reload
+// and its secrets request take up to server.Timeout each after that, about 150 seconds
+// and the start of its tools. Nor does it cover a run on the local link that requests
+// its secrets after a late registration: 140 seconds and the start of its tools.
 func TestTheSessionWaitsForTheTries(t *testing.T) {
 	_, window := gateway.OpenTries()
 	if server.OpenWait < window+server.Timeout+10*time.Second {

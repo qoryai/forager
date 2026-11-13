@@ -84,9 +84,11 @@ const Timeout = 10 * time.Second
 // link and behind a separate gateway: the gateway tries the run's registration, or its
 // attach, for up to 120 seconds of the request's arrival; the last try, which may start
 // just before 120 seconds, has [Timeout] for its answer; and 10 seconds are left for
-// the rest of the open. They do not cover the slowest open: a run with credentials
-// whose attach ends late, then reloads and requests its secrets, [Timeout] each, may
-// take about 150 seconds and the start of its tools.
+// the rest of the open. They do not cover the slowest opens: behind a separate gateway,
+// a run with credentials whose attach ends late, then reloads and requests its
+// secrets, [Timeout] each, may take about 150 seconds and the start of its tools; on
+// the local link, a run that requests its secrets after a late registration may take
+// 140 seconds and the start of its tools.
 const OpenWait = 140 * time.Second
 
 // Window is how far a signed GET's timestamp may be from the receiver's clock,

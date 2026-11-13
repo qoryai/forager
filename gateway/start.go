@@ -554,14 +554,16 @@ func (g *Gateway) reserved() []string {
 }
 
 // Close stops taking runs and ends the gateway. It is called once the session is over,
-// so it waits for no session: a run that is opening stops its tries of Qory Apiary and
-// does not open, its run request a 503; a run still live ends at once, without an
-// exit, which a resend of its record completes as gateway_lost, and lets go of its secret, proxy,
-// tools and credentials. Each run's events are flushed toward the server within
-// [stream.CloseWait] (or the Config's own bound), whatever ctx allows, whose values
-// alone pass on; then the link's directory is removed and the proxy stops. The
-// Delivery is what the runs came to: their undelivered events, and who closed a run
-// that ended at the gateway, and how it ended. Close again waits for the first.
+// so it waits for no session: a run whose registration or attach is still being tried
+// stops its tries of Qory Apiary and does not open, its run request a 503, while a run
+// past its tries opens and then ends as a live one; a run still live ends at once,
+// without an exit, which a resend of its record completes as gateway_lost, and lets go
+// of its secret, proxy, tools and credentials. Each run's events are flushed toward the
+// server within [stream.CloseWait] (or the Config's own bound), whatever ctx allows,
+// whose values alone pass on; then the link's directory is removed and the proxy
+// stops. The Delivery is what the runs came to: their undelivered events, and who
+// closed a run that ended at the gateway, and how it ended. Close again waits for the
+// first.
 func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.mu.Lock()
 	if g.closing {
@@ -571,8 +573,8 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	}
 	g.closing = true
 	g.mu.Unlock()
-	// A run that is opening stops its tries of Qory Apiary, and its run request gets a
-	// 503, as one that comes while the gateway closes.
+	// A run whose registration or attach is still being tried stops its tries of Qory
+	// Apiary, and its run request gets a 503, as one that comes while the gateway closes.
 	g.stopOpens()
 	g.opens.Wait()
 	g.mu.Lock()

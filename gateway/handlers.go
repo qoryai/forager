@@ -149,9 +149,9 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			g.mu.Unlock()
 			return
 		}
-		if g.openCtx.Err() != nil {
-			// The gateway closes: the run did not open, and its request gets the 503 of
-			// a run request that comes while the gateway closes.
+		if errors.Is(err, errClosing) {
+			// Close stopped the run's tries: the run did not open, and its request gets
+			// the 503 of a run request that comes while the gateway closes.
 			g.mu.Lock()
 			delete(g.used, req.RunID)
 			g.mu.Unlock()
