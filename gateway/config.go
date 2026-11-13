@@ -109,9 +109,16 @@ type Config struct {
 	// whose session sends nothing ends; closeWait, when not zero, bounds each run's
 	// flush. Tests set them.
 	quiet, closeWait time.Duration
+	// caSweepEvery and caSweepAge, when not zero, replace caSweepEvery and caSweepAge,
+	// how often the CA key sweep runs and how long a record it sweeps has not changed.
+	// Tests set them.
+	caSweepEvery, caSweepAge time.Duration
 	// opened, when not nil, is called once a run on the one address opened. Tests set
 	// it.
 	opened func()
+	// afterOpen, when not nil, is called once a run's open returns, before its run
+	// request is answered. Tests set it.
+	afterOpen func()
 	// marked, when not nil, is called once the record of a run on the one address is
 	// marked answered, with the context of its run request. Tests set it.
 	marked func(context.Context)

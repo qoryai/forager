@@ -79,6 +79,14 @@ release may change what an existing document does, and says so under Upgrading.
   plugin is installed, and at start when it is enabled. An interactive run of 2.1.316
   without `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`, behind a wall in
   observe mode, connected to `downloads.claude.ai`.
+- Expect `CLAUDE_CODE_MAX_RETRIES=15` in every Claude Code launch, walled or not: the
+  Claude Code descriptor's `fixed` sets it, in the launch and in the `--settings` copy,
+  as it sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, and `runtimes.json` lists it. A
+  value of it from the server, `--env`, `wall.env`, a harness default or the
+  environment the run inherits no longer applies. Claude Code retries a failed API
+  request up to 15 times, up from its default of 10, so a run goes on through a longer
+  outage of its proxy, such as a separate gateway's restart: in a direct test, Claude
+  Code with 15 went on through an outage of 300 s.
 - Set the model or effort of a walled run another way than `CLAUDE_CODE_SUBAGENT_EFFORT`
   or `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`: the Claude Code descriptor's `overrides` list
   both, so a run behind a wall leaves out their values and records each as `denied`, like
@@ -1234,6 +1242,49 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A run that opens while Qory Apiary restarts opens once Qory Apiary is back. The
+  gateway tries the run's registration, or its attach, again 1, 2, 4, 8 and 15 seconds
+  after the try before, then every 15 seconds, within 120 seconds of the run request's
+  arrival. Before, it tried 3 times within 6 seconds. The session waits 140 seconds
+  for its run answer, `server.OpenWait`, on the local link and behind a separate
+  gateway. On both links it waits 10 seconds for every other answer. A session built
+  before this change stops waiting after 10 seconds, and the gateway then stops its
+  tries. A gateway that closes while a run's registration or attach is still being
+  tried stops its tries at once, and the run request gets a `503`; a run past its
+  tries opens, and then ends with `run_closed` on the local link or is kept behind a
+  separate gateway, as in the next entry.
+- A separate gateway that restarts on the same directory keeps its runs, so the agent
+  sessions behind it go on. `Close` suspends each live run: it flushes the run's events,
+  writes no `dev.qory.run.exited`, and keeps the run's record. The gateway that starts
+  again reopens the run at its first request whose run key verifies, a batch, a reload,
+  a join, a transcript request or a proxy connection: it attaches the run again with the
+  tries of an open and goes on numbering the record. While the reopen is tried, or after
+  it fails in a way that may pass, a request gets a `503` with no body; after a final
+  failure, a `410` `run_closed`. The attach of a reopen is final at once on a signed
+  `410`, `run_attached`, `wrong_gateway`, `workspace_not_served` or a run configuration
+  that fails Forager's checks; any other signed `4xx`, and a `401` signed or not, is
+  tried again for up to 120 seconds, and is final when that window ends on it; a `5xx`,
+  no answer, a `429` `rate_limited`, and an unsigned answer other than a `401` give a
+  `503`. While a connection waits on a reopen, it counts against the bound of 4096
+  connections and not against its source's bounds. To reopen a run the gateway keeps
+  `request.json`, `ca.pem`, `ca.key`, `given.jsonl`, `joins.jsonl`, `model-key-limit`
+  and `held.jsonl` in its record, each mode `0600`. `request.json` may contain a
+  registry's credentials in an image reference. `request.json` and the CA files go
+  together: at the run's end, when its open or a reopen fails for good, when
+  `qory run resend` ends the run, and in a sweep every 10 minutes of each record
+  unchanged for 15 minutes. A join request that repeats the last join the gateway
+  numbered, answered `200` or `403` `placeholder_conflict`, gets the same answer, across
+  a restart too. Before, a run open at a gateway that stopped was over, and
+  `qory run resend` ended it with `gateway_lost`.
+- A run request behind a separate gateway counts against the bounds of 64 connections
+  of one source and 256 of one IPv6 /48 only until its open starts, once its run key
+  passes and its body is read. It counts against the bound of 4096 connections until
+  its run answer, `2xx`, or until its connection closes. Before, it counted against all
+  three until its run answer, which may take 140 seconds while Qory Apiary restarts: 64
+  runs that opened behind one address, such as a NAT's, then made the gateway close
+  each connection accepted after that from that address, the batch and proxy
+  connections of its live runs among them. A run request whose run key fails counts
+  against all three, as before.
 - An adapter's output that fails `credential.schema.json` is refused with `Fix the
   output of the adapter <PATH> to match credential.schema.json: <LOCATIONS>`, where
   `<LOCATIONS>` lists each failing location and keyword, such as `/apply/0/header fails
@@ -2243,6 +2294,30 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- Behind a separate gateway, every forwarder of the session holds a connection it took
+  while the gateway cannot be reached: it keeps the agent's connection open, writes
+  nothing to it, and dials the gateway again for up to 120 seconds, waiting 250 ms after
+  the first failed dial and twice as long after each one after it, up to 2 seconds. A
+  gateway that restarts within the 120 seconds serves the connection; after them the
+  forwarder closes it. If the agent closed its connection during the hold, the
+  forwarder sends nothing of it, so a plain request or a `POST` to the run API on a
+  closed connection never runs. Before, the forwarder dialed once, for up to 10 seconds,
+  and closed the connection when that dial failed. On one machine nothing changes.
+- Behind a separate gateway, `Join` sends the join request again, unchanged, after a
+  try that gets no answer or a `503` with no code, for up to 120 seconds, with waits of
+  1, 2, 4 and 8 seconds, then 8 seconds each, and flushes the run's events before each
+  try after the first. Each flush posts a batch the gateway did not accept again at
+  once, so the events and the join reach a gateway back within the 120 seconds within
+  one wait. `Close` waits up to 180 seconds for the gateway to accept the run's last
+  events, and returns as soon as it accepts them or the batch gets a `410`. Both cover
+  a separate gateway that restarts in up to 120 seconds. Before, a join was tried once
+  and the close waited 15 seconds. When the flush at the end of the previous join ended
+  before the gateway accepted that session's events, `Join` sends its request only
+  once the gateway accepted them, within the same 120 seconds, and fails with no
+  request sent after them. On one machine a join is tried once, as before.
+- A `Flush` of a sink tries a batch the server or the gateway did not accept again at
+  once, without the rest of the wait between two tries. Before, the batch waited up to
+  60 seconds for its next try.
 - On one machine, the walled run's forwarder closes a connection that does not open
   with the relay's preamble and the run's proxy secret within 10 seconds, as it does
   behind a separate gateway, and writes the same preamble on toward the proxy. Before,

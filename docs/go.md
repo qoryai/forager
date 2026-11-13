@@ -130,7 +130,11 @@ At each `Join` the session:
 1. starts the join step, `join session <n>`, and sends the join request: the names,
    never the values, of the variables it passes a value for, and the session's model
    credential when `ModelCredential` is set; the answer has the session's number, 1 for
-   the run's first join;
+   the run's first join. Behind a separate gateway, after a try that gets no answer,
+   or a `503` with no code, the session flushes the run's events and sends the same
+   join request again, for up to 120 seconds: the gateway may be restarting. When the
+   previous join's events were not accepted by its end, the session sends the request
+   only once they are, within the same 120 seconds;
 2. checks the session's places, prepares the runtime and resolves the variables, then
    ends the join step `succeeded` with `-1`;
 3. records `dev.qory.session.started`, with the runtime, the command, `terminal`, the
@@ -830,8 +834,20 @@ attaches the run, writes the record's `dev.qory.run.registered` from the run key
 attach's answer, and gives a run answer with no labels and no proxy secret. When the
 server's answer to a batch carries the outcome the run's starter gave, it ends the run
 `stopped` with that state and reason, as a direct node's gateway does. A gateway that
-starts again attaches again a run whose open never answered its session, and answers a
-run that was open before `410` `run_closed`.
+starts again attaches again a run whose session never got its run answer.
+
+`Close` of a separate gateway keeps its runs: it suspends each live run, flushes its
+events, writes no `dev.qory.run.exited`, and keeps the run's record. Its
+`Delivery` then has `RunClosed` false. A gateway that you `Start` again with the same
+`Dir`, on the same `Listen`, reopens each such run at the first request of it: it
+attaches the run again and goes on numbering the record, and the session goes on. A
+request gets a `503` while the reopen is tried, and a `410` `run_closed` when it fails
+for good. A record from a gateway that did not keep its runs is not reopened: the
+requests of the run get a `410` `run_closed`. The contract lists the files a reopen
+reads, their mode and when they are removed in
+[The record files](../contracts/forager/v1/README.md#the-record-files), and describes
+the reopen in the paragraph A restart of
+[The gateway's link](../contracts/forager/v1/README.md#the-gateways-link).
 
 `Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
 `host:port`, a `Listen` without `TLS`, "the gateway's address <address> needs TLS, a
@@ -954,6 +970,15 @@ run, err := session.Open(ctx, session.OpenSpec{
   forwarder takes off: see
   [the relay to a separate gateway](wall.md#the-relay-to-a-separate-gateway). The run key
   stays in the session's memory, in no environment and no file.
+- After any failed dial to the gateway, such as a connection refused or reset, a TLS
+  handshake cut short or a binding that fails, every forwarder of the session, the host
+  proxy and the engine proxy among them, holds the connection it took: it keeps the
+  connection open, writes nothing to it, and dials the gateway again for up to 120
+  seconds, waiting 250 ms after the first failed dial and twice as long after each one
+  after it, up to 2 seconds. A gateway that restarts within the 120 seconds serves the
+  connection; after them the forwarder closes it. If the agent closed its connection
+  during the hold, the forwarder sends nothing of it to the gateway. On one machine the
+  forwarder dials the gateway's proxy once, for up to 10 seconds.
 
 ### The run key from a run code
 
@@ -1072,8 +1097,11 @@ res, err := session.Resend(ctx, session.ResendSpec{
   `run_key_expired` instead, which stops the resend as the refusals above do.
 - `session.jsonl` is never completed: the gateway writes the end of a run whose session
   was lost.
-- After a gateway restarts, it holds no run of before: the gateway's resend,
-  `gateway.Resend`, completes the run `gateway_lost`.
+- A separate gateway that restarts on the same `Dir` reopens a run its `Close`
+  suspended at the resend's first batch, and the resend goes on. A record from a
+  gateway that did not keep its runs, or a reopen that failed for good, gets a `410`
+  `run_closed`, and the gateway's resend, `gateway.Resend`, then completes the run
+  `gateway_lost`.
 
 ## The runtime
 
@@ -1469,7 +1497,10 @@ after a last session that ended otherwise.
 - `RunID` and `Dir`, the run directory with the record.
 - `State`, `Reason` and `ExitCode`, those of the run's `dev.qory.run.exited`.
 - `Undelivered`, how many of the run's events the gateway did not accept; behind a
-  separate gateway they are under the run directory's `undelivered/`.
+  separate gateway they are under the run directory's `undelivered/`. `Close` waits up
+  to 15 seconds for the gateway to accept the run's last events, and behind a separate
+  gateway up to 180 seconds, so a gateway that restarts in 120 seconds still receives
+  them. It returns as soon as the gateway accepts them or the batch gets a `410`.
 - `RunClosed` and `ClosedReason`, as `session.Result` has them.
 - `WallKept`, true when removing a container of the run's wall failed at some point of
   the run: the agent's container at a session's end, the setup container in

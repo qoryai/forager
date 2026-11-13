@@ -6,8 +6,10 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"reflect"
 	"time"
 
@@ -125,6 +127,21 @@ func SetRenewClock(c *Config, clock run.Clock) { c.renewClock = clock }
 // SetOpened sets what is called once a run on the one address opened.
 func SetOpened(c *Config, f func()) { c.opened = f }
 
+// SetAfterOpen sets what is called once a run's open returns, before its run request is
+// answered.
+func SetAfterOpen(c *Config, f func()) { c.afterOpen = f }
+
+// OpensStopped reports whether Close stopped the tries of the runs that open.
+func OpensStopped(g *Gateway) bool { return g.openCtx.Err() != nil }
+
+// Used reports whether the run id is used at the gateway: a run request named it, and
+// its run has a record, open or not.
+func Used(g *Gateway, runID string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.used[runID]
+}
+
 // WaitOpens waits for the run requests the gateway is answering to be answered.
 func WaitOpens(g *Gateway) { g.opens.Wait() }
 
@@ -138,9 +155,41 @@ func SetOpenTries(c *Config, waits []time.Duration, window time.Duration) {
 	c.openWaits, c.openWindow = waits, window
 }
 
-// OpenTries are the gateway's own waits between the tries of Qory Apiary as a run
-// opens, and its window.
+// OpenTries are the gateway's waits between the tries of Qory Apiary as a run opens,
+// and its window.
 func OpenTries() ([]time.Duration, time.Duration) { return openWaits, openWindow }
+
+// StoppedByClose reports whether a run's open that failed with err, with the session's
+// run request and the context of opens, failed because Close stopped its tries, and
+// the error the run request then gets.
+func StoppedByClose(request, opens context.Context, err error) (bool, error) {
+	if !stoppedByClose(request, opens, err) {
+		return false, err
+	}
+	return true, closing(err)
+}
+
+// ErrClosing is the failure of a run whose tries Close stopped.
+var ErrClosing = errClosing
+
+// TriesOnAFakeClock runs the tries of a run's open with the gateway's waits and window
+// on a fake clock, which each try's ask moves on by took and each wait by its length,
+// and returns when each try started, after the run request's arrival, and the result.
+func TriesOnAFakeClock(ctx context.Context, took time.Duration, ask func(n int) error) ([]time.Duration, error) {
+	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	now := t0
+	clock := openClock{now: func() time.Time { return now }, wait: func(ctx context.Context, d time.Duration) bool {
+		now = now.Add(d)
+		return ctx.Err() == nil
+	}}
+	var starts []time.Duration
+	err := tryOpen(ctx, clock, openWaits, t0.Add(openWindow), passing, func() error {
+		starts = append(starts, now.Sub(t0))
+		now = now.Add(took)
+		return ask(len(starts))
+	})
+	return starts, err
+}
 
 // EndWords is how a line says a run ended with the state and the reason.
 func EndWords(state, reason string) string {
@@ -200,6 +249,17 @@ func PendingConns(g *Gateway) int {
 	return g.svc.conns.total
 }
 
+// SourceConns counts the connections g's one address holds whose run key it has not
+// admitted, of the source of addr, host:port, against that source's bound: a run
+// request's whose open started is not among them.
+func SourceConns(g *Gateway, addr string) int {
+	a := netip.MustParseAddrPort(addr).Addr()
+	s := sourceOf(&net.TCPAddr{IP: net.IP(a.AsSlice()), Zone: a.Zone()})
+	g.svc.conns.mu.Lock()
+	defer g.svc.conns.mu.Unlock()
+	return g.svc.conns.by[s.key]
+}
+
 // WaitingConns counts the connections g's one address holds whose run key it has not
 // admitted and no run key has vouched for: those it may close for a newer one.
 func WaitingConns(g *Gateway) int {
@@ -228,4 +288,17 @@ func StackTokens(g *Gateway, runID string) map[string]string {
 		out[u.Name] = string(u.Value())
 	}
 	return out
+}
+
+// SetCASweep makes every how often the CA key sweep runs, and age how long a record it
+// sweeps has not changed, in place of caSweepEvery and caSweepAge.
+func SetCASweep(c *Config, every, age time.Duration) { c.caSweepEvery, c.caSweepAge = every, age }
+
+// SweepCA runs one pass of g's CA key sweep as of now, with the age g has.
+func SweepCA(g *Gateway, now time.Time) {
+	age := caSweepAge
+	if g.cfg.caSweepAge != 0 {
+		age = g.cfg.caSweepAge
+	}
+	g.sweep(now, age)
 }

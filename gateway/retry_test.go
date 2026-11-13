@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -137,18 +139,16 @@ func gaps(seen []seenRequest) []time.Duration {
 }
 
 // TestTheTriesOfQoryApiaryAsARunOpens pins the tries of the run's registration as a
-// run opens: the gateway's own waits, 1 second and then 2 seconds, in a window of 6
-// seconds; a signed 503 or 429 rate_limited, an unsigned 5xx and no answer are asked
-// again, every try with the same bytes, its time included, and an answer on a later try
-// opens the run, whose record holds one run.registered, its first line; a refusal with
+// run opens, with test waits of 100 milliseconds, 200 milliseconds and 10 seconds and a
+// window of 5 seconds, which fit 3 tries whatever the time a try takes: a signed 503 or
+// 429 rate_limited, an unsigned 5xx and no answer are tried again, every try with the
+// same bytes, its time included, and an answer on a later try
+// opens the run, whose record has one run.registered, its first line; a refusal with
 // any other code, an unsigned answer other than a 5xx, a signed answer without a code
 // and a 410, signed or not, with a code or none, are asked once, the 410 a failure
 // without a code; and the last try's refusal is the session's, as before the tries.
 func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
-	if waits, window := gateway.OpenTries(); !slices.Equal(waits, []time.Duration{time.Second, 2 * time.Second}) || window != 6*time.Second {
-		t.Fatalf("the waits %v and the window %v; want [1s 2s] and 6s", waits, window)
-	}
-	waits := []time.Duration{50 * time.Millisecond, 100 * time.Millisecond}
+	waits := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 10 * time.Second}
 	for _, c := range []struct {
 		name    string
 		path    string
@@ -279,25 +279,222 @@ func TestTheTriesStopWhenTheSessionGoes(t *testing.T) {
 }
 
 // TestTheWindowOfTheTries pins the window of the tries of Qory Apiary as a run opens: a
-// try starts again only within the window of the run request's arrival.
+// try starts again only within the window of the run request's arrival, and the last
+// wait repeats until then. Each case has more than a second between the start of its
+// last try and the window's end, and between the window's end and the next try's start.
 func TestTheWindowOfTheTries(t *testing.T) {
-	waits := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}
+	ms := time.Millisecond
 	for _, c := range []struct {
+		waits  []time.Duration
 		window time.Duration
 		tries  int
-	}{{450 * time.Millisecond, 3}, {250 * time.Millisecond, 2}} {
+	}{
+		// Tries at 0, 0.1, 3.1 and 6.1 seconds; the next would start at 9.1.
+		{[]time.Duration{100 * ms, 3 * time.Second}, 7500 * ms, 4},
+		// Tries at 0, 0.1 and 0.3 seconds; the next would start at 10.3.
+		{[]time.Duration{100 * ms, 200 * ms, 10 * time.Second}, 5 * time.Second, 3},
+		// Tries at 0 and 0.1 seconds; the next would start at 10.1.
+		{[]time.Duration{100 * ms, 10 * time.Second}, 5 * time.Second, 2},
+	} {
 		ctl := newControl(t)
 		cfg := gateway.Config{Server: ctl.server()}
-		gateway.SetOpenTries(&cfg, waits, c.window)
+		gateway.SetOpenTries(&cfg, c.waits, c.window)
 		h := start(t, cfg)
 		s := script(ctl)
-		s.then(runPath, coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable"))
+		s.then(runPath, coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable"))
 		if _, err := h.tryOpen(server.LinkRunRequest{}); err == nil {
 			t.Fatal("the run opened")
 		}
 		if n := len(s.requests(runPath)); n != c.tries {
 			t.Errorf("a window of %v: asked %d times; want %d", c.window, n, c.tries)
 		}
+	}
+}
+
+// TestTheGatewayTriesForTwoMinutes pins the gateway's waits between the tries of Qory
+// Apiary as a run opens, 1, 2, 4, 8 and 15 seconds and then 15 seconds each, and its
+// window of 120 seconds of the run request's arrival, on a fake clock: with instant
+// answers that may pass, the last try starts at 120 seconds; with answers that take a
+// second each, the last try starts at 115 seconds, since the next would start at 131;
+// a final refusal stops the tries at once; and a run request that ends stops them.
+func TestTheGatewayTriesForTwoMinutes(t *testing.T) {
+	if waits, window := gateway.OpenTries(); !slices.Equal(waits, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}) || window != 120*time.Second {
+		t.Fatalf("the waits %v and the window %v; want [1s 2s 4s 8s 15s] and 2m0s", waits, window)
+	}
+	seconds := func(s ...int) []time.Duration {
+		var out []time.Duration
+		for _, n := range s {
+			out = append(out, time.Duration(n)*time.Second)
+		}
+		return out
+	}
+	unavailable := &accesskey.Refusal{Code: "unavailable", Status: 503, From: accesskey.FromApiary}
+	for _, c := range []struct {
+		name   string
+		took   time.Duration
+		answer func(n int) error
+		starts []time.Duration
+		err    error
+	}{
+		{"no answer, instant", 0, func(int) error { return unavailable }, seconds(0, 1, 3, 7, 15, 30, 45, 60, 75, 90, 105, 120), unavailable},
+		{"no answer, a second a try", time.Second, func(int) error { return unavailable }, seconds(0, 2, 5, 10, 19, 35, 51, 67, 83, 99, 115), unavailable},
+		{"503s, then an answer at 105 seconds", 0, func(n int) error {
+			if n < 11 {
+				return unavailable
+			}
+			return nil
+		}, seconds(0, 1, 3, 7, 15, 30, 45, 60, 75, 90, 105), nil},
+		{"a 503, then a final refusal", 0, func(n int) error {
+			if n == 1 {
+				return unavailable
+			}
+			return &accesskey.Refusal{Code: "instance_limit", Status: 409, From: accesskey.FromApiary}
+		}, seconds(0, 1), &accesskey.Refusal{Code: "instance_limit", Status: 409, From: accesskey.FromApiary}},
+		{"a final refusal", 0, func(int) error { return server.ErrNotAccepted }, seconds(0), server.ErrNotAccepted},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			starts, err := gateway.TriesOnAFakeClock(context.Background(), c.took, c.answer)
+			if !slices.Equal(starts, c.starts) {
+				t.Errorf("the tries started at %v; want %v", starts, c.starts)
+			}
+			var ref, want *accesskey.Refusal
+			if errors.As(c.err, &want) {
+				if !errors.As(err, &ref) || ref.Code != want.Code || ref.Status != want.Status || ref.From != want.From {
+					t.Errorf("the result %v; want %v", err, c.err)
+				}
+			} else if !errors.Is(err, c.err) {
+				t.Errorf("the result %v; want %v", err, c.err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	starts, err := gateway.TriesOnAFakeClock(ctx, 0, func(n int) error {
+		if n == 3 {
+			cancel()
+		}
+		return unavailable
+	})
+	if !slices.Equal(starts, seconds(0, 1, 3)) || !errors.Is(err, unavailable) {
+		t.Errorf("a run request that ended: the tries started at %v, with %v", starts, err)
+	}
+}
+
+// TestARefusalBeforeCloseKeepsItsAnswer pins which failed opens Close stopped, so their
+// run requests get a 503: a failure the tries would have tried again, after Close
+// started, while the session's run request is there. A final refusal keeps its answer
+// whenever it came, and a session that went is no stop by Close.
+func TestARefusalBeforeCloseKeepsItsAnswer(t *testing.T) {
+	live, gone := context.Background(), canceled()
+	unavailable := &accesskey.Refusal{Code: "unavailable", Status: 503, From: accesskey.FromApiary}
+	final := &accesskey.Refusal{Code: "instance_limit", Status: 409, From: accesskey.FromApiary}
+	for _, c := range []struct {
+		name           string
+		request, opens context.Context
+		err            error
+		stopped        bool
+	}{
+		{"a 503 after Close", live, gone, unavailable, true},
+		{"a try in flight that Close cut", live, gone, context.Canceled, true},
+		{"a final refusal after Close", live, gone, final, false},
+		{"a 410 after Close", live, gone, server.ErrNotAccepted, false},
+		{"a 503 without Close", live, live, unavailable, false},
+		{"a session that went", gone, gone, unavailable, false},
+		{"a 503 after Close, with no session's request", nil, gone, unavailable, true},
+		{"no failure after Close", live, gone, nil, false},
+	} {
+		stopped, err := gateway.StoppedByClose(c.request, c.opens, c.err)
+		if stopped != c.stopped || errors.Is(err, gateway.ErrClosing) != c.stopped || !errors.Is(err, c.err) {
+			t.Errorf("%s: stopped %v with %v; want %v", c.name, stopped, err, c.stopped)
+		}
+	}
+}
+
+// TestCloseStopsTheTriesOfALocalRegistration pins a gateway that closes while a run's
+// registration on the local link keeps failing with a 503: Close returns within
+// seconds, the run request gets a 503 without a code, no run opens, and the run's
+// record is removed.
+func TestCloseStopsTheTriesOfALocalRegistration(t *testing.T) {
+	ctl := newControl(t)
+	cfg := gateway.Config{Server: ctl.server()}
+	gateway.SetOpenTries(&cfg, []time.Duration{100 * time.Millisecond}, time.Minute)
+	h := start(t, cfg)
+	s := script(ctl)
+	unavailable := make([]apiaryReply, 1000)
+	for i := range unavailable {
+		unavailable[i] = coded(503, "unavailable")
+	}
+	s.then(runPath, unavailable...)
+	closed := make(chan time.Duration, 1)
+	go func() {
+		for len(s.requests(runPath)) < 3 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		h.g.Close(ctx)
+		closed <- time.Since(start)
+	}()
+	runID := event.NewRunID()
+	_, err := h.tryOpen(server.LinkRunRequest{RunID: runID})
+	if took := <-closed; took > 3*time.Second {
+		t.Errorf("Close took %v; want it within 3s", took)
+	}
+	var ref *accesskey.Refusal
+	var failed *server.StatusError
+	if errors.As(err, &ref) || !errors.As(err, &failed) || failed.Status != http.StatusServiceUnavailable {
+		t.Errorf("the run request: %v; want a 503 without a code", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.dir, "runs", runID)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the run's record after Close: %v", err)
+	}
+}
+
+// TestAFinalRefusalAfterCloseStartsKeepsItsAnswer pins a final refusal of the run's
+// registration, a 409 run_id_used, whose run request is answered after Close started:
+// the session gets the refusal with its code, not a 503, and the run id stays used.
+func TestAFinalRefusalAfterCloseStartsKeepsItsAnswer(t *testing.T) {
+	ctl := newControl(t)
+	cfg := gateway.Config{Server: ctl.server()}
+	var h *harness
+	gateway.SetAfterOpen(&cfg, func() {
+		go h.g.Close(context.Background())
+		for !gateway.OpensStopped(h.g) {
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
+	h = start(t, cfg)
+	s := script(ctl)
+	s.then(runPath, coded(409, "run_id_used"))
+	runID := event.NewRunID()
+	_, err := h.tryOpen(server.LinkRunRequest{RunID: runID})
+	var ref *accesskey.Refusal
+	if !errors.As(err, &ref) || ref.Code != "run_id_used" || ref.Status != http.StatusConflict || ref.From != accesskey.FromApiary {
+		t.Errorf("the run request: %v; want the server's 409 run_id_used", err)
+	}
+	if !gateway.Used(h.g, runID) {
+		t.Error("the run id is free again; want it used")
+	}
+}
+
+// canceled is a context that ended.
+func canceled() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// TestTheSessionWaitsForTheTries pins that a session waits for its run answer longer
+// than the tries of the registration or the attach take: the window, the last try's
+// time for its answer, and 10 seconds for the rest of the open. The wait does not cover
+// a run with credentials whose attach ends late, behind a separate gateway: its reload
+// and its secrets request take up to server.Timeout each after that, about 150 seconds
+// and the start of its tools. Nor does it cover a run on the local link that requests
+// its secrets after a late registration: 140 seconds and the start of its tools.
+func TestTheSessionWaitsForTheTries(t *testing.T) {
+	_, window := gateway.OpenTries()
+	if server.OpenWait < window+server.Timeout+10*time.Second {
+		t.Errorf("a session waits %v for its run answer; want at least %v", server.OpenWait, window+server.Timeout+10*time.Second)
 	}
 }
 

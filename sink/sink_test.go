@@ -812,6 +812,48 @@ func TestAPanicInTheWorkerEndsOneBatchAlone(t *testing.T) {
 	waitFor(t, func() bool { return g.hits() == 2 })
 }
 
+// TestAFlushTriesAFailedBatchAtOnce pins the wait between two tries of a batch: a
+// Flush ends it, so a gateway back after a restart gets the batch at the pace of the
+// Flush calls, not at the next try of the doubling wait. The batch's tries fail for
+// 1.2 s, past its tries at 0 and 1 s; the next try after the wait would come at 3 s.
+func TestAFlushTriesAFailedBatchAtOnce(t *testing.T) {
+	start := time.Now()
+	up := start.Add(1200 * time.Millisecond)
+	g := &linkGateway{answer: func(int) (int, string) {
+		if time.Now().Before(up) {
+			return http.StatusServiceUnavailable, ""
+		}
+		return http.StatusAccepted, ""
+	}}
+	w := linkSink(t, g, sink.Config{})
+	defer w.Close(context.Background())
+	e := event.NewEmitter(event.NewRunID(), nil)
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		err := w.Flush(ctx)
+		cancel()
+		if err == nil {
+			break
+		}
+		if time.Since(start) > 2500*time.Millisecond {
+			t.Fatalf("no Flush returned in %s: %v", time.Since(start), err)
+		}
+	}
+	if took := time.Since(start); took < 1200*time.Millisecond || took > 2*time.Second {
+		t.Errorf("the batch was accepted after %s, want soon after 1.2s", took)
+	}
+	// One try for each Flush call at most, and the tries of the doubling wait.
+	if hits := g.hits(); hits > 12 {
+		t.Errorf("%d tries in %s", hits, time.Since(start))
+	}
+	// The next batch, accepted at its first try, is posted without its wait.
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 60, "interval_seconds": 30}))
+	if err := w.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestFlushReturnsOnceTheBatchIsAccepted pins Flush: it returns once the gateway
 // accepted every event written before it, after a retry and a late answer too, and
 // with the context's error when the context ends first.

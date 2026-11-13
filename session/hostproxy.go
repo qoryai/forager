@@ -122,7 +122,7 @@ func (r *Run) HostProxy() (HostProxy, error) {
 	if r.remote == nil {
 		fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.ProxySecret, password)
 	} else {
-		fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, password: password})
+		fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, hold: gatewayHold, password: password})
 	}
 	if err != nil {
 		return HostProxy{}, err
@@ -178,7 +178,7 @@ func (r *Run) StackProxy() (HostProxy, error) {
 	if r.remote == nil {
 		fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.StackProxySecret, password)
 	} else {
-		fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialStack, password: password})
+		fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialStack, hold: gatewayHold, password: password})
 	}
 	if err != nil {
 		return HostProxy{}, err

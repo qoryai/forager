@@ -23,6 +23,7 @@ import (
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/receiver"
+	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/server"
 )
 
@@ -747,6 +748,249 @@ func TestAKeyOfNoLiveRunAdmitsNothing(t *testing.T) {
 	}
 	held = nil
 	pending(0)
+}
+
+// TestRunsThatOpenKeepTheLiveRunsOfTheirAddress pins decision 547 (a): a run request
+// counts against the bounds of its source and its /48 only until its open starts, its
+// run key passed. While Qory Apiary restarts, answering every attach 503, 64 runs open
+// from 127.0.0.1, each waiting on its connection; they count in all, not against their
+// source. A live run from the same address keeps its proxy connection and its
+// connection of the link, and opens 16 more proxy connections and 3 batches beside the
+// 64; once Qory Apiary is back, each of the 64 runs opens.
+func TestRunsThatOpenKeepTheLiveRunsOfTheirAddress(t *testing.T) {
+	o := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok") }))
+	t.Cleanup(o.Close)
+	cfg := gateway.Config{Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}}}}
+	gateway.SetOpenTries(&cfg, []time.Duration{500 * time.Millisecond}, 2*time.Minute)
+	r := startRemote(t, nil, cfg)
+	const source = "127.0.0.1:1"
+	key := runKeyFor(t, event.NewRunID(), nil)
+	e := r.open(t, key, server.LinkRunRequest{})
+	var conns []net.Conn
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	target := o.Listener.Addr().String()
+	proxy := func(what string) *bound {
+		t.Helper()
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		conns = append(conns, b)
+		io.WriteString(b, link.RelayPreamble+" "+key+"\n")
+		req, _ := http.NewRequest(http.MethodConnect, "http://"+target, nil)
+		req.Host = target
+		req.Write(b.c)
+		resp, err := http.ReadResponse(b.r, req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %v %v", what, resp, err)
+		}
+		return b
+	}
+	// through fails the test unless a GET through the proxy connection b is answered by
+	// the origin.
+	through := func(what string, b *bound) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, "http://"+target+"/", nil)
+		req.Write(b.c)
+		resp, err := http.ReadResponse(b.r, req)
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		got, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(got) != "ok" {
+			t.Errorf("%s: %d %q", what, resp.StatusCode, got)
+		}
+	}
+	fwd := proxy("the live run's proxy connection")
+	through("the live run's proxy connection", fwd)
+	edge, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conns = append(conns, edge)
+	if a := edge.do(t, key, http.MethodGet, "/qory-link/run-configuration/"+e.a.RunID, nil); a.status != http.StatusOK || a.close {
+		t.Fatalf("the live run's reload: %d close=%v %s", a.status, a.close, a.body)
+	}
+	if n := gateway.PendingConns(r.g); n != 0 {
+		t.Fatalf("%d connections of the live run counted; want 0", n)
+	}
+
+	// Qory Apiary restarts: every attach is answered 503, and 64 runs open from the
+	// address.
+	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusServiceUnavailable, Code: "unavailable"})
+	type opened struct {
+		status int
+		body   []byte
+		err    error
+	}
+	var opening []string
+	answers := make(chan opened, gateway.MaxSourceConns)
+	for i := range gateway.MaxSourceConns {
+		runID := event.NewRunID()
+		k := runKeyFor(t, runID, nil)
+		r.mu.Lock()
+		r.keys = append(r.keys, k)
+		r.mu.Unlock()
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatalf("the connection of opening run %d: %v", i+1, err)
+		}
+		conns = append(conns, b)
+		b.c.SetDeadline(time.Time{})
+		body := []byte(openBody(runID))
+		req, _ := http.NewRequest(http.MethodPost, "https://gateway.example:8443/qory-link/run-configuration", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+k)
+		req.Header.Set("Content-Type", server.LinkContentType)
+		if err := req.Write(b.c); err != nil {
+			t.Fatalf("the run request of opening run %d: %v", i+1, err)
+		}
+		opening = append(opening, runID)
+		go func() {
+			resp, err := http.ReadResponse(b.r, req)
+			if err != nil {
+				answers <- opened{err: err}
+				return
+			}
+			got, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			answers <- opened{status: resp.StatusCode, body: got}
+		}()
+	}
+	eventually(t, "64 runs opening", func() bool {
+		for _, id := range opening {
+			if !gateway.Used(r.g, id) {
+				return false
+			}
+		}
+		return true
+	})
+	// A run's id is used just before its connection is released.
+	for deadline := time.Now().Add(time.Second); gateway.SourceConns(r.g, source) != 0 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n, s, w := gateway.PendingConns(r.g), gateway.SourceConns(r.g, source), gateway.WaitingConns(r.g); n != gateway.MaxSourceConns || s != 0 || w != 0 {
+		t.Errorf("64 runs opening: %d connections counted in all, %d of the source, %d waiting; want 64, 0, 0", n, s, w)
+	}
+	before := len(r.c.attached())
+	eventually(t, "the opening runs' attaches tried again", func() bool { return len(r.c.attached()) >= before+gateway.MaxSourceConns })
+
+	// The live run keeps its connections, and opens more beside the 64.
+	through("the live run's proxy connection beside 64 runs opening", fwd)
+	if a := edge.do(t, key, http.MethodPost, "/qory-link/events", mustJSON(t, []map[string]any{heartbeat(e.a.RunID)})); a.status != http.StatusAccepted || a.close {
+		t.Errorf("a batch on the live run's connection beside 64 runs opening: %d close=%v %s", a.status, a.close, a.body)
+	}
+	for i := range 16 {
+		through(fmt.Sprintf("proxy connection %d of the live run beside 64 runs opening", i+2), proxy(fmt.Sprintf("proxy connection %d of the live run beside 64 runs opening", i+2)))
+	}
+	for i := range 3 {
+		if a := e.post(t, heartbeat(e.a.RunID)); a.status != http.StatusAccepted {
+			t.Errorf("batch %d of the live run on a fresh connection beside 64 runs opening: %d %s", i+1, a.status, a.body)
+		}
+	}
+	select {
+	case a := <-answers:
+		t.Fatalf("an opening run answered while Qory Apiary restarts: %d %s %v", a.status, a.body, a.err)
+	default:
+	}
+
+	// Qory Apiary is back: each of the 64 opens, and no connection is counted.
+	r.c.attachRefusal.Store(nil)
+	for range gateway.MaxSourceConns {
+		select {
+		case a := <-answers:
+			if a.err != nil || a.status != http.StatusOK {
+				t.Errorf("an opening run once Qory Apiary is back: %d %s %v", a.status, a.body, a.err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("an opening run is not answered 30 seconds after Qory Apiary is back")
+		}
+	}
+	eventually(t, "no connection counted", func() bool { return gateway.PendingConns(r.g) == 0 })
+}
+
+// TestARunKeyThatFailsStillCounts pins the bounds of a source for run requests whose run
+// key does not pass: no run key, a run key of another gateway, and one past its attach
+// window. 64 of them from one source, each waiting for the rest of its body, are counted
+// against the source and may be closed for a newer one; the 65th connection closes the
+// oldest, unanswered, and the others stay. A run request whose run key passes counts
+// against its source too until its body is read and its open starts.
+func TestARunKeyThatFailsStillCounts(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	const source = "127.0.0.1:1"
+	failing := []string{
+		"nonsense",
+		runKeyFor(t, event.NewRunID(), func(k *runkey.Key) { k.Gateway = "ng_0therg4teway0000" }),
+		runKeyFor(t, event.NewRunID(), func(k *runkey.Key) {
+			k.AttachBy, k.Issued = time.Now().Add(-400*time.Second).Truncate(time.Second), time.Now().Add(-time.Hour).Truncate(time.Second)
+		}),
+	}
+	var held []*bound
+	defer func() {
+		for _, b := range held {
+			b.Close()
+		}
+	}()
+	pending := func(want, waiting int) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for gateway.PendingConns(r.g) != want || gateway.SourceConns(r.g, source) != want || gateway.WaitingConns(r.g) != waiting {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d connections counted, %d of the source, %d waiting; want %d, %d, %d", gateway.PendingConns(r.g), gateway.SourceConns(r.g, source), gateway.WaitingConns(r.g), want, want, waiting)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	start := time.Now()
+	for i := range gateway.MaxSourceConns {
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatalf("connection %d: %v", i+1, err)
+		}
+		held = append(held, b)
+		fmt.Fprintf(b.c, "POST /qory-link/run-configuration HTTP/1.1\r\nHost: gateway.example:8443\r\nAuthorization: Bearer %s\r\nContent-Type: %s\r\nContent-Length: 100\r\n\r\n0123456789", failing[i%len(failing)], server.LinkContentType)
+	}
+	pending(gateway.MaxSourceConns, gateway.MaxSourceConns)
+	over, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatalf("connection %d: %v", gateway.MaxSourceConns+1, err)
+	}
+	held = append(held, over)
+	closedUnansweredWithin(t, "the oldest run request whose run key fails, beside a newer connection", held[0].r, held[0].c, 2*time.Second)
+	if since := time.Since(start); since < gateway.RefusedWait-time.Second {
+		for i, b := range held[1:gateway.MaxSourceConns] {
+			b.c.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+			if _, err := b.r.Peek(1); err == nil {
+				t.Errorf("run request %d whose run key fails is answered before its body", i+2)
+			} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+				t.Errorf("run request %d whose run key fails is closed beside a newer connection: %v", i+2, err)
+			}
+		}
+	} else {
+		t.Logf("the 64 run requests took %s: the others are not checked", since)
+	}
+	for _, b := range held {
+		b.Close()
+	}
+	held = nil
+	pending(0, 0)
+
+	// A run key that passes on a run request whose body has not come: counted against its
+	// source, but never closed for a newer one.
+	runID := event.NewRunID()
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	held = append(held, b)
+	fmt.Fprintf(b.c, "POST /qory-link/run-configuration HTTP/1.1\r\nHost: gateway.example:8443\r\nAuthorization: Bearer %s\r\nContent-Type: %s\r\nContent-Length: 100\r\n\r\n{", runKeyFor(t, runID, nil), server.LinkContentType)
+	pending(1, 0)
+	b.Close()
+	pending(0, 0)
 }
 
 // endedRun is the id and the run key of a run of r that opened, ended by the server's

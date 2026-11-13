@@ -18,7 +18,8 @@
 //
 // A run holds a lock in its record directory for as long as it is open, as the session
 // holds its own; [Resend] completes and delivers the record of one run whose gateway is
-// gone.
+// gone. A gateway that stops without ending its runs suspends each ([Run.Suspend]),
+// and the gateway that starts again on the same directory reopens it ([Stream.Reopen]).
 package stream
 
 import (
@@ -55,6 +56,12 @@ var (
 	ErrEnded = errors.New("the run has ended")
 	// ErrClosed says the run is closed.
 	ErrClosed = errors.New("the run is closed")
+	// ErrStopped says the run's delivered.log records the server's stop, a signed 410:
+	// the run does not reopen.
+	ErrStopped = errors.New("the server stopped the run's events")
+	// ErrNotAnswered says the run's record is not marked answered ([Run.MarkAnswered]):
+	// its session never had the run answer, so the run does not reopen.
+	ErrNotAnswered = errors.New("the run's first run request was never answered")
 )
 
 // Sink is the control-plane sink of one run. [*sink.Server] is one.
@@ -193,8 +200,11 @@ type Run struct {
 	record *os.File
 	unlock func()
 	server Sink
-	// registered is the sequence of dev.qory.run.registered, when there is one.
+	// registered is the sequence of dev.qory.run.registered, when there is one, and
+	// marked is true when delivered.log marks it already: a run reopened after a sink
+	// did.
 	registered string
+	marked     bool
 	// seen are the ids numbered so far.
 	seen map[string]bool
 	// started says run.started is numbered; ended that the final event is.
@@ -241,7 +251,8 @@ func (r *Run) Registered(data any) (*event.Event, error) {
 // Deliver hands the run its control-plane sink, once the server accepted the run's
 // registration, and the run closes the sink. The sink marks the registration with the
 // sequence of the run's dev.qory.run.registered, when there is one. Events numbered
-// before it reach the record alone. A closed run is [ErrClosed], and the sink is the
+// before it reach the record alone. A run reopened from a delivered.log that marks the
+// registration is not marked again. A closed run is [ErrClosed], and the sink is the
 // caller's to close.
 func (r *Run) Deliver(s Sink) error {
 	r.mu.Lock()
@@ -253,7 +264,7 @@ func (r *Run) Deliver(s Sink) error {
 		return errors.New("the run has its sink already")
 	}
 	r.server = s
-	if r.registered != "" {
+	if r.registered != "" && !r.marked {
 		s.Registered(r.registered)
 	}
 	return nil
@@ -549,7 +560,14 @@ func (r *Run) Close(ctx context.Context) (Result, error) {
 	srv, rec := r.server, r.record
 	r.mu.Unlock()
 	defer close(r.done)
-	var errs []error
+	return r.finish(ctx, srv, rec, nil)
+}
+
+// finish ends a run closed to new events, for [Run.Close] and [Run.Suspend]: the server
+// gets up to [Config.CloseWait] to take what is queued and the rest is spooled, the
+// record is synced and closed, the lock released and the run forgotten by its stream.
+// errs are the errors met before it.
+func (r *Run) finish(ctx context.Context, srv Sink, rec *os.File, errs []error) (Result, error) {
 	if srv != nil {
 		flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.s.cfg.CloseWait)
 		errs = append(errs, srv.Close(flush))
@@ -586,7 +604,12 @@ func (r *Run) MarkAnswered() error {
 	if err := errors.Join(f.Sync(), f.Close()); err != nil {
 		return accesskey.ShownError(err)
 	}
-	for _, dir := range []string{r.dir, filepath.Dir(r.dir)} {
+	return syncDirs(r.dir, filepath.Dir(r.dir))
+}
+
+// syncDirs syncs each directory, so the entries made in it last.
+func syncDirs(dirs ...string) error {
+	for _, dir := range dirs {
 		d, err := os.Open(dir)
 		if err != nil {
 			return accesskey.ShownError(err)
@@ -598,27 +621,69 @@ func (r *Run) MarkAnswered() error {
 	return nil
 }
 
-// Discard closes the run's stream as [Run.Close] does, then removes what the stream
-// wrote under the run's record directory, events.jsonl, the delivery state, the mark
-// that it was answered and its lock, and the directory itself when nothing else is left
-// in it, so the run id opens again: a run that never opened.
-func (r *Run) Discard(ctx context.Context) error {
-	_, err := r.Close(ctx)
-	errs := []error{err}
-	for _, name := range []string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir, answeredFile, lockFile} {
-		errs = append(errs, accesskey.ShownError(os.RemoveAll(filepath.Join(r.dir, name))))
+// keptFiles are the files the gateway writes in a run's record directory beside the
+// stream's, so that a gateway that starts again can reopen the run: the run request,
+// the run's CA certificate and key, the policy members given, the join decisions, the
+// mark of a model key past its limit, and the egress held at a suspend ([heldFile]).
+// [Run.Discard] and [Stream.Reclaim] remove them by name.
+var keptFiles = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", heldFile}
+
+// secretFiles are the kept files whose contents may act for the run: the run request,
+// whose image references may contain a registry's credentials, and the run's CA
+// certificate and key.
+var secretFiles = []string{"ca.key", "ca.pem", "request.json"}
+
+// RemoveKept removes the run request and the CA files ([secretFiles]) from the run
+// record directory dir, then syncs dir when it removed one: a run that ended for good,
+// which no gateway reopens. A file that does not exist is no error, nor is a dir that
+// does not exist.
+func RemoveKept(dir string) error {
+	removed := false
+	var errs []error
+	for _, name := range secretFiles {
+		err := os.Remove(filepath.Join(dir, name))
+		switch {
+		case err == nil:
+			removed = true
+		case !errors.Is(err, os.ErrNotExist):
+			errs = append(errs, accesskey.ShownError(err))
+		}
 	}
-	// Left in place when it holds anything else, a session's own files on one machine.
-	os.Remove(r.dir)
+	if removed {
+		errs = append(errs, syncDirs(dir))
+	}
 	return errors.Join(errs...)
 }
 
-// Reclaim removes the record of a run whose open never answered its session, so its
+// Discard closes the run's stream as [Run.Close] does, then removes what the stream
+// wrote under the run's record directory, events.jsonl, the delivery state, the mark
+// that it was answered, the files the gateway keeps to reopen the run ([keptFiles]) and
+// its lock, and the directory itself when nothing else is left in it, so the run id
+// opens again: a run that never opened.
+func (r *Run) Discard(ctx context.Context) error {
+	_, err := r.Close(ctx)
+	errs := []error{err}
+	for _, name := range slices.Concat([]string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir, answeredFile}, keptFiles, []string{lockFile}) {
+		errs = append(errs, accesskey.ShownError(os.RemoveAll(filepath.Join(r.dir, name))))
+	}
+	// Left in place when it contains anything else, the session's files on one machine.
+	// The directory that lost the entries is synced, so the removal of the CA key and
+	// the run request lasts after a crash.
+	synced := r.dir
+	if os.Remove(r.dir) == nil {
+		synced = filepath.Dir(r.dir)
+	}
+	errs = append(errs, syncDirs(synced))
+	return errors.Join(errs...)
+}
+
+// Reclaim removes the record of a run whose session never got its run answer, so its
 // run id opens again: a record whose lock is free, that is not marked answered
-// ([Run.MarkAnswered]) and whose events.jsonl holds at most the run's
+// ([Run.MarkAnswered]) and whose events.jsonl contains at most the run's
 // dev.qory.run.registered, which is never posted. It reads the record under its lock,
-// so what it judges is what it removes. It removes what [Run.Discard] removes, and
-// reports whether it did; a record marked answered, one that holds anything more, one
+// so what it judges is what it removes. It removes events.jsonl, the delivery state and
+// the files the gateway keeps to reopen the run ([keptFiles]), and reports whether it
+// did; a record marked answered, one that holds anything more, one
 // another holds, and no record at all are left as they are.
 func (s *Stream) Reclaim(runID string) (bool, error) {
 	if err := checkRunID(runID); err != nil {
@@ -667,9 +732,10 @@ func (s *Stream) Reclaim(runID string) (bool, error) {
 		}
 	}
 	var errs []error
-	for _, name := range []string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir} {
+	for _, name := range slices.Concat([]string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir}, keptFiles) {
 		errs = append(errs, accesskey.ShownError(os.RemoveAll(filepath.Join(dir, name))))
 	}
+	errs = append(errs, syncDirs(dir))
 	return true, errors.Join(errs...)
 }
 
@@ -677,27 +743,36 @@ func (s *Stream) Reclaim(runID string) (bool, error) {
 // event's data as the session encoded it, so the record holds the bytes it would have
 // written itself. It checks the shape alone; the link checks the schema.
 func DecodeBatch(body []byte) ([]event.Event, error) {
-	var raw []struct {
-		SpecVersion string          `json:"specversion"`
-		ID          string          `json:"id"`
-		Source      string          `json:"source"`
-		Type        string          `json:"type"`
-		Subject     string          `json:"subject"`
-		Time        string          `json:"time"`
-		DataSchema  string          `json:"dataschema"`
-		Data        json.RawMessage `json:"data"`
-	}
+	var raw []unnumbered
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
 	out := make([]event.Event, len(raw))
 	for i, e := range raw {
-		out[i] = event.Event{SpecVersion: e.SpecVersion, ID: e.ID, Source: e.Source, Type: e.Type, Subject: e.Subject, Time: e.Time, DataSchema: e.DataSchema}
-		if e.Data != nil {
-			out[i].Data = e.Data
-		}
+		out[i] = e.event()
 	}
 	return out, nil
+}
+
+// unnumbered is an event as JSON with no sequence, its data as encoded.
+type unnumbered struct {
+	SpecVersion string          `json:"specversion"`
+	ID          string          `json:"id"`
+	Source      string          `json:"source"`
+	Type        string          `json:"type"`
+	Subject     string          `json:"subject"`
+	Time        string          `json:"time"`
+	DataSchema  string          `json:"dataschema"`
+	Data        json.RawMessage `json:"data"`
+}
+
+// event is the event, its data the bytes as encoded, nil for none.
+func (e unnumbered) event() event.Event {
+	ev := event.Event{SpecVersion: e.SpecVersion, ID: e.ID, Source: e.Source, Type: e.Type, Subject: e.Subject, Time: e.Time, DataSchema: e.DataSchema}
+	if e.Data != nil {
+		ev.Data = e.Data
+	}
+	return ev
 }
 
 // runIDShape is a run id: a UUID in the canonical lower-case form, since it names the

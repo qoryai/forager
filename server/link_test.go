@@ -716,3 +716,74 @@ func TestABatchNamesItsRunOnceItOpened(t *testing.T) {
 		t.Errorf("the batches named %q, want %q", got, want)
 	}
 }
+
+// TestTheRunRequestWaitsForTheGatewaysTries pins how long the link waits for an
+// answer: OpenWait, 140 seconds, for the run request, while the gateway tries Qory
+// Apiary, and Timeout for every other request, on the local link and behind a separate
+// gateway. With test waits of 100 milliseconds and 5 seconds, a run answer after 300
+// milliseconds arrives, and every other request of the link that reaches the gateway,
+// the discovery, the reload, the join request, the transcript request and a batch, gets
+// no answer.
+func TestTheRunRequestWaitsForTheGatewaysTries(t *testing.T) {
+	if server.OpenWait != 140*time.Second {
+		t.Errorf("OpenWait %v; want 2m20s", server.OpenWait)
+	}
+	f := linktest.StartRemoteFake(t)
+	remote := remoteLink(t, f, f.RunKey(t, remoteRunID))
+	slow := 300 * time.Millisecond
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.Method+" "+r.URL.Path] = true
+		mu.Unlock()
+		time.Sleep(slow)
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/run-configuration":
+			answer(w, 200, runAnswer)
+		default:
+			answer(w, 200, reloadAnswer)
+		}
+	}))
+	local, _ := newLink(t, g)
+	for name, k := range map[string]*server.Link{"local": local, "remote": remote} {
+		if each, open := server.LinkWaits(k); each != server.Timeout || open != server.OpenWait {
+			t.Errorf("%s: the link waits %v for an answer and %v for the run answer; want %v and %v", name, each, open, server.Timeout, server.OpenWait)
+		}
+	}
+	server.SetLinkWaits(local, 100*time.Millisecond, 5*time.Second)
+	ctx := context.Background()
+	const runURL = "http://localhost/v1/run-configuration"
+	if _, err := local.OpenRun(ctx, runURL, server.LinkRunRequest{RunID: runID}); err != nil {
+		t.Errorf("a run answer after %v: %v", slow, err)
+	}
+	for _, c := range []struct {
+		name, request string
+		send          func() error
+	}{
+		{"the discovery", "GET " + server.WellKnown, func() error { _, err := local.Discover(ctx); return err }},
+		{"the reload", "GET /v1/run-configuration/" + runID, func() error { _, err := local.Reload(ctx, runURL, runID); return err }},
+		{"the join request", "POST /v1/run-configuration/" + runID + "/sessions", func() error {
+			_, err := local.Join(ctx, runURL, runID, server.LinkJoinRequest{})
+			return err
+		}},
+		{"the transcript request", "GET /v1/run-configuration/" + runID + "/transcript", func() error {
+			_, err := local.Transcript(ctx, runURL, runID, 1<<10)
+			return err
+		}},
+		{"a batch", "POST /v1/events", func() error {
+			_, err := local.Deliver(ctx, "http://localhost/v1/events", "d1", []byte("[]"), "")
+			return err
+		}},
+	} {
+		if err := c.send(); err == nil {
+			t.Errorf("%s: an answer after %v arrived; want no answer within 100ms", c.name, slow)
+		}
+		mu.Lock()
+		reached := seen[c.request]
+		mu.Unlock()
+		if !reached {
+			t.Errorf("%s: %s did not reach the gateway", c.name, c.request)
+		}
+	}
+}

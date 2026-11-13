@@ -458,6 +458,9 @@ type Link struct {
 	// uid is the user the local link's socket's peer must be.
 	uid  int
 	http *http.Client
+	// opening is http with [OpenWait] for one request in place of [Timeout]: the run
+	// request's client.
+	opening *http.Client
 	// runID holds the run's id once the run is open on the local link, which every
 	// batch names; it holds nil before.
 	runID *atomic.Pointer[string]
@@ -496,7 +499,15 @@ func NewLocalLink(l link.Local, userAgent string, digests func(Digests)) (*Link,
 		// A 3xx is a status like any other: nothing the session sends leaves the link.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+	k.opening = waiting(k.http, OpenWait)
 	return k, nil
+}
+
+// waiting is c with wait for one request, on the same transport.
+func waiting(c *http.Client, wait time.Duration) *http.Client {
+	w := *c
+	w.Timeout = wait
+	return &w
 }
 
 // dialLocal opens one connection of the local link: in memory to a gateway in this
@@ -570,15 +581,15 @@ type linkAnswer struct {
 	digests Digests
 }
 
-// send sends one request on the link and reads its answer, at most most bytes of body:
-// a longer one is read as no body on the local link, and behind a separate gateway,
-// past the largest document, is no answer. The request carries User-Agent and the contract
-// revision, and set's headers; no access key, instance, timestamp or signature, and
-// behind a separate gateway the run key. An error is a transport failure: no answer.
-// Behind a separate gateway an answer not signed under a key the run key names, for
-// the connection it came on and the request it answers, is no answer either: a
-// [*GatewayKeyError].
-func (k *Link) send(ctx context.Context, method, u string, body []byte, most int, set func(http.Header)) (*linkAnswer, error) {
+// send sends one request on the link with hc and reads its answer, at most most bytes
+// of body: a longer one is read as no body on the local link, and behind a separate
+// gateway, past the largest document, is no answer. The request has a User-Agent
+// header, the contract revision and set's headers; no access key, instance, timestamp
+// or signature, and behind a separate gateway the run key. An error is a transport
+// failure: no answer. Behind a separate gateway an answer not signed under a key
+// listed in the run key, for the connection it came on and the request it was sent
+// for, is no answer either: a [*GatewayKeyError].
+func (k *Link) send(ctx context.Context, hc *http.Client, method, u string, body []byte, most int, set func(http.Header)) (*linkAnswer, error) {
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
@@ -597,7 +608,7 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, most int
 	k.authorize(req.Header)
 	req.Header.Set("User-Agent", k.userAgent)
 	req.Header.Set(HeaderContractVersion, strconv.Itoa(Revision))
-	resp, err := k.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		var ke *GatewayKeyError
 		if errors.As(err, &ke) {
@@ -734,7 +745,7 @@ func (a *linkAnswer) refusal(what string) error {
 		return &endError{Refusal: &accesskey.Refusal{Code: e.Code, Status: a.status, Detail: what, From: e.From, Text: accesskey.ShownValue(doc.Message, false)}, end: e}
 	}
 	if a.status >= http.StatusInternalServerError && (doc.Error == "" || doc.Error == CodeInternal) {
-		return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false)}
+		return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false), Code: doc.Error}
 	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
 		r.Detail, r.From, r.Text = what, a.from(), accesskey.ShownValue(doc.Message, false)
@@ -776,6 +787,8 @@ type StatusError struct {
 	Status int
 	// Message is the text of the failure the answer's body carries, empty for none.
 	Message string
+	// Code is the code of a 5xx answer's body: empty for none, or internal.
+	Code string
 }
 
 func (e *StatusError) Error() string { return fmt.Sprintf("%s: status %d", e.What, e.Status) }
@@ -813,10 +826,10 @@ func (k *Link) hand(a *linkAnswer) {
 	}
 }
 
-// fetch makes one request of a document on the link, which must answer 200; it
+// fetch makes one request of a document on the link with hc, which must answer 200; it
 // validates the body against the schema and decodes it into out.
-func (k *Link) fetch(ctx context.Context, what, method, u string, body []byte, set func(http.Header), schemaName string, out any) error {
-	a, err := k.send(ctx, method, u, body, MaxDocument, set)
+func (k *Link) fetch(ctx context.Context, hc *http.Client, what, method, u string, body []byte, set func(http.Header), schemaName string, out any) error {
+	a, err := k.send(ctx, hc, method, u, body, MaxDocument, set)
 	var ke *GatewayKeyError
 	if errors.As(err, &ke) {
 		// A gateway that failed the run key's pin is told in its own words.
@@ -918,7 +931,7 @@ func (k *Link) Discover(ctx context.Context) (*LinkDiscovery, error) {
 		u = k.origin + link.RemoteDiscoveryPath
 	}
 	var d LinkDiscovery
-	if err := k.fetch(ctx, "the link's discovery", http.MethodGet, u, nil, nil, "link-discovery.schema.json", &d); err != nil {
+	if err := k.fetch(ctx, k.http, "the link's discovery", http.MethodGet, u, nil, nil, "link-discovery.schema.json", &d); err != nil {
 		return nil, err
 	}
 	if err := k.onLink("events.url", d.Events.URL); err != nil {
@@ -944,9 +957,10 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // OpenRun posts the run request to runURL, the discovery's run.url, and returns the
 // run answer: a 200 the schema accepts, whose run_id is the request's. A 410 is the end
 // of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status and
-// who refused, From. Once the run is open on the local link, every later batch names it
-// in X-Qory-Run-Id. The local link takes no narrowing, and a separate gateway no labels
-// or about, which are the starter's registration's.
+// who refused, From. It waits [OpenWait] for the answer, where every other request of
+// the link waits [Timeout]. Once the run is open on the local link, every later batch
+// has it in X-Qory-Run-Id. The local link takes no narrowing, and a separate gateway
+// no labels or about, which are the starter's registration's.
 func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
 		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
@@ -968,7 +982,7 @@ func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (
 		return nil, fmt.Errorf("the run request: %w", err)
 	}
 	var a LinkRunAnswer
-	if err := k.fetch(ctx, "the run request", http.MethodPost, runURL, body, func(h http.Header) { h.Set("Content-Type", LinkContentType) }, "link-run-answer.schema.json", &a); err != nil {
+	if err := k.fetch(ctx, k.opening, "the run request", http.MethodPost, runURL, body, func(h http.Header) { h.Set("Content-Type", LinkContentType) }, "link-run-answer.schema.json", &a); err != nil {
 		return nil, err
 	}
 	if a.RunID != req.RunID {
@@ -998,7 +1012,7 @@ func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAns
 	}
 	u := strings.TrimSuffix(runURL, "/") + "/" + runID
 	var a LinkReloadAnswer
-	if err := k.fetch(ctx, "the reload", http.MethodGet, u, nil, nil, "link-reload-answer.schema.json", &a); err != nil {
+	if err := k.fetch(ctx, k.http, "the reload", http.MethodGet, u, nil, nil, "link-reload-answer.schema.json", &a); err != nil {
 		return nil, err
 	}
 	if err := checkRunMembers(a.Variables, a.Placeholders, a.Reserved, a.Image); err != nil {
@@ -1030,7 +1044,7 @@ func (k *Link) Join(ctx context.Context, runURL, runID string, req LinkJoinReque
 	}
 	u := strings.TrimSuffix(runURL, "/") + "/" + runID + "/sessions"
 	var a LinkJoinAnswer
-	if err := k.fetch(ctx, "the join request", http.MethodPost, u, body, func(h http.Header) { h.Set("Content-Type", LinkContentType) }, "link-join-answer.schema.json", &a); err != nil {
+	if err := k.fetch(ctx, k.http, "the join request", http.MethodPost, u, body, func(h http.Header) { h.Set("Content-Type", LinkContentType) }, "link-join-answer.schema.json", &a); err != nil {
 		return nil, err
 	}
 	return &a, nil
@@ -1055,7 +1069,7 @@ func (k *Link) Transcript(ctx context.Context, runURL, runID string, most int) (
 	}
 	u := strings.TrimSuffix(runURL, "/") + "/" + runID + "/transcript"
 	what := "the transcript request " + accesskey.ShownValue(k.at(u), false)
-	a, err := k.send(ctx, http.MethodGet, u, nil, most, nil)
+	a, err := k.send(ctx, k.http, http.MethodGet, u, nil, most, nil)
 	var ke *GatewayKeyError
 	if errors.As(err, &ke) {
 		return nil, ke
@@ -1086,7 +1100,7 @@ func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body [
 	if err := k.onLink("the events URL", eventsURL); err != nil {
 		return Delivery{}, fmt.Errorf("%s: %w", k.name, err)
 	}
-	a, err := k.send(ctx, http.MethodPost, eventsURL, body, MaxRefusal, func(h http.Header) {
+	a, err := k.send(ctx, k.http, http.MethodPost, eventsURL, body, MaxRefusal, func(h http.Header) {
 		h.Set("Content-Type", ContentType)
 		h.Set(HeaderDelivery, deliveryID)
 		if runDigest != "" {

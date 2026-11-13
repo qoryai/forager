@@ -90,8 +90,11 @@ func TestMain(m *testing.M) {
 		os.Exit(fakeRuntime())
 	}
 	// A fake gateway that does not accept a batch holds a join and a close for 3 s,
-	// not 15 s.
+	// not 15 s, or 180 s behind a separate gateway.
 	session.SetCloseWait(3 * time.Second)
+	session.SetFinalWait(3 * time.Second)
+	// A join request with no answer is sent again for 3 s, not 120 s.
+	session.SetJoinRetry(3*time.Second, 100*time.Millisecond, 200*time.Millisecond, 400*time.Millisecond)
 	// The registry of walled runs is the tests' own, not this user's.
 	state, err := os.MkdirTemp("", "session-state-")
 	if err != nil {
@@ -125,6 +128,15 @@ func fakeRuntime() int {
 		// Reach the proxy as another process of the machine would, first.
 		os.WriteFile(out, []byte(stray(proxyURL.Host)), 0o600)
 	}
+	// FAKE_WAIT is a file whose existence the runtime waits for, up to 2 minutes,
+	// before its requests.
+	if wait := os.Getenv("FAKE_WAIT"); wait != "" {
+		for end := time.Now().Add(2 * time.Minute); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			if _, err := os.Stat(wait); err == nil {
+				break
+			}
+		}
+	}
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
 	for _, u := range []string{os.Getenv("FAKE_ALLOWED_URL"), os.Getenv("FAKE_DENIED_URL")} {
 		if u == "" {
@@ -138,6 +150,14 @@ func fakeRuntime() int {
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 		fmt.Fprintf(os.Stderr, "get %s: %d\n", u, resp.StatusCode)
+		// FAKE_GOT is a file to which each request's URL and status are added, a line
+		// apiece.
+		if got := os.Getenv("FAKE_GOT"); got != "" {
+			if f, err := os.OpenFile(got, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil {
+				fmt.Fprintf(f, "%s %d\n", u, resp.StatusCode)
+				f.Close()
+			}
+		}
 	}
 	if settings := os.Getenv("FAKE_SETTINGS"); settings != "" {
 		// Call the hook the settings name, as the runtime would, with a SessionEnd input.

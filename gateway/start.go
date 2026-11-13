@@ -112,6 +112,11 @@ type Gateway struct {
 	// base is the context of everything a run starts, cancelled when Close is done.
 	base   context.Context
 	cancel context.CancelFunc
+	// openCtx is the context of the tries of Qory Apiary as runs open or reopen,
+	// cancelled by stopOpens as Close starts, so a run that is opening or reopening
+	// stops its tries at once, and Close waits for none of them.
+	openCtx   context.Context
+	stopOpens context.CancelFunc
 
 	dir     string
 	ln      net.Listener
@@ -134,6 +139,15 @@ type Gateway struct {
 	used  map[string]bool
 	runs  map[string]*linkRun
 	opens sync.WaitGroup
+	// reopening are the reopens of suspended runs in flight, by run id. A reopen is
+	// added here before it reads the run's CA files, and the CA key sweep removes no
+	// file of a run here or in runs ([Gateway.sweep]).
+	reopening map[string]*reopenCall
+	// sweeping are the runs whose records the CA key sweep removes files from now, by
+	// run id: no reopen of them starts meanwhile ([Gateway.sweep]).
+	sweeping map[string]bool
+	// reopens counts the reopens in flight, which Close waits for.
+	reopens sync.WaitGroup
 	// spent are the runs on the one address that ended and were let go of, by their run
 	// id, each kept for [keepEnded]; each and the delivery hold what they came to, for
 	// Close. lapsedErrs are the errors of the first [keepLapsedErrs] spent runs past
@@ -141,6 +155,10 @@ type Gateway struct {
 	spent      map[string]spentRun
 	lapsedErrs []error
 	lapsedMore int
+
+	// sweepStop stops the CA key sweep, and sweepDone is closed once it stopped; both
+	// nil without a sweep ([Gateway.sweepCA]).
+	sweepStop, sweepDone chan struct{}
 
 	closed   chan struct{}
 	delivery Delivery
@@ -236,7 +254,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if report == nil {
 		report = func(line string) { fmt.Fprintln(os.Stderr, "qory run:", line) }
 	}
-	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{}),
+	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, reopening: map[string]*reopenCall{}, sweeping: map[string]bool{}, closed: make(chan struct{}),
 		spent: map[string]spentRun{}}
 	g.quiet = 3 * cfg.Heartbeat
 	if cfg.quiet != 0 {
@@ -265,6 +283,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		g.client, g.conf, g.confDigest = client, conf, digest
 	}
 	g.base, g.cancel = context.WithCancel(context.WithoutCancel(ctx))
+	g.openCtx, g.stopOpens = context.WithCancel(g.base)
 	ok := false
 	defer func() {
 		if !ok {
@@ -278,6 +297,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		if g.svc, err = g.startService(certs); err != nil {
 			return nil, err
 		}
+		g.sweepCA()
 		ok = true
 		return g, nil
 	}
@@ -548,14 +568,27 @@ func (g *Gateway) reserved() []string {
 	return out
 }
 
-// Close stops taking runs and ends the gateway. It is called once the session is over,
-// so it waits for no session: a run still live ends at once, without an exit, which a
-// resend of its record completes as gateway_lost, and lets go of its secret, proxy,
-// tools and credentials. Each run's events are flushed toward the server within
-// [stream.CloseWait] (or the Config's own bound), whatever ctx allows, whose values
-// alone pass on; then the link's directory is removed and the proxy stops. The
-// Delivery is what the runs came to: their undelivered events, and who closed a run
-// that ended at the gateway, and how it ended. Close again waits for the first.
+// Close stops taking runs and ends the gateway. A run whose registration or attach is
+// still being tried stops its tries of Qory Apiary and does not open, its run request
+// a 503, while a run past its tries opens and then ends or is suspended as a live one.
+//
+// On the local link Close is called once the session is over, so it waits for no
+// session: a run still live ends at once, without an exit, which a resend of its
+// record completes as gateway_lost, and lets go of its secret, proxy, tools and
+// credentials. Each run's events are flushed toward the server within
+// [stream.CloseWait] (or the bound in the Config), whatever ctx allows, whose values alone
+// pass on; then the link's directory is removed and the proxy stops.
+//
+// A gateway with Listen keeps its runs instead, for a gateway that starts again on the
+// same directory: a run request or a reopen gets a 503 from now on, the tries of the
+// reopens end as those of the opens do, and Close waits for those opens and reopens to
+// end. Then the one address closes, and each run is suspended ([linkRun.suspend]): it
+// lets go of what it holds, and its stream is flushed as above and kept
+// ([stream.Run.Suspend]), with no session.exited or run.exited, and with its CA files
+// and every file a reopen reads ([Gateway.reopen]).
+//
+// The Delivery is what the runs came to: their undelivered events, and who closed a
+// run that ended at the gateway, and how it ended. Close again waits for the first.
 func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.mu.Lock()
 	if g.closing {
@@ -565,7 +598,21 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	}
 	g.closing = true
 	g.mu.Unlock()
+	g.stopSweep()
+	// A run whose registration, attach or reopen is still being tried stops its tries of
+	// Qory Apiary, and its run request gets a 503, as one that comes while the gateway
+	// closes.
+	g.stopOpens()
+	keep := g.svc != nil
 	g.opens.Wait()
+	g.reopens.Wait()
+	var errs []error
+	if keep {
+		// The one address first: no request reaches a run once it is suspended.
+		shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		errs = append(errs, g.svc.close(shut))
+		cancel()
+	}
 	g.mu.Lock()
 	runs := make([]*linkRun, 0, len(g.runs))
 	for _, lr := range g.runs {
@@ -573,9 +620,12 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	}
 	g.mu.Unlock()
 	for _, lr := range runs {
-		lr.end(ending{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
+		if keep {
+			lr.suspend()
+			continue
+		}
+		lr.end(gatewayClosed)
 	}
-	var errs []error
 	for _, lr := range runs {
 		<-lr.done
 		if lr.err != nil {
@@ -587,17 +637,15 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.mu.Lock()
 	errs = append(errs, g.spentErrs()...)
 	g.mu.Unlock()
-	shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
-	if g.svc != nil {
-		errs = append(errs, g.svc.close(shut))
-	} else {
+	if !keep {
+		shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		if err := g.http.Shutdown(shut); err != nil {
 			g.http.Close()
 		}
 		g.link.Close()
 		errs = append(errs, g.proxies.Close())
+		cancel()
 	}
-	cancel()
 	if g.dir != "" {
 		errs = append(errs, accesskey.ShownError(os.RemoveAll(g.dir)))
 	}

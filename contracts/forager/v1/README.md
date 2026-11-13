@@ -184,9 +184,9 @@ One run, on a developer machine, with a server configured:
    run's run configuration; heartbeats start once the registration is accepted. A fetch
    that fails, a document the schema refuses, an answer that does not verify, or a
    registration not accepted means the run does not start: a run configured to be
-   observed never runs unobserved by accident. The gateway tries the registration up to
-   3 times as a run opens, with the same bytes each time (§The gateway's link, Tries as
-   a run opens).
+   observed never runs unobserved by accident. The gateway tries the registration again
+   for up to 120 seconds as a run opens, with the same bytes each time (§The gateway's
+   link, Tries as a run opens).
    The `--local` flag of the command runs with the file sink alone and contacts no
    server. With no server configured there is no fetch and no registration, and the run
    starts at once, files only.
@@ -269,6 +269,10 @@ One run, on a developer machine, with a server configured:
    time (§The events, The measure of the enclosure). When the caller closes the
    run, the session emits `dev.qory.run.exited` with the caller's outcome, waits up to
    fifteen seconds for the sinks to flush, and reports what the server has not accepted.
+   Behind a separate gateway it waits up to 180 seconds: the 120 seconds a restart of
+   the gateway may take, and the 60 seconds the session may wait between two tries of a
+   batch. It stops waiting as soon as the gateway accepts the last batch or the batch
+   gets a `410`.
    A runtime killed by a signal exits as `-1` with `signal` set.
 
 A run may have a time limit, which covers the run's host work and every session. When
@@ -2423,6 +2427,46 @@ compose keeps it out of git:
   answers a run request; a gateway that starts again keeps a record that holds it, and
   the run request that comes again is `409` `run_attached`.
 
+Behind a separate gateway the gateway writes these files too, each mode `0600`, so the
+gateway that starts again on the same directory can reopen the run (§The gateway's link,
+A restart). The local link writes none of them.
+
+- `request.json`: the members of the run request that set the run's wall, narrowing
+  and images, written as the run opens: `version`, `wall`, and the session's
+  `narrowing` and `images` when the request has them. An image reference may contain a
+  registry's credentials, as the run request does.
+- `ca.pem` and `ca.key`: the certificate and the private key of the run's certificate
+  authority, for a run with one, written as the run opens. A reopen reads them only
+  when the certificate's common name is `qory run <run id>` and the gateway's user owns
+  `ca.key`.
+- `given.jsonl`: the members of each `dev.qory.run.policy_applied` the gateway decided,
+  one JSON object per line, as the event's data has them: shown names and values, never
+  a credential's value.
+- `joins.jsonl`: each join the gateway numbered, one JSON object per line, written
+  before the join's answer: `session`, `accepted`, `passes`, `model`, `no_key` and,
+  when the join asked for one, `model_credential`.
+- `model-key-limit`: an empty file, present while the run's proxy has passed a model
+  provider's limit refusal to the session (§The gateway's link, A stop in a batch's
+  answer).
+- `held.jsonl`: the gateway's `dev.qory.run.egress` events that waited for
+  `dev.qory.run.started` when the gateway stopped, one per line. The reopen reads it
+  back and removes it.
+
+The gateway removes `request.json`, `ca.pem` and `ca.key` together: at the run's end,
+when the run's open fails, when a reopen fails for good, and by the sweep below. `qory
+run resend` removes them too once it writes the run's `dev.qory.run.exited`. A record
+without `request.json` is not reopened, and its requests get a `410` `run_closed`.
+The other files stay with the record until the record is removed.
+**The sweep.** A separate gateway removes `request.json`, `ca.pem` and `ca.key` of each
+record whose run it neither holds nor reopens and whose `events.jsonl` has not changed
+for 15 minutes, at its start and every 10 minutes. It reads the records under its
+directory, or, with `RunDir`, those in the directory `RunDir` makes each record in as
+`<directory>/<run id>`. A live run's session sends a heartbeat at least every 300
+seconds, so a live run's record changes within those 15 minutes. The sweep and a
+reopen of the same run never run at once: the sweep skips a run that is reopening, a
+request that comes while the sweep removes a record's files gets a `503` with no body,
+and a request after the sweep gets a `410` `run_closed`.
+
 **A hidden harness.** In a run whose harness is hidden, `[harness text: <path>]`
 replaces the text of each file in a session's harness home, after the forwarders'
 passwords are replaced, in every `dev.qory.run.log` chunk of the session, its setup
@@ -3755,7 +3799,12 @@ of a live run, it counts against three bounds: at most 4096 such connections at 
 one source, an IPv4 address or an IPv6 /64, and 256 of one IPv6 /48. One more closes the
 oldest such connection whose run key has not verified, of its source when that is full,
 else of its /48, else of all, and is taken; when none can be closed, it is closed as it
-is accepted, unanswered. An admitted connection counts against none of them. On a bound connection a
+is accepted, unanswered. An admitted connection counts against none of them. A run
+request whose run key passes counts against the bound of 4096 alone once its open
+starts, after its body is read: its run may wait 140 seconds for Qory Apiary
+(`server.OpenWait`), and the live runs of an address keep connecting while 64 runs
+from that address, such as a NAT's, wait during a Qory Apiary restart. A run request
+whose run key fails counts against all three until its connection closes. On a bound connection a
 request of the link arrives whole, its body included, within 60 seconds, and its
 request line and fields within 16 KiB, the 4 KiB net/http allows past that aside: a
 longer head is net/http's `431`, unsigned. The run request is
@@ -3822,10 +3871,52 @@ the run request that comes again removes it, and the gateway attaches the run ag
 which the server answers the same; one that stopped after it keeps the record, and the
 run request that comes again is `409` `run_attached`. An attach that fails, the server's
 refusal or no answer, leaves nothing of the run at the gateway: the run request that
-comes again, with the same run key, asks for the attach again. A run that was open at a
-gateway that stopped is over: the gateway that starts again answers its reloads and
-batches `410` `run_closed` and its run request `409` `run_attached`, and
-`qory run resend` writes its `dev.qory.run.exited` with `gateway_lost` (§The server).
+comes again, with the same run key, asks for the attach again.
+
+**A restart.** A separate gateway's `Close` keeps its runs for the gateway that starts
+again on the same directory. From the start of `Close`, a run request and every request
+that would reopen a run get a `503` with no body. A run whose attach is still being
+tried stops its tries and does not open, its run request a `503`; a run past its tries
+opens. Then the one address closes, and each live run is suspended: the gateway lets go
+of the run's proxy, tools and credentials, flushes the run's events toward the server
+as at a run's end, writes no `dev.qory.session.exited` and no `dev.qory.run.exited`, and
+keeps the run's record with the files of a reopen (The record files).
+
+The gateway that starts again reopens a suspended run at the first request of it whose
+run key verifies: a batch, a reload, a join, a transcript request, or a connection to
+the run's proxy or stack proxy. One reopen of a run runs at a time, and every request of
+the run waits for it. The reopen reads the record back, attaches the run again under the
+run key of that request, with the tries of an open (Tries as a run opens, below), sets
+the run up again from `request.json` and the run configuration in the attach's answer,
+with the run's certificate authority from `ca.pem` and `ca.key`, and goes on numbering
+the record after its last `sequence`. The reopen reads the certificate authority before
+the attach, so a record whose CA files do not read back ends the run with no attach. It
+sends again what the server has not accepted within the attach's window of 120 seconds.
+A connection that waits on a reopen, once its run key verifies, counts against the bound
+of 4096 connections and against neither the bound of its source nor that of its IPv6
+/48, and is never closed for a newer connection. The reopen's answers to the requests
+that wait:
+
+- the run is open: each request is served as for a live run;
+- a failure that may pass: no answer from the server, a `5xx`, an answer that is not
+  signed, a `429` `rate_limited`, events the server does not take within the attach's
+  window, or a `Close` that stops the reopen's tries. Each request gets a `503` with no
+  body, and the session's next request starts the reopen again;
+- a final failure: a `410` `run_closed`, and the run is over. The attach's failures that
+  are final at once are a signed `410`, a signed refusal `run_attached`, `wrong_gateway`
+  or `workspace_not_served`, and a run configuration that fails Forager's checks; a
+  record the gateway cannot read, one with the run's final event, and one the server
+  stopped are final too. Any other signed `4xx` of the attach, a `401`, signed or not,
+  among them, is tried again within the 120 seconds, and is final when the window ends
+  on it. Only tries that `Close` stopped count as a stop by `Close`: a final refusal
+  that came first keeps its `410`.
+
+A connection to the run's proxy that waited on a reopen that did not open the run is
+closed unanswered. The run request of a reopened run stays `409` `run_attached`. A
+record without `request.json`, of a gateway that did not keep its runs, is not
+reopened: its reloads and batches get a `410` `run_closed`, its run request a `409`
+`run_attached`, and `qory run resend` writes its `dev.qory.run.exited` with
+`gateway_lost` (§The server).
 
 **No local sessions.** A separate gateway serves other machines alone: with `Listen`
 it makes no local link, in memory or on a socket, and no proxy listener on loopback,
@@ -3989,31 +4080,55 @@ order:
 | `403` | `wall_required` | a run without a wall whose policy selects what needs one, below; the link's code alone |
 | `403` | a code of `refusal.Decides` | the gateway's decision of the run with `images`, below: `run_configuration_invalid`, `image_unknown`, `tool_unknown` and the like |
 
-A session waits ten seconds for its run answer, as for any answer on the link. A run
-request whose session gives up opens no run: once its connection goes, the gateway asks
-the server nothing more for it, the registration among it, opens no run, and removes
-what it recorded of the run, so the same `run_id` sent again is a new run request, not
-`run_id_used` at the gateway. A registration the server accepted before then stays the
-server's. The gateway keeps the bytes it built for a `run_id` for 150 seconds of their
-`time`, by the wall clock, half the server's window: when the same `run_id` comes again within them,
-with every member but `time` the same, its labels and `about` among them, it sends the
-same bytes, `time` included, which a server that accepted them under the same access key
-answers the same again. After them, or when another member differs, it builds the
-registration anew, with another `time`, and the server answers `409` `run_id_used`.
-A session that goes in the moment between the gateway's last look and the answer's
-arrival may leave a run open, which ends `session_lost` as any run whose session sends
-nothing does.
+A session waits 140 seconds for its run answer, on the local link and behind a
+separate gateway. On both links it waits 10 seconds for every other answer. The gateway
+tries the server's registration, or the attach, for up to 120 seconds (Tries as a run
+opens, below); the last try may start just before 120 seconds and has 10 seconds for
+its answer, which leaves 10 seconds for the rest of the open. Those 10 seconds do not
+cover every open: behind a separate gateway, a run with credentials reloads its run
+configuration after the attach and then requests its secrets, each with 10 seconds for
+its answer, so after a late attach its open may take about 150 seconds and the start of
+its tools, and on the local link a run that requests its secrets after a late
+registration may take 140 seconds and the start of its tools. Such a session stops
+waiting before the run opens.
 
-**Tries as a run opens.** The gateway tries the server's registration up to 3 times,
-the second try 1 second after the first ends and the third 2 seconds
-after the second, and starts a try again only within 6 seconds of the run request's
-arrival, so the last answer comes inside the ten seconds the session waits. It asks
-again after no answer, a transport failure or a timeout, a `5xx`, signed or not, and a
-signed `429` `rate_limited`; it ignores `Retry-After`. Every other answer is final: a
-`401`, any other coded refusal, `not_found` among them, a signed answer other than a
-`5xx` with no code, and a document Forager refuses. The gateway builds the
-registration's body once, and each try sends the same bytes, `time` included, which a
-server that accepted them under the same access key answers the same again; the run's record holds
+A run request whose session stops waiting opens no run: once its connection goes, the
+gateway sends the server no further request for it, the registration among them, opens
+no run, and removes what it recorded of the run, so the same `run_id` sent again opens
+as a first run request would, not `run_id_used` at the gateway. A registration the
+server accepted before then stays the server's. A gateway that closes while a run's
+registration or attach is still being tried stops its tries at once: the run does not
+open, and its run request gets a `503` without a body, as one that comes while the
+gateway closes. A run past its tries opens and gets its `200`. On the local link the
+closing gateway then ends it with `run_closed`, as any live run; a separate gateway
+suspends it, as any live run, for the gateway that starts again (§The gateway's link,
+A restart).
+
+The gateway keeps the bytes it built for a `run_id` for 150 seconds of their `time`, by
+the wall clock, half the server's window: when the same `run_id` comes again within
+them, with every member but `time` the same, its labels and `about` among them, it sends
+the same bytes, `time` included, for which a server that accepted them under the same
+access key returns the same answer. After them, or when another member differs, it
+builds the registration anew, with another `time`, and the server returns `409`
+`run_id_used`. A session that stops waiting at 140 seconds and sends the same `run_id`
+again at once has 10 of the 150 seconds left to get the same bytes. A session that goes
+in the moment between the gateway's last look and the answer's arrival may leave a run
+open, which ends `session_lost` as any run whose session sends nothing does.
+
+**Tries as a run opens.** The gateway tries the server's registration again after a
+failure that may pass, 1, 2, 4, 8 and 15 seconds after the try before ends, and then
+every 15 seconds, and starts a try again only within 120 seconds of the run request's
+arrival. A server that restarts within those 120 seconds therefore registers the run
+once it is back. The attach behind a separate gateway has the same tries, and so does
+the reload of its run configuration when it has credentials, within the same 120
+seconds: when the attach ends less than a second before they end, or after them, the
+reload gets one try. The gateway tries again after no answer, a transport failure or a
+timeout, a `5xx`, signed or not, and a signed `429` `rate_limited`; it ignores
+`Retry-After`. Every other answer is final: a `401`, any other coded refusal,
+`not_found` among them, a signed answer other than a `5xx` with no code, and a document
+that fails Forager's checks. The gateway builds the registration's body once, and each
+try sends the same bytes, `time` included, for which a server that accepted them under
+the same access key returns the same answer; the run's record has
 `dev.qory.run.registered` once. Once the tries are spent the last answer is the
 session's, as without them: its code and status passed on from `apiary`, or a `500`
 `internal`.
@@ -4254,6 +4369,33 @@ join that the gateway answers with a `403`, or that fails those checks, writes
 `dev.qory.session.exited` with `state: failed`, `exit_code: -1`, the refusal's code as
 `reason` and `duration_ms: 0`, and no `dev.qory.session.started` (§Sequence, The run and
 its sessions). The run stays open.
+
+Behind a separate gateway, the session sends a join request again, unchanged, after a
+try that gets no answer (the connection does not open, its TLS or its binding fails, or
+it resets or times out) and after a `503` with no code: the gateway may be restarting.
+It tries for up to 120 seconds, with waits of 1, 2, 4 and 8 seconds, then 8 seconds
+each. Before each try after the first it flushes its batches, so the previous session's
+`dev.qory.session.exited` reaches the gateway before the join; a batch the gateway did
+not accept is posted again at each of these waits, so a gateway back within the 120
+seconds gets the batch and then the join within one wait. Every other answer, a `400`,
+`403` or `410` among them, ends its tries, and the join has that answer. A join with
+no answer after 120 seconds fails as after one try. When the flush at the end of the
+previous join ended before the gateway accepted that session's events, the session
+sends the next join request only once the gateway accepted them, flushing at the same
+waits for up to 120 seconds; after them the join fails with no request sent. A gateway
+that restarted in between then never takes the request for a repeat of the previous
+join. On the local link the session sends a join request once.
+
+Behind a separate gateway, a join request that repeats the last join the gateway
+numbered gets that join's answer again, and nothing is numbered anew: for a join
+answered `200`, the same `200`, with the same session number and model key; for a join
+answered `403` `placeholder_conflict`, the same `403`, as long as the request's
+`passes` still contain a placeholder of a credential or a tool the gateway holds for
+the run. A join request repeats the last join when that join's session has neither
+started nor exited and the request has the same `passes`, `model_key` and
+`model_credential`. The gateway writes each join it numbers to `joins.jsonl` before it
+sends the join's answer (The record files), so a repeated join request gets the same
+answer from the gateway that starts again.
 
 **Events.** The session posts its events to `events.url`, in batches cut as toward the
 server (§The server, Delivery), with `Content-Type: application/cloudevents-batch+json`.
@@ -4581,9 +4723,19 @@ without one, opens every connection to the gateway's one address over TLS 1.3, w
 the link is (The binding, above), and with `QORY-RELAY`, a space, the run key and a
 newline. Behind a wall the forwarder takes the relay's connection, which opens with
 `QORY-RELAY` and a value the session makes for the run's forwarder alone, and takes that
-line off before anything reaches the gateway. Without a wall, on one machine as behind a
-separate gateway, the agent's proxy URL is the forwarder's address on loopback with a
-password, `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session
+line off before anything reaches the gateway. After any failed dial to the gateway's one
+address, such as a connection refused or reset, a TLS handshake cut short or a binding
+that fails, the forwarder keeps the connection it took open, writes nothing to it, and
+dials again for up to 120 seconds, waiting 250 ms after the first failed dial and twice
+as long after each one after it, up to 2 seconds; after them it closes the connection.
+When a dial after the first succeeds, the forwarder first checks the agent's
+connection: if the agent closed it, or it reset, during the hold, the forwarder closes
+both connections and sends nothing, so a plain request or a `POST` to the run API on a
+closed connection never runs. On each connection it sends the run key only once the
+binding passed. Without a wall, on
+one machine as behind a separate gateway, the agent's proxy URL is the forwarder's
+address on loopback with a password, `http://qory:<password>@127.0.0.1:<port>`, the
+password a secret the session
 makes for the run's forwarder alone, 32 bytes from the system's random source in
 base64url, which lives as long as the run. The session writes the password into no
 event. Where the runtime prints it, as is or as the base64 of `qory:<password>`, the
@@ -5114,9 +5266,9 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`, `CLAUDE_CODE_AUTO_MODE_MODEL`,
 `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_EFFORT` and `CLAUDE_CODE_EXTRA_BODY`.
 Its `egress_hosts` lists `api.anthropic.com`.
-Its `fixed` sets two variables to `1`. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
-Claude Code 2.1.316 sends no log lines to Datadog, does not call
-`/api/claude_cli/bootstrap`, and makes no other request that its environment-variable
+Its `fixed` sets two variables to `1` and `CLAUDE_CODE_MAX_RETRIES` to `15`. With
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, Claude Code 2.1.316 sends no log lines to
+Datadog, does not call `/api/claude_cli/bootstrap`, and makes no other request that its environment-variable
 reference lists as nonessential. With
 `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`, an interactive Claude Code
 2.1.316 does not auto-install the official plugin marketplace, so it makes neither
@@ -5129,11 +5281,14 @@ only when a command asks for it, run by the agent or by a person:
 `/plugin` menu. `FORCE_AUTOUPDATE_PLUGINS` turns on the background refresh again, and
 the refreshes for a plugin missing from the marketplace's cached catalog: when that
 plugin is installed, and at start when it is enabled.
+`CLAUDE_CODE_MAX_RETRIES` is how many times Claude Code retries a failed API request,
+10 by default. The value 15 is for a separate gateway's restart: in a direct test,
+Claude Code with 15 went on through an outage of its proxy of 300 s.
 Claude Code 2.1.316 applies the `env` of its settings sources in the order user,
 project, local, `--settings`, managed, each over the ones before, so the copy's value
 wins over a workspace's `.claude/settings.json` or `.claude/settings.local.json`. A
-managed settings file, which the image or the machine provides, can still set either
-variable empty.
+managed settings file, which the image or the machine provides, can still set any of
+the three variables to another value.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,

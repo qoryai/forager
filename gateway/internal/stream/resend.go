@@ -168,6 +168,13 @@ func resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if res.Closed, err = closeRecord(file, runID, rec, highest(accepted), cfg.Now); err != nil {
 		return nil, err
 	}
+	if res.Closed {
+		// The run ended for good: no gateway reopens it, and its CA key and run request
+		// go from the disk.
+		if err := RemoveKept(cfg.Dir); err != nil {
+			return nil, err
+		}
+	}
 	lines := rec.lines
 	if cfg.Sink == nil {
 		return res, nil
@@ -208,13 +215,15 @@ func resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	return res, nil
 }
 
-// recorded is one event of events.jsonl and what Resend reads of it.
+// recorded is one event of events.jsonl and what Resend and [Stream.Reopen] read of it.
 type recorded struct {
+	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Sequence string `json:"sequence"`
 	Time     string `json:"time"`
 	// Data is the event's data, of which Resend reads the session number of a
-	// dev.qory.session.started or dev.qory.session.exited ([recorded.session]).
+	// dev.qory.session.started or dev.qory.session.exited ([recorded.session]), and
+	// which Reopen passes on.
 	Data json.RawMessage `json:"data"`
 	line []byte
 	seq  uint64
@@ -432,9 +441,9 @@ func highest(accepted map[string]bool) uint64 {
 // server accepted, and reports whether it did: an event whose line in the record the
 // gateway did not finish may have reached the server whole. Its duration runs from
 // run.started to the record's highest event. A last line the gateway did not finish
-// is made a line first, so run.exited starts its own: one that holds a whole event gets
-// its newline, and one that holds none is cut off the file, being no event. Nothing
-// else of the file is changed.
+// is made a line first, so run.exited starts a line: one that contains a whole event
+// gets its newline, and one that contains none is cut off the file, being no event.
+// Nothing else of the file is changed.
 func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func() time.Time) (bool, error) {
 	var started time.Time
 	begun := false
@@ -491,18 +500,30 @@ func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func
 		return false, err
 	}
 	defer f.Close()
-	if rec.size > rec.whole {
-		if rec.tailKept {
-			write = append([]byte{'\n'}, write...)
-		} else if err := f.Truncate(rec.whole); err != nil {
-			return false, err
-		}
+	first, err := mendTail(f, rec)
+	if err != nil {
+		return false, err
 	}
-	if _, err := f.Write(write); err != nil {
+	if _, err := f.Write(append(first, write...)); err != nil {
 		return false, err
 	}
 	for i, ev := range evs {
-		rec.lines = append(rec.lines, recorded{Type: ev.Type, Sequence: ev.Sequence, Time: ev.Time, line: lines[i]})
+		rec.lines = append(rec.lines, recorded{ID: ev.ID, Type: ev.Type, Sequence: ev.Sequence, Time: ev.Time, line: lines[i]})
 	}
 	return true, f.Sync()
+}
+
+// mendTail makes a last line of the record that the gateway did not finish a line, so
+// the next write starts a line: one that contains a whole event gets its newline, which
+// mendTail returns for the caller to write first, and one that contains none is cut
+// off the file, being no event. Nothing else of the file is changed. f is the record,
+// open for append.
+func mendTail(f *os.File, rec *recordFile) ([]byte, error) {
+	if rec.size <= rec.whole {
+		return nil, nil
+	}
+	if rec.tailKept {
+		return []byte{'\n'}, nil
+	}
+	return nil, f.Truncate(rec.whole)
 }

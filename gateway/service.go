@@ -98,7 +98,12 @@ const serviceIdle = 90 * time.Second
 // ([sourceOf]). A connection past any closes the oldest such connection whose run key
 // has not passed, of its source when that is full, else of its /48, else of all, and is
 // taken; when none can be closed, it is closed as it is accepted, unanswered. One whose
-// run key is admitted counts against none of them.
+// run key is admitted counts against none of them. A run request whose run key passed
+// counts in all only once its open starts ([Gateway.openRun]): its run may wait for
+// Qory Apiary as long as the session waits for its run answer, [server.OpenWait], and
+// 64 runs that open behind one NAT address while Qory Apiary restarts would otherwise
+// fill their source's bound, so every new connection of that address, those of its
+// live runs among them, would be closed as it is accepted.
 const (
 	maxConns       = 4096
 	maxSourceConns = 64
@@ -159,7 +164,8 @@ func (g *Gateway) startService(certs *certFiles) (*service, error) {
 		IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog(),
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if b, ok := c.(*boundConn); ok {
-				return context.WithValue(context.WithValue(context.WithValue(ctx, bindingKey{}, b.ekm), admitKey{}, b.admit), vouchKey{}, b.vouch)
+				ctx = context.WithValue(context.WithValue(ctx, bindingKey{}, b.ekm), admitKey{}, b.admit)
+				return context.WithValue(context.WithValue(ctx, vouchKey{}, b.vouch), releaseKey{}, b.release)
 			}
 			return ctx
 		}}
@@ -177,7 +183,8 @@ func (s *service) addr() string { return s.ln.Addr().String() }
 // holds up no one else. A connection past [maxConns], [maxSourceConns] of its source or
 // [maxBlockConns] of its /48 whose run keys are not admitted closes the oldest of them
 // whose run key has not passed ([connLimit.take]), or, when there is none, is closed at
-// once.
+// once. A run request's connection whose open started counts in all only
+// ([connLimit.release]).
 func (s *service) accept() {
 	defer s.wg.Done()
 	routine.Accept(s.g.report, s.take)
@@ -240,11 +247,11 @@ func (s *service) route(raw net.Conn) {
 	}
 	if string(line) == link.BindLine {
 		r.Discard(len(line))
-		admit, vouch := func() {}, func() {}
+		admit, vouch, release := func() {}, func() {}, func() {}
 		if h, ok := raw.(*heldConn); ok {
-			admit, vouch = h.admit, h.vouch
+			admit, vouch, release = h.admit, h.vouch, h.release
 		}
-		handed = s.bind(tc, r, admit, vouch)
+		handed = s.bind(tc, r, admit, vouch, release)
 		return
 	}
 	tc.SetDeadline(time.Time{})
@@ -258,9 +265,10 @@ func (s *service) route(raw net.Conn) {
 // [link.StackPreamble] with a run key to that run's stack proxy until the run's first
 // join request; any other line is the link's HTTP/1.1. admit lets go of c's count
 // among the connections whose run keys are not admitted, once its run key is; vouch
-// keeps c from being closed for a newer one, once a run key on it passed. It reports
-// whether c was handed on.
-func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch func()) bool {
+// keeps c from being closed for a newer one, once a run key on it passed; release lets
+// go of c's count of its source and of its /48, once the open of a run request on it
+// starts. It reports whether c was handed on.
+func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch, release func()) bool {
 	cs := c.ConnectionState()
 	if cs.Version != tls.VersionTLS13 {
 		return false
@@ -285,10 +293,10 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch func()) bool {
 			return false
 		}
 		r.Discard(len(line))
-		return s.g.relayRun(c, r, value, admit, word == link.StackPreamble)
+		return s.g.relayRun(c, r, value, admit, release, word == link.StackPreamble)
 	}
 	c.SetDeadline(time.Time{})
-	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit, vouch: vouch})
+	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit, vouch: vouch, release: release})
 }
 
 // relayRunKey is the run key of a line of the relay's preamble, or of
@@ -346,11 +354,12 @@ func (c *linkConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
 // boundConn is a bound connection of the link: what its binding read, its exporter
 // value, which signs every answer on it, what lets go of its count once a run key is
-// admitted on it, and what keeps it held once a run key on it passed.
+// admitted on it, what keeps it held once a run key on it passed, and what lets go of
+// its count of its source and of its /48 once the open of a run request on it starts.
 type boundConn struct {
 	linkConn
-	ekm          []byte
-	admit, vouch func()
+	ekm                   []byte
+	admit, vouch, release func()
 }
 
 // bindingKey is the key of a bound connection's exporter value in its requests'
@@ -362,6 +371,18 @@ type admitKey struct{}
 
 // vouchKey is the key of a bound connection's vouch in its requests' contexts.
 type vouchKey struct{}
+
+// releaseKey is the key of a bound connection's release in its requests' contexts.
+type releaseKey struct{}
+
+// releaseSource lets go of the count of the source and of the /48 of the connection of
+// the request whose context is ctx, if it is a bound connection of the one address
+// ([connLimit.release]).
+func releaseSource(ctx context.Context) {
+	if release, _ := ctx.Value(releaseKey{}).(func()); release != nil {
+		release()
+	}
+}
 
 // b64token is the value of an Authorization of the Bearer scheme, RFC 6750 §2.1.
 var b64token = regexp.MustCompile(`^[A-Za-z0-9\-._~+/]+=*$`)
@@ -389,7 +410,9 @@ func bearer(values []string) (string, bool) {
 // it other than a 2xx with Connection: close, once the rest of its body is read within
 // [refusedWait], and the connection closed unanswered when it is not. The connection is
 // admitted once a run request, a reload or a batch is answered 2xx ([forLiveRun]), after
-// the answer. Every answer is signed under the gateway's access key ([signedWriter]).
+// the answer; a run request's counts in all only from the start of its open
+// ([Gateway.openRun]). Every answer is signed under the gateway's access key
+// ([signedWriter]).
 func (g *Gateway) edgeHandler(s *side) http.Handler {
 	next := g.handler(s)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -683,9 +706,10 @@ func sourceOfAddr(a netip.Addr) connSource {
 }
 
 // connLimit counts the connections the one address holds whose run key it has not
-// admitted: in all, by source and by IPv6 /48. It keeps those of them no run key has
-// vouched for in the order they were taken, in all, by source and by /48, so a
-// connection past a bound closes the oldest of them in the narrowest group that is
+// admitted: in all, by source and by IPv6 /48, except a run request's whose open
+// started, which counts in all only ([connLimit.release]). It keeps those of them no
+// run key has vouched for in the order they were taken, in all, by source and by /48,
+// so a connection past a bound closes the oldest of them in the narrowest group that is
 // full.
 type connLimit struct {
 	mu                sync.Mutex
@@ -703,13 +727,14 @@ func newConnLimit(most, each, block int) *connLimit {
 }
 
 // connSlot is a connection connLimit counts: its source, what closes it, whether it is
-// counted, and, until a run key vouches for it, its places among the connections
-// waiting, in all, of its source and of its /48.
+// counted in all, whether it is counted of its source and of its /48, and, until a run
+// key vouches for it, its places among the connections waiting, in all, of its source
+// and of its /48.
 type connSlot struct {
-	s              connSource
-	c              io.Closer
-	counted        bool
-	all, by, block *list.Element
+	s               connSource
+	c               io.Closer
+	counted, source bool
+	all, by, block  *list.Element
 }
 
 // hold counts c, a connection of s, and returns it held ([heldConn]); nil when it is
@@ -760,7 +785,7 @@ func (l *connLimit) take(cs *connSlot) bool {
 		l.blocks[s.block]++
 		cs.block = waitingOf(l.waitingBlocks, s.block).PushBack(cs)
 	}
-	cs.counted = true
+	cs.counted, cs.source = true, true
 	l.mu.Unlock()
 	if oldest != nil {
 		oldest.c.Close()
@@ -788,6 +813,18 @@ func (l *connLimit) vouch(cs *connSlot) {
 	}
 }
 
+// release lets go of cs's count of its source and of its /48, and of its places among
+// the connections waiting, once, and keeps it counted in all: the open of a run request
+// on it started, and its run may wait for Qory Apiary up to [server.OpenWait].
+func (l *connLimit) release(cs *connSlot) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if cs.counted && cs.source {
+		l.unwait(cs)
+		l.unsource(cs)
+	}
+}
+
 // give lets go of cs's count, once.
 func (l *connLimit) give(cs *connSlot) {
 	l.mu.Lock()
@@ -800,9 +837,18 @@ func (l *connLimit) give(cs *connSlot) {
 // drop lets go of cs's count and its places among the connections waiting.
 func (l *connLimit) drop(cs *connSlot) {
 	l.unwait(cs)
-	s := cs.s
+	l.unsource(cs)
 	cs.counted = false
 	l.total--
+}
+
+// unsource lets go of cs's count of its source and of its /48, if it is counted there.
+func (l *connLimit) unsource(cs *connSlot) {
+	if !cs.source {
+		return
+	}
+	s := cs.s
+	cs.source = false
 	if l.by[s.key]--; l.by[s.key] <= 0 {
 		delete(l.by, s.key)
 	}
@@ -849,6 +895,10 @@ func (c *heldConn) admit() { c.once.Do(func() { c.limit.give(c.slot) }) }
 
 // vouch keeps the connection from being closed for a newer one: a run key on it passed.
 func (c *heldConn) vouch() { c.limit.vouch(c.slot) }
+
+// release lets go of the connection's count of its source and of its /48: the open of
+// a run request on it started.
+func (c *heldConn) release() { c.limit.release(c.slot) }
 
 // Close closes the connection and lets go of its count, once.
 func (c *heldConn) Close() error {

@@ -4,19 +4,29 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1116,5 +1126,353 @@ func TestTheUnwalledForwarderEndsARefusedTunnel(t *testing.T) {
 				t.Errorf("the proxy got %q after its refusal", b)
 			}
 		})
+	}
+}
+
+// holdCert makes a TLS server certificate for 127.0.0.1, and the pool that trusts it.
+func holdCert(t *testing.T) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "gateway stand-in"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, pool
+}
+
+// holdForwarder starts a forwarder with a password whose dial reaches addr over TLS
+// with pool's trust, as the link reaches a separate gateway, held for hold. tries
+// counts the dials.
+func holdForwarder(t *testing.T, addr string, pool *x509.CertPool, hold time.Duration) (f *forwarder, login string, tries *atomic.Int32) {
+	t.Helper()
+	const password = "forwarder-password-0123456789abcdefghijklmn"
+	tries = new(atomic.Int32)
+	d := &tls.Dialer{Config: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}}
+	f, err := listenForwarding("127.0.0.1:0", forwarding{
+		dial: func(ctx context.Context) (net.Conn, error) {
+			tries.Add(1)
+			return d.DialContext(ctx, "tcp", addr)
+		},
+		hold:     hold,
+		password: password,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f, "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(proxyUser+":"+password)) + "\r\n", tries
+}
+
+// freeAddr is a loopback address with no listener, host:port, from a port the system
+// gave and that is closed again.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
+}
+
+// waitTries waits until tries reaches n.
+func waitTries(t *testing.T, tries *atomic.Int32, n int32) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for tries.Load() < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("the forwarder dialed %d times, want %d", tries.Load(), n)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestTheForwarderHoldsAConnectionWhileTheGatewayIsDown pins the hold behind a separate
+// gateway: while the gateway's address refuses connections, accepts and resets them, or
+// closes them in the TLS handshake, as Docker's published port does while the gateway's
+// container is down, the forwarder keeps the agent's CONNECT open with nothing written
+// to it and dials again; once the gateway listens on the same address, the CONNECT
+// reaches it and the agent gets its answer.
+func TestTheForwarderHoldsAConnectionWhileTheGatewayIsDown(t *testing.T) {
+	cert, pool := holdCert(t)
+	for name, down := range map[string]func(c *net.TCPConn){
+		"refused": nil,
+		"reset": func(c *net.TCPConn) {
+			c.SetLinger(0)
+			c.Close()
+		},
+		"closed in the TLS handshake": func(c *net.TCPConn) {
+			c.SetReadDeadline(time.Now().Add(time.Second))
+			c.Read(make([]byte, 1))
+			c.Close()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			addr := freeAddr(t)
+			var standIn net.Listener
+			standInDone := make(chan struct{})
+			if down != nil {
+				var err error
+				if standIn, err = net.Listen("tcp", addr); err != nil {
+					t.Fatal(err)
+				}
+				go func() {
+					defer close(standInDone)
+					for {
+						c, err := standIn.Accept()
+						if err != nil {
+							return
+						}
+						down(c.(*net.TCPConn))
+					}
+				}()
+			} else {
+				close(standInDone)
+			}
+			f, login, tries := holdForwarder(t, addr, pool, time.Minute)
+			agent, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer agent.Close()
+			io.WriteString(agent, "CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n"+login+"\r\n")
+			// Three failed dials take at least 250 ms and 500 ms of waits.
+			waitTries(t, tries, 3)
+			agent.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+			if n, err := agent.Read(make([]byte, 1)); n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("the agent's connection during the hold: %d bytes, %v; want nothing, open", n, err)
+			}
+			agent.SetReadDeadline(time.Time{})
+
+			if standIn != nil {
+				standIn.Close()
+			}
+			<-standInDone
+			gw, err := tls.Listen("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer gw.Close()
+			got := make(chan string, 1)
+			go func() {
+				c, err := gw.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				head, _, err := readHead(c, nil)
+				if err != nil {
+					got <- "error: " + err.Error()
+					return
+				}
+				got <- string(head)
+				io.WriteString(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+				io.Copy(c, c)
+			}()
+			select {
+			case head := <-got:
+				if !strings.HasPrefix(head, "CONNECT api.example:443 HTTP/1.1\r\n") || strings.Contains(head, "Proxy-Authorization") {
+					t.Fatalf("the gateway got %q", head)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the held CONNECT did not reach the gateway once it listened")
+			}
+			agent.SetReadDeadline(time.Now().Add(5 * time.Second))
+			r := bufio.NewReader(agent)
+			resp, err := http.ReadResponse(r, &http.Request{Method: http.MethodConnect})
+			if err != nil || resp.StatusCode != http.StatusOK {
+				t.Fatalf("the agent's answer: %v, %v", resp, err)
+			}
+			io.WriteString(agent, "ping")
+			b := make([]byte, 4)
+			if _, err := io.ReadFull(r, b); err != nil || string(b) != "ping" {
+				t.Fatalf("the tunnel: %q, %v", b, err)
+			}
+		})
+	}
+}
+
+// TestTheForwarderClosesAConnectionAtTheHoldsEnd pins the end of a hold that reaches no
+// gateway: the agent's connection stays open until the hold ends, gets nothing, and is
+// closed then.
+func TestTheForwarderClosesAConnectionAtTheHoldsEnd(t *testing.T) {
+	_, pool := holdCert(t)
+	const hold = 700 * time.Millisecond
+	f, login, tries := holdForwarder(t, freeAddr(t), pool, hold)
+	agent, err := net.Dial("tcp", f.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+	start := time.Now()
+	io.WriteString(agent, "CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n"+login+"\r\n")
+	agent.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, err := agent.Read(make([]byte, 1))
+	elapsed := time.Since(start)
+	if n != 0 || err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the agent's connection after the hold: %d bytes, %v; want closed", n, err)
+	}
+	if elapsed < hold-50*time.Millisecond || elapsed > hold+2*time.Second {
+		t.Errorf("the connection closed after %v, want about %v", elapsed, hold)
+	}
+	// Tries at 0 and 250 ms; the third would come 500 ms later, at 750 ms, past the
+	// hold: two tries fit in it.
+	if n := tries.Load(); n != 2 {
+		t.Errorf("the forwarder dialed %d times in %v, want 2", n, hold)
+	}
+}
+
+// TestTheForwarderDropsARequestOfAConnectionClosedDuringTheHold pins the check after a
+// held dial: a plain request whose agent closed its connection while the forwarder
+// dialed again never reaches the gateway, which gets a connection that ends with
+// nothing; a plain request whose agent is still there reaches it whole, its body
+// included.
+func TestTheForwarderDropsARequestOfAConnectionClosedDuringTheHold(t *testing.T) {
+	cert, pool := holdCert(t)
+	const body = "a-body-of-the-request"
+	for _, gone := range []bool{true, false} {
+		t.Run(fmt.Sprintf("gone %v", gone), func(t *testing.T) {
+			addr := freeAddr(t)
+			f, login, tries := holdForwarder(t, addr, pool, time.Minute)
+			agent, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer agent.Close()
+			io.WriteString(agent, "POST http://api.example/v1 HTTP/1.1\r\nHost: api.example\r\nContent-Length: "+strconv.Itoa(len(body))+"\r\n"+login+"\r\n"+body)
+			waitTries(t, tries, 2)
+			if gone {
+				agent.Close()
+			}
+			gw, err := tls.Listen("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer gw.Close()
+			got := make(chan string, 1)
+			go func() {
+				c, err := gw.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				// What the gateway reads until the connection ends or the body is in.
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				var b []byte
+				buf := make([]byte, 4096)
+				for !strings.HasSuffix(string(b), body) {
+					n, err := c.Read(buf)
+					b = append(b, buf[:n]...)
+					if err != nil {
+						if !errors.Is(err, io.EOF) {
+							b = append(b, " error: "+err.Error()...)
+						}
+						break
+					}
+				}
+				got <- string(b)
+			}()
+			select {
+			case b := <-got:
+				switch {
+				case gone && b != "":
+					t.Errorf("the gateway got %q from an agent that went away", b)
+				case !gone && (!strings.HasPrefix(b, "POST http://api.example/v1 HTTP/1.1\r\n") || !strings.HasSuffix(b, "\r\n\r\n"+body) || strings.Contains(b, "Proxy-Authorization")):
+					t.Errorf("the gateway got %q", b)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the held connection did not reach the gateway once it listened")
+			}
+		})
+	}
+}
+
+// TestTheForwarderOnOneMachineDialsOnce pins the local link's forwarder: it has no hold,
+// so a gateway's proxy that refuses the connection closes the agent's at once, after one
+// dial.
+func TestTheForwarderOnOneMachineDialsOnce(t *testing.T) {
+	const password = "forwarder-password-0123456789abcdefghijklmn"
+	local, err := listenForwarder("127.0.0.1:0", freeAddr(t), "proxy-secret-0123456789abcdefghijklmnopqrst", password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local.Close()
+	if local.way.hold != 0 {
+		t.Fatalf("the local forwarder's hold is %v, want none", local.way.hold)
+	}
+	// The same way, its dials counted.
+	var tries atomic.Int32
+	way := local.way
+	way.dial = func(ctx context.Context) (net.Conn, error) {
+		tries.Add(1)
+		return local.way.dial(ctx)
+	}
+	f, err := listenForwarding("127.0.0.1:0", way)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	agent, err := net.Dial("tcp", f.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+	login := "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(proxyUser+":"+password)) + "\r\n"
+	io.WriteString(agent, "CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n"+login+"\r\n")
+	agent.SetReadDeadline(time.Now().Add(time.Second))
+	if n, err := agent.Read(make([]byte, 1)); n != 0 || err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the agent's connection: %d bytes, %v; want closed at once", n, err)
+	}
+	if n := tries.Load(); n != 1 {
+		t.Errorf("the forwarder dialed %d times, want 1", n)
+	}
+}
+
+// TestTheForwarderEndsAHoldWhenClosed pins Close during a hold: it returns at once, ends
+// the dials, and closes the agent's connection.
+func TestTheForwarderEndsAHoldWhenClosed(t *testing.T) {
+	_, pool := holdCert(t)
+	f, login, tries := holdForwarder(t, freeAddr(t), pool, time.Minute)
+	agent, err := net.Dial("tcp", f.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+	io.WriteString(agent, "CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n"+login+"\r\n")
+	waitTries(t, tries, 2)
+	start := time.Now()
+	f.Close()
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("Close took %v during a hold", elapsed)
+	}
+	agent.SetReadDeadline(time.Now().Add(time.Second))
+	if n, err := agent.Read(make([]byte, 1)); n != 0 || err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the agent's connection after Close: %d bytes, %v; want closed", n, err)
+	}
+	after := tries.Load()
+	time.Sleep(3 * time.Second)
+	if n := tries.Load(); n != after {
+		t.Errorf("the forwarder dialed %d more times after Close", n-after)
 	}
 }

@@ -91,6 +91,24 @@ func CheckAbout(a *About) error { return server.CheckAbout(a) }
 // not accept a batch costs them less.
 var closeWait = 15 * time.Second
 
+// finalWait is how long the sinks get to flush at the close of a run behind a separate
+// gateway, in place of closeWait: 180 seconds, the 120 seconds a gateway's restart may
+// take plus the link sink's longest wait between two tries of a batch, 60 seconds
+// (sink.MaxBackoff), so a batch whose try failed just before the gateway came back is
+// tried once more. The flush ends as soon as the gateway accepts the last batch, or the
+// batch gets a 410. The user approved the value ("545 (a)", 2026-11-13). Tests set it
+// shorter.
+var finalWait = 180 * time.Second
+
+// joinWindow is how long a join request behind a separate gateway is sent again after
+// a try with no answer or a 503 with no code: the 120 seconds a separate gateway's
+// restart may take. joinWaits are the waits between the tries, the last one repeated.
+// Tests set both shorter.
+var (
+	joinWindow = 120 * time.Second
+	joinWaits  = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+)
+
 // ended is how a run was closed from outside, set once.
 type ended struct {
 	mu  sync.Mutex

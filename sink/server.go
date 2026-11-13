@@ -143,7 +143,6 @@ type Server struct {
 	closeOnce sync.Once
 	dir       string
 	report    func(string)
-	sleep     func(context.Context, time.Duration) bool
 	wait      time.Duration
 	link      bool
 
@@ -200,7 +199,7 @@ func New(c Config) *Server {
 		wait = BatchWait
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &Server{client: c.To, onDigests: c.OnDigests, onEnded: c.OnEnded, onEnd: c.OnServerEnd, onStop: c.OnStop, dir: c.Spool, report: report, queue: make(chan queued, QueueSize), ctx: ctx, cancel: cancel, done: make(chan struct{}), sleep: sleep, wait: wait, link: c.Link,
+	w := &Server{client: c.To, onDigests: c.OnDigests, onEnded: c.OnEnded, onEnd: c.OnServerEnd, onStop: c.OnStop, dir: c.Spool, report: report, queue: make(chan queued, QueueSize), ctx: ctx, cancel: cancel, done: make(chan struct{}), wait: wait, link: c.Link,
 		changed: make(chan struct{}), flush: make(chan struct{}, 1)}
 	w.target.Store(&c.Target)
 	if c.Spool != "" {
@@ -357,11 +356,11 @@ func (w *Server) settle(n int) {
 	w.changed = make(chan struct{})
 }
 
-// Flush posts the events written so far without waiting for the batch's wait, and
-// returns once the worker is done with each of them: accepted, spooled, or dropped
-// because the deliveries stopped. It returns the context's error when the context ends
-// first; the events then stay queued. Events written during a Flush may or may not be
-// waited for.
+// Flush posts the events written so far without waiting for the batch's wait, tries
+// a batch the server did not accept once more at once, and returns once the worker is
+// done with each of the events: accepted, spooled, or dropped because the deliveries
+// stopped. It returns the context's error when the context ends first; the events then
+// stay queued. Events written during a Flush may or may not be waited for.
 func (w *Server) Flush(ctx context.Context) error {
 	w.mu.Lock()
 	target := w.queued
@@ -443,6 +442,18 @@ func (w *Server) deliver(batch []queued) {
 	body := encode(batch)
 	id := event.NewID()
 	backoff := Backoff
+	// flushed is true when a Flush call ended a pause and used up its signal: the signal
+	// is put back once the batch is done with, so the batches after it go without their
+	// wait.
+	flushed := false
+	defer func() {
+		if flushed {
+			select {
+			case w.flush <- struct{}{}:
+			default:
+			}
+		}
+	}()
 	for {
 		// Each try first asks whether the deliveries stopped, by an answer of the sink's
 		// own or by [Server.Stop] while the batch was retried: then nothing more is sent.
@@ -499,7 +510,13 @@ func (w *Server) deliver(batch []queued) {
 			}
 			return
 		}
-		if w.ctx.Err() != nil || !w.sleep(w.ctx, backoff) {
+		ok := w.ctx.Err() == nil
+		if ok {
+			var asked bool
+			asked, ok = w.pause(backoff)
+			flushed = flushed || asked
+		}
+		if !ok {
 			w.mu.Lock()
 			w.spool(batch, id)
 			w.mu.Unlock()
@@ -508,6 +525,24 @@ func (w *Server) deliver(batch []queued) {
 		if backoff *= 2; backoff > MaxBackoff {
 			backoff = MaxBackoff
 		}
+	}
+}
+
+// pause waits d between two tries of a batch, and ends sooner when [Server.Flush] is
+// called: a separate gateway back after a restart then gets the batch at once, not up
+// to [MaxBackoff] later. Each Flush call ends one pause, so a batch is tried again
+// after d, or at each Flush call when sooner. It reports whether a Flush call ended the
+// pause, and false for ok when the sink's context ends first.
+func (w *Server) pause(d time.Duration) (asked, ok bool) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return false, true
+	case <-w.flush:
+		return true, true
+	case <-w.ctx.Done():
+		return false, false
 	}
 }
 
@@ -639,18 +674,6 @@ func (w *Server) RunClosed() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.runClosed
-}
-
-// sleep waits d or until the context ends, reporting whether it waited the whole d.
-func sleep(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return true
-	case <-ctx.Done():
-		return false
-	}
 }
 
 // Delivered reads the record of accepted batches in a run directory: the sequences the

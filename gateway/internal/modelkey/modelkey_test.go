@@ -2,6 +2,7 @@ package modelkey_test
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -345,10 +346,72 @@ func TestPassHoldsUntilResume(t *testing.T) {
 		t.Error("Passed is true after Resume")
 	}
 	var none *modelkey.Group
+	none.Pass()
 	if none.Passed() || none.Has("model") {
 		t.Error("a nil group passed a refusal or has a key")
 	}
 	none.Resume()
+}
+
+// TestOnPassedIsCalledOncePerChange pins the hook of Pass and Resume: true on a Pass,
+// false on the Resume after it, nothing on a repeated Pass or a Resume with nothing
+// passed, and the group's methods callable from the hook.
+func TestOnPassedIsCalledOncePerChange(t *testing.T) {
+	g, _ := group(t)
+	var calls []bool
+	g.OnPassed(func(passed bool) {
+		if g.Passed() != passed {
+			t.Errorf("the hook got %v while Passed is %v", passed, g.Passed())
+		}
+		calls = append(calls, passed)
+	})
+	g.Resume()
+	g.Pass()
+	g.Pass()
+	g.Resume()
+	g.Resume()
+	g.Pass()
+	if want := []bool{true, false, true}; !slices.Equal(calls, want) {
+		t.Errorf("the hook got %v; want %v", calls, want)
+	}
+}
+
+// TestOnPassedCallsComeInTheOrderOfTheChanges pins the order of the hook's calls under
+// Pass and Resume from many goroutines: the calls alternate, and the last one is the
+// value Passed has at the end.
+func TestOnPassedCallsComeInTheOrderOfTheChanges(t *testing.T) {
+	g, _ := group(t)
+	var mu sync.Mutex
+	var calls []bool
+	g.OnPassed(func(passed bool) {
+		mu.Lock()
+		calls = append(calls, passed)
+		mu.Unlock()
+	})
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Go(func() {
+			for range 200 {
+				if i%2 == 0 {
+					g.Pass()
+				} else {
+					g.Resume()
+				}
+			}
+		})
+	}
+	wg.Wait()
+	for i, c := range calls {
+		if c != (i%2 == 0) {
+			t.Fatalf("call %d got %v: the calls do not alternate from true", i, c)
+		}
+	}
+	if len(calls) > 0 && calls[len(calls)-1] != g.Passed() {
+		t.Errorf("the last call got %v; Passed is %v", calls[len(calls)-1], g.Passed())
+	}
+	if len(calls) == 0 && g.Passed() {
+		t.Error("Passed is true with no call")
+	}
 }
 
 // TestShownHasNamesAndNoValues pins the log line of a limit answer: the status, the

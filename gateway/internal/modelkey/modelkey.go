@@ -95,6 +95,11 @@ type Group struct {
 	passed bool
 	// changed, when set, is called after a change a report sends.
 	changed func()
+	// onPassed, when set, is called with the value of passed after each change of it.
+	onPassed func(bool)
+	// passing is held from a change of passed to the end of the call of onPassed for
+	// it, so the calls come in the order of the changes. mu is not held during the call.
+	passing sync.Mutex
 }
 
 // New makes the group of keys, in their order, with the key start active, the first
@@ -116,6 +121,17 @@ func New(keys []Key, start string, now func() time.Time) *Group {
 func (g *Group) OnChange(f func()) {
 	g.mu.Lock()
 	g.changed = f
+	g.mu.Unlock()
+}
+
+// OnPassed sets f, called after each change of [Group.Passed]: with true when
+// [Group.Pass] sets it, with false when [Group.Resume] clears it. A Pass while passed
+// is set, or a Resume while it is clear, calls nothing. The calls come one at a time,
+// in the order of the changes, with the group's lock not held: f may call any method
+// of the group but Pass and Resume, which wait for f to return.
+func (g *Group) OnPassed(f func(bool)) {
+	g.mu.Lock()
+	g.onPassed = f
 	g.mu.Unlock()
 }
 
@@ -272,11 +288,12 @@ func (g *Group) Streamed(name string, h http.Header) {
 func (g *Group) switched() (string, bool) { return g.Pick() }
 
 // Pass records that the proxy passed a limit refusal to the session: no key of the
-// group is left, or the refused body had no copy.
+// group is left, or the refused body had no copy. A nil group records nothing.
 func (g *Group) Pass() {
-	g.mu.Lock()
-	g.passed = true
-	g.mu.Unlock()
+	if g == nil {
+		return
+	}
+	g.setPassed(true)
 }
 
 // Passed reports whether the proxy passed a limit refusal to the session since the
@@ -296,9 +313,21 @@ func (g *Group) Resume() {
 	if g == nil {
 		return
 	}
+	g.setPassed(false)
+}
+
+// setPassed sets passed to v, and calls onPassed with v when passed changed.
+func (g *Group) setPassed(v bool) {
+	g.passing.Lock()
+	defer g.passing.Unlock()
 	g.mu.Lock()
-	g.passed = false
+	was := g.passed
+	g.passed = v
+	f := g.onPassed
 	g.mu.Unlock()
+	if was != v && f != nil {
+		f(v)
+	}
 }
 
 // record reads the answer's headers into key name's windows. limit is true for a limit
