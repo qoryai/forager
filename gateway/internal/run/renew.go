@@ -277,16 +277,15 @@ func (r *Run) dropValue(name string) {
 	r.values.Drop(name)
 }
 
-// split are the secrets requests of due: each model key whose renewal after a 401 is
-// pending in a request that names it alone, then the others in one. The server returns 409 with
-// no value to a whole request that has a name it cannot seal, so such a key fails no
-// other renewal.
+// split are the secrets requests of due: each model key, a credential with a format,
+// in a request that names it alone, then the others in one. The server returns 409
+// with no value to a whole request that has a name it cannot seal, so a model key it
+// refuses fails no other renewal.
 func (w *renewer) split(due []string) [][]string {
-	g := w.keyGroup()
 	var out [][]string
 	var rest []string
 	for _, name := range due {
-		if g != nil && g.Pending(name) {
+		if w.r.modelKey(name) {
 			out = append(out, []string{name})
 			continue
 		}
@@ -298,6 +297,12 @@ func (w *renewer) split(due []string) [][]string {
 	return out
 }
 
+// modelKey reports whether the credential name of the run configuration is a model
+// key: one with a format.
+func (r *Run) modelKey(name string) bool {
+	return slices.ContainsFunc(r.stored, func(c server.RunCredential) bool { return c.Name == name && c.Format != "" })
+}
+
 // keyGroup is the run's key group, nil for none.
 func (w *renewer) keyGroup() *modelkey.Group {
 	w.mu.Lock()
@@ -307,7 +312,7 @@ func (w *renewer) keyGroup() *modelkey.Group {
 
 // renew requests from the server the values of names under the digest of the run
 // configuration in force, with the model keys among them whose renewal after a 401 is
-// pending as unauthorized ([renewer.split] puts such a key alone), and puts each one
+// pending as unauthorized ([renewer.split] puts each model key alone), and puts each one
 // that meets the start's rules in place of the one the run has. Each one refused, and
 // every one of a request that failed, keeps its value and is reported. A model key that
 // was unauthorized goes back in the key group with its value, out of it at the server's

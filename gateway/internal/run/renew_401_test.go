@@ -444,3 +444,57 @@ func TestAPendingKeysFirstApplyIsTaken(t *testing.T) {
 		})
 	}
 }
+
+// TestEachModelKeyIsRenewedAlone pins a renewal round with no 401: the two model keys
+// and forge expire together, and the round sends three requests, each model key alone
+// and forge alone, none with an unauthorized. A signed 409 to model-2's request leaves
+// forge and model renewed, and model-2 with its value and in the key group.
+func TestEachModelKeyIsRenewedAlone(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		fail error
+		want map[string]string
+	}{
+		{"200", nil, map[string]string{"model": "model-1", "model-2": "model-2-2", "forge": "forge-3"}},
+		{"409", &server.AnswerError{What: "secrets https://apiary.example/v1/secrets", Status: http.StatusConflict}, map[string]string{"model": "model-1", "model-2": "model-2-0", "forge": "forge-3"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clock := &fakeClock{now: start}
+			s := &controlPlane{
+				answer: func(name string, call int) (answer, error) {
+					return answer{value: fmt.Sprintf("%s-%d", name, call), expires: start.Add(time.Hour + time.Duration(call)*time.Hour)}, nil
+				},
+				fail: func(call int) error {
+					if call == 2 {
+						return c.fail
+					}
+					return nil
+				},
+			}
+			r := renewRun(t, twoKeysDoc, s, clock, &reports{}, &reports{})
+			g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", clock.Now)
+			r.SetKeyGroup(g)
+			clock.step(t, time.Hour-credential.RenewBefore)
+			calls := s.called()
+			s.mu.Lock()
+			unauth := slices.Clone(s.unauth)
+			s.mu.Unlock()
+			if len(calls) != 4 {
+				t.Fatalf("the requests %v; want the start's and three", calls)
+			}
+			for i, w := range [][]string{{"model"}, {"model-2"}, {"forge"}} {
+				if !slices.Equal(calls[i+1][1:], w) || unauth[i+1] != nil {
+					t.Errorf("request %d names %v, unauthorized %v; want %v, none", i+1, calls[i+1][1:], unauth[i+1], w)
+				}
+			}
+			for name, want := range c.want {
+				if got := value(r, name); got != want {
+					t.Errorf("%s's value %s; want %s", name, got, want)
+				}
+			}
+			if u := g.Unauthorized(); u != nil {
+				t.Errorf("the keys after a 401 %+v; want none", u)
+			}
+		})
+	}
+}
