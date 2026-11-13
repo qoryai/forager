@@ -159,10 +159,11 @@ func TestTheConnectionLimit(t *testing.T) {
 		t.Errorf("counted %d, waiting %d, by %v, by /48 %v", l.total, l.waiting.Len(), l.waitingBy, l.waitingBlocks)
 	}
 
-	// Admitted, closed, vouched for, or any of these in any order, a connection is let go
-	// of once.
+	// Admitted, closed, vouched for, released, or any of these in any order, a connection
+	// is let go of once.
 	a := src("[2001:db8::1]:1")
-	for _, steps := range [][]string{{"admit"}, {"close"}, {"admit", "close"}, {"close", "admit"}, {"close", "close", "admit", "admit"}, {"vouch", "close"}, {"vouch", "admit", "vouch"}, {"close", "vouch"}} {
+	for _, steps := range [][]string{{"admit"}, {"close"}, {"admit", "close"}, {"close", "admit"}, {"close", "close", "admit", "admit"}, {"vouch", "close"}, {"vouch", "admit", "vouch"}, {"close", "vouch"},
+		{"release", "admit"}, {"release", "close"}, {"vouch", "release", "release", "close", "admit"}, {"admit", "release"}, {"close", "release", "admit"}} {
 		l := newConnLimit(1, 1, 1)
 		c := l.hold(nopConn{}, a)
 		if c == nil {
@@ -174,6 +175,8 @@ func TestTheConnectionLimit(t *testing.T) {
 				c.admit()
 			case "vouch":
 				c.vouch()
+			case "release":
+				c.release()
 			default:
 				c.Close()
 			}
@@ -233,6 +236,64 @@ func TestTheConnectionLimit(t *testing.T) {
 	h.Close()
 	if l.total != 1 || l.waiting.Len() != 1 {
 		t.Errorf("a connection closed for a newer one, closed again: %d counted, %d waiting", l.total, l.waiting.Len())
+	}
+}
+
+// TestAReleasedConnectionCountsInAllOnly pins a connection released, a run request's
+// whose open started: it counts against neither its source nor its /48, is never
+// closed for a newer one, and counts in all until it is admitted or closed, once.
+func TestAReleasedConnectionCountsInAllOnly(t *testing.T) {
+	l := newConnLimit(3, 1, 2)
+	var closed []string
+	take := func(name, addr string) *connSlot {
+		t.Helper()
+		cs := &connSlot{s: src(addr), c: closeFunc(func() { closed = append(closed, name) })}
+		if !l.take(cs) {
+			return nil
+		}
+		return cs
+	}
+	r1 := take("r1", "[2001:db8::1]:1")
+	if r1 == nil {
+		t.Fatal("a first connection is not taken")
+	}
+	l.vouch(r1)
+	l.release(r1)
+	l.release(r1)
+	if l.total != 1 || len(l.by) != 0 || len(l.blocks) != 0 || l.waiting.Len() != 0 {
+		t.Fatalf("a released connection: %d counted, by %v, by /48 %v, %d waiting", l.total, l.by, l.blocks, l.waiting.Len())
+	}
+	// Its source and its /48 take their bounds again: one more of the /64 is taken, and
+	// the next closes that one, not the released one.
+	r2 := take("r2", "[2001:db8::2]:1")
+	if r2 == nil || len(closed) != 0 {
+		t.Fatalf("a connection of the /64 of a released one: taken %v, closed %q", r2 != nil, closed)
+	}
+	if take("r3", "[2001:db8::3]:1") == nil || !reflect.DeepEqual(closed, []string{"r2"}) {
+		t.Fatalf("a second connection of the /64 beside a released one: closed %q; want [r2]", closed)
+	}
+	closed = nil
+	// The bound in all still counts it: with all full of connections released, the next
+	// is refused.
+	l = newConnLimit(2, 2, 2)
+	for i := range 2 {
+		cs := take(fmt.Sprintf("o%d", i+1), fmt.Sprintf("192.0.2.%d:1", i+1))
+		if cs == nil {
+			t.Fatalf("connection %d is not taken", i+1)
+		}
+		l.vouch(cs)
+		l.release(cs)
+		if i == 0 {
+			r1 = cs
+		}
+	}
+	if take("o3", "192.0.2.3:1") != nil || len(closed) != 0 {
+		t.Errorf("a connection past the bound in all, all of them released: taken, closed %q", closed)
+	}
+	l.give(r1)
+	l.give(r1)
+	if l.total != 1 || take("o4", "192.0.2.4:1") == nil {
+		t.Errorf("a released connection admitted: %d counted, and the next is not taken", l.total)
 	}
 }
 
