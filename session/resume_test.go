@@ -332,7 +332,7 @@ const rolloutID = "0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e"
 
 // rollouterScript is the rollouter's program: it prints the transcript it finds under
 // its home and its arguments, then its start, then appends two lines to its
-// transcript, a new file in a dated directory when it found none.
+// transcript, or to a file it makes in a dated directory when it found none.
 const rollouterScript = `f=$(ls "$HOME"/.rollouter/*/*/*/rollout-*-` + rolloutID + `.jsonl 2>/dev/null | head -n 1)
 if [ -n "$f" ]; then echo "restored: $(cat "$f")"; else f="$HOME/.rollouter/2026/11/13/rollout-t-` + rolloutID + `.jsonl"; mkdir -p "${f%/*}"; fi
 echo "args: $*"
@@ -486,5 +486,30 @@ func TestAnUnboundWallTakesTheInsertedArgumentsOff(t *testing.T) {
 	}
 	if w.got.Transcript != (wall.Transcript{}) {
 		t.Errorf("the launch's transcript directory %+v", w.got.Transcript)
+	}
+}
+
+// TestAnUnwalledResumeChecksThePathAgainstThePattern pins the restore with no wall: a
+// resume.path that does not match the descriptor's, here a deeper path, is a failed
+// resume, as behind a wall, and the runtime starts without the resume arguments.
+func TestAnUnwalledResumeChecksThePathAgainstThePattern(t *testing.T) {
+	sp, g, home := resumerSpec(t, "ok\n")
+	deeper := "~/.resumer/" + cwdSlugOf(sp.Dir) + "/x/0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl"
+	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+		a := linktest.RunAnswer(req)
+		a["resume"] = map[string]any{"run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "session_id": "0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e", "path": deeper}
+		return linktest.Reply{Status: 200, Body: a}
+	})
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := runLogText(t, events(t, res))
+	want := "Check resume.path in the run configuration. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: its path " + deeper + " does not match ~/.resumer/{cwd_slug}/0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl, with {cwd_slug} a slug\n"
+	if !strings.Contains(out, want) || !strings.Contains(out, "args: \n") {
+		t.Errorf("the runtime's output %q; want %q", out, want)
+	}
+	if _, err := os.Stat(filepath.Join(home, strings.TrimPrefix(deeper, "~/"))); err == nil {
+		t.Error("the transcript was restored")
 	}
 }

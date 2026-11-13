@@ -48,10 +48,10 @@ const resumeWait = 10 * time.Minute
 // resume.prefix inside: the session writes the bytes there itself, at the run
 // configuration's resume.path below resume.prefix, before the agent's container starts
 // ([writeBeneath]), and inserts resume.args in launch the same way, with no script. A
-// resume.session_id that is not a UUID in lower case, or a resume.path that does not
-// match the descriptor's resume.path with that session id, {cwd_slug} any slug, is a
-// failed resume. A walled session with no transcript directory, root empty, does not
-// resume.
+// resume.session_id that is not a UUID in lower case is a failed resume, and so is a
+// walled session with no transcript directory, root empty. With a wall or without one,
+// a resume.path that does not match the descriptor's resume.path with
+// resume.session_id, {cwd_slug} any slug, is a failed resume.
 //
 // A restore also returns the [restored] transcript: the session reads the transcript
 // the resumed runtime appends to at resume.path, under the paused run's slug, and the
@@ -84,17 +84,19 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 		args[i] = strings.ReplaceAll(a, "{session_id}", want.SessionID)
 	}
 	at := resumeAt(launch.Args, rs.After)
+	below := strings.TrimPrefix(want.Path, rs.Prefix)
 	if walled {
 		if root == "" {
 			return failed("Use a runtime whose resume.prefix is a directory below the runtime's home", "the session has no transcript directory behind the wall")
 		}
-		below := strings.TrimPrefix(want.Path, rs.Prefix)
 		if !walledSessionID.MatchString(want.SessionID) {
 			return failed("Check resume.session_id in the run configuration", fmt.Sprintf("its session id %s is not a UUID in lower case", accesskey.ShownName(want.SessionID, false)))
 		}
-		if pattern := newPathPattern(strings.TrimPrefix(rs.Path, rs.Prefix), want.SessionID, "", true); !pattern.matches(below) {
-			return failed(checkPath, fmt.Sprintf("its path %s does not match %s%s, with {cwd_slug} a slug", want.Path, rs.Prefix, pattern.shown))
-		}
+	}
+	if pattern := newPathPattern(strings.TrimPrefix(rs.Path, rs.Prefix), want.SessionID, "", true); !pattern.matches(below) {
+		return failed(checkPath, fmt.Sprintf("its path %s does not match %s%s, with {cwd_slug} a slug", want.Path, rs.Prefix, pattern.shown))
+	}
+	if walled {
 		b, err := r.fetchTranscript(ctx)
 		if err != nil {
 			return failed(fetchFix(want.RunID), err.Error())
@@ -114,8 +116,8 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 		return failed("Check the session's directory "+pathShown(sessionDir), accesskey.ShownError(err).Error())
 	}
 	script := filepath.Join(sessionDir, ResumeScript)
-	// The script keeps the command and the arguments up to the one resume.after names
-	// before the resume arguments: 1 + at words of its arguments.
+	// The script keeps the command and the arguments up to the one equal to
+	// resume.after before the resume arguments: 1 + at words of its arguments.
 	head := 0
 	if at < len(launch.Args) {
 		head = 1 + at
