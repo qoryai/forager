@@ -2245,16 +2245,17 @@ not terminate is not seen. Each write has two events with the same `request_id`,
 1. `started`, when the proxy sends the request to the system, before the request's
    `dev.qory.run.egress`.
 2. Its end, once:
-   - `changed`: the system reported the write done. For a git push, the report status
-     in the answer has `unpack ok` and `ok` for every ref.
+   - `changed`: the system reported the write done, in part or whole. For a git push,
+     the report status in the answer has `unpack ok` and `ok` for at least one ref. A
+     push with some refs `ok` and some `ng` is `changed`.
    - `refused`: the system reported the write not done. For a git push, the answer's
-     status is `4xx`, the unpack failed, any ref is `ng`, or the answer is a fatal error
-     (side-band 3, or an `ERR` line). A push with some refs `ok` and some `ng` is
-     `refused`: some refs may have changed.
+     status is `4xx`, or the report status has an unpack error, or `ng` for every ref.
    - `cut`: the write ended with no report the gateway could read. The transport
-     failed, the answer's status is not `200` and not `4xx`, the answer ended before
-     its report, the answer is not a report (§The events, Reading a git push's answer),
-     or the run ended during the write. The system may have applied the write.
+     failed, the answer's status is `5xx` or another status that is not `200` and not
+     `4xx`, the answer ended before its report, the answer is a fatal error (side-band
+     3, or an `ERR` line), the answer is not a report (§The events, Reading a git push's
+     answer), or the run ended during the write. The system may have applied the
+     write.
 
 `system` is the request's host, as in `dev.qory.run.egress`, without the port. `path` is
 the request's path, decoded, without `/git-receive-pack` at its end, without its leading
@@ -2279,10 +2280,10 @@ side-band or side-band-64k, which the first pkt-line's first byte shows, band 1 
 the report status in pkt-lines of its own, band 2 progress, which is skipped, and band
 3 a fatal error. The report is `unpack ok` or `unpack <error>`, then `ok <ref>` or
 `ng <ref> <reason>` per ref, with `option` lines after an `ok` under report-status-v2,
-then a flush. An answer with `Content-Encoding: gzip` is read decompressed. A
-pkt-line with a length of 1 to 3 or over 65520, a length that is not hex, a report line
-of another form, a report with no ref, or a report not complete within the first 4 MiB
-of the answer (4194304 bytes, decompressed) ends the write `cut`. The gateway keeps at
+then a flush. An answer with a `Content-Encoding` other than `identity`, a pkt-line
+with a length of 1 to 3 or over 65520, a length that is not hex, a report line of
+another form, a report with no ref, or a report not complete within the first 4 MiB of
+the answer (4194304 bytes) ends the write `cut`. The gateway keeps at
 most one pkt-line's first bytes and its counters per write, whatever the answer's size.
 
 **How a run ends.** Every `dev.qory.run.exited` contains `state`, how the run ended:
