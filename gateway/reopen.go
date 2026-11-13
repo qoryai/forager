@@ -241,13 +241,18 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		}
 	}
 
-	ca, err = lr.decide(ctx, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: &run.Fetched{URL: conf.Run.URL, Digest: digest, Document: rc}, labels: labels},
+	// The steps past the attach end when Close starts too, with ask: a reopen Close cuts
+	// fails in a way that may pass, and the record stays for the next gateway.
+	ca, err = lr.decide(ctx, ask, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: &run.Fetched{URL: conf.Run.URL, Digest: digest, Document: rc}, labels: labels},
 		func(*run.Run) (*proxy.CA, error) {
 			if ca == nil {
 				return nil, fmt.Errorf("start a new run: this run needs its certificate authority, and its record has no %s or %s", proxy.CACertFile, proxy.CAKeyFile)
 			}
 			return ca, nil
 		})
+	if g.openCtx.Err() != nil {
+		return fail(false, closing(err))
+	}
 	if err != nil {
 		var mayPass holdError
 		return fail(!errors.As(err, &mayPass), err)

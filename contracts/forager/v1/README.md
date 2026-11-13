@@ -3877,12 +3877,17 @@ comes again, with the same run key, asks for the attach again.
 
 **A restart.** A separate gateway's `Close` keeps its runs for the gateway that starts
 again on the same directory. From the start of `Close`, a run request and every request
-that would reopen a run get a `503` with no body. A run whose attach is still being
-tried stops its tries and does not open, its run request a `503`; a run past its tries
-opens. Then the one address closes, and each live run is suspended: the gateway lets go
-of the run's proxy, tools and credentials, flushes the run's events toward the server
-as at a run's end, writes no `dev.qory.session.exited` and no `dev.qory.run.exited`, and
-keeps the run's record with the files of a reopen (The record files).
+that would reopen a run get a `503` with no body. A run that is opening stops at any
+step before its run answer, and its run request gets a `503` (Tries as a run opens); a
+reopen stops the same way, a failure that may pass, and the run keeps its record. Then
+the one address closes, and every live run is suspended at once, in parallel: the
+gateway lets go of the run's proxy, tools and credentials, flushes the run's events
+toward the server as at a run's end, writes no `dev.qory.session.exited` and no
+`dev.qory.run.exited`, and keeps the run's record with the files of a reopen (The record
+files). With tools that stop at `SIGTERM` and a server that takes the last events, a
+`Close` with runs live and opening takes a few seconds; the bounds in code are 5
+seconds from a tool's `SIGTERM` to its `SIGKILL`, and 5 more for it to exit, 1 second
+for the one address and for each proxy, and 15 seconds for each run's flush.
 
 The gateway that starts again reopens a suspended run at the first request of it whose
 run key verifies: a batch, a reload, a join, a transcript request, or a connection to
@@ -3905,8 +3910,8 @@ reopen's answers to the requests that wait:
 - a failure that may pass: no answer from the server, a `5xx`, an answer that is not
   signed, a `429` `rate_limited`, events the server does not take within the attach's
   window, a fetch of the run's secrets that gets no answer, a `5xx` or a `429`
-  `rate_limited`, or a `Close` that stops the reopen's tries. Each request that waits
-  gets a `503` with no body, and the session's next request starts the reopen again;
+  `rate_limited`, or a `Close` that stops the reopen. Each request that waits gets a
+  `503` with no body, and the session's next request starts the reopen again;
 - a final failure: a `410` `run_closed`, and the run is over. The attach's failures that
   are final at once are a signed `410`, a signed refusal `run_attached`, `wrong_gateway`
   or `workspace_not_served`, and a run configuration that fails Forager's checks; a
@@ -3914,8 +3919,8 @@ reopen's answers to the requests that wait:
   stopped, and a fetch of the run's secrets refused with a `4xx` other than a `429`
   `rate_limited` are final too. Any other signed `4xx` of the attach, a `401`, signed or
   not, among them, is tried again within the 120 seconds, and is final when the window
-  ends on it. Only tries that `Close` stopped count as a stop by `Close`: a final
-  refusal that came first keeps its `410`.
+  ends on it. Only a reopen that `Close` stopped counts as a stop by `Close`: a final
+  refusal of the attach that came first keeps its `410`.
 
 A connection to the run's proxy that waited on a reopen that did not open the run is
 closed unanswered. The run request of a reopened run stays `409` `run_attached`. A
@@ -4116,13 +4121,16 @@ A run request whose session stops waiting opens no run: once its connection goes
 gateway sends the server no further request for it, the registration among them, opens
 no run, and removes what it recorded of the run, so the same `run_id` sent again opens
 as a first run request would, not `run_id_used` at the gateway. A registration the
-server accepted before then stays the server's. A gateway that closes while a run's
-registration or attach is still being tried stops its tries at once: the run does not
-open, and its run request gets a `503` without a body, as one that comes while the
-gateway closes. A run past its tries opens and gets its `200`. On the local link the
-closing gateway then ends it with `run_closed`, as any live run; a separate gateway
-suspends it, as any live run, for the gateway that starts again (§The gateway's link,
-A restart).
+server accepted before then stays the server's. A gateway that closes while a run
+opens stops the open at once, at any step before the run answer: the tries of its
+registration or attach, the request for its secrets, and the wait for its tools to
+listen. The run does not open, the gateway removes what it recorded of the run, and the
+run request gets a `503` without a body, as one that comes while the gateway closes.
+The same `run_id` sent again, to the gateway that starts again, opens as a first run
+request would; behind a separate gateway its attach is sent again. A run whose open
+ended before the gateway closed gets its `200`. On the local link the closing gateway
+then ends it with `run_closed`, as any live run; a separate gateway suspends it, as any
+live run, for the gateway that starts again (§The gateway's link, A restart).
 
 The gateway keeps the bytes it built for a `run_id` for 150 seconds of their `time`, by
 the wall clock, half the server's window: when the same `run_id` comes again within

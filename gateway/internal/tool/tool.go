@@ -279,16 +279,20 @@ func (s *Set) Close() {
 // until each listens. A tool that exits first, or does not listen within a minute, is
 // no run, and the last line it wrote to standard error is the reason given. After
 // that, what a tool writes to standard error goes to report line by line, and a tool
-// that exits while the run goes on is reported; it is not started again.
+// that exits while the run goes on is reported; it is not started again. A ctx that
+// ends while a tool starts ends the wait for it. On a failure every tool started is
+// stopped at once, the one that failed among them, so the stop takes one grace.
 func Start(ctx context.Context, chosen []Chosen, runID string, env []string, report func(string)) (*Set, error) {
 	set := &Set{}
 	for _, c := range chosen {
 		t, err := start(ctx, c, runID, env, report)
+		if t != nil {
+			set.Tools = append(set.Tools, t)
+		}
 		if err != nil {
 			set.Close()
 			return nil, fmt.Errorf("tool %s: %w", accesskey.ShownName(c.Name, false), err)
 		}
-		set.Tools = append(set.Tools, t)
 	}
 	return set, nil
 }
@@ -343,8 +347,8 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 		}
 	})
 	if err := t.listens(ctx); err != nil {
-		t.stop()
-		return nil, err
+		// Started, so the caller stops it with the others.
+		return t, err
 	}
 	return t, nil
 }

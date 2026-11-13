@@ -1,6 +1,7 @@
 package gateway_test
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -272,6 +273,74 @@ func TestAReopenWhoseSecretsFail(t *testing.T) {
 			}
 			if left := keptLeft(cfg.Dir, runID); len(left) > 0 {
 				t.Errorf("the record keeps %v", left)
+			}
+		})
+	}
+}
+
+// TestCloseStopsAReopenPastItsAttach pins a reopen in flight past its attach when the
+// gateway closes, waiting on the fetch of its run's secrets or for its tool to listen:
+// Close stops it and returns within seconds, the batch that waited gets a 503 with no
+// body, the run keeps its record, and the gateway that starts next reopens it.
+func TestCloseStopsAReopenPastItsAttach(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []string{"secrets", "tool"} {
+		t.Run(step, func(t *testing.T) {
+			tools := t.TempDir()
+			t.Setenv(envTool, "serve")
+			t.Setenv(envToolDir, tools)
+			c := gatewayControl(t)
+			serveToolAndKeys(c)
+			cfg := gateway.Config{Dir: t.TempDir(), Tools: []gateway.Tool{{Name: "svc", Command: []string{exe}, Serves: []string{"svc.example"}}}}
+			before := startRemote(t, c, cfg)
+			runID := event.NewRunID()
+			e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
+			after := before.restart(t, cfg)
+			e.r = after
+			got := make(chan answer, 1)
+			if step == "secrets" {
+				asked := blockSecrets(t, c)
+				go func() { got <- e.post(t, heartbeat(runID)) }()
+				select {
+				case <-asked:
+				case <-time.After(10 * time.Second):
+					t.Fatal("no secrets request")
+				}
+			} else {
+				if err := os.WriteFile(filepath.Join(tools, "hold"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				go func() { got <- e.post(t, heartbeat(runID)) }()
+				eventually(t, "the tool that does not listen", func() bool {
+					entries, _ := os.ReadDir(tools)
+					return len(entries) > 1
+				})
+			}
+			begin := time.Now()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			after.g.Close(ctx)
+			// A tool that ignores SIGTERM goes at its SIGKILL, after the tool package's
+			// stopGrace of 5 seconds.
+			if took := time.Since(begin); took > 10*time.Second {
+				t.Errorf("Close took %s", took)
+			}
+			if a := <-got; a.status != http.StatusServiceUnavailable || len(a.body) != 0 {
+				t.Errorf("the batch while Close stopped the reopen: %d %s", a.status, a.body)
+			}
+			if left := secretsLeft(cfg.Dir, runID); len(left) != len(secretNames) {
+				t.Errorf("the record keeps only %v", left)
+			}
+			os.Remove(filepath.Join(tools, "hold"))
+			c.mu.Lock()
+			c.secretsAnswer = nil
+			c.mu.Unlock()
+			e.r = startRemote(t, c, cfg)
+			if a := e.post(t, heartbeat(runID)); a.status != http.StatusAccepted {
+				t.Errorf("a batch at the gateway that starts next: %d %s", a.status, a.body)
 			}
 		})
 	}

@@ -507,8 +507,13 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if how.request != nil && how.request.Err() != nil {
 		return fail(how.request.Err())
 	}
+	// The steps past the attach end when Close starts, as the tries do: a run Close cuts
+	// does not open, and its run request gets a 503.
+	steps, stopSteps := context.WithCancel(ctx)
+	defer stopSteps()
+	defer context.AfterFunc(g.openCtx, stopSteps)()
 	var ca *proxy.CA
-	ca, err = lr.decide(ctx, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: fetched, labels: decideLabels}, func(*run.Run) (*proxy.CA, error) {
+	ca, err = lr.decide(ctx, steps, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: fetched, labels: decideLabels}, func(*run.Run) (*proxy.CA, error) {
 		ca, err := proxy.NewCA(req.RunID)
 		if err != nil || !remote {
 			return ca, err
@@ -520,6 +525,11 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		}
 		return ca, nil
 	})
+	if g.openCtx.Err() != nil {
+		// Close started: the run does not open, whether its steps failed or not, and
+		// nothing of it is kept, so the run request that comes again opens it.
+		return fail(closing(err))
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -585,8 +595,10 @@ func (e holdError) Unwrap() error { return e.error }
 // called when the run's policy needs one, which the proxy ends TLS with; the start key;
 // and the key group, which on the one address keeps the mark of a passed limit refusal
 // in the run's record ([markLimit]). It returns the authority, nil for none. ctx is the
-// run's: the tools stop when it ends.
-func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.Run) (*proxy.CA, error)) (*proxy.CA, error) {
+// run's, which the key reporter runs under; steps is that of the fetch of the run's
+// values and of the wait for its tools to listen, which the caller ends as Close starts,
+// so Close does not wait for them.
+func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func(*run.Run) (*proxy.CA, error)) (*proxy.CA, error) {
 	g := lr.g
 	var selects []run.Selection
 	if lr.remote {
@@ -611,7 +623,7 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 		lr.live.holds(r.RunConfiguration())
 		lr.posts.SetRunDigest(r.RunConfiguration())
 	}
-	if err := r.Hold(ctx); err != nil {
+	if err := r.Hold(steps); err != nil {
 		if passing(err) {
 			return nil, holdError{err}
 		}
@@ -620,7 +632,7 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 	// The tools, started before the proxy is: a tool that does not listen is no run.
 	// They are stopped after the proxy is closed, so no request reaches a tool that is
 	// gone.
-	if lr.tools, err = r.StartTools(ctx); err != nil {
+	if lr.tools, err = r.StartTools(steps); err != nil {
 		return nil, err
 	}
 	pol := r.Policy()
