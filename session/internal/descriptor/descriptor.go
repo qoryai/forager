@@ -82,6 +82,9 @@ type Config struct {
 	// Fixed maps a dotted key to a TOML value: a string, a bool or an int64. Nil when
 	// the descriptor sets none.
 	Fixed map[string]any `yaml:"fixed" json:"fixed,omitempty"`
+	// Keys is the keys of Fixed in the descriptor's order, which [Parse] reads from the
+	// document; runtimes.json lists them in that order.
+	Keys []string `yaml:"-" json:"-"`
 }
 
 // Resume is where the runtime writes the transcript of its session, and the arguments
@@ -383,10 +386,53 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	if err := d.checkConfig(); err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
+	if d.Config != nil {
+		if d.Config.Keys, err = fixedKeys(b); err != nil {
+			return nil, fmt.Errorf("%s: %w", shown, accesskey.ShownError(err))
+		}
+	}
 	if err := d.checkRules(); err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
 	return &d, nil
+}
+
+// fixedKeys is the keys of config.fixed in the document's order. A JSON document is
+// YAML too, so one reader serves both.
+func fixedKeys(b []byte) ([]string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	node := &doc
+	if node.Kind == yaml.DocumentNode && len(node.Content) == 1 {
+		node = node.Content[0]
+	}
+	for _, key := range []string{"config", "fixed"} {
+		node = member(node, key)
+		if node == nil {
+			return nil, nil
+		}
+	}
+	var keys []string
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		keys = append(keys, node.Content[i].Value)
+	}
+	return keys, nil
+}
+
+// member is the value of key in the mapping node, nil when node is no mapping or has
+// no such key.
+func member(node *yaml.Node, key string) *yaml.Node {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }
 
 // checkRules checks what the schema cannot express of the rules: a field of an event

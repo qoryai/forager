@@ -190,6 +190,22 @@
           }
         ]
       },
+      "config": {
+        "flag": "--config",
+        "fixed": [
+          "model_provider",
+          "model_providers.qory.name",
+          "model_providers.qory.wire_api",
+          "model_providers.qory.env_key",
+          "features.plugins",
+          "features.apps",
+          "analytics.enabled",
+          "feedback.enabled",
+          "check_for_update_on_startup",
+          "otel.metrics_exporter",
+          "web_search"
+        ]
+      },
       "fixed": {},
       "egress_hosts": []
     }

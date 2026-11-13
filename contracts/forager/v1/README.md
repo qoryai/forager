@@ -5629,12 +5629,16 @@ in name order: `version`, 1, and `runtimes`, each with its `name`, `title`, `res
 (`scheme`, and `header` for the `header` scheme, `username` for the `basic` scheme and
 `oauth` when it is set), `paths` when the declaration has some, `one_of` with `id`,
 `required` and `of`, and `model`, the descriptor's model section in the same shape,
-`keys` with each key's `auth` in the same shape, when it has one, and `resume`, the
+`keys` with each key's `auth` in the same shape, when it has one, `config`, the
+descriptor's `config.flag` as `flag` and the keys of `config.fixed` as `fixed`, in the
+descriptor's order and without their values, `{"flag": "--config", "fixed":
+["model_provider", ...]}`, for a composer to refuse a run's arguments that set one of
+them, when it has one, and `resume`, the
 descriptor's `resume.prefix` and `resume.path`, `{"prefix": "~/.claude/projects/",
 "path": "~/.claude/projects/{cwd_slug}/{session_id}.jsonl"}`, for a server to check a
 transcript's path against, when it has one. Every list is
-present, empty when the descriptor has none, and so is `fixed`, an empty object; `model` and `resume` are absent when the descriptor has
-none, and so are `keys` and `overrides` in a `model` that has none of them. `runtimes` is
+present, empty when the descriptor has none, and so is `fixed`, an empty object;
+`model`, `config` and `resume` are absent when the descriptor has none, and so are `keys` and `overrides` in a `model` that has none of them. `runtimes` is
 a list of objects that a reader finds by `name`. `go generate ./contracts`
 writes it from the descriptors, and a test fails while the file differs from what that
 writes.

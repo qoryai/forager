@@ -268,7 +268,7 @@
       "additionalProperties": {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00\\r\\n]*$"}
     },
     "config": {
-      "description": "How the session passes settings to a runtime that reads them as TOML, such as Codex: flag, the argument that takes one key=value pair, such as --config, where key is a dotted key and value a TOML value; and fixed, the settings the session passes in every launch, walled or not. With config, a place's setting goes to flag too, its value as a TOML string. Absent, a setting goes in the JSON settings file the launch passes.",
+      "description": "How the session passes settings to a runtime that reads them as TOML, such as Codex: flag, the argument that takes one key=value pair, such as --config, where key is a dotted key and value a TOML value; and fixed, the settings the session passes in every launch, walled or not. With config, a place's setting goes to flag too, its value as a TOML string. Absent, a setting goes in the JSON settings file the launch passes. runtimes.json lists config's flag and the keys of fixed, in the descriptor's order, without their values.",
       "type": "object",
       "additionalProperties": false,
       "required": ["flag"],
