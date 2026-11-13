@@ -209,8 +209,10 @@ func roundTrip(t *testing.T, v any) any {
 // profiles, projects or responses_api_metadata, or one of the addresses of OpenAI and
 // ChatGPT; --ignore-user-config; features.connectors, the
 // legacy name of apps, in a pair and in --enable or --disable; --enable and --disable
-// of a fixed feature; and every form of --oss, --search, --local-provider, --profile
-// and -p. Ordinary arguments, a flag after --, and Claude Code with the same arguments
+// of a fixed feature; every form of --oss, --search, --local-provider, --profile
+// and -p; every form of --dangerously-bypass-hook-trust and --remote; and each form of
+// --config and -c that sets a key at, under or above skills or cloud.skills. Ordinary
+// arguments, cloud.other, a flag after --, and Claude Code with the same arguments
 // pass.
 func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 	rt, err := codex.New()
@@ -267,6 +269,19 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 		{"-p", []string{"-p", v}},
 		{"-p", []string{"-p" + v}},
 		{"-p", []string{"-p=" + v}},
+		{"--dangerously-bypass-hook-trust", []string{"--dangerously-bypass-hook-trust"}},
+		{"--dangerously-bypass-hook-trust", []string{"--dangerously-bypass-hook-trust=" + v}},
+		{"--remote", []string{"--remote", "ws://" + v + ":1"}},
+		{"--remote", []string{"--remote=ws://" + v + ":1"}},
+		{"--config", []string{"--config", "skills.config=[{path=\"" + v + "\"}]"}},
+		{"--config", []string{"--config=skills={}"}},
+		{"-c", []string{"-c", "skills=" + v}},
+		{"-c", []string{"-cskills." + v + "=true"}},
+		{"-c", []string{"-c=skills.x=" + v}},
+		{"--config", []string{"--config", "cloud.skills=" + v}},
+		{"-c", []string{"-c", "cloud.skills.x=" + v}},
+		{"-c", []string{"-c", "cloud={skills=\"" + v + "\"}"}},
+		{"--config", []string{"--config=cloud={}"}},
 	} {
 		args := slices.Concat([]string{"exec", "--json"}, r.args, []string{"Say hi"})
 		err := c.CheckArgs(args)
@@ -276,7 +291,8 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 	}
 	ordinary := []string{"exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-x",
 		"--config", "model_reasoning_effort=\"high\"", "-c", "model=\"gpt-x\"", "--enable", "undo", "-c", "model_provider_note=x",
-		"--config", "experimental_realtime_base_url=x", "-c", "features.connectors_extra=true", "--", "--oss", "-p", "x"}
+		"--config", "experimental_realtime_base_url=x", "-c", "features.connectors_extra=true", "-c", "cloud.other=1", "-c", "skills_extra=1",
+		"--remote-auth-token-env", "X", "--", "--oss", "-p", "x", "--remote", "ws://x:1", "--dangerously-bypass-hook-trust"}
 	if err := c.CheckArgs(ordinary); err != nil {
 		t.Errorf("%q: %v; want no refusal", ordinary, err)
 	}

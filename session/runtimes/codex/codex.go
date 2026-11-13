@@ -36,7 +36,9 @@ func New() (runtimes.Runtime, error) {
 // --local-provider select a local model provider in place of model_provider;
 // --profile and -p layer $CODEX_HOME/<name>.config.toml over the settings; --search
 // sets web_search; --enable and --disable set features.<name>; --ignore-user-config
-// skips $CODEX_HOME/config.toml, which qory writes for a walled run.
+// skips $CODEX_HOME/config.toml, which qory writes for a walled run;
+// --dangerously-bypass-hook-trust runs hooks without the trust Codex stores for them;
+// --remote connects Codex to a remote app server (codex --help of 0.167.2).
 const (
 	flagConfig        = "--config"
 	flagShort         = "-c"
@@ -48,6 +50,8 @@ const (
 	flagEnable        = "--enable"
 	flagDisable       = "--disable"
 	flagIgnoreUser    = "--ignore-user-config"
+	flagHookTrust     = "--dangerously-bypass-hook-trust"
+	flagRemote        = "--remote"
 )
 
 // reserved are the settings of Codex 0.167.2 a launch's pair may not set beside the
@@ -72,6 +76,11 @@ var reserved = []string{
 	"experimental_realtime_*_base_url",
 }
 
+// skills are the settings of Codex 0.167.2 that change the skills Codex loads, which
+// qory places read-only below CODEX_HOME for a walled run: a launch's pair may not set
+// one, a key under one or a key above one, such as cloud.
+var skills = []string{"skills", "cloud.skills"}
+
 // connectors is the legacy name of the feature apps: Codex 0.167.2 reads
 // features.connectors as features.apps, after apps, so connectors wins
 // (codex-rs features/src/legacy.rs).
@@ -88,7 +97,10 @@ const (
 //   - --enable or --disable of a feature whose features.<name> is one of keys, as
 //     --enable x or --enable=x, where connectors counts as apps;
 //   - --oss and --search;
-//   - --ignore-user-config, and --ignore-user-config=x, a form Codex 0.167.2 rejects;
+//   - --config or -c with a pair that sets a setting of [skills];
+//   - --ignore-user-config and --dangerously-bypass-hook-trust, each also as
+//     <flag>=x, a form Codex 0.167.2 rejects;
+//   - --remote, as --remote x and --remote=x;
 //   - --local-provider, --profile and -p in every form: --profile x, --profile=x,
 //     -p x, -px and -p=x.
 //
@@ -129,6 +141,10 @@ func checkArgs(args, keys []string) error {
 			return flagRefused(a)
 		case a == flagIgnoreUser || strings.HasPrefix(a, flagIgnoreUser+"="):
 			return flagRefused(flagIgnoreUser)
+		case a == flagHookTrust || strings.HasPrefix(a, flagHookTrust+"="):
+			return hookTrustRefused()
+		case a == flagRemote || strings.HasPrefix(a, flagRemote+"="):
+			return remoteRefused()
 		case a == flagLocalProvider || strings.HasPrefix(a, flagLocalProvider+"="):
 			return flagRefused(flagLocalProvider)
 		case a == flagProfile || strings.HasPrefix(a, flagProfile+"="):
@@ -150,6 +166,12 @@ func checkPair(flag, pair string, keys []string) error {
 	for _, r := range reserved {
 		if covers(r, key) {
 			return keyRefused(flag, r)
+		}
+	}
+	for _, r := range skills {
+		if covers(r, key) {
+			return fmt.Errorf("remove the %s that sets %s from the launch's arguments: it changes the skills Codex loads, which qory places below CODEX_HOME",
+				accesskey.ShownName(flag, false), accesskey.ShownName(r, false))
 		}
 	}
 	return nil
@@ -199,4 +221,16 @@ func keyRefused(flag, k string) error {
 func flagRefused(flag string) error {
 	return fmt.Errorf("remove %s from the launch's arguments: it changes the model provider, web search or other settings the session sets for Codex",
 		accesskey.ShownName(flag, false))
+}
+
+// hookTrustRefused is the error for --dangerously-bypass-hook-trust.
+func hookTrustRefused() error {
+	return fmt.Errorf("remove %s from the launch's arguments: it lets Codex run hooks that have no trust stored for them",
+		flagHookTrust)
+}
+
+// remoteRefused is the error for --remote.
+func remoteRefused() error {
+	return fmt.Errorf("remove %s from the launch's arguments: it connects Codex to a remote app server, so the work runs outside the session",
+		flagRemote)
 }

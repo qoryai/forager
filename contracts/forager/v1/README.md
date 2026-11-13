@@ -5590,7 +5590,14 @@ and `--config=k=v`. For Codex 0.167.2, it fails on these too:
 - `--search`, which sets `web_search`;
 - `--ignore-user-config`, which skips `$CODEX_HOME/config.toml`, the settings qory
   writes for a walled run, and `--ignore-user-config=x`, which Codex 0.167.2 does not
-  take.
+  take;
+- `--dangerously-bypass-hook-trust`, which runs hooks that have no trust stored for
+  them, and `--dangerously-bypass-hook-trust=x`, which Codex 0.167.2 does not take;
+- `--remote`, which connects Codex to a remote app server, so the work runs outside
+  the session, as `--remote x` and `--remote=x`;
+- `--config` and `-c` with a pair that sets a key at, under or above `skills` or
+  `cloud.skills`, which change the skills Codex loads, in the forms of `--config`
+  above: `cloud.skills.x` and `cloud` both set `cloud.skills`.
 
 **Fixed**, optional: variables the session sets for the runtime in every launch, by
 name, walled or not, `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`: 1 to 64 names,
