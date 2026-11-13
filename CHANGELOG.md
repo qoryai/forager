@@ -1251,7 +1251,23 @@ release may change what an existing document does, and says so under Upgrading.
   before this change stops waiting after 10 seconds, and the gateway then stops its
   tries. A gateway that closes while a run's registration or attach is still being
   tried stops its tries at once, and the run request gets a `503`; a run past its
-  tries opens and then ends with `run_closed`.
+  tries opens, and then ends with `run_closed` on the local link or is kept behind a
+  separate gateway, as in the next entry.
+- A separate gateway that restarts on the same directory keeps its runs, so the agent
+  sessions behind it go on. `Close` suspends each live run: it flushes the run's
+  events, writes no `dev.qory.run.exited`, and keeps the run's record. The gateway
+  that starts again reopens the run at its first request whose run key verifies, a
+  batch, a reload, a join, a transcript request or a proxy connection: it attaches the
+  run again with the tries of an open and goes on numbering the record. While the
+  reopen is tried, or after it fails in a way that may pass, a request gets a `503`
+  with no body; after a final failure, a `410` `run_closed`. To reopen a run the
+  gateway keeps `request.json`, `ca.pem`, `ca.key`, `given.jsonl`, `joins.jsonl`,
+  `model-key-limit` and `held.jsonl` in its record, each mode `0600`. `request.json`
+  may contain a registry's credentials in an image reference. The CA files go at the
+  run's end, and a sweep every 10 minutes removes those of a record unchanged for 15
+  minutes. A join request that repeats the last join the gateway accepted gets the same
+  answer, across a restart too. Before, a run open at a gateway that stopped was over,
+  and `qory run resend` ended it with `gateway_lost`.
 - An adapter's output that fails `credential.schema.json` is refused with `Fix the
   output of the adapter <PATH> to match credential.schema.json: <LOCATIONS>`, where
   `<LOCATIONS>` lists each failing location and keyword, such as `/apply/0/header fails

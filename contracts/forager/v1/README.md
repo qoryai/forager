@@ -2427,6 +2427,40 @@ compose keeps it out of git:
   answers a run request; a gateway that starts again keeps a record that holds it, and
   the run request that comes again is `409` `run_attached`.
 
+Behind a separate gateway the gateway writes these files too, each mode `0600`, so the
+gateway that starts again on the same directory can reopen the run (§The gateway's link,
+A restart). The local link writes none of them.
+
+- `request.json`: what the gateway decides the run by of its run request, written as
+  the run opens: `version`, `wall`, and the session's `narrowing` and `images` when the
+  request has them. An image reference may contain a registry's credentials, as the
+  run request does.
+- `ca.pem` and `ca.key`: the certificate and the private key of the run's certificate
+  authority, for a run with one, written as the run opens. The gateway removes both at
+  the run's end, when the run's open fails, when a reopen fails for good, and by the
+  sweep below.
+- `given.jsonl`: the members of each `dev.qory.run.policy_applied` the gateway decided,
+  one JSON object per line, as the event's data has them: shown names and values, never
+  a credential's value.
+- `joins.jsonl`: each join the gateway numbered, one JSON object per line, written
+  before the join's answer: `session`, `accepted`, `passes`, `model`, `no_key` and,
+  when the join asked for one, `model_credential`.
+- `model-key-limit`: an empty file, present while the run's proxy has passed a model
+  provider's limit refusal to the session (§The gateway's link, A stop in a batch's
+  answer).
+- `held.jsonl`: the gateway's `dev.qory.run.egress` events that waited for
+  `dev.qory.run.started` when the gateway stopped, one per line. The reopen reads it
+  back and removes it.
+
+These files stay with the record until the record is removed, the CA files excepted.
+**The sweep.** A separate gateway whose records are under its directory removes
+`ca.pem` and `ca.key` of each record whose run it neither holds nor reopens and whose
+`events.jsonl` has not changed for 15 minutes, at its start and every 10 minutes. A
+live run's session sends a heartbeat at least every 300 seconds, so a live run's record
+changes within those 15 minutes. The sweep and a reopen of the same run never run at
+once: the sweep skips a run that is reopening, and the reopen of a run with a
+certificate authority that comes after the sweep finds no CA files and fails for good.
+
 **A hidden harness.** In a run whose harness is hidden, `[harness text: <path>]`
 replaces the text of each file in a session's harness home, after the forwarders'
 passwords are replaced, in every `dev.qory.run.log` chunk of the session, its setup
@@ -3826,10 +3860,43 @@ the run request that comes again removes it, and the gateway attaches the run ag
 which the server answers the same; one that stopped after it keeps the record, and the
 run request that comes again is `409` `run_attached`. An attach that fails, the server's
 refusal or no answer, leaves nothing of the run at the gateway: the run request that
-comes again, with the same run key, asks for the attach again. A run that was open at a
-gateway that stopped is over: the gateway that starts again answers its reloads and
-batches `410` `run_closed` and its run request `409` `run_attached`, and
-`qory run resend` writes its `dev.qory.run.exited` with `gateway_lost` (§The server).
+comes again, with the same run key, asks for the attach again.
+
+**A restart.** A separate gateway's `Close` keeps its runs for the gateway that starts
+again on the same directory. From the start of `Close`, a run request and every request
+that would reopen a run get a `503` with no body. A run whose attach is still being
+tried stops its tries and does not open, its run request a `503`; a run past its tries
+opens. Then the one address closes, and each live run is suspended: the gateway lets go
+of the run's proxy, tools and credentials, flushes the run's events toward the server
+as at a run's end, writes no `dev.qory.session.exited` and no `dev.qory.run.exited`, and
+keeps the run's record with the files of a reopen (The record files).
+
+The gateway that starts again reopens a suspended run at the first request of it whose
+run key verifies: a batch, a reload, a join, a transcript request, or a connection to
+the run's proxy or stack proxy. One reopen of a run runs at a time, and every request
+of the run waits for it. The reopen reads the record back, attaches the run again under
+the run key of that request, with the tries of an open (Tries as a run opens, below),
+sends again what the server has not accepted, decides the run again from `request.json`
+and the run configuration the attach answers, with the run's certificate authority from
+`ca.pem` and `ca.key`, and goes on numbering the record after its last `sequence`. A
+connection that waits on a reopen counts against none of the one address's bounds of
+connections once its run key verifies. The reopen's answers to the requests that wait:
+
+- the run is open: each request is served as for a live run;
+- a failure that may pass, no answer from the server, a `5xx` or a `429`
+  `rate_limited`, or a `Close` that stops the reopen's tries: a `503` with no body, and
+  the session's next request starts the reopen again;
+- a final failure, such as another refusal of the attach, a run configuration Forager
+  refuses, or a record the gateway cannot read: a `410` `run_closed`, and the run is
+  over. Only tries that `Close` stopped count as a stop by `Close`: a final refusal that
+  came first keeps its `410`.
+
+A connection to the run's proxy that waited on a reopen that did not open the run is
+closed unanswered. The run request of a reopened run stays `409` `run_attached`. A
+record without `request.json`, of a gateway that did not keep its runs, is not
+reopened: its reloads and batches get a `410` `run_closed`, its run request a `409`
+`run_attached`, and `qory run resend` writes its `dev.qory.run.exited` with
+`gateway_lost` (§The server).
 
 **No local sessions.** A separate gateway serves other machines alone: with `Listen`
 it makes no local link, in memory or on a socket, and no proxy listener on loopback,
@@ -4012,8 +4079,10 @@ as a first run request would, not `run_id_used` at the gateway. A registration t
 server accepted before then stays the server's. A gateway that closes while a run's
 registration or attach is still being tried stops its tries at once: the run does not
 open, and its run request gets a `503` without a body, as one that comes while the
-gateway closes. A run past its tries opens, gets its `200`, and the closing gateway
-then ends it with `run_closed`, as any live run.
+gateway closes. A run past its tries opens and gets its `200`. On the local link the
+closing gateway then ends it with `run_closed`, as any live run; a separate gateway
+suspends it, as any live run, for the gateway that starts again (§The gateway's link,
+A restart).
 
 The gateway keeps the bytes it built for a `run_id` for 150 seconds of their `time`, by
 the wall clock, half the server's window: when the same `run_id` comes again within
@@ -4289,6 +4358,14 @@ each try after the first it flushes its batches, so the previous session's
 `dev.qory.session.exited` reaches the gateway before the join. Every other answer, a
 `400`, `403` or `410` among them, it takes as the answer to the join. A join with no
 answer after 120 seconds fails as after one try.
+
+Behind a separate gateway the gateway answers a join request that repeats the last
+join it accepted the same way again: `200` with the same session number and model key,
+and nothing numbered anew. A join request repeats the last join when that join's
+session has neither started nor exited and the request has the same `passes`,
+`model_key` and `model_credential`. The gateway writes each join it numbers to
+`joins.jsonl` before it answers (The record files), so the gateway that starts again
+answers a repeated join request the same way.
 
 **Events.** The session posts its events to `events.url`, in batches cut as toward the
 server (§The server, Delivery), with `Content-Type: application/cloudevents-batch+json`.
