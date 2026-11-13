@@ -535,6 +535,8 @@ type keysSession struct {
 	// in place of Claude Code, with CODEX_HOME at [codexHome] as a fixed value of the
 	// launch, as qory sets it.
 	codex string
+	// codexArgs, when set, replaces [codexArgs] for Codex.
+	codexArgs []string
 }
 
 // run opens the run, joins one session of Claude Code, or of Codex, and closes the run
@@ -580,7 +582,11 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 	}
 	if s.codex != "" {
 		join.Command = filepath.Join(s.codex, codexRun)
-		join.Args = slices.Concat(codexArgs, s.args, []string{s.prompt})
+		launch := codexArgs
+		if s.codexArgs != nil {
+			launch = s.codexArgs
+		}
+		join.Args = slices.Concat(launch, s.args, []string{s.prompt})
 		join.Mounts = append(join.Mounts, wall.Mount{Path: s.codex, ReadOnly: true})
 		join.LaunchFixed = []string{"CODEX_HOME=" + codexHome}
 	}

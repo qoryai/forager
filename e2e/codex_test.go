@@ -70,6 +70,11 @@ const codexRun = "codex-run"
 // stub accepts.
 var codexArgs = []string{"exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-e2e"}
 
+// codexResumable are [codexArgs] with Codex's sandbox off as a --config pair: codex exec
+// resume of Codex 0.167.2 takes no --sandbox, nor --cd, --add-dir, --color or
+// --approve-for-me, after resume <thread id>, where the session inserts them.
+var codexResumable = []string{"exec", "--json", "--skip-git-repo-check", "--config", `sandbox_mode="danger-full-access"`, "--model", "gpt-e2e"}
+
 func init() {
 	if len(os.Args) > 1 && os.Args[1] == modeCodexStub {
 		os.Exit(serveCodexStub())
@@ -92,15 +97,33 @@ func codexToken(mark string) string {
 
 // codexEntry is one request the stub logs: its number, method and path, the key's
 // mark, "other" for any other credential and "" for none, the account header, and the
-// status of the answer.
+// status of the answer; for a request of the Responses format, the first 200 bytes of
+// its instructions and the text of each message of its input, each cut at 200 bytes,
+// with the message's role before it, such as "user: Say hi".
 type codexEntry struct {
-	N       int    `json:"n"`
-	Method  string `json:"method"`
-	Path    string `json:"path"`
-	Key     string `json:"key"`
-	Account string `json:"account"`
-	Status  int    `json:"status"`
+	N            int      `json:"n"`
+	Method       string   `json:"method"`
+	Path         string   `json:"path"`
+	Key          string   `json:"key"`
+	Account      string   `json:"account"`
+	Status       int      `json:"status"`
+	Instructions string   `json:"instructions,omitempty"`
+	Texts        []string `json:"texts,omitempty"`
 }
+
+// codexRequest is what the stub reads of a request of the Responses format.
+type codexRequest struct {
+	Instructions string `json:"instructions"`
+	Input        []struct {
+		Role    string `json:"role"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"input"`
+}
+
+// cut is s cut at n bytes.
+func cut(s string, n int) string { return s[:min(len(s), n)] }
 
 // codexMark is the mark of the key in a request's Authorization header.
 func codexMark(h http.Header) string {
@@ -124,11 +147,22 @@ type codexStub struct {
 }
 
 func (s *codexStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	io.Copy(io.Discard, r.Body)
+	body, _ := io.ReadAll(r.Body)
 	s.mu.Lock()
 	s.n++
 	e := codexEntry{N: s.n, Method: r.Method, Path: r.URL.Path, Key: codexMark(r.Header), Account: r.Header.Get(codexAccountHeader)}
 	s.mu.Unlock()
+	var req codexRequest
+	if json.Unmarshal(body, &req) == nil {
+		e.Instructions = cut(req.Instructions, 200)
+		for _, m := range req.Input {
+			for _, c := range m.Content {
+				if c.Text != "" {
+					e.Texts = append(e.Texts, m.Role+": "+cut(c.Text, 200))
+				}
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	switch {
 	case r.Method != http.MethodPost || r.URL.Path != codexPath:
@@ -243,6 +277,8 @@ func serveCodexStub() int {
 type codexWall struct {
 	keysWall
 	stub, host, folder string
+	// launch, when set, replaces [codexArgs].
+	launch []string
 }
 
 // newCodexWall skips the test without an engine, without a Linux build of the test
@@ -352,8 +388,14 @@ func codexCredential(name, endpoint string, login bool) map[string]any {
 // requests the stub got during the run.
 func (k codexWall) run(t *testing.T, login bool, keys ...[2]string) (keysOutcome, []codexEntry, keysSession) {
 	t.Helper()
+	return k.runOn(t, startKeysControl(t), event.NewRunID(), "Say hi in one word.", nil, login, keys...)
+}
+
+// runOn is [codexWall.run] with the control plane ctl, the run's id runID, the prompt,
+// and the run configuration's resume when it is not nil.
+func (k codexWall) runOn(t *testing.T, ctl *keysControl, runID, prompt string, resume map[string]any, login bool, keys ...[2]string) (keysOutcome, []codexEntry, keysSession) {
+	t.Helper()
 	before := len(k.log(t, 0))
-	ctl := startKeysControl(t)
 	endpoint := "https://" + k.host + ":" + recorderTLS + "/v1"
 	var creds []map[string]any
 	var values []string
@@ -361,10 +403,9 @@ func (k codexWall) run(t *testing.T, login bool, keys ...[2]string) (keysOutcome
 		creds = append(creds, codexCredential(kv[0], endpoint, login))
 		values = append(values, kv[1])
 	}
-	runID := event.NewRunID()
-	ctl.configure(t, runID, k.host, creds, values, nil)
-	s := keysSession{runID: runID, server: ctl.server, allow: []string{k.host}, prompt: "Say hi in one word.",
-		dir: t.TempDir(), walled: &k.keysWall, timeout: 4 * time.Minute, codex: k.folder}
+	ctl.configure(t, runID, k.host, creds, values, resume)
+	s := keysSession{runID: runID, server: ctl.server, allow: []string{k.host}, prompt: prompt,
+		dir: t.TempDir(), walled: &k.keysWall, timeout: 4 * time.Minute, codex: k.folder, codexArgs: k.launch}
 	o := s.run(t)
 	log := k.log(t, before)
 	t.Logf("the session ended %s, reason %q, exit %d; the stub got:%s", o.res.State, o.res.Reason, o.res.ExitCode, codexEntries(log))
@@ -373,11 +414,12 @@ func (k codexWall) run(t *testing.T, login bool, keys ...[2]string) (keysOutcome
 	return o, log, s
 }
 
-// codexEntries is the log as lines "<n> <method> <path> <key> <account> <status>".
+// codexEntries is the log as lines "<n> <method> <path> <key> <account> <status>
+// <texts>".
 func codexEntries(log []codexEntry) string {
 	var b strings.Builder
 	for _, e := range log {
-		fmt.Fprintf(&b, "\n  %d %s %s key=%q account=%q %d", e.N, e.Method, e.Path, e.Key, e.Account, e.Status)
+		fmt.Fprintf(&b, "\n  %d %s %s key=%q account=%q %d texts=%q", e.N, e.Method, e.Path, e.Key, e.Account, e.Status, e.Texts)
 	}
 	return b.String()
 }
@@ -539,7 +581,8 @@ func TestDockerCodexPausesOnAUsageLimit(t *testing.T) {
 }
 
 // TestDockerCodexEndsOrSwitchesOnARejectedKey runs Codex 0.167.2 behind the wall with
-// a key for which the stub returns 401. With that key alone, the gateway takes it out, no key is
+// a key for which the stub returns 401; Codex's turn.failed may come after the stop
+// ([codexTurnFailedOnce]). With that key alone, the gateway takes it out, no key is
 // left, and the session and the run end failed with model_key_unauthorized. With a
 // second key, the gateway passes the 401 on and sends nothing with the second key in
 // that session: the session and the run end paused with model_key_switch, for the
@@ -553,7 +596,7 @@ func TestDockerCodexEndsOrSwitchesOnARejectedKey(t *testing.T) {
 				o.res.State, o.res.Reason, o.res.ExitCode, tail(o.errs, 4000), tail(o.out, 4000))
 		}
 		codexExited(t, o, event.StateFailed, event.ReasonModelKeyUnauthorized)
-		codexTurnFailed(t, o)
+		codexTurnFailedOnce(t, o)
 		if len(log) == 0 || log[0].Key != codexUnauthorized || log[0].Status != http.StatusUnauthorized {
 			t.Errorf("the stub got:%s\nwant a 401 with the key first", codexEntries(log))
 		}
@@ -566,7 +609,7 @@ func TestDockerCodexEndsOrSwitchesOnARejectedKey(t *testing.T) {
 				o.res.State, o.res.Reason, o.res.ExitCode, tail(o.errs, 4000), tail(o.out, 4000))
 		}
 		codexExited(t, o, event.StatePaused, event.ReasonModelKeySwitch)
-		codexTurnFailed(t, o)
+		codexTurnFailedOnce(t, o)
 		if len(log) == 0 || log[0].Key != codexUnauthorized || log[0].Status != http.StatusUnauthorized {
 			t.Errorf("the stub got:%s\nwant a 401 with the first key first", codexEntries(log))
 		}
@@ -577,6 +620,21 @@ func TestDockerCodexEndsOrSwitchesOnARejectedKey(t *testing.T) {
 		}
 		codexNoKeyValue(t, o, []string{codexKey(codexUnauthorized), codexKey(codexServe)}, s.dir)
 	})
+}
+
+// codexTurnFailedOnce checks that the run's events contain at most one
+// dev.qory.runtime.turn_failed, with error unknown and the session id of the one
+// dev.qory.runtime.started. After a 401, Codex 0.167.2 retries the request, and the
+// proxy's local 429s end the retries with turn.failed; the gateway's stop, in the answer
+// to the session's next batch, may stop Codex first. The chunks of Codex's transcript
+// add events to the session's batches; on 2026-11-13 the stop came before turn.failed
+// in each run of this test.
+func codexTurnFailedOnce(t *testing.T, o keysOutcome) {
+	t.Helper()
+	started, failed := o.of("dev.qory.runtime.started"), o.of("dev.qory.runtime.turn_failed")
+	if len(started) != 1 || len(failed) > 1 || len(failed) == 1 && (failed[0]["error"] != "unknown" || failed[0]["session_id"] != started[0]["session_id"]) {
+		t.Errorf("dev.qory.runtime.turn_failed is %v after the start %v; want at most one, error unknown, with the start's session_id", failed, started)
+	}
 }
 
 // codexTurnFailed checks that the run's events contain one dev.qory.runtime.turn_failed,
@@ -641,4 +699,71 @@ func codexExited(t *testing.T, o keysOutcome, state, reason string) {
 	if es := o.of(event.RunExited); len(es) != 1 || es[0]["state"] != state || es[0]["reason"] != reason {
 		t.Errorf("dev.qory.run.exited is %v; want one, %s with %s", es, state, reason)
 	}
+}
+
+// TestDockerCodexResumesAPausedRunUnderAnotherKey runs Codex 0.167.2 twice behind the
+// wall, with CODEX_HOME at /var/lib/qory-codex-home as a fixed value of the launch and
+// an empty environment otherwise, as qory starts it, and the sandbox off as a --config
+// pair ([codexResumable]). Run 1, with one key, says hi; its
+// session finds the rollout below ${CODEX_HOME}/sessions/, in the transcript directory
+// the wall binds there, and sends it as dev.qory.session.transcript chunks, which the
+// control plane stores. Run 2's run configuration has resume, with run 1's id, thread id
+// and rollout path, and another key; the control plane serves run 1's chunks. Run 2
+// restores the rollout alone at the same path, starts codex exec resume <thread id>
+// with --model, and its first request goes with the second key and contains run 1's
+// prompt and Codex's answer to it, then run 2's prompt. Run 2's
+// dev.qory.runtime.started has source resume and run 1's thread id, both runs end
+// succeeded, and run 2 sends the restored rollout with its turn appended from offset 0,
+// under run 1's path. The test logs the instructions of each run's first request.
+func TestDockerCodexResumesAPausedRunUnderAnotherKey(t *testing.T) {
+	k := newCodexWall(t)
+	k.launch = codexResumable
+	ctl := startKeysControl(t)
+	const prompt1, prompt2 = "Say hi in one word.", "Now say it again."
+	run1 := event.NewRunID()
+	o1, log1, s1 := k.runOn(t, ctl, run1, prompt1, nil, false, [2]string{"model", codexKey(codexServe)})
+	if o1.res.State != event.StateSucceeded {
+		t.Fatalf("run 1 ended %s, exit %d; want succeeded\nstderr:\n%s", o1.res.State, o1.res.ExitCode, tail(o1.errs, 4000))
+	}
+	transcript, threadID, tpath := storedTranscript(t, ctl, run1)
+	rollout := regexp.MustCompile(`^` + regexp.QuoteMeta(codexHome) + `/sessions/[0-9]{4}/[0-9]{2}/[0-9]{2}/rollout-[^/]*-` + regexp.QuoteMeta(threadID) + `\.jsonl$`)
+	if !rollout.MatchString(tpath) || !bytes.Contains(transcript, []byte(prompt1)) {
+		t.Fatalf("run 1's transcript: %d bytes of %s, thread %s; want the rollout with the prompt", len(transcript), tpath, threadID)
+	}
+
+	run2 := event.NewRunID()
+	ctl.mu.Lock()
+	ctl.transcripts[run2] = transcript
+	ctl.mu.Unlock()
+	key2 := strings.Replace(codexKey(codexServe), "codex", "codex-b", 1)
+	o2, log2, s2 := k.runOn(t, ctl, run2, prompt2, map[string]any{"run_id": run1, "session_id": threadID, "path": tpath}, false, [2]string{"model-b", key2})
+	if o2.res.State != event.StateSucceeded {
+		t.Fatalf("run 2 ended %s, exit %d; want succeeded\nstderr:\n%s\nstdout:\n%s", o2.res.State, o2.res.ExitCode, tail(o2.errs, 4000), tail(o2.out, 4000))
+	}
+	for _, d := range o2.of(event.RunLog) {
+		if b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(d["bytes"])); bytes.Contains(b, []byte("without a resume")) {
+			t.Errorf("run 2 wrote: %s", b)
+		}
+	}
+	sessions := o2.of(event.SessionStarted)
+	if len(sessions) != 1 {
+		t.Fatalf("run 2's dev.qory.session.started is %v; want one", sessions)
+	}
+	args, _ := sessions[0]["args"].([]any)
+	if at := slices.Index(args, any("exec")); at < 0 || at+2 >= len(args) || args[at+1] != "resume" || args[at+2] != threadID || !slices.Contains(args, any("--model")) {
+		t.Errorf("run 2's arguments %q; want exec resume %s, and --model", args, threadID)
+	}
+	if started := o2.of("dev.qory.runtime.started"); len(started) != 1 || started[0]["source"] != "resume" || started[0]["session_id"] != threadID {
+		t.Errorf("run 2's dev.qory.runtime.started is %v; want one, from resume, with thread %s", started, threadID)
+	}
+	if len(log2) == 0 || log2[0].Key != codexServe || !slices.Contains(log2[0].Texts, "user: "+prompt1) || !slices.Contains(log2[0].Texts, "assistant: Hi") ||
+		!slices.Contains(log2[0].Texts, "user: "+prompt2) {
+		t.Errorf("run 2's requests:%s\nwant the first with run 1's prompt, its answer and run 2's prompt", codexEntries(log2))
+	}
+	if len(log1) > 0 && len(log2) > 0 {
+		t.Logf("the instructions of run 1's first request: %q\nof run 2's: %q", log1[0].Instructions, log2[0].Instructions)
+	}
+	continued(t, ctl, run2, transcript, threadID, tpath)
+	codexNoKeyValue(t, o1, []string{codexKey(codexServe)}, s1.dir)
+	codexNoKeyValue(t, o2, []string{key2}, s2.dir)
 }
