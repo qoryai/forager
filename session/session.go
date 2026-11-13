@@ -288,10 +288,15 @@ func environment(base []string, sets ...[]string) []string {
 }
 
 // heartbeat emits run.heartbeat every interval, its elapsed seconds counted from
-// start, until the returned function is called; calling it again does nothing.
-func heartbeat(ctx context.Context, interval time.Duration, start time.Time, write func(string, any)) func() {
+// start, until stop is called; calling stop again does nothing. beat emits one
+// run.heartbeat at once, the same as the interval's, for a batch that must go out
+// before the next interval; after stop it emits nothing.
+func heartbeat(ctx context.Context, interval time.Duration, start time.Time, write func(string, any)) (stop, beat func()) {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
+	one := func() {
+		write(event.RunHeartbeat, map[string]any{"elapsed_seconds": int(time.Since(start).Seconds()), "interval_seconds": int(math.Ceil(interval.Seconds()))})
+	}
 	go func() {
 		defer close(stopped)
 		t := time.NewTicker(interval)
@@ -299,7 +304,7 @@ func heartbeat(ctx context.Context, interval time.Duration, start time.Time, wri
 		for {
 			select {
 			case <-t.C:
-				write(event.RunHeartbeat, map[string]any{"elapsed_seconds": int(time.Since(start).Seconds()), "interval_seconds": int(math.Ceil(interval.Seconds()))})
+				one()
 			case <-done:
 				return
 			case <-ctx.Done():
@@ -307,7 +312,23 @@ func heartbeat(ctx context.Context, interval time.Duration, start time.Time, wri
 			}
 		}
 	}()
-	return sync.OnceFunc(func() { close(done); <-stopped })
+	var mu sync.Mutex
+	ended := false
+	stop = sync.OnceFunc(func() {
+		mu.Lock()
+		ended = true
+		mu.Unlock()
+		close(done)
+		<-stopped
+	})
+	beat = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !ended && ctx.Err() == nil {
+			one()
+		}
+	}
+	return stop, beat
 }
 
 func hostname() string {

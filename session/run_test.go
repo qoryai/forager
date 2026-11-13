@@ -67,7 +67,8 @@ func runClosed(ctx context.Context, sp runSpec) (*session.Result, *session.Close
 // outcomeOf is the outcome qory closes a run of one session with: failed with -1 for a
 // session that did not start; for one that did, the session's state and exit code,
 // with timeout and 124 at the time limit, interrupted at a stop from where it was
-// started, and model_key_limit after a stop in the gateway's answer to a batch.
+// started, and model_key_limit, model_key_switch or model_key_unauthorized after a
+// stop in the gateway's answer to a batch.
 func outcomeOf(res *session.Result, err error) session.Outcome {
 	switch {
 	case err != nil || res == nil || res.RunClosed:
@@ -76,8 +77,8 @@ func outcomeOf(res *session.Result, err error) session.Outcome {
 		return session.Outcome{State: event.StateCancelled, Reason: event.ReasonTimeout, ExitCode: 124}
 	case res.Reason == event.ReasonInterrupted:
 		return session.Outcome{State: event.StateCancelled, Reason: event.ReasonInterrupted, ExitCode: res.ExitCode}
-	case res.Reason == event.ReasonModelKeyLimit:
-		return session.Outcome{State: event.StatePaused, Reason: event.ReasonModelKeyLimit, ExitCode: res.ExitCode}
+	case res.Reason == event.ReasonModelKeyLimit, res.Reason == event.ReasonModelKeySwitch, res.Reason == event.ReasonModelKeyUnauthorized:
+		return session.Outcome{State: res.State, Reason: res.Reason, ExitCode: res.ExitCode}
 	}
 	return session.Outcome{State: res.State, ExitCode: res.ExitCode}
 }

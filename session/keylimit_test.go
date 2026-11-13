@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -203,5 +204,152 @@ func TestTheCloseTakesPausedOnlyWithModelKeyLimit(t *testing.T) {
 	}
 	if closed.State != event.StatePaused || closed.Reason != event.ReasonModelKeyLimit {
 		t.Errorf("the close %+v", closed)
+	}
+}
+
+// stopWith is the gateway's answer to a batch that stops the session with reason.
+func stopWith(reason string) linktest.Reply {
+	return linktest.Reply{Status: 200, Body: map[string]any{"stop": map[string]any{"reason": reason}}}
+}
+
+// TestAStopForAKeyOutAfterA401EndsTheSession pins the two stops for a model key the
+// provider returned 401 for: model_key_switch ends the session paused and
+// model_key_unauthorized failed, whatever the runtime's exit status, 0 included; the
+// session reports each, and the close takes each with its state, after that session.
+func TestAStopForAKeyOutAfterA401EndsTheSession(t *testing.T) {
+	for _, c := range []struct {
+		reason, state, report string
+		exit                  int
+	}{
+		{"model_key_switch", "paused", "the runtime was stopped and the run pauses: the model provider returned 401 for the session's model key, and the run continues with another key of the run", 0},
+		{"model_key_switch", "paused", "", 3},
+		{"model_key_unauthorized", "failed", "the runtime was stopped and the run fails: the model provider returned 401 for every model key of the run, and no renewal of a key ended it", 0},
+		{"model_key_unauthorized", "failed", "", 3},
+	} {
+		t.Run(fmt.Sprintf("%s %d", c.reason, c.exit), func(t *testing.T) {
+			sp, g, reports := remoteSpec(t, 0)
+			sp.Args = []string{"-c", fmt.Sprintf("echo last; exit %d", c.exit)}
+			g.OnBatch(func(evs []map[string]any) linktest.Reply {
+				if hasLog(evs, "last") {
+					return stopWith(c.reason)
+				}
+				return linktest.Reply{Status: 200}
+			})
+			res, closed, err := runClosed(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.State != c.state || res.Reason != c.reason || res.ExitCode != c.exit {
+				t.Errorf("result %+v", res)
+			}
+			if state, reason, code := endedWith(t, res); state != c.state || reason != c.reason || code != c.exit {
+				t.Errorf("session.exited %s %s %d", state, reason, code)
+			}
+			if closed.State != c.state || closed.Reason != c.reason || closed.ExitCode != c.exit {
+				t.Errorf("the close %+v", closed)
+			}
+			if c.report != "" && !slices.Contains(reports(), c.report) {
+				t.Errorf("reports %q", reports())
+			}
+			if own, posted := exitedOf(t, res, g); posted == nil || own["reason"] != c.reason || posted["reason"] != c.reason || own["state"] != c.state {
+				t.Errorf("run.exited %v, posted %v", own, posted)
+			}
+		})
+	}
+}
+
+// TestTheCloseTakesAKeyReasonOnlyAfterSuchASession pins model_key_switch and
+// model_key_unauthorized at the close: each only with its state, paused and failed,
+// after a last session that ended with that reason, never after one that ended with
+// the other.
+func TestTheCloseTakesAKeyReasonOnlyAfterSuchASession(t *testing.T) {
+	for _, c := range []struct{ reason, state, other string }{
+		{"model_key_switch", "paused", "model_key_unauthorized"},
+		{"model_key_unauthorized", "failed", "model_key_switch"},
+	} {
+		t.Run(c.reason, func(t *testing.T) {
+			sp, g, _ := remoteSpec(t, 0)
+			sp.Args = []string{"-c", "echo last; exit 0"}
+			g.OnBatch(func(evs []map[string]any) linktest.Reply {
+				if hasLog(evs, "last") {
+					return stopWith(c.reason)
+				}
+				return linktest.Reply{Status: 200}
+			})
+			r, err := session.Open(context.Background(), opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Close(context.Background(), session.Outcome{State: c.state, Reason: c.reason}); err == nil {
+				t.Error("a run with no join closed with", c.reason)
+			}
+			res, err := r.Join(context.Background(), sp.SessionSpec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Reason != c.reason {
+				t.Fatalf("result %+v", res)
+			}
+			for _, o := range []session.Outcome{
+				{State: "succeeded", Reason: c.reason},
+				{State: "cancelled", Reason: c.reason},
+				{State: map[string]string{"paused": "failed", "failed": "paused"}[c.state], Reason: c.reason},
+				{State: map[string]string{"model_key_switch": "paused", "model_key_unauthorized": "failed"}[c.other], Reason: c.other},
+				{State: "paused", Reason: "model_key_limit"},
+			} {
+				if _, err := r.Close(context.Background(), o); err == nil {
+					t.Errorf("closed %+v", o)
+				}
+			}
+			closed, err := r.Close(context.Background(), session.Outcome{State: c.state, Reason: c.reason, ExitCode: res.ExitCode})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if closed.State != c.state || closed.Reason != c.reason {
+				t.Errorf("the close %+v", closed)
+			}
+		})
+	}
+}
+
+// TestTheStopIsReadBeforeTheExitOfASilentRuntime pins the batch before
+// dev.qory.session.exited: a runtime that writes nothing and exits 0 after the
+// gateway's proxy passed a refusal, here the file flag the runtime makes, still ends
+// paused with model_key_switch. The session posts a heartbeat after the exit, whose
+// answer has the stop, before the batch with dev.qory.session.exited, which no stop
+// answers: the gateway takes the stop back once it accepts that event.
+func TestTheStopIsReadBeforeTheExitOfASilentRuntime(t *testing.T) {
+	flag := filepath.Join(t.TempDir(), "refused")
+	sp, g, _ := remoteSpec(t, 0)
+	sp.Args = []string{"-c", fmt.Sprintf("sleep 0.3; : > %q; exit 0", flag)}
+	var mu sync.Mutex
+	var order []string
+	g.OnBatch(func(evs []map[string]any) linktest.Reply {
+		mu.Lock()
+		defer mu.Unlock()
+		if slices.Contains(order, "exited") {
+			return linktest.Reply{Status: 200}
+		}
+		if len(ofType(evs, event.SessionExited)) > 0 {
+			order = append(order, "exited")
+			return linktest.Reply{Status: 200}
+		}
+		if _, err := os.Stat(flag); err == nil {
+			order = append(order, "stop")
+			return stopWith(event.ReasonModelKeySwitch)
+		}
+		return linktest.Reply{Status: 200}
+	})
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != "paused" || res.Reason != "model_key_switch" || res.ExitCode != 0 {
+		t.Errorf("result %+v", res)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) < 2 || order[0] != "stop" || order[len(order)-1] != "exited" {
+		t.Errorf("batches after the runtime's flag %q; want a stop answered, then the batch with session.exited", order)
 	}
 }
