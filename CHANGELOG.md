@@ -1272,16 +1272,17 @@ release may change what an existing document does, and says so under Upgrading.
   `request.json` and the CA files go together: at the run's end, when its open or a
   reopen fails for good, when `qory run resend` ends the run, and in a sweep every 10
   minutes of each record unchanged for 15 minutes. A join request that repeats the last
-  join the gateway accepted gets the same answer, across a restart too. Before, a run open at a gateway that stopped was over,
-  and `qory run resend` ended it with `gateway_lost`.
+  join the gateway numbered, answered `200` or `403` `placeholder_conflict`, gets the
+  same answer, across a restart too. Before, a run open at a gateway that stopped was
+  over, and `qory run resend` ended it with `gateway_lost`.
 - A run request behind a separate gateway counts against the bounds of 64 connections
   of one source and 256 of one IPv6 /48 only until its open starts, once its run key
   passes and its body is read. It counts against the bound of 4096 connections until
   its run answer, `2xx`, or until its connection closes. Before, it counted against all
   three until its run answer, which may take 140 seconds while Qory Apiary restarts: 64
   runs that opened behind one address, such as a NAT's, then made the gateway close
-  every new connection from that address, the batch and proxy connections of its live
-  runs among them. A run request whose run key fails counts against all three, as
+  each connection accepted after that from that address, the batch and proxy
+  connections of its live runs among them. A run request whose run key fails counts against all three, as
   before.
 - An adapter's output that fails `credential.schema.json` is refused with `Fix the
   output of the adapter <PATH> to match credential.schema.json: <LOCATIONS>`, where
@@ -2297,15 +2298,22 @@ release may change what an existing document does, and says so under Upgrading.
   nothing to it, and dials the gateway again for up to 120 seconds, waiting 250 ms after
   the first failed dial and twice as long after each one after it, up to 2 seconds. A
   gateway that restarts within the 120 seconds serves the connection; after them the
-  forwarder closes it. Before, the forwarder dialed once, for up to 10 seconds, and
-  closed the connection when that dial failed. On one machine nothing changes.
-- `Join` sends the join request again, unchanged, after a try that gets no answer or a
-  `503` with no code, for up to 120 seconds, with waits of 1, 2, 4 and 8 seconds, then
-  8 seconds each, and flushes the run's events before each try after the first. Behind
-  a separate gateway, `Close` waits up to 180 seconds for the gateway to accept the
-  run's last events, and returns as soon as it accepts them or answers `410`. Both
-  cover a separate gateway that restarts in up to 120 seconds. Before, a join was tried
-  once and the close waited 15 seconds.
+  forwarder closes it. If the agent closed its connection during the hold, the
+  forwarder sends nothing of it, so a plain request or a `POST` to the run API on a
+  closed connection never runs. Before, the forwarder dialed once, for up to 10 seconds,
+  and closed the connection when that dial failed. On one machine nothing changes.
+- Behind a separate gateway, `Join` sends the join request again, unchanged, after a
+  try that gets no answer or a `503` with no code, for up to 120 seconds, with waits of
+  1, 2, 4 and 8 seconds, then 8 seconds each, and flushes the run's events before each
+  try after the first. Each flush posts a batch the gateway did not accept again at
+  once, so the events and the join reach a gateway back within the 120 seconds within
+  one wait. `Close` waits up to 180 seconds for the gateway to accept the run's last
+  events, and returns as soon as it accepts them or the batch gets a `410`. Both cover
+  a separate gateway that restarts in up to 120 seconds. Before, a join was tried once
+  and the close waited 15 seconds. On one machine a join is tried once, as before.
+- A `Flush` of a sink tries a batch the server or the gateway did not accept again at
+  once, without the rest of the wait between two tries. Before, the batch waited up to
+  60 seconds for its next try.
 - On one machine, the walled run's forwarder closes a connection that does not open
   with the relay's preamble and the run's proxy secret within 10 seconds, as it does
   behind a separate gateway, and writes the same preamble on toward the proxy. Before,

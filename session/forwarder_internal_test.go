@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1335,9 +1336,75 @@ func TestTheForwarderClosesAConnectionAtTheHoldsEnd(t *testing.T) {
 	if elapsed < hold-50*time.Millisecond || elapsed > hold+2*time.Second {
 		t.Errorf("the connection closed after %v, want about %v", elapsed, hold)
 	}
-	// Waits of 250, 500 and 1000 ms: three or four tries fit in the hold.
-	if n := tries.Load(); n < 2 || n > 4 {
-		t.Errorf("the forwarder dialed %d times in %v", n, hold)
+	// Tries at 0 and 250 ms; the third would come 500 ms later, at 750 ms, past the
+	// hold: two tries fit in it.
+	if n := tries.Load(); n != 2 {
+		t.Errorf("the forwarder dialed %d times in %v, want 2", n, hold)
+	}
+}
+
+// TestTheForwarderDropsARequestOfAConnectionClosedDuringTheHold pins the check after a
+// held dial: a plain request whose agent closed its connection while the forwarder
+// dialed again never reaches the gateway, which gets a connection that ends with
+// nothing; a plain request whose agent is still there reaches it whole, its body
+// included.
+func TestTheForwarderDropsARequestOfAConnectionClosedDuringTheHold(t *testing.T) {
+	cert, pool := holdCert(t)
+	const body = "a-body-of-the-request"
+	for _, gone := range []bool{true, false} {
+		t.Run(fmt.Sprintf("gone %v", gone), func(t *testing.T) {
+			addr := freeAddr(t)
+			f, login, tries := holdForwarder(t, addr, pool, time.Minute)
+			agent, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer agent.Close()
+			io.WriteString(agent, "POST http://api.example/v1 HTTP/1.1\r\nHost: api.example\r\nContent-Length: "+strconv.Itoa(len(body))+"\r\n"+login+"\r\n"+body)
+			waitTries(t, tries, 2)
+			if gone {
+				agent.Close()
+			}
+			gw, err := tls.Listen("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer gw.Close()
+			got := make(chan string, 1)
+			go func() {
+				c, err := gw.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				// What the gateway reads until the connection ends or the body is in.
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				var b []byte
+				buf := make([]byte, 4096)
+				for !strings.HasSuffix(string(b), body) {
+					n, err := c.Read(buf)
+					b = append(b, buf[:n]...)
+					if err != nil {
+						if !errors.Is(err, io.EOF) {
+							b = append(b, " error: "+err.Error()...)
+						}
+						break
+					}
+				}
+				got <- string(b)
+			}()
+			select {
+			case b := <-got:
+				switch {
+				case gone && b != "":
+					t.Errorf("the gateway got %q from an agent that went away", b)
+				case !gone && (!strings.HasPrefix(b, "POST http://api.example/v1 HTTP/1.1\r\n") || !strings.HasSuffix(b, "\r\n\r\n"+body) || strings.Contains(b, "Proxy-Authorization")):
+					t.Errorf("the gateway got %q", b)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the held connection did not reach the gateway once it listened")
+			}
+		})
 	}
 }
 

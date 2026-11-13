@@ -271,8 +271,8 @@ One run, on a developer machine, with a server configured:
    fifteen seconds for the sinks to flush, and reports what the server has not accepted.
    Behind a separate gateway it waits up to 180 seconds: the 120 seconds a restart of
    the gateway may take, and the 60 seconds the session may wait between two tries of a
-   batch. It stops waiting as soon as the gateway accepts the last batch or answers
-   `410`.
+   batch. It stops waiting as soon as the gateway accepts the last batch or the batch
+   gets a `410`.
    A runtime killed by a signal exits as `-1` with `signal` set.
 
 A run may have a time limit, which covers the run's host work and every session. When
@@ -2431,8 +2431,8 @@ Behind a separate gateway the gateway writes these files too, each mode `0600`, 
 gateway that starts again on the same directory can reopen the run (§The gateway's link,
 A restart). The local link writes none of them.
 
-- `request.json`: what the gateway decides the run by of its run request, written as
-  the run opens: `version`, `wall`, and the session's `narrowing` and `images` when the
+- `request.json`: the members of the run request that set the run's wall, narrowing
+  and images, written as the run opens: `version`, `wall`, and the session's `narrowing` and `images` when the
   request has them. An image reference may contain a registry's credentials, as the
   run request does.
 - `ca.pem` and `ca.key`: the certificate and the private key of the run's certificate
@@ -3889,7 +3889,7 @@ run key verifies: a batch, a reload, a join, a transcript request, or a connecti
 the run's proxy or stack proxy. One reopen of a run runs at a time, and every request
 of the run waits for it. The reopen reads the record back, attaches the run again under
 the run key of that request, with the tries of an open (Tries as a run opens, below),
-sends again what the server has not accepted, decides the run again from `request.json`
+sends again what the server has not accepted, sets the run up again from `request.json`
 and the run configuration in the attach's answer, with the run's certificate authority from
 `ca.pem` and `ca.key`, and goes on numbering the record after its last `sequence`. The
 reopen reads the certificate authority before the attach, so a record whose CA files
@@ -4372,22 +4372,28 @@ join that the gateway answers with a `403`, or that fails those checks, writes
 `reason` and `duration_ms: 0`, and no `dev.qory.session.started` (§Sequence, The run and
 its sessions). The run stays open.
 
-The session sends a join request again, unchanged, after a try that gets no answer
-(the connection does not open, its TLS or its binding fails, or it resets or times
-out) and after a `503` with no code: a separate gateway may be restarting. It tries for
-up to 120 seconds, with waits of 1, 2, 4 and 8 seconds, then 8 seconds each. Before
-each try after the first it flushes its batches, so the previous session's
-`dev.qory.session.exited` reaches the gateway before the join. Every other answer, a
-`400`, `403` or `410` among them, ends its tries, and the join has that answer. A join
-with no answer after 120 seconds fails as after one try.
+Behind a separate gateway, the session sends a join request again, unchanged, after a
+try that gets no answer (the connection does not open, its TLS or its binding fails, or
+it resets or times out) and after a `503` with no code: the gateway may be restarting.
+It tries for up to 120 seconds, with waits of 1, 2, 4 and 8 seconds, then 8 seconds
+each. Before each try after the first it flushes its batches, so the previous session's
+`dev.qory.session.exited` reaches the gateway before the join; a batch the gateway did
+not accept is posted again at each of these waits, so a gateway back within the 120
+seconds gets the batch and then the join within one wait. Every other answer, a `400`,
+`403` or `410` among them, ends its tries, and the join has that answer. A join with
+no answer after 120 seconds fails as after one try. On the local link the session
+sends a join request once.
 
 Behind a separate gateway, a join request that repeats the last join the gateway
-accepted gets that join's `200` again, with the same session number and model key, and
-nothing is numbered anew. A join request repeats the last join when that join's
-session has neither started nor exited and the request has the same `passes`,
-`model_key` and `model_credential`. The gateway writes each join it numbers to
-`joins.jsonl` before it sends the join's answer (The record files), so a repeated join
-request gets the same `200` from the gateway that starts again.
+numbered gets that join's answer again, and nothing is numbered anew: for a join
+answered `200`, the same `200`, with the same session number and model key; for a join
+answered `403` `placeholder_conflict`, the same `403`, as long as the request's
+`passes` still contain a placeholder of a credential or a tool the gateway holds for
+the run. A join request repeats the last join when that join's session has neither
+started nor exited and the request has the same `passes`, `model_key` and
+`model_credential`. The gateway writes each join it numbers to `joins.jsonl` before it
+sends the join's answer (The record files), so a repeated join request gets the same
+answer from the gateway that starts again.
 
 **Events.** The session posts its events to `events.url`, in batches cut as toward the
 server (§The server, Delivery), with `Content-Type: application/cloudevents-batch+json`.
@@ -4715,12 +4721,16 @@ without one, opens every connection to the gateway's one address over TLS 1.3, w
 the link is (The binding, above), and with `QORY-RELAY`, a space, the run key and a
 newline. Behind a wall the forwarder takes the relay's connection, which opens with
 `QORY-RELAY` and a value the session makes for the run's forwarder alone, and takes that
-line off before anything reaches the gateway. While the gateway's one address cannot be
-reached, a connection refused or reset, a TLS handshake cut short or a binding that
-fails, the forwarder keeps the connection it took open, writes nothing to it, and dials
-again for up to 120 seconds, waiting 250 ms after the first failed dial and twice as
-long after each one after it, up to 2 seconds; after them it closes the connection. On
-each connection it sends the run key only once the binding passed. Without a wall, on
+line off before anything reaches the gateway. After any failed dial to the gateway's one
+address, such as a connection refused or reset, a TLS handshake cut short or a binding
+that fails, the forwarder keeps the connection it took open, writes nothing to it, and
+dials again for up to 120 seconds, waiting 250 ms after the first failed dial and twice
+as long after each one after it, up to 2 seconds; after them it closes the connection.
+When a dial after the first succeeds, the forwarder first checks the agent's
+connection: if the agent closed it, or it reset, during the hold, the forwarder closes
+both connections and sends nothing, so a plain request or a `POST` to the run API on a
+closed connection never runs. On each connection it sends the run key only once the
+binding passed. Without a wall, on
 one machine as behind a separate gateway, the agent's proxy URL is the forwarder's
 address on loopback with a password, `http://qory:<password>@127.0.0.1:<port>`, the
 password a secret the session

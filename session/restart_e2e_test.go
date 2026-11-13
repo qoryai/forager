@@ -52,28 +52,41 @@ func closeSeparate(t *testing.T, g *gateway.Gateway) gateway.Delivery {
 // receives every sequence once and one run.exited, the session's, succeeded; no event
 // of the session, of the gateway's record or of the server has run_closed,
 // gateway_lost or session_lost; the run is attached twice under the same run key, with
-// the same instance id; nothing is undelivered; and the run's CA key goes at its end.
+// the same instance id; nothing is undelivered; and the run's CA files go at its end.
 //
 // The cases: the agent's request through the proxy after the restart, which gets the
-// reopened proxy's 403; the session's last flush while the gateway is down; and a
-// re-attach that gets a 503 three times before its 200.
+// reopened proxy's 403; the agent's request while the gateway is down, which the
+// session's forwarder holds until the reopened proxy serves it, a 403 too; the
+// session's last flush while the gateway is down; a re-attach that gets a 503 three
+// times before its 200; and a second join that starts while the gateway is down,
+// which the session sends again until the gateway that starts again numbers it
+// session 2, after session 1 of its joins.jsonl.
 func TestARunGoesOnThroughAGatewayRestart(t *testing.T) {
 	cases := []struct {
 		name string
 		// down is true when the agent ends while the gateway is down, so the session's
-		// last batches wait for the restart; otherwise the agent requests a denied URL
-		// after the restart.
+		// last batches wait for the restart; otherwise the agent requests a denied URL.
 		down bool
+		// requestDown is true when the agent requests the denied URL while the gateway
+		// is down; otherwise it requests it after the restart.
+		requestDown bool
+		// secondJoin is true when session 1 ends before the gateway's Close and
+		// session 2 joins while the gateway is down.
+		secondJoin bool
 		// fails is how many re-attaches get a 503.
 		fails int
 	}{
 		{name: "a request after the restart"},
+		{name: "a request while the gateway is down", requestDown: true},
 		{name: "the last flush while the gateway is down", down: true},
 		{name: "a re-attach answered 503 three times", fails: 3},
+		{name: "a second join while the gateway is down", secondJoin: true},
 	}
-	// The session's last flush waits up to 60 seconds for the gateway that starts again.
+	// The session's last flush, and a join request, wait up to 60 seconds for the
+	// gateway that starts again.
 	finalWait := session.SetFinalWait(60 * time.Second)
 	t.Cleanup(func() { session.SetFinalWait(finalWait) })
+	t.Cleanup(session.SetJoinRetry(60*time.Second, 100*time.Millisecond, 200*time.Millisecond, 400*time.Millisecond))
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			a := newApiary(t)
@@ -89,7 +102,10 @@ func TestARunGoesOnThroughAGatewayRestart(t *testing.T) {
 
 			files := t.TempDir()
 			wait, got := filepath.Join(files, "wait"), filepath.Join(files, "got")
-			env := []string{"FAKE_WAIT=" + wait}
+			var env []string
+			if !c.secondJoin {
+				env = append(env, "FAKE_WAIT="+wait)
+			}
 			if !c.down {
 				env = append(env, "FAKE_DENIED_URL=http://denied.example/after", "FAKE_GOT="+got)
 			}
@@ -102,22 +118,59 @@ func TestARunGoesOnThroughAGatewayRestart(t *testing.T) {
 
 			done := make(chan *session.Result, 1)
 			var closed *session.Closed
+			// joined gets session 1's result, and second starts session 2, in the case
+			// of a second join.
+			joined, second := make(chan *session.Result, 1), make(chan struct{})
 			go func() {
-				res, cl, err := runClosed(context.Background(), sp)
+				if !c.secondJoin {
+					res, cl, err := runClosed(context.Background(), sp)
+					if err != nil {
+						t.Error(err)
+					}
+					closed = cl
+					done <- res
+					return
+				}
+				ctx := context.Background()
+				r, err := session.Open(ctx, opened(sp))
 				if err != nil {
 					t.Error(err)
+					done <- nil
+					return
+				}
+				first, err := r.Join(ctx, sp.SessionSpec)
+				if err != nil {
+					t.Error(err)
+				}
+				joined <- first
+				<-second
+				res, err := r.Join(ctx, sp.SessionSpec)
+				cl, cerr := r.Close(ctx, outcomeOf(res, err))
+				if err != nil || cerr != nil {
+					t.Error(err, cerr)
 				}
 				closed = cl
 				done <- res
 			}()
-			// The agent runs: the open's and the join's policy_applied are in the
-			// session's record, and the server received the run's first batch.
-			waitFor(t, func() bool {
-				if _, err := os.Stat(filepath.Join(own, "session.jsonl")); err != nil {
-					return false
+			if c.secondJoin {
+				select {
+				case first := <-joined:
+					if first == nil || first.Session != 1 || first.State != event.StateSucceeded {
+						t.Fatalf("session 1: %+v", first)
+					}
+				case <-time.After(time.Minute):
+					t.Fatal("session 1 did not end")
 				}
-				return len(ofType(events(t, &session.Result{Dir: own}), "dev.qory.run.policy_applied")) == 2 && len(a.receivedTypes()) > 0
-			})
+			} else {
+				// The agent runs: the open's and the join's policy_applied are in the
+				// session's record, and the server received the run's first batch.
+				waitFor(t, func() bool {
+					if _, err := os.Stat(filepath.Join(own, "session.jsonl")); err != nil {
+						return false
+					}
+					return len(ofType(events(t, &session.Result{Dir: own}), "dev.qory.run.policy_applied")) == 2 && len(a.receivedTypes()) > 0
+				})
+			}
 
 			if d := closeSeparate(t, g); d.RunClosed {
 				t.Errorf("the first gateway's Delivery %+v; want no run closed", d)
@@ -126,9 +179,17 @@ func TestARunGoesOnThroughAGatewayRestart(t *testing.T) {
 				t.Fatal("the suspended run has no ca.key")
 			}
 			down := time.Now()
-			if c.down {
+			switch {
+			case c.secondJoin:
+				// Session 2's join request gets no answer, and is sent again until the
+				// restart.
+				close(second)
+			case c.requestDown:
+				// The agent's request reaches the session's forwarder, which holds it.
+				os.WriteFile(wait, nil, 0o600)
+			case c.down:
 				// The agent ends, and the session closes the run, while the gateway is
-				// down. The session's flush before its session.exited ends after
+				// down. The flush after the session's session.exited ends after
 				// closeWait, 3 s in these tests; then the session's last flush waits for
 				// the gateway's restart.
 				os.WriteFile(wait, nil, 0o600)
@@ -140,11 +201,22 @@ func TestARunGoesOnThroughAGatewayRestart(t *testing.T) {
 				}
 			}
 			time.Sleep(time.Until(down.Add(3 * time.Second)))
+			switch {
+			case c.secondJoin:
+				steps := ofType(events(t, &session.Result{Dir: own}), "dev.qory.run.step_started")
+				if !slices.ContainsFunc(steps, func(e map[string]any) bool { return data(e)["name"] == "join session 2" }) {
+					t.Fatal("session 2's join did not start while the gateway was down")
+				}
+			case c.requestDown:
+				if exists(got) {
+					t.Fatal("the agent's request was answered while the gateway was down")
+				}
+			}
 			a.mu.Lock()
 			a.failAttaches = c.fails
 			a.mu.Unlock()
 			g = separateAt(t, a, dir, addr, certFile, keyFile)
-			if !c.down {
+			if !c.down && !c.requestDown && !c.secondJoin {
 				os.WriteFile(wait, nil, 0o600)
 			}
 
@@ -160,9 +232,17 @@ func TestARunGoesOnThroughAGatewayRestart(t *testing.T) {
 			if res.State != event.StateSucceeded || res.RunClosed || closed == nil || closed.Undelivered != 0 {
 				t.Errorf("result %+v, closed %+v", res, closed)
 			}
+			if c.secondJoin && res.Session != 2 {
+				t.Errorf("the second join is session %d, want 2", res.Session)
+			}
 			if !c.down {
-				if b, _ := os.ReadFile(got); string(b) != "http://denied.example/after 403\n" {
-					t.Errorf("the agent's request after the restart: %q; want a 403", b)
+				want := "http://denied.example/after 403\n"
+				if c.secondJoin {
+					// Session 1's request before the Close, and session 2's after the restart.
+					want += want
+				}
+				if b, _ := os.ReadFile(got); string(b) != want {
+					t.Errorf("the agent's requests: %q; want %q", b, want)
 				}
 			}
 
@@ -212,7 +292,9 @@ func TestARunGoesOnThroughAGatewayRestart(t *testing.T) {
 				t.Errorf("%d attaches got a 200; want 2", succeeded)
 			}
 
-			waitFor(t, func() bool { return !exists(filepath.Join(records, "ca.key")) })
+			waitFor(t, func() bool {
+				return !exists(filepath.Join(records, "ca.key")) && !exists(filepath.Join(records, "ca.pem"))
+			})
 			if d := closeSeparate(t, g); d.Undelivered != 0 || d.RunClosed {
 				t.Errorf("the second gateway's Delivery %+v", d)
 			}

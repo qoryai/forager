@@ -54,11 +54,12 @@ type join struct {
 // dev.qory.session.exited not numbered.
 func (j *join) open() bool { return j.accepted && !j.exited }
 
-// replays reports whether req is the join request of j sent again, whose 200 its
-// session may not have had: j was answered 200, neither its session.started nor its
-// session.exited is numbered, and req has its passes, model_key and model_credential.
+// replays reports whether req is the join request of j sent again, whose 200 or 403
+// its session may not have had: neither j's session.started nor its session.exited is
+// numbered, and req has its passes, model_key and model_credential. The session
+// writes the session.exited of a join answered 403 once it has the 403.
 func (j *join) replays(req *server.LinkJoinRequest) bool {
-	return j.accepted && !j.started && !j.exited && slices.Equal(j.passes, req.Passes) && j.noKey == !req.ModelKey && j.credential == req.ModelCredential
+	return !j.started && !j.exited && slices.Equal(j.passes, req.Passes) && j.noKey == !req.ModelKey && j.credential == req.ModelCredential
 }
 
 // passing reports whether an open join of the run passes a value for the variable:
@@ -113,9 +114,10 @@ func readJoinRequest(body []byte) (*server.LinkJoinRequest, bool) {
 }
 
 // joinSession answers a join request of the run runID: 200 with the session's number,
-// in the order the run's joins arrive; on the one address, 200 again with the same
-// number and model key for the run's last join sent again ([join.replays]), which
-// numbers nothing; 403 placeholder_conflict, numbered too, for
+// in the order the run's joins arrive; on the one address, for the run's last join
+// sent again ([join.replays]), the same answer, which numbers nothing: 200 with the
+// same number and model key, or the 403 of the passes' conflict; 403
+// placeholder_conflict, numbered too, for
 // passes that contain a placeholder of a credential or a tool the gateway holds for
 // the run, which leaves the run open; 410 for a run that ended at the gateway; and 400
 // invalid_request for a body the schema refuses, model_credential beside a model_key
@@ -184,12 +186,17 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		gone(w, end)
 		return
 	}
-	if n := len(lr.joins); lr.remote && n > 0 && lr.joins[n-1].replays(req) {
-		// The session sends a join again when it had no answer, a gateway that stopped
-		// as it answered say: the same answer, and nothing more numbered.
+	// The session sends a join again when it had no answer, a gateway that stopped as
+	// it answered say: the same answer, and nothing more numbered. A refused join whose
+	// passes no longer conflict, after a reload, is numbered anew.
+	if n := len(lr.joins); lr.remote && n > 0 && lr.joins[n-1].replays(req) && (lr.joins[n-1].accepted || conflict != nil) {
 		last := *lr.joins[n-1]
 		digest := lr.reloadDigest
 		lr.mu.Unlock()
+		if !last.accepted {
+			refuseOpen(w, conflict)
+			return
+		}
 		lr.joinAnswer(s, w, r, digest, last.session, last.model)
 		return
 	}
