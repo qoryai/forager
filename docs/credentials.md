@@ -251,6 +251,11 @@ an entry of the key that is not `rejected`. The session gets only the answer to 
 second request. The proxy keeps a copy of each request
 body up to 8 MiB for this; a larger body goes once.
 
+Keys of the format `openai-responses` keep one key for each session, because Codex
+sends its reasoning encrypted for one account. The proxy sends no such request again:
+the provider's first `429` puts the key in cooldown and reaches Codex, and the run
+pauses as below, also when another key is out of cooldown.
+
 A key with `use_up_to_percent` is also in cooldown while a window in its
 `use_up_to_windows` is at or above the percentage, until that window resets. The
 gateway reads each window's use from the provider's responses to the run and from the
