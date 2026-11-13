@@ -94,14 +94,16 @@ func TestEverySchemaCompiles(t *testing.T) {
 
 // TestDocumentFixturesValidate pins that every policy, server, configuration, run
 // registration, run configuration, attach answer, outcome, batch answer, API format,
-// descriptor, model keys report and model keys answer fixture passes its schema.
+// descriptor, model keys report, model keys answer and secrets request fixture passes
+// its schema.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json",
 		"run-attach-answer.schema.json", "run-outcome.schema.json", "batch-answer.schema.json",
 		"api-format.schema.json", "descriptor.schema.json",
-		"model-keys-report.schema.json", "model-keys-answer.schema.json")
+		"model-keys-report.schema.json", "model-keys-answer.schema.json", "secrets-request.schema.json")
 	dirs := map[string]string{
+		"fixtures/secrets-request":   "secrets-request.schema.json",
 		"fixtures/model-keys-report": "model-keys-report.schema.json",
 		"fixtures/model-keys-answer": "model-keys-answer.schema.json",
 		"fixtures/api-format":        "api-format.schema.json",
@@ -210,7 +212,9 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // with and without model_credential, a join answer with and
 // without model_credential, a batch answer with stop and an empty one, a batch of a
 // session.exited and a run.exited paused with model_key_limit and one of a session.exited
-// alone, a batch of two session.transcript chunks, and refusals from the gateway, two internal ones among them, one whose message spans
+// alone, the same two with model_key_switch, and with model_key_unauthorized and failed,
+// a batch answer with each of those two stops, a batch of two session.transcript chunks,
+// and refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
 	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
@@ -371,7 +375,20 @@ const beyondLinkSchema = "-beyond-schema-"
 // failed or cancelled with model_key_limit, a session.exited paused with no reason or
 // with stopped and exit code -1, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
 // without its session id or over 32 KiB, and a descriptor whose resume has no args, a
-// prefix outside the home or a path without {session_id}. A fixture whose name contains
+// prefix outside the home or a path without {session_id}. For model keys of another
+// format: a run configuration whose API credential has account_header or account_claim
+// alone, both without oauth, with oauth false or beside a header scheme, an
+// account_claim that is no JSON pointer or has an escape other than ~0 and ~1, an
+// account_header with a space, or paths that are empty, 33, twice, with an inner * or
+// relative; a secrets request whose unauthorized is empty, of 7, twice or not a name; a
+// model keys report whose unauthorized is empty, of 7, a list of names, or has an entry
+// without at or credential, with an at that is no time or with a member it does not
+// define; a link batch, a session.exited or a run.exited with model_key_switch and a
+// state other than paused, or with model_key_unauthorized and a state other than
+// failed; and a descriptor whose endpoint is a flag or two places, whose config has no
+// flag, a short flag, an empty fixed or a fixed value that is a fraction, a table or a
+// string with a line feed, or a key with a space, or whose resume has a prefix with *
+// or an empty after. A fixture whose name contains
 // -beyond-schema- breaks a rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
 // the schema, so run-configuration-variable-value-not-string is held to the run
 // configuration and not to a schema named run.
@@ -729,7 +746,8 @@ func TestOneStepIsOpenAtATime(t *testing.T) {
 }
 
 // TestSessionExitedReasonsAreTheSessions pins the reasons of a dev.qory.session.exited in a
-// link batch to timeout, interrupted, model_key_limit and the codes a link batch's
+// link batch to timeout, interrupted, the three reasons of a stop in a batch's answer,
+// model_key_limit, model_key_switch and model_key_unauthorized, and the codes a link batch's
 // dev.qory.run.refused may have, the codes the session sets itself: a refused join has its refusal's code as
 // reason. The event's reason is the open code of dev.qory.run.exited, since the gateway
 // writes a session's dev.qory.session.exited with the reason of the run's end.
@@ -750,12 +768,13 @@ func TestSessionExitedReasonsAreTheSessions(t *testing.T) {
 			got = append(got, c.(string))
 		}
 	}
+	stops := []string{"model_key_limit", "model_key_switch", "model_key_unauthorized"}
 	for _, code := range got {
-		if code != "timeout" && code != "interrupted" && code != "model_key_limit" && !refusal.Decides(code) {
+		if code != "timeout" && code != "interrupted" && !slices.Contains(stops, code) && !refusal.Decides(code) {
 			t.Errorf("a link batch's session.exited allows the reason %s, which the session does not decide", code)
 		}
 	}
-	for _, code := range []string{"timeout", "interrupted", "model_key_limit", "placeholder_conflict", "mount_mode_conflict", "engine_unreachable",
+	for _, code := range []string{"timeout", "interrupted", "model_key_limit", "model_key_switch", "model_key_unauthorized", "placeholder_conflict", "mount_mode_conflict", "engine_unreachable",
 		"image_access_denied", "image_rate_limited", "image_registry_unreachable"} {
 		if !slices.Contains(got, code) {
 			t.Errorf("a link batch's session.exited does not allow the reason %s", code)

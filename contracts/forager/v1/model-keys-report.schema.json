@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/model-keys-report.schema.json",
   "title": "Model keys report",
-  "description": "The body of the gateway's signed POST <run.url>/<run_id>/model-keys, application/json, at most 32 KiB: the state of each limit window the gateway has of the run's key group, from the model provider's responses and the gateway's cooldowns (README §The server, The model keys). Each report has every window the gateway has, so it replaces the one before. The server accepts it from the key that a batch of the run is accepted from, and answers with model-keys-answer.schema.json.",
+  "description": "The body of the gateway's signed POST <run.url>/<run_id>/model-keys, application/json, at most 32 KiB: the state of each limit window the gateway has of the run's key group, from the model provider's responses and the gateway's cooldowns, and the keys that got a 401 from the provider (README §The server, The model keys). Each report has every window the gateway has, so it replaces the one before. The server accepts it from the key that a batch of the run is accepted from, and answers with model-keys-answer.schema.json.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "run_id", "time", "keys"],
@@ -27,9 +27,27 @@
       "type": "array",
       "maxItems": 66,
       "items": {"$ref": "#/$defs/key_state"}
+    },
+    "unauthorized": {
+      "description": "The keys of the key group the gateway sets no more because the model provider returned 401 to a request with the key's value, and no renewal brought it back, each once: 1 to 6, one per key of the group at most. Each report has every such key, so a key that a renewal brought back is absent from the next report. Absent when the group has none.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/unauthorized_key"}
     }
   },
   "$defs": {
+    "unauthorized_key": {
+      "description": "One key that got a 401 from the model provider: its name and when the 401 arrived.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credential", "at"],
+      "properties": {
+        "credential": {"description": "The key's name, an API credential of the run configuration's credentials.", "$ref": "run-configuration.schema.json#/$defs/credential_name"},
+        "at": {"description": "The gateway's clock when the provider's 401 arrived, an RFC 3339 time, as observed_at of an entry of keys.", "type": "string", "format": "date-time"}
+      }
+    },
     "key_state": {
       "description": "The state of one limit window of one model key: the provider's status, reset and use, and the gateway's cooldown.",
       "type": "object",

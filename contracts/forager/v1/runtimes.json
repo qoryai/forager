@@ -116,7 +116,11 @@
       },
       "egress_hosts": [
         "api.anthropic.com"
-      ]
+      ],
+      "resume": {
+        "prefix": "~/.claude/projects/",
+        "path": "~/.claude/projects/{cwd_slug}/{session_id}.jsonl"
+      }
     }
   ]
 }

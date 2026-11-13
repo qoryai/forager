@@ -21,9 +21,11 @@
 // keeps for itself, and its [Model] the API formats the runtime sends, where a composer
 // writes a run's model id, effort value and model endpoint, and the variables it reads
 // a model key from. Its Fixed is the variables the session sets for the runtime in
-// every launch, over every other source, and its EgressHosts the hosts the runtime
-// needs to reach. [Runtimes] renders the four, for every descriptor the contract ships,
-// as runtimes.json, the file a server vendors.
+// every launch, over every other source, its [Config] how the session passes
+// settings to a runtime that reads them as TOML, and its EgressHosts the hosts the
+// runtime needs to reach. [Runtimes] renders the secrets, the model section, the fixed
+// variables, the egress hosts and the resume's prefix and path, for every descriptor
+// the contract ships, as runtimes.json, the file a server vendors.
 package descriptor
 
 import (
@@ -57,6 +59,10 @@ type Descriptor struct {
 	// walled or not: no other source's value of one applies. Nil when the descriptor
 	// sets none.
 	Fixed map[string]string `yaml:"fixed" json:"fixed,omitempty"`
+	// Config is how the session passes settings to a runtime that reads them as TOML,
+	// and the settings it passes in every launch. Nil when the descriptor has none, and
+	// a setting goes in the JSON settings file the launch passes.
+	Config *Config `yaml:"config" json:"config,omitempty"`
 	// EgressHosts is the hosts the runtime needs to reach, which [Runtimes] lists for a
 	// server to allow for a run. No code of this module applies them to a run's policy.
 	// Nil when the descriptor has none.
@@ -68,20 +74,33 @@ type Descriptor struct {
 	Rules  []Rule  `yaml:"rules" json:"rules"`
 }
 
+// Config is how the session passes settings to a runtime that reads them as TOML: Flag,
+// the argument that takes one key=value pair, such as --config, and Fixed, the
+// settings it passes in every launch.
+type Config struct {
+	Flag string `yaml:"flag" json:"flag"`
+	// Fixed maps a dotted key to a TOML value: a string, a bool or an int64. Nil when
+	// the descriptor sets none.
+	Fixed map[string]any `yaml:"fixed" json:"fixed,omitempty"`
+}
+
 // Resume is where the runtime writes the transcript of its session, and the arguments
 // that start the runtime again from it. Each path starts with ~/, the runtime's home.
 type Resume struct {
 	// PathFrom is the member of a hook's input that contains the transcript's path,
-	// such as transcript_path.
-	PathFrom string `yaml:"path_from" json:"path_from"`
+	// such as transcript_path; empty when the session takes the path from Path alone.
+	PathFrom string `yaml:"path_from" json:"path_from,omitempty"`
 	// Path is the transcript's path while no hook input contains PathFrom: a template
-	// with {session_id} and {cwd_slug}. It starts with Prefix.
+	// with {session_id} and {cwd_slug}, in which a * matches any characters other than
+	// / inside one path name. It starts with Prefix.
 	Path string `yaml:"path" json:"path"`
-	// Prefix is the directory the transcript must lie under, ending in /.
+	// Prefix is the directory the transcript must lie under, ending in /, with no *.
 	Prefix string `yaml:"prefix" json:"prefix"`
 	// Args are the arguments the session adds when it resumes, with {session_id} in
 	// place of the runtime's session id.
 	Args []string `yaml:"args" json:"args"`
+	// After is the argument Args follow, such as exec; empty when Args go at the end.
+	After string `yaml:"after" json:"after,omitempty"`
 }
 
 // Tools is what the session copies from a tool's input onto the runtime's tool events.
@@ -150,7 +169,8 @@ type Key struct {
 
 // Place is where a value goes, exactly one of its fields set: Flag, an argument the
 // runtime is started with, which takes the value; Setting, a dotted key in the JSON
-// settings file the launch passes; Variable, an environment variable.
+// settings file the launch passes, or with [Config] a key=value pair of its Flag;
+// Variable, an environment variable.
 type Place struct {
 	Flag     string `yaml:"flag" json:"flag,omitempty"`
 	Setting  string `yaml:"setting" json:"setting,omitempty"`
@@ -177,9 +197,12 @@ type Effort struct {
 	Agent *AgentPlace `yaml:"agent" json:"agent,omitempty"`
 }
 
-// Endpoint is the variable the runtime reads the base URL of its model API from.
+// Endpoint is where the base URL of the runtime's model API goes, exactly one of its
+// fields set: Variable, the variable the runtime reads it from, or Setting, a dotted
+// key of the runtime's settings, written as a [Place]'s setting.
 type Endpoint struct {
-	Variable string `yaml:"variable" json:"variable"`
+	Variable string `yaml:"variable" json:"variable,omitempty"`
+	Setting  string `yaml:"setting" json:"setting,omitempty"`
 }
 
 // Secrets is what the runtime needs of a run's secrets and the variables it keeps for
@@ -213,12 +236,16 @@ type Declaration struct {
 
 // Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
 // the header of header, Username the fixed user of basic, and OAuth marks a bearer as
-// an OAuth token.
+// an OAuth token. AccountHeader and AccountClaim, both or neither and only with OAuth,
+// are the header the proxy sets beside the value and the JSON pointer of its value in
+// the token's JWT payload.
 type Auth struct {
-	Scheme   string `yaml:"scheme" json:"scheme"`
-	Header   string `yaml:"header" json:"header,omitempty"`
-	Username string `yaml:"username" json:"username,omitempty"`
-	OAuth    bool   `yaml:"oauth" json:"oauth,omitempty"`
+	Scheme        string `yaml:"scheme" json:"scheme"`
+	Header        string `yaml:"header" json:"header,omitempty"`
+	Username      string `yaml:"username" json:"username,omitempty"`
+	OAuth         bool   `yaml:"oauth" json:"oauth,omitempty"`
+	AccountHeader string `yaml:"account_header" json:"account_header,omitempty"`
+	AccountClaim  string `yaml:"account_claim" json:"account_claim,omitempty"`
 }
 
 // Group is a set of declarations of which the runtime needs at most one, and exactly
@@ -347,7 +374,51 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	if err := d.Resume.check(); err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
+	if err := d.checkConfig(); err != nil {
+		return nil, fmt.Errorf("%s: %w", shown, err)
+	}
 	return &d, nil
+}
+
+// checkConfig holds config to what the schema cannot express, and makes each fixed
+// value a string, a bool or an int64, whether the document was YAML or JSON: no fixed
+// key is a setting of the model section, and no fixed key or model setting is a dotted
+// prefix of another, since a TOML key has a value or a table of keys, not both. A nil
+// Config passes.
+func (d *Descriptor) checkConfig() error {
+	if d.Config == nil {
+		return nil
+	}
+	var settings []string
+	if m := d.Model; m != nil {
+		settings = append(settings, m.Model.Setting, m.Endpoint.Setting)
+		if m.Effort != nil {
+			settings = append(settings, m.Effort.Run.Setting)
+		}
+		settings = slices.DeleteFunc(settings, func(s string) bool { return s == "" })
+	}
+	keys := slices.Sorted(maps.Keys(d.Config.Fixed))
+	for _, k := range keys {
+		switch v := d.Config.Fixed[k].(type) {
+		case int:
+			d.Config.Fixed[k] = int64(v)
+		case float64:
+			d.Config.Fixed[k] = int64(v)
+		}
+		shown := accesskey.ShownName(k, false)
+		if slices.Contains(settings, k) {
+			return fmt.Errorf("config.fixed: remove %s: it is a setting of the model section", shown)
+		}
+		for _, o := range append(slices.Clone(keys), settings...) {
+			if strings.HasPrefix(o, k+".") {
+				return fmt.Errorf("config.fixed: remove %s or %s: a TOML key has a value or a table of keys, not both, and %s lies inside %s", shown, accesskey.ShownName(o, false), accesskey.ShownName(o, false), shown)
+			}
+			if strings.HasPrefix(k, o+".") {
+				return fmt.Errorf("config.fixed: remove %s: a TOML key has a value or a table of keys, not both, and %s lies inside %s", shown, shown, accesskey.ShownName(o, false))
+			}
+		}
+	}
+	return nil
 }
 
 // check checks what the schema cannot express of resume: path starts with prefix, and
@@ -397,7 +468,9 @@ func (d *Descriptor) checkFixed() error {
 		for _, k := range m.Keys {
 			add("model.keys", k.Variable)
 		}
-		add("model.endpoint", m.Endpoint.Variable)
+		if m.Endpoint.Variable != "" {
+			add("model.endpoint", m.Endpoint.Variable)
+		}
 		add("model.overrides", m.Overrides...)
 	}
 	for _, name := range slices.Sorted(maps.Keys(d.Fixed)) {
@@ -445,7 +518,7 @@ func (m *Model) check(s *Secrets) error {
 				accesskey.ShownName(k.Format, false), strings.Join(m.Formats, ", "))
 		case slices.ContainsFunc(m.Keys[:i], func(o Key) bool { return o.Format == k.Format && sameAuth(o.Auth, k.Auth) }):
 			return fmt.Errorf("model.keys: list %s with %s once: two keys have it", accesskey.ShownName(k.Format, false), authWords(k.Auth))
-		case slices.Contains(secrets.Denies, k.Variable) || slices.Contains(m.Overrides, k.Variable) || k.Variable == m.Endpoint.Variable:
+		case slices.Contains(secrets.Denies, k.Variable) || slices.Contains(m.Overrides, k.Variable) || (m.Endpoint.Variable != "" && k.Variable == m.Endpoint.Variable):
 			return fmt.Errorf("model.keys: read the key from a variable outside denies, overrides and the endpoint: %s is %s", v, place(m, k.Variable))
 		}
 		if j := slices.IndexFunc(secrets.Declares, func(d Declaration) bool { return d.Name == k.Variable }); j >= 0 && !sameAuth(secrets.Declares[j].Auth, k.Auth) {

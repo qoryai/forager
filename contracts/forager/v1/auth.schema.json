@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/auth.schema.json",
   "title": "Authentication scheme",
-  "description": "How a secret value is set on a request, from the closed set of schemes the proxy implements. bearer sets Authorization: Bearer and the value. header sets the header in header to the value. basic sets Authorization: Basic with the username in username and the value as the password. oauth, only with bearer, marks the value as an OAuth token, such as a Claude subscription login's: the proxy sets it as any bearer, and the session reads it to choose the runtime's variable for a model key.",
+  "description": "How a secret value is set on a request, from the closed set of schemes the proxy implements. bearer sets Authorization: Bearer and the value. header sets the header in header to the value. basic sets Authorization: Basic with the username in username and the value as the password. oauth, only with bearer, marks the value as an OAuth token, such as a Claude subscription login's: the proxy sets it as any bearer, and the session reads it to choose the runtime's variable for a model key. account_header and account_claim, both or neither and only with oauth, make the proxy read a claim of the value's JWT payload and set it in a header beside the value, for a model API that needs the subscription's account id on every request.",
   "type": "object",
   "additionalProperties": false,
   "required": ["scheme"],
@@ -10,8 +10,11 @@
     "scheme": {"enum": ["bearer", "header", "basic"]},
     "header": {"type": "string", "maxLength": 64, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
     "username": {"type": "string", "minLength": 1, "pattern": "^[^:\\s]+$"},
-    "oauth": {"const": true}
+    "oauth": {"const": true},
+    "account_header": {"description": "The HTTP header the proxy sets to the value of account_claim on every request it sets the value on, such as chatgpt-account-id.", "type": "string", "maxLength": 64, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
+    "account_claim": {"description": "Where the header's value lies in the payload of the value, a JWT: a JSON pointer, RFC 6901, into the payload's JSON object, with ~1 for / and ~0 for ~ inside a member name, such as /https:~1~1api.openai.com~1auth/chatgpt_account_id. The member it points at is a string.", "type": "string", "minLength": 2, "maxLength": 256, "pattern": "^(/([^/~\\x00-\\x1f]|~[01])*)+$"}
   },
+  "dependentRequired": {"account_header": ["account_claim", "oauth"], "account_claim": ["account_header", "oauth"]},
   "allOf": [
     {"if": {"properties": {"scheme": {"const": "header"}}}, "then": {"required": ["header"]}, "else": {"not": {"required": ["header"]}}},
     {"if": {"properties": {"scheme": {"const": "basic"}}},

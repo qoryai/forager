@@ -178,7 +178,8 @@ type Declaration = descriptor.Declaration
 
 // Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
 // the header of header, Username the fixed user of basic, and OAuth marks a bearer as
-// an OAuth token.
+// an OAuth token. AccountHeader and AccountClaim are the header the proxy sets beside
+// an OAuth token and the JSON pointer of its value in the token's JWT payload.
 type Auth = descriptor.Auth
 
 // Group is a set of declarations of which the runtime needs one at most, and exactly
@@ -198,8 +199,7 @@ type Model interface {
 // ModelPlaces is a descriptor's model section: Formats, the model API formats the
 // runtime sends its requests in, from the contract's api-format.schema.json; Model,
 // where a run's model id goes; Effort, where an effort value goes, nil when the runtime
-// has no place for one; Endpoint, the variable the runtime reads the base URL of its
-// model API from; Keys, the variables it reads a model key from, one per API format
+// has no place for one; Endpoint, where the base URL of its model API goes; Keys, the variables it reads a model key from, one per API format
 // and auth; and Overrides, the variables that would override the model id or effort
 // value a composer writes, which a walled run leaves out and unsets inside.
 type ModelPlaces = descriptor.Model
@@ -210,7 +210,8 @@ type Key = descriptor.Key
 
 // Place is where a value goes, exactly one of its fields set: Flag, an argument the
 // runtime is started with, which takes the value; Setting, a dotted key in the JSON
-// settings file the launch passes; Variable, an environment variable.
+// settings file the launch passes, or a key=value pair of the descriptor's config flag;
+// Variable, an environment variable.
 type Place = descriptor.Place
 
 // ValuedPlace is a [Place] and the values the runtime accepts there.
@@ -224,7 +225,8 @@ type AgentPlace = descriptor.AgentPlace
 // runtime has no place for an agent's effort.
 type Effort = descriptor.Effort
 
-// Endpoint is the variable a runtime reads the base URL of its model API from.
+// Endpoint is where the base URL of a runtime's model API goes: Variable, the variable
+// the runtime reads it from, or Setting, a dotted key of its settings.
 type Endpoint = descriptor.Endpoint
 
 // Record is one unit of what a program reports.

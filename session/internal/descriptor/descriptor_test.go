@@ -555,10 +555,12 @@ func TestEgressHostsAreListed(t *testing.T) {
 // runtimes; per runtime its name, title, reserves, denies, credential_files, declares,
 // one_of, fixed and egress_hosts, every one present, fixed an object of strings; per declaration id, title, name, hosts, auth with its
 // scheme, the header of a header scheme and the username of a basic scheme, and paths
-// when it has some; per group id, required and of; and model when the descriptor has
-// one, with formats, model, endpoint with its variable and optionally effort, with run
+// when it has some; per group id, required and of; model when the descriptor has
+// one, with formats, model, endpoint with exactly one of its variable and its setting,
+// keys whose auth has account_header and account_claim only together, and optionally effort, with run
 // and optionally agent, each place being exactly one of flag, setting and variable, and
-// optionally overrides. The claude runtime has a model with overrides, and its fixed
+// optionally overrides; and resume when the descriptor has one, with its prefix and its
+// path alone. The claude runtime has a model with overrides, its resume's prefix and path, and its fixed
 // sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and
 // CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL to 1 and CLAUDE_CODE_MAX_RETRIES
 // to 15, and nothing else, and its egress_hosts is api.anthropic.com alone. Every built-in descriptor is one runtime, in
@@ -649,7 +651,18 @@ func TestRuntimesJSONShape(t *testing.T) {
 		t.Fatalf("%d runtimes for %d descriptors", len(runtimes), len(dirs))
 	}
 	for i, r := range runtimes {
-		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of", "fixed", "egress_hosts"}, "model")
+		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of", "fixed", "egress_hosts"}, "model", "resume")
+		if rs, ok := rt["resume"]; ok {
+			resume := members("resume", rs, []string{"prefix", "path"})
+			prefix, _ := resume["prefix"].(string)
+			path, _ := resume["path"].(string)
+			if !strings.HasPrefix(prefix, "~/") || !strings.HasSuffix(prefix, "/") || !strings.HasPrefix(path, prefix) {
+				t.Errorf("resume of %v is %v; want a prefix under ~/ ending in / that the path starts with", rt["name"], resume)
+			}
+		}
+		if want := map[string]any{"prefix": "~/.claude/projects/", "path": "~/.claude/projects/{cwd_slug}/{session_id}.jsonl"}; rt["name"] == "claude" && !reflect.DeepEqual(rt["resume"], want) {
+			t.Errorf("the claude runtime's resume is %v; want %v", rt["resume"], want)
+		}
 		if rt["name"] != dirs[i].Name() || rt["title"] == "" {
 			t.Errorf("runtime %d is %v, %v; want %s and a title", i, rt["name"], rt["title"], dirs[i].Name())
 		}
@@ -701,7 +714,12 @@ func TestRuntimesJSONShape(t *testing.T) {
 			keys, _ := model["keys"].([]any)
 			for _, k := range keys {
 				key := members("key", k, []string{"format", "auth", "variable"})
-				members("auth", key["auth"], []string{"scheme"}, "header", "username", "oauth")
+				auth := members("auth", key["auth"], []string{"scheme"}, "header", "username", "oauth", "account_header", "account_claim")
+				_, header := auth["account_header"]
+				_, claim := auth["account_claim"]
+				if header != claim || (header && auth["oauth"] != true) {
+					t.Errorf("auth %v: account_header and account_claim come together, with oauth", auth)
+				}
 			}
 			if len(keys) == 0 && rt["name"] == "claude" {
 				t.Error("the claude runtime's model has no keys")
@@ -712,7 +730,10 @@ func TestRuntimesJSONShape(t *testing.T) {
 				t.Error("the claude runtime's model has no overrides")
 			}
 			place(model["model"])
-			members("endpoint", model["endpoint"], []string{"variable"})
+			endpoint := members("endpoint", model["endpoint"], nil, "variable", "setting")
+			if _, v := endpoint["variable"]; v == (endpoint["setting"] != nil) {
+				t.Errorf("endpoint %v has %d of variable and setting; want one", endpoint, len(endpoint))
+			}
 			if e, ok := model["effort"]; ok {
 				effort := members("effort", e, []string{"run"}, "agent")
 				strs("values", place(effort["run"], "values")["values"])
@@ -726,10 +747,11 @@ func TestRuntimesJSONShape(t *testing.T) {
 	}
 }
 
-// TestResumeDecodes pins that a descriptor's resume decodes with its four members, that
-// the built-in Claude Code descriptor has the contract's, and what Parse returns an error for beyond
-// the schema: a path that does not start with the prefix, and a .. segment. runtimes.json
-// does not list resume (TestRuntimesJSONShape).
+// TestResumeDecodes pins that a descriptor's resume decodes with its members, path_from
+// and after optional, that the built-in Claude Code descriptor has the contract's, and
+// what Parse returns an error for beyond the schema: a path that does not start with the
+// prefix, and a .. segment. runtimes.json lists the prefix and the path alone
+// (TestRuntimesJSONShape).
 func TestResumeDecodes(t *testing.T) {
 	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
 		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
@@ -746,6 +768,15 @@ func TestResumeDecodes(t *testing.T) {
 	}
 	if d, err := descriptor.Parse("amp.yaml", []byte(head)); err != nil || d.Resume != nil {
 		t.Errorf("a descriptor with no resume: %+v, %v; want nil", d.Resume, err)
+	}
+	starred := head + "resume:\n  path: ~/.amp/s/*/*/run-*-{session_id}.jsonl\n  prefix: ~/.amp/s/\n  args: [resume, '{session_id}']\n  after: exec\n"
+	d, err = descriptor.Parse("amp.yaml", []byte(starred))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = &descriptor.Resume{Path: "~/.amp/s/*/*/run-*-{session_id}.jsonl", Prefix: "~/.amp/s/", Args: []string{"resume", "{session_id}"}, After: "exec"}
+	if !reflect.DeepEqual(d.Resume, want) {
+		t.Errorf("a resume with * and after, without path_from = %+v; want %+v", d.Resume, want)
 	}
 	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
 	if err != nil {
@@ -766,5 +797,61 @@ func TestResumeDecodes(t *testing.T) {
 		if _, err := descriptor.Parse("amp.yaml", []byte(doc)); err == nil || !strings.HasPrefix(err.Error(), "amp.yaml: resume: ") {
 			t.Errorf("%s: %v; want an error that starts with the fix", name, err)
 		}
+	}
+}
+
+// TestConfigDecodes pins that a descriptor's config decodes, with each fixed value a
+// string, a bool or an int64 from YAML and from JSON alike, that an endpoint may be a
+// setting, and what Parse returns an error for beyond the schema: a fixed key that is a
+// setting of the model section, and a fixed key or a model setting that is a dotted
+// prefix of another.
+func TestConfigDecodes(t *testing.T) {
+	b, err := fs.ReadFile(contracts.FS, "fixtures/descriptor/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := descriptor.Parse("config.yaml", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &descriptor.Config{Flag: "--config", Fixed: map[string]any{
+		"model_provider": "qory", "model_providers.qory.name": "qory", "model_providers.qory.wire_api": "responses",
+		"features.plugins": false, "stream_max_retries": int64(5),
+	}}
+	if !reflect.DeepEqual(d.Config, want) {
+		t.Errorf("Config = %#v; want %#v", d.Config, want)
+	}
+	if d.Model == nil || d.Model.Endpoint != (descriptor.Endpoint{Setting: "model_providers.qory.base_url"}) {
+		t.Errorf("Model.Endpoint = %+v; want the setting model_providers.qory.base_url", d.Model)
+	}
+	j, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromJSON, err := descriptor.Parse("config.json", j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(fromJSON.Config, want) {
+		t.Errorf("Config from JSON = %#v; want %#v", fromJSON.Config, want)
+	}
+	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n" +
+		"model:\n  formats: [openai-responses]\n  model: {setting: model}\n  endpoint: {setting: providers.qory.base_url}\n"
+	for name, fixed := range map[string]string{
+		"the model's setting":      "{model: x}",
+		"the endpoint's setting":   "{providers.qory.base_url: x}",
+		"a table of the endpoint":  "{providers.qory: x}",
+		"a key inside the model's": "{model.name: x}",
+		"a key inside another":     "{a.b: x, a.b.c: y}",
+		"a key that holds another": "{a.b.c: x, a.b: y}",
+	} {
+		_, err := descriptor.Parse("amp.yaml", []byte(head+"config: {flag: --config, fixed: "+fixed+"}\n"))
+		if err == nil || !strings.HasPrefix(err.Error(), "amp.yaml: config.fixed: remove ") {
+			t.Errorf("%s: %v; want an error that starts with the fix", name, err)
+		}
+	}
+	if _, err := descriptor.Parse("amp.yaml", []byte(head+"config: {flag: --config, fixed: {providers.qory.name: qory, a.b: 1}}\n")); err != nil {
+		t.Errorf("fixed keys beside the model's settings: %v", err)
 	}
 }

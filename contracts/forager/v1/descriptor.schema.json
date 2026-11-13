@@ -207,13 +207,14 @@
           }
         },
         "endpoint": {
-          "description": "Where the base URL of the run's model API goes: always a variable.",
+          "description": "Where the base URL of the run's model API goes, exactly one of: variable, the variable the runtime reads it from; setting, a dotted key of the runtime's settings, which the session writes as a place's setting, the URL as a TOML string with config. A flag is no place of the endpoint.",
           "type": "object",
           "additionalProperties": false,
-          "required": ["variable"],
           "properties": {
-            "variable": {"description": "The variable the runtime reads the base URL from.", "$ref": "#/$defs/name"}
-          }
+            "variable": {"description": "The variable the runtime reads the base URL from.", "$ref": "#/$defs/name"},
+            "setting": {"description": "The dotted key of the runtime's settings the base URL goes in, such as model_providers.qory.base_url.", "$ref": "#/$defs/setting"}
+          },
+          "oneOf": [{"required": ["variable"]}, {"required": ["setting"]}]
         },
         "keys": {
           "description": "The variables the runtime reads a model key from, one per API format and auth: the session gives an API credential's placeholder to the variable of the key whose format is the credential's and whose auth has the credential's scheme, the same header name, case ignored, and the same oauth. Each format is one of formats, each pair of format and auth appears once, and a variable is none of denies, overrides and the endpoint's variable.",
@@ -265,6 +266,23 @@
       "propertyNames": {"$ref": "#/$defs/name"},
       "additionalProperties": {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00\\r\\n]*$"}
     },
+    "config": {
+      "description": "How the session passes settings to a runtime that reads them as TOML, such as Codex: flag, the argument that takes one key=value pair, such as --config, where key is a dotted key and value a TOML value; and fixed, the settings the session passes in every launch, walled or not. With config, a place's setting goes to flag too, its value as a TOML string. Absent, a setting goes in the JSON settings file the launch passes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flag"],
+      "properties": {
+        "flag": {"description": "The argument that takes one key=value pair, such as --config. The session passes one pair per argument.", "$ref": "#/$defs/flag"},
+        "fixed": {
+          "description": "The settings the session passes in every launch, by dotted key: 1 to 64 keys, each a TOML value, a string, a boolean or an integer, which the session writes in TOML's form, such as {model_provider: qory, features.plugins: false}. A key is none of the model section's settings, and no key is a dotted prefix of another.",
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 64,
+          "propertyNames": {"$ref": "#/$defs/setting"},
+          "additionalProperties": {"$ref": "#/$defs/toml_value"}
+        }
+      }
+    },
     "egress_hosts": {
       "description": "The hosts the runtime needs to reach: exact DNS names, no wildcard, no IP literal. runtimes.json lists them for every descriptor the contract ships, for a server to allow for a run; a machine's policy can still block them. This list differs from secrets.declares[].hosts, the hosts a secret's value is set on.",
       "type": "array",
@@ -274,15 +292,16 @@
       "items": {"$ref": "#/$defs/exact_host"}
     },
     "resume": {
-      "description": "Where the runtime writes the transcript of its session, and how the session starts the runtime again from it. The session reads the transcript as the runtime appends to it and writes it as dev.qory.session.transcript. In a run with resume in its run configuration, it writes the paused run's transcript at the run configuration's resume.path before the runtime starts, and adds args. Absent, the runtime has no resume: the session writes no dev.qory.session.transcript, and a continuation starts the runtime without a resume.",
+      "description": "Where the runtime writes the transcript of its session, and how the session starts the runtime again from it. The session reads the transcript as the runtime appends to it and writes it as dev.qory.session.transcript. In a run with resume in its run configuration, it writes the paused run's transcript at the run configuration's resume.path before the runtime starts, and adds args after the argument after, or at the end. Absent, the runtime has no resume: the session writes no dev.qory.session.transcript, and a continuation starts the runtime without a resume.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["path_from", "path", "prefix", "args"],
+      "required": ["path", "prefix", "args"],
       "properties": {
-        "path_from": {"description": "The member of a hook's input that contains the transcript's path, such as transcript_path. The session takes the path from the first hook input that contains it.", "type": "string", "pattern": "^[a-z_]{1,64}$"},
-        "path": {"description": "The transcript's path when no hook input contains path_from: a template, with {session_id} replaced by the runtime's session id from dev.qory.runtime.started, and {cwd_slug} by the runtime's working directory with every character other than an ASCII letter or digit replaced by -, such as ~/.claude/projects/{cwd_slug}/{session_id}.jsonl. It starts with prefix.", "type": "string", "maxLength": 1024, "pattern": "^~/[^\\s]*\\{session_id\\}[^\\s]*$"},
-        "prefix": {"description": "The directory the transcript must lie under, ~/ for the runtime's home, ending in /. The session reads no path outside it, no path with a .. segment, and no path through a symbolic link.", "type": "string", "maxLength": 1024, "pattern": "^~/[^\\s]*/$"},
-        "args": {"description": "The arguments the session adds to the runtime's when it resumes, with {session_id} replaced by the run configuration's resume.session_id, such as --resume {session_id}.", "type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 256}}
+        "path_from": {"description": "The member of a hook's input that contains the transcript's path, such as transcript_path. The session takes the path from the first hook input that contains it. Absent, the session takes the path from path alone.", "type": "string", "pattern": "^[a-z_]{1,64}$"},
+        "path": {"description": "The transcript's path when no hook input contains path_from: a template, with {session_id} replaced by the runtime's session id from dev.qory.runtime.started, and {cwd_slug} by the runtime's working directory with every character other than an ASCII letter or digit replaced by -, such as ~/.claude/projects/{cwd_slug}/{session_id}.jsonl. A * matches any characters other than / inside one path name, for a runtime that puts a date in the path, such as ~/.codex/sessions/*/*/*/rollout-*-{session_id}.jsonl. It starts with prefix.", "type": "string", "maxLength": 1024, "pattern": "^~/[^\\s]*\\{session_id\\}[^\\s]*$"},
+        "prefix": {"description": "The directory the transcript must lie under, ~/ for the runtime's home, ending in /, with no *. The session reads no path outside it, no path with a .. segment, and no path through a symbolic link.", "type": "string", "maxLength": 1024, "pattern": "^~/[^\\s*]*/$"},
+        "args": {"description": "The arguments the session adds to the runtime's when it resumes, with {session_id} replaced by the run configuration's resume.session_id, such as --resume {session_id}.", "type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
+        "after": {"description": "The argument of the runtime's that args follow, such as exec for codex exec --json, which resumes as codex exec resume <session id> --json: the session inserts args right after the first argument equal to it. Absent, or when no argument equals it, the session adds args at the end.", "type": "string", "minLength": 1, "maxLength": 256}
       }
     },
     "parent": {
@@ -395,7 +414,7 @@
     },
     "path": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
     "place": {
-      "description": "Where a value goes, exactly one of: flag, an argument the runtime is started with, which takes the value; setting, a dotted key in the JSON settings file the launch passes; variable, an environment variable.",
+      "description": "Where a value goes, exactly one of: flag, an argument the runtime is started with, which takes the value; setting, a dotted key in the JSON settings file the launch passes, or with config, a key=value pair of config.flag; variable, an environment variable.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -432,6 +451,14 @@
     "setting": {"type": "string", "maxLength": 256, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
     "values": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
       "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"}},
+    "toml_value": {
+      "description": "A TOML value of config.fixed: a string of at most 4096 characters with no NUL, carriage return or line feed, a boolean, or an integer of at most 2^53-1 either side of 0, which every JSON reader reads exactly.",
+      "oneOf": [
+        {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00\\r\\n]*$"},
+        {"type": "boolean"},
+        {"type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991}
+      ]
+    },
     "declared": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
     "key_variable": {
       "description": "A variable a runtime reads a key from: a variable's name other than HOME, LD_PRELOAD, NODE_OPTIONS and BASH_ENV, which change what runs. The schema refuses them in upper case; Forager refuses them in any letter case.",

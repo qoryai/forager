@@ -13,8 +13,8 @@ import (
 )
 
 // RuntimesFile is the path, in the contract directory, of the file that lists the
-// secrets, the model section, the fixed variables and the egress hosts of every
-// runtime the contract ships a descriptor for, the file a server vendors.
+// secrets, the model section, the fixed variables, the egress hosts and the transcript
+// paths of every runtime the contract ships a descriptor for, the file a server vendors.
 const RuntimesFile = "runtimes.json"
 
 // runtimesFile is the document of [RuntimesFile].
@@ -25,8 +25,8 @@ type runtimesFile struct {
 
 // runtimeEntry is one runtime of [RuntimesFile]. Every list is present, empty when the
 // descriptor has none, so a reader finds the same members for every runtime, and so is
-// fixed, an empty object when the descriptor has none. Model is the one member that is
-// absent when the descriptor has none.
+// fixed, an empty object when the descriptor has none. Model and Resume are the members
+// that are absent when the descriptor has none.
 type runtimeEntry struct {
 	Name            string             `json:"name"`
 	Title           string             `json:"title"`
@@ -38,6 +38,15 @@ type runtimeEntry struct {
 	Model           *modelEntry        `json:"model,omitempty"`
 	Fixed           map[string]string  `json:"fixed"`
 	EgressHosts     []string           `json:"egress_hosts"`
+	Resume          *resumeEntry       `json:"resume,omitempty"`
+}
+
+// resumeEntry is where a runtime of [RuntimesFile] writes the transcript of its
+// session: the descriptor's resume.prefix and resume.path, for a server to check a
+// transcript's path against.
+type resumeEntry struct {
+	Prefix string `json:"prefix"`
+	Path   string `json:"path"`
 }
 
 // modelEntry is the model section of a runtime in [RuntimesFile], in the descriptor's
@@ -75,7 +84,8 @@ type groupEntry struct {
 // Runtimes renders [RuntimesFile] from the descriptors of a contract directory, such as
 // contracts.FS: every runtimes/<name>/descriptor.yaml, sorted by name, with its name,
 // its title, its secrets, the lists in the descriptor's order, its model section
-// when it has one, its fixed variables, by name, and its egress hosts. The output is
+// when it has one, its fixed variables, by name, its egress hosts, and its resume's
+// prefix and path when it has a resume. The output is
 // indented JSON ending in a newline, the same bytes for the same descriptors. A
 // descriptor without a title, or whose runtime is not its directory's name, is an
 // error.
@@ -145,6 +155,9 @@ func entry(d *Descriptor) runtimeEntry {
 	}
 	if m := d.Model; m != nil {
 		e.Model = &modelEntry{Formats: m.Formats, Model: m.Model, Effort: m.Effort, Endpoint: m.Endpoint, Keys: m.Keys, Overrides: m.Overrides}
+	}
+	if r := d.Resume; r != nil {
+		e.Resume = &resumeEntry{Prefix: r.Prefix, Path: r.Path}
 	}
 	return e
 }
