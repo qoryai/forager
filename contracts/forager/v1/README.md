@@ -3884,32 +3884,32 @@ keeps the run's record with the files of a reopen (The record files).
 
 The gateway that starts again reopens a suspended run at the first request of it whose
 run key verifies: a batch, a reload, a join, a transcript request, or a connection to
-the run's proxy or stack proxy. One reopen of a run runs at a time, and every request
-of the run waits for it. The reopen reads the record back, attaches the run again under
-the run key of that request, with the tries of an open (Tries as a run opens, below),
-sets the run up again from `request.json` and the run configuration in the attach's
-answer, with the run's certificate authority from `ca.pem` and `ca.key`, and goes on
-numbering the record after its last `sequence`. The
-reopen reads the certificate authority before the attach, so a record whose CA files
-do not read back ends the run with no attach. It sends again what the server has not
-accepted within the attach's window of 120 seconds. A connection that waits on a
-reopen, once its run key verifies, counts against the bound of 4096 connections and
-against neither the bound of its source nor that of its IPv6 /48, and is never closed
-for a newer connection. The reopen's answers to the requests that wait:
+the run's proxy or stack proxy. One reopen of a run runs at a time, and every request of
+the run waits for it. The reopen reads the record back, attaches the run again under the
+run key of that request, with the tries of an open (Tries as a run opens, below), sets
+the run up again from `request.json` and the run configuration in the attach's answer,
+with the run's certificate authority from `ca.pem` and `ca.key`, and goes on numbering
+the record after its last `sequence`. The reopen reads the certificate authority before
+the attach, so a record whose CA files do not read back ends the run with no attach. It
+sends again what the server has not accepted within the attach's window of 120 seconds.
+A connection that waits on a reopen, once its run key verifies, counts against the bound
+of 4096 connections and against neither the bound of its source nor that of its IPv6
+/48, and is never closed for a newer connection. The reopen's answers to the requests
+that wait:
 
 - the run is open: each request is served as for a live run;
 - a failure that may pass: no answer from the server, a `5xx`, an answer that is not
   signed, a `429` `rate_limited`, events the server does not take within the attach's
   window, or a `Close` that stops the reopen's tries. Each request gets a `503` with no
   body, and the session's next request starts the reopen again;
-- a final failure: a `410` `run_closed`, and the run is over. The attach's failures
-  that are final at once are a signed `410`, a signed refusal `run_attached`,
-  `wrong_gateway` or `workspace_not_served`, and a run configuration that fails
-  Forager's checks; a record the gateway cannot read, one with the run's final event,
-  and one the server stopped are final too. Any other signed `4xx` of the attach, a
-  `401`, signed or not, among them, is tried again within the 120 seconds, and is
-  final when the window ends on it. Only tries that `Close` stopped count as a stop by `Close`: a final
-  refusal that came first keeps its `410`.
+- a final failure: a `410` `run_closed`, and the run is over. The attach's failures that
+  are final at once are a signed `410`, a signed refusal `run_attached`, `wrong_gateway`
+  or `workspace_not_served`, and a run configuration that fails Forager's checks; a
+  record the gateway cannot read, one with the run's final event, and one the server
+  stopped are final too. Any other signed `4xx` of the attach, a `401`, signed or not,
+  among them, is tried again within the 120 seconds, and is final when the window ends
+  on it. Only tries that `Close` stopped count as a stop by `Close`: a final refusal
+  that came first keeps its `410`.
 
 A connection to the run's proxy that waited on a reopen that did not open the run is
 closed unanswered. The run request of a reopened run stays `409` `run_attached`. A

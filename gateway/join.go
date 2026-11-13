@@ -188,8 +188,8 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	}
 	// The session sends a join again when it had no answer, for example from a gateway
 	// that stopped while it wrote the answer: the same answer, and nothing more
-	// numbered. A refused join whose
-	// passes no longer conflict, after a reload, is numbered anew.
+	// numbered. A refused join whose passes no longer conflict, after a reload, is
+	// numbered anew.
 	if n := len(lr.joins); lr.remote && n > 0 && lr.joins[n-1].replays(req) && (lr.joins[n-1].accepted || conflict != nil) {
 		last := *lr.joins[n-1]
 		digest := lr.reloadDigest
