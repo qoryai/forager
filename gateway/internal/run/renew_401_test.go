@@ -1,7 +1,6 @@
 package run_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,7 +13,6 @@ import (
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/modelkey"
 	"github.com/qoryai/forager/gateway/internal/run"
-	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 )
@@ -397,59 +395,37 @@ func TestAReopenWithEveryKeyLeftOutSendsNoRequest(t *testing.T) {
 }
 
 // TestAPendingKeysFirstApplyIsTaken pins the apply of a model key with no value at the
-// reopen. Its first value may set it on fewer paths within its entry: the run's
-// credentials are built again and set on the proxy ([run.Run.SetRebuild]) before the
-// key goes back in the group, so a path outside the value's apply gets no value; the
-// next renewal, with the same apply, puts its value in place. When that step fails,
-// the key stays out of use with no value, and the next renewal tries again. A first
-// value whose apply is outside the entry takes the key out.
+// reopen, whose credentials the proxy built with its entry's items: a first value with
+// that apply puts the key back in the group, and the next renewal puts its value in
+// place. A first value with another apply within the entry takes the key out, with
+// no value and a line that starts with the fix; one outside the entry takes it out.
 func TestAPendingKeysFirstApplyIsTaken(t *testing.T) {
 	for _, c := range []struct {
 		name  string
-		host  string
-		fail  bool
+		apply sealed.Apply
 		value string
+		line  string
 	}{
-		{"within", "api.model.example", false, "model-2"},
-		{"rebuild fails", "api.model.example", true, "(none)"},
-		{"outside", "other.example", false, "(none)"},
+		{"same", sealed.Apply{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}, "model-2", ""},
+		{"other paths", sealed.Apply{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key", Paths: []string{"/anthropic/*"}}, "(none)",
+			`Store a value of the model key "model" whose apply matches its run configuration entry`},
+		{"outside", sealed.Apply{Hosts: []string{"other.example"}, Scheme: "header", Header: "x-api-key"}, "(none)", `Store in the control plane a value of the model key "model"`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			clock := &fakeClock{now: start}
-			apply := []sealed.Apply{{Hosts: []string{c.host}, Scheme: "header", Header: "x-api-key", Paths: []string{"/anthropic/*"}}}
 			s := &controlPlane{answer: func(name string, call int) (answer, error) {
 				if name == "model" {
-					return answer{value: fmt.Sprintf("model-%d", call), expires: start.Add(time.Hour), apply: apply}, nil
+					return answer{value: fmt.Sprintf("model-%d", call), expires: start.Add(time.Hour), apply: []sealed.Apply{c.apply}}, nil
 				}
 				return renewing(name, call)
 			}}
 			f := document(t, twoKeysDoc, digest('1'))
 			f.Document.Computed = digest('c')
-			report := &reports{}
-			r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: f, Secrets: s.fetch, Clock: clock, Report: report.report, Log: (&reports{}).report, Pending: []string{"model"}})
+			log := &reports{}
+			r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: f, Secrets: s.fetch, Clock: clock, Report: (&reports{}).report, Log: log.report, Pending: []string{"model"}})
 			g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", clock.Now)
 			r.SetKeyGroup(g)
 			g.Restore([]modelkey.Unauthorized{{Credential: "model", At: start}})
-			var rebuilt []string
-			r.SetRebuild(func() error {
-				if !g.Pending("model") {
-					t.Error("model is back in the group before the proxy has its credentials")
-				}
-				if c.fail {
-					return errors.New("a fake failure")
-				}
-				d, err := r.Rebuild(context.Background())
-				if err != nil {
-					return err
-				}
-				r.Commit(d)
-				for _, u := range r.Uses() {
-					if u.Name == "model" {
-						rebuilt = append(rebuilt, strings.Join(u.Paths, ","))
-					}
-				}
-				return nil
-			})
 			renew := func() {
 				t.Helper()
 				n := clock.count()
@@ -459,14 +435,6 @@ func TestAPendingKeysFirstApplyIsTaken(t *testing.T) {
 				clock.idle(t, n)
 			}
 			renew()
-			if c.name == "within" {
-				if !slices.Equal(rebuilt, []string{"/anthropic/*"}) {
-					t.Errorf("model's paths on the proxy %v; want /anthropic/* once", rebuilt)
-				}
-				if sets(r, "model", "/other/path") || !sets(r, "model", "/anthropic/v1/messages") {
-					t.Error("the proxy sets model outside /anthropic/*, or not within it")
-				}
-			}
 			clock.advance(credential.RetryWait)
 			g.Reject("model", true)
 			renew()
@@ -475,35 +443,15 @@ func TestAPendingKeysFirstApplyIsTaken(t *testing.T) {
 			}
 			u := g.Unauthorized()
 			switch {
-			case c.name == "within" && u != nil:
+			case c.line == "" && u != nil:
 				t.Errorf("the keys after a 401 %+v; want none", u)
-			case c.fail && (len(u) != 1 || u[0].Out):
-				t.Errorf("the keys after a 401 %+v; want model pending", u)
-			case c.name == "outside" && (len(u) != 1 || !u[0].Out):
+			case c.line != "" && (len(u) != 1 || !u[0].Out):
 				t.Errorf("the keys after a 401 %+v; want model out", u)
-			}
-			if c.fail && !report.reported("Start another run to use the model key") {
-				t.Errorf("the reports %q; want the failed step", report.lines())
+			case c.line != "" && !log.reported(c.line):
+				t.Errorf("the record %q; want a line that starts %q", log.said, c.line)
 			}
 		})
 	}
-}
-
-// sets reports whether the run's proxy sets the credential name on a request to path
-// of its host, by the paths of its uses.
-func sets(r *run.Run, name, path string) bool {
-	for _, u := range r.Uses() {
-		if u.Name != name {
-			continue
-		}
-		if u.Paths == nil {
-			return true
-		}
-		if _, ok := policy.MatchPath(u.Paths, path); ok {
-			return true
-		}
-	}
-	return false
 }
 
 // TestEachModelKeyIsRenewedAlone pins a renewal round with no 401: the two model keys

@@ -685,7 +685,6 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 		lr.keys.SetFormat(format)
 		// A key the model provider returns 401 for is renewed as unauthorized.
 		r.SetKeyGroup(lr.keys)
-		r.SetRebuild(lr.resetUses)
 		if lr.remote {
 			// The mark that the proxy passed a limit refusal or a 401 to the session,
 			// with the stop's reason once an answer has it, and the keys out of use
@@ -1590,23 +1589,6 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	}
 	lr.st.Await(hold, appliedIs(lr.given[len(lr.given)-1]), event.RunEgress, data...)
 	lr.mu.Unlock()
-	return nil
-}
-
-// resetUses puts the run's credentials, built again from the policy in force, on its
-// proxy, under lr.joining as [linkRun.apply] does: a model key's first value after a
-// reopen may set it on fewer paths than its entry's items. The rules stay the same, so
-// no tunnel is closed for a host they deny.
-func (lr *linkRun) resetUses() error {
-	lr.joining.Lock()
-	defer lr.joining.Unlock()
-	d, err := lr.r.Rebuild(lr.ctx)
-	if err != nil {
-		return err
-	}
-	in := d.Policy.Policy.Egress
-	lr.px.SetPolicyOpening(in.Mode, in.AllowFirst, in.Allow, in.Deny, d.Guard, in.Paths, d.Uses)
-	lr.r.Commit(d)
 	return nil
 }
 

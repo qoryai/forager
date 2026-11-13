@@ -70,9 +70,6 @@ type renewer struct {
 	entries []*renewal
 	// group is the run's key group, [Run.SetKeyGroup]; nil for none.
 	group *modelkey.Group
-	// rebuild puts the run's credentials, built again, on its proxy ([Run.SetRebuild]);
-	// nil for none.
-	rebuild func() error
 }
 
 // renewal is one credential's state: when its value expires, when it was last asked
@@ -364,7 +361,13 @@ func (w *renewer) renew(names []string, now time.Time) {
 			continue
 		}
 		if err := r.renewed(name, values, w.clock.Now()); err != nil {
-			if w.valueless(name) {
+			switch {
+			case w.valueless(name) && errors.Is(err, errApplyMoved):
+				// The proxy sets the key on its entry's items, built at the start.
+				w.takeOut(name, fmt.Sprintf("Store a value of the model key %s whose apply matches its run configuration entry: its first value after a reopen sets it on other paths, so the run sets it no more",
+					accesskey.ShownName(name, true)))
+				continue
+			case w.valueless(name):
 				// No value to keep until the next try: the key cannot be set.
 				w.revoke(name, err)
 				continue
@@ -373,24 +376,7 @@ func (w *renewer) renew(names []string, now time.Time) {
 			continue
 		}
 		at, _ := values.ExpiresAt(name)
-		var prev []credential.StoredApply
-		narrowed := false
-		if w.valueless(name) {
-			prev, narrowed = r.firstApply(name, values)
-		}
 		taken = r.replaceValue(name, values) || taken
-		if narrowed {
-			// The proxy sets the key where its entry's items say until its credentials are
-			// built again. When that fails, the key stays out of use with no value, and
-			// the next try RetryWait later builds them again.
-			if err := w.rebuilt(); err != nil {
-				r.setApply(name, prev)
-				r.dropValue(name)
-				w.report(fmt.Sprintf("Start another run to use the model key %s: its first value sets it on fewer paths than its entry, and setting the run's credentials on the proxy again failed: %v",
-					accesskey.ShownName(name, true), err))
-				continue
-			}
-		}
 		w.renewedAt(name, at)
 		if slices.Contains(unauthorized, name) {
 			g.Renewed(name)
@@ -418,11 +404,17 @@ func (w *renewer) revoke(name string, err error) {
 		return
 	default:
 	}
+	w.takeOut(name, fmt.Sprintf("Store in the control plane a value of the model key %s that its provider accepts; the run sets the key no more: the provider returned 401 for it, and its renewal was refused: %v",
+		accesskey.ShownName(name, true), accesskey.ShownError(err)))
+}
+
+// takeOut takes the model key name out of the run's key group: its renewals stop, and
+// the run's record gets line.
+func (w *renewer) takeOut(name, line string) {
 	w.keyGroup().Revoked(name)
 	w.drop([]string{name})
 	if w.r.cfg.Log != nil {
-		w.r.cfg.Log(fmt.Sprintf("Store in the control plane a value of the model key %s that its provider accepts; the run sets the key no more: the provider returned 401 for it, and its renewal was refused: %v",
-			accesskey.ShownName(name, true), accesskey.ShownError(err)))
+		w.r.cfg.Log(line)
 	}
 }
 
@@ -539,13 +531,12 @@ func (r *Run) renewed(name string, values sealed.Values, now time.Time) error {
 	case !at.After(now):
 		return errExpiresPassed
 	}
-	// A model key with no value yet has the apply of its entry's items: its first value
-	// may set another apply within its entry, which becomes the key's.
+	// A model key with no value yet has the apply of its entry's items, so its first
+	// value is held to them as well.
 	if r.renew.valueless(name) {
 		if why, ok := outside(r.stored[i], values); ok {
 			return errors.New(why)
 		}
-		return nil
 	}
 	if !reflect.DeepEqual(effectiveApply(r.stored[i], values), r.applyOf(name)) {
 		return errApplyMoved
@@ -553,65 +544,11 @@ func (r *Run) renewed(name string, values sealed.Values, now time.Time) error {
 	return nil
 }
 
-// applyOf is where the value of the credential name is set ([Run.open]), or where its
-// first renewal set it for a model key with no value at the start ([Run.firstApply]).
+// applyOf is where the value of the credential name is set ([Run.open]).
 func (r *Run) applyOf(name string) []credential.StoredApply {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.applies[name]
-}
-
-// firstApply sets where the value of the model key name is set to the apply of its
-// first value, in values: a key with no value at the start had its entry's items. It
-// returns the apply before, and whether the apply changed, so the proxy's credentials
-// must be built again ([renewer.rebuilt]).
-func (r *Run) firstApply(name string, values sealed.Values) ([]credential.StoredApply, bool) {
-	i := slices.IndexFunc(r.stored, func(c server.RunCredential) bool { return c.Name == name })
-	if i < 0 {
-		return nil, false
-	}
-	a := effectiveApply(r.stored[i], values)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	prev := r.applies[name]
-	if reflect.DeepEqual(a, prev) {
-		return prev, false
-	}
-	r.applies[name] = a
-	return prev, true
-}
-
-// setApply sets where the value of name is set back to a, after a failed
-// [renewer.rebuilt].
-func (r *Run) setApply(name string, a []credential.StoredApply) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.applies[name] = a
-}
-
-// rebuilt puts the run's credentials, built again, on its proxy, with the step
-// [Run.SetRebuild] set.
-func (w *renewer) rebuilt() error {
-	w.mu.Lock()
-	f := w.rebuild
-	w.mu.Unlock()
-	if f == nil {
-		return errors.New("the run has no step that sets its credentials on the proxy")
-	}
-	return f()
-}
-
-// SetRebuild sets f, the gateway's step that puts the run's credentials on its proxy
-// again ([Run.Rebuild]): a model key with no value at a reopen whose first value
-// narrows where it is set needs it before the key is back in use. The gateway calls it
-// once, beside [Run.SetKeyGroup].
-func (r *Run) SetRebuild(f func() error) {
-	if r.renew == nil {
-		return
-	}
-	r.renew.mu.Lock()
-	defer r.renew.mu.Unlock()
-	r.renew.rebuild = f
 }
 
 // effectiveApply is where the value of c is set: the answer's apply, or c's items when
