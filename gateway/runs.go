@@ -276,11 +276,13 @@ func passing(err error) bool {
 // did not open, and its run request gets a 503.
 var errClosing = errors.New("the gateway closes")
 
-// stoppedByClose reports whether a run's open failed with err because Close stopped its
-// tries: Close started, the session's run request is there, and err is a failure the
-// tries would have tried again. A final refusal that came before Close keeps its answer.
+// stoppedByClose reports whether the tries of a run's registration or attach ended with
+// err because Close stopped them: err is a failure, Close started, the session's run
+// request is there, nil being one that is, and err is a failure the tries would have
+// tried again. A final refusal that came before Close keeps its answer. Only the
+// result of the tries is judged so; a failure after them is no stop by Close.
 func stoppedByClose(request, opens context.Context, err error) bool {
-	return request.Err() == nil && opens.Err() != nil && passing(err)
+	return err != nil && (request == nil || request.Err() == nil) && opens != nil && opens.Err() != nil && passing(err)
 }
 
 // closing is err as the failure of a run whose tries Close stopped.
@@ -382,15 +384,14 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	defer stopAsk()
 	defer context.AfterFunc(g.openCtx, stopAsk)()
 	if how.request != nil {
-		// Once the session's run request goes, or the gateway closes, the run's
-		// registration is tried no longer, and the run does not open: nothing more is
-		// written of it, and what its stream wrote goes too, so a retry of the run id
-		// opens.
+		// Once the session's run request goes, or Close stops the tries of the run's
+		// registration, the run does not open: nothing more is written of it, and what
+		// its stream wrote goes too, so a retry of the run id opens.
 		failed := fail
 		fail = func(err error) (*linkRun, bool, error) {
 			gone := how.request.Err()
-			if stoppedByClose(how.request, g.openCtx, err) {
-				err, gone = closing(err), errClosing
+			if errors.Is(err, errClosing) {
+				gone = errClosing
 			}
 			if gone == nil {
 				return failed(err)
@@ -455,6 +456,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 				rc, digest, err = g.client.Register(ask, conf.Run.URL, body)
 				return err
 			})
+			if stoppedByClose(how.request, g.openCtx, regErr) {
+				regErr = closing(regErr)
+			}
 			// A gateway's key has no workspaces: a conforming server refuses its direct
 			// registration, and an acceptance fails run.registered's schema, not the
 			// gateway.

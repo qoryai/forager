@@ -4037,11 +4037,12 @@ reload gets one try. The gateway tries again after no answer, a transport failur
 timeout, a `5xx`, signed or not, and a signed `429` `rate_limited`; it ignores
 `Retry-After`. Every other answer is final: a `401`, any other coded refusal,
 `not_found` among them, a signed answer other than a `5xx` with no code, and a document
-Forager refuses. The gateway builds the registration's body once, and each try sends
-the same bytes, `time` included, for which a server that accepted them under the same
-access key returns the same answer; the run's record has `dev.qory.run.registered`
-once. Once the tries are spent the last answer is the session's, as without them: its
-code and status passed on from `apiary`, or a `500` `internal`.
+that fails Forager's checks. The gateway builds the registration's body once, and each
+try sends the same bytes, `time` included, for which a server that accepted them under
+the same access key returns the same answer; the run's record has
+`dev.qory.run.registered` once. Once the tries are spent the last answer is the
+session's, as without them: its code and status passed on from `apiary`, or a `500`
+`internal`.
 
 With `images`, the gateway then decides the run as the session decides it
 on one machine today, in the same order, and before it sets anything: the policy in

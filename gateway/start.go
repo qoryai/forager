@@ -573,7 +573,7 @@ func (g *Gateway) reserved() []string {
 // session: a run still live ends at once, without an exit, which a resend of its
 // record completes as gateway_lost, and lets go of its secret, proxy, tools and
 // credentials. Each run's events are flushed toward the server within
-// [stream.CloseWait] (or the Config's bound), whatever ctx allows, whose values alone
+// [stream.CloseWait] (or the bound in the Config), whatever ctx allows, whose values alone
 // pass on; then the link's directory is removed and the proxy stops.
 //
 // A gateway with Listen keeps its runs instead, for a gateway that starts again on the

@@ -116,6 +116,9 @@ type Config struct {
 	// opened, when not nil, is called once a run on the one address opened. Tests set
 	// it.
 	opened func()
+	// afterOpen, when not nil, is called once a run's open returns, before its run
+	// request is answered. Tests set it.
+	afterOpen func()
 	// marked, when not nil, is called once the record of a run on the one address is
 	// marked answered, with the context of its run request. Tests set it.
 	marked func(context.Context)
