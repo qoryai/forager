@@ -967,8 +967,11 @@ before it expires, and after a host answers `401` to a request that the value wa
 on. It waits at least 30 seconds between two requests for one entry. A request lists
 only the entries that are due, in the document's order, with entries due within 30
 seconds of each other in one request, under the digest it computes of the run
-configuration in force, a reload's once the reload is committed. A value without
-`expires_at`, such as a model key's, is never asked for again, after a `401` either.
+configuration in force, a reload's once the reload is committed. A model key goes in a
+request that names it alone, since the server answers a whole request `409` when it
+cannot seal one of its names. A value without `expires_at` is never asked for again,
+after a `401` either: a model key without it leaves the run's key group after a `401`
+on the model API's path (Keys out after a 401, below).
 
 The answer's value takes the old value's place, whose bytes the gateway overwrites with
 zeros, if it passes the checks of the start, has an `expires_at` after the machine's
@@ -1242,14 +1245,40 @@ revoked or whose subscription ended. The contract has three parts for such a key
   and `model_key_unauthorized`, `failed`, when every key of the group got such a `401`
   (§The gateway's link, A stop in a batch's answer).
 
-On 2026-11-13 the schemas have these members and reasons, and the gateway sends none
-of them. Today and after the gateway's and the session's parts are built:
+The gateway acts on a `401` to a request with a model key to the model API's path under
+the key's endpoint: the endpoint's path and `/v1/messages` for `anthropic-messages`, and
+the endpoint's path and `/responses` for `openai-responses`. A `401` on another path of
+the host, such as an account check, reaches the session as it came, and the gateway
+requests the key's value again as for any credential (§Credentials, From the server).
+After a `401` on the model API's path:
 
-| Behaviour | Today | After |
-|---|---|---|
-| a provider's `401` to a request with a model key | the proxy passes the `401` on and keeps the key | the key leaves the group; a key with `expires_at` is renewed first, its name in `unauthorized`: a `200` puts it back, a `409` keeps it out, and a `503` keeps it in cooldown with another try every 30 seconds |
-| `unauthorized` of the secrets request and the model keys report | the schemas accept it; the gateway sends neither | the gateway sends both |
-| `model_key_switch`, `model_key_unauthorized` | the schemas accept them, and both are reserved codes; the gateway sends no such stop, `(*session.Run).Close` returns an error for each, and the gateway returns `400` `invalid_request` to a batch whose `dev.qory.run.exited` has one | the gateway sends the stops; the session writes `paused` with `model_key_switch` and `failed` with `model_key_unauthorized`; the close and the gateway accept each only with its state, after a last session that ended with it |
+1. The proxy sets the key no more, and the gateway writes one line to its log, with the
+   key's name and no value. A key whose value has `expires_at` is renewed at once, in a
+   secrets request that names it alone, with its name in `unauthorized`: a `200` with a
+   value puts the key back in the group; the server's signed `409`, a value the run
+   cannot set, or `expires_at` with no renewal takes it out for the run; any other
+   failure, such as a `503`, keeps it out of use, with another try 30 seconds later. A
+   key without `expires_at` leaves the group for the run at once.
+2. For `anthropic-messages`, the proxy sends the request again with the next usable key,
+   as after a limit refusal (Several model keys, above). For `openai-responses`, and
+   when no key is usable, the proxy passes the `401` to the session, and from then until
+   the session's join ends returns its `429` to each request with the placeholder.
+3. The gateway's answer to the session's next batch has `stop` with the reason its first
+   such answer fixes: `model_key_unauthorized` when every key of the group is out and a
+   `401` took at least one out; `model_key_switch` when the proxy passed a `401`, the
+   format is `openai-responses` and another key is usable; otherwise `model_key_limit`,
+   such as for a key whose renewal is pending. The session writes
+   `dev.qory.session.exited` `paused` with `model_key_switch`, or `failed` with
+   `model_key_unauthorized`, and the close and the gateway accept each only with its
+   state, after a last session that ended with it (§The events, How a run ends).
+4. Each model keys report lists the keys out of use after a `401` in `unauthorized`,
+   until a renewal brings a key back (§The server, The model keys).
+
+A separate gateway keeps the stop's reason and the keys out after a `401` in the run's
+record, so a gateway that starts again (§The server, A gateway that restarts) answers
+with the same stop. Its first secrets request leaves those keys out, and it renews each
+key whose renewal was pending in a request that names it alone. When no credential of
+the run is left to request, it sends no secrets request.
 
 **The variable of a model key.** The session gives the start key to the runtime. The
 run answer's `credential_hosts` has each model key's `format`, `endpoint` and `auth`
@@ -2296,7 +2325,8 @@ transcript, as `dev.qory.session.transcript` events. A continuation of a paused 
 reads it to resume the runtime's session on another machine (§The run API, The
 transcript of a paused run). The session takes the file's path from the hook input
 member that `resume.path_from` is set to, Claude Code's `transcript_path`. Until a hook
-input contains it, the session uses `resume.path`, with `{session_id}` replaced by
+input contains it, or for a descriptor with no `resume.path_from`, such as Codex's, the
+session uses `resume.path`, with `{session_id}` replaced by
 `session_id` of `dev.qory.runtime.started` and `{cwd_slug}` by the runtime's working
 directory with every character other than an ASCII letter or digit replaced by `-`:
 `/workspace` becomes `-workspace`. A `resume.prefix` that starts with `~/` lies under the
@@ -2326,6 +2356,29 @@ link, and reads no path with a symbolic link among the names below `resume.prefi
 run's transcript reads `resume.path` instead, under the paused run's slug (§The run API,
 The transcript of a paused run).
 
+A `resume.path` with a `*`, such as Codex's
+`${CODEX_HOME}/sessions/*/*/*/rollout-*-{session_id}.jsonl`, is a pattern. At each read
+until one file matches, the session searches below `resume.prefix` for the file whose
+names match the pattern's, with `{session_id}` replaced: a `*` matches any characters
+other than `/` inside one name, and never a whole `.` or `..`. The search follows no
+symbolic link below `resume.prefix`, skips a directory it cannot read, and tries again at
+the next read when no file matches. Behind a wall it lists at most 10000 entries, since
+the agent makes them; without a wall it lists every entry. The session sends nothing and
+writes one line when:
+
+- more than one file matches: `Keep one transcript of the runtime's session at <pattern>.
+  A continuation of this run starts the runtime without a resume: more than one file
+  matches it, so the session reads none of them`;
+- a walled search lists more than 10000 entries: `Keep at most 10000 entries in the
+  directories below <prefix> that the transcript's pattern reaches`;
+- the path of the file that matches contains one of the run's secrets, a character that
+  is not printable, such as a newline, or is no UTF-8, since the path goes out in
+  `dev.qory.session.transcript`; the line does not contain the path;
+- that path is over 1022 bytes after `~/` or `/`;
+- no file matches when the runtime exits, behind a wall: `Check that the runtime writes
+  its transcript at <pattern>. A continuation of this run starts the runtime without a
+  resume: no file matches, so the session sent no transcript`.
+
 Each line the session writes about a transcript is one `dev.qory.run.log` line of the
 session, with `stream: stderr`, of the form `<fix>. A continuation of this run starts
 the runtime without a resume: <cause>`: the fix comes first. After such a line the
@@ -2333,9 +2386,9 @@ session sends no more of the transcript.
 
 Behind a wall, the session reads the transcript in the session's transcript directory,
 `transcripts/<n>/` in the run directory, which it makes, mode `0700`, before the
-runtime starts. A runtime gets the directory only when its descriptor has `resume` and
-its `resume.path` is `resume.prefix` followed by `{cwd_slug}/{session_id}.jsonl`, as
-Claude Code's is. The wall binds the directory writable at `resume.prefix` below the
+runtime starts. A runtime gets the directory when its descriptor has `resume`, its
+`resume.prefix` is not the home itself, and its `resume.path` has no empty, `.` or `..`
+name below `resume.prefix`. The wall binds the directory writable at `resume.prefix` below the
 home of the agent's user inside, or at an absolute `resume.prefix` itself. For `docker`
 that home is `HOME` of the launch's environment, else `HOME` of the image's, else the
 home in the image's `/etc/passwd` of the user the container starts as, else `/`. That user is the wall's user, or root with
@@ -2368,8 +2421,9 @@ transcript of a paused run). The wall makes each directory between the home and 
 bind's place that the image does not have, such as `~/.claude`, mode `0700` and owned by
 the agent's uid and gid, before the agent's container starts, except for an absolute
 prefix, whose missing parents the engine makes owned by root. The session reads one path
-in the directory, `<slug>/<session id>.jsonl`, with `<slug>` from the working directory
-inside, and ignores `resume.path_from`. It takes the session id from the first hook input
+in the directory, the part of `resume.path` below `resume.prefix`, such as
+`<slug>/<session id>.jsonl` for Claude Code, with `<slug>` from the working directory
+inside, or the one file a pattern matches, and ignores `resume.path_from`. It takes the session id from the first hook input
 or `dev.qory.runtime.started` with `session_id`, and reads only under an id that is a
 UUID in lower case, such as `5d0c6a51-3b2e-4f7a-9c1d-8e6f4a2b0c37`. It opens the file
 with no symbolic link among its names and without waiting for a writer, and reads it
@@ -2512,11 +2566,11 @@ can resume its runtime session (§The run API, The transcript of a paused run). 
 closes a run whose last session ended with `model_key_switch` the same way, `paused`, and
 a control plane can start its continuation at once on another key; it closes a run
 whose last session ended with `model_key_unauthorized` `failed`, and the run has no
-continuation (§Credentials, Keys out after a 401, which also lists what Forager checks
-of the two today).
-`(*session.Run).Close` returns an error for `model_key_limit` with a state other than
-`paused`, for `paused` with no reason or another reason, in a run with no join, or when the last
-session's `dev.qory.session.exited` has another reason, and the gateway returns
+continuation (§Credentials, Keys out after a 401).
+`(*session.Run).Close` returns an error for `model_key_limit` or `model_key_switch` with
+a state other than `paused`, for `model_key_unauthorized` with a state other than
+`failed`, for `paused` with no reason or another reason, for any of the three in a run
+with no join, or when the last session's `dev.qory.session.exited` has another reason, and the gateway returns
 `400` `invalid_request` to a batch with such a `dev.qory.run.exited`. The close writes
 `image_missing`, `image_user_root`, `image_access_denied`, `image_rate_limited` or
 `image_registry_unreachable`, refusal codes of `refusal.Decides`, when its caller gives
@@ -3350,15 +3404,18 @@ body as the request string's last line:
 
 `run_configuration` is the digest of the run configuration the credentials come from,
 `credentials` the names of the entries whose values the server seals, in the document's
-order, each once: every entry when the run starts, and the entries that are due at a
-renewal, `unauthorized`, optional, the model keys among `credentials` whose renewal
+order, each once: every entry when the run starts, but at a reopen the model keys out
+of use after a `401`, and the entries that are due at a renewal, each model key in a
+request that names it alone and the other entries together, `unauthorized`, optional, the model keys among `credentials` whose renewal
 follows a model provider's `401`, 1 to 6 names in the order of `credentials`
 (§Credentials, Keys out after a 401), and
 `timestamp` the sender's clock in Unix seconds. The server ignores a name of
 `unauthorized` that is not one of the run's credentials, and treats the request as if
 the name were absent: a credential can leave the run configuration between the
 gateway's fetch of the run configuration and the secrets request. More than 6 names, a name twice or a value that
-is no credential's name is `400` `invalid_request`. A member the schema does not define is
+is no credential's name is `400` `invalid_request`. The gateway waits 30 seconds for the
+answer to a secrets request (`server.SecretsTimeout`), and 10 seconds for every other
+request to the server. A member the schema does not define is
 refused, and so is a member name twice in one object; the body is at most 32 KiB. After
 the shared order of refusals (§The server, Coded refusals), in which a body the schema refuses
 is `400` `invalid_request` and a `timestamp` more than 300 seconds from the server's
@@ -4425,10 +4482,11 @@ tries the server's registration, or the attach, for up to 120 seconds (Tries as 
 opens, below); the last try may start just before 120 seconds and has 10 seconds for
 its answer, which leaves 10 seconds for the rest of the open. Those 10 seconds do not
 cover every open: behind a separate gateway, a run with credentials reloads its run
-configuration after the attach and then requests its secrets, each with 10 seconds for
-its answer, so after a late attach its open may take about 150 seconds and the start of
-its tools, and on the local link a run that requests its secrets after a late
-registration may take 140 seconds and the start of its tools. Such a session stops
+configuration after the attach, with 10 seconds for its answer, and then requests its
+secrets, with 30 seconds for that answer (`server.SecretsTimeout`), so after a late
+attach its open may take about 170 seconds and the start of its tools, and on the local
+link a run that requests its secrets after a late registration may take 160 seconds and
+the start of its tools. Such a session stops
 waiting before the run opens.
 
 A run request whose session stops waiting opens no run: once its connection goes, the
@@ -4915,8 +4973,15 @@ when every key of the group is out after such a `401`:
 The session stops the runtime as for `model_key_limit` and writes
 `dev.qory.session.exited` `paused` with `model_key_switch`, or `failed` with
 `model_key_unauthorized`, whatever the runtime's exit status; its caller closes the run
-with the same state and reason. On 2026-11-13 the gateway sends neither, and the
-session stops the runtime for `model_key_limit` alone.
+with the same state and reason.
+
+The gateway puts the stop in its answer to a batch that reaches it after the proxy
+passed the refusal or the `401`, and takes the stop back once it accepts the session's
+`dev.qory.session.exited`. A runtime that writes nothing after the refusal and exits
+leaves no such batch, so when every event the session queued before the exit was in a
+batch whose post began before it, the session writes a `dev.qory.run.heartbeat` after
+the exit and reads the answer to its batch before it writes
+`dev.qory.session.exited`.
 
 **Heartbeats and liveness.** A run has one source of heartbeats. For a session's run,
 the session's `dev.qory.run.heartbeat` events on the link, every `interval_seconds` of
@@ -5588,8 +5653,7 @@ and dashes. `endpoint` is where the base URL of the run's model API goes, exactl
 of `{variable}`, the variable the runtime reads it from, `{variable: ANTHROPIC_BASE_URL}`,
 and `{setting}`, a dotted key of the runtime's settings, written as a place's setting,
 `{setting: model_providers.qory.base_url}`; with `config`, the session passes the URL
-as a TOML string. A flag is no place of the endpoint. Until 2026-11-13 the endpoint
-was always a variable. The session sets the start key's endpoint in an endpoint
+as a TOML string. A flag is no place of the endpoint. The session sets the start key's endpoint in an endpoint
 variable; for an endpoint in a setting it sets no variable, and with `config` passes the
 endpoint as that setting's pair (Config, below). `keys` lists 1 to 32 variables the
 runtime reads a model key from, each `{format, auth, variable}`: the API format the key
@@ -5760,10 +5824,9 @@ resumes as `codex exec --json --add-dir <dir> resume <session id> "<prompt>"`, a
 without a resume and the session writes one line, `Put the prompt as the launch's last
 argument, after exec. The runtime starts without a resume: the transcript of run <run
 id> could not be restored: the launch has no argument after exec, and resume.place
-before_last puts resume.args before the last one`. Until 2026-11-13 `path_from` was
-required, and a `*` and `after` had no meaning; on 2026-11-13 the schema accepts all
-three, and the session still reads `path` with no pattern and adds `args` at the
-end. The session sends the transcript as `dev.qory.session.transcript`
+before_last puts resume.args before the last one`. The session places `args` by
+`after` and `place` with a wall and without one, and searches for the file of a `path`
+with a `*` (§The events, A session's transcript). The session sends the transcript as `dev.qory.session.transcript`
 (§The events, A session's transcript) and restores it in a run with `resume` (§The run
 API, The transcript of a paused run), behind a wall through the session's transcript
 directory, which the wall binds at `prefix` inside, or in the writable mount whose place
