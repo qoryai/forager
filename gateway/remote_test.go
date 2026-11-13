@@ -1354,8 +1354,8 @@ func TestTheEndMember(t *testing.T) {
 }
 
 // TestAGatewayRestartedReattaches pins a separate gateway that restarts on its
-// directory: a run it attached whose open never answered its session, its record
-// holding its dev.qory.run.registered alone, is reclaimed, and the session's run
+// directory: a run it attached whose session never got its run answer, its record
+// containing its dev.qory.run.registered alone, is reclaimed, and the session's run
 // request attaches it again and opens it; a run that was live there is reopened by its
 // batch, a 202, which attaches it again, and its run request is a 409 run_attached.
 // Its attaches and its batches at the server carry the same X-Qory-Instance-Id, the

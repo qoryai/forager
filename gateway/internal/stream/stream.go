@@ -666,7 +666,7 @@ func (r *Run) Discard(ctx context.Context) error {
 	for _, name := range slices.Concat([]string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir, answeredFile}, keptFiles, []string{lockFile}) {
 		errs = append(errs, accesskey.ShownError(os.RemoveAll(filepath.Join(r.dir, name))))
 	}
-	// Left in place when it holds anything else, the session's files on one machine.
+	// Left in place when it contains anything else, the session's files on one machine.
 	// The directory that lost the entries is synced, so the removal of the CA key and
 	// the run request lasts after a crash.
 	synced := r.dir
@@ -677,9 +677,9 @@ func (r *Run) Discard(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Reclaim removes the record of a run whose open never answered its session, so its
+// Reclaim removes the record of a run whose session never got its run answer, so its
 // run id opens again: a record whose lock is free, that is not marked answered
-// ([Run.MarkAnswered]) and whose events.jsonl holds at most the run's
+// ([Run.MarkAnswered]) and whose events.jsonl contains at most the run's
 // dev.qory.run.registered, which is never posted. It reads the record under its lock,
 // so what it judges is what it removes. It removes events.jsonl, the delivery state and
 // the files the gateway keeps to reopen the run ([keptFiles]), and reports whether it

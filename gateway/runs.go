@@ -349,8 +349,8 @@ func tryOpen(ctx context.Context, clock openClock, waits []time.Duration, deadli
 // registration, or on the one address its attach, whose answer is its run
 // configuration, the policy in force, the credentials and the tools, the run's proxy,
 // under a fresh secret on the local link, and its record. On the one address its proxy
-// is guarded whatever its wall, and a record of the run whose open never answered its
-// session, of a gateway that stopped as it opened, is removed first, so the run
+// is guarded whatever its wall, and a record of the run whose session never got its run
+// answer, of a gateway that stopped as it opened, is removed first, so the run
 // attaches again ([stream.Stream.Reclaim]). A refusal is an [*accesskey.Refusal];
 // recorded says the run's record was made, so its id is used from now on.
 func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, recorded bool, err error) {

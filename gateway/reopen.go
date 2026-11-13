@@ -123,8 +123,8 @@ func (g *Gateway) reopen(c *reopenCall, runID string, p presented) {
 //     given.jsonl, run.started's id and time, and the ids numbered; and the run's CA,
 //     from its files, when the record has them;
 //  3. the run's attach again, with p and the gateway's instance id, through the tries
-//     of an open ([Gateway.attach]), each failure tried again as [reopenRetried]
-//     decides; nothing of its answer is written to the record;
+//     of an open ([Gateway.attach]), each failure tried again when [reopenRetried]
+//     returns true; nothing of its answer is written to the record;
 //  4. a sink for the run, then each event the server wants and did not accept, sent
 //     again in order before any new event, within the deadline of the attach's tries;
 //  5. and 6. the run decided by request.json and the run configuration of the attach,
@@ -197,7 +197,8 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 	}
 	numbered := len(joins) > 0
 	// The run's authority, read before the attach, so a record whose CA files do not
-	// read back ends the run before Qory Apiary sees an attach or an event again.
+	// read back ends the run before the gateway sends Qory Apiary an attach or an event
+	// again.
 	ca, err := readKeptCA(dir, runID)
 	if err != nil {
 		return fail(true, err)
@@ -243,7 +244,7 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 	ca, err = lr.decide(ctx, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: &run.Fetched{URL: conf.Run.URL, Digest: digest, Document: rc}, labels: labels},
 		func(*run.Run) (*proxy.CA, error) {
 			if ca == nil {
-				return nil, fmt.Errorf("the run needs a CA, and its record has no %s or %s", proxy.CACertFile, proxy.CAKeyFile)
+				return nil, fmt.Errorf("start a new run: this run needs its certificate authority, and its record has no %s or %s", proxy.CACertFile, proxy.CAKeyFile)
 			}
 			return ca, nil
 		})

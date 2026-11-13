@@ -318,7 +318,7 @@ func ReadCA(dir, runID string) (*CA, error) {
 		return nil, fmt.Errorf("%s is not a certificate authority's certificate", shownPath(certPath))
 	}
 	if cert.Subject.CommonName != caName(runID) {
-		return nil, fmt.Errorf("%s is not the certificate authority of run %s", shownPath(certPath), accesskey.ShownValue(runID, false))
+		return nil, fmt.Errorf("remove %s: it is the certificate authority of another run, not of run %s", shownPath(certPath), accesskey.ShownValue(runID, false))
 	}
 	if !time.Now().Before(cert.NotAfter) {
 		return nil, fmt.Errorf("the certificate in %s expired at %s", shownPath(certPath), cert.NotAfter.UTC().Format(time.RFC3339))

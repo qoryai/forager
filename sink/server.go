@@ -442,8 +442,9 @@ func (w *Server) deliver(batch []queued) {
 	body := encode(batch)
 	id := event.NewID()
 	backoff := Backoff
-	// flushed says a Flush call ended a pause and used up its signal: the signal is put
-	// back once the batch is done with, so the batches after it go without their wait.
+	// flushed is true when a Flush call ended a pause and used up its signal: the signal
+	// is put back once the batch is done with, so the batches after it go without their
+	// wait.
 	flushed := false
 	defer func() {
 		if flushed {

@@ -31,8 +31,11 @@ const dialWait = 10 * time.Second
 // gatewayHold is how long a forwarder that reaches a separate gateway through the link
 // tries again to reach it for one connection, while the agent's connection stays open
 // with nothing written to it, so a gateway that restarts within it serves the
-// connection. With a CONNECT held 120 s with no answer, Claude Code 2.1.316 and Codex
-// rust-v0.166.0 finish the turn. Claude Code's limit is 360 s (test of 2026-11-12).
+// connection. Claude Code 2.1.316 waits up to 360 s for a CONNECT held with no answer,
+// and Codex rust-v0.166.0 at least 1,800 s (test of 2026-11-12), so both still wait
+// when the 120 s hold ends. A gateway back within the hold serves the connection and
+// the turn goes on; after the hold, the forwarder closes the connection and the agent
+// tries the request again.
 const gatewayHold = 120 * time.Second
 
 // agentWait is how long the forwarder reads the agent's connection, after a dial that

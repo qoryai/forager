@@ -189,7 +189,7 @@ func TestReadCARefuses(t *testing.T) {
 		{name: "a certificate not an authority's", cert: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafOnly.Raw}), key: pemKey(t, leafOnly.key), wantInText: "not a certificate authority"},
 		{name: "an expired certificate", cert: must(os.ReadFile(filepath.Join(expiredDir, CACertFile))), key: must(os.ReadFile(filepath.Join(expiredDir, CAKeyFile))), wantInText: "expired"},
 		{name: "another authority's key", cert: certPEM, key: otherKeyPEM, wantInText: "not the key of the certificate"},
-		{name: "another run's authority", cert: must(os.ReadFile(filepath.Join(otherDir, CACertFile))), key: otherKeyPEM, wantInText: "is not the certificate authority of run test"},
+		{name: "another run's authority", cert: must(os.ReadFile(filepath.Join(otherDir, CACertFile))), key: otherKeyPEM, wantInText: "it is the certificate authority of another run, not of run test"},
 		{name: "a P-384 key", cert: certPEM, key: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: p384DER}), wantInText: "not an ECDSA P-256 key"},
 		{name: "an empty key", cert: certPEM, key: []byte{}, wantInText: "not one PEM block"},
 		{name: "a key of another block type", cert: certPEM, key: pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBlock.Bytes}), wantInText: "not one PEM block"},
