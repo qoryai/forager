@@ -23,9 +23,10 @@ import (
 // reopenable reports whether a request on the one address for runID, of a run the
 // gateway neither holds nor keeps as spent, may reopen it: the gateway has Listen, and
 // the run's record has request.json, which only a gateway that keeps its runs writes.
-// [Gateway.reopen] checks the rest.
+// [Gateway.reopen] checks the rest. It reads the Config's Listen, not g.svc: a request
+// may come before Start sets g.svc.
 func (g *Gateway) reopenable(runID string) bool {
-	if g.svc == nil {
+	if g.cfg.Listen == "" {
 		return false
 	}
 	_, err := os.Lstat(filepath.Join(g.stream.Dir(runID), requestFile))
