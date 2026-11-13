@@ -52,6 +52,17 @@ type apiary struct {
 	digest   string
 	attaches int
 	received []map[string]any
+	// failAttaches is how many attaches to come get a 503 with no body; tried lists
+	// every attach, those among them.
+	failAttaches int
+	tried        []triedAttach
+}
+
+// triedAttach is an attach the apiary got: its X-Qory-Instance-Id, the run key of its
+// body, and whether it got a 503.
+type triedAttach struct {
+	instance, runKey string
+	failed           bool
 }
 
 // The node and the workspace the apiary's discovery lists.
@@ -88,7 +99,8 @@ func (a *apiary) configuration() ([]byte, string) {
 }
 
 // handle answers the gateway, signed: the discovery, an attach with labels of the
-// starter's registration, a reload and a batch, whose events it keeps.
+// starter's registration, or a 503 while failAttaches is above 0, a reload and a
+// batch, whose events it keeps.
 func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
 	if runAPIAnswers(a.signer, w, r) {
 		return
@@ -103,6 +115,21 @@ func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == server.WellKnown:
 		out, withRun = doc, false
 	case r.Method == http.MethodPost && ok && strings.HasSuffix(rest, "/attach"):
+		var at struct {
+			RunKey string `json:"run_key"`
+		}
+		json.Unmarshal(body, &at)
+		a.mu.Lock()
+		failed := a.failAttaches > 0
+		if failed {
+			a.failAttaches--
+		}
+		a.tried = append(a.tried, triedAttach{instance: r.Header.Get(server.HeaderInstanceID), runKey: at.RunKey, failed: failed})
+		a.mu.Unlock()
+		if failed {
+			status, withRun = http.StatusServiceUnavailable, false
+			break
+		}
 		var m map[string]json.RawMessage
 		json.Unmarshal(run, &m)
 		m["labels"] = json.RawMessage(`{"repository":"example-namespace/project"}`)
