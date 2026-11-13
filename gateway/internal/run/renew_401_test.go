@@ -343,3 +343,52 @@ func TestAPendingKeyIsRenewedAloneAfterTheReopen(t *testing.T) {
 		})
 	}
 }
+
+// keysOnlyDoc is twoKeysDoc with no credential outside model's key group.
+const keysOnlyDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}},"model_credential":"model","credentials":[` +
+	`{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
+	`{"name":"model-2","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}]}`
+
+// TestAReopenWithEveryKeyLeftOutSendsNoRequest pins a reopened run whose every
+// credential is out or pending after a 401: the contract's secrets request names at
+// least one credential, so the reopen sends none and the run opens with no value. The
+// pending key's renewal, alone, then brings its value, and a renewal of another
+// pending key puts that one in place beside it.
+func TestAReopenWithEveryKeyLeftOutSendsNoRequest(t *testing.T) {
+	clock := &fakeClock{now: start}
+	s := &controlPlane{answer: func(name string, call int) (answer, error) {
+		return answer{value: fmt.Sprintf("%s-%d", name, call), expires: start.Add(time.Hour)}, nil
+	}}
+	f := document(t, keysOnlyDoc, digest('1'))
+	f.Document.Computed = digest('c')
+	// The renewer sets no timer: no renewal is due before the key group has a key
+	// pending.
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: f, Secrets: s.fetch, Clock: clock, Report: (&reports{}).report, Log: (&reports{}).report, Pending: []string{"model", "model-2"}})
+	if got := s.called(); len(got) != 0 {
+		t.Fatalf("the reopen sent %v; want no request", got)
+	}
+	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", clock.Now)
+	r.SetKeyGroup(g)
+	g.Restore([]modelkey.Unauthorized{{Credential: "model", At: start}, {Credential: "model-2", At: start}})
+	for _, name := range []string{"model", "model-2"} {
+		n := clock.count()
+		if !r.Renew(name) {
+			t.Fatalf("Renew of %s reports no renewal", name)
+		}
+		clock.idle(t, n)
+	}
+	for i, call := range s.called() {
+		if len(call) != 2 {
+			t.Errorf("request %d names %v; want one key", i+1, call[1:])
+		}
+	}
+	if got := len(s.called()); got != 2 {
+		t.Errorf("%d requests; want one per key", got)
+	}
+	if value(r, "model") != "model-0" || value(r, "model-2") != "model-2-1" {
+		t.Errorf("the values %s, %s; want model-0 and model-2-1", value(r, "model"), value(r, "model-2"))
+	}
+	if u := g.Unauthorized(); u != nil {
+		t.Errorf("after the renewals: %+v; want both keys back", u)
+	}
+}

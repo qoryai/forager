@@ -333,7 +333,12 @@ func (w *renewer) renew(names []string, now time.Time) {
 	}()
 	r := w.r
 	values, err := r.cfg.Secrets(ctx, r.computedDigest(), names, unauthorized)
-	defer values.Clear()
+	taken := false
+	defer func() {
+		if !taken {
+			values.Clear()
+		}
+	}()
 	revoked := err != nil && conflict(err)
 	for _, name := range names {
 		if !w.has(name) {
@@ -358,7 +363,7 @@ func (w *renewer) renew(names []string, now time.Time) {
 			continue
 		}
 		at, _ := values.ExpiresAt(name)
-		r.replaceValue(name, values)
+		taken = r.replaceValue(name, values) || taken
 		w.renewedAt(name, at)
 		if slices.Contains(unauthorized, name) {
 			g.Renewed(name)
@@ -418,14 +423,22 @@ func (w *renewer) renewedAt(name string, at time.Time) {
 }
 
 // replaceValue puts the value of name that values has in place of the run's, unless
-// name is a harness credential whose value [Run.CloseHarness] cleared.
-func (r *Run) replaceValue(name string, values sealed.Values) {
+// name is a harness credential whose value [Run.CloseHarness] cleared. For a run with
+// no values yet ([Run.unopened]), values becomes the run's, and replaceValue reports
+// true: the caller then keeps values uncleared. Each such renewal names one key alone
+// ([renewer.split]), so values has that key's value and no other.
+func (r *Run) replaceValue(name string, values sealed.Values) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.harnessGone(name) {
-		return
+		return false
+	}
+	if r.unopened {
+		r.values, r.unopened = values, false
+		return true
 	}
 	r.values.Replace(name, values)
+	return false
 }
 
 // drop stops the renewals of names: they are planned no more, and a renewal in flight

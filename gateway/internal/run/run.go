@@ -179,6 +179,10 @@ type Run struct {
 	stored      []server.RunCredential
 	storedModel string
 	values      sealed.Values
+	// unopened is true while values is the zero Values of a reopened run that sent no
+	// secrets request, every credential being left out ([Run.leftOut]): the first
+	// value a renewal brings becomes values ([Run.replaceValue]).
+	unopened bool
 	// stack are the stack_hosts of the run configuration the run started with, nil
 	// when it has none, fixed for the run; stacks are those of each run configuration
 	// Read read that a reload has not decided yet.
@@ -411,9 +415,14 @@ func (r *Run) open(ctx context.Context) error {
 	if d := r.cfg.Fetched.Document; d != nil {
 		digest = d.Computed
 	}
-	values, err := r.cfg.Secrets(ctx, digest, names, nil)
-	if err != nil {
-		return err
+	// The contract's request names at least one credential: a reopened run whose every
+	// credential is left out sends none, and gets its values from their renewals.
+	var values sealed.Values
+	if len(names) > 0 {
+		var err error
+		if values, err = r.cfg.Secrets(ctx, digest, names, nil); err != nil {
+			return err
+		}
 	}
 	now := r.clock().Now()
 	for i, name := range names {
@@ -447,7 +456,7 @@ func (r *Run) open(ctx context.Context) error {
 	}
 	r.renew = newRenewer(r, values, r.cfg.Pending, now)
 	r.mu.Lock()
-	r.values = values
+	r.values, r.unopened = values, len(names) == 0
 	r.mu.Unlock()
 	return nil
 }
@@ -506,7 +515,7 @@ func (r *Run) clearValues() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.values.Clear()
-	r.values = sealed.Values{}
+	r.values, r.unopened = sealed.Values{}, false
 }
 
 // HeaderValue reports whether v, UTF-8, holds the contract's rule for a value set in a
