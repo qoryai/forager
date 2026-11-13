@@ -3877,7 +3877,7 @@ the run's proxy or stack proxy. One reopen of a run runs at a time, and every re
 of the run waits for it. The reopen reads the record back, attaches the run again under
 the run key of that request, with the tries of an open (Tries as a run opens, below),
 sends again what the server has not accepted, decides the run again from `request.json`
-and the run configuration the attach answers, with the run's certificate authority from
+and the run configuration in the attach's answer, with the run's certificate authority from
 `ca.pem` and `ca.key`, and goes on numbering the record after its last `sequence`. A
 connection that waits on a reopen counts against none of the one address's bounds of
 connections once its run key verifies. The reopen's answers to the requests that wait:
@@ -3886,10 +3886,10 @@ connections once its run key verifies. The reopen's answers to the requests that
 - a failure that may pass, no answer from the server, a `5xx` or a `429`
   `rate_limited`, or a `Close` that stops the reopen's tries: a `503` with no body, and
   the session's next request starts the reopen again;
-- a final failure, such as another refusal of the attach, a run configuration Forager
-  refuses, or a record the gateway cannot read: a `410` `run_closed`, and the run is
-  over. Only tries that `Close` stopped count as a stop by `Close`: a final refusal that
-  came first keeps its `410`.
+- a final failure, such as another refusal of the attach, a run configuration that
+  fails Forager's checks, or a record the gateway cannot read: a `410` `run_closed`, and
+  the run is over. Only tries that `Close` stopped count as a stop by `Close`: a final
+  refusal that came first keeps its `410`.
 
 A connection to the run's proxy that waited on a reopen that did not open the run is
 closed unanswered. The run request of a reopened run stays `409` `run_attached`. A
@@ -4359,13 +4359,13 @@ each try after the first it flushes its batches, so the previous session's
 `400`, `403` or `410` among them, it takes as the answer to the join. A join with no
 answer after 120 seconds fails as after one try.
 
-Behind a separate gateway the gateway answers a join request that repeats the last
-join it accepted the same way again: `200` with the same session number and model key,
-and nothing numbered anew. A join request repeats the last join when that join's
+Behind a separate gateway, a join request that repeats the last join the gateway
+accepted gets that join's `200` again, with the same session number and model key, and
+nothing is numbered anew. A join request repeats the last join when that join's
 session has neither started nor exited and the request has the same `passes`,
 `model_key` and `model_credential`. The gateway writes each join it numbers to
-`joins.jsonl` before it answers (The record files), so the gateway that starts again
-answers a repeated join request the same way.
+`joins.jsonl` before it sends the join's answer (The record files), so a repeated join
+request gets the same `200` from the gateway that starts again.
 
 **Events.** The session posts its events to `events.url`, in batches cut as toward the
 server (§The server, Delivery), with `Content-Type: application/cloudevents-batch+json`.

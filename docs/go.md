@@ -841,7 +841,7 @@ events, writes no `dev.qory.run.exited`, and keeps the run's record. Its
 attaches the run again and goes on numbering the record, and the session goes on. A
 request gets a `503` while the reopen is tried, and a `410` `run_closed` when it fails
 for good. A record from a gateway that did not keep its runs is not reopened: the
-gateway answers its requests `410` `run_closed`. The contract lists the files a reopen
+requests of the run get a `410` `run_closed`. The contract lists the files a reopen
 reads, their mode and when they are removed in
 [The record files](../contracts/forager/v1/README.md#the-record-files), and describes
 the reopen in the paragraph A restart of
