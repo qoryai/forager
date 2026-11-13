@@ -57,7 +57,7 @@ func TestAReservedAccountHeaderIsRefused(t *testing.T) {
 		err := server.CheckCredentials([]server.RunCredential{c}, "")
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !slices.Equal(r.Names, []string{"subscription"}) ||
-			!strings.Contains(err.Error(), "set account_header of the credential \"subscription\" to another header") {
+			!strings.Contains(err.Error(), "Set account_header of the credential \"subscription\" to another header") {
 			t.Errorf("account_header %s: %v", h, err)
 		}
 	}
@@ -140,7 +140,7 @@ func TestAnAccountHeaderComesWithItsClaimAndOAuth(t *testing.T) {
 		err := server.CheckCredentials([]server.RunCredential{c}, "")
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !slices.Equal(r.Names, []string{"subscription"}) ||
-			!strings.Contains(err.Error(), "give the credential \"subscription\" both account_header and account_claim, with oauth, or neither") {
+			!strings.Contains(err.Error(), "Give the credential \"subscription\" both account_header and account_claim, with oauth, or neither") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

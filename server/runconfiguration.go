@@ -116,17 +116,17 @@ func CheckCredentials(creds []RunCredential, model string) error {
 		}
 		if a := c.Auth; (a.AccountHeader != "") != (a.AccountClaim != "") || (a.AccountHeader != "" && !a.OAuth) {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"the document is refused: give the credential %s both account_header and account_claim, with oauth, or neither; it has one of them, or both without oauth", name)
+				"Give the credential %s both account_header and account_claim, with oauth, or neither: it has one of them, or both without oauth", name)
 		}
 		if h := c.Auth.AccountHeader; h != "" && (ReservedHeader(h) || strings.EqualFold(h, "authorization")) {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"the document is refused: set account_header of the credential %s to another header than %s; that header frames the request, carries the token, or the proxy sets it", name, accesskey.ShownName(h, true))
+				"Set account_header of the credential %s to another header than %s: that header frames the request, contains the token, or the proxy sets it", name, accesskey.ShownName(h, true))
 		}
 		for _, a := range c.Applies() {
 			for _, p := range a.Paths {
 				if UnclearPath(p) {
 					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-						"the document is refused: write the path %s of the credential %s without a . or .. segment or an empty segment, each read up to its first ; or %%3B, a backslash, or an encoded slash, backslash, dot or percent sign; the proxy denies every request whose path has one, so the path would match none", accesskey.ShownValue(p, true), name)
+						"Write the path %s of the credential %s without a . or .. segment or an empty segment, each read up to its first ; or %%3B, a backslash, or an encoded slash, backslash, dot or percent sign: the proxy denies every request whose path has one, so the path would match none", accesskey.ShownValue(p, true), name)
 				}
 			}
 		}
