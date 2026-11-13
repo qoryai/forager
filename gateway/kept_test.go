@@ -483,6 +483,46 @@ func TestTheSweepKeepsTheCAOfARunThatOpens(t *testing.T) {
 	r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
 }
 
+// TestTheOpeningMarkIsTheRequests pins the mark of a run that opens as each run request's
+// own entry: when a request gives the run id up and a later request of the same run id
+// marks it before the first request's mark is removed, the removal leaves the later
+// request's mark, and the sweep keeps the record's files until that mark goes.
+func TestTheOpeningMarkIsTheRequests(t *testing.T) {
+	dir := t.TempDir()
+	r := startRemote(t, nil, gateway.Config{Dir: dir})
+	runID := fakeRecord(t, dir, time.Now().Add(-time.Hour), event.RunRegistered)
+	first := gateway.MarkOpening(r.g, runID, &http.Request{})
+	later := gateway.MarkOpening(r.g, runID, &http.Request{})
+	first()
+	gateway.SweepCA(r.g, time.Now())
+	if left := keptLeft(dir, runID); len(left) != len(finalNames) {
+		t.Errorf("the sweep with the later request's mark left %v", left)
+	}
+	later()
+	gateway.SweepCA(r.g, time.Now())
+	if left := keptLeft(dir, runID); len(left) != 0 {
+		t.Errorf("the sweep with no mark left %v", left)
+	}
+}
+
+// TestASweepThatPanicsLetsTheRunGo pins the sweep's mark of a record it removes files
+// from: a removal that panics takes the mark away, so the run's requests get no 503 from
+// then on.
+func TestASweepThatPanicsLetsTheRunGo(t *testing.T) {
+	dir := t.TempDir()
+	cfg := gateway.Config{Dir: dir}
+	gateway.SetSweptRemove(&cfg, func(string) error { panic("a removal that panics") })
+	r := startRemote(t, nil, cfg)
+	runID := fakeRecord(t, dir, time.Now().Add(-time.Hour), event.RunRegistered)
+	func() {
+		defer func() { _ = recover() }()
+		gateway.SweepCA(r.g, time.Now())
+	}()
+	if gateway.Swept(r.g, runID) {
+		t.Error("the run is still marked as swept after the removal panicked")
+	}
+}
+
 // TestTheSweepRunsEvery10MinutesOnRecordsOlderThan15 pins the CA key sweep's values,
 // the user's "545 (a)": the sweep's ticker has an interval of 10 minutes, and a pass
 // removes the kept files of a record whose events.jsonl has not changed for more than

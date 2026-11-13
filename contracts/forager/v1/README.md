@@ -2468,9 +2468,10 @@ request until its run answer. It reads the records under its directory, or, with
 `<directory>/<run id>`. A live run's session sends a heartbeat at least every 300
 seconds, so a live run's record changes within those 15 minutes. The sweep and a reopen
 of the same run never run at once, and neither do the sweep and an open: the sweep skips
-a run that is opening or reopening, a request, a run request among them, that comes
-while the sweep removes a record's files gets a `503` with no body, and a request after
-the sweep gets a `410` `run_closed`.
+a run that is opening or reopening, and a request, a run request among them, that comes
+while the sweep removes a record's files gets a `503` with no body. After the sweep, a
+request of the run gets the `410` `run_closed` of a run that does not reopen, and a run
+request of its run id gets the `409` `run_attached` of any record there.
 
 **A hidden harness.** In a run whose harness is hidden, `[harness text: <path>]`
 replaces the text of each file in a session's harness home, after the forwarders'

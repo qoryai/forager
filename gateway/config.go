@@ -116,6 +116,9 @@ type Config struct {
 	// sweepTicker, when not nil, makes the CA key sweep's ticker of interval every in
 	// place of time.NewTicker: its channel and what stops it. Tests set it.
 	sweepTicker func(every time.Duration) (<-chan time.Time, func())
+	// sweptRemove, when not nil, removes a record's kept files for the CA key sweep in
+	// place of stream.RemoveKept. Tests set it.
+	sweptRemove func(dir string) error
 	// opened, when not nil, is called once a run on the one address opened. Tests set
 	// it.
 	opened func()

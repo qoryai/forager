@@ -442,7 +442,7 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 			continue
 		}
 		g.mu.Lock()
-		held := g.runs[id] != nil || g.opening[id] || g.reopening[id] != nil
+		held := g.runs[id] != nil || g.opening[id] != nil || g.reopening[id] != nil
 		if !held {
 			g.sweeping[id] = true
 		}
@@ -450,16 +450,28 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 		if held {
 			continue
 		}
-		err = stream.RemoveKept(dir)
-		g.mu.Lock()
-		delete(g.sweeping, id)
-		g.mu.Unlock()
-		if err != nil {
+		if err := g.removeSwept(id, dir); err != nil {
 			g.report(keptNotRemoved(id, dir, err))
 			continue
 		}
 		g.report(fmt.Sprintf("run %s: removed the files kept to reopen it: its record has not changed for %s", accesskey.ShownValue(id, false), age))
 	}
+}
+
+// removeSwept removes the kept files of the record dir of the run id, which the sweep
+// added to g.sweeping, and takes the run from g.sweeping, also when the removal panics,
+// so the run's requests do not get a 503 from then on.
+func (g *Gateway) removeSwept(id, dir string) error {
+	defer func() {
+		g.mu.Lock()
+		delete(g.sweeping, id)
+		g.mu.Unlock()
+	}()
+	remove := stream.RemoveKept
+	if g.cfg.sweptRemove != nil {
+		remove = g.cfg.sweptRemove
+	}
+	return remove(dir)
 }
 
 // newestOf is the most recent modification time of the files of dir named in names,
