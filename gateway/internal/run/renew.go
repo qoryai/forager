@@ -46,9 +46,9 @@ func (machineClock) After(d time.Duration) <-chan time.Time { return time.After(
 // run's record gets one line, and the value is set no more. It lives on the [Run], so a
 // reload, which resolves the credentials again, starts no second one.
 //
-// A model key of the run's key group that the model provider answered 401 to
-// ([modelkey.Group.Reject]) is renewed with its name in the request's unauthorized, and
-// again every RetryWait until the server answers: a value puts the key back in the
+// A model key of the run's key group that the model provider returned 401 for
+// ([modelkey.Group.Reject]) is renewed with its name in the request's unauthorized,
+// and again every RetryWait until a renewal ends: a value puts the key back in the
 // group ([modelkey.Group.Renewed]); the server's signed 409, or the value's expires_at
 // with no renewal, takes it out for the run ([modelkey.Group.Revoked]); any other
 // failure, such as a 503 or no answer, keeps it out of use until the next try.
@@ -188,7 +188,9 @@ func (w *renewer) loop() {
 			w.expire(e)
 		}
 		if len(due) > 0 {
-			w.renew(due, now)
+			for _, b := range w.split(due) {
+				w.renew(b, now)
+			}
 			continue
 		}
 		var timer <-chan time.Time
@@ -280,6 +282,27 @@ func (r *Run) dropValue(name string) {
 	r.values.Drop(name)
 }
 
+// split are the secrets requests of due: each model key whose renewal after a 401 is
+// pending in a request that names it alone, then the others in one. The server returns 409 with
+// no value to a whole request that has a name it cannot seal, so such a key fails no
+// other renewal.
+func (w *renewer) split(due []string) [][]string {
+	g := w.keyGroup()
+	var out [][]string
+	var rest []string
+	for _, name := range due {
+		if g != nil && g.Pending(name) {
+			out = append(out, []string{name})
+			continue
+		}
+		rest = append(rest, name)
+	}
+	if len(rest) > 0 {
+		out = append(out, rest)
+	}
+	return out
+}
+
 // keyGroup is the run's key group, nil for none.
 func (w *renewer) keyGroup() *modelkey.Group {
 	w.mu.Lock()
@@ -287,13 +310,14 @@ func (w *renewer) keyGroup() *modelkey.Group {
 	return w.group
 }
 
-// renew asks the server for the values of names under the digest of the run
-// configuration in force, with the model keys among them that wait for their renewal
-// after a 401 as unauthorized, and puts each one that meets the start's rules in place
-// of the one the run has. Each one refused, and every one of a request that failed,
-// keeps its value and is reported. A model key that was unauthorized goes back in the
-// key group with its value, out of it at the server's signed 409, and stays out of use
-// after any other failure, until the next try RetryWait later ([renewer]).
+// renew requests from the server the values of names under the digest of the run
+// configuration in force, with the model keys among them whose renewal after a 401 is
+// pending as unauthorized ([renewer.split] puts such a key alone), and puts each one
+// that meets the start's rules in place of the one the run has. Each one refused, and
+// every one of a request that failed, keeps its value and is reported. A model key that
+// was unauthorized goes back in the key group with its value, out of it at the server's
+// signed 409, and stays out of use after any other failure, until the next try
+// RetryWait later ([renewer]).
 func (w *renewer) renew(names []string, now time.Time) {
 	g := w.keyGroup()
 	var unauthorized []string
@@ -587,7 +611,7 @@ func checkOpened(c server.RunCredential, values sealed.Values, now time.Time) er
 }
 
 // SetKeyGroup gives the run's renewals its key group, g: a model key of g that the
-// model provider answered 401 to is renewed as unauthorized ([renewer]). The gateway
+// model provider returned 401 for is renewed as unauthorized ([renewer]). The gateway
 // calls it once, after the group is made and before the run's first request.
 func (r *Run) SetKeyGroup(g *modelkey.Group) {
 	if r.renew == nil {
@@ -598,7 +622,7 @@ func (r *Run) SetKeyGroup(g *modelkey.Group) {
 	r.renew.group = g
 }
 
-// Renew asks for the value of the model key name again as after the model provider's
+// Renew requests the value of the model key name again as after the model provider's
 // 401, for a gateway that reopens a run whose record has the key waiting for its
 // renewal. It reports false for a key whose value does not expire, which has no
 // renewal.

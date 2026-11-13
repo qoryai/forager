@@ -7,7 +7,7 @@ import (
 )
 
 // maxUnauthorized is the most keys [Group.Unauthorized] lists, the most entries of a
-// model keys report's unauthorized: Qory Apiary gives a run at most 6 model keys.
+// model keys report's unauthorized: Qory Apiary sends a run at most 6 model keys.
 const maxUnauthorized = 6
 
 // Unauthorized is a key of the group that got a 401 of the model provider and that no
@@ -40,9 +40,14 @@ func (g *Group) OnUnauthorized(f func([]Unauthorized)) {
 // as in cooldown until its renewal ends, [Group.Renewed] or [Group.Revoked]; another
 // key leaves the group at once. A key already out, or whose renewal is pending, keeps
 // its state and the time of its first 401. A name of no key of the group changes
-// nothing.
+// nothing. For a format whose requests the proxy does not send again ([Resends]), a 401
+// before any pass makes the 401 the cause of the next pass, as [Group.PassRejected]
+// does: a [Group.Pass] between the two, a request that found no key usable, keeps it.
 func (g *Group) Reject(name string, renews bool) {
 	g.change(name, func(i int) bool {
+		if !g.passed && !Resends(g.format) {
+			g.rejected = true
+		}
 		if g.out[i] || !g.unauth[i].IsZero() {
 			return false
 		}
@@ -157,7 +162,8 @@ func (g *Group) change(name string, f func(i int) bool) {
 
 // PassRejected is [Group.Pass] for a 401 of the provider that the proxy passed to the
 // session: the stop's reason may then be model_key_switch ([Group.Stop]). A group that
-// passed a limit refusal before keeps it as the cause.
+// passed a limit refusal before keeps it as the cause. [Group.Reject] sets the cause
+// first for openai-responses, so a pass that comes between the two keeps it.
 func (g *Group) PassRejected() {
 	if g == nil {
 		return
@@ -206,6 +212,9 @@ func (g *Group) Stop() (string, bool) {
 		g.mu.Unlock()
 		return reason, true
 	}
+	// The reason holds until Resume, whatever the keys do meanwhile: Core's
+	// continuation of a paused run ends it with model_key_unauthorized when no key is
+	// usable.
 	g.reason = g.stopReason(g.now())
 	reason, f := g.reason, g.onStop
 	g.mu.Unlock()

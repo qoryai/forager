@@ -102,8 +102,8 @@ type Group struct {
 	// until [Group.Resume], the proxy sends no request with the placeholder and the
 	// gateway's answer to each batch has stop.
 	passed bool
-	// rejected is true when the proxy passed a 401 ([Group.PassRejected]) since the
-	// last [Group.Resume].
+	// rejected is true when a 401 is the cause of the pass ([Group.Reject],
+	// [Group.PassRejected]) since the last [Group.Resume].
 	rejected bool
 	// reason is the stop's reason, fixed by the first [Group.Stop] after the pass;
 	// empty before it.
@@ -206,11 +206,12 @@ func (g *Group) Active() string {
 }
 
 // Pick returns the active key's name, and false when every key of the group is in
-// cooldown, out ([Group.Out]) or unauthorized ([Group.Reject]). When the active key is in cooldown or out, the first
-// key of [Group.next] becomes active first; when no key is left, the active key stays,
-// and the proxy sets no key. For a format whose requests the proxy does not send again
-// ([Resends]), the active key stays while it is in cooldown or out, and Pick reports
-// false: only [Group.JoinKey] makes another key active.
+// cooldown, out ([Group.Out]) or unauthorized ([Group.Reject]). When the active key
+// is in cooldown or out, the first key of [Group.next] becomes active first; when no
+// key is left, the active key stays, and the proxy sets no key. For a format whose
+// requests the proxy does not send again ([Resends]), the active key stays while it
+// is in cooldown or out, and Pick reports false: only [Group.JoinKey] makes another
+// key active.
 func (g *Group) Pick() (string, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -267,10 +268,11 @@ func (g *Group) pick(move bool) (string, bool) {
 	return g.keys[g.active].Name, true
 }
 
-// next is the key a switch makes active, among the keys usable at now ([Group.usable]): the chosen key first; then the keys with no known reset, or one that has
-// passed, by the order; then the key with the closest reset, keys whose resets fall in
-// the same minute by the order. It reports false when every key is out or in cooldown.
-// Called with g.mu held.
+// next is the key a switch makes active, among the keys usable at now
+// ([Group.usable]): the chosen key first; then the keys with no known reset, or one
+// that has passed, by the order; then the key with the closest reset, keys whose
+// resets fall in the same minute by the order. It reports false when every key is out
+// or in cooldown. Called with g.mu held.
 func (g *Group) next(now time.Time) (int, bool) {
 	best, bestReset := -1, time.Time{}
 	for i, k := range g.keys {

@@ -222,3 +222,23 @@ func TestRestoreGivesBackTheKeysOfTheRecord(t *testing.T) {
 		t.Error("a key is usable after Restore")
 	}
 }
+
+// TestAPassBetweenA401AndItsPassKeepsTheSwitch pins the cause of an openai-responses
+// pass: a Pass that comes between Reject and PassRejected, a request that found no key
+// usable, keeps model_key_switch while another key is usable.
+func TestAPassBetweenA401AndItsPassKeepsTheSwitch(t *testing.T) {
+	g, _ := group(t)
+	g.SetFormat(modelkey.FormatOpenAIResponses)
+	g.Reject("model", true)
+	g.Pass()
+	g.PassRejected()
+	if r, ok := g.Stop(); !ok || r != "model_key_switch" {
+		t.Errorf("the stop %q, %v; want model_key_switch", r, ok)
+	}
+	g.Resume()
+	g.Refused("model-2", nil, "")
+	g.Pass()
+	if r, _ := g.Stop(); r != "model_key_limit" {
+		t.Errorf("a limit refusal after the Resume: %q; want model_key_limit", r)
+	}
+}

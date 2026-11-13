@@ -15,7 +15,7 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// expiring answers model with model-<call>, expiring an hour after the start plus call
+// expiring returns model-<call> for model, expiring an hour after the start plus call
 // hours, and forge as renewing does.
 func expiring(name string, call int) (answer, error) {
 	if name == "model" {
@@ -45,7 +45,7 @@ func newKeyRun(t *testing.T, fail func(call int) error) *keyRun {
 }
 
 // reject is the proxy's 401 to a request with the model key: the group takes the key
-// out of use, and its Rejected asks for its value again. It waits until the renewer
+// out of use, and its Rejected requests its value again. It waits until the renewer
 // waits again.
 func (k *keyRun) reject(t *testing.T) {
 	t.Helper()
@@ -194,5 +194,87 @@ func TestAKeyThatExpiresWaitingForItsRenewalGoesOut(t *testing.T) {
 	}
 	if got := k.g.Unauthorized(); len(got) != 1 || !got[0].Out {
 		t.Errorf("after expires_at: %+v; want model out", got)
+	}
+}
+
+// twoKeysDoc is renewDoc with a second model key, model-2, in model's key group.
+const twoKeysDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example","api.git.example"]}},"model_credential":"model","credentials":[` +
+	`{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
+	`{"name":"model-2","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
+	`{"name":"forge","apply":[{"hosts":["git.example","api.git.example"],"scheme":"basic","username":"x-access-token"}]}]}`
+
+// TestEachKeyAfterA401IsRenewedAlone pins the requests of renewals due together: each
+// model key whose renewal after a 401 is pending goes in a request that names it alone,
+// with itself as unauthorized, and the other credentials in one request with none,
+// since the server returns 409 to a whole request that has a name it cannot seal.
+func TestEachKeyAfterA401IsRenewedAlone(t *testing.T) {
+	c := &fakeClock{now: start}
+	s := &controlPlane{answer: func(name string, call int) (answer, error) {
+		if name == "model-2" {
+			return answer{value: fmt.Sprintf("model-2-%d", call), expires: start.Add(time.Hour)}, nil
+		}
+		return expiring(name, call)
+	}}
+	r := renewRun(t, twoKeysDoc, s, c, &reports{}, &reports{})
+	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", c.Now)
+	r.SetKeyGroup(g)
+	var forge func()
+	for _, u := range r.Uses() {
+		if u.Name == "forge" {
+			forge = u.Rejected
+		}
+	}
+	c.advance(credential.RetryWait)
+	g.Reject("model", true)
+	g.Reject("model-2", true)
+	n := c.count()
+	forge()
+	c.idle(t, n)
+	calls := s.called()[1:]
+	s.mu.Lock()
+	unauth := slices.Clone(s.unauth[1:])
+	s.mu.Unlock()
+	want := [][]string{{"model"}, {"model-2"}, {"forge"}}
+	if len(calls) != 3 {
+		t.Fatalf("the renewals %v; want 3 requests", calls)
+	}
+	for i, w := range want {
+		if !slices.Equal(calls[i][1:], w) {
+			t.Errorf("request %d names %v; want %v", i+1, calls[i][1:], w)
+		}
+	}
+	if !slices.Equal(unauth[0], []string{"model"}) || !slices.Equal(unauth[1], []string{"model-2"}) || unauth[2] != nil {
+		t.Errorf("the requests' unauthorized %v; want [model], [model-2], none", unauth)
+	}
+	if g.Unauthorized() != nil {
+		t.Errorf("after the renewals: %+v; want both keys back", g.Unauthorized())
+	}
+}
+
+// TestARevokedKeyIsLeftOutOfTheReopen pins Config.Revoked, a reopened run whose record
+// has model out after a 401: the secrets request leaves model out and keeps the order
+// of the rest, model gets no value, and no renewal requests it.
+func TestARevokedKeyIsLeftOutOfTheReopen(t *testing.T) {
+	c := &fakeClock{now: start}
+	s := &controlPlane{answer: expiring}
+	f := document(t, twoKeysDoc, digest('1'))
+	f.Document.Computed = digest('c')
+	n := c.count()
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: f, Secrets: s.fetch, Clock: c, Report: (&reports{}).report, Revoked: []string{"model"}})
+	c.idle(t, n)
+	if got := s.called(); len(got) != 1 || !slices.Equal(got[0], []string{digest('c'), "model-2", "forge"}) {
+		t.Fatalf("the reopen's request %v; want model-2 and forge", got)
+	}
+	if value(r, "model") != "(none)" {
+		t.Errorf("model's value %s; want none", value(r, "model"))
+	}
+	c.step(t, time.Hour-credential.RenewBefore)
+	for _, call := range s.called()[1:] {
+		if slices.Contains(call, "model") {
+			t.Errorf("a renewal requests model: %v", call)
+		}
+	}
+	if len(s.called()) < 2 {
+		t.Error("no renewal of forge")
 	}
 }

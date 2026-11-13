@@ -31,7 +31,7 @@ type ModelKeyState struct {
 }
 
 // MaxUnauthorized is the most entries of a model keys report's unauthorized, and the
-// most names of a secrets request's: Qory Apiary gives a run at most 6 model keys.
+// most names of a secrets request's: Qory Apiary sends a run at most 6 model keys.
 const MaxUnauthorized = 6
 
 // ModelKeysReport is a model keys report: the time it is sent, RFC 3339 in UTC with
@@ -99,7 +99,7 @@ func (c *Client) PostModelKeys(ctx context.Context, runURL, runID string, rep Mo
 		keys = []ModelKeyState{}
 	}
 	if len(rep.Unauthorized) > MaxUnauthorized {
-		return nil, fmt.Errorf("the model keys report: %d unauthorized keys, over the %d a report may have", len(rep.Unauthorized), MaxUnauthorized)
+		return nil, fmt.Errorf("report this bug in the gateway's model keys report to the Forager maintainers; the report lists %d unauthorized keys, and a report lists at most %d", len(rep.Unauthorized), MaxUnauthorized)
 	}
 	body, err := json.Marshal(modelKeysBody{Version: 1, RunID: runID, Time: t, Keys: keys, Unauthorized: rep.Unauthorized})
 	if err != nil {

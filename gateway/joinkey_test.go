@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ import (
 // confirm with probe burst-429).
 type openaiRemote struct {
 	r   *remote
+	c   *control
 	cfg gateway.Config
 	e   *edgeRun
 	key string
@@ -89,6 +91,7 @@ func startOpenAIRemote(t *testing.T) *openaiRemote {
 		return `{"name":"` + name + `","format":"openai-responses","endpoint":"` + o.url + `","auth":{"scheme":"bearer"},"pause_for_s":3600}`
 	}
 	c := gatewayControl(t)
+	o.c = c
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = values
@@ -251,8 +254,9 @@ func TestAJoinWhoseRecordFailsKeepsTheActiveKey(t *testing.T) {
 // TestAReopenKeepsTheStopsReasonAndTheKeysOut pins a 401 of the provider to an
 // openai-responses session across a restart: the session gets the 401, the answer to
 // its next batch has stop, model_key_switch, and the record has the reason and the key
-// out. The reopened run answers the next batch with the same stop, the session ends
-// paused with model_key_switch, and the next join gets model-2, never model.
+// out. The reopened run requests the values of the other keys alone, answers the next
+// batch with the same stop, the session ends paused with model_key_switch, and the next
+// join gets model-2, never model.
 func TestAReopenKeepsTheStopsReasonAndTheKeysOut(t *testing.T) {
 	o := startOpenAIRemote(t)
 	o.mu.Lock()
@@ -285,6 +289,10 @@ func TestAReopenKeepsTheStopsReasonAndTheKeysOut(t *testing.T) {
 	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || string(got.body) != stop {
 		t.Errorf("the reopened run's first batch: %d %q", got.status, got.body)
 	}
+	// The reopen's secrets request leaves model, out for the run, out.
+	if reqs := o.c.requests(t); len(reqs) == 0 || !slices.Equal(reqs[len(reqs)-1].Credentials, []string{"model-2"}) {
+		t.Errorf("the secrets requests %+v; want the reopen's with model-2 alone", reqs)
+	}
 	o.posted(t, ev(o.runID(), event.SessionExited, map[string]any{"session": 1, "state": "paused", "exit_code": 1, "reason": "model_key_switch", "duration_ms": 5}))
 	if status, key := o.join(t); status != http.StatusOK || key != "model-2" {
 		t.Fatalf("join 2: %d %s; want 200 with model-2", status, key)
@@ -299,7 +307,7 @@ func TestAReopenKeepsTheStopsReasonAndTheKeysOut(t *testing.T) {
 }
 
 // TestAReopenRenewsAKeyWaitingForItsRenewal pins a record whose key waits for its
-// renewal after a 401: the reopened run asks for it again, and a key whose value no
+// renewal after a 401: the reopened run requests it again, and a key whose value no
 // longer expires, as here, leaves the group, so the next join gets model-2.
 func TestAReopenRenewsAKeyWaitingForItsRenewal(t *testing.T) {
 	o := startOpenAIRemote(t)

@@ -241,7 +241,20 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		}
 	}
 
-	ca, err = lr.decide(ctx, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: &run.Fetched{URL: conf.Run.URL, Digest: digest, Document: rc}, labels: labels},
+	// The keys out of use after a 401 stay so. A key out for the run is left out of
+	// the secrets request: the server returns 409 with no value to a whole request
+	// that has a name it cannot seal.
+	keys, err := readUnauthorized(dir)
+	if err != nil {
+		g.report(fmt.Sprintf("run %s: start another run to stop setting its model keys after a 401: reading them failed, and the run sets them again: %v", runID, err))
+	}
+	var revoked []string
+	for _, k := range keys {
+		if k.Out {
+			revoked = append(revoked, k.Credential)
+		}
+	}
+	ca, err = lr.decide(ctx, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: &run.Fetched{URL: conf.Run.URL, Digest: digest, Document: rc}, labels: labels, revoked: revoked},
 		func(*run.Run) (*proxy.CA, error) {
 			if ca == nil {
 				return nil, fmt.Errorf("start a new run: this run needs its certificate authority, and its record has no %s or %s", proxy.CACertFile, proxy.CAKeyFile)
@@ -257,12 +270,8 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		return fail(true, err)
 	}
 	if lr.keys != nil {
-		// The keys out of use after a 401 stay so; a key whose renewal was pending is
-		// renewed again, and one whose value no longer expires leaves the group.
-		keys, err := readUnauthorized(dir)
-		if err != nil {
-			g.report(fmt.Sprintf("run %s: reading its model keys after a 401: %v; the run sets them again", runID, err))
-		}
+		// A key whose renewal was pending is renewed again, and one whose value no
+		// longer expires leaves the group.
 		lr.keys.Restore(keys)
 		for _, k := range keys {
 			if lr.keys.Pending(k.Credential) && !lr.r.Renew(k.Credential) {

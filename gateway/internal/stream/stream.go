@@ -625,9 +625,9 @@ func syncDirs(dirs ...string) error {
 // stream's, so that a gateway that starts again can reopen the run: the run request,
 // the run's CA certificate and key, the policy members given, the join decisions, the
 // mark of a model key past its limit or out of use after a 401, the keys out of use
-// after a 401, and the egress held at a suspend ([heldFile]). [Run.Discard] and
-// [Stream.Reclaim] remove them by name.
-var keptFiles = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", "model-keys-unauthorized.json", heldFile}
+// after a 401 and the temporary file of their write, and the egress held at a suspend
+// ([heldFile]). [Run.Discard] and [Stream.Reclaim] remove them by name.
+var keptFiles = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", "model-keys-unauthorized.json", "model-keys-unauthorized.json.tmp", heldFile}
 
 // secretFiles are the kept files whose contents may act for the run: the run request,
 // whose image references may contain a registry's credentials, and the run's CA

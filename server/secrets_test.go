@@ -233,7 +233,7 @@ func (d *deadlines) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // TestTheSecretsRequestWaits30Seconds pins the timeouts: a secrets request's answer
 // may take SecretsTimeout, 30 seconds, and every other request's Timeout, 10 seconds;
-// a client given with its own Timeout keeps it for both.
+// a client given with a Timeout that is not zero keeps it for both.
 func TestTheSecretsRequestWaits30Seconds(t *testing.T) {
 	if server.SecretsTimeout != 30*time.Second || server.Timeout != 10*time.Second {
 		t.Fatalf("SecretsTimeout %v, Timeout %v", server.SecretsTimeout, server.Timeout)

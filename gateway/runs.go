@@ -570,6 +570,9 @@ type decision struct {
 	images    *server.LinkImages
 	fetched   *run.Fetched
 	labels    map[string]string
+	// revoked are the model keys a reopened run's record has out after a 401
+	// ([run.Config.Revoked]); nil for an open.
+	revoked []string
 }
 
 // holdError is a failure of [run.Run.Hold] that may pass: a fetch of the run's values
@@ -601,6 +604,7 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 		RunID: lr.id, Node: g.cfg.Policy, Server: g.client != nil, Fetched: d.fetched, Labels: d.labels, Wall: d.wall,
 		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(d.images), Passes: lr.passing, Report: g.report,
 		Narrowing: narrowingOf(d.narrowing), Secrets: secrets, Log: lr.logLine, Clock: g.cfg.renewClock, StackHosts: g.cfg.StackHosts,
+		Revoked: d.revoked,
 	})
 	if err != nil {
 		return nil, err
@@ -679,7 +683,7 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 		}
 		format, stream := r.ModelAPI()
 		lr.keys.SetFormat(format)
-		// A key the model provider answers 401 to is renewed as unauthorized.
+		// A key the model provider returns 401 for is renewed as unauthorized.
 		r.SetKeyGroup(lr.keys)
 		if lr.remote {
 			// The mark that the proxy passed a limit refusal or a 401 to the session,
@@ -700,7 +704,7 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 			})
 			lr.keys.OnUnauthorized(func(keys []modelkey.Unauthorized) {
 				if err := writeUnauthorized(dir, keys); err != nil {
-					g.report(fmt.Sprintf("run %s: writing its model keys after a 401: %v", runID, err))
+					g.report(fmt.Sprintf("run %s: check the run's record directory: writing its model keys after a 401 failed: %v", runID, err))
 				}
 			})
 		}

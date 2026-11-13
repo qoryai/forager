@@ -114,8 +114,15 @@ func TestTheKeptFilesReadBack(t *testing.T) {
 	// The keys out of use after a 401: written and read back, and removed when none is left.
 	at := time.Date(2026, 11, 13, 12, 0, 4, 0, time.UTC)
 	keys := []modelkey.Unauthorized{{Credential: "model", At: at, Out: true}, {Credential: "model-2", At: at.Add(time.Second)}}
+	// A temporary file a crash left is replaced, and none is left after the write.
+	if err := os.WriteFile(filepath.Join(dir, unauthorizedTemp), []byte(`{"version":1,"ke`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeUnauthorized(dir, keys); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, unauthorizedTemp)); !os.IsNotExist(err) {
+		t.Errorf("the temporary file is left: %v", err)
 	}
 	if got, err := readUnauthorized(dir); err != nil || !reflect.DeepEqual(got, keys) {
 		t.Errorf("model-keys-unauthorized.json read back as %+v, %v; want %+v", got, err, keys)

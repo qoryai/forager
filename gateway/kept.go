@@ -38,6 +38,9 @@ const (
 	joinsFile        = "joins.jsonl"
 	limitMark        = "model-key-limit"
 	unauthorizedFile = "model-keys-unauthorized.json"
+	// unauthorizedTemp is where [writeUnauthorized] writes the file before it renames
+	// it, so a crash leaves the file before the write or the file after it, whole.
+	unauthorizedTemp = unauthorizedFile + ".tmp"
 )
 
 // The CA key sweep (the user's "545 (a)", 2026-11-13): a gateway removes the CA files
@@ -206,8 +209,8 @@ type keptKey struct {
 	Out        bool      `json:"out"`
 }
 
-// writeUnauthorized writes keys to dir's [unauthorizedFile], or removes the file when
-// keys is empty: every key a renewal brought back.
+// writeUnauthorized writes keys to dir's [unauthorizedFile] whole ([replaceKept]), or
+// removes the file when keys is empty: every key a renewal brought back.
 func writeUnauthorized(dir string, keys []modelkey.Unauthorized) error {
 	if len(keys) == 0 {
 		err := os.Remove(filepath.Join(dir, unauthorizedFile))
@@ -227,7 +230,33 @@ func writeUnauthorized(dir string, keys []modelkey.Unauthorized) error {
 	if err != nil {
 		return err
 	}
-	return writeKept(dir, unauthorizedFile, append(b, '\n'))
+	return replaceKept(dir, unauthorizedFile, unauthorizedTemp, append(b, '\n'))
+}
+
+// replaceKept puts b in dir's file name whole: it writes b to temp, made with mode 0600
+// after a temp left by a crash is removed, syncs it, renames it to name and syncs dir.
+// A write that fails removes temp and leaves name as it was.
+func replaceKept(dir, name, temp string, b []byte) error {
+	tmp := filepath.Join(dir, temp)
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return accesskey.ShownError(err)
+	}
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return accesskey.ShownError(err)
+	}
+	_, werr := f.Write(b)
+	err = errors.Join(werr, f.Sync(), f.Close())
+	if err == nil {
+		err = os.Rename(tmp, filepath.Join(dir, name))
+	}
+	if err != nil {
+		if rerr := os.Remove(tmp); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			err = errors.Join(err, rerr)
+		}
+		return accesskey.ShownError(err)
+	}
+	return syncDir(dir)
 }
 
 // readUnauthorized reads dir's [unauthorizedFile]: no file is no key.
@@ -247,7 +276,7 @@ func readUnauthorized(dir string) ([]modelkey.Unauthorized, error) {
 	}
 	var k keptUnauthorized
 	if err := json.Unmarshal(b, &k); err != nil || k.Version != 1 {
-		return nil, fmt.Errorf("%s is not a list of model keys the gateway wrote", accesskey.ShownValue(path, false))
+		return nil, fmt.Errorf("remove %s, or start another run: it is not a list of model keys the gateway wrote", accesskey.ShownValue(path, false))
 	}
 	out := make([]modelkey.Unauthorized, 0, len(k.Keys))
 	for _, key := range k.Keys {

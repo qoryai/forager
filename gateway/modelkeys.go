@@ -170,8 +170,8 @@ func (k *keyReporter) entries() []server.ModelKeyState {
 	if len(out) > maxReportKeys {
 		out = out[:maxReportKeys]
 	}
-	// The run id, the time and the members around them take less than 200 bytes, and
-	// unauthorized less than 600: 6 entries of a name of 64 characters and a time.
+	// The run id, the time and the members around them take 99 bytes, and
+	// unauthorized 677: 6 entries of a name of 64 characters and a time.
 	for len(out) > 0 {
 		b, _ := json.Marshal(out)
 		if len(b)+800 <= server.MaxModelKeysReport {

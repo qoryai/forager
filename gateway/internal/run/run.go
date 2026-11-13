@@ -100,6 +100,11 @@ type Config struct {
 	Secrets func(ctx context.Context, digest string, credentials, unauthorized []string) (sealed.Values, error)
 	// Clock is the time renewals are judged by; nil is this machine's clock.
 	Clock Clock
+	// Revoked are the model keys a reopened run's record has out of the key group after
+	// a 401 ([modelkey.Group.Revoked]). The secrets request leaves them out, since the
+	// server returns 409 with no value to a whole request that has a name it cannot
+	// seal; they get no value and no renewal. Nil for an open.
+	Revoked []string
 	// StackHosts are the gateway's gateway.stack_hosts, which the run's stack proxy
 	// allows beside the run configuration's stack_hosts: each host of a harness
 	// credential must be one of the two lists allows ([Run.StackAllows]).
@@ -387,11 +392,17 @@ func (r *Run) takeComputed(p *policy.Loaded) string {
 // a value that expired before the run started, and one whose apply is outside its
 // entry ([checkOpened]). A model key with account_claim whose value has no string at it
 // leaves the key group ([Run.KeysOut]), with a line in the run's record; when no key of
-// the group is left, the run is refused.
+// the group is left, the run is refused. The keys of [Config.Revoked] are left out of
+// the request and of these checks.
 func (r *Run) open(ctx context.Context) error {
-	names := make([]string, len(r.stored))
-	for i, c := range r.stored {
-		names[i] = c.Name
+	var names []string
+	var entries []server.RunCredential
+	for _, c := range r.stored {
+		if slices.Contains(r.cfg.Revoked, c.Name) {
+			continue
+		}
+		names = append(names, c.Name)
+		entries = append(entries, c)
 	}
 	digest := ""
 	if d := r.cfg.Fetched.Document; d != nil {
@@ -409,7 +420,7 @@ func (r *Run) open(ctx context.Context) error {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
 				"run configuration %s: store another value of the credential %s in the control plane: its value has a control character, or a space or tab at its start or end, which a header value cannot have", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true))
 		}
-		if prefixes := r.stored[i].KeyPrefixes; !credential.KeyMatches(prefixes, v) {
+		if prefixes := entries[i].KeyPrefixes; !credential.KeyMatches(prefixes, v) {
 			values.Clear()
 			shown := make([]string, len(prefixes))
 			for j, p := range prefixes {
@@ -418,7 +429,7 @@ func (r *Run) open(ctx context.Context) error {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
 				"run configuration %s: store in the control plane a value of the credential %s that starts with %s: the stored value starts with none of its key_prefixes", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true), strings.Join(shown, " or "))
 		}
-		if err := checkOpened(r.stored[i], values, now); err != nil {
+		if err := checkOpened(entries[i], values, now); err != nil {
 			values.Clear()
 			return err
 		}
@@ -441,11 +452,13 @@ func (r *Run) open(ctx context.Context) error {
 // checkClaims sets keysOut: each model key with account_claim whose opened value in
 // values has no string at it ([credential.AccountClaim]), with a line in the run's
 // record that contains why, never the value or the claim. It refuses the run,
-// run_configuration_invalid, when no key of the run's key group is left.
+// run_configuration_invalid, when no key of the run's key group is left and none is
+// out after a 401 ([Config.Revoked]): a reopened run whose keys a 401 took out stops
+// with model_key_unauthorized.
 func (r *Run) checkClaims(values sealed.Values) error {
 	var out []string
 	for _, c := range r.stored {
-		if c.Auth.AccountClaim == "" {
+		if c.Auth.AccountClaim == "" || slices.Contains(r.cfg.Revoked, c.Name) {
 			continue
 		}
 		v, _ := values.Value(c.Name)
@@ -460,7 +473,11 @@ func (r *Run) checkClaims(values sealed.Values) error {
 		}
 	}
 	group := storedGroup(r.stored, r.storedModel)
-	if len(group) > 0 && !slices.ContainsFunc(group, func(c server.RunCredential) bool { return !slices.Contains(out, c.Name) }) {
+	left := func(c server.RunCredential) bool {
+		return !slices.Contains(out, c.Name) && !slices.Contains(r.cfg.Revoked, c.Name)
+	}
+	revoked := slices.ContainsFunc(group, func(c server.RunCredential) bool { return slices.Contains(r.cfg.Revoked, c.Name) })
+	if len(group) > 0 && !revoked && !slices.ContainsFunc(group, left) {
 		start := startName(group, r.storedModel)
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
 			"run configuration %s: store in the control plane a value of a model key of the key group of %s with a string at its account_claim: no key of the group has one", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(start, true))
