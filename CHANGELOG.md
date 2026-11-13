@@ -10,12 +10,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- Deploy a Qory Apiary that accepts `dev.qory.run.target_write` before the gateway that
-  writes it. A Qory Apiary built with an older contract does not have the type.
-- Deploy the gateway first, then Qory Apiary. A gateway built before this change fails
-  a run with `run_configuration_invalid` when the run configuration's API credential has
-  `resets_at`, `schedule_resets_at` or `pause_for_s`, and ignores the run
-  configuration's `resume`. It also ends a run `batch_refused` for a batch with
+- Deploy in this order:
+  1. the gateway;
+  2. a Qory Apiary that folds `dev.qory.run.target_write` and sends `use_up_to_percent`
+     and `use_up_to_windows`.
+
+  A Qory Apiary built before the type stores each `dev.qory.run.target_write`, and its
+  fold skips it.
+- A gateway built before this change fails a run with `run_configuration_invalid` when
+  the run configuration's API credential has `resets_at`, `schedule_resets_at` or
+  `pause_for_s`, and ignores the run configuration's `resume`. It also ends a run `batch_refused` for a batch with
   `dev.qory.session.transcript`, or with `model_key_limit` as the reason of
   `dev.qory.session.exited` or `dev.qory.run.exited`. With a control plane that sends
   no `pause_for_s`, each key has the default cooldown in the next entry.
@@ -24,10 +28,9 @@ release may change what an existing document does, and says so under Upgrading.
   3600 seconds for a subscription, a key whose `auth` has `oauth`. A `pause_for_s` of 0
   fails the run with `run_configuration_invalid`. A run configuration has at most 6 API
   credentials.
-- Deploy the gateway first, then a Qory Apiary that sends `use_up_to_percent` and
-  `use_up_to_windows` on an API credential. A gateway built before this change fails
-  such a run with `run_configuration_invalid`, because the API credential has
-  `additionalProperties: false`. Send both or neither: a `use_up_to_percent` outside 1
+- A gateway built before this change fails a run whose API credential has
+  `use_up_to_percent` and `use_up_to_windows` with `run_configuration_invalid`, because
+  the API credential has `additionalProperties: false`. Send both or neither: a `use_up_to_percent` outside 1
   to 99, or one of the two without the other, is `run_configuration_invalid` too. Send
   the windows of the provider's catalogue entry, and `cooldown_until`, the window's
   reset, for a key whose stored use is at or above its percentage at the claim.

@@ -543,7 +543,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// closes reports whether evs holds a run's final event, a run.exited or a run.refused.
+// closes reports whether evs contains a run's final event, a run.exited or a run.refused.
 func closes(evs []event.Event) bool {
 	return slices.ContainsFunc(evs, func(ev event.Event) bool { return ev.Type == event.RunExited || ev.Type == event.RunRefused })
 }

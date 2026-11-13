@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -86,7 +87,7 @@ type chunks struct {
 
 func (c *chunks) Read(p []byte) (int, error) { return c.r.Read(p[:min(len(p), c.n)]) }
 
-// readAnswer reads answer through a push's reportBody as split gives it, and returns
+// readAnswer reads answer through a push's reportBody as split returns it, and returns
 // the bytes read and the write's end state.
 func readAnswer(t *testing.T, answer string, split func(io.Reader) io.Reader) (string, string) {
 	t.Helper()
@@ -121,41 +122,43 @@ func TestTheReportStatusEndsTheWrite(t *testing.T) {
 	cases := map[string]struct {
 		answer, want string
 	}{
-		"plain, every ref ok":            {okLines, event.WriteChanged},
-		"plain, a ref ng":                {ngLines, event.WriteRefused},
-		"plain, mixed":                   {mixed, event.WriteChanged},
-		"plain, every ref ng":            {allNG, event.WriteRefused},
-		"plain, an unpack error":         {lines("unpack index-pack abnormal exit", "ng refs/heads/main unpacker error"), event.WriteRefused},
-		"plain, report-status-v2":        {lines("unpack ok", ok, "option refname refs/heads/main", "option old-oid 0000", "option new-oid 1111"), event.WriteChanged},
-		"plain, no newlines":             {pkt("unpack ok") + pkt(ok) + flush, event.WriteChanged},
-		"side-band, every ref ok":        {inside(okLines), event.WriteChanged},
-		"side-band, a refused ref":       {inside(ngLines), event.WriteRefused},
-		"side-band, mixed":               {inside(mixed), event.WriteChanged},
-		"side-band, every ref ng":        {inside(allNG), event.WriteRefused},
-		"side-band, an unpack error":     {inside(lines("unpack error: out of space", "ng refs/heads/main unpacker error")), event.WriteRefused},
-		"side-band, progress":            {band(bandProgress, "Resolving deltas: 100% (3/3)\r") + band(bandProgress, pkt(ng+"\n")) + inside(okLines), event.WriteChanged},
-		"side-band, a fatal error":       {band(bandProgress, "remote: working\n") + band(bandError, "fatal: the remote end hung up\n") + flush, event.WriteCut},
-		"side-band, a fatal error first": {band(bandError, "fatal: the remote end hung up\n") + inside(okLines), event.WriteCut},
-		"side-band, an unknown band":     {band(4, "x") + inside(okLines), event.WriteCut},
-		"side-band, an empty pkt-line":   {"0004" + inside(okLines), event.WriteCut},
-		"side-band, a ref ng split":      {splitBands(ngLines, 3, 7, 16, 30) + flush, event.WriteRefused},
-		"side-band, every ref ok split":  {splitBands(okLines, 1, 5, 6, 20) + flush, event.WriteChanged},
-		"side-band, no flush":            {band(bandReport, pkt("unpack ok\n")+pkt(ok+"\n")), event.WriteCut},
-		"side-band, the answer's flush":  {band(bandReport, pkt("unpack ok\n")+pkt(ok+"\n")) + flush, event.WriteCut},
-		"side-band, an inner bad length": {inside(pkt("unpack ok\n") + "zz10"), event.WriteCut},
-		"an ERR line":                    {lines("ERR access denied"), event.WriteCut},
-		"no ref":                         {lines("unpack ok"), event.WriteCut},
-		"a line of another form":         {lines("unpack ok", "what refs/heads/main"), event.WriteCut},
-		"no unpack line":                 {lines(ok), event.WriteCut},
-		"a length that is not hex":       {"zzzz" + okLines, event.WriteCut},
-		"a delimiter":                    {"0001" + okLines, event.WriteCut},
-		"a length of 3":                  {"0003" + okLines, event.WriteCut},
-		"a length over 65520":            {"fff1" + okLines, event.WriteCut},
-		"a pkt-line cut short":           {"fff0unpack ok\n", event.WriteCut},
-		"a length cut short":             {"00", event.WriteCut},
-		"an empty answer":                {"", event.WriteCut},
-		"a report cut before its flush":  {pkt("unpack ok\n") + pkt(ok+"\n"), event.WriteCut},
-		"bytes after the report":         {okLines + "garbage", event.WriteChanged},
+		"plain, every ref ok":                             {okLines, event.WriteChanged},
+		"plain, a ref ng":                                 {ngLines, event.WriteRefused},
+		"plain, mixed":                                    {mixed, event.WriteChanged},
+		"plain, every ref ng":                             {allNG, event.WriteRefused},
+		"plain, an unpack error":                          {lines("unpack index-pack abnormal exit", "ng refs/heads/main unpacker error"), event.WriteRefused},
+		"plain, report-status-v2":                         {lines("unpack ok", ok, "option refname refs/heads/main", "option old-oid 0000", "option new-oid 1111"), event.WriteChanged},
+		"plain, no newlines":                              {pkt("unpack ok") + pkt(ok) + flush, event.WriteChanged},
+		"side-band, every ref ok":                         {inside(okLines), event.WriteChanged},
+		"side-band, a refused ref":                        {inside(ngLines), event.WriteRefused},
+		"side-band, mixed":                                {inside(mixed), event.WriteChanged},
+		"side-band, every ref ng":                         {inside(allNG), event.WriteRefused},
+		"side-band, an unpack error":                      {inside(lines("unpack error: out of space", "ng refs/heads/main unpacker error")), event.WriteRefused},
+		"side-band, progress":                             {band(bandProgress, "Resolving deltas: 100% (3/3)\r") + band(bandProgress, pkt(ng+"\n")) + inside(okLines), event.WriteChanged},
+		"side-band, a fatal error":                        {band(bandProgress, "remote: working\n") + band(bandError, "fatal: the remote end hung up\n") + flush, event.WriteCut},
+		"side-band, a fatal error first":                  {band(bandError, "fatal: the remote end hung up\n") + inside(okLines), event.WriteCut},
+		"side-band, an unknown band":                      {band(4, "x") + inside(okLines), event.WriteCut},
+		"side-band, an empty pkt-line":                    {"0004" + inside(okLines), event.WriteCut},
+		"side-band, an empty pkt-line after progress":     {band(bandProgress, "p") + "0004" + inside(okLines), event.WriteCut},
+		"side-band, the answer's flush inside the report": {band(bandReport, pkt("unpack ok\n")) + flush + band(bandReport, pkt(ok+"\n")+flush) + flush, event.WriteCut},
+		"side-band, a ref ng split":                       {splitBands(ngLines, 3, 7, 16, 30) + flush, event.WriteRefused},
+		"side-band, every ref ok split":                   {splitBands(okLines, 1, 5, 6, 20) + flush, event.WriteChanged},
+		"side-band, no flush":                             {band(bandReport, pkt("unpack ok\n")+pkt(ok+"\n")), event.WriteCut},
+		"side-band, the answer's flush":                   {band(bandReport, pkt("unpack ok\n")+pkt(ok+"\n")) + flush, event.WriteCut},
+		"side-band, an inner bad length":                  {inside(pkt("unpack ok\n") + "zz10"), event.WriteCut},
+		"an ERR line":                                     {lines("ERR access denied"), event.WriteCut},
+		"no ref":                                          {lines("unpack ok"), event.WriteCut},
+		"a line of another form":                          {lines("unpack ok", "what refs/heads/main"), event.WriteCut},
+		"no unpack line":                                  {lines(ok), event.WriteCut},
+		"a length that is not hex":                        {"zzzz" + okLines, event.WriteCut},
+		"a delimiter":                                     {"0001" + okLines, event.WriteCut},
+		"a length of 3":                                   {"0003" + okLines, event.WriteCut},
+		"a length over 65520":                             {"fff1" + okLines, event.WriteCut},
+		"a pkt-line cut short":                            {"fff0unpack ok\n", event.WriteCut},
+		"a length cut short":                              {"00", event.WriteCut},
+		"an empty answer":                                 {"", event.WriteCut},
+		"a report cut before its flush":                   {pkt("unpack ok\n") + pkt(ok+"\n"), event.WriteCut},
+		"bytes after the report":                          {okLines + "garbage", event.WriteChanged},
 	}
 	for name, c := range cases {
 		for how, split := range splits {
@@ -256,6 +259,34 @@ func TestAnyAnswerEndsTheWriteOnce(t *testing.T) {
 	}
 }
 
+// TestAReadErrorEndsTheWriteCut pins a push's body whose read fails before the
+// report's end: the session gets the error, and the write ends cut at the error, before
+// Close; a read that fails after the report's end leaves the report's result.
+func TestAReadErrorEndsTheWriteCut(t *testing.T) {
+	report := lines("unpack ok", "ok refs/heads/main")
+	for _, c := range []struct {
+		before, want string
+	}{
+		{report[:12], event.WriteCut},
+		{report, event.WriteChanged},
+	} {
+		w := &writes{}
+		g := &gitWrite{observe: w.observe, w: Write{RequestID: "id"}}
+		reset := errors.New("connection reset by the host")
+		resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(io.MultiReader(strings.NewReader(c.before), iotest.ErrReader(reset)))}
+		g.answer(resp)
+		got, err := io.ReadAll(resp.Body)
+		if !errors.Is(err, reset) || string(got) != c.before {
+			t.Errorf("the session read %q, %v; want %q and the error", got, err, c.before)
+		}
+		// The read's error ends the write, before Close.
+		if states := w.states(); !slices.Equal(states, []string{c.want}) {
+			t.Errorf("after %d bytes: the write's states %v; want %s", len(c.before), states, c.want)
+		}
+		resp.Body.Close()
+	}
+}
+
 // TestAnAnswerClosedEarlyEndsTheWriteCut pins a push's body that the session stops
 // reading before the report's end: Close ends the write cut, once.
 func TestAnAnswerClosedEarlyEndsTheWriteCut(t *testing.T) {
@@ -306,7 +337,9 @@ func TestTheAnswersStatusEndsTheWrite(t *testing.T) {
 
 // TestAPushIsRecognisedByItsMethodAndPath pins pushPath: a POST whose path ends in
 // /git-receive-pack, with the repository's path as qory's labels take it from an
-// origin remote; a fetch, an advertisement and another method are no push.
+// origin remote, a trailing slash trimmed; a path policy.CleanPath refuses, with a dot
+// segment or an encoded dot or slash, as sent, undecoded; a fetch, an advertisement and
+// another method are no push.
 func TestAPushIsRecognisedByItsMethodAndPath(t *testing.T) {
 	for _, c := range []struct {
 		method, target, want string
@@ -321,6 +354,11 @@ func TestAPushIsRecognisedByItsMethodAndPath(t *testing.T) {
 		{http.MethodGet, "https://git.example/example-org/app.git/info/refs?service=git-receive-pack", "", false},
 		{http.MethodGet, "https://git.example/example-org/app.git/git-receive-pack", "", false},
 		{http.MethodPost, "https://git.example/example-org/app.git/git-receive-pack/x", "", false},
+		{http.MethodPost, "https://git.example/example-org/app//git-receive-pack", "example-org/app", true},
+		{http.MethodPost, "https://git.example/example-org/app.git/git-receive-pack/", "", false},
+		{http.MethodPost, "https://git.example/org/x/../app.git/git-receive-pack", "org/x/../app", true},
+		{http.MethodPost, "https://git.example/org/x/%2e%2e/app.git/git-receive-pack", "org/x/%2e%2e/app", true},
+		{http.MethodPost, "https://git.example/org%2fx/app.git/git-receive-pack", "org%2fx/app", true},
 	} {
 		r := httptest.NewRequest(c.method, c.target, nil)
 		got, push := pushPath(r)
@@ -330,7 +368,7 @@ func TestAPushIsRecognisedByItsMethodAndPath(t *testing.T) {
 	}
 }
 
-// gitOrigin is a git host behind a terminating proxy: answers by path, git's answer
+// gitOrigin is a git host behind a terminating proxy: returns by path, git's answer
 // to a push sent in pieces with a flush between them.
 type gitOrigin struct {
 	p      *Proxy

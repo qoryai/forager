@@ -1705,7 +1705,7 @@ The types, one namespace. Forager's:
 | `dev.qory.run.log` | one per chunk of a session's output, with the session's number as `session`, or of the run's host work outside every session, which the caller writes with `stream: stderr` and no `session`, and with the step's number as `step` inside a step: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes`, `session`, `step` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows`, `session` |
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation; the same for the stack proxy, with `channel: stack`; one per request of the route to the run API, with `channel: run_api` (§The run API) | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool`; `channel` on the stack proxy's and the run API's |
-| `dev.qory.run.target_write` | the gateway recognised a write to a place in another system in a request the proxy reads, a git push over HTTP: one when the write begins, and one when it ends, before `dev.qory.run.exited` (§The events, Writes to a target) | `system`, `path`, `state`, and `request_id`, that of the request's `dev.qory.run.egress` |
+| `dev.qory.run.target_write` | a request the proxy reads counts as a write to a place in another system, a git push over HTTP: one when the write begins, and one when it ends, before `dev.qory.run.exited` (§The events, Writes to a target) | `system`, `path`, `state`, and `request_id`, that of the request's `dev.qory.run.egress` |
 | `dev.qory.run.heartbeat` | every `interval_seconds` from the accepted registration until the final event, or from `dev.qory.run.started` when the run has no server; `elapsed_seconds` counts since the open's discovery of its gateway's link | `elapsed_seconds`, `interval_seconds` |
 | `dev.qory.session.exited` | a session ended: its runtime exited or was stopped, its join was refused, or the run ended while it ran, when the gateway's or the resend's `dev.qory.session.exited` comes right before the run's `dev.qory.run.exited`; one per join, the last event of the session's | `session`, `state`, `exit_code`, `signal`, `reason`, `duration_ms`, `peak_memory_bytes`, `cpu_time_ms` |
 | `dev.qory.session.transcript` | one per chunk of the transcript of a runtime's session, for a runtime whose descriptor has `resume`, between the session's `dev.qory.session.started` and `dev.qory.session.exited` (A session's transcript, below) | `session`, `session_id`, `path`, `offset`, `bytes` |
@@ -2237,9 +2237,10 @@ the <n> bytes read`.
 **Writes to a target.** `dev.qory.run.target_write` records a write the run sent to a
 place in another system, its target, and whether the write took effect. The gateway
 writes it for a request the proxy reads: one to a host `dev.qory.run.policy_applied`
-lists as `terminated` (§Limits), or a plain request. It recognises one kind of write, a git push over HTTP:
-a `POST` whose path ends in `/git-receive-pack`. A push through a tunnel the proxy does
-not terminate is not seen. Each write has two events with the same `request_id`, the
+lists as `terminated` (§Limits), or a plain request. One kind of request counts as a
+write, a git push over HTTP: a `POST` whose path ends in `/git-receive-pack`. A push
+through a tunnel the proxy does not terminate has no event, since the proxy does not
+read it. Each write has two events with the same `request_id`, the
 `request_id` of the request's `dev.qory.run.egress`:
 
 1. `started`, when the proxy sends the request to the system, before the request's
@@ -2258,7 +2259,9 @@ not terminate is not seen. Each write has two events with the same `request_id`,
      write.
 
 `system` is the request's host, as in `dev.qory.run.egress`, without the port. `path` is
-the request's path, decoded, without `/git-receive-pack` at its end, without its leading
+the request's path, decoded, or as sent when it has an encoded slash, backslash, dot or
+percent sign, a backslash, an empty segment or a dot segment, without
+`/git-receive-pack` at its end, without its leading
 and trailing slash and without a `.git` at its end. For a push to
 `https://git.example/example-org/app.git`, `system` is `git.example` and `path` is
 `example-org/app`: the `forge` and `repository` labels qory gives a run whose origin
@@ -2270,8 +2273,8 @@ When the run ends at the gateway, the gateway closes the run's proxy, then write
 for each write still open, then `dev.qory.run.exited`, so every `started` has its end
 before `dev.qory.run.exited`. When the session closes the run, the gateway writes `cut`
 for each write still open before the events of the batch that has the session's
-`dev.qory.run.exited` or `dev.qory.run.refused`. A write the gateway sees end after that
-point has no further event. When the gateway stops during a write, the write may have no end in the
+`dev.qory.run.exited` or `dev.qory.run.refused`. A write that ends after that point has no
+further event. When the gateway stops during a write, the write may have no end in the
 record (§The server, After Forager stops unexpectedly): a receiver reads a `started`
 with no end in a run that ended as `cut`.
 
@@ -2281,7 +2284,7 @@ The answer is a sequence of pkt-lines (four hex digits of length, then the data)
 side-band or side-band-64k, which the first pkt-line's first byte shows, band 1 contains
 the report status, itself in pkt-lines, band 2 progress, which is skipped, and band
 3 a fatal error. The report is `unpack ok` or `unpack <error>`, then `ok <ref>` or
-`ng <ref> <reason>` per ref, with `option` lines after an `ok` under report-status-v2,
+`ng <ref> <reason>` per ref, with `option` lines anywhere after the unpack line under report-status-v2,
 then a flush. An answer with a `Content-Encoding` other than `identity`, a pkt-line
 with a length of 1 to 3 or over 65520, a length that is not hex, a report line of
 another form, a report with no ref, or a report not complete within the first 4 MiB of

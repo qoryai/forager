@@ -4,14 +4,16 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/policy"
 )
 
 // Write is one state of one write the session sent through the proxy to a place in
-// another system: a git push over HTTP, recognised in a request the proxy reads.
+// another system: a request the proxy reads that counts as a git push over HTTP.
 // State is one of event.WriteStarted, event.WriteChanged, event.WriteRefused and
 // event.WriteCut; each write is handed over twice, started and then its end.
 type Write struct {
@@ -32,18 +34,31 @@ const receivePack = "/git-receive-pack"
 
 // ObserveWrites hands every state of every git push the proxy reads to observe, on
 // the goroutine of the request: started before the request is sent, then its end
-// once. Without it the proxy recognises no write.
+// once. Without it no request counts as a write.
 func (p *Proxy) ObserveWrites(observe func(Write)) { p.writes.Store(&observe) }
 
 // pushPath is the path of the repository a request pushes to, and whether it is a
-// git push over HTTP: a POST whose decoded path ends in /git-receive-pack, without that
-// end, its leading and trailing slash and a .git at its end, as qory's labels take a
-// repository from an origin remote.
+// git push over HTTP: a POST whose path ends in /git-receive-pack, without that end,
+// its leading and trailing slash and a .git at its end, as qory's labels take a
+// repository from an origin remote. The path is the request's path as
+// [policy.CleanPath] reads it, decoded; one CleanPath refuses, with an encoded slash or
+// a dot segment say, is the path as sent, undecoded, as the request's [Decision] has it.
 func pushPath(r *http.Request) (string, bool) {
 	if r.Method != http.MethodPost {
 		return "", false
 	}
-	rest, ok := strings.CutSuffix(r.URL.Path, receivePack)
+	sent := r.URL.EscapedPath()
+	clean, ok := policy.CleanPath(sent)
+	if ok {
+		// CleanPath refuses %2f, %25 and %2e, so the decoded path has no slash, dot
+		// segment or escape the sent one did not.
+		if decoded, err := url.PathUnescape(clean); err == nil {
+			clean = decoded
+		}
+	} else {
+		clean = sent
+	}
+	rest, ok := strings.CutSuffix(clean, receivePack)
 	if !ok {
 		return "", false
 	}
@@ -96,7 +111,7 @@ func (g *gitWrite) cut() { g.end(event.WriteCut) }
 
 // answer reads the answer to the push, resp: a 4xx is refused, any other status but
 // 200 and an answer with a content coding cut, and a 200's body is read for its report
-// status as it passes ([reportBody]). resp.Body is replaced; the bytes it gives are
+// status as it passes ([reportBody]). resp.Body is replaced; the bytes it returns are
 // the same.
 func (g *gitWrite) answer(resp *http.Response) {
 	if g == nil {
@@ -117,7 +132,7 @@ func (g *gitWrite) answer(resp *http.Response) {
 	resp.Body = &reportBody{ReadCloser: resp.Body, w: g}
 }
 
-// writeKey carries a request's git write in its context.
+// writeKey is the context key of a request's git write.
 type writeKey struct{}
 
 // withWrite is ctx with the git write g, when there is one.
@@ -208,7 +223,7 @@ type pktReader struct {
 	open bool
 }
 
-// feed reads b into s, and reports false when b holds no pkt-line or s stops.
+// feed reads b into s, and reports false when b is no pkt-line or s stops.
 func (p *pktReader) feed(b []byte, s pktSink) bool {
 	for len(b) > 0 {
 		if !p.open {
@@ -256,7 +271,7 @@ func (p *pktReader) feed(b []byte, s pktSink) bool {
 	return true
 }
 
-// pktLength is the length four hex digits give, and whether it is one a push's answer
+// pktLength is the length four hex digits are, and whether it is one a push's answer
 // has: 0, the flush, or 4 to [maxPkt].
 func pktLength(h [4]byte) (int, bool) {
 	n := 0
@@ -285,7 +300,7 @@ type report struct {
 	// mode is 0 until the first payload byte shows whether the answer has side-band,
 	// then sideBand or plain.
 	mode int
-	// band is the band of the outer pkt-line read now, with side-band; first says its
+	// band is the band of the outer pkt-line read now, with side-band; first is set while its
 	// band byte comes next.
 	band  byte
 	first bool
@@ -388,7 +403,7 @@ func (o *outerLines) flush() bool {
 type reportLines struct {
 	prefix [linePrefix]byte
 	pn, n  int
-	// unpacked says the first line was read; oks and ngs count the refs.
+	// unpacked is set once the first line is read; oks and ngs count the refs.
 	unpacked bool
 	oks, ngs int
 	result   string
