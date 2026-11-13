@@ -4381,8 +4381,12 @@ each. Before each try after the first it flushes its batches, so the previous se
 not accept is posted again at each of these waits, so a gateway back within the 120
 seconds gets the batch and then the join within one wait. Every other answer, a `400`,
 `403` or `410` among them, ends its tries, and the join has that answer. A join with
-no answer after 120 seconds fails as after one try. On the local link the session
-sends a join request once.
+no answer after 120 seconds fails as after one try. When the flush at the end of the
+previous join ended before the gateway accepted that session's events, the session
+sends the next join request only once the gateway accepted them, flushing at the same
+waits for up to 120 seconds; after them the join fails with no request sent. A gateway
+that restarted in between then never takes the request for a repeat of the previous
+join. On the local link the session sends a join request once.
 
 Behind a separate gateway, a join request that repeats the last join the gateway
 numbered gets that join's answer again, and nothing is numbered anew: for a join

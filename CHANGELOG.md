@@ -2310,7 +2310,10 @@ release may change what an existing document does, and says so under Upgrading.
   one wait. `Close` waits up to 180 seconds for the gateway to accept the run's last
   events, and returns as soon as it accepts them or the batch gets a `410`. Both cover
   a separate gateway that restarts in up to 120 seconds. Before, a join was tried once
-  and the close waited 15 seconds. On one machine a join is tried once, as before.
+  and the close waited 15 seconds. When the flush at the end of the previous join ended
+  before the gateway accepted that session's events, `Join` sends its request only
+  once the gateway accepted them, within the same 120 seconds, and fails with no
+  request sent after them. On one machine a join is tried once, as before.
 - A `Flush` of a sink tries a batch the server or the gateway did not accept again at
   once, without the rest of the wait between two tries. Before, the batch waited up to
   60 seconds for its next try.
