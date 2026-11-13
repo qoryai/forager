@@ -288,8 +288,13 @@ func (g *Group) Streamed(name string, h http.Header) {
 func (g *Group) switched() (string, bool) { return g.Pick() }
 
 // Pass records that the proxy passed a limit refusal to the session: no key of the
-// group is left, or the refused body had no copy.
-func (g *Group) Pass() { g.setPassed(true) }
+// group is left, or the refused body had no copy. A nil group records nothing.
+func (g *Group) Pass() {
+	if g == nil {
+		return
+	}
+	g.setPassed(true)
+}
 
 // Passed reports whether the proxy passed a limit refusal to the session since the
 // last [Group.Resume].

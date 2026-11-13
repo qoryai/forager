@@ -39,7 +39,7 @@ func writtenCA(t *testing.T) (*CA, string) {
 // verifies against the certificate of the authority that was written.
 func TestAWrittenAuthorityReadsBackTheSame(t *testing.T) {
 	ca, dir := writtenCA(t)
-	got, err := ReadCA(dir)
+	got, err := ReadCA(dir, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestReadCARefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expired, err := newCA(pkix.Name{CommonName: "expired"}, -time.Minute)
+	expired, err := newCA(pkix.Name{CommonName: caName("test")}, -time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,6 +189,7 @@ func TestReadCARefuses(t *testing.T) {
 		{name: "a certificate not an authority's", cert: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafOnly.Raw}), key: pemKey(t, leafOnly.key), wantInText: "not a certificate authority"},
 		{name: "an expired certificate", cert: must(os.ReadFile(filepath.Join(expiredDir, CACertFile))), key: must(os.ReadFile(filepath.Join(expiredDir, CAKeyFile))), wantInText: "expired"},
 		{name: "another authority's key", cert: certPEM, key: otherKeyPEM, wantInText: "not the key of the certificate"},
+		{name: "another run's authority", cert: must(os.ReadFile(filepath.Join(otherDir, CACertFile))), key: otherKeyPEM, wantInText: "is not the certificate authority of run test"},
 		{name: "a P-384 key", cert: certPEM, key: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: p384DER}), wantInText: "not an ECDSA P-256 key"},
 		{name: "an empty key", cert: certPEM, key: []byte{}, wantInText: "not one PEM block"},
 		{name: "a key of another block type", cert: certPEM, key: pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBlock.Bytes}), wantInText: "not one PEM block"},
@@ -228,7 +229,7 @@ func TestReadCARefuses(t *testing.T) {
 			if c.change != nil {
 				c.change(t, dir)
 			}
-			got, err := ReadCA(dir)
+			got, err := ReadCA(dir, "test")
 			if err == nil {
 				t.Fatalf("ReadCA read %v", got.cert.Subject)
 			}
@@ -251,43 +252,8 @@ func TestReadCARefuses(t *testing.T) {
 		}
 	}
 	chmodKey(0o644)(t, dir)
-	if _, err := ReadCA(dir); err == nil || err.Error() != "set "+filepath.Join(dir, CAKeyFile)+" to mode 0600: its mode 0644 lets group or others access it" {
+	if _, err := ReadCA(dir, "test"); err == nil || err.Error() != "set "+filepath.Join(dir, CAKeyFile)+" to mode 0600: its mode 0644 lets group or others access it" {
 		t.Errorf("the mode refusal is %v", err)
-	}
-}
-
-// TestRemoveCARemovesBothFiles pins RemoveCA: both files go, and a file or a
-// directory that is not there is no error.
-func TestRemoveCARemovesBothFiles(t *testing.T) {
-	_, dir := writtenCA(t)
-	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := RemoveCA(dir); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "events.jsonl" {
-		t.Errorf("the directory has %v", entries)
-	}
-	if err := RemoveCA(dir); err != nil {
-		t.Errorf("RemoveCA with no file: %v", err)
-	}
-	_, dir = writtenCA(t)
-	if err := os.Remove(filepath.Join(dir, CACertFile)); err != nil {
-		t.Fatal(err)
-	}
-	if err := RemoveCA(dir); err != nil {
-		t.Errorf("RemoveCA with ca.key alone: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, CAKeyFile)); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("ca.key: %v", err)
-	}
-	if err := RemoveCA(filepath.Join(dir, "missing")); err != nil {
-		t.Errorf("RemoveCA of a missing directory: %v", err)
 	}
 }
 

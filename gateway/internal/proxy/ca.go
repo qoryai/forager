@@ -37,9 +37,9 @@ import (
 // file ca.key in the run's record directory, mode 0600, which those limits do not
 // cover: a gateway that stops while the run goes on keeps the file, and reads the
 // authority back with [ReadCA] when it reopens the run. The gateway removes both files
-// with [RemoveCA] at the run's final end, when it discards or reclaims the run's
-// record, and in a sweep of records no run is open on that have not changed for a
-// while.
+// at the run's final end, when a reopen of the run fails for good, when it discards or
+// reclaims the run's record, and in a sweep of records no run is open on that have not
+// changed for a while.
 type CA struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey
@@ -73,7 +73,18 @@ const leafRenew = 24 * time.Hour
 
 // NewCA makes an authority for the run named.
 func NewCA(runID string) (*CA, error) {
-	return newCA(pkix.Name{CommonName: "qory run " + runID, Organization: []string{"Forager gateway, one run only"}}, caLife)
+	return newCA(pkix.Name{CommonName: caName(runID), Organization: []string{"Forager gateway, one run only"}}, caLife)
+}
+
+// caName is the common name of the authority of the run runID.
+func caName(runID string) string { return "qory run " + runID }
+
+// ownerOf is the user id that owns the file of info, -1 when info has none.
+func ownerOf(info os.FileInfo) int {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int(st.Uid)
+	}
+	return -1
 }
 
 // newCA makes an authority of the subject, good for life.
@@ -279,15 +290,17 @@ func syncDir(dir string) error {
 	return accesskey.ShownError(errors.Join(d.Sync(), d.Close()))
 }
 
-// ReadCA reads the authority [CA.Write] wrote to dir. It fails, with no byte of either
-// file in its error, when a file is missing, is not a regular file, is larger than
-// [maxCAFile] or is not one PEM block of its type; when [CAKeyFile]'s mode lets group or
-// others read, write or run it; when the certificate is not an authority's or is past
-// its NotAfter; and when the key is not a PKCS#8 ECDSA P-256 key or is not the key of
-// the certificate. ReadCA overwrites with zeros what it read of the key file, and the
-// key's DER form, before it returns; copies the standard library makes inside its
-// parser stay in the heap until it is reused.
-func ReadCA(dir string) (*CA, error) {
+// ReadCA reads the authority [CA.Write] wrote to dir for the run runID, as [NewCA]
+// made it. It fails, with no byte of either file in its error, when a file is missing,
+// is not a regular file, is larger than [maxCAFile] or is not one PEM block of its
+// type; when [CAKeyFile]'s mode lets group or others read, write or run it, or a user
+// other than this process's effective user owns it; when the certificate is not an
+// authority's, is past its NotAfter or has a common name other than "qory run "
+// followed by runID; and when the key is not a PKCS#8 ECDSA P-256 key or is not the
+// key of the certificate. ReadCA overwrites with zeros what it read of the key file,
+// and the key's DER form, before it returns; copies the standard library makes inside
+// its parser stay in the heap until it is reused.
+func ReadCA(dir, runID string) (*CA, error) {
 	certPath, keyPath := filepath.Join(dir, CACertFile), filepath.Join(dir, CAKeyFile)
 	certPEM, _, err := readCAFile(certPath)
 	if err != nil {
@@ -304,6 +317,9 @@ func ReadCA(dir string) (*CA, error) {
 	if !cert.BasicConstraintsValid || !cert.IsCA {
 		return nil, fmt.Errorf("%s is not a certificate authority's certificate", shownPath(certPath))
 	}
+	if cert.Subject.CommonName != caName(runID) {
+		return nil, fmt.Errorf("%s is not the certificate authority of run %s", shownPath(certPath), accesskey.ShownValue(runID, false))
+	}
 	if !time.Now().Before(cert.NotAfter) {
 		return nil, fmt.Errorf("the certificate in %s expired at %s", shownPath(certPath), cert.NotAfter.UTC().Format(time.RFC3339))
 	}
@@ -319,6 +335,9 @@ func ReadCA(dir string) (*CA, error) {
 	}
 	if perm := info.Mode().Perm(); perm&0o077 != 0 {
 		return nil, fmt.Errorf("set %s to mode 0600: its mode %#o lets group or others access it", shownPath(keyPath), perm)
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Geteuid() {
+		return nil, fmt.Errorf("remove %s: user %d does not own it, and the gateway runs as user %d", shownPath(keyPath), ownerOf(info), os.Geteuid())
 	}
 	kb, rest := pem.Decode(keyPEM)
 	if kb != nil {
@@ -382,23 +401,3 @@ func readCAFile(path string) ([]byte, os.FileInfo, error) {
 
 // shownPath is path as an error shows it.
 func shownPath(path string) string { return accesskey.ShownValue(path, false) }
-
-// RemoveCA removes [CACertFile] and [CAKeyFile] from dir, then syncs dir when it removed
-// one. A file that does not exist is no error, nor is a dir that does not exist.
-func RemoveCA(dir string) error {
-	removed := false
-	var errs []error
-	for _, name := range []string{CAKeyFile, CACertFile} {
-		err := os.Remove(filepath.Join(dir, name))
-		switch {
-		case err == nil:
-			removed = true
-		case !errors.Is(err, fs.ErrNotExist):
-			errs = append(errs, accesskey.ShownError(err))
-		}
-	}
-	if removed {
-		errs = append(errs, syncDir(dir))
-	}
-	return errors.Join(errs...)
-}

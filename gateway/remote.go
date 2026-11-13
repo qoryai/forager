@@ -166,15 +166,17 @@ func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) 
 		return nil
 	}
 	if lr == nil && g.reopenable(runID) {
-		// The run key verified: the connection counts against the one address's bounds
-		// no longer while it waits on the reopen, up to 120 seconds.
-		if admit, _ := r.Context().Value(admitKey{}).(func()); admit != nil {
-			admit()
-		}
+		// The run key verified: while the connection waits on the reopen, up to 120
+		// seconds, it counts against the one address's bounds in all alone, not of its
+		// source or its /48, and is closed for no newer one (the user's "547 (a)").
+		releaseSource(r.Context())
 		p, _ := runKeyOf(r.Context())
 		lr, final := g.reopenRun(r.Context(), runID, p)
 		switch {
 		case lr != nil && lr.remote:
+			if admit, _ := r.Context().Value(admitKey{}).(func()); admit != nil {
+				admit()
+			}
 			return lr
 		case !final:
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -189,30 +191,34 @@ func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) 
 // key to the proxy of that run, live at the gateway, as the shared proxy does a local
 // connection with a run's proxy secret, admit called once the run key verifies; with
 // stack, one that opened with [link.StackPreamble] to that run's stack proxy, until the
-// run's first join request. The run a gateway with Listen suspended at its stop is reopened first
-// ([Gateway.reopenRun]), with c's deadline cleared, until the reopen ends or the
-// gateway closes. A run key [Gateway.admitRunKey] refuses, one of no live run here, or,
-// with stack, one of a run whose stack proxy is closed, closes the connection
-// unanswered. It reports whether c was handed on.
-func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func(), stack bool) bool {
+// run's first join request. The run a gateway with Listen suspended at its stop is
+// reopened first ([Gateway.reopenRun]), with c's deadline cleared, until the reopen
+// ends or the gateway closes; meanwhile release keeps c counted in all alone, and
+// admit is called once the run is live. A run key [Gateway.admitRunKey] refuses, one
+// of no live run here, or, with stack, one of a run whose stack proxy is closed,
+// closes the connection unanswered. It reports whether c was handed on.
+func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, release func(), stack bool) bool {
 	k, ref := g.admitRunKey(value, b64token.MatchString(value))
 	if ref != nil {
 		return false
 	}
-	// The run key verified: the connection counts against the one address's bounds no
-	// longer, so a wait on a reopen, up to 120 seconds, closes no connection for a newer
-	// one, and none is closed as it is accepted (the user's "547 (a)").
-	admit()
 	g.mu.Lock()
 	lr := g.runs[k.RunID]
 	g.mu.Unlock()
 	if _, spent := g.spentOf(k.RunID); lr == nil && !spent && g.reopenable(k.RunID) {
+		// The run key verified: while the connection waits on the reopen, up to 120
+		// seconds, it counts against the one address's bounds in all alone, not of its
+		// source or its /48, and is closed for no newer one (the user's "547 (a)").
+		release()
 		c.SetDeadline(time.Time{})
 		lr, _ = g.reopenRun(g.openCtx, k.RunID, presented{raw: value, key: k})
 	}
 	if lr == nil || !lr.remote || lr.px == nil {
 		return false
 	}
+	// The run key verified, of a live run: the connection counts against the one
+	// address's bounds no longer.
+	admit()
 	if _, ended := lr.gone(); ended {
 		return false
 	}
@@ -245,7 +251,7 @@ func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID 
 	}
 	var ans *server.AttachAnswer
 	var digest string
-	err = g.tries(ctx, how.deadline, func() (err error) {
+	err = g.tries(ctx, how.deadline, how.retry, func() (err error) {
 		ans, digest, err = g.client.Attach(ctx, conf.Run.URL, runID, body)
 		return err
 	})
@@ -260,7 +266,7 @@ func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID 
 		// credentials and computes the digest from them.
 		var rc *server.RunConfiguration
 		var reloaded string
-		err = g.tries(ctx, how.deadline, func() (err error) {
+		err = g.tries(ctx, how.deadline, how.retry, func() (err error) {
 			rc, reloaded, err = g.client.RunConfiguration(ctx, conf.Run.URL, runID)
 			return err
 		})

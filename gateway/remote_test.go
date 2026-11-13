@@ -2208,7 +2208,9 @@ func TestAReopenedRunKeepsItsStop(t *testing.T) {
 
 // TestAReopenedRunUnderAnotherPolicy pins a policy put in force while the gateway was
 // stopped: the reopened run's reload has it, a policy_applied of the policy before is
-// still accepted, and so is one of the policy now in force.
+// still accepted, and so is one of the policy now in force. A run.egress through the
+// reopened proxy is numbered after the session's policy_applied of the policy now in
+// force, not before it.
 func TestAReopenedRunUnderAnotherPolicy(t *testing.T) {
 	c := gatewayControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
@@ -2229,8 +2231,22 @@ func TestAReopenedRunUnderAnotherPolicy(t *testing.T) {
 	if json.Unmarshal(a.body, &reloaded); a.status != http.StatusOK || !bytes.Contains(reloaded.Applied, []byte("other.example")) {
 		t.Fatalf("the reload: %d %s", a.status, a.body)
 	}
+	resp, err := after.relay(t, e.key).Get("http://denied.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	time.Sleep(200 * time.Millisecond)
+	if rec := after.record(runID); slices.Contains(types(rec), event.RunEgress) {
+		t.Fatalf("a run.egress before the policy_applied of the policy now in force: %v", types(rec))
+	}
 	if got := e.post(t, applied(runID, reloaded.Applied)); got.status != http.StatusAccepted {
 		t.Errorf("a policy_applied of the policy now in force: %d %s", got.status, got.body)
+	}
+	eventually(t, "the run.egress", func() bool { return slices.Contains(types(after.record(runID)), event.RunEgress) })
+	rec := after.record(runID)
+	if got, want := types(rec[len(rec)-2:]), []string{event.PolicyApplied, event.RunEgress}; !slices.Equal(got, want) || !bytes.Contains([]byte(fmt.Sprint(rec[len(rec)-2].Data["allow"])), []byte("other.example")) {
+		t.Errorf("the record ends %v %v; want the policy_applied of the policy now in force, then the run.egress", got, rec[len(rec)-2].Data["allow"])
 	}
 }
 
@@ -2315,10 +2331,12 @@ func TestAReopenWhoseAttachFails(t *testing.T) {
 
 // TestConnectionsThatWaitOnAReopenAreNotBounded pins the bound of 64 connections of one
 // source whose run key has not been admitted, for connections that wait on a reopen:
-// a connection counts against the bound only until its run key verifies (the user's
-// "547 (a)"). With the attach answered 503, 40 relay connections and 30 reloads from
-// one address wait on the reopen of one run; none of them is closed, the one address
-// counts none of them, and each gets its answer once the attach is answered.
+// a connection counts against its source's bound only until its run key verifies (the
+// user's "547 (a)"), and against the bound in all until the run is live. With the
+// attach answered 503, 40 relay connections and 30 reloads from one address wait on the
+// reopen of one run; none of them is closed, the one address counts each of them in
+// all and none of its source, and each gets its answer once the attach is answered;
+// then the one address counts none of them.
 func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
 	const relays, reloads = 40, 30
 	if relays+reloads <= gateway.MaxSourceConns {
@@ -2334,6 +2352,7 @@ func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
 	c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusServiceUnavailable, Code: "unavailable"})
 	after := before.restart(t, cfg)
 	attaches := len(c.attached())
+	const source = "127.0.0.1:0"
 
 	results := make(chan string, relays+reloads)
 	relay := func() {
@@ -2367,14 +2386,14 @@ func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
-		eventually(t, "the connections' admission", func() bool { return gateway.PendingConns(after.g) == 0 })
+		eventually(t, "the connections' release from their source's count", func() bool { return gateway.SourceConns(after.g, source) == 0 })
 	}
 	// Every connection is bound and waits on the reopen, whose attach is tried again and
-	// again; the one address counts none of them.
+	// again; the one address counts each of them in all, and none of its source.
 	eventually(t, "the reopen's tries", func() bool { return len(c.attached()) > attaches+5 })
 	time.Sleep(500 * time.Millisecond)
-	if n := gateway.PendingConns(after.g); n != 0 {
-		t.Errorf("%d connections counted against the bounds while they wait on the reopen", n)
+	if n, s := gateway.PendingConns(after.g), gateway.SourceConns(after.g, source); n != relays+reloads || s != 0 {
+		t.Errorf("%d connections counted in all and %d of their source while they wait on the reopen; want %d and 0", n, s, relays+reloads)
 	}
 	if len(results) > 0 {
 		t.Fatalf("an answer before the reopen: %s", <-results)
@@ -2391,6 +2410,7 @@ func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
 			t.Fatal("a connection got no answer")
 		}
 	}
+	eventually(t, "the connections' admission", func() bool { return gateway.PendingConns(after.g) == 0 })
 }
 
 // TestARecordFromBeforeIsNotReopened pins a run record with no request.json, as a

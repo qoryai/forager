@@ -168,6 +168,13 @@ func resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if res.Closed, err = closeRecord(file, runID, rec, highest(accepted), cfg.Now); err != nil {
 		return nil, err
 	}
+	if res.Closed {
+		// The run ended for good: no gateway reopens it, and its CA key and run request
+		// go from the disk.
+		if err := RemoveKept(cfg.Dir); err != nil {
+			return nil, err
+		}
+	}
 	lines := rec.lines
 	if cfg.Sink == nil {
 		return res, nil
@@ -434,7 +441,7 @@ func highest(accepted map[string]bool) uint64 {
 // server accepted, and reports whether it did: an event whose line in the record the
 // gateway did not finish may have reached the server whole. Its duration runs from
 // run.started to the record's highest event. A last line the gateway did not finish
-// is made a line first, so run.exited starts its own: one that holds a whole event gets
+// is made a line first, so run.exited starts a line: one that holds a whole event gets
 // its newline, and one that holds none is cut off the file, being no event. Nothing
 // else of the file is changed.
 func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func() time.Time) (bool, error) {
@@ -507,7 +514,7 @@ func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func
 }
 
 // mendTail makes a last line of the record that the gateway did not finish a line, so
-// the next write starts its own: one that holds a whole event gets its newline, which
+// the next write starts a line: one that holds a whole event gets its newline, which
 // mendTail returns for the caller to write first, and one that holds none is cut off
 // the file, being no event. Nothing else of the file is changed. f is the record, open
 // for append.

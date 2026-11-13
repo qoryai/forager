@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/server"
 )
 
@@ -93,8 +95,9 @@ func TestTheKeptFilesReadBack(t *testing.T) {
 	}
 }
 
-// TestTheSweepLeavesAReopenAlone pins the sweep beside a reopen: the CA files of a run
-// whose reopen is in flight stay, however old its record, and go once it is not.
+// TestTheSweepLeavesAReopenAlone pins the sweep beside a reopen: the CA files and the
+// run request of a run whose reopen is in flight stay, however old its record, and go
+// once it is not; and no reopen starts on a record the sweep marked.
 func TestTheSweepLeavesAReopenAlone(t *testing.T) {
 	dir := t.TempDir()
 	runID := "0b2f1e3c-4d5a-4b6c-8d7e-9f0a1b2c3d4e"
@@ -103,7 +106,7 @@ func TestTheSweepLeavesAReopenAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-time.Hour)
-	for _, name := range []string{"events.jsonl", "ca.pem", "ca.key"} {
+	for _, name := range []string{"events.jsonl", "ca.pem", "ca.key", "request.json"} {
 		if err := os.WriteFile(filepath.Join(rec, name), []byte("fake\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -111,14 +114,50 @@ func TestTheSweepLeavesAReopenAlone(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(rec, "events.jsonl"), old, old); err != nil {
 		t.Fatal(err)
 	}
-	g := &Gateway{cfg: Config{Dir: dir}, report: func(string) {}, runs: map[string]*linkRun{}, reopening: map[string]*reopenCall{runID: {done: make(chan struct{})}}}
+	g := &Gateway{cfg: Config{Dir: dir}, report: func(string) {}, stream: stream.New(stream.Config{Dir: dir}), runs: map[string]*linkRun{},
+		reopening: map[string]*reopenCall{runID: {done: make(chan struct{})}}, sweeping: map[string]bool{}, spent: map[string]spentRun{}}
 	g.sweep(time.Now(), time.Minute)
-	if _, err := os.Stat(filepath.Join(rec, "ca.key")); err != nil {
-		t.Errorf("the sweep removed the CA key of a run being reopened: %v", err)
+	for _, name := range []string{"ca.key", "request.json"} {
+		if _, err := os.Stat(filepath.Join(rec, name)); err != nil {
+			t.Errorf("the sweep removed %s of a run being reopened: %v", name, err)
+		}
 	}
 	delete(g.reopening, runID)
+	g.sweeping[runID] = true
+	if lr, final := g.reopenRun(context.Background(), runID, presented{}); lr != nil || final || g.reopening[runID] != nil {
+		t.Errorf("a reopen of a record the sweep marked: %v, final %v, in flight %v", lr, final, g.reopening[runID] != nil)
+	}
+	delete(g.sweeping, runID)
 	g.sweep(time.Now(), time.Minute)
-	if _, err := os.Stat(filepath.Join(rec, "ca.key")); err == nil {
-		t.Error("the sweep kept the CA key once no reopen was in flight")
+	for _, name := range []string{"ca.key", "ca.pem", "request.json"} {
+		if _, err := os.Stat(filepath.Join(rec, name)); err == nil {
+			t.Errorf("the sweep kept %s once no reopen was in flight", name)
+		}
+	}
+	if len(g.sweeping) != 0 {
+		t.Errorf("the sweep left its marks %v", g.sweeping)
+	}
+}
+
+// TestAnAppendAfterATornLineStartsALine pins appendKept on a file whose last line the
+// gateway did not finish: the line it adds starts a line, so it reads back, and the
+// torn line is counted alone.
+func TestAnAppendAfterATornLineStartsALine(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, givenFile), []byte(`{"mode":"enforce"}`+"\n"+`{"mode":"obs`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendKept(dir, givenFile, map[string]any{"mode": "observe"}); err != nil {
+		t.Fatal(err)
+	}
+	given, torn, err := readGiven(dir)
+	if err != nil || torn != 1 || len(given) != 2 || given[1]["mode"] != "observe" {
+		t.Errorf("given %v, %d torn, %v; want the line appended after the torn one", given, torn, err)
+	}
+	if err := appendKept(dir, givenFile, map[string]any{"mode": "enforce"}); err != nil {
+		t.Fatal(err)
+	}
+	if given, torn, _ := readGiven(dir); torn != 1 || len(given) != 3 {
+		t.Errorf("given %v, %d torn after a second append", given, torn)
 	}
 }

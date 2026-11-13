@@ -117,7 +117,7 @@ func TestReopenNumbersOnFromTheHigherSequence(t *testing.T) {
 
 // TestReopenMendsATornLastLine pins a last line the gateway did not finish: a whole
 // event without its newline gets it, part of an event is cut off; the next event starts
-// its own line, numbered after the record's highest whole event.
+// a line, numbered after the record's highest whole event.
 func TestReopenMendsATornLastLine(t *testing.T) {
 	for name, tc := range map[string]struct {
 		cut  func(line []byte) []byte
