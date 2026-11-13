@@ -36,7 +36,7 @@ func New() (runtimes.Runtime, error) {
 // --local-provider select a local model provider in place of model_provider;
 // --profile and -p layer $CODEX_HOME/<name>.config.toml over the settings; --search
 // sets web_search; --enable and --disable set features.<name>; --ignore-user-config
-// skips $CODEX_HOME/config.toml, which qory writes for a walled run;
+// skips $CODEX_HOME/config.toml, which a composer writes for a walled run;
 // --dangerously-bypass-hook-trust runs hooks without the trust Codex stores for them;
 // --remote connects Codex to a remote app server (codex --help of 0.167.2).
 const (
@@ -77,8 +77,8 @@ var reserved = []string{
 }
 
 // skills are the settings of Codex 0.167.2 that change the skills Codex loads, which
-// qory places read-only below CODEX_HOME for a walled run: a launch's pair may not set
-// one, a key under one or a key above one, such as cloud.
+// a composer places read-only below CODEX_HOME for a walled run: a launch's pair may
+// not set one, a key under one or a key above one, such as cloud.
 var skills = []string{"skills", "cloud.skills"}
 
 // connectors is the legacy name of the feature apps: Codex 0.167.2 reads
@@ -170,7 +170,7 @@ func checkPair(flag, pair string, keys []string) error {
 	}
 	for _, r := range skills {
 		if covers(r, key) {
-			return fmt.Errorf("remove the %s that sets %s from the launch's arguments: it changes the skills Codex loads, which qory places below CODEX_HOME",
+			return fmt.Errorf("remove the %s that sets %s from the launch's arguments: it changes the skills Codex loads, which the composer places below CODEX_HOME",
 				accesskey.ShownName(flag, false), accesskey.ShownName(r, false))
 		}
 	}

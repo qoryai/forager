@@ -79,7 +79,7 @@ config:
     web_search: disabled
 # Codex writes the transcript of its session, the rollout, below CODEX_HOME, which a
 # composer sets through the launch's fixed variables: sessions/<yyyy>/<mm>/<dd>/
-# rollout-<time>-<thread id>.jsonl. codex exec resume <thread id> finds the rollout by
+# rollout-<time>-<thread id>.jsonl. codex exec resume <thread id> looks up the rollout by
 # the id, in its state database or else by the file's name below $CODEX_HOME/sessions,
 # so a continuation restores the rollout alone, never queue_1.sqlite or state_5.sqlite,
 # whose rows start turns or set the model, the provider and the rollout's path. A

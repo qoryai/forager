@@ -85,7 +85,7 @@ func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir st
 	checkPath := "Check resume.path in the run configuration"
 	moved, ok := rs.moved(want.Path)
 	if !ok {
-		return failed(checkPath, fmt.Sprintf("its path %s lies outside %s, with an absolute path in place of ${%s}", want.Path, rs.prefix, rs.HomeVar))
+		return failed(checkPath, rs.notMoved(want.Path))
 	}
 	want.Path = moved
 	rel, ok := strings.CutPrefix(want.Path, leadOf(rs.Prefix))

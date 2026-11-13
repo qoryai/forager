@@ -41,7 +41,7 @@ rules:
     set: {source: startup}
 `
 
-// homerScript is the homer's program: it prints the transcript it finds below
+// homerScript is the homer's program: it prints the transcript it looks up below
 // $SESSIONS, the sessions directory on this machine, else below $HOMER_HOME/sessions,
 // and its arguments, then its start, then appends two lines to its transcript, or to a
 // file it makes in a dated directory when it found none.
@@ -94,7 +94,7 @@ func homerSpec(t *testing.T, homeVar, paused string) runSpec {
 // through the link, the runtime resumes with the arguments after exec, and the session
 // sends the file under its path below this run's HOMER_HOME, the restored bytes first.
 // The runtime's start, whose rule sets source startup, has source resume. A run with no
-// resume finds and sends the file the runtime makes there, and its start has startup.
+// resume looks up and sends the file the runtime makes there, and its start has startup.
 func TestAnUnwalledHomeVariableResumesBelowALinkedHome(t *testing.T) {
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "home")
@@ -212,6 +212,27 @@ echo '{"type":"start","session_id":"'$id'","source":"exec"}'
 	}
 	if got := sources(t, file); fmt.Sprint(got) != "[startup startup]" {
 		t.Errorf("after a failed copy, the starts have sources %v; want [startup startup]", got)
+	}
+}
+
+// TestAPausedRunsPathOutsideTheHomesNamesFails pins a run answer whose resume.path
+// does not move below this run's HOMER_HOME: one with other names above the date
+// directories, and one below the home with ~/. The runtime starts without the resume
+// arguments, and the line of the failed resume starts with the fix and names the names
+// the path must end in.
+func TestAPausedRunsPathOutsideTheHomesNamesFails(t *testing.T) {
+	const below = "2025/01/02/rollout-p-" + rolloutID + ".jsonl"
+	for _, paused := range []string{"/srv/another-home/other/" + below, "~/sessions/" + below} {
+		sp := homerSpec(t, t.TempDir(), paused)
+		res, err := run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "Check resume.path in the run configuration. The runtime starts without a resume: the transcript of run " + pausedRun +
+			" could not be restored: its path " + paused + " is not an absolute path that ends in sessions/ followed by the names of resume.path below it\n"
+		if out := runLogText(t, events(t, res)); !strings.Contains(out, want) || !strings.Contains(out, "args: exec --json\n") {
+			t.Errorf("the runtime's output %q; want %q", out, want)
+		}
 	}
 }
 

@@ -705,7 +705,7 @@ func codexExited(t *testing.T, o keysOutcome, state, reason string) {
 // wall, with CODEX_HOME at /var/lib/qory-codex-home as a fixed value of the launch and
 // an empty environment otherwise, as qory starts it, and the sandbox off as a --config
 // pair ([codexResumable]). Run 1, with one key, prints the stub's Hi; its
-// session finds the rollout below ${CODEX_HOME}/sessions/, in the transcript directory
+// session looks up the rollout below ${CODEX_HOME}/sessions/, in the transcript directory
 // the wall binds there, and sends it as dev.qory.session.transcript chunks, which the
 // control plane stores. Run 2's run configuration has resume, with run 1's id, thread id
 // and rollout path, and another key; the control plane serves run 1's chunks. Run 2

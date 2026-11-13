@@ -299,6 +299,15 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 			t.Errorf("%q: %v; want a refusal that starts with the fix, names %s and contains no value", args, err, r.flag)
 		}
 	}
+	for args, want := range map[string]string{
+		"--dangerously-bypass-hook-trust": "remove --dangerously-bypass-hook-trust from the launch's arguments: it lets Codex run hooks that have no trust stored for them",
+		"--remote=ws://x:1":               "remove --remote from the launch's arguments: it connects Codex to a remote app server, so the work runs outside the session",
+		"-cskills={}":                     "remove the -c that sets skills from the launch's arguments: it changes the skills Codex loads, which the composer places below CODEX_HOME",
+	} {
+		if err := c.CheckArgs([]string{"exec", args, "Say hi"}); err == nil || err.Error() != want {
+			t.Errorf("%s: %v; want %s", args, err, want)
+		}
+	}
 	ordinary := []string{"exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-x",
 		"--config", "model_reasoning_effort=\"high\"", "-c", "model=\"gpt-x\"", "--enable", "undo", "-c", "model_provider_note=x",
 		"--config", "experimental_realtime_base_url=x", "-c", "features.connectors_extra=true", "-c", "cloud.other=1", "-c", "skills_extra=1",

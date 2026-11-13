@@ -2303,7 +2303,7 @@ runtime's home, and an absolute one, such as `/var/lib/qory-codex-home/sessions/
 that path whatever the home; `path` in `dev.qory.session.transcript` starts the same
 way. A `resume.prefix` that starts with `${<home_var>}/` lies below the value of the
 descriptor's `resume.home_var` in the launch's environment, the one the runtime gets,
-such as `CODEX_HOME`, which qory sets as a fixed value of the launch:
+such as `CODEX_HOME`, which a composer sets as a fixed value of the launch:
 `${CODEX_HOME}/sessions/` with `CODEX_HOME=/var/lib/qory-codex-home` is
 `/var/lib/qory-codex-home/sessions/`. From there on the session reads it as that
 absolute prefix, with a wall or without one, and `path` in

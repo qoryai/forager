@@ -94,6 +94,16 @@ func homeFault(name, value string, set bool) string {
 	return ""
 }
 
+// notMoved is the cause of a failed resume whose resume.path p does not move
+// ([sessionResume.moved]), such as: its path <p> is not an absolute path that ends in
+// sessions/ followed by the names of resume.path below it.
+func (s *sessionResume) notMoved(p string) string {
+	if s.tail == "" {
+		return fmt.Sprintf("its path %s is not an absolute path that ends in the names of resume.path below %s", p, s.prefix)
+	}
+	return fmt.Sprintf("its path %s is not an absolute path that ends in %s followed by the names of resume.path below it", p, s.tail)
+}
+
 // moved is p, the run configuration's resume.path, at the same names below this
 // session's resolved resume.prefix, and true; for a descriptor with home_var, p is the
 // transcript's path in the paused run, absolute, below that run's value of the

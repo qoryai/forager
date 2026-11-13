@@ -92,6 +92,12 @@ func TestAPausedRunsPathMovesBelowThisRunsHome(t *testing.T) {
 	if _, ok := deep.moved("/old/b/a/x.jsonl"); ok {
 		t.Error("a path below other names moved")
 	}
+	if got, want := deep.notMoved("/old/b/a/x.jsonl"), "its path /old/b/a/x.jsonl is not an absolute path that ends in a/b/ followed by the names of resume.path below it"; got != want {
+		t.Errorf("the cause %q; want %q", got, want)
+	}
+	if got, want := top.notMoved("x.jsonl"), "its path x.jsonl is not an absolute path that ends in the names of resume.path below ${AMP_HOME}/"; got != want {
+		t.Errorf("the cause %q; want %q", got, want)
+	}
 	plain := resumeOf(describedRuntime(t), nil)
 	if got, ok := plain.moved("~/.claude/projects/s/x.jsonl"); !ok || got != "~/.claude/projects/s/x.jsonl" {
 		t.Errorf("a descriptor without home_var: %q, %v", got, ok)
