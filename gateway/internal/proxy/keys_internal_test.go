@@ -139,6 +139,7 @@ func newKeyFixtureOf(t *testing.T, format, stream string, set ...func(*modelkey.
 		keys = append(keys, k)
 	}
 	f.g = modelkey.New(keys, "model", nil)
+	f.g.SetFormat(format)
 	f.p.SetKeyGroup(f.g, format, stream, func(line string) { f.mu.Lock(); f.logged = append(f.logged, line); f.mu.Unlock() })
 	ca, err := NewCA("test")
 	if err != nil {
@@ -450,7 +451,7 @@ func TestKeysAtTheirUseUpToPercentGetTheProxys429(t *testing.T) {
 		}
 	}
 	status, body := f.post(t, "{}")
-	if want := "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, which keeps one key for its session), and the gateway sends no more model requests in this session.\n"; status != http.StatusTooManyRequests || body != want {
+	if want := "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key), and the gateway sends no more model requests in this session.\n"; status != http.StatusTooManyRequests || body != want {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {

@@ -79,6 +79,8 @@ type Window struct {
 type Group struct {
 	keys []Key
 	now  func() time.Time
+	// format is the API format of the keys, [Group.SetFormat]; empty for none set.
+	format string
 	// made is the clock's time when the group was made, after the claim.
 	made time.Time
 
@@ -114,6 +116,17 @@ func New(keys []Key, start string, now func() time.Time) *Group {
 	}
 	g.active = max(g.index(start), 0)
 	return g
+}
+
+// SetFormat sets the API format of the group's keys, before the group's first use. The
+// limit headers of the format are read: x-codex-* and x-ratelimit-* for openai-responses
+// alone. For a format whose requests the proxy does not send again ([Resends]), the
+// active key changes only at [Group.JoinKey]: while it is in cooldown, [Group.Pick]
+// reports false, so a session goes on with one key or with none.
+func (g *Group) SetFormat(format string) {
+	g.mu.Lock()
+	g.format = format
+	g.mu.Unlock()
 }
 
 // OnChange sets f, called with no lock held after each change of a window's status,
@@ -161,12 +174,32 @@ func (g *Group) Active() string {
 // Pick returns the active key's name, and false when every key of the group is in
 // cooldown. When the active key is in cooldown, the first key of [Group.next] becomes
 // active first; when every key is in cooldown, the active key stays, and the proxy sets
-// no key.
+// no key. For a format whose requests the proxy does not send again ([Resends]), the
+// active key stays while it is in cooldown, and Pick reports false: only
+// [Group.JoinKey] makes another key active.
 func (g *Group) Pick() (string, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.pick(Resends(g.format))
+}
+
+// JoinKey is the key a session starts with, at its join: the active key, or, when it is
+// in cooldown, the first key of [Group.next], which becomes active, for any format.
+func (g *Group) JoinKey() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	name, _ := g.pick(true)
+	return name
+}
+
+// pick is [Group.Pick], with another key made active only when move is true. Called
+// with g.mu held.
+func (g *Group) pick(move bool) (string, bool) {
 	now := g.now()
 	if g.coolingUntil(g.active, now).After(now) {
+		if !move {
+			return g.keys[g.active].Name, false
+		}
 		next, ok := g.next(now)
 		if !ok {
 			return g.keys[g.active].Name, false
@@ -268,7 +301,7 @@ func (g *Group) Answered(name string, status int, h http.Header) {
 
 // Refused records a limit refusal of the provider to a request with key name, with its
 // headers and the error_code of its body: the key goes into cooldown. When name is the
-// active key, the first key of [Group.next] becomes active. It
+// active key, the first key of [Group.next] becomes active, as [Group.Pick] allows. It
 // returns the active key and whether it is out of cooldown, which a resend needs.
 func (g *Group) Refused(name string, h http.Header, code string) (string, bool) {
 	g.record(name, h, true, false, code)
@@ -340,7 +373,10 @@ func (g *Group) record(name string, h http.Header, limit, served bool, code stri
 		return
 	}
 	now := g.now()
-	r := readHeaders(h, now)
+	g.mu.Lock()
+	format := g.format
+	g.mu.Unlock()
+	r := readHeaders(h, now, format)
 	if limit {
 		g.cool(i, &r, code, now)
 	}
@@ -389,9 +425,10 @@ func (g *Group) record(name string, h http.Header, limit, served bool, code stri
 }
 
 // cool sets the cooldown of a limit refusal of key i on the windows of r it rejects:
-// the windows the subscription's headers mark rejected, an API key's families with 0
-// remaining, and spend_limit for a spend cap or an OpenAI quota, code [SpendLimitCode]
-// or [QuotaCode]; key when the refusal rejects no window.
+// the windows the subscription's headers mark rejected, a ChatGPT subscription's
+// windows at 100 percent or more, an API key's families with 0 remaining, and
+// spend_limit for a spend cap or an OpenAI quota ([SpendLimit]); key when the refusal
+// rejects no window.
 // The cooldown ends at the latest reset of those windows; with none, retry-after after
 // now; with none, at the key's schedule_resets_at, moved by 7 days until it is after
 // now; with none, pause_for_s after now.
@@ -405,7 +442,7 @@ func (g *Group) cool(i int, r *read, code string, now time.Time) {
 			rejected = append(rejected, s)
 		}
 	}
-	if code == SpendLimitCode || code == QuotaCode {
+	if SpendLimit(code) {
 		s := r.window(WindowSpendLimit)
 		s.status = StatusRejected
 		rejected = append(rejected, s)
@@ -545,8 +582,8 @@ func (g *Group) Merge(entries []Window) {
 
 // Shown is the line of the gateway's log of one limit answer of key name: its status,
 // the names of its headers, its error type and, when it has one, its error code, never
-// a value, and the limit headers of no window the gateway reads.
-func Shown(name string, status int, h http.Header, kind, code string) string {
+// a value, and the limit headers of the group's format of no window the gateway reads.
+func (g *Group) Shown(name string, status int, h http.Header, kind, code string) string {
 	names := make([]string, 0, len(h))
 	for n := range h {
 		names = append(names, strings.ToLower(n))
@@ -560,7 +597,10 @@ func Shown(name string, status int, h http.Header, kind, code string) string {
 		line += ", error code " + code
 	}
 	line += ", headers " + strings.Join(names, " ")
-	if u := readHeaders(h, time.Time{}).unknown; len(u) > 0 {
+	g.mu.Lock()
+	format := g.format
+	g.mu.Unlock()
+	if u := readHeaders(h, time.Time{}, format).unknown; len(u) > 0 {
 		line += "; no window for " + strings.Join(u, " ")
 	}
 	return line

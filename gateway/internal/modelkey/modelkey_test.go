@@ -418,7 +418,8 @@ func TestOnPassedCallsComeInTheOrderOfTheChanges(t *testing.T) {
 // error type and the header names, a limit header of no window named apart, and no
 // value.
 func TestShownHasNamesAndNoValues(t *testing.T) {
-	line := modelkey.Shown("model", 429, headers("Anthropic-Ratelimit-Unified-5h-Reset", "1762786800", "Anthropic-Ratelimit-Unified-7d_oi-Status", "rejected", "Retry-After", "31"), modelkey.RateLimitError, "")
+	g, _ := group(t)
+	line := g.Shown("model", 429, headers("Anthropic-Ratelimit-Unified-5h-Reset", "1762786800", "Anthropic-Ratelimit-Unified-7d_oi-Status", "rejected", "Retry-After", "31"), modelkey.RateLimitError, "")
 	want := "model key model: limit answer, status 429, error type rate_limit_error, headers anthropic-ratelimit-unified-5h-reset anthropic-ratelimit-unified-7d_oi-status retry-after; no window for anthropic-ratelimit-unified-7d_oi-status"
 	if line != want {
 		t.Errorf("Shown:\n%s\nwant\n%s", line, want)
@@ -534,7 +535,7 @@ func TestAClaimOutsideTheWindowsIsLeftOut(t *testing.T) {
 	if ws := g.Windows(); len(ws) != 1 {
 		t.Errorf("windows %+v; want seven_day_sonnet alone", ws)
 	}
-	line := modelkey.Shown("model-2", 429, h, "", "")
+	line := g.Shown("model-2", 429, h, "", "")
 	if !strings.Contains(line, "no window for anthropic-ratelimit-unified-representative-claim") || strings.Contains(line, "monthly_other") {
 		t.Errorf("Shown: %s", line)
 	}

@@ -317,6 +317,38 @@ func TestAnOpenAIKeyGroupStopsAtTheFirstRefusal(t *testing.T) {
 	}
 }
 
+// TestAnOpenAIKeyCooledByAReportStopsTheSession pins an openai-responses group whose
+// active key goes into cooldown from the answer to a model keys report, during a
+// session: the proxy sets no other key, the next request gets the gateway's 429, the
+// provider gets no request with model-2, and the next batch's answer has stop,
+// model_key_limit.
+func TestAnOpenAIKeyCooledByAReportStopsTheSession(t *testing.T) {
+	g := startGroupRunOf(t, "openai-responses")
+	later := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	g.mu.Lock()
+	g.answer = func() (int, string) {
+		return http.StatusOK, `{"version":1,"keys":[{"credential":"model","window":"five_hour","status":"rejected","cooldown_until":"` + later +
+			`","source":"provider","observed_at":"` + time.Now().Add(time.Minute).UTC().Format(time.RFC3339) + `"}]}`
+	}
+	g.mu.Unlock()
+	if one, err := g.h.join(g.runID); err != nil || one.ModelCredential != "model" {
+		t.Fatalf("join 1: %+v, %v", one, err)
+	}
+	g.h.post(sessionStarted(g.runID, 1))
+	eventually(t, "the gateway's 429 after the report's answer", func() bool {
+		status, calls := g.send(t)
+		for _, c := range calls {
+			if c != "model" {
+				t.Fatalf("the provider got a request with %q; want model alone", c)
+			}
+		}
+		return status == http.StatusTooManyRequests && len(calls) == 0
+	})
+	if status, body := g.batch(t, heartbeat(g.runID)); status != http.StatusAccepted || body != `{"stop":{"reason":"model_key_limit"}}` {
+		t.Errorf("the next batch: %d %q; want 202 with stop", status, body)
+	}
+}
+
 // TestAReportAnsweredWithACooldownBarsTheKey pins the merge of a report's answer: a key
 // that another run found at its limit, with a cooldown in the answer, is not set; and a
 // 404 stops the reports and writes the one dev.qory.run.log line.

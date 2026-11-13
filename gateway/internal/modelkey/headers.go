@@ -40,14 +40,26 @@ const (
 // SpendLimitCode is the error_code of an API key's refusal at its spend cap.
 const SpendLimitCode = "enforced_spend_limit_reached"
 
-// QuotaCode is the error code of an OpenAI key's refusal at its quota, in a 429's body
-// and in a stream's response.failed event: its window is spend_limit, as for
-// [SpendLimitCode].
+// QuotaCode is the error code, and the error type, of an OpenAI key's refusal at its
+// quota.
 const QuotaCode = "insufficient_quota"
 
-// rateLimitCode is the error code of an OpenAI rate limit in a stream's
-// response.failed event.
-const rateLimitCode = "rate_limit_exceeded"
+// quotaCodes are the error codes of an OpenAI key's refusal at a quota or a spend cap,
+// in a 429's body and in a stream's response.failed event, as Codex reads them
+// (codex-api/src/api_bridge.rs, codex-api/src/sse/responses_error.rs at 17a0e6f63f):
+// their window is spend_limit, as for [SpendLimitCode].
+var quotaCodes = map[string]bool{
+	QuotaCode: true, "credit_balance_exhausted": true, "organization_spend_limit_exceeded": true,
+	"project_spend_limit_exceeded": true, "organization_usage_limit_exceeded": true,
+}
+
+// rateLimitCodes are the error codes of an OpenAI rate limit in a stream's
+// response.failed event, as Codex reads them.
+var rateLimitCodes = map[string]bool{"rate_limit_exceeded": true, "slow_down": true}
+
+// SpendLimit reports whether an error code is a spend cap's or a quota's, whose window
+// is spend_limit: [SpendLimitCode] or an OpenAI quota code.
+func SpendLimit(code string) bool { return code == SpendLimitCode || quotaCodes[code] }
 
 // The API formats whose answers the gateway reads apart, api-format.schema.json.
 const (
@@ -117,7 +129,8 @@ type seen struct {
 	// utilization is the use in whole percent; has is true when the answer contains it.
 	utilization int
 	has         bool
-	// exhausted is true when an API key's family has 0 remaining.
+	// exhausted is true when an API key's family has 0 remaining, or a ChatGPT
+	// subscription's window is at 100 percent or more: a limit refusal rejects it.
 	exhausted bool
 	// cooldown and source are a limit refusal's, set on each window it rejects.
 	cooldown time.Time
@@ -150,8 +163,10 @@ func (r *read) window(w string) *seen {
 }
 
 // readHeaders reads the limit headers of an answer that arrived at now, in the order
-// of their names. A header whose value has no form is left out.
-func readHeaders(h http.Header, now time.Time) read {
+// of their names, for a key of the format: the x-codex-* and x-ratelimit-* headers for
+// openai-responses alone. A header whose value has no form is left out.
+func readHeaders(h http.Header, now time.Time, format string) read {
+	openai := format == FormatOpenAIResponses
 	var r read
 	names := make([]string, 0, len(h))
 	for name := range h {
@@ -171,13 +186,16 @@ func readHeaders(h http.Header, now time.Time) read {
 		hasLimit, hasRem bool
 		reset            time.Time
 	}
-	// families are an API key's header families, by their prefix and name.
+	// families are an API key's header families, by their prefix and name, and order
+	// the keys in the order of their first header.
 	families := map[string]*family{}
+	var order []string
 	familyOf := func(key, window string) *family {
 		f := families[key]
 		if f == nil {
 			f = &family{window: window}
 			families[key] = f
+			order = append(order, key)
 			r.window(window)
 		}
 		return f
@@ -264,7 +282,7 @@ func readHeaders(h http.Header, now time.Time) read {
 					f.reset = capped(t, now, maxReset)
 				}
 			}
-		case strings.HasPrefix(name, openaiPrefix):
+		case openai && strings.HasPrefix(name, openaiPrefix):
 			// x-ratelimit-{limit,remaining,reset}-{requests,tokens}, the field first.
 			field, fam, _ := strings.Cut(strings.TrimPrefix(name, openaiPrefix), "-")
 			w, ok := openaiWindows[fam]
@@ -288,7 +306,7 @@ func readHeaders(h http.Header, now time.Time) read {
 					f.reset = now.Add(min(d, maxReset))
 				}
 			}
-		case strings.HasPrefix(name, codexPrefix):
+		case openai && strings.HasPrefix(name, codexPrefix):
 			rest := strings.TrimPrefix(name, codexPrefix)
 			at, field, _ := strings.Cut(rest, "-")
 			if !slices.Contains(codexSlots, at) {
@@ -306,7 +324,10 @@ func readHeaders(h http.Header, now time.Time) read {
 			case "used-percent":
 				sl.used, sl.hasUsed = finite(value)
 			case "reset-at":
-				sl.resetAt = capped(epoch(value), now, maxReset)
+				// A reset that is not after the answer counts as none.
+				if t := capped(epoch(value), now, maxReset); t.After(now) {
+					sl.resetAt = t
+				}
 			case "reset-after-seconds":
 				if v, ok := finite(value); ok && v >= 0 {
 					sl.after, sl.hasAfter = v, true
@@ -314,7 +335,7 @@ func readHeaders(h http.Header, now time.Time) read {
 			}
 		}
 	}
-	reached := get(codexReached) != ""
+	reached := openai && get(codexReached) != ""
 	for _, at := range codexSlots {
 		sl := slots[at]
 		if sl == nil {
@@ -340,13 +361,15 @@ func readHeaders(h http.Header, now time.Time) read {
 		case sl.hasAfter:
 			s.resetsAt = now.Add(time.Duration(min(sl.after, maxReset.Seconds()) * float64(time.Second)))
 		}
+		s.exhausted = sl.hasUsed && sl.used >= 100
 		// The header has no window in it: it marks the windows the answer shows at
 		// their limit.
-		if reached && sl.hasUsed && sl.used >= 100 {
+		if reached && s.exhausted {
 			s.status = StatusRejected
 		}
 	}
-	for _, f := range families {
+	for _, key := range order {
+		f := families[key]
 		s := r.window(f.window)
 		s.resetsAt = f.reset
 		s.exhausted = f.hasRem && f.remaining <= 0
@@ -415,8 +438,9 @@ func retryAfter(v string, now time.Time) (time.Duration, bool) {
 // {"type":"error","error":{"type":"rate_limit_error","details":{"error_code":"..."}}},
 // its error_code in details or in error, and else OpenAI's
 // {"error":{"type":"insufficient_quota","code":"insufficient_quota"}}, its code in
-// error. Empty for a body of another shape. A type or code of no window's form is left
-// out, and so is a code that is no string.
+// error, or, with no code, [QuotaCode] for the type insufficient_quota. Empty for a
+// body of another shape. A type or code of no window's form is left out, and so is a
+// code that is no string.
 func ErrorOf(body []byte) (kind, code string) {
 	var doc struct {
 		Error struct {
@@ -437,6 +461,9 @@ func ErrorOf(body []byte) (kind, code string) {
 	}
 	if code == "" && len(doc.Error.Code) > 0 && json.Unmarshal(doc.Error.Code, &code) != nil {
 		code = ""
+	}
+	if code == "" && kind == QuotaCode {
+		code = QuotaCode
 	}
 	if !windowName.MatchString(kind) {
 		kind = ""
@@ -487,8 +514,9 @@ func StreamPath(format, endpoint string) string {
 //     of the type rate_limit_error; the code is empty, so the refusal rejects the
 //     window key, as before openai-responses had a stream check.
 //   - openai-responses: an event whose data has the type response.failed, with an event
-//     field of response.failed or none, and whose response's error has the code
-//     rate_limit_exceeded or insufficient_quota; the type is empty.
+//     field of response.failed or none, and whose response's error has a rate limit's
+//     code, rate_limit_exceeded or slow_down, or a quota's ([SpendLimit]); the type is
+//     empty.
 func StreamLimit(format, event string, data []byte) (kind, code string, ok bool) {
 	switch format {
 	case FormatAnthropicMessages:
@@ -510,7 +538,7 @@ func StreamLimit(format, event string, data []byte) (kind, code string, ok bool)
 		if json.Unmarshal(data, &doc) != nil || doc.Type != "response.failed" || json.Unmarshal(doc.Response.Error.Code, &code) != nil {
 			return "", "", false
 		}
-		if code == rateLimitCode || code == QuotaCode {
+		if rateLimitCodes[code] || quotaCodes[code] {
 			return "", code, true
 		}
 	}

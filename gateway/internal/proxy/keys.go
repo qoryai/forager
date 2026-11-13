@@ -70,7 +70,7 @@ func (p *Proxy) limitPassed(w http.ResponseWriter, d Decision) {
 	p.observe(d)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusTooManyRequests)
-	fmt.Fprint(w, "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, which keeps one key for its session), and the gateway sends no more model requests in this session.\n")
+	fmt.Fprint(w, "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key), and the gateway sends no more model requests in this session.\n")
 }
 
 // resendKey marks the context of a request with a key of the group, with its [resend].
@@ -268,13 +268,9 @@ func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Resp
 		}
 		head, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		kind, code := modelkey.ErrorOf(head)
-		rs.k.log(modelkey.Shown(accesskey.ShownName(rs.name, true), resp.StatusCode, resp.Header, kind, code))
+		rs.k.log(g.Shown(accesskey.ShownName(rs.name, true), resp.StatusCode, resp.Header, kind, code))
 		resends := modelkey.Resends(rs.k.format)
-		if !resends {
-			// Stopped before the cooldown makes another key active: a request of the
-			// session that picks the next key finds the group stopped.
-			g.Pass()
-		}
+		// For a format that keeps one key per session, Refused reports false.
 		next, ok := g.Refused(rs.name, resp.Header, code)
 		// Each try cools a key, so the group runs out of keys within its size; the bound
 		// stops the loop when a provider sends a reset that has passed.
@@ -322,15 +318,21 @@ func eventStream(h http.Header) bool {
 
 // maxLine is the most of one line, and of one event's data, of a stream the proxy reads
 // for an error event; a longer line is passed on unread, as every byte is, and its event
-// is not read.
+// is not read. An openai-responses event whose event field is response.failed has
+// [maxFailedData] in its place.
 const maxLine = 4096
+
+// maxFailedData is the limit of a response.failed event's data, and of each of its
+// lines, in an openai-responses stream: the event can repeat the request's
+// instructions and tools, which pass 4096 bytes.
+const maxFailedData = 1 << 20
 
 // streamWatch passes a streamed answer on as it came, and reads each event of it, by
 // the lines of server-sent events: a limit event of the format ([modelkey.StreamLimit])
 // puts the key it went with into cooldown, and the next key becomes active. For a
-// format whose requests the proxy does not send again ([modelkey.Resends]), the group
-// is stopped too ([modelkey.Group.Pass]): the runtime's next request, a retry among
-// them, gets the proxy's 429.
+// format whose requests the proxy does not send again ([modelkey.Resends]), the key
+// stays active and the group is stopped too ([modelkey.Group.Pass]): the runtime's
+// next request, a retry among them, gets the proxy's 429.
 type streamWatch struct {
 	io.ReadCloser
 	rs     *resend
@@ -351,7 +353,7 @@ func (s *streamWatch) Read(p []byte) (int, error) {
 	n, err := s.ReadCloser.Read(p)
 	for _, b := range p[:n] {
 		if b != '\n' {
-			if len(s.line) < maxLine {
+			if len(s.line) < s.limit() {
 				s.line = append(s.line, b)
 			} else {
 				s.long = true
@@ -384,12 +386,21 @@ func (s *streamWatch) read(line string) {
 		if len(s.data) > 0 {
 			s.data = append(s.data, '\n')
 		}
-		if len(s.data)+len(value) > maxLine {
+		if len(s.data)+len(value) > s.limit() {
 			s.over = true
 			return
 		}
 		s.data = append(s.data, value...)
 	}
+}
+
+// limit is the most of a line and of the data of the event so far: [maxFailedData] for
+// an openai-responses event whose event field is response.failed, else [maxLine].
+func (s *streamWatch) limit() int {
+	if s.format == modelkey.FormatOpenAIResponses && s.event == "response.failed" {
+		return maxFailedData
+	}
+	return maxLine
 }
 
 // dispatch reads the event that ended: a limit event cools the key, once per stream.
@@ -402,13 +413,11 @@ func (s *streamWatch) dispatch() {
 		return
 	}
 	s.once.Do(func() {
-		s.rs.k.log(modelkey.Shown(accesskey.ShownName(s.rs.name, true), http.StatusOK, s.header, kind, code))
+		s.rs.k.log(s.rs.k.g.Shown(accesskey.ShownName(s.rs.name, true), http.StatusOK, s.header, kind, code))
+		s.rs.k.g.Streamed(s.rs.name, s.header, code)
 		if !modelkey.Resends(s.format) {
-			// Stopped before the cooldown makes another key active, as in
-			// [resend.roundTrip].
 			s.rs.k.g.Pass()
 		}
-		s.rs.k.g.Streamed(s.rs.name, s.header, code)
 	})
 }
 

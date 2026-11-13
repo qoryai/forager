@@ -670,9 +670,12 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 	}
 	if keys := r.ModelKeys(); len(keys) > 0 {
 		// The run's key group: the proxy sets its active key, sends a refused request
-		// again with the next key, for a format other than openai-responses, and the
-		// reporter shares each key's state with the control plane.
+		// again with the next key, for a format other than openai-responses, whose
+		// active key changes only at a join, and the reporter shares each key's state
+		// with the control plane.
 		lr.keys = modelkey.New(keys, r.Held().Start, nil)
+		format, stream := r.ModelAPI()
+		lr.keys.SetFormat(format)
 		if lr.remote {
 			// The mark that the proxy passed a limit refusal to the session, for a
 			// gateway that starts again. Called on the proxy's request path: a write
@@ -685,7 +688,6 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 			})
 		}
 		runID := lr.id
-		format, stream := r.ModelAPI()
 		lr.px.SetKeyGroup(lr.keys, format, stream, func(line string) { g.report("run " + runID + ": " + line) })
 		if g.client != nil {
 			conf, _ := g.config()

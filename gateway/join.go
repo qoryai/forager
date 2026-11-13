@@ -261,7 +261,8 @@ const joinWhileOpen = "a join while another join of the run is open"
 // modelKey is the model key a join's session starts with: name, when it is one of the
 // model keys the gateway holds for the run, else the run's start key when name is
 // empty; empty when the run has no model key. Empty, or a key of the run's key group,
-// is the group's active key. It reports false for a name of no model key of the run's.
+// is the group's key for a join, [modelkey.Group.JoinKey]. It reports false for a name
+// of no model key of the run's.
 func (lr *linkRun) modelKey(name string) (string, bool) {
 	held := lr.r.Held()
 	if held == nil {
@@ -274,7 +275,8 @@ func (lr *linkRun) modelKey(name string) (string, bool) {
 		}
 	}
 	if lr.keys.Has(name) {
-		return lr.keys.Active(), true
+		// The join is where the group's active key may change for every format.
+		return lr.keys.JoinKey(), true
 	}
 	for _, c := range held.Credentials() {
 		if c.Format != "" && c.Name == name {
