@@ -1834,6 +1834,14 @@ release may change what an existing document does, and says so under Upgrading.
   `Content-Length` values or a head that net/http could read another way gets a `400`.
   Without a call of `SetRunAPICheck`, the forwarder passes what the wall's relay sends
   as it is, byte for byte.
+- `session.ErrRunAPIHold`: return it, or an error that wraps it, from the check of
+  `SetRunAPICheck` for a `POST /verdict` to hold the verdict. The program gets a `202`
+  with `{"version":1,"artifact":{"type":"verdict","name":"main","version":null}}`, the body
+  of Qory Apiary's `201` for a stored verdict with `null` for the artifact's version,
+  and nothing reaches the gateway. A hold of another path, or one returned after the
+  check's context ended, gets the `503` `push_check_unavailable`. The check gets the
+  verdicts of a program that sends each after the reply to the one before in the order
+  sent.
 - The helper's exec, `session.Exec`, measures the enclosure when the runtime exits. It
   reads `/sys/fs/cgroup/memory.peak` and the `usage_usec` line of
   `/sys/fs/cgroup/cpu.stat`, only when `/sys/fs/cgroup/memory.max` exists, and sends

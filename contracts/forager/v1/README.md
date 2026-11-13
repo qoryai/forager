@@ -5036,14 +5036,15 @@ wall before anything of it reaches the gateway: qory checks a push of artifacts 
 the run's push checks. The check is set after the run opens, before its setup and its
 first session; a run without one passes every connection through the wall as it
 arrives, byte for byte. The run's forwarder reads the POST whole, then the check lets it
-go on or returns a refusal, which the program that sent the POST gets at once:
+go on, holds a verdict, or returns a refusal, which the program that sent the POST gets
+at once:
 
 | Status | `error` | When |
 |---|---|---|
 | `400` to `499` other than `407`, the check's | the check's code | the check returns a refusal for the POST; the body may contain `findings`, a list of strings, and `message` may contain line feeds |
 | `400` | `bad_request` | the forwarder and the gateway could read the POST differently: not HTTP/1.1 to `http://run-api.qory.invalid/`, not exactly one `Host: run-api.qory.invalid`, a line that does not end in CRLF, a folded line, a `Transfer-Encoding`, or more than one `Content-Length`. A target that is not absolute-form gets the forwarder's plain-text `400`, as without a check |
 | `413` | `payload_too_large` | the `Content-Length` is over the path's limit, 64 KiB for `verdict` and 32 MiB for any other path; nothing is read |
-| `503` | `push_check_unavailable` | the check failed, returned a refusal with no code or another status, or did not finish within 90 seconds, or the POST waited 90 seconds behind another POST of the run, since the forwarder checks one at a time; run the push again |
+| `503` | `push_check_unavailable` | the check failed, held a POST to a path other than `verdict`, returned a refusal with no code or another status, or did not finish within 90 seconds, or the POST waited 90 seconds behind another POST of the run, since the forwarder checks one at a time; run the push again |
 
 Each of these replies closes the connection, and nothing reaches the gateway. A POST the
 check lets pass goes to the gateway as the program sent it, with `Connection: close`,
@@ -5057,6 +5058,23 @@ request that the forwarder does not check goes on as HTTP/1.1, an HTTP/1.0 one a
 them. A POST with `Expect: 100-continue` gets two `100 Continue` replies, the
 forwarder's before the body and the route's once the body goes on. The check gets no POST
 outside the run's path, no GET and no other method.
+
+A held verdict is a `POST /verdict` that the check keeps, so that a check after the
+agent's last session sets the run's end. The program gets `202 Accepted`, with
+`Content-Type: application/json`, `Content-Length` and `Connection: close`, and nothing
+of the POST reaches the gateway. The body is the body of Qory Apiary's `201` for a
+stored verdict, with `null` for the artifact's version, since a held verdict has no
+stored version. The `version` at the top is the version of the JSON, `1`, as in every
+run API answer:
+
+```json
+{"version":1,"artifact":{"type":"verdict","name":"main","version":null}}
+```
+
+The forwarder checks the POSTs of a run one at a time, in the order they reach it, so
+the check gets the verdicts of a program that sends each after the reply to the one
+before in the order the program sent them. A hold that the check returns after 90
+seconds or the run's close gets the `503`.
 
 **No tunnel.** A `CONNECT` to `run-api.qory.invalid` is denied with a `403` and, where the
 policy would allow it, the rule `wall:run-api`, in either mode. On a proxy with the
