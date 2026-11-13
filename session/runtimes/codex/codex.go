@@ -27,7 +27,15 @@ func New() (runtimes.Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return runtimes.DescribedWithArgs(descriptorPath, b, nil, checkArgs)
+	return Described(descriptorPath, b, nil)
+}
+
+// Described is Codex by the descriptor document, name being where it was read, with
+// the check of the launch's arguments for the flags of Codex 0.167.2 below. A caller
+// that resolves the name codex, the contract's descriptor or a machine's codex.yaml,
+// builds Codex with it, so every launch of Codex gets the check.
+func Described(name string, document []byte, installers map[string]runtimes.Installer) (runtimes.Runtime, error) {
+	return runtimes.DescribedWithArgs(name, document, installers, checkArgs)
 }
 
 // The flags of Codex 0.167.2 that change a setting the session passes, other than

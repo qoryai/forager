@@ -135,10 +135,15 @@ func (r *described) sessionKeys() []string {
 
 // CheckArgs returns an error when args set a setting the session passes through
 // config.flag, as "flag key=value" or "flag=key=value", up to an argument --, and then
-// runs the runtime's ArgsCheck. A runtime without config passes every argument.
+// runs the runtime's ArgsCheck, also for a descriptor without config, such as a
+// machine's replacement of Codex's. A runtime without config and without an ArgsCheck
+// passes every argument.
 func (r *described) CheckArgs(args []string) error {
 	keys := r.sessionKeys()
 	if len(keys) == 0 {
+		if r.check != nil {
+			return r.check(args, nil)
+		}
 		return nil
 	}
 	flag := r.d.Config.Flag

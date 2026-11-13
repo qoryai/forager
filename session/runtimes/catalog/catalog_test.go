@@ -144,3 +144,36 @@ func TestClaudeSaysWhereItsModelGoes(t *testing.T) {
 		t.Errorf("model %v\n%+v\nwant\n%+v", ok, got, want)
 	}
 }
+
+// TestLookupChecksCodexFlags pins that Codex from Lookup, the contract's descriptor and
+// a machine's codex.yaml alike, refuses the launch arguments that the codex package
+// refuses: a caller that resolves runtimes by name, as qory does, gets the check.
+func TestLookupChecksCodexFlags(t *testing.T) {
+	dir := t.TempDir()
+	doc := "version: 1\nruntime: codex\nruntime_version: \"9\"\nsources:\n  output: {format: jsonl}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}\n"
+	if err := os.WriteFile(filepath.Join(dir, "codex.yaml"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, from := range []string{"", dir} {
+		rt, err := catalog.Lookup("codex", from)
+		if err != nil {
+			t.Fatalf("codex from %q: %v", from, err)
+		}
+		c, ok := rt.(runtimes.ArgsChecker)
+		if !ok {
+			t.Fatalf("codex from %q checks no arguments", from)
+		}
+		for _, args := range [][]string{
+			{"exec", "--json", "--remote", "ws://remote.example", "Fix the test"},
+			{"exec", "--json", "-c", "model_providers.x.base_url=https://elsewhere.example", "Fix the test"},
+		} {
+			err := c.CheckArgs(args)
+			if err == nil || !strings.HasPrefix(err.Error(), "remove ") || strings.Contains(err.Error(), "example") {
+				t.Errorf("codex from %q with %q: %v", from, args, err)
+			}
+		}
+		if err := c.CheckArgs([]string{"exec", "--json", "Fix the test"}); err != nil {
+			t.Errorf("codex from %q with plain arguments: %v", from, err)
+		}
+	}
+}

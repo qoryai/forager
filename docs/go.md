@@ -1171,6 +1171,9 @@ res, err := session.Resend(ctx, session.ResendSpec{
    ships for. It is read only when its last part is no link, it is a regular file and
    it holds at most 1 MiB.
 2. The contract's descriptor: Claude Code's or Codex's.
+
+Codex from either place, the contract's descriptor or a machine's `codex.yaml`, comes
+with the check of Codex's flags below.
 3. A bare runtime, for a name with neither. It is run and recorded, with no session
    events.
 
@@ -1188,13 +1191,16 @@ flags that only that runtime has, which runs after the check of `config.flag`.
 
 Two packages give the contract's runtimes with what a descriptor cannot hold:
 
-- `codex.New()` is Codex 0.167.2 by the contract's descriptor, with the check of
-  Codex's flags. The join also fails on `--config` and `-c` with a pair that sets one
-  of the session's settings, a setting at, under or above `model_providers`, `profile`, `profiles`,
-  `projects`, `responses_api_metadata`, `skills` or `cloud.skills`, or one of
-  `openai_base_url`, `chatgpt_base_url` and `experimental_realtime_*_base_url`; on `--enable` and `--disable` of a fixed feature, `plugins`, `apps` or
-  `connectors`; and on `--oss`, `--local-provider`, `--profile`, `-p`, `--search`,
-  `--ignore-user-config`, `--dangerously-bypass-hook-trust` and `--remote`. The
+- `codex.New()` is Codex 0.167.2 by the contract's descriptor, and
+  `codex.Described(name, document, installers)` is Codex by another descriptor
+  document; `catalog.Lookup` uses it for the name `codex`. Each comes with the check of
+  Codex's flags, also for a descriptor without `config`. The join fails on `--config`
+  and `-c` with a pair that sets one of the session's settings, a setting at, under or above `model_providers`,
+  `profile`, `profiles`, `projects`, `responses_api_metadata`, `skills` or
+  `cloud.skills`, or one of `openai_base_url`, `chatgpt_base_url` and
+  `experimental_realtime_*_base_url`; on `--enable` and `--disable` of a fixed
+  feature, `plugins`, `apps` or `connectors`; and on `--oss`, `--local-provider`,
+  `--profile`, `-p`, `--search`, `--ignore-user-config`, `--dangerously-bypass-hook-trust` and `--remote`. The
   contract's README, §The descriptor, Config, lists every form.
 - `claude.ApprovedKey()` returns the value Claude Code keeps under
   `customApiKeyResponses.approved` once a person approves the API key's stand-in: its

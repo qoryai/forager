@@ -36,6 +36,8 @@ import (
 	"github.com/qoryai/forager/receiver"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/catalog"
 	"github.com/qoryai/forager/session/runtimes/claude"
 	"github.com/qoryai/forager/session/runtimes/codex"
 	"github.com/qoryai/forager/wall"
@@ -547,7 +549,8 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 	t.Helper()
 	newRuntime := claude.New
 	if s.codex != "" {
-		newRuntime = codex.New
+		// Codex comes by its name, as qory resolves a run's runtime.
+		newRuntime = func() (runtimes.Runtime, error) { return catalog.Lookup(codex.Name, "") }
 	}
 	rt, err := newRuntime()
 	if err != nil {

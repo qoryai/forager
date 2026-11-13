@@ -649,9 +649,11 @@ func codexTurnFailed(t *testing.T, o keysOutcome) {
 
 // TestDockerCodexRefusesAnArgumentThatSetsASessionSetting starts Codex behind the wall
 // with launch arguments that set a setting the session passes: model_provider through
-// --config, the endpoint's setting through -c, and the provider through --profile. The
-// join returns an error that starts with the fix and contains the flag, Codex does not
-// start, and the stub gets no request. The error contains no value of the arguments.
+// --config, the endpoint's setting through -c, the provider through --profile, and a
+// remote app server through --remote. The test resolves Codex through catalog.Lookup,
+// as qory does. The join returns an error that starts with the fix and contains the
+// flag, Codex does not start, and the stub gets no request. The error contains no value
+// of the arguments.
 func TestDockerCodexRefusesAnArgumentThatSetsASessionSetting(t *testing.T) {
 	k := newCodexWall(t)
 	const value = "e2e-value-not-shown"
@@ -662,6 +664,7 @@ func TestDockerCodexRefusesAnArgumentThatSetsASessionSetting(t *testing.T) {
 		{"--config", "--config", []string{"--config", "model_provider=" + value}},
 		{"-c", "-c", []string{"-c", "model_providers.qory.base_url=" + value}},
 		{"--profile", "--profile", []string{"--profile=" + value}},
+		{"--remote", "--remote", []string{"--remote", "ws://" + value + ".example"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			before := len(k.log(t, 0))

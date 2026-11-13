@@ -2107,8 +2107,11 @@ release may change what an existing document does, and says so under Upgrading.
   passes through `config.flag`, as `flag k=v` or `flag=k=v`: the key, a key under it, or
   a key it is under. The error starts with the fix, contains the flag and no value of
   the arguments.
-- `codex.New()`: Codex by the contract's descriptor, with the check of Codex 0.167.2's
-  flags. The join also fails on `--config` and `-c` with a pair at, under or above
+- `codex.New()` and `codex.Described`: Codex by the contract's descriptor or by another
+  descriptor document, with the check of Codex 0.167.2's flags. `catalog.Lookup` builds
+  Codex with it, from the contract's descriptor and from a machine's `codex.yaml`, and
+  a runtime's `runtimes.ArgsCheck` runs also for a descriptor without `config`. The
+  join also fails on `--config` and `-c` with a pair at, under or above
   `model_providers`, `profile`, `profiles`, `projects`, `responses_api_metadata`,
   `skills` or `cloud.skills`, or that sets `openai_base_url`, `chatgpt_base_url` or an
   `experimental_realtime_*_base_url`; on `--enable` and `--disable` of a fixed feature,
