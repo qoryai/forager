@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1316,10 +1317,10 @@ func TestTheEndMember(t *testing.T) {
 // TestAGatewayRestartedReattaches pins a separate gateway that restarts on its
 // directory: a run it attached whose open never answered its session, its record
 // holding its dev.qory.run.registered alone, is reclaimed, and the session's run
-// request attaches it again and opens it; a run that was live there is over, a 410
-// run_closed to its batch and a 409 run_attached to its run request. Its attaches and
-// its batches at the server carry the same X-Qory-Instance-Id, the one its caller
-// gives, before the restart and after.
+// request attaches it again and opens it; a run that was live there is reopened by its
+// batch, a 202, which attaches it again, and its run request is a 409 run_attached.
+// Its attaches and its batches at the server carry the same X-Qory-Instance-Id, the
+// one its caller gives, before the restart and after.
 func TestAGatewayRestartedReattaches(t *testing.T) {
 	dir := t.TempDir()
 	c := gatewayControl(t)
@@ -1344,14 +1345,14 @@ func TestAGatewayRestartedReattaches(t *testing.T) {
 		t.Fatalf("the reclaimed run's request: %d %s", a.status, a.body)
 	}
 	if got := len(c.attached()); got != attaches+1 {
-		t.Errorf("%d attaches after the restart; want 1", got-attaches)
+		t.Errorf("%d attaches after the reclaimed run's request; want 1", got-attaches)
 	}
 	rec := r.record(partial)
 	if len(rec) != 1 || rec[0].Type != event.RunRegistered || rec[0].Sequence != "0000000001" {
 		t.Errorf("the reclaimed run's record %v", types(rec))
 	}
 	l.r = r
-	if got := l.post(t, heartbeat(live)); got.status != http.StatusGone || got.refusal()["error"] != "run_closed" {
+	if got := l.post(t, heartbeat(live)); got.status != http.StatusAccepted {
 		t.Errorf("a batch of the run live before: %d %s", got.status, got.body)
 	}
 	refused(t, "a run request of the run live before", r.tryOpen(t, liveKey, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(live, "run_attached"))
@@ -1367,8 +1368,8 @@ func TestAGatewayRestartedReattaches(t *testing.T) {
 		return len(d) > len(delivered)
 	})
 	attachIDs, deliveryIDs := c.instances()
-	if len(attachIDs) != attaches+1 || len(delivered) == 0 {
-		t.Errorf("%d attaches, want %d, and %d deliveries before the restart", len(attachIDs), attaches+1, len(delivered))
+	if len(attachIDs) != attaches+2 || len(delivered) == 0 {
+		t.Errorf("%d attaches, want %d, and %d deliveries before the restart", len(attachIDs), attaches+2, len(delivered))
 	}
 	for _, id := range append(attachIDs, deliveryIDs...) {
 		if id != testInstance {
@@ -1929,5 +1930,381 @@ func TestARunKeyWhoseInstanceIDContainsASecretIsInvalid(t *testing.T) {
 	}
 	if n := len(r.c.attached()); n != 0 {
 		t.Errorf("%d attaches", n)
+	}
+}
+
+// restart closes the separate gateway r and starts another at r's control on r's
+// directory, with cfg's test settings.
+func (r *remote) restart(t *testing.T, cfg gateway.Config) *remote {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if d, err := r.g.Close(ctx); err != nil || d.RunClosed {
+		t.Fatalf("Close: %+v, %v; want no run closed", d, err)
+	}
+	cfg.Dir = r.cfg.Dir
+	return startRemote(t, r.c, cfg)
+}
+
+// failDeliveries makes the control answer each delivery of events a 503 while fail is
+// true.
+func failDeliveries(c *control, fail *atomic.Bool) {
+	f := func(w http.ResponseWriter, r *http.Request) bool {
+		if fail.Load() && r.Method == http.MethodPost && r.URL.Path == receiver.DefaultEventsPath {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return true
+		}
+		return false
+	}
+	c.intercept.Store(&f)
+}
+
+// TestARestartedGatewayReopensARun pins a separate gateway's restart on its directory
+// with a run live: Close suspends the run, with no run.exited and no run closed in its
+// Delivery; the gateway that starts again reopens it at its session's next batch, a
+// 202, which attaches it again under the same X-Qory-Instance-Id. The record goes on
+// with the next sequence, each id once; the batch the server had not accepted before
+// the stop reaches it once, and so does every event after. The run's run request is
+// then a 409 run_attached, and the run ends as any run does.
+func TestARestartedGatewayReopensARun(t *testing.T) {
+	c := gatewayControl(t)
+	var fail atomic.Bool
+	failDeliveries(c, &fail)
+	cfg := gateway.Config{Dir: t.TempDir()}
+	gateway.SetCloseWait(&cfg, 300*time.Millisecond)
+	before := startRemote(t, c, cfg)
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	e := before.open(t, key, server.LinkRunRequest{})
+	eventually(t, "the first batch at the server", func() bool { return len(c.lines(t)) == 2 })
+	fail.Store(true)
+	owed := heartbeat(runID)
+	if got := e.post(t, owed); got.status != http.StatusAccepted {
+		t.Fatalf("the batch before the stop: %d %s", got.status, got.body)
+	}
+	after := before.restart(t, cfg)
+	fail.Store(false)
+	if rec := after.record(runID); rec[len(rec)-1].Type != event.RunHeartbeat {
+		t.Fatalf("the suspended run's record %v", types(rec))
+	}
+	if got := len(c.attached()); got != 1 {
+		t.Fatalf("%d attaches before the first request", got)
+	}
+
+	e.r = after
+	if got := e.post(t, heartbeat(runID)); got.status != http.StatusAccepted {
+		t.Fatalf("the batch after the restart: %d %s", got.status, got.body)
+	}
+	if got := e.post(t, owed); got.status != http.StatusAccepted {
+		t.Fatalf("the owed batch sent again: %d %s", got.status, got.body)
+	}
+	refused(t, "the run request again", after.tryOpen(t, key, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", after.attachLine(runID, "run_attached"))
+	if got := e.post(t, exited(runID)); got.status != http.StatusAccepted {
+		t.Fatalf("the last batch: %d %s", got.status, got.body)
+	}
+	eventually(t, "the run.exited at the server", func() bool {
+		lines := c.lines(t)
+		return len(lines) > 0 && lines[len(lines)-1].Type == event.RunExited
+	})
+	rec := after.record(runID)
+	want := []string{event.RunRegistered, event.RunStarted, event.PolicyApplied, event.RunHeartbeat, event.RunHeartbeat, event.RunExited}
+	if !slices.Equal(types(rec), want) {
+		t.Errorf("the record %v; want %v", types(rec), want)
+	}
+	ids := map[string]bool{}
+	for i, l := range rec {
+		if l.Sequence != fmt.Sprintf("%010d", i+1) || ids[l.ID] {
+			t.Errorf("line %d of the record: sequence %s, id %s again %v", i+1, l.Sequence, l.ID, ids[l.ID])
+		}
+		ids[l.ID] = true
+	}
+	posted := map[string]int{}
+	for _, l := range c.lines(t) {
+		posted[l.Sequence]++
+	}
+	for _, l := range rec[1:] {
+		if posted[l.Sequence] != 1 {
+			t.Errorf("the server has sequence %s %d times", l.Sequence, posted[l.Sequence])
+		}
+	}
+	attaches, deliveries := c.instances()
+	if len(attaches) != 2 {
+		t.Errorf("%d attaches; want 2", len(attaches))
+	}
+	for _, id := range append(attaches, deliveries...) {
+		if id != testInstance {
+			t.Errorf("the attaches carry %q and the deliveries %q; want each %q", attaches, deliveries, testInstance)
+			break
+		}
+	}
+}
+
+// TestEachFirstRequestReopensARun pins each request of a suspended run that reopens it
+// in a gateway that started again: a request through its proxy, which denies a host
+// its policy does not allow; a reload; a join that its session sends again, which is
+// answered as before since the join is open, while another join is a 400; a transcript
+// request, a 404 for a run that continues no paused run; and, before the run's first
+// join, a request through its stack proxy, which its stack_hosts refuses. After a join
+// the stack proxy stays closed.
+func TestEachFirstRequestReopensARun(t *testing.T) {
+	joinPath := func(runID string) string { return "/qory-link/run-configuration/" + runID + "/sessions" }
+	join := []byte(`{"version":1,"passes":["HOME"],"model_key":true}`)
+	for _, c := range []struct {
+		name    string
+		joined  bool
+		request func(t *testing.T, r *remote, e *edgeRun)
+	}{
+		{"proxy", false, func(t *testing.T, r *remote, e *edgeRun) {
+			resp, err := r.relay(t, e.key).Get("http://denied.example/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("a denied host through the proxy: %d", resp.StatusCode)
+			}
+		}},
+		{"reload", false, func(t *testing.T, r *remote, e *edgeRun) {
+			if a := e.reload(t); a.status != http.StatusOK || !bytes.Contains(a.body, []byte("api.example")) {
+				t.Errorf("the reload: %d %s", a.status, a.body)
+			}
+		}},
+		{"join", true, func(t *testing.T, r *remote, e *edgeRun) {
+			a := r.do(t, e.key, http.MethodPost, joinPath(e.a.RunID), join)
+			var joined server.LinkJoinAnswer
+			if json.Unmarshal(a.body, &joined); a.status != http.StatusOK || joined.Session != 1 {
+				t.Errorf("the join again: %d %s", a.status, a.body)
+			}
+			if a := r.do(t, e.key, http.MethodPost, joinPath(e.a.RunID), []byte(`{"version":1,"passes":[],"model_key":true}`)); a.status != http.StatusBadRequest {
+				t.Errorf("another join while the restored one is open: %d %s", a.status, a.body)
+			}
+		}},
+		{"transcript", false, func(t *testing.T, r *remote, e *edgeRun) {
+			if a := r.do(t, e.key, http.MethodGet, "/qory-link/run-configuration/"+e.a.RunID+"/transcript", nil); a.status != http.StatusNotFound || a.refusal()["error"] != "not_found" {
+				t.Errorf("the transcript request: %d %s", a.status, a.body)
+			}
+		}},
+		{"stack", false, func(t *testing.T, r *remote, e *edgeRun) {
+			resp, err := r.through(link.StackLine(e.key)).Get("http://other.example.net/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || string(b) != stackRefusedBody("other.example.net", 80) {
+				t.Errorf("another host through the stack proxy: %d %q", resp.StatusCode, b)
+			}
+		}},
+		{"stack after a join", true, func(t *testing.T, r *remote, e *edgeRun) {
+			if _, err := r.through(link.StackLine(e.key)).Get("http://other.example.net/"); err == nil {
+				t.Error("the stack proxy answered after the run's first join")
+			}
+			if runs, _ := gateway.Held(r.g); runs != 1 {
+				t.Errorf("%d runs held", runs)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctl := gatewayControl(t)
+			ctl.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
+			cfg := gateway.Config{Dir: t.TempDir(), StackHosts: []string{"stack.invalid"}}
+			before := startRemote(t, ctl, cfg)
+			runID := event.NewRunID()
+			e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+			if c.joined {
+				if a := before.do(t, e.key, http.MethodPost, joinPath(runID), join); a.status != http.StatusOK {
+					t.Fatalf("the join: %d %s", a.status, a.body)
+				}
+			}
+			after := before.restart(t, cfg)
+			e.r = after
+			c.request(t, after, e)
+			if got := len(ctl.attached()); got != 2 {
+				t.Errorf("%d attaches; want 2", got)
+			}
+			if got := e.post(t, heartbeat(runID)); got.status != http.StatusAccepted {
+				t.Errorf("a batch after the reopen: %d %s", got.status, got.body)
+			}
+		})
+	}
+}
+
+// serveKeyGroup makes c serve a run configuration with a key group of two keys, model
+// and model-2, at an endpoint on localhost, with fake values.
+func serveKeyGroup(c *control) {
+	entry := func(name string) string {
+		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+	}
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+	c.mu.Lock()
+	c.secrets = map[string]string{"model": "fake-group-value-0001", "model-2": "fake-group-value-0002"}
+	c.mu.Unlock()
+}
+
+// TestAReopenedRunKeepsItsStop pins the mark of a passed limit refusal across a
+// restart: the first batch of the reopened run is answered with stop, model_key_limit;
+// a run with no mark gets none.
+func TestAReopenedRunKeepsItsStop(t *testing.T) {
+	c := gatewayControl(t)
+	serveKeyGroup(c)
+	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
+	cfg := gateway.Config{Dir: t.TempDir(), Policy: node}
+	before := startRemote(t, c, cfg)
+	marked, plain := event.NewRunID(), event.NewRunID()
+	m := before.open(t, runKeyFor(t, marked, nil), server.LinkRunRequest{Wall: true})
+	p := before.open(t, runKeyFor(t, plain, nil), server.LinkRunRequest{Wall: true})
+	// The mark as the key group's Pass makes it.
+	if err := os.WriteFile(filepath.Join(cfg.Dir, "runs", marked, "model-key-limit"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after := before.restart(t, cfg)
+	m.r, p.r = after, after
+	if got := m.post(t, heartbeat(marked)); got.status != http.StatusAccepted || string(got.body) != `{"stop":{"reason":"model_key_limit"}}` {
+		t.Errorf("the marked run's first batch: %d %q", got.status, got.body)
+	}
+	if got := p.post(t, heartbeat(plain)); got.status != http.StatusAccepted || len(got.body) != 0 {
+		t.Errorf("the other run's first batch: %d %q", got.status, got.body)
+	}
+}
+
+// TestAReopenedRunUnderAnotherPolicy pins a policy put in force while the gateway was
+// stopped: the reopened run's reload has it, a policy_applied of the policy before is
+// still accepted, and so is one of the policy now in force.
+func TestAReopenedRunUnderAnotherPolicy(t *testing.T) {
+	c := gatewayControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
+	cfg := gateway.Config{Dir: t.TempDir()}
+	before := startRemote(t, c, cfg)
+	runID := event.NewRunID()
+	e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["other.example"]}}`, 'b')
+	after := before.restart(t, cfg)
+	e.r = after
+	if got := e.post(t, applied(runID, e.a.Applied)); got.status != http.StatusAccepted {
+		t.Fatalf("a policy_applied of the policy before: %d %s", got.status, got.body)
+	}
+	a := e.reload(t)
+	var reloaded struct {
+		Applied json.RawMessage `json:"applied"`
+	}
+	if json.Unmarshal(a.body, &reloaded); a.status != http.StatusOK || !bytes.Contains(reloaded.Applied, []byte("other.example")) {
+		t.Fatalf("the reload: %d %s", a.status, a.body)
+	}
+	if got := e.post(t, applied(runID, reloaded.Applied)); got.status != http.StatusAccepted {
+		t.Errorf("a policy_applied of the policy now in force: %d %s", got.status, got.body)
+	}
+}
+
+// TestAReopenWhoseAttachFails pins the attach of a reopen that fails: answered 503,
+// which may pass, the session's request is a 503 with no body, and its request once
+// the attach is answered reopens the run; answered a signed 410, the request is a 410
+// run_closed, and so is the next with no attach.
+func TestAReopenWhoseAttachFails(t *testing.T) {
+	t.Run("503", func(t *testing.T) {
+		c := gatewayControl(t)
+		cfg := gateway.Config{Dir: t.TempDir()}
+		gateway.SetOpenTries(&cfg, []time.Duration{20 * time.Millisecond}, 100*time.Millisecond)
+		before := startRemote(t, c, cfg)
+		runID := event.NewRunID()
+		e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+		c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusServiceUnavailable, Code: "unavailable"})
+		after := before.restart(t, cfg)
+		e.r = after
+		for range 2 {
+			if got := e.post(t, heartbeat(runID)); got.status != http.StatusServiceUnavailable || len(got.body) != 0 {
+				t.Errorf("a batch while the attach is answered 503: %d %s", got.status, got.body)
+			}
+		}
+		c.attachRefusal.Store(nil)
+		if got := e.post(t, heartbeat(runID)); got.status != http.StatusAccepted {
+			t.Errorf("a batch once the attach is answered: %d %s", got.status, got.body)
+		}
+	})
+	t.Run("410", func(t *testing.T) {
+		c := gatewayControl(t)
+		cfg := gateway.Config{Dir: t.TempDir()}
+		before := startRemote(t, c, cfg)
+		runID := event.NewRunID()
+		e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+		c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusGone, Code: "run_closed"})
+		after := before.restart(t, cfg)
+		e.r = after
+		for range 2 {
+			if got := e.post(t, heartbeat(runID)); got.status != http.StatusGone || got.refusal()["error"] != "run_closed" {
+				t.Errorf("a batch after a 410 to the attach: %d %s", got.status, got.body)
+			}
+		}
+		if got := len(c.attached()); got != 2 {
+			t.Errorf("%d attaches; want 2", got)
+		}
+	})
+}
+
+// TestCloseEndsTheTriesOfAnOpen pins Close of a separate gateway while a run opens
+// and its attach is answered 503 again and again: Close ends the tries, the run
+// request is a 503, and Close returns within seconds.
+func TestCloseEndsTheTriesOfAnOpen(t *testing.T) {
+	c := gatewayControl(t)
+	c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusServiceUnavailable, Code: "unavailable"})
+	r := startRemote(t, c, gateway.Config{})
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	status := make(chan int, 1)
+	go func() {
+		body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: runID})
+		req, _ := http.NewRequest(http.MethodPost, "https://gateway.example:8443/qory-link/run-configuration", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", server.LinkContentType)
+		if req.Write(b.c) != nil {
+			status <- 0
+			return
+		}
+		resp, err := http.ReadResponse(b.r, req)
+		if err != nil {
+			status <- 0
+			return
+		}
+		resp.Body.Close()
+		status <- resp.StatusCode
+	}()
+	eventually(t, "the first attach", func() bool { return len(c.attached()) > 0 })
+	begin := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r.g.Close(ctx)
+	if took := time.Since(begin); took > 5*time.Second {
+		t.Errorf("Close took %s", took)
+	}
+	if got := <-status; got != http.StatusServiceUnavailable {
+		t.Errorf("the run request: %d; want 503", got)
+	}
+}
+
+// TestARecordFromBeforeIsNotReopened pins a run record with no request.json, as a
+// gateway that did not keep its runs left it: its batch is a 410 run_closed, and no
+// attach is made.
+func TestARecordFromBeforeIsNotReopened(t *testing.T) {
+	c := gatewayControl(t)
+	cfg := gateway.Config{Dir: t.TempDir()}
+	before := startRemote(t, c, cfg)
+	runID := event.NewRunID()
+	e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	before.g.Close(ctx)
+	cancel()
+	if err := os.Remove(filepath.Join(cfg.Dir, "runs", runID, "request.json")); err != nil {
+		t.Fatal(err)
+	}
+	e.r = startRemote(t, c, cfg)
+	if got := e.post(t, heartbeat(runID)); got.status != http.StatusGone || got.refusal()["error"] != "run_closed" {
+		t.Errorf("a batch of a record from before: %d %s", got.status, got.body)
+	}
+	if got := len(c.attached()); got != 1 {
+		t.Errorf("%d attaches; want 1", got)
 	}
 }

@@ -149,6 +149,15 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			g.mu.Unlock()
 			return
 		}
+		if s.remote && g.stopping.Err() != nil {
+			// The gateway's Close ended the attach's tries: the session asks the
+			// gateway that starts again.
+			g.mu.Lock()
+			delete(g.used, req.RunID)
+			g.mu.Unlock()
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		if !recorded {
 			if errors.Is(err, os.ErrExist) || errors.Is(err, stream.ErrRunning) || errors.Is(err, stream.ErrOpen) {
 				// The run's record is there already: a run of another gateway's, or of
@@ -366,8 +375,8 @@ func (g *Gateway) localRun(runID string) *linkRun {
 // reload answers a GET of a run's configuration by its run id: the reload answer as it
 // stands, 410 for a run that ended at the gateway. On the local link a run id this
 // gateway holds no run of is 400 invalid_request. On the one address the run id is
-// the run key's, any other 400 run_key_invalid, and a run the gateway does not hold a
-// 410 ([Gateway.heldRun]).
+// the run key's, any other 400 run_key_invalid, and a run the gateway does not hold is
+// reopened, or answered a 503 or a 410 ([Gateway.heldRun]).
 func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID string) {
 	var lr *linkRun
 	if s.remote {
@@ -376,7 +385,7 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
 		}
-		if lr = g.heldRun(w, runID); lr == nil {
+		if lr = g.heldRun(w, r, runID); lr == nil {
 			return
 		}
 	} else if lr = g.localRun(runID); lr == nil {
@@ -404,7 +413,8 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 // are a 410 batch_refused. Every event's subject must be that run's. The run is found
 // before the body is read: on the local link by its X-Qory-Run-Id, and a batch that names no run, or one of no run here, is 400
 // invalid_request, which ends no run; on the one address by its run key,
-// and a run the gateway does not hold is a 410 ([Gateway.heldRun]).
+// and a run the gateway does not hold is reopened, or answered a 503 or a 410
+// ([Gateway.heldRun]).
 func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	if !mediaType(r, server.ContentType) {
 		w.WriteHeader(http.StatusUnsupportedMediaType)
@@ -413,7 +423,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	var lr *linkRun
 	if s.remote {
 		p, _ := runKeyOf(r.Context())
-		if lr = g.heldRun(w, p.key.RunID); lr == nil {
+		if lr = g.heldRun(w, r, p.key.RunID); lr == nil {
 			return
 		}
 	} else if lr = g.localRun(batchRun(r)); lr == nil {
@@ -428,6 +438,12 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	lr.touch()
 	refused := func(why string) {
+		if lr.isSuspended() {
+			// The gateway stops, and its stream is closed to the batch: the session sends
+			// it again to the gateway that starts again.
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		g.report(fmt.Sprintf("run %s: the gateway refused a batch from the run's session, %s; the run ends: %s", lr.id, why, batchRefused.state))
 		invalid(w)
 		lr.end(batchRefused)

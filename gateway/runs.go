@@ -110,6 +110,9 @@ type linkRun struct {
 	// discarded says the run's session gave up before it had the run answer: the run
 	// ends as if it never opened, [Gateway.discard].
 	discarded bool
+	// suspended is true once the gateway's Close suspended the run ([linkRun.suspend]):
+	// it does not end here, and a gateway that starts again reopens it.
+	suspended bool
 
 	// done is closed once the run's gateway side is over and its stream flushed; result
 	// and err are then set.
@@ -348,7 +351,13 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		cancel()
 		return nil, true, err
 	}
-	ask := ctx
+	// ask is the context of the run's registration or attach: on the one address it
+	// ends when the gateway's Close starts, so Close does not wait for the tries.
+	ask, stopAsk := context.WithCancel(ctx)
+	defer stopAsk()
+	if remote {
+		defer context.AfterFunc(g.stopping, stopAsk)()
+	}
 	if how.request != nil {
 		// Once the session's run request goes, the run's registration is tried no
 		// longer, and the run does not open: nothing more is written of
@@ -370,9 +379,6 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			cancel()
 			return nil, false, err
 		}
-		var stopAsk context.CancelFunc
-		ask, stopAsk = context.WithCancel(ctx)
-		defer stopAsk()
 		defer context.AfterFunc(how.request, stopAsk)()
 	}
 	var fetched *run.Fetched
@@ -458,122 +464,31 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if how.request != nil && how.request.Err() != nil {
 		return fail(how.request.Err())
 	}
-	narrowing := narrowingOf(req.Narrowing)
-	var selects []run.Selection
-	if remote {
-		// The gateway's selection is for a run that attached with a run key alone.
-		selects = g.cfg.Selects
-	}
-	var secrets func(context.Context, string, []string) (sealed.Values, error)
-	if g.client != nil {
-		secrets = g.secrets(req.RunID)
-	}
-	r, err := run.Decide(run.Config{
-		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
-		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: lr.passing, Report: g.report,
-		Narrowing: narrowing, Secrets: secrets, Log: lr.logLine, Clock: g.cfg.renewClock, StackHosts: g.cfg.StackHosts,
+	var ca *proxy.CA
+	ca, err = lr.decide(ctx, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: fetched, labels: decideLabels}, func(*run.Run) (*proxy.CA, error) {
+		ca, err := proxy.NewCA(req.RunID)
+		if err != nil || !remote {
+			return ca, err
+		}
+		// The authority's files, read back by a gateway that starts again; removed at
+		// the run's end ([linkRun.end]).
+		if err := ca.Write(st.Dir()); err != nil {
+			return nil, fmt.Errorf("run %s: writing its CA to its record: %w", req.RunID, err)
+		}
+		return ca, nil
 	})
 	if err != nil {
 		return fail(err)
 	}
-	lr.r = r
 	if remote {
 		// What Decide read of the run request, for a gateway that starts again.
 		if err := writeRequest(st.Dir(), req); err != nil {
 			return fail(fmt.Errorf("run %s: writing its run request to its record: %w", req.RunID, err))
 		}
 	}
-	if lr.live != nil {
-		lr.live.read = r.Read
-		lr.live.holds(r.RunConfiguration())
-		lr.posts.SetRunDigest(r.RunConfiguration())
-	}
-	if err := r.Hold(ctx); err != nil {
-		return fail(err)
-	}
-	// The tools, started before the proxy is: a tool that does not listen is no run.
-	// They are stopped after the proxy is closed, so no request reaches a tool that is
-	// gone.
-	if lr.tools, err = r.StartTools(ctx); err != nil {
-		return fail(err)
-	}
-	pol := r.Policy()
-	if lr.px, err = proxy.New(pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, pol.Policy.Egress.Deny, lr.observe); err != nil {
-		return fail(err)
-	}
-	lr.px.ReportPanics(routine.ForRun(g.report, req.RunID))
-	lr.px.AllowFirst(pol.Policy.Egress.AllowFirst)
-	if g.client != nil {
-		lr.px.SetRunAPI(&proxy.RunAPI{RunID: req.RunID, Limits: &g.runAPILimits, Send: func(ctx context.Context, method, path string, body []byte, file bool) (*server.RunAPIAnswer, error) {
-			conf, _ := g.config()
-			return g.client.RunAPI(ctx, conf.Run.URL, req.RunID, method, path, body, file)
-		}})
-	}
-	// Every run's counters are its own, at the limits Start checked.
-	lr.px.SetLimits(proxy.Limits{Connections: g.cfg.RunLimits.Connections, RequestsPerSecond: g.cfg.RunLimits.RequestsPerSecond, Burst: g.cfg.RunLimits.Burst})
-	if g.cfg.upstreamRoots != nil {
-		lr.px.TrustUpstream(g.cfg.upstreamRoots)
-	}
-	if req.Wall || remote {
-		// The proxy serves something that is not on this machine, so this machine's own
-		// addresses and the private network addresses are not its to reach: an
-		// enclosure, or another machine. The names are entries of the node's policy,
-		// never of a server's policy or a session's narrowing: neither opens any of
-		// these addresses.
-		lr.px.Guard(r.GuardNames())
-	}
-	// The node's path rules, beside a server's, and those put beside the node's policy:
-	// fixed for the run, so a reload that brings a server's policy is narrowed by them
-	// as the start is.
-	if sides := r.NodePaths(); len(sides) > 0 {
-		lr.px.NodePaths(sides...)
-	}
 	var authority []byte
-	var ca *proxy.CA
-	if r.NeedsCA() {
-		if ca, err = proxy.NewCA(req.RunID); err != nil {
-			return fail(err)
-		}
-		if remote {
-			// The authority's files, read back by a gateway that starts again; removed at
-			// the run's end ([linkRun.end]).
-			if err := ca.Write(st.Dir()); err != nil {
-				return fail(fmt.Errorf("run %s: writing its CA to its record: %w", req.RunID, err))
-			}
-		}
-		lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
+	if ca != nil {
 		authority = ca.PEM()
-	}
-	if held := r.Held(); held != nil && held.Start != "" {
-		// Before any session joins, and between sessions, the proxy sets the start key;
-		// of a key group, the group's active key.
-		lr.px.SetModelKey(held.Start)
-	}
-	if keys := r.ModelKeys(); len(keys) > 0 {
-		// The run's key group: the proxy sets its active key, sends a refused request
-		// again with the next key, and the reporter shares each key's state with the
-		// control plane.
-		lr.keys = modelkey.New(keys, r.Held().Start, nil)
-		if remote {
-			// The mark that the proxy passed a limit refusal to the session, for a
-			// gateway that starts again. Called on the proxy's request path: a write
-			// that fails is reported, and the request goes on.
-			dir := st.Dir()
-			lr.keys.OnPassed(func(passed bool) {
-				if err := markLimit(dir, passed); err != nil {
-					g.report(fmt.Sprintf("run %s: writing its model key mark: %v", req.RunID, err))
-				}
-			})
-		}
-		lr.px.SetKeyGroup(lr.keys, r.MessagesPath(), func(line string) { g.report("run " + req.RunID + ": " + line) })
-		if g.client != nil {
-			conf, _ := g.config()
-			rep := newKeyReporter(req.RunID, conf.Run.URL, lr.keys, func(ctx context.Context, m server.ModelKeysReport) ([]server.ModelKeyState, error) {
-				conf, _ := g.config()
-				return g.client.PostModelKeys(ctx, conf.Run.URL, req.RunID, m)
-			}, g.report, lr.logLine)
-			routine.Go(routine.ForRun(g.report, req.RunID), func() { rep.run(ctx) })
-		}
 	}
 	if !remote {
 		// On the one address the run key opens the run's proxy, bound to its connection.
@@ -601,6 +516,142 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	lr.answer = newSecretValue(string(lr.runAnswer(authority)))
 	lr.mu.Unlock()
 	return lr, true, nil
+}
+
+// decision is what a run is decided by besides the gateway's configuration: the run
+// request's wall, narrowing and images, the run configuration the server answered, nil
+// with no server, and the labels the run is decided by.
+type decision struct {
+	wall      bool
+	narrowing *server.LinkNarrowing
+	images    *server.LinkImages
+	fetched   *run.Fetched
+	labels    map[string]string
+}
+
+// holdError is a failure of [run.Run.Hold] that may pass: a fetch of the run's values
+// from the server that no answer refused.
+type holdError struct{ error }
+
+func (e holdError) Unwrap() error { return e.error }
+
+// decide decides the run by d and starts what the gateway holds of it, for an open and
+// for a reopen alike: the run's values ([run.Run.Hold], whose failure that may pass is a
+// [holdError]), its tools, its proxy, guarded on a wall or the one address, with the
+// run API, its limits and the node's path rules; the run's authority from authority,
+// called when the run's policy needs one, which the proxy ends TLS with; the start key;
+// and the key group, which on the one address keeps the mark of a passed limit refusal
+// in the run's record ([markLimit]). It returns the authority, nil for none. ctx is the
+// run's: the tools stop when it ends.
+func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.Run) (*proxy.CA, error)) (*proxy.CA, error) {
+	g := lr.g
+	var selects []run.Selection
+	if lr.remote {
+		// The gateway's selection is for a run that attached with a run key alone.
+		selects = g.cfg.Selects
+	}
+	var secrets func(context.Context, string, []string) (sealed.Values, error)
+	if g.client != nil {
+		secrets = g.secrets(lr.id)
+	}
+	r, err := run.Decide(run.Config{
+		RunID: lr.id, Node: g.cfg.Policy, Server: g.client != nil, Fetched: d.fetched, Labels: d.labels, Wall: d.wall,
+		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(d.images), Passes: lr.passing, Report: g.report,
+		Narrowing: narrowingOf(d.narrowing), Secrets: secrets, Log: lr.logLine, Clock: g.cfg.renewClock, StackHosts: g.cfg.StackHosts,
+	})
+	if err != nil {
+		return nil, err
+	}
+	lr.r = r
+	if lr.live != nil {
+		lr.live.read = r.Read
+		lr.live.holds(r.RunConfiguration())
+		lr.posts.SetRunDigest(r.RunConfiguration())
+	}
+	if err := r.Hold(ctx); err != nil {
+		if passing(err) {
+			return nil, holdError{err}
+		}
+		return nil, err
+	}
+	// The tools, started before the proxy is: a tool that does not listen is no run.
+	// They are stopped after the proxy is closed, so no request reaches a tool that is
+	// gone.
+	if lr.tools, err = r.StartTools(ctx); err != nil {
+		return nil, err
+	}
+	pol := r.Policy()
+	if lr.px, err = proxy.New(pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, pol.Policy.Egress.Deny, lr.observe); err != nil {
+		return nil, err
+	}
+	lr.px.ReportPanics(routine.ForRun(g.report, lr.id))
+	lr.px.AllowFirst(pol.Policy.Egress.AllowFirst)
+	if g.client != nil {
+		runID := lr.id
+		lr.px.SetRunAPI(&proxy.RunAPI{RunID: runID, Limits: &g.runAPILimits, Send: func(ctx context.Context, method, path string, body []byte, file bool) (*server.RunAPIAnswer, error) {
+			conf, _ := g.config()
+			return g.client.RunAPI(ctx, conf.Run.URL, runID, method, path, body, file)
+		}})
+	}
+	// Every run's counters are its own, at the limits Start checked.
+	lr.px.SetLimits(proxy.Limits{Connections: g.cfg.RunLimits.Connections, RequestsPerSecond: g.cfg.RunLimits.RequestsPerSecond, Burst: g.cfg.RunLimits.Burst})
+	if g.cfg.upstreamRoots != nil {
+		lr.px.TrustUpstream(g.cfg.upstreamRoots)
+	}
+	if d.wall || lr.remote {
+		// The proxy serves something that is not on this machine, so this machine's own
+		// addresses and the private network addresses are not its to reach: an
+		// enclosure, or another machine. The names are entries of the node's policy,
+		// never of a server's policy or a session's narrowing: neither opens any of
+		// these addresses.
+		lr.px.Guard(r.GuardNames())
+	}
+	// The node's path rules, beside a server's, and those put beside the node's policy:
+	// fixed for the run, so a reload that brings a server's policy is narrowed by them
+	// as the start is.
+	if sides := r.NodePaths(); len(sides) > 0 {
+		lr.px.NodePaths(sides...)
+	}
+	var ca *proxy.CA
+	if r.NeedsCA() {
+		if ca, err = authority(r); err != nil {
+			return nil, err
+		}
+		lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
+	}
+	if held := r.Held(); held != nil && held.Start != "" {
+		// Before any session joins, and between sessions, the proxy sets the start key;
+		// of a key group, the group's active key.
+		lr.px.SetModelKey(held.Start)
+	}
+	if keys := r.ModelKeys(); len(keys) > 0 {
+		// The run's key group: the proxy sets its active key, sends a refused request
+		// again with the next key, and the reporter shares each key's state with the
+		// control plane.
+		lr.keys = modelkey.New(keys, r.Held().Start, nil)
+		if lr.remote {
+			// The mark that the proxy passed a limit refusal to the session, for a
+			// gateway that starts again. Called on the proxy's request path: a write
+			// that fails is reported, and the request goes on.
+			dir, runID := lr.st.Dir(), lr.id
+			lr.keys.OnPassed(func(passed bool) {
+				if err := markLimit(dir, passed); err != nil {
+					g.report(fmt.Sprintf("run %s: writing its model key mark: %v", runID, err))
+				}
+			})
+		}
+		runID := lr.id
+		lr.px.SetKeyGroup(lr.keys, r.MessagesPath(), func(line string) { g.report("run " + runID + ": " + line) })
+		if g.client != nil {
+			conf, _ := g.config()
+			rep := newKeyReporter(runID, conf.Run.URL, lr.keys, func(ctx context.Context, m server.ModelKeysReport) ([]server.ModelKeyState, error) {
+				conf, _ := g.config()
+				return g.client.PostModelKeys(ctx, conf.Run.URL, runID, m)
+			}, g.report, lr.logLine)
+			routine.Go(routine.ForRun(g.report, runID), func() { rep.run(ctx) })
+		}
+	}
+	return ca, nil
 }
 
 // keepRegistration is how long a registration built for a run id is kept for a retry
@@ -949,7 +1000,7 @@ func (lr *linkRun) gone() (runEnd, bool) {
 // flushed and closed. It never blocks.
 func (lr *linkRun) end(e ending) {
 	lr.mu.Lock()
-	if lr.ended || !lr.opened {
+	if lr.ended || !lr.opened || lr.suspended {
 		lr.mu.Unlock()
 		return
 	}
@@ -1007,6 +1058,40 @@ func (lr *linkRun) end(e ending) {
 			lr.g.retire(lr)
 		}
 	})
+}
+
+// suspend ends the run's gateway side at the stop of a gateway with Listen, without
+// ending the run, once: the run is not ended or suspended here, its timer stops, and in
+// the background it lets go of what it holds, as [linkRun.end] does, then its stream
+// is suspended under lr.batch, so no batch is numbered meanwhile ([stream.Run.Suspend]):
+// no session.exited, no run.exited, and its record's files kept. It never blocks.
+func (lr *linkRun) suspend() {
+	lr.mu.Lock()
+	if lr.ended || !lr.opened || lr.suspended {
+		lr.mu.Unlock()
+		return
+	}
+	lr.suspended = true
+	if lr.timer != nil {
+		lr.timer.Stop()
+	}
+	lr.mu.Unlock()
+	report := routine.ForRun(lr.g.report, lr.id)
+	routine.Go(report, func() {
+		defer close(lr.done)
+		routine.Do(report, lr.release)
+		lr.batch.Lock()
+		lr.result, lr.err = lr.st.Suspend(lr.g.base)
+		lr.batch.Unlock()
+		lr.cancel()
+	})
+}
+
+// isSuspended reports whether the run is suspended ([linkRun.suspend]).
+func (lr *linkRun) isSuspended() bool {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.suspended
 }
 
 // ended is the data of the gateway's dev.qory.run.exited of the ending e, or with a

@@ -147,11 +147,14 @@ func (g *Gateway) recorded(runID string) bool {
 	return !errors.Is(err, os.ErrNotExist)
 }
 
-// heldRun is the run of a request on the one address whose run key names runID, the
-// run the gateway holds; nil when there is none to go on with, its answer written: the
-// 410 of a run the gateway ended and let go of, and otherwise a 410 run_closed, a run
-// that ended here before, the gateway's own stop among it, or that never opened here.
-func (g *Gateway) heldRun(w http.ResponseWriter, runID string) *linkRun {
+// heldRun is the run of a request r on the one address whose run key names runID, the
+// run the gateway holds, or the run a gateway with Listen suspended at its stop, which
+// the request reopens ([Gateway.reopenRun]) and waits for within its context; nil when
+// there is none to go on with, its answer written: the 410 of a run the gateway ended
+// and let go of; a 503 with no body while the reopen goes on, when it failed in a way
+// that may pass, and while the gateway closes; and otherwise a 410 run_closed, a run
+// that ended here before, whose reopen failed for good, or that never opened here.
+func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) *linkRun {
 	g.mu.Lock()
 	lr := g.runs[runID]
 	g.mu.Unlock()
@@ -162,6 +165,17 @@ func (g *Gateway) heldRun(w http.ResponseWriter, runID string) *linkRun {
 		gone(w, sp.end)
 		return nil
 	}
+	if lr == nil && g.reopenable(runID) {
+		p, _ := runKeyOf(r.Context())
+		lr, final := g.reopenRun(r.Context(), runID, p)
+		switch {
+		case lr != nil && lr.remote:
+			return lr
+		case !final:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return nil
+		}
+	}
 	gone(w, runEnd{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
 	return nil
 }
@@ -170,7 +184,9 @@ func (g *Gateway) heldRun(w http.ResponseWriter, runID string) *linkRun {
 // key to the proxy of that run, live at the gateway, as the shared proxy does a local
 // connection with a run's proxy secret, admit called first; with stack, one that
 // opened with [link.StackPreamble] to that run's stack proxy, until the run's first
-// join request. A run key [Gateway.admitRunKey] refuses, one of no live run here, or,
+// join request. The run a gateway with Listen suspended at its stop is reopened first
+// ([Gateway.reopenRun]), with c's deadline cleared, until the reopen ends or the
+// gateway closes. A run key [Gateway.admitRunKey] refuses, one of no live run here, or,
 // with stack, one of a run whose stack proxy is closed, closes the connection
 // unanswered. It reports whether c was handed on.
 func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func(), stack bool) bool {
@@ -181,6 +197,10 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func
 	g.mu.Lock()
 	lr := g.runs[k.RunID]
 	g.mu.Unlock()
+	if _, spent := g.spentOf(k.RunID); lr == nil && !spent && g.reopenable(k.RunID) {
+		c.SetDeadline(time.Time{})
+		lr, _ = g.reopenRun(g.stopping, k.RunID, presented{raw: value, key: k})
+	}
 	if lr == nil || !lr.remote || lr.px == nil {
 		return false
 	}

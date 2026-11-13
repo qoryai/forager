@@ -122,7 +122,7 @@ func readJoinRequest(body []byte) (*server.LinkJoinRequest, bool) {
 // of false among them, for a model_credential of no model key of the run, for a join while another join of the run is open, and on the local
 // link for a run id of no run here. On the one
 // address the run id is the run key's, any other 400 run_key_invalid, and a run the
-// gateway does not hold is a 410 ([Gateway.heldRun]).
+// gateway does not hold is reopened, or answered a 503 or a 410 ([Gateway.heldRun]).
 func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, runID string) {
 	var lr *linkRun
 	if s.remote {
@@ -131,7 +131,7 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
 		}
-		if lr = g.heldRun(w, runID); lr == nil {
+		if lr = g.heldRun(w, r, runID); lr == nil {
 			return
 		}
 	} else if lr = g.localRun(runID); lr == nil {

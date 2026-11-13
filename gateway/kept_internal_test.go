@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/server"
 )
@@ -89,5 +90,35 @@ func TestTheKeptFilesReadBack(t *testing.T) {
 	}
 	if !slices.Equal(one.kept().Passes, []string{"HOME"}) || (&join{}).kept().Passes == nil {
 		t.Error("a join's line has no passes array")
+	}
+}
+
+// TestTheSweepLeavesAReopenAlone pins the sweep beside a reopen: the CA files of a run
+// whose reopen is in flight stay, however old its record, and go once it is not.
+func TestTheSweepLeavesAReopenAlone(t *testing.T) {
+	dir := t.TempDir()
+	runID := "0b2f1e3c-4d5a-4b6c-8d7e-9f0a1b2c3d4e"
+	rec := filepath.Join(dir, "runs", runID)
+	if err := os.MkdirAll(rec, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	for _, name := range []string{"events.jsonl", "ca.pem", "ca.key"} {
+		if err := os.WriteFile(filepath.Join(rec, name), []byte("fake\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(filepath.Join(rec, "events.jsonl"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{cfg: Config{Dir: dir}, report: func(string) {}, runs: map[string]*linkRun{}, reopening: map[string]*reopenCall{runID: {done: make(chan struct{})}}}
+	g.sweep(time.Now(), time.Minute)
+	if _, err := os.Stat(filepath.Join(rec, "ca.key")); err != nil {
+		t.Errorf("the sweep removed the CA key of a run being reopened: %v", err)
+	}
+	delete(g.reopening, runID)
+	g.sweep(time.Now(), time.Minute)
+	if _, err := os.Stat(filepath.Join(rec, "ca.key")); err == nil {
+		t.Error("the sweep kept the CA key once no reopen was in flight")
 	}
 }

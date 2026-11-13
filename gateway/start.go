@@ -112,6 +112,11 @@ type Gateway struct {
 	// base is the context of everything a run starts, cancelled when Close is done.
 	base   context.Context
 	cancel context.CancelFunc
+	// stopping ends when Close of a gateway with Listen starts, with stopTries: the
+	// tries of the attaches of runs that open or reopen end with it, so Close waits
+	// for none of them.
+	stopping  context.Context
+	stopTries context.CancelFunc
 
 	dir     string
 	ln      net.Listener
@@ -138,6 +143,8 @@ type Gateway struct {
 	// added here before it reads the run's CA files, and the CA key sweep removes no
 	// file of a run here or in runs ([Gateway.sweep]).
 	reopening map[string]*reopenCall
+	// reopens counts the reopens in flight, which Close waits for.
+	reopens sync.WaitGroup
 	// spent are the runs on the one address that ended and were let go of, by their run
 	// id, each kept for [keepEnded]; each and the delivery hold what they came to, for
 	// Close. lapsedErrs are the errors of the first [keepLapsedErrs] spent runs past
@@ -273,6 +280,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		g.client, g.conf, g.confDigest = client, conf, digest
 	}
 	g.base, g.cancel = context.WithCancel(context.WithoutCancel(ctx))
+	g.stopping, g.stopTries = context.WithCancel(g.base)
 	ok := false
 	defer func() {
 		if !ok {
@@ -557,14 +565,23 @@ func (g *Gateway) reserved() []string {
 	return out
 }
 
-// Close stops taking runs and ends the gateway. It is called once the session is over,
-// so it waits for no session: a run still live ends at once, without an exit, which a
-// resend of its record completes as gateway_lost, and lets go of its secret, proxy,
-// tools and credentials. Each run's events are flushed toward the server within
-// [stream.CloseWait] (or the Config's own bound), whatever ctx allows, whose values
-// alone pass on; then the link's directory is removed and the proxy stops. The
-// Delivery is what the runs came to: their undelivered events, and who closed a run
-// that ended at the gateway, and how it ended. Close again waits for the first.
+// Close stops taking runs and ends the gateway. On the local link it is called once
+// the session is over, so it waits for no session: a run still live ends at once,
+// without an exit, which a resend of its record completes as gateway_lost, and lets go
+// of its secret, proxy, tools and credentials. Each run's events are flushed toward
+// the server within [stream.CloseWait] (or the Config's bound), whatever ctx allows,
+// whose values alone pass on; then the link's directory is removed and the proxy stops.
+//
+// A gateway with Listen keeps its runs instead, for a gateway that starts again on the
+// same directory: a run request or a reopen gets a 503 from now on, the tries of the
+// attaches of runs that open or reopen end, and Close waits for those opens and
+// reopens to end. Then the one address closes, and each run is suspended
+// ([linkRun.suspend]): it lets go of what it holds, and its stream is flushed as above
+// and kept ([stream.Run.Suspend]), with no session.exited or run.exited, and with its
+// CA files and every file a reopen reads ([Gateway.reopen]).
+//
+// The Delivery is what the runs came to: their undelivered events, and who closed a
+// run that ended at the gateway, and how it ended. Close again waits for the first.
 func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.mu.Lock()
 	if g.closing {
@@ -575,7 +592,19 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.closing = true
 	g.mu.Unlock()
 	g.stopSweep()
+	keep := g.svc != nil
+	if keep {
+		g.stopTries()
+	}
 	g.opens.Wait()
+	g.reopens.Wait()
+	var errs []error
+	if keep {
+		// The one address first: no request reaches a run once it is suspended.
+		shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		errs = append(errs, g.svc.close(shut))
+		cancel()
+	}
 	g.mu.Lock()
 	runs := make([]*linkRun, 0, len(g.runs))
 	for _, lr := range g.runs {
@@ -583,9 +612,12 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	}
 	g.mu.Unlock()
 	for _, lr := range runs {
+		if keep {
+			lr.suspend()
+			continue
+		}
 		lr.end(gatewayClosed)
 	}
-	var errs []error
 	for _, lr := range runs {
 		<-lr.done
 		if lr.err != nil {
@@ -597,17 +629,15 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.mu.Lock()
 	errs = append(errs, g.spentErrs()...)
 	g.mu.Unlock()
-	shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
-	if g.svc != nil {
-		errs = append(errs, g.svc.close(shut))
-	} else {
+	if !keep {
+		shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		if err := g.http.Shutdown(shut); err != nil {
 			g.http.Close()
 		}
 		g.link.Close()
 		errs = append(errs, g.proxies.Close())
+		cancel()
 	}
-	cancel()
 	if g.dir != "" {
 		errs = append(errs, accesskey.ShownError(os.RemoveAll(g.dir)))
 	}
