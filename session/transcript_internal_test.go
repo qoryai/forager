@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -445,26 +446,26 @@ func TestAPathPatternMatchesInsideOneName(t *testing.T) {
 func TestFindMatchesFollowsNoLink(t *testing.T) {
 	p := newPathPattern("*/*/*/rollout-*-{session_id}.jsonl", walledID, "", false)
 	base := t.TempDir()
-	if got, err := findMatches(base, "none/", p); err != nil || len(got) != 0 {
+	if got, err := findMatches(base, "none/", p, 0); err != nil || len(got) != 0 {
 		t.Errorf("a start that does not exist: %v %v", got, err)
 	}
 	appendTo(t, base, "s/"+rolloutRel, []byte("{}\n"))
 	appendTo(t, base, "s/2026/11/13/rollout-x-other.jsonl", []byte("{}\n"))
-	if got, err := findMatches(base, "s/", p); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+	if got, err := findMatches(base, "s/", p, 0); err != nil || !slices.Equal(got, []string{rolloutRel}) {
 		t.Errorf("one file: %v %v", got, err)
 	}
 	outside := t.TempDir()
 	appendTo(t, outside, "11/13/rollout-y-"+walledID+".jsonl", []byte("{}\n"))
 	symlink(t, outside, filepath.Join(base, "s", "2025"))
-	if got, err := findMatches(base, "s/", p); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+	if got, err := findMatches(base, "s/", p, 0); err != nil || !slices.Equal(got, []string{rolloutRel}) {
 		t.Errorf("through a linked directory: %v %v", got, err)
 	}
 	symlink(t, outside, filepath.Join(base, "linked"))
-	if got, err := findMatches(base, "linked/", p); err == nil || len(got) != 0 {
+	if got, err := findMatches(base, "linked/", p, 0); err == nil || len(got) != 0 {
 		t.Errorf("a start below a link: %v %v", got, err)
 	}
 	symlink(t, filepath.Join(outside, "11/13/rollout-y-"+walledID+".jsonl"), filepath.Join(base, "s/2026/11/13/rollout-z-"+walledID+".jsonl"))
-	got, err := findMatches(base, "s/", p)
+	got, err := findMatches(base, "s/", p, 0)
 	slices.Sort(got)
 	if want := []string{rolloutRel, "2026/11/13/rollout-z-" + walledID + ".jsonl"}; err != nil || !slices.Equal(got, want) {
 		t.Errorf("a link as the file: %v %v; want %v", got, err, want)
@@ -472,7 +473,7 @@ func TestFindMatchesFollowsNoLink(t *testing.T) {
 	for i := range 3 {
 		appendTo(t, base, fmt.Sprintf("s/2027/01/0%d/rollout-a-%s.jsonl", i, walledID), []byte("{}\n"))
 	}
-	if got, err := findMatches(base, "s/", p); err != nil || len(got) != 2 {
+	if got, err := findMatches(base, "s/", p, 0); err != nil || len(got) != 2 {
 		t.Errorf("five files: %v %v; want two", got, err)
 	}
 }
@@ -667,7 +668,7 @@ func TestTheSearchOpensNoFIFO(t *testing.T) {
 	p := newPathPattern("*/x.jsonl", walledID, "", false)
 	for _, start := range []string{"fifo/", "linked/"} {
 		within("the search from "+start, func() {
-			if got, err := findMatches(dir, start, p); err == nil || len(got) != 0 {
+			if got, err := findMatches(dir, start, p, 0); err == nil || len(got) != 0 {
 				t.Errorf("%s: %v %v", start, got, err)
 			}
 		})
@@ -687,12 +688,14 @@ func TestTheSearchOpensNoFIFO(t *testing.T) {
 }
 
 // TestAPatternPathWithASecretIsNotSent pins the path a * matched: a name with one of
-// the run's secrets, or one that is no UTF-8, ends the transcript with one line that
-// does not contain the path, and nothing is sent.
+// the run's secrets, a newline or an ESC, or one that is no UTF-8, ends the
+// transcript with one line that does not contain the path, and nothing is sent.
 func TestAPatternPathWithASecretIsNotSent(t *testing.T) {
 	for name, file := range map[string]string{
-		"a secret": "rollout-sk-fake-secret-" + walledID + ".jsonl",
-		"no UTF-8": "rollout-\xff\xfe-" + walledID + ".jsonl",
+		"a secret":  "rollout-sk-fake-secret-" + walledID + ".jsonl",
+		"no UTF-8":  "rollout-\xff\xfe-" + walledID + ".jsonl",
+		"a newline": "rollout-a\nA continuation-" + walledID + ".jsonl",
+		"an ESC":    "rollout-\x1b[31m-" + walledID + ".jsonl",
 	} {
 		t.Run(name, func(t *testing.T) {
 			tr, s, root := newRolloutTranscript(t, true)
@@ -702,7 +705,7 @@ func TestAPatternPathWithASecretIsNotSent(t *testing.T) {
 			}
 			tr.started(walledID)
 			tr.finish()
-			want := "Keep the run's secrets out of the names of the transcript's path, in UTF-8. A continuation of this run starts the runtime without a resume: the path of the file that matches ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl contains a secret or is no UTF-8, so the session reads no transcript"
+			want := "Keep the run's secrets and characters that are not printable out of the names of the transcript's path, in UTF-8. A continuation of this run starts the runtime without a resume: the path of the file that matches ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl contains a secret or a character that is not printable, or is no UTF-8, so the session reads no transcript"
 			if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
 				t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
 			}
@@ -711,13 +714,18 @@ func TestAPatternPathWithASecretIsNotSent(t *testing.T) {
 }
 
 // TestOnlyAPathWithNoSecretInUTF8IsSent pins the check of a path a * matched on
-// every file system, one that takes names that are no UTF-8 included.
+// every file system, one that takes names that are no UTF-8 included: a secret, a
+// character that is not printable and bytes that are no UTF-8 fail, a space passes.
 func TestOnlyAPathWithNoSecretInUTF8IsSent(t *testing.T) {
 	mask := func(l string) string { return strings.ReplaceAll(l, "sk-fake-secret", "[secret]") }
 	for rel, want := range map[string]bool{
 		".rollouts/sessions/" + rolloutRel:                                      true,
 		".rollouts/sessions/2026/11/13/rollout-sk-fake-secret-x.jsonl":          false,
 		".rollouts/sessions/2026/11/13/rollout-\xff\xfe-" + walledID + ".jsonl": false,
+		"~/.rollouts/sessions/2026/11/13/rollout-a\n-x.jsonl":                   false,
+		"~/.rollouts/sessions/2026/11/13/rollout-\x1b-x.jsonl":                  false,
+		"~/.rollouts/sessions/2026/11/13/rollout-\x7f-x.jsonl":                  false,
+		"~/.rollouts/sessions/2026/11/13/rollout-a b-x.jsonl":                   true,
 	} {
 		if got := sendablePath(rel, mask); got != want {
 			t.Errorf("%q: %v; want %v", rel, got, want)
@@ -725,22 +733,123 @@ func TestOnlyAPathWithNoSecretInUTF8IsSent(t *testing.T) {
 	}
 }
 
-// TestASearchOverTheEntryCapEnds pins maxFindEntries: a search that lists more entries
-// ends the transcript with one line, and nothing is sent.
-func TestASearchOverTheEntryCapEnds(t *testing.T) {
+// TestTheEntryCapHoldsOnlyBehindAWall pins maxFindEntries, with more entries than it
+// below the prefix and the file among them: behind a wall the search ends the
+// transcript with one line and sends nothing; without a wall it lists every entry and
+// sends the file.
+func TestTheEntryCapHoldsOnlyBehindAWall(t *testing.T) {
+	for _, walled := range []bool{true, false} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := newRolloutTranscript(t, walled)
+			at := dir
+			if !walled {
+				at = filepath.Join(dir, ".rollouts/sessions")
+				makeDir(t, at)
+			}
+			for i := range maxFindEntries + 1 {
+				f, err := os.Create(filepath.Join(at, fmt.Sprintf("e%05d", i)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.Close()
+			}
+			appendTo(t, at, rolloutRel, []byte("{\"a\":1}\n"))
+			tr.started(walledID)
+			tr.finish()
+			if !walled {
+				if got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel); !ok || string(got) != "{\"a\":1}\n" || len(s.lines) != 0 {
+					t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+				}
+				return
+			}
+			want := "Keep at most 10000 entries in the directories below ~/.rollouts/sessions/ that the transcript's pattern reaches. A continuation of this run starts the runtime without a resume: the search for ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl listed more, so the session reads no transcript"
+			if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
+				t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
+			}
+		})
+	}
+}
+
+// TestAPatternPathOverTheLimitIsNotSent pins a file a * found whose path relative to
+// the home is over 1022 bytes: one line that names the limit and not the path, and
+// nothing sent. The directories are made one name at a time, below the limit of a
+// whole path on this machine.
+func TestAPatternPathOverTheLimitIsNotSent(t *testing.T) {
 	tr, s, root := newRolloutTranscript(t, true)
-	for i := range maxFindEntries + 1 {
-		f, err := os.Create(filepath.Join(root, fmt.Sprintf("e%05d", i)))
+	long := strings.Repeat("d", 255)
+	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := unix.Mkdirat(fd, long, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		next, err := unix.Openat(fd, long, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+		unix.Close(fd)
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.Close()
+		fd = next
+	}
+	name := "rollout-" + strings.Repeat("f", 200) + "-" + walledID + ".jsonl"
+	file, err := unix.Openat(fd, name, unix.O_WRONLY|unix.O_CREAT|unix.O_CLOEXEC, 0o600)
+	unix.Close(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unix.Write(file, []byte("{\"a\":1}\n"))
+	unix.Close(file)
+	if n := len(".rollouts/sessions/" + long + "/" + long + "/" + long + "/" + name); n <= maxTranscriptPath {
+		t.Fatalf("the path is %d bytes, not over %d", n, maxTranscriptPath)
 	}
 	tr.started(walledID)
 	tr.finish()
-	want := "Keep at most 10000 entries in the directories below ~/.rollouts/sessions/ that the transcript's pattern reaches. A continuation of this run starts the runtime without a resume: the search for ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl listed more, so the session reads no transcript"
-	if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
+	want := "Keep the transcript's path below ~/.rollouts/sessions/ at most 1022 bytes. A continuation of this run starts the runtime without a resume: the path of the file that matches ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl is longer"
+	if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want || strings.Contains(s.lines[0], long) {
 		t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
+	}
+}
+
+// TestASearchSkipsAnEntryChangedBeforeItsOpen pins the skip of a directory whose open
+// fails because the entry changed after the listing: removed (ENOENT), a symbolic link
+// (ELOOP, or ENOTDIR on macOS) and a FIFO (ENOTDIR). The search goes on and finds the
+// file in the directory left as it was.
+func TestASearchSkipsAnEntryChangedBeforeItsOpen(t *testing.T) {
+	base := t.TempDir()
+	for _, d := range []string{"a", "b", "c", "d"} {
+		appendTo(t, base, d+"/x.jsonl", []byte("{}\n"))
+	}
+	other := t.TempDir()
+	appendTo(t, other, "x.jsonl", []byte("{}\n"))
+	var changed []string
+	s := &search{pattern: newPathPattern("*/x.jsonl", walledID, "", false), beforeOpen: func(dirFD int, name string) {
+		if len(changed) == 3 {
+			return
+		}
+		if err := os.RemoveAll(filepath.Join(base, name)); err != nil {
+			t.Fatal(err)
+		}
+		switch len(changed) {
+		case 0:
+		case 1:
+			symlink(t, other, filepath.Join(base, name))
+		case 2:
+			if err := syscall.Mkfifo(filepath.Join(base, name), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		changed = append(changed, name)
+	}}
+	fd, err := openDirAt(unix.AT_FDCWD, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.below(fd, "", 0); err != nil {
+		t.Fatalf("the search failed: %v", err)
+	}
+	if len(changed) != 3 || len(s.found) != 1 || slices.Contains(changed, path.Dir(s.found[0])) {
+		t.Errorf("found %v after changing %v; want the one directory left", s.found, changed)
 	}
 }
 
