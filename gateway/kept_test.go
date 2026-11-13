@@ -272,9 +272,51 @@ func TestARefusedJoinSentAgainGetsItsRefusalAgain(t *testing.T) {
 	}
 }
 
+// TestTheReloadAnswerIsTheSameAfterAReopen pins an image reference with user
+// information: the run answer gives it whole, the reload answer and request.json
+// without it, and the reload answer of the reopened run has the same bytes and the same
+// digest as before the restart, so the session reloads nothing and records no
+// policy_applied more.
+func TestTheReloadAnswerIsTheSameAfterAReopen(t *testing.T) {
+	const digest = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	const bare = "registry.example/agents/base" + digest
+	// A password with / and @ in it.
+	const secret = "user:pa/ss@wo@rd@"
+	c := gatewayControl(t)
+	cfg := gateway.Config{Dir: t.TempDir()}
+	before := startRemote(t, c, cfg)
+	runID := event.NewRunID()
+	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: secret + bare, Runtime: "sysbox-runc"}}}
+	e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true, Images: images})
+	if e.a.Image == nil || e.a.Image.Ref != secret+bare {
+		t.Errorf("the run answer's image: %+v", e.a.Image)
+	}
+	first := e.reload(t)
+	var reloaded server.LinkReloadAnswer
+	if err := json.Unmarshal(first.body, &reloaded); first.status != http.StatusOK || err != nil || reloaded.Image == nil || reloaded.Image.Ref != bare {
+		t.Fatalf("the reload: %d %s", first.status, first.body)
+	}
+	if b, err := os.ReadFile(filepath.Join(cfg.Dir, "runs", runID, "request.json")); err != nil || strings.Contains(string(b), "pa/ss") {
+		t.Errorf("request.json: %s, %v", b, err)
+	}
+	held := strings.Trim(first.header.Get("ETag"), `"`)
+	if got := first.header.Get(server.HeaderRunConfiguration); got != held {
+		t.Errorf("the reload's run configuration %q; want its ETag's %q", got, held)
+	}
+	e.r = before.restart(t, cfg)
+	if got := e.post(t, heartbeat(runID)); got.status != http.StatusAccepted || got.header.Get(server.HeaderRunConfiguration) != held {
+		t.Errorf("the first batch after the restart: %d, run configuration %q; want %q", got.status, got.header.Get(server.HeaderRunConfiguration), held)
+	}
+	again := e.reload(t)
+	if again.status != http.StatusOK || string(again.body) != string(first.body) || again.header.Get("ETag") != first.header.Get("ETag") {
+		t.Errorf("the reload after the reopen: %d %s, ETag %q; want %s, ETag %q", again.status, again.body, again.header.Get("ETag"), first.body, first.header.Get("ETag"))
+	}
+}
+
 // TestACAIsKeptUntilTheRunsFinalEnd pins the CA files of a run on the one address:
 // Close keeps them, which ends the run with no final event; the run's final end
-// removes them: the session's run.exited, and the server's end member, stopped.
+// removes them with every other file kept to reopen the run: the session's run.exited,
+// and the server's end member, stopped.
 func TestACAIsKeptUntilTheRunsFinalEnd(t *testing.T) {
 	caOf := func(dir string) (bool, bool) {
 		return exists(filepath.Join(dir, "ca.pem")), exists(filepath.Join(dir, "ca.key"))
@@ -297,16 +339,13 @@ func TestACAIsKeptUntilTheRunsFinalEnd(t *testing.T) {
 		runID := event.NewRunID()
 		e := r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
 		dir := filepath.Join(r.cfg.Dir, "runs", runID)
-		if pem, key := caOf(dir); !pem || !key {
-			t.Fatalf("a live run: ca.pem %v, ca.key %v", pem, key)
+		if pem, key := caOf(dir); !pem || !key || !exists(filepath.Join(dir, "given.jsonl")) {
+			t.Fatalf("a live run: ca.pem %v, ca.key %v, given.jsonl missing", pem, key)
 		}
 		if got := e.post(t, exited(runID)); got.status != http.StatusAccepted {
 			t.Fatalf("the last batch: %d %s", got.status, got.body)
 		}
-		eventually(t, "the CA files removed", func() bool {
-			pem, key := caOf(dir)
-			return !pem && !key
-		})
+		eventually(t, "the kept files removed", func() bool { return len(keptLeft(r.cfg.Dir, runID)) == 0 })
 	})
 	t.Run("stopped", func(t *testing.T) {
 		c := gatewayControl(t)
@@ -315,16 +354,12 @@ func TestACAIsKeptUntilTheRunsFinalEnd(t *testing.T) {
 		e := r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
 		c.end.Store(&server.ServerEnd{State: "cancelled"})
 		eventually(t, "the 410", func() bool { return e.post(t, heartbeat(runID)).status == http.StatusGone })
-		dir := filepath.Join(r.cfg.Dir, "runs", runID)
-		eventually(t, "the CA files removed", func() bool {
-			pem, key := caOf(dir)
-			return !pem && !key
-		})
+		eventually(t, "the kept files removed", func() bool { return len(keptLeft(r.cfg.Dir, runID)) == 0 })
 	})
 }
 
 // fakeRecord makes a run record under dir/runs with events.jsonl of the event types
-// given, changed at changed, and a run request and CA files with fake contents.
+// given, changed at changed, and every file kept to reopen a run with fake contents.
 func fakeRecord(t *testing.T, dir string, changed time.Time, types ...string) string {
 	t.Helper()
 	runID := event.NewRunID()
@@ -340,7 +375,7 @@ func fakeRecord(t *testing.T, dir string, changed time.Time, types ...string) st
 	if err := os.WriteFile(events, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"request.json", "ca.pem", "ca.key"} {
+	for _, name := range finalNames {
 		if err := os.WriteFile(filepath.Join(rec, name), []byte("fake "+name+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -352,7 +387,7 @@ func fakeRecord(t *testing.T, dir string, changed time.Time, types ...string) st
 }
 
 // TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn pins the CA key sweep: at Start and
-// on each tick it removes the run request and the CA files of a record the gateway
+// on each tick it removes the files kept to reopen a run of a record the gateway
 // does not hold whose events.jsonl has not changed for longer than the sweep's age,
 // with a final event or without; a record that changed since and the record of a run
 // the gateway holds keep theirs.
@@ -366,7 +401,7 @@ func TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn(t *testing.T) {
 	cfg := gateway.Config{Dir: dir}
 	gateway.SetCASweep(&cfg, time.Hour, time.Minute)
 	r := startRemote(t, nil, cfg)
-	gone := func(runID string) bool { return len(secretsLeft(dir, runID)) == 0 }
+	gone := func(runID string) bool { return len(keptLeft(dir, runID)) == 0 }
 	eventually(t, "the sweep at Start", func() bool { return gone(atStart) })
 
 	// A run the gateway holds, its record unchanged as long, with CA files.
@@ -398,6 +433,37 @@ func TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn(t *testing.T) {
 	if !gone(fresh) {
 		t.Error("the record changed 30 minutes ago keeps its CA files")
 	}
+}
+
+// TestTheSweepRunsEvery10MinutesOnRecordsOlderThan15 pins the CA key sweep's values,
+// the user's "545 (a)": the sweep's ticker has an interval of 10 minutes, and a pass
+// removes the kept files of a record whose events.jsonl has not changed for more than
+// 15 minutes, not those of one unchanged for 14 minutes.
+func TestTheSweepRunsEvery10MinutesOnRecordsOlderThan15(t *testing.T) {
+	dir := t.TempDir()
+	older := fakeRecord(t, dir, time.Now().Add(-16*time.Minute), event.RunRegistered)
+	younger := fakeRecord(t, dir, time.Now().Add(-14*time.Minute), event.RunRegistered)
+	ticks, every := make(chan time.Time), make(chan time.Duration, 1)
+	cfg := gateway.Config{Dir: dir}
+	gateway.SetSweepTicker(&cfg, func(d time.Duration) <-chan time.Time {
+		every <- d
+		return ticks
+	})
+	startRemote(t, nil, cfg)
+	if got := <-every; got != 10*time.Minute {
+		t.Errorf("the sweep's interval is %s, want 10m0s", got)
+	}
+	eventually(t, "the sweep at Start", func() bool { return len(keptLeft(dir, older)) == 0 })
+	if left := keptLeft(dir, younger); len(left) != len(finalNames) {
+		t.Errorf("the record unchanged for 14 minutes keeps only %v", left)
+	}
+	// The younger record ages past 15 minutes; the next tick removes its files.
+	past := time.Now().Add(-16 * time.Minute)
+	if err := os.Chtimes(filepath.Join(dir, "runs", younger, "events.jsonl"), past, past); err != nil {
+		t.Fatal(err)
+	}
+	ticks <- time.Now()
+	eventually(t, "the sweep at a tick", func() bool { return len(keptLeft(dir, younger)) == 0 })
 }
 
 // TestTheSweepTicks pins the sweep's ticker: a record that ages after Start loses its

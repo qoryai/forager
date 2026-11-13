@@ -150,14 +150,19 @@ func (g *Gateway) recorded(runID string) bool {
 // heldRun is the run of a request r on the one address whose run key names runID, the
 // run the gateway holds, or the run a gateway with Listen suspended at its stop, which
 // the request reopens ([Gateway.reopenRun]) and waits for within its context; nil when
-// there is none to go on with, its answer written: the 410 of a run the gateway ended
-// and let go of; a 503 with no body while the reopen goes on, when it failed in a way
-// that may pass, and while the gateway closes; and otherwise a 410 run_closed, a run
-// that ended here before, whose reopen failed for good, or that never opened here.
+// there is none to go on with, its answer written: a 503 with no body from the start
+// of Close, for a live run too, whose suspend starts then; the 410 of a run the
+// gateway ended and let go of; a 503 with no body while the reopen goes on and when it
+// failed in a way that may pass; and otherwise a 410 run_closed, a run that ended here
+// before, whose reopen failed for good, or that never opened here.
 func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) *linkRun {
 	g.mu.Lock()
-	lr := g.runs[runID]
+	lr, closing := g.runs[runID], g.closing
 	g.mu.Unlock()
+	if closing {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return nil
+	}
 	if lr != nil && lr.remote {
 		return lr
 	}
@@ -173,6 +178,11 @@ func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) 
 		p, _ := runKeyOf(r.Context())
 		lr, final := g.reopenRun(r.Context(), runID, p)
 		switch {
+		case g.openCtx.Err() != nil:
+			// Close started while the request waited: the reopened run, if any, is
+			// suspended now.
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return nil
 		case lr != nil && lr.remote:
 			if admit, _ := r.Context().Value(admitKey{}).(func()); admit != nil {
 				admit()
@@ -203,8 +213,12 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, rel
 		return false
 	}
 	g.mu.Lock()
-	lr := g.runs[k.RunID]
+	lr, closing := g.runs[k.RunID], g.closing
 	g.mu.Unlock()
+	if closing {
+		// The gateway closes: its runs are being suspended.
+		return false
+	}
 	if _, spent := g.spentOf(k.RunID); lr == nil && !spent && g.reopenable(k.RunID) {
 		// The run key verified: while the connection waits on the reopen, up to 120
 		// seconds, it counts against the one address's bounds in all alone, not of its
@@ -212,6 +226,9 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, rel
 		release()
 		c.SetDeadline(time.Time{})
 		lr, _ = g.reopenRun(g.openCtx, k.RunID, presented{raw: value, key: k})
+		if g.openCtx.Err() != nil {
+			return false
+		}
 	}
 	if lr == nil || !lr.remote || lr.px == nil {
 		return false

@@ -649,7 +649,8 @@ func (g *Gateway) discoveryOf(s *side, r *http.Request) ([]byte, string, bool) {
 
 // close stops the one address: no connection is routed from now on, every connection
 // still being routed is closed, and the link's and the relay's servers are shut within
-// ctx.
+// ctx. The wait for the routing goroutines is within ctx too: each ends once a read or
+// write on its closed connection fails, and one that has not by then ends later.
 func (s *service) close(ctx context.Context) error {
 	s.mu.Lock()
 	s.closed = true
@@ -662,7 +663,15 @@ func (s *service) close(ctx context.Context) error {
 		err = nil
 	}
 	err = accesskey.ShownError(err)
-	s.wg.Wait()
+	routed := make(chan struct{})
+	routine.Go(s.g.report, func() {
+		s.wg.Wait()
+		close(routed)
+	})
+	select {
+	case <-routed:
+	case <-ctx.Done():
+	}
 	if serr := s.edge.Shutdown(ctx); serr != nil {
 		s.edge.Close()
 	}

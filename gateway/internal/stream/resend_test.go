@@ -115,10 +115,9 @@ func TestResendWritesGatewayLost(t *testing.T) {
 	}
 }
 
-// TestResendRemovesTheKeptSecrets pins a record a gateway kept for a reopen: once
-// Resend writes its run.exited, the run request and the CA files go, and the other kept
-// files stay.
-func TestResendRemovesTheKeptSecrets(t *testing.T) {
+// TestResendRemovesTheKeptFiles pins a record a gateway kept for a reopen: once Resend
+// writes its run.exited, every kept file goes.
+func TestResendRemovesTheKeptFiles(t *testing.T) {
 	dir := lostRun(t)
 	for _, name := range keptFiles {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
@@ -130,18 +129,22 @@ func TestResendRemovesTheKeptSecrets(t *testing.T) {
 		t.Fatalf("%+v, %v", res, err)
 	}
 	for _, name := range keptFiles {
-		_, err := os.Lstat(filepath.Join(dir, name))
-		if gone := errors.Is(err, os.ErrNotExist); gone != slices.Contains(secretFiles, name) {
-			t.Errorf("%s gone %v", name, gone)
+		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s is left: %v", name, err)
 		}
+	}
+	if _, err := os.Lstat(filepath.Join(dir, sink.EventsFile)); err != nil {
+		t.Errorf("events.jsonl: %v", err)
 	}
 }
 
-// TestRemoveKeptRemovesTheSecrets pins RemoveKept: the run request and both CA files
-// go, the other files stay, and a file or a directory that is not there is no error.
-func TestRemoveKeptRemovesTheSecrets(t *testing.T) {
+// TestRemoveKeptRemovesTheKeptFiles pins RemoveKept: every kept file goes,
+// events.jsonl, the delivery state and the lock stay, and a file or a directory that is
+// not there is no error.
+func TestRemoveKeptRemovesTheKeptFiles(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range append([]string{sink.EventsFile}, keptFiles...) {
+	stays := []string{sink.EventsFile, sink.DeliveredFile, lockFile}
+	for _, name := range append(slices.Clone(stays), keptFiles...) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -149,9 +152,9 @@ func TestRemoveKeptRemovesTheSecrets(t *testing.T) {
 	if err := RemoveKept(dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range append([]string{sink.EventsFile}, keptFiles...) {
+	for _, name := range append(slices.Clone(stays), keptFiles...) {
 		_, err := os.Lstat(filepath.Join(dir, name))
-		if gone := errors.Is(err, os.ErrNotExist); gone != slices.Contains(secretFiles, name) {
+		if gone := errors.Is(err, os.ErrNotExist); gone != slices.Contains(keptFiles, name) {
 			t.Errorf("%s gone %v", name, gone)
 		}
 	}

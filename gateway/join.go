@@ -168,6 +168,12 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		gone(w, end)
 		return
 	}
+	if lr.isSuspended() {
+		// The gateway closes, and the run's stream is suspended: the session sends the
+		// join again to the gateway that starts again.
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
 	lr.touch()
 	// A join with no model key gets none; the schema has refused one that names one.
 	var model string
