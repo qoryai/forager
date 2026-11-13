@@ -1266,16 +1266,17 @@ release may change what an existing document does, and says so under Upgrading.
   may contain a registry's credentials in an image reference. The CA files go at the
   run's end, and a sweep every 10 minutes removes those of a record unchanged for 15
   minutes. A join request that repeats the last join the gateway numbered, answered
-  `200` or `403` `placeholder_conflict`, gets the same answer, across a restart too. Before, a run open at a gateway that stopped was over,
-  and `qory run resend` ended it with `gateway_lost`.
+  `200` or `403` `placeholder_conflict`, gets the same answer, across a restart too.
+  Before, a run open at a gateway that stopped was over, and `qory run resend` ended it
+  with `gateway_lost`.
 - A run request behind a separate gateway counts against the bounds of 64 connections
   of one source and 256 of one IPv6 /48 only until its open starts, once its run key
   passes and its body is read. It counts against the bound of 4096 connections until
   its run answer, `2xx`, or until its connection closes. Before, it counted against all
   three until its run answer, which may take 140 seconds while Qory Apiary restarts: 64
   runs that opened behind one address, such as a NAT's, then made the gateway close
-  each connection accepted after that from that address, the batch and proxy connections of its live
-  runs among them. A run request whose run key fails counts against all three, as
+  each connection accepted after that from that address, the batch and proxy
+  connections of its live runs among them. A run request whose run key fails counts against all three, as
   before.
 - An adapter's output that fails `credential.schema.json` is refused with `Fix the
   output of the adapter <PATH> to match credential.schema.json: <LOCATIONS>`, where
