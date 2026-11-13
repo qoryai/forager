@@ -264,8 +264,9 @@ func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.L
 		r.refusedJoin(r.numbered, ref)
 		return nil, 0, ref
 	}
-	// A try with no answer, an answer document the session refuses, or an answer
-	// under a key the run key does not name may follow a join the gateway numbered.
+	// A try with no answer, an answer document that fails the session's checks, or an
+	// answer under a key the run key does not name may follow a join the gateway
+	// numbered.
 	var status *server.StatusError
 	if unanswered || !errors.As(err, &status) && !errors.As(err, &ref) {
 		r.maybeJoined = true
@@ -344,8 +345,8 @@ func (r *Run) pauseJoin(window context.Context, i int) (int, bool) {
 // joinUnanswered reports whether a join request's error is a try that got no answer:
 // a connection that did not open, its TLS or its binding failing, a connection reset,
 // or no answer in time. An answer is a 410, a refusal with a code, a status, an answer
-// document the session refuses, or a separate gateway's answer under a key the run key
-// does not name.
+// document that fails the session's checks, or a separate gateway's answer under a key
+// the run key does not name.
 func joinUnanswered(err error) bool {
 	var key *server.GatewayKeyError
 	if errors.As(err, &key) {

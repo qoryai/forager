@@ -2291,8 +2291,10 @@ release may change what an existing document does, and says so under Upgrading.
   nothing to it, and dials the gateway again for up to 120 seconds, waiting 250 ms after
   the first failed dial and twice as long after each one after it, up to 2 seconds. A
   gateway that restarts within the 120 seconds serves the connection; after them the
-  forwarder closes it. Before, the forwarder dialed once, for up to 10 seconds, and
-  closed the connection when that dial failed. On one machine nothing changes.
+  forwarder closes it. If the agent closed its connection during the hold, the
+  forwarder sends nothing of it, so a plain request or a `POST` to the run API on a
+  closed connection never runs. Before, the forwarder dialed once, for up to 10 seconds,
+  and closed the connection when that dial failed. On one machine nothing changes.
 - Behind a separate gateway, `Join` sends the join request again, unchanged, after a
   try that gets no answer or a `503` with no code, for up to 120 seconds, with waits of
   1, 2, 4 and 8 seconds, then 8 seconds each, and flushes the run's events before each

@@ -832,7 +832,7 @@ attaches the run, writes the record's `dev.qory.run.registered` from the run key
 attach's answer, and gives a run answer with no labels and no proxy secret. When the
 server's answer to a batch carries the outcome the run's starter gave, it ends the run
 `stopped` with that state and reason, as a direct node's gateway does. A gateway that
-starts again attaches again a run whose open never answered its session.
+starts again attaches again a run whose session never got its run answer.
 
 `Close` of a separate gateway keeps its runs: it suspends each live run, flushes its
 events, writes no `dev.qory.run.exited`, and keeps the run's record. Its
@@ -968,13 +968,15 @@ run, err := session.Open(ctx, session.OpenSpec{
   forwarder takes off: see
   [the relay to a separate gateway](wall.md#the-relay-to-a-separate-gateway). The run key
   stays in the session's memory, in no environment and no file.
-- While the gateway cannot be reached, every forwarder of the session, the host proxy
-  and the engine proxy among them, holds a connection it took: it keeps the connection
-  open, writes nothing to it, and dials the gateway again for up to 120 seconds, waiting
-  250 ms after the first failed dial and twice as long after each one after it, up to
-  2 seconds. A gateway that restarts within the 120 seconds serves the connection; after
-  them the forwarder closes it. On one machine the forwarder dials the gateway's proxy
-  once, for up to 10 seconds.
+- After any failed dial to the gateway, such as a connection refused or reset, a TLS
+  handshake cut short or a binding that fails, every forwarder of the session, the host
+  proxy and the engine proxy among them, holds the connection it took: it keeps the
+  connection open, writes nothing to it, and dials the gateway again for up to 120
+  seconds, waiting 250 ms after the first failed dial and twice as long after each one
+  after it, up to 2 seconds. A gateway that restarts within the 120 seconds serves the
+  connection; after them the forwarder closes it. If the agent closed its connection
+  during the hold, the forwarder sends nothing of it to the gateway. On one machine the
+  forwarder dials the gateway's proxy once, for up to 10 seconds.
 
 ### The run key from a run code
 
@@ -1496,7 +1498,7 @@ after a last session that ended otherwise.
   separate gateway they are under the run directory's `undelivered/`. `Close` waits up
   to 15 seconds for the gateway to accept the run's last events, and behind a separate
   gateway up to 180 seconds, so a gateway that restarts in 120 seconds still receives
-  them. It returns as soon as the gateway accepts them or answers `410`.
+  them. It returns as soon as the gateway accepts them or the batch gets a `410`.
 - `RunClosed` and `ClosedReason`, as `session.Result` has them.
 - `WallKept`, true when removing a container of the run's wall failed at some point of
   the run: the agent's container at a session's end, the setup container in

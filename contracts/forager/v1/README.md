@@ -271,8 +271,8 @@ One run, on a developer machine, with a server configured:
    fifteen seconds for the sinks to flush, and reports what the server has not accepted.
    Behind a separate gateway it waits up to 180 seconds: the 120 seconds a restart of
    the gateway may take, and the 60 seconds the session may wait between two tries of a
-   batch. It stops waiting as soon as the gateway accepts the last batch or answers
-   `410`.
+   batch. It stops waiting as soon as the gateway accepts the last batch or the batch
+   gets a `410`.
    A runtime killed by a signal exits as `-1` with `signal` set.
 
 A run may have a time limit, which covers the run's host work and every session. When
@@ -2431,8 +2431,8 @@ Behind a separate gateway the gateway writes these files too, each mode `0600`, 
 gateway that starts again on the same directory can reopen the run (§The gateway's link,
 A restart). The local link writes none of them.
 
-- `request.json`: what the gateway decides the run by of its run request, written as
-  the run opens: `version`, `wall`, and the session's `narrowing` and `images` when the
+- `request.json`: the members of the run request that set the run's wall, narrowing
+  and images, written as the run opens: `version`, `wall`, and the session's `narrowing` and `images` when the
   request has them. An image reference may contain a registry's credentials, as the
   run request does.
 - `ca.pem` and `ca.key`: the certificate and the private key of the run's certificate
@@ -3881,7 +3881,7 @@ run key verifies: a batch, a reload, a join, a transcript request, or a connecti
 the run's proxy or stack proxy. One reopen of a run runs at a time, and every request
 of the run waits for it. The reopen reads the record back, attaches the run again under
 the run key of that request, with the tries of an open (Tries as a run opens, below),
-sends again what the server has not accepted, decides the run again from `request.json`
+sends again what the server has not accepted, sets the run up again from `request.json`
 and the run configuration in the attach's answer, with the run's certificate authority from
 `ca.pem` and `ca.key`, and goes on numbering the record after its last `sequence`. A
 connection that waits on a reopen counts against none of the one address's bounds of
@@ -4704,12 +4704,16 @@ without one, opens every connection to the gateway's one address over TLS 1.3, w
 the link is (The binding, above), and with `QORY-RELAY`, a space, the run key and a
 newline. Behind a wall the forwarder takes the relay's connection, which opens with
 `QORY-RELAY` and a value the session makes for the run's forwarder alone, and takes that
-line off before anything reaches the gateway. While the gateway's one address cannot be
-reached, a connection refused or reset, a TLS handshake cut short or a binding that
-fails, the forwarder keeps the connection it took open, writes nothing to it, and dials
-again for up to 120 seconds, waiting 250 ms after the first failed dial and twice as
-long after each one after it, up to 2 seconds; after them it closes the connection. On
-each connection it sends the run key only once the binding passed. Without a wall, on
+line off before anything reaches the gateway. After any failed dial to the gateway's one
+address, such as a connection refused or reset, a TLS handshake cut short or a binding
+that fails, the forwarder keeps the connection it took open, writes nothing to it, and
+dials again for up to 120 seconds, waiting 250 ms after the first failed dial and twice
+as long after each one after it, up to 2 seconds; after them it closes the connection.
+When a dial after the first succeeds, the forwarder first checks the agent's
+connection: if the agent closed it, or it reset, during the hold, the forwarder closes
+both connections and sends nothing, so a plain request or a `POST` to the run API on a
+closed connection never runs. On each connection it sends the run key only once the
+binding passed. Without a wall, on
 one machine as behind a separate gateway, the agent's proxy URL is the forwarder's
 address on loopback with a password, `http://qory:<password>@127.0.0.1:<port>`, the
 password a secret the session

@@ -95,8 +95,8 @@ var closeWait = 15 * time.Second
 // gateway, in place of closeWait: 180 seconds, the 120 seconds a gateway's restart may
 // take plus the link sink's longest wait between two tries of a batch, 60 seconds
 // (sink.MaxBackoff), so a batch whose try failed just before the gateway came back is
-// tried once more. The flush ends as soon as the gateway accepts the last batch, or
-// answers 410. The user approved the value ("545 (a)", 2026-11-13). Tests set it
+// tried once more. The flush ends as soon as the gateway accepts the last batch, or the
+// batch gets a 410. The user approved the value ("545 (a)", 2026-11-13). Tests set it
 // shorter.
 var finalWait = 180 * time.Second
 
