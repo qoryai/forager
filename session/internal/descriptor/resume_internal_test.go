@@ -28,3 +28,23 @@ func TestTheResumeCheckRefusesAnyOtherVariable(t *testing.T) {
 		t.Errorf("%+v: %v", ok, err)
 	}
 }
+
+// TestTheResumeCheckRefusesAPlaceItCannotUse pins the Go check of resume.place apart
+// from the schema: another place, and before_last without after, each return an error
+// that starts with the fix.
+func TestTheResumeCheckRefusesAPlaceItCannotUse(t *testing.T) {
+	base := Resume{Prefix: "~/.amp/", Path: "~/.amp/{session_id}.jsonl", Args: []string{"resume", "{session_id}"}}
+	for want, r := range map[string]Resume{
+		`resume: set place to before_last or leave it out: "after_first" is no place`:                  {Prefix: base.Prefix, Path: base.Path, After: "exec", Place: "after_first"},
+		"resume: set after with place before_last: the arguments go before the last argument after it": {Prefix: base.Prefix, Path: base.Path, Place: PlaceBeforeLast},
+	} {
+		if err := r.check(); err == nil || err.Error() != want {
+			t.Errorf("%+v: %v; want %s", r, err, want)
+		}
+	}
+	ok := base
+	ok.After, ok.Place = "exec", PlaceBeforeLast
+	if err := ok.check(); err != nil {
+		t.Errorf("%+v: %v", ok, err)
+	}
+}

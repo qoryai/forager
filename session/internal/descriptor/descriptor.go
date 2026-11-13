@@ -109,7 +109,14 @@ type Resume struct {
 	Args []string `yaml:"args" json:"args"`
 	// After is the argument Args follow, such as exec; empty when Args go at the end.
 	After string `yaml:"after" json:"after,omitempty"`
+	// Place is PlaceBeforeLast for Args that go before the launch's last argument after
+	// After, or before the first -- after After; empty for right after After.
+	Place string `yaml:"place" json:"place,omitempty"`
 }
+
+// PlaceBeforeLast is the resume.place whose arguments go before the launch's last
+// argument after resume.after, the prompt, or before the first -- after resume.after.
+const PlaceBeforeLast = "before_last"
 
 // Tools is what the session copies from a tool's input onto the runtime's tool events.
 // Nil when the descriptor has no tools member.
@@ -522,8 +529,9 @@ func (d *Descriptor) checkConfig() error {
 
 // check checks what the schema cannot express of resume: path starts with prefix,
 // neither has a .. segment, and the only variable either has is home_var's, as
-// ${<home_var>}/ at its start, which each has when home_var is set. A nil Resume
-// passes.
+// ${<home_var>}/ at its start, which each has when home_var is set. It also checks
+// place, which the schema checks too: before_last or empty, and with after. A nil
+// Resume passes.
 func (r *Resume) check() error {
 	if r == nil {
 		return nil
@@ -548,6 +556,12 @@ func (r *Resume) check() error {
 	}
 	if !strings.HasPrefix(r.Path, r.Prefix) {
 		return fmt.Errorf("resume: start path %s with prefix %s: the transcript lies under prefix", accesskey.ShownValue(r.Path, true), accesskey.ShownValue(r.Prefix, true))
+	}
+	switch {
+	case r.Place != "" && r.Place != PlaceBeforeLast:
+		return fmt.Errorf("resume: set place to %s or leave it out: %s is no place", PlaceBeforeLast, accesskey.ShownValue(r.Place, true))
+	case r.Place != "" && r.After == "":
+		return fmt.Errorf("resume: set after with place %s: the arguments go before the last argument after it", r.Place)
 	}
 	return nil
 }

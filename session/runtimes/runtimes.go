@@ -264,10 +264,16 @@ type Resumes interface {
 // that contains the transcript's path; Path, the path while no hook input contains it,
 // a template with {session_id} and {cwd_slug}, in which a * matches any characters
 // other than / inside one path name; Prefix, the directory the transcript must lie
-// under; Args, the arguments the session adds when it resumes, with {session_id}; and
-// After, optional, the argument Args follow, at the end when it is empty. Each path
-// starts with ~/, the runtime's home, or with /, an absolute path.
+// under; Args, the arguments the session adds when it resumes, with {session_id};
+// After, optional, the argument Args follow, at the end when it is empty; and Place,
+// optional, PlaceBeforeLast for Args before the last argument after After. Each path
+// starts with ~/, the runtime's home, with /, an absolute path, or with
+// ${<HomeVar>}/.
 type Resume = descriptor.Resume
+
+// PlaceBeforeLast is the resume.place whose arguments go before the launch's last
+// argument after resume.after, or before the first -- after it.
+const PlaceBeforeLast = descriptor.PlaceBeforeLast
 
 // Parents is implemented by a runtime that reports which tool call started a subagent.
 // It is optional and checked by type assertion, so [Runtime] keeps its methods: the

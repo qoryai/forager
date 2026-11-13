@@ -932,6 +932,29 @@ func TestAResumeHomeVariableDecodes(t *testing.T) {
 	}
 }
 
+// TestAResumePlaceDecodes pins resume.place: before_last with after decodes, and a
+// descriptor fails the schema with place but no after, or with another place.
+func TestAResumePlaceDecodes(t *testing.T) {
+	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n" +
+		"resume:\n  path: '~/.amp/{session_id}.jsonl'\n  prefix: '~/.amp/'\n  args: [resume, '{session_id}']\n"
+	d, err := descriptor.Parse("amp.yaml", []byte(head+"  after: exec\n  place: before_last\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Resume.Place != descriptor.PlaceBeforeLast || d.Resume.After != "exec" {
+		t.Errorf("Resume = %+v; want after exec, place before_last", d.Resume)
+	}
+	for name, doc := range map[string]string{
+		"place without after": head + "  place: before_last\n",
+		"another place":       head + "  after: exec\n  place: after_first\n",
+	} {
+		if _, err := descriptor.Parse("amp.yaml", []byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
 // TestConfigDecodes pins that a descriptor's config decodes, with each fixed value a
 // string, a bool or an int64 from YAML and from JSON alike, that an endpoint may be a
 // setting, and what Parse returns an error for beyond the schema: a fixed key that is a

@@ -58,7 +58,7 @@ func TestCodexReadsItsKeyFromOpenAIAPIKey(t *testing.T) {
 
 // TestCodexResumesItsRolloutBelowCodexHome pins the resume: the rollout below
 // ${CODEX_HOME}/sessions/ in dated directories, CODEX_HOME the home variable, no hook
-// path, and codex exec resume <thread id>, the arguments right after exec.
+// path, and resume <thread id> after exec, right before the launch's last argument.
 func TestCodexResumesItsRolloutBelowCodexHome(t *testing.T) {
 	rt, err := codex.New()
 	if err != nil {
@@ -66,7 +66,7 @@ func TestCodexResumesItsRolloutBelowCodexHome(t *testing.T) {
 	}
 	rs, ok := rt.(runtimes.Resumes).Resume()
 	want := runtimes.Resume{HomeVar: "CODEX_HOME", Prefix: "${CODEX_HOME}/sessions/", Path: "${CODEX_HOME}/sessions/*/*/*/rollout-*-{session_id}.jsonl",
-		Args: []string{"resume", "{session_id}"}, After: "exec"}
+		Args: []string{"resume", "{session_id}"}, After: "exec", Place: runtimes.PlaceBeforeLast}
 	if !ok || !reflect.DeepEqual(rs, want) {
 		t.Errorf("resume %+v, %v; want %+v", rs, ok, want)
 	}

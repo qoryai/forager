@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/qoryai/forager/session/runtimes"
 )
 
 // TestTheResumeScriptWritesTheTranscriptThenResumes pins the script's two ends: with a
@@ -163,6 +165,75 @@ func TestResumeAtFollowsAfter(t *testing.T) {
 	}
 	if got := resumeAt(nil, "exec"); got != 0 {
 		t.Errorf("no arguments: %d", got)
+	}
+}
+
+// TestResumePlaceBeforeLast pins resume.place before_last: the resume
+// arguments go right before the first -- after resume.after, else right before the last
+// argument; with no argument after resume.after, or none equal to it, there is no place.
+// Without place, they go right after resume.after.
+func TestResumePlaceBeforeLast(t *testing.T) {
+	before := runtimes.Resume{After: "exec", Place: runtimes.PlaceBeforeLast}
+	for _, c := range []struct {
+		args []string
+		want int
+	}{
+		{[]string{"exec", "--json", "--add-dir", "/in", "Say hi"}, 4},
+		{[]string{"exec", "--json", "--", "Say hi"}, 2},
+		{[]string{"--", "exec", "--json", "--", "--x", "--"}, 3},
+		{[]string{"exec", "Say hi"}, 1},
+		{[]string{"--model", "m", "exec", "--json", "Say hi"}, 4},
+	} {
+		if got, ok := resumePlace(c.args, before); !ok || got != c.want {
+			t.Errorf("%q: %d, %v; want %d", c.args, got, ok, c.want)
+		}
+	}
+	for _, args := range [][]string{{"exec"}, {"--json", "exec"}, {"--json", "Say hi"}, nil} {
+		if got, ok := resumePlace(args, before); ok {
+			t.Errorf("%q: %d; want no place", args, got)
+		}
+	}
+	if got, ok := resumePlace([]string{"exec", "--json", "Say hi"}, runtimes.Resume{After: "exec"}); !ok || got != 1 {
+		t.Errorf("without place: %d, %v; want 1", got, ok)
+	}
+}
+
+// TestTheResumeScriptInsertsTheArgumentsBeforeThePrompt pins the script for resume.place
+// before_last: the runtime gets the resume arguments right before its last argument, or
+// right before the -- that comes before it.
+func TestTheResumeScriptInsertsTheArgumentsBeforeThePrompt(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, ResumeTranscript)
+	if err := os.WriteFile(transcript, []byte("{\"a\":1}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := runtimes.Resume{After: "exec", Place: runtimes.PlaceBeforeLast}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"exec", "--json", "--add-dir", "/in", "it's a 'prompt'"}, "[exec]\n[--json]\n[--add-dir]\n[/in]\n[resume]\n[s 1]\n[it's a 'prompt']\n"},
+		{[]string{"exec", "--json", "--", "--prompt"}, "[exec]\n[--json]\n[resume]\n[s 1]\n[--]\n[--prompt]\n"},
+	} {
+		launch := append([]string{"/bin/sh", "-c", `for a; do echo "[$a]"; done`, "sh"}, c.args...)
+		at, ok := resumePlace(launch[1:], before)
+		if !ok {
+			t.Fatalf("%q: no place", c.args)
+		}
+		script := filepath.Join(dir, ResumeScript)
+		text := resumeScriptAt("0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", transcript, "~/.rollouts/sessions/2026/11/13/rollout-a-s.jsonl", []string{"resume", "s 1"}, 1+at)
+		if err := os.WriteFile(script, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("/bin/sh", append([]string{script}, launch...)...)
+		cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(out) != c.want {
+			t.Errorf("%q: the runtime got %q; want %q", c.args, out, c.want)
+		}
 	}
 }
 

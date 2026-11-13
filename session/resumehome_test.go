@@ -236,6 +236,55 @@ func TestAPausedRunsPathOutsideTheHomesNamesFails(t *testing.T) {
 	}
 }
 
+// TestResumeBeforeLastGoesBeforeThePrompt pins a homer whose descriptor has
+// resume.place before_last, with a wall in a writable mount and without one: the
+// session inserts resume <id> right before the launch's last argument, or right before
+// the -- after exec; with no argument after exec, the runtime starts without a resume
+// and the line of the failed resume starts with the fix.
+func TestResumeBeforeLastGoesBeforeThePrompt(t *testing.T) {
+	t.Setenv("QORY_TEST_HOST_ONLY", "1")
+	const below = "2025/01/02/rollout-p-" + rolloutID + ".jsonl"
+	doc := strings.Replace(homer, "  after: exec\n", "  after: exec\n  place: before_last\n", 1)
+	for _, walled := range []bool{false, true} {
+		for _, c := range []struct {
+			args []string
+			want string
+		}{
+			{[]string{"exec", "--json", "--add-dir", "/in", "Say hi"}, "args: exec --json --add-dir /in resume " + rolloutID + " Say hi\n"},
+			{[]string{"exec", "--json", "--", "Say hi"}, "args: exec --json resume " + rolloutID + " -- Say hi\n"},
+			{[]string{"--json", "exec"}, "Put the prompt as the launch's last argument, after exec. The runtime starts without a resume: the transcript of run " + pausedRun +
+				" could not be restored: the launch has no argument after exec, and resume.place before_last puts resume.args before the last one\n"},
+		} {
+			t.Run(fmt.Sprint("walled ", walled, " ", c.args), func(t *testing.T) {
+				home := t.TempDir()
+				homeVar := home
+				if walled {
+					homeVar = homeInside
+				}
+				sp := homerSpec(t, homeVar, "/var/lib/old-home/sessions/"+below)
+				rt, err := runtimes.Described("homer.yaml", []byte(doc), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sp.Runtime = rt
+				sp.Args = append([]string{"-c", homerScript, "sh"}, c.args...)
+				if walled {
+					sp.Env = append(sp.Env, "SESSIONS="+filepath.Join(home, "sessions"))
+					sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+					sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: home, Target: homeInside}}
+				}
+				res, err := run(context.Background(), sp)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if out := runLogText(t, events(t, res)); !strings.Contains(out, c.want) {
+					t.Errorf("the runtime's output %q; want %q", out, c.want)
+				}
+			})
+		}
+	}
+}
+
 // startedFrom checks that evs have one dev.qory.runtime.started, with source.
 func startedFrom(t *testing.T, evs []map[string]any, source string) {
 	t.Helper()

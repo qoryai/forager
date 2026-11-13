@@ -70,10 +70,10 @@ const codexRun = "codex-run"
 // stub accepts.
 var codexArgs = []string{"exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-e2e"}
 
-// codexResumable are [codexArgs] with Codex's sandbox off as a --config pair: codex exec
-// resume of Codex 0.167.2 takes no --sandbox, nor --cd, --add-dir, --color or
-// --approve-for-me, after resume <thread id>, where the session inserts them.
-var codexResumable = []string{"exec", "--json", "--skip-git-repo-check", "--config", `sandbox_mode="danger-full-access"`, "--model", "gpt-e2e"}
+// codexResumable are [codexArgs] with --add-dir /tmp, as a composer passes an inputs
+// folder: the session puts resume <thread id> right before the prompt, after every
+// option of codex exec, --sandbox and --add-dir among them.
+var codexResumable = slices.Concat(codexArgs, []string{"--add-dir", "/tmp"})
 
 func init() {
 	if len(os.Args) > 1 && os.Args[1] == modeCodexStub {
@@ -703,15 +703,15 @@ func codexExited(t *testing.T, o keysOutcome, state, reason string) {
 
 // TestDockerCodexResumesAPausedRunUnderAnotherKey runs Codex 0.167.2 twice behind the
 // wall, with CODEX_HOME at /var/lib/qory-codex-home as a fixed value of the launch and
-// an empty environment otherwise, as qory starts it, and the sandbox off as a --config
-// pair ([codexResumable]). Run 1, with one key, prints the stub's Hi; its
-// session looks up the rollout below ${CODEX_HOME}/sessions/, in the transcript directory
-// the wall binds there, and sends it as dev.qory.session.transcript chunks, which the
-// control plane stores. Run 2's run configuration has resume, with run 1's id, thread id
-// and rollout path, and another key; the control plane serves run 1's chunks. Run 2
-// restores the rollout alone at the same path, starts codex exec resume <thread id>
-// with --model, and its first request goes with the second key and contains run 1's
-// prompt and Codex's answer to it, then run 2's prompt. Run 2's
+// an empty environment otherwise, as qory starts it, with --sandbox and --add-dir
+// ([codexResumable]). Run 1, with one key, prints the stub's Hi; its session looks up
+// the rollout below ${CODEX_HOME}/sessions/, in the transcript directory the wall binds
+// there, and sends it as dev.qory.session.transcript chunks, which the control plane
+// stores. Run 2's run configuration has resume, with run 1's id, thread id and rollout
+// path, and another key; the control plane serves run 1's chunks. Run 2 restores the
+// rollout alone at the same path, starts codex exec with its options and resume <thread
+// id> right before the prompt, and its first request goes with the second key and
+// contains run 1's prompt and Codex's answer to it, then run 2's prompt. Run 2's
 // dev.qory.runtime.started has source resume and run 1's thread id, both runs end
 // succeeded, and run 2 sends the restored rollout with its turn appended from offset 0,
 // under run 1's path. The test logs the instructions of each run's first request.
@@ -750,8 +750,9 @@ func TestDockerCodexResumesAPausedRunUnderAnotherKey(t *testing.T) {
 		t.Fatalf("run 2's dev.qory.session.started is %v; want one", sessions)
 	}
 	args, _ := sessions[0]["args"].([]any)
-	if at := slices.Index(args, any("exec")); at < 0 || at+2 >= len(args) || args[at+1] != "resume" || args[at+2] != threadID || !slices.Contains(args, any("--model")) {
-		t.Errorf("run 2's arguments %q; want exec resume %s, and --model", args, threadID)
+	if n := len(args); n < 3 || args[n-3] != "resume" || args[n-2] != threadID || args[n-1] != prompt2 || !slices.Contains(args, any("--model")) ||
+		!slices.Contains(args, any("--add-dir")) || !slices.Contains(args, any("--sandbox")) {
+		t.Errorf("run 2's arguments %q; want --model, --sandbox, --add-dir, then resume %s before the prompt", args, threadID)
 	}
 	if started := o2.of("dev.qory.runtime.started"); len(started) != 1 || started[0]["source"] != "resume" || started[0]["session_id"] != threadID {
 		t.Errorf("run 2's dev.qory.runtime.started is %v; want one, from resume, with thread %s", started, threadID)

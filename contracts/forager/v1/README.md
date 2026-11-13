@@ -5689,7 +5689,17 @@ the one the runtime gets (§The events, A session's transcript). `args` are the 
 `["--resume", "{session_id}"]`. `after`, optional, is the argument of the runtime's that
 `args` follow: with `after: exec` and `args: [resume, "{session_id}"]`, `codex exec
 --json` resumes as `codex exec resume <session id> --json`. Absent, or when no
-argument equals it, the session adds `args` at the end. Until 2026-11-13 `path_from` was
+argument equals it, the session adds `args` at the end. `place`, optional, has one
+value, `before_last`, and requires `after`: the session inserts `args` right before the
+first `--` after the argument equal to `after`, or else right before the last argument,
+the prompt. Codex's descriptor sets it: `codex exec --json --add-dir <dir> "<prompt>"`
+resumes as `codex exec --json --add-dir <dir> resume <session id> "<prompt>"`, and
+`codex exec --json -- "<prompt>"` as `codex exec --json resume <session id> --
+"<prompt>"`. With no argument after `after`, or none equal to it, the runtime starts
+without a resume and the session writes one line, `Put the prompt as the launch's last
+argument, after exec. The runtime starts without a resume: the transcript of run <run
+id> could not be restored: the launch has no argument after exec, and resume.place
+before_last puts resume.args before the last one`. Until 2026-11-13 `path_from` was
 required, and a `*` and `after` had no meaning; on 2026-11-13 the schema accepts all
 three, and the session still reads `path` with no pattern and adds `args` at the
 end. The session sends the transcript as `dev.qory.session.transcript`

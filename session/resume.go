@@ -101,7 +101,11 @@ func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir st
 	for i, a := range rs.Args {
 		args[i] = strings.ReplaceAll(a, "{session_id}", want.SessionID)
 	}
-	at := resumeAt(launch.Args, rs.After)
+	at, ok := resumePlace(launch.Args, rs.Resume)
+	if !ok {
+		return failed(fmt.Sprintf("Put the prompt as the launch's last argument, after %s", rs.After),
+			fmt.Sprintf("the launch has no argument after %s, and resume.place %s puts resume.args before the last one", rs.After, rs.Place))
+	}
 	below := strings.TrimPrefix(want.Path, rs.Prefix)
 	if walled {
 		if root.dir == "" {
@@ -174,6 +178,25 @@ func resumeAt(args []string, after string) int {
 		}
 	}
 	return len(args)
+}
+
+// resumePlace is where the resume arguments of r go in args, a launch's arguments,
+// and true. For resume.place before_last, that is right before the first -- after
+// the first argument equal to r.After, or else right before the last argument, the
+// prompt: false when no argument follows one equal to r.After, or none equals it.
+// Otherwise it is [resumeAt].
+func resumePlace(args []string, r runtimes.Resume) (int, bool) {
+	if r.Place != runtimes.PlaceBeforeLast {
+		return resumeAt(args, r.After), true
+	}
+	i := slices.Index(args, r.After)
+	if i < 0 || i == len(args)-1 {
+		return 0, false
+	}
+	if j := slices.Index(args[i+1:], "--"); j >= 0 {
+		return i + 1 + j, true
+	}
+	return len(args) - 1, true
 }
 
 // fetchFix is the fix of a resume whose read of the transcript of run runID failed.
