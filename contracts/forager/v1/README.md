@@ -2340,9 +2340,13 @@ that home is `HOME` of the launch's environment, else `HOME` of the image's, els
 home in the image's `/etc/passwd` of the user the container starts as, else `/`. That user is the wall's user, or root with
 nested Docker: the engine sets root's `HOME`, and the helper keeps it when it starts the
 agent as the wall's user. A home where that place is, contains or lies inside a mount's
-place inside, or `/qory`, fails the session. Before the wall binds the directory it
-checks that the agent can write it, and binds nothing when:
+place inside fails the session. Before the wall binds the directory it checks that the
+agent can write it, and binds nothing when:
 
+- the bind's place is or lies inside `/qory`, where the wall mounts its helper, hooks
+  and bundle, with the fix `Set HOME to a directory where the transcript's place lies
+  outside /qory`, or for an absolute `resume.prefix` `Set resume.prefix, or the value of
+  its resume.home_var, to a path outside /qory`;
 - the wall's user is a name, or a uid other than the session's, since the directory is
   mode `0700` and the session's uid's;
 - a directory from `/` down to the bind's place is a symbolic link or no directory in

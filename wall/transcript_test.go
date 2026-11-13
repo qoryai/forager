@@ -93,8 +93,9 @@ func TestALaunchWithNoTranscriptDirectoryBindsNone(t *testing.T) {
 
 // TestATranscriptDirectoryThatOverlapsAMountIsRefused pins the refusals: a directory
 // that lies inside a mount, contains one or is not clean, a place below the home with a ..
-// name, an absolute place that is /, is not clean or overlaps a mount's place inside or
-// /qory, and a home where the place inside overlaps a mount's place inside or /qory.
+// name, an absolute place that is /, is not clean or overlaps a mount's place inside,
+// and a home where the place inside overlaps a mount's place inside. A place at or
+// inside /qory is unbound ([TestATranscriptPlaceInQoryIsUnbound]).
 func TestATranscriptDirectoryThatOverlapsAMountIsRefused(t *testing.T) {
 	for name, c := range map[string]struct {
 		change func(*Launch)
@@ -110,10 +111,8 @@ func TestATranscriptDirectoryThatOverlapsAMountIsRefused(t *testing.T) {
 		"absolute, not clean":      {func(l *Launch) { l.Transcript.Under = "/var/../etc" }, `wall docker: set the transcript's place to a clean path below the home or below /: "/var/../etc" is not one`},
 		"absolute, in a mount":     {func(l *Launch) { l.Transcript.Under = "/work/.sessions" }, `wall docker: show no mount at, around or inside "/work/.sessions": the transcript directory is bound there, and it overlaps "/work"`},
 		"absolute, around a mount": {func(l *Launch) { l.Transcript.Under = "/home/dev/.qory" }, `wall docker: show no mount at, around or inside "/home/dev/.qory": the transcript directory is bound there, and it overlaps "/home/dev/.qory/homes/work"`},
-		"absolute, under /qory":    {func(l *Launch) { l.Transcript.Under = "/qory/sessions" }, `wall docker: show no mount at, around or inside "/qory/sessions": the transcript directory is bound there, and it overlaps "/qory"`},
 		"a home in a mount":        {func(l *Launch) { l.Env = append(l.Env, "HOME=/work") }, `wall docker: set HOME to a directory where "/work/.claude/projects" overlaps no mount: the transcript directory is bound there, and it overlaps "/work"`},
 		"a home that contains one": {func(l *Launch) { l.Env = append(l.Env, "HOME=/"); l.Transcript.Under = "work" }, `wall docker: set HOME to a directory where "/work" overlaps no mount: the transcript directory is bound there, and it overlaps "/work"`},
-		"a home under /qory":       {func(l *Launch) { l.Env = append(l.Env, "HOME=/qory") }, `wall docker: set HOME to a directory where "/qory/.claude/projects" overlaps no mount: the transcript directory is bound there, and it overlaps "/qory"`},
 		"a relative home":          {func(l *Launch) { l.Env = append(l.Env, "HOME=home") }, `wall docker: the home inside, "home" from the launch's HOME, is not an absolute path`},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -363,6 +362,50 @@ func TestATranscriptPlaceTheAgentCannotUseIsUnbound(t *testing.T) {
 			}
 			if _, err := e.Wrap(context.Background(), l); err == nil || !strings.Contains(err.Error(), unbound.Fix) {
 				t.Errorf("the wrap: %v; want the fix %q", err, unbound.Fix)
+			}
+			if agentCreate(rec) != "" {
+				t.Errorf("the agent's container was created: %q", agentCreate(rec))
+			}
+		})
+	}
+}
+
+// TestATranscriptPlaceInQoryIsUnbound pins a transcript place at or inside /qory, where
+// the wall mounts its helper, hooks and bundle: an absolute place, and a place below a
+// home at /qory or at /. CheckTranscript returns the fix first, so the session starts
+// the runtime without a resume, and Wrap of the same launch fails with that fix before
+// the agent's container is made.
+func TestATranscriptPlaceInQoryIsUnbound(t *testing.T) {
+	const abs = "Set resume.prefix, or the value of its resume.home_var, to a path outside /qory"
+	const home = "Set HOME to a directory where the transcript's place lies outside /qory"
+	for name, c := range map[string]struct {
+		env   string
+		under string
+		fix   string
+		place string
+	}{
+		"absolute, under /qory": {"HOME=/home/agent", "/qory/sessions", abs, "/qory/sessions"},
+		"absolute, at /qory":    {"HOME=/home/agent", "/qory", abs, "/qory"},
+		"a home under /qory":    {"HOME=/qory", ".claude/projects", home, "/qory/.claude/projects"},
+		"a home at /":           {"HOME=/", "qory", home, "/qory"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000"`}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+			e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer e.Close(context.Background())
+			l := transcriptLaunch(c.env)
+			l.Transcript.Under = c.under
+			want := Unbound{Fix: c.fix, Cause: "the transcript's place \"" + c.place + "\" lies at or inside /qory, where the wall mounts its helper, hooks and bundle"}
+			unbound, err := e.(TranscriptChecker).CheckTranscript(context.Background(), l.Env, l.Transcript)
+			if err != nil || unbound == nil || *unbound != want {
+				t.Fatalf("CheckTranscript: %+v, %v; want %+v", unbound, err, want)
+			}
+			if _, err := e.Wrap(context.Background(), l); err == nil || !strings.HasPrefix(err.Error(), "wall docker: "+c.fix+": ") {
+				t.Errorf("the wrap: %v; want the fix %q", err, c.fix)
 			}
 			if agentCreate(rec) != "" {
 				t.Errorf("the agent's container was created: %q", agentCreate(rec))

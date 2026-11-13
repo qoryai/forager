@@ -1788,11 +1788,12 @@ func (a *renamer) renames(h, next *tar.Header) string {
 // transcriptMount is the --mount of the launch's transcript directory, empty for a
 // launch with none: the directory, writable, at Under below the home of the agent's
 // user inside, or at an absolute Under, [dockerEnclosure.transcriptPlace]. A directory
-// that is not absolute and clean, an Under that is not clean or has a .. name, a directory that is,
-// contains or lies inside one of the launch's mounts or the hook socket's directory, a
-// place inside that is, contains or lies inside another mount's place inside or /qory, and
-// a place the agent's container cannot bind for the agent ([Unbound]) are refused: no
-// mount of the launch's shows the directory, and the bind hides no part of another one.
+// that is not absolute and clean, an Under that is not clean or has a .. name, a
+// directory that is, contains or lies inside one of the launch's mounts or the hook
+// socket's directory, a place inside that is, contains or lies inside another mount's
+// place inside, and a place the agent's container cannot bind for the agent
+// ([Unbound]), one at or inside /qory among them, are refused: no mount of the
+// launch's shows the directory, and the bind hides no part of another one.
 // It also returns the place, with the directories between the home and the bind's place
 // that [dockerEnclosure.copyDirs] makes.
 func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string, *transcriptPlace, error) {
@@ -1803,8 +1804,7 @@ func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string
 	if !filepath.IsAbs(tr.Path) || filepath.Clean(tr.Path) != tr.Path {
 		return "", nil, fmt.Errorf("wall docker: the transcript directory %s is not an absolute, clean path", accesskey.ShownValue(tr.Path, true))
 	}
-	var sources []string
-	dsts := []string{qoryDir}
+	var sources, dsts []string
 	for _, m := range l.Mounts {
 		sources = append(sources, m.Path)
 		if m.Target != "" {
@@ -1910,6 +1910,10 @@ func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t T
 		}
 	}
 	p.dst, p.uid, p.gid = path.Join(home, t.Under), uid, gid
+	if why := inQory(p.dst, path.IsAbs(t.Under)); why != nil {
+		p.unbound, e.placed = why, p
+		return p, nil
+	}
 	var names []string
 	for q := p.dst; q != "/"; q = path.Dir(q) {
 		names = append([]string{q}, names...)
@@ -1936,6 +1940,21 @@ func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t T
 	}
 	e.placed = p
 	return p, nil
+}
+
+// inQory is why the agent's container binds no transcript directory at dst, the
+// bind's place inside, when dst is or lies inside /qory, where the wall mounts its
+// helper, hooks and bundle; nil when it lies outside. abs says the place is absolute, so
+// the fix is the place, not HOME.
+func inQory(dst string, abs bool) *Unbound {
+	if !under(qoryDir, dst) {
+		return nil
+	}
+	cause := fmt.Sprintf("the transcript's place %s lies at or inside /qory, where the wall mounts its helper, hooks and bundle", accesskey.ShownValue(dst, true))
+	if abs {
+		return &Unbound{Fix: "Set resume.prefix, or the value of its resume.home_var, to a path outside /qory", Cause: cause}
+	}
+	return &Unbound{Fix: "Set HOME to a directory where the transcript's place lies outside /qory", Cause: cause}
 }
 
 // unreachable is why the directory q of the image, whose first tar header is h, keeps
