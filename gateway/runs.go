@@ -673,6 +673,9 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 		// again with the next key, and the reporter shares each key's state with the
 		// control plane.
 		lr.keys = modelkey.New(keys, r.Held().Start, nil)
+		for _, name := range r.KeysOut() {
+			lr.keys.Out(name)
+		}
 		if lr.remote {
 			// The mark that the proxy passed a limit refusal to the session, for a
 			// gateway that starts again. Called on the proxy's request path: a write

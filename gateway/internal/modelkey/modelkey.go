@@ -87,7 +87,9 @@ type Group struct {
 	windows [][]*Window
 	// claim is each key's cooldown_until of the run configuration, by the key's place,
 	// zero once a later state of the key allows it.
-	claim  []time.Time
+	claim []time.Time
+	// out is true for each key, by the key's place, that left the group ([Group.Out]).
+	out    []bool
 	active int
 	// passed is true once the proxy passed a limit refusal to the session: until
 	// [Group.Resume], the proxy sends no request with the placeholder and the gateway's
@@ -108,7 +110,7 @@ func New(keys []Key, start string, now func() time.Time) *Group {
 	if now == nil {
 		now = time.Now
 	}
-	g := &Group{keys: slices.Clone(keys), now: now, made: now(), windows: make([][]*Window, len(keys)), claim: make([]time.Time, len(keys))}
+	g := &Group{keys: slices.Clone(keys), now: now, made: now(), windows: make([][]*Window, len(keys)), claim: make([]time.Time, len(keys)), out: make([]bool, len(keys))}
 	for i, k := range keys {
 		g.claim[i] = k.CooldownUntil
 	}
@@ -152,6 +154,19 @@ func (g *Group) index(name string) int {
 	return slices.IndexFunc(g.keys, func(k Key) bool { return k.Name == name })
 }
 
+// Out takes the key name out of the group for the rest of the run: [Group.Pick] and
+// [Group.next] pass over it as over a key in cooldown that never ends. A name that is
+// no key of the group changes nothing.
+func (g *Group) Out(name string) {
+	i := g.index(name)
+	if i < 0 {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.out[i] = true
+}
+
 // Active is the active key's name, as [Group.Pick] returns it.
 func (g *Group) Active() string {
 	name, _ := g.Pick()
@@ -159,14 +174,14 @@ func (g *Group) Active() string {
 }
 
 // Pick returns the active key's name, and false when every key of the group is in
-// cooldown. When the active key is in cooldown, the first key of [Group.next] becomes
-// active first; when every key is in cooldown, the active key stays, and the proxy sets
-// no key.
+// cooldown or out ([Group.Out]). When the active key is in cooldown or out, the first
+// key of [Group.next] becomes active first; when no key is left, the active key stays,
+// and the proxy sets no key.
 func (g *Group) Pick() (string, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
-	if g.coolingUntil(g.active, now).After(now) {
+	if g.out[g.active] || g.coolingUntil(g.active, now).After(now) {
 		next, ok := g.next(now)
 		if !ok {
 			return g.keys[g.active].Name, false
@@ -176,14 +191,15 @@ func (g *Group) Pick() (string, bool) {
 	return g.keys[g.active].Name, true
 }
 
-// next is the key a switch makes active, among the keys not in cooldown at now: the
-// chosen key first; then the keys with no known reset, or one that has passed, by the
-// order; then the key with the closest reset, keys whose resets fall in the same minute
-// by the order. It reports false when every key is in cooldown. Called with g.mu held.
+// next is the key a switch makes active, among the keys neither out nor in cooldown at
+// now: the chosen key first; then the keys with no known reset, or one that has
+// passed, by the order; then the key with the closest reset, keys whose resets fall in
+// the same minute by the order. It reports false when every key is out or in cooldown.
+// Called with g.mu held.
 func (g *Group) next(now time.Time) (int, bool) {
 	best, bestReset := -1, time.Time{}
 	for i, k := range g.keys {
-		if g.coolingUntil(i, now).After(now) {
+		if g.out[i] || g.coolingUntil(i, now).After(now) {
 			continue
 		}
 		if k.Chosen {

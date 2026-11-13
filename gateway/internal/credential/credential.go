@@ -19,13 +19,16 @@ package credential
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -95,11 +98,15 @@ type Use struct {
 	// after a host refuses it: a value with expires_at, whose rejected asks for it again.
 	Renewed bool
 	// Format, Endpoint and OAuth are a model key's, from the server or the machine;
-	// empty for every other credential.
-	Format, Endpoint string
-	OAuth            bool
-	held             *held
-	index            int
+	// empty for every other credential. AccountHeader and AccountClaim, of a model key
+	// from the server alone, are the header the proxy sets beside the value and the
+	// JSON pointer of its value in the value's JWT payload ([AccountClaim]); empty for
+	// none.
+	Format, Endpoint            string
+	OAuth                       bool
+	AccountHeader, AccountClaim string
+	held                        *held
+	index                       int
 }
 
 // Stored is a credential whose value Qory Apiary stores for the run: an entry of the
@@ -112,8 +119,11 @@ type Stored struct {
 	Apply        []StoredApply
 	Placeholders []string
 	// Format, Endpoint and OAuth are an API credential's; empty for a host credential.
-	Format, Endpoint string
-	OAuth            bool
+	// AccountHeader and AccountClaim are an API credential's auth's account_header and
+	// account_claim; empty for none.
+	Format, Endpoint            string
+	OAuth                       bool
+	AccountHeader, AccountClaim string
 	// Entry is the part of the credential's entry that [KeyGroup] reads; its Format is
 	// empty for a host credential.
 	Entry KeyEntry
@@ -356,7 +366,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		}
 		for _, a := range s.Apply {
 			out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, Stored: true,
-				Renewed: renewed, Format: s.Format, Endpoint: s.Endpoint, OAuth: s.OAuth, held: h})
+				Renewed: renewed, Format: s.Format, Endpoint: s.Endpoint, OAuth: s.OAuth, AccountHeader: s.AccountHeader, AccountClaim: s.AccountClaim, held: h})
 		}
 		for _, p := range s.Placeholders {
 			if !slices.Contains(h.placeholders, p) {
@@ -421,15 +431,17 @@ func (h *Held) startKey(start string) error {
 // [KeyGroup] reads: its name, and an API credential's format, endpoint and auth.
 // Format is empty for a host credential.
 type KeyEntry struct {
-	Name, Format, Endpoint   string
-	Scheme, Username, Header string
-	OAuth                    bool
+	Name, Format, Endpoint      string
+	Scheme, Username, Header    string
+	OAuth                       bool
+	AccountHeader, AccountClaim string
 }
 
 // KeyGroup is the key group of the start key start: the names of entries, in their
-// order, whose format, endpoint and auth are the start key's, the header's case
-// ignored; none when start is no API credential of entries. The gateway sets the key
-// group by it alone: the check of the run configuration and the proxy's group.
+// order, whose format, endpoint and auth are the start key's, the case of the header
+// and of the account header ignored; none when start is no API credential of entries.
+// The gateway sets the key group by it alone: the check of the run configuration and
+// the proxy's group.
 func KeyGroup(entries []KeyEntry, start string) []string {
 	i := slices.IndexFunc(entries, func(e KeyEntry) bool { return e.Name == start })
 	if i < 0 || entries[i].Format == "" {
@@ -439,7 +451,8 @@ func KeyGroup(entries []KeyEntry, start string) []string {
 	var out []string
 	for _, e := range entries {
 		if e.Format == first.Format && e.Endpoint == first.Endpoint && e.OAuth == first.OAuth &&
-			e.Scheme == first.Scheme && e.Username == first.Username && strings.EqualFold(e.Header, first.Header) {
+			e.Scheme == first.Scheme && e.Username == first.Username && strings.EqualFold(e.Header, first.Header) &&
+			strings.EqualFold(e.AccountHeader, first.AccountHeader) && e.AccountClaim == first.AccountClaim {
 			out = append(out, e.Name)
 		}
 	}
@@ -458,7 +471,9 @@ func keyGroup(stored []Stored, start string) []string {
 
 // check refuses two uses that claim a host together, unless both are model keys, which
 // the proxy tells apart by their placeholders, or both have paths and no path of one
-// overlaps a path of the other, so the proxy sets the use whose paths match a request.
+// overlaps a path of the other, so the proxy sets the use whose paths match a request:
+// a model key from the server with paths, such as /backend-api/codex/*, beside a host
+// credential with other paths of its host.
 // Under enforce it refuses a host the run's allow list does not cover, a model key's
 // host being its endpoint's: a credential for a host the run never reaches is a
 // mistake to hear of before the run, not during it.
@@ -534,6 +549,86 @@ func (d Definition) hosts() []string {
 // prefixes is empty.
 func KeyMatches(prefixes []string, value []byte) bool {
 	return len(prefixes) == 0 || slices.ContainsFunc(prefixes, func(p string) bool { return bytes.HasPrefix(value, []byte(p)) })
+}
+
+// MaxClaimPayload is the most bytes of a JWT payload [AccountClaim] decodes, once
+// decoded: it bounds what the gateway decodes of a model key's value each time it
+// loads one. The claims of a subscription's token under the member account_claim
+// points into are 8 members (the 521 probe, item 7).
+const MaxClaimPayload = 8 << 10
+
+// AccountClaim is the string at pointer, a JSON pointer (RFC 6901), in the JWT payload
+// of value: the value of a model key's account header. The payload is the second of
+// the value's three parts separated by dots, base64url with or without padding.
+// AccountClaim checks no signature: the value comes from the control plane, and the
+// model provider checks the token. Its error contains neither the value nor the claim:
+// a value that is not three parts, a payload over [MaxClaimPayload] bytes once decoded,
+// one that is no base64url or no JSON object with each member name once, a pointer
+// that reaches no string, and a string that is empty, starts or ends with a space or a
+// tab, or has a control character, which a header value cannot have.
+func AccountClaim(value []byte, pointer string) (string, error) {
+	parts := bytes.Split(value, []byte("."))
+	if len(parts) != 3 {
+		return "", errors.New("the value is no JWT: it is not three parts separated by dots")
+	}
+	enc := bytes.TrimRight(parts[1], "=")
+	if base64.RawURLEncoding.DecodedLen(len(enc)) > MaxClaimPayload {
+		return "", fmt.Errorf("its JWT payload is over %d bytes", MaxClaimPayload)
+	}
+	payload := make([]byte, base64.RawURLEncoding.DecodedLen(len(enc)))
+	defer clear(payload)
+	n, err := base64.RawURLEncoding.Decode(payload, enc)
+	if err != nil {
+		return "", errors.New("its JWT payload is not base64url")
+	}
+	var doc map[string]any
+	if err := jsonv2.Unmarshal(payload[:n], &doc); err != nil || doc == nil {
+		return "", errors.New("its JWT payload is not one JSON object with each member name once")
+	}
+	shown := accesskey.ShownValue(pointer, true)
+	missing := fmt.Errorf("its JWT payload has no string at account_claim %s", shown)
+	if !strings.HasPrefix(pointer, "/") {
+		return "", fmt.Errorf("account_claim %s is no JSON pointer", shown)
+	}
+	var at any = doc
+	for _, token := range strings.Split(pointer[1:], "/") {
+		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+		switch v := at.(type) {
+		case map[string]any:
+			next, ok := v[token]
+			if !ok {
+				return "", missing
+			}
+			at = next
+		case []any:
+			i, ok := arrayIndex(token)
+			if !ok || i >= len(v) {
+				return "", missing
+			}
+			at = v[i]
+		default:
+			return "", missing
+		}
+	}
+	claim, ok := at.(string)
+	if !ok {
+		return "", missing
+	}
+	if claim == "" || strings.HasPrefix(claim, " ") || strings.HasPrefix(claim, "\t") || strings.HasSuffix(claim, " ") || strings.HasSuffix(claim, "\t") ||
+		strings.ContainsFunc(claim, func(r rune) bool { return r != '\t' && (r < 0x20 || (r >= 0x7f && r <= 0x9f)) }) {
+		return "", fmt.Errorf("the string at account_claim %s in its JWT payload is empty, starts or ends with a space or a tab, or has a control character, which a header value cannot have", shown)
+	}
+	return claim, nil
+}
+
+// arrayIndex is a JSON pointer's token read as an index of an array, RFC 6901: 0, or
+// decimal digits that do not start with 0. ok is false for any other token.
+func arrayIndex(token string) (int, bool) {
+	if token == "" || len(token) > 9 || (len(token) > 1 && token[0] == '0') || strings.Trim(token, "0123456789") != "" {
+		return 0, false
+	}
+	i, err := strconv.Atoi(token)
+	return i, err == nil
 }
 
 // checkModelKey refuses a model key's definition that cannot be one: a format outside

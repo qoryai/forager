@@ -263,13 +263,14 @@ func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Resp
 		rs.k.log(modelkey.Shown(accesskey.ShownName(rs.name, true), resp.StatusCode, resp.Header, kind))
 		next, ok := g.Refused(rs.name, resp.Header, code)
 		c := rs.cred(next)
-		var name, value string
+		var name, value, account string
 		if ok && c != nil {
 			v := c.secret()
-			var set bool
+			var set, accountOK bool
 			name, value, set = c.header(v)
+			account, accountOK = c.account(v)
 			clear(v)
-			ok = set
+			ok = set && accountOK
 		}
 		// Each try cools a key, so the group runs out of keys within its size; the bound
 		// stops the loop when a provider sends a reset that has passed.
@@ -287,6 +288,9 @@ func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Resp
 		again.ContentLength = int64(len(rs.body))
 		again.GetBody = rs.again
 		again.Header.Set(name, value)
+		if c.AccountHeader != "" {
+			again.Header.Set(c.AccountHeader, account)
+		}
 		rs.name = next
 		if rs.pending != nil {
 			rs.pending.d.Credential = next

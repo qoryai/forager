@@ -55,6 +55,12 @@ type Credential struct {
 	// the key is set with. Empty for every other credential, which the proxy sets on
 	// every request to its hosts.
 	Placeholder string
+	// AccountHeader, for a model key whose auth has account_header, is the header the
+	// proxy sets beside the key, to what Account reads from the key's value: the claim
+	// at account_claim in its JWT payload. The proxy takes the header off every request
+	// to the key's hosts, so the session's value of it never passes. Empty for none.
+	AccountHeader string
+	Account       func(value []byte) (string, error)
 }
 
 // Tool is a program of the machine's that serves hosts: the proxy hands every request
@@ -518,6 +524,11 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		r.Header.Del(setBy)
+		for _, h := range creds {
+			if h.AccountHeader != "" {
+				dropHeader(r.Header, h.AccountHeader)
+			}
+		}
 		group := (*keyGroup)(nil)
 		if c != nil && allowed && tl == nil && c.carries(r.Header) {
 			group = t.p.group(c.Name)
@@ -540,8 +551,13 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			for _, h := range creds {
 				v := h.secret()
 				if h == c && c.carries(r.Header) {
-					if name, value, ok := c.header(v); ok {
+					name, value, ok := c.header(v)
+					account, accountOK := c.account(v)
+					if ok && accountOK {
 						r.Header.Set(name, value)
+						if c.AccountHeader != "" {
+							r.Header.Set(c.AccountHeader, account)
+						}
 						r.Header.Set(setBy, c.Name)
 						req.Credential, keyed = c.Name, true
 					}
@@ -693,6 +709,33 @@ func (c *Credential) header(v []byte) (string, string, bool) {
 		return c.Header, join("", v), true
 	}
 	return "", "", false
+}
+
+// account is the value of the credential's account header for its value v, which
+// stays the caller's to clear, and whether the proxy may set v: true with "" for a
+// credential with no account header, false when v has no account claim. A value the
+// run loaded has one ([credential.AccountClaim]), so a false is a value that changed
+// since, and the proxy sets neither.
+func (c *Credential) account(v []byte) (string, bool) {
+	if c.AccountHeader == "" {
+		return "", true
+	}
+	if c.Account == nil || len(v) == 0 {
+		return "", false
+	}
+	account, err := c.Account(v)
+	return account, err == nil
+}
+
+// dropHeader takes every header named name off h, case ignored and an underscore read
+// as a dash, which some servers read as the same name.
+func dropHeader(h http.Header, name string) {
+	want := strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	for k := range h {
+		if strings.ReplaceAll(strings.ToLower(k), "_", "-") == want {
+			delete(h, k)
+		}
+	}
 }
 
 // upstream is the transport to the real hosts of terminated connections: verified

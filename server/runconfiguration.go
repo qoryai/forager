@@ -89,8 +89,11 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 // CheckCredentials refuses what the schema cannot state of a run configuration's
 // credentials, each [refusal.RunConfigurationInvalid] with the credential's name, a
 // name that contains a secret as its phrase ([refusal.Shown]): a name twice, a header
-// [ReservedHeader] reports, a placeholder [DeniedPlaceholder] reports, and an API
-// credential's endpoint from which [policy.EndpointHost] reads no host. Of model, the
+// [ReservedHeader] reports, a placeholder [DeniedPlaceholder] reports, an API
+// credential's endpoint from which [policy.EndpointHost] reads no host, an API
+// credential's path with a . or .. segment ([DotSegment]), and an API credential's
+// account_header that [ReservedHeader] reports or that is Authorization, which the
+// schema refuses too, for a document not read from bytes. Of model, the
 // document's model_credential, it refuses a name of a host credential, and an empty
 // one beside two or more API credentials; a name of none of creds may be a model key
 // of the machine's, which the gateway checks. The reader of a document calls it, and so
@@ -104,6 +107,18 @@ func CheckCredentials(creds []RunCredential, model string) error {
 		if _, ok := policy.EndpointHost(c.Endpoint); c.Format != "" && !ok {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 				"the document is refused: give the credential %s an endpoint whose host is a DNS name or an IP address, port 1 to 65535: Forager reads no host from its endpoint", name)
+		}
+		if h := c.Auth.AccountHeader; h != "" && (ReservedHeader(h) || strings.EqualFold(h, "authorization")) {
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"the document is refused: set account_header of the credential %s to another header than %s; that header frames the request, carries the token, or the proxy sets it", name, accesskey.ShownName(h, true))
+		}
+		if c.Format != "" {
+			for _, p := range c.Paths {
+				if DotSegment(p) {
+					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+						"the document is refused: write the path %s of the credential %s without a . or .. segment; the proxy denies every request whose path has one, so the path would match none", accesskey.ShownValue(p, true), name)
+				}
+			}
 		}
 		for _, a := range c.Applies() {
 			if a.Scheme == "header" && ReservedHeader(a.Header) {
@@ -198,6 +213,18 @@ func ReservedHeader(name string) bool {
 		return true
 	}
 	return strings.HasPrefix(n, "proxy-") || strings.HasPrefix(n, "x-qory-") || strings.HasPrefix(n, "qory-")
+}
+
+// DotSegment reports whether a path of a credential's paths has a segment that is . or
+// .., such as /a/../b: a request path with one is denied before any credential's paths
+// are read ([policy.CleanPath]). Of a path that ends in *, the text after its last
+// slash is the start of a segment, not a whole one, so /a/.* has none.
+func DotSegment(path string) bool {
+	segments := strings.Split(path, "/")
+	if strings.HasSuffix(path, "*") {
+		segments = segments[:len(segments)-1]
+	}
+	return slices.ContainsFunc(segments, func(s string) bool { return s == "." || s == ".." })
 }
 
 // CheckConfigurationImage refuses a run configuration's image that is not a reference
