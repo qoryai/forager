@@ -276,10 +276,10 @@ func (g *Group) Refused(name string, h http.Header, code string) (string, bool) 
 }
 
 // Streamed records a stream of an answer to a request with key name that ended with a
-// rate_limit_error event: the key goes into cooldown as after a limit refusal, with the
-// answer's headers, and the next key becomes active.
-func (g *Group) Streamed(name string, h http.Header) {
-	g.record(name, h, true, false, "")
+// limit event ([StreamLimit]), with the event's error code: the key goes into cooldown
+// as after a limit refusal, with the answer's headers, and the next key becomes active.
+func (g *Group) Streamed(name string, h http.Header, code string) {
+	g.record(name, h, true, false, code)
 	g.switched()
 }
 
@@ -288,7 +288,8 @@ func (g *Group) Streamed(name string, h http.Header) {
 func (g *Group) switched() (string, bool) { return g.Pick() }
 
 // Pass records that the proxy passed a limit refusal to the session: no key of the
-// group is left, or the refused body had no copy. A nil group records nothing.
+// group is left, the refused body had no copy, or the group's format is one whose
+// requests the proxy does not send again ([Resends]). A nil group records nothing.
 func (g *Group) Pass() {
 	if g == nil {
 		return
@@ -389,7 +390,8 @@ func (g *Group) record(name string, h http.Header, limit, served bool, code stri
 
 // cool sets the cooldown of a limit refusal of key i on the windows of r it rejects:
 // the windows the subscription's headers mark rejected, an API key's families with 0
-// remaining, and spend_limit for a spend cap; key when the refusal rejects no window.
+// remaining, and spend_limit for a spend cap or an OpenAI quota, code [SpendLimitCode]
+// or [QuotaCode]; key when the refusal rejects no window.
 // The cooldown ends at the latest reset of those windows; with none, retry-after after
 // now; with none, at the key's schedule_resets_at, moved by 7 days until it is after
 // now; with none, pause_for_s after now.
@@ -403,7 +405,7 @@ func (g *Group) cool(i int, r *read, code string, now time.Time) {
 			rejected = append(rejected, s)
 		}
 	}
-	if code == SpendLimitCode {
+	if code == SpendLimitCode || code == QuotaCode {
 		s := r.window(WindowSpendLimit)
 		s.status = StatusRejected
 		rejected = append(rejected, s)
@@ -542,9 +544,9 @@ func (g *Group) Merge(entries []Window) {
 }
 
 // Shown is the line of the gateway's log of one limit answer of key name: its status,
-// the names of its headers and its error type, never a value, and the limit headers of
-// no window the gateway reads.
-func Shown(name string, status int, h http.Header, kind string) string {
+// the names of its headers, its error type and, when it has one, its error code, never
+// a value, and the limit headers of no window the gateway reads.
+func Shown(name string, status int, h http.Header, kind, code string) string {
 	names := make([]string, 0, len(h))
 	for n := range h {
 		names = append(names, strings.ToLower(n))
@@ -553,7 +555,11 @@ func Shown(name string, status int, h http.Header, kind string) string {
 	if kind == "" {
 		kind = "none"
 	}
-	line := "model key " + name + ": limit answer, status " + strconv.Itoa(status) + ", error type " + kind + ", headers " + strings.Join(names, " ")
+	line := "model key " + name + ": limit answer, status " + strconv.Itoa(status) + ", error type " + kind
+	if code != "" {
+		line += ", error code " + code
+	}
+	line += ", headers " + strings.Join(names, " ")
 	if u := readHeaders(h, time.Time{}).unknown; len(u) > 0 {
 		line += "; no window for " + strings.Join(u, " ")
 	}

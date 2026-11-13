@@ -20,12 +20,16 @@ import (
 // before it passes the refusal on or sends the request again.
 const maxErrorBody = 64 << 10
 
-// keyGroup is the run's key group as the proxy sets it, the path of its model API's
-// messages, and where it writes its log of limit answers.
+// keyGroup is the run's key group as the proxy sets it, the format and the stream path
+// of its model API, and where it writes its log of limit answers.
 type keyGroup struct {
 	g *modelkey.Group
-	// messages is the clean path of the messages request of the model API under the
-	// endpoint, whose streamed answers the proxy reads for a rate_limit_error event;
+	// format is the API format of the group's keys; empty counts as a format whose
+	// requests the proxy sends again ([modelkey.Resends]) and whose stream it does not
+	// read.
+	format string
+	// messages is the clean path of the request of the model API under the endpoint
+	// whose streamed answers the proxy reads for a limit event, [modelkey.StreamPath];
 	// empty for a format with none.
 	messages string
 	log      func(string)
@@ -33,17 +37,19 @@ type keyGroup struct {
 
 // SetKeyGroup sets p's key group to g, the run's: of the model keys whose names g has,
 // which share one placeholder, the proxy sets the group's active key on each request with the
-// placeholder, and sends a request again with the next key after a limit refusal.
-// messages is the clean path of the model API's messages request, [modelkey.MessagesPath]:
-// the proxy reads the streamed 200 of a POST to it with the placeholder for a
-// rate_limit_error event, and no other answer. log gets one line of each limit answer:
-// its status, its header names and its error type, never a value. The gateway calls it
-// once, after [New] and before the run's first connection.
-func (p *Proxy) SetKeyGroup(g *modelkey.Group, messages string, log func(string)) {
+// placeholder. After a limit refusal it sends a request again with the next key, for a
+// format other than openai-responses ([modelkey.Resends]). format is the keys' API
+// format, and stream the clean path of the model API's request whose streamed answers
+// the proxy reads, [modelkey.StreamPath]: the proxy reads the streamed 200 of a POST to
+// it with the placeholder for a limit event ([modelkey.StreamLimit]), and no other
+// answer. log gets one line of each limit answer: its status, its header names, its
+// error type and code, never a value. The gateway calls it once, after [New] and
+// before the run's first connection.
+func (p *Proxy) SetKeyGroup(g *modelkey.Group, format, stream string, log func(string)) {
 	if log == nil {
 		log = func(string) {}
 	}
-	p.keys.Store(&keyGroup{g: g, messages: messages, log: log})
+	p.keys.Store(&keyGroup{g: g, format: format, messages: stream, log: log})
 }
 
 // group is the run's key group when name is one of its keys, nil otherwise.
@@ -64,7 +70,7 @@ func (p *Proxy) limitPassed(w http.ResponseWriter, d Decision) {
 	p.observe(d)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusTooManyRequests)
-	fmt.Fprint(w, "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, or a key whose credential does not cover the path), and the gateway sends no more model requests in this session.\n")
+	fmt.Fprint(w, "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, which keeps one key for its session), and the gateway sends no more model requests in this session.\n")
 }
 
 // resendKey marks the context of a request with a key of the group, with its [resend].
@@ -86,8 +92,8 @@ type resend struct {
 	clean string
 	// name is the key the request goes with, the one the proxy set last.
 	name string
-	// scan is true for a POST to the messages path of the model API: the proxy reads
-	// its streamed 200 for a rate_limit_error event.
+	// scan is true for a POST to the stream path of the model API: the proxy reads its
+	// streamed 200 for a limit event.
 	scan bool
 	// pending is the request's decision, whose credential follows the key.
 	pending *pending
@@ -240,8 +246,10 @@ func (rs *resend) drop() {
 // a key of the group is left out of cooldown, sends it again from the copy of its body
 // with the next key. Every answer's headers go to the group, and the copy is dropped
 // once an answer's status arrives that the proxy passes on. The refusal reaches the
-// caller when no key is left, with no copy, or when the next key's credential does not
-// cover the request ([resend.cred]); the group is then stopped ([modelkey.Group.Pass]).
+// caller when no key is left, with no copy, when the next key's credential does not
+// cover the request ([resend.cred]), or for a format whose requests the proxy does not
+// send again ([modelkey.Resends]), whose first refusal puts the key in cooldown and
+// goes to the caller; the group is then stopped ([modelkey.Group.Pass]).
 func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Response, error) {
 	g := rs.k.g
 	for tries := 0; ; tries++ {
@@ -254,26 +262,37 @@ func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Resp
 			rs.drop()
 			g.Answered(rs.name, resp.StatusCode, resp.Header)
 			if rs.scan && resp.StatusCode == http.StatusOK && eventStream(resp.Header) {
-				resp.Body = &streamWatch{ReadCloser: resp.Body, rs: rs, header: resp.Header.Clone()}
+				resp.Body = &streamWatch{ReadCloser: resp.Body, rs: rs, format: rs.k.format, header: resp.Header.Clone()}
 			}
 			return resp, nil
 		}
 		head, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		kind, code := modelkey.ErrorOf(head)
-		rs.k.log(modelkey.Shown(accesskey.ShownName(rs.name, true), resp.StatusCode, resp.Header, kind))
+		rs.k.log(modelkey.Shown(accesskey.ShownName(rs.name, true), resp.StatusCode, resp.Header, kind, code))
+		resends := modelkey.Resends(rs.k.format)
+		if !resends {
+			// Stopped before the cooldown makes another key active: a request of the
+			// session that picks the next key finds the group stopped.
+			g.Pass()
+		}
 		next, ok := g.Refused(rs.name, resp.Header, code)
-		c := rs.cred(next)
+		// Each try cools a key, so the group runs out of keys within its size; the bound
+		// stops the loop when a provider sends a reset that has passed.
+		var c *Credential
+		if ok && resends && rs.copied && tries < len(rs.creds) {
+			c = rs.cred(next)
+		}
 		var name, value string
-		if ok && c != nil {
+		if c != nil {
 			v := c.secret()
 			var set bool
 			name, value, set = c.header(v)
 			clear(v)
-			ok = set
+			if !set {
+				c = nil
+			}
 		}
-		// Each try cools a key, so the group runs out of keys within its size; the bound
-		// stops the loop when a provider sends a reset that has passed.
-		if !ok || c == nil || !rs.copied || tries >= len(rs.creds) {
+		if c == nil {
 			rs.drop()
 			g.Pass()
 			resp.Body = readCloser{io.MultiReader(bytes.NewReader(head), resp.Body), resp.Body}
@@ -307,12 +326,15 @@ func eventStream(h http.Header) bool {
 const maxLine = 4096
 
 // streamWatch passes a streamed answer on as it came, and reads each event of it, by
-// the lines of server-sent events: an event whose event field is error, and whose data
-// is an error of the type rate_limit_error, puts the key it went with into cooldown,
-// and the next key becomes active.
+// the lines of server-sent events: a limit event of the format ([modelkey.StreamLimit])
+// puts the key it went with into cooldown, and the next key becomes active. For a
+// format whose requests the proxy does not send again ([modelkey.Resends]), the group
+// is stopped too ([modelkey.Group.Pass]): the runtime's next request, a retry among
+// them, gets the proxy's 429.
 type streamWatch struct {
 	io.ReadCloser
 	rs     *resend
+	format string
 	header http.Header
 	once   sync.Once
 	line   []byte
@@ -370,25 +392,31 @@ func (s *streamWatch) read(line string) {
 	}
 }
 
-// dispatch reads the event that ended: an error event of the type rate_limit_error
-// cools the key, once per stream.
+// dispatch reads the event that ended: a limit event cools the key, once per stream.
 func (s *streamWatch) dispatch() {
-	if s.event != "error" || s.over {
+	if s.over {
 		return
 	}
-	if kind, _ := modelkey.ErrorOf(s.data); kind != modelkey.RateLimitError {
+	kind, code, ok := modelkey.StreamLimit(s.format, s.event, s.data)
+	if !ok {
 		return
 	}
 	s.once.Do(func() {
-		s.rs.k.log(modelkey.Shown(accesskey.ShownName(s.rs.name, true), http.StatusOK, s.header, modelkey.RateLimitError))
-		s.rs.k.g.Streamed(s.rs.name, s.header)
+		s.rs.k.log(modelkey.Shown(accesskey.ShownName(s.rs.name, true), http.StatusOK, s.header, kind, code))
+		if !modelkey.Resends(s.format) {
+			// Stopped before the cooldown makes another key active, as in
+			// [resend.roundTrip].
+			s.rs.k.g.Pass()
+		}
+		s.rs.k.g.Streamed(s.rs.name, s.header, code)
 	})
 }
 
 // withResend attaches a [resend] to the context of a request c is set on, a key of the
-// run's key group, and copies the request's body. creds are the host's credentials,
-// clean is the request's clean path, and scan is true for a POST to the model API's
-// messages path.
+// run's key group, and copies the request's body when the group's format is one whose
+// requests the proxy sends again ([modelkey.Resends]). creds are the host's
+// credentials, clean is the request's clean path, and scan is true for a POST to the
+// model API's stream path.
 func (p *Proxy) withResend(ctx context.Context, r *http.Request, k *keyGroup, c *Credential, creds []*Credential, clean string, scan bool) context.Context {
 	rs := &resend{k: k, first: c, name: c.Name, clean: clean, scan: scan}
 	for _, h := range creds {
@@ -396,7 +424,9 @@ func (p *Proxy) withResend(ctx context.Context, r *http.Request, k *keyGroup, c 
 			rs.creds = append(rs.creds, h)
 		}
 	}
-	rs.copyBody(r)
+	if modelkey.Resends(k.format) {
+		rs.copyBody(r)
+	}
 	rs.pending, _ = ctx.Value(pendingKey{}).(*pending)
 	return context.WithValue(ctx, resendKey{}, rs)
 }

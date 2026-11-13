@@ -95,9 +95,17 @@ type keyFixture struct {
 	logged []string
 }
 
-// newKeyFixture starts the fake provider and the proxy. Each of set changes every key of
-// the group.
+// newKeyFixture starts the fake provider and the proxy, with a group of the format
+// anthropic-messages whose stream path is /v1/messages. Each of set changes every key
+// of the group.
 func newKeyFixture(t *testing.T, set ...func(*modelkey.Key)) *keyFixture {
+	t.Helper()
+	return newKeyFixtureOf(t, modelkey.FormatAnthropicMessages, "/v1/messages", set...)
+}
+
+// newKeyFixtureOf starts the fake provider and the proxy, with a group of the format
+// whose stream path is stream. Each of set changes every key of the group.
+func newKeyFixtureOf(t *testing.T, format, stream string, set ...func(*modelkey.Key)) *keyFixture {
 	t.Helper()
 	upCA, err := NewCA("upstream")
 	if err != nil {
@@ -131,7 +139,7 @@ func newKeyFixture(t *testing.T, set ...func(*modelkey.Key)) *keyFixture {
 		keys = append(keys, k)
 	}
 	f.g = modelkey.New(keys, "model", nil)
-	f.p.SetKeyGroup(f.g, "/v1/messages", func(line string) { f.mu.Lock(); f.logged = append(f.logged, line); f.mu.Unlock() })
+	f.p.SetKeyGroup(f.g, format, stream, func(line string) { f.mu.Lock(); f.logged = append(f.logged, line); f.mu.Unlock() })
 	ca, err := NewCA("test")
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +318,7 @@ func TestAStreamErrorSwitchesTheKeyAndPassesTheBytes(t *testing.T) {
 // no key, and that an empty line ends the event.
 func TestAStreamWithoutAnErrorKeepsTheKey(t *testing.T) {
 	// No resend: a cooldown would panic on the nil key group.
-	s := &streamWatch{ReadCloser: io.NopCloser(bytes.NewReader(nil))}
+	s := &streamWatch{ReadCloser: io.NopCloser(bytes.NewReader(nil)), format: modelkey.FormatAnthropicMessages}
 	for _, line := range []string{
 		"event: content_block_delta", `data: {"delta":"\"rate_limit_error\""}`, "",
 		"event: content_block_delta", `data: {"type":"error","error":{"type":"rate_limit_error"}}`, "",
@@ -442,7 +450,7 @@ func TestKeysAtTheirUseUpToPercentGetTheProxys429(t *testing.T) {
 		}
 	}
 	status, body := f.post(t, "{}")
-	if want := "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, or a key whose credential does not cover the path), and the gateway sends no more model requests in this session.\n"; status != http.StatusTooManyRequests || body != want {
+	if want := "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, which keeps one key for its session), and the gateway sends no more model requests in this session.\n"; status != http.StatusTooManyRequests || body != want {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {
@@ -519,7 +527,7 @@ func TestTheCopyIsDroppedWhenTheStatusArrives(t *testing.T) {
 	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", nil)
 	one := &Credential{Name: "model", Hosts: []string{keyHost}, Scheme: "bearer", Token: func() string { return fakeKeys["model"] }}
 	two := &Credential{Name: "model-2", Hosts: []string{keyHost}, Scheme: "bearer", Token: func() string { return fakeKeys["model-2"] }}
-	k := &keyGroup{g: g, messages: "/v1/messages", log: func(string) {}}
+	k := &keyGroup{g: g, format: modelkey.FormatAnthropicMessages, messages: "/v1/messages", log: func(string) {}}
 	r := httptest.NewRequest(http.MethodPost, "https://"+keyHost+"/v1/messages", strings.NewReader(`{"model":"m"}`))
 	p := &Proxy{}
 	ctx := p.withResend(r.Context(), r, k, one, []*Credential{one, two}, "/v1/messages", true)
@@ -608,7 +616,7 @@ func answerBeforeTheBody(t *testing.T, h2 bool, status, size int) {
 	defer srv.Close()
 	rt := srv.Client().Transport
 	one := &Credential{Name: "model", Hosts: []string{keyHost}, Scheme: "bearer", Token: func() string { return fakeKeys["model"] }}
-	k := &keyGroup{g: modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil), messages: "/v1/messages", log: func(string) {}}
+	k := &keyGroup{g: modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil), format: modelkey.FormatAnthropicMessages, messages: "/v1/messages", log: func(string) {}}
 	r, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/messages", io.NopCloser(bytes.NewReader(sent)))
 	if err != nil {
 		t.Fatal(err)

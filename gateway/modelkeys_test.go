@@ -45,12 +45,25 @@ type groupRun struct {
 	answer  func() (int, string)
 	agent   *http.Client
 	url     string
+	// format is the API format of the keys.
+	format string
 }
 
-// startGroupRun opens the run and posts its first batch.
+// startGroupRun opens the run, with keys of the format anthropic-messages, and posts
+// its first batch.
 func startGroupRun(t *testing.T) *groupRun {
 	t.Helper()
-	g := &groupRun{limited: map[string]bool{}}
+	return startGroupRunOf(t, "anthropic-messages")
+}
+
+// startGroupRunOf opens the run, with keys of the format, and posts its first batch. A
+// key of anthropic-messages goes in the header x-api-key, and the provider's refusal is
+// Anthropic's; a key of openai-responses goes as a bearer, and the refusal is a ChatGPT
+// subscription's, its shape from the openai/codex source at 17a0e6f63f (to confirm
+// with probe burst-429).
+func startGroupRunOf(t *testing.T, format string) *groupRun {
+	t.Helper()
+	g := &groupRun{limited: map[string]bool{}, format: format}
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -60,7 +73,7 @@ func startGroupRun(t *testing.T) *groupRun {
 		io.Copy(io.Discard, r.Body)
 		key := ""
 		for name, v := range groupValues {
-			if r.Header.Get("X-Api-Key") == v {
+			if r.Header.Get("X-Api-Key") == v || r.Header.Get("Authorization") == "Bearer "+v {
 				key = name
 			}
 		}
@@ -68,6 +81,16 @@ func startGroupRun(t *testing.T) *groupRun {
 		g.calls = append(g.calls, key)
 		limited := g.limited[key]
 		g.mu.Unlock()
+		if limited && format == "openai-responses" {
+			reset := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+			w.Header().Set("X-Codex-Primary-Used-Percent", "100")
+			w.Header().Set("X-Codex-Primary-Window-Minutes", "300")
+			w.Header().Set("X-Codex-Primary-Reset-At", reset)
+			w.Header().Set("X-Codex-Rate-Limit-Reached-Type", "rate_limit_reached")
+			w.WriteHeader(http.StatusTooManyRequests)
+			io.WriteString(w, `{"error":{"type":"usage_limit_reached","resets_at":`+reset+`}}`)
+			return
+		}
 		if limited {
 			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
 			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
@@ -85,8 +108,12 @@ func startGroupRun(t *testing.T) *groupRun {
 	t.Cleanup(origin.Close)
 	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 	g.url = "https://localhost:" + port + "/v1"
+	auth := `{"scheme":"header","header":"x-api-key"}`
+	if format == "openai-responses" {
+		auth = `{"scheme":"bearer"}`
+	}
 	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"` + g.url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+		return `{"name":"` + name + `","format":"` + format + `","endpoint":"` + g.url + `","auth":` + auth + `,"pause_for_s":3600}`
 	}
 	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[` +
 		entry("model") + `,` + entry("model-2") + `,` + entry("model-3") + `]}`
@@ -142,6 +169,10 @@ func (g *groupRun) send(t *testing.T) (int, []string) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, g.url+"/messages", strings.NewReader(`{"model":"m"}`))
 	req.Header.Set("X-Api-Key", link.KeyPlaceholder("model"))
+	if g.format == "openai-responses" {
+		req, _ = http.NewRequest(http.MethodPost, g.url+"/responses", strings.NewReader(`{"model":"m"}`))
+		req.Header.Set("Authorization", "Bearer "+link.KeyPlaceholder("model"))
+	}
 	resp, err := g.agent.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -243,6 +274,46 @@ func TestAKeyGroupResendsReportsAndStops(t *testing.T) {
 	}
 	if lines := g.h.reportsWith("limit answer, status 429"); len(lines) != 3 {
 		t.Errorf("the log of limit answers: %q; want 3 lines", lines)
+	}
+}
+
+// TestAnOpenAIKeyGroupStopsAtTheFirstRefusal pins the gateway side of a 429 for an
+// openai-responses group: the provider's first 429 reaches the session with no resend,
+// the next request gets the gateway's 429 and reaches no provider, and the answer to
+// the session's next batch has stop, model_key_limit, before any dev.qory.session.exited;
+// the run then closes paused with model_key_limit.
+func TestAnOpenAIKeyGroupStopsAtTheFirstRefusal(t *testing.T) {
+	g := startGroupRunOf(t, "openai-responses")
+	one, err := g.h.join(g.runID)
+	if err != nil || one.ModelCredential != "model" {
+		t.Fatalf("join 1: %+v, %v", one, err)
+	}
+	g.h.post(sessionStarted(g.runID, 1))
+	if status, calls := g.send(t); status != http.StatusOK || strings.Join(calls, ",") != "model" {
+		t.Fatalf("the first request: %d, %v; want 200 from model", status, calls)
+	}
+	if status, body := g.batch(t, heartbeat(g.runID)); status != http.StatusAccepted || body != "" {
+		t.Errorf("a batch before the refusal: %d %q; want 202 with no body", status, body)
+	}
+	g.limit("model")
+	if status, calls := g.send(t); status != http.StatusTooManyRequests || strings.Join(calls, ",") != "model" {
+		t.Fatalf("the refused request: %d, %v; want the provider's 429 from model alone", status, calls)
+	}
+	if status, calls := g.send(t); status != http.StatusTooManyRequests || len(calls) != 0 {
+		t.Errorf("after the refusal: %d, %v; want the gateway's 429 and no call", status, calls)
+	}
+	if status, body := g.batch(t, heartbeat(g.runID)); status != http.StatusAccepted || body != `{"stop":{"reason":"model_key_limit"}}` {
+		t.Errorf("the next batch: %d %q; want 202 with stop", status, body)
+	}
+	paused := ev(g.runID, event.SessionExited, map[string]any{"session": 1, "state": "paused", "exit_code": -1, "signal": "SIGINT", "reason": "model_key_limit", "duration_ms": 5})
+	if status, body := g.batch(t, paused); status != http.StatusAccepted || body != "" {
+		t.Errorf("the session's end: %d %q; want 202 with no stop", status, body)
+	}
+	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "paused", "exit_code": -1, "signal": "SIGINT", "reason": "model_key_limit"})); status != http.StatusAccepted {
+		t.Errorf("the close: %d %q", status, body)
+	}
+	if lines := g.h.reportsWith("limit answer, status 429, error type usage_limit_reached"); len(lines) != 1 {
+		t.Errorf("the log of limit answers: %q; want 1 line", lines)
 	}
 }
 
