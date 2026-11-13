@@ -41,7 +41,8 @@ func (machineClock) After(d time.Duration) <-chan time.Time { return time.After(
 // renewer fetches again the values of the run configuration's credentials that have
 // expires_at: [credential.RenewBefore] before each expires, and after a host answered
 // 401 to a request one was set on, at most every [credential.RetryWait] per credential.
-// The credentials due within RetryWait of each other go in one secrets request. A
+// Each model key goes in a secrets request alone, and the other credentials due within
+// RetryWait of each other go in one ([renewer.split]). A
 // renewal that fails keeps the value and is reported; at expires_at with no renewal the
 // run's record gets one line, and the value is set no more. It lives on the [Run], so a
 // reload, which resolves the credentials again, starts no second one.
@@ -69,6 +70,9 @@ type renewer struct {
 	entries []*renewal
 	// group is the run's key group, [Run.SetKeyGroup]; nil for none.
 	group *modelkey.Group
+	// rebuild puts the run's credentials, built again, on its proxy ([Run.SetRebuild]);
+	// nil for none.
+	rebuild func() error
 }
 
 // renewal is one credential's state: when its value expires, when it was last asked
@@ -278,9 +282,9 @@ func (r *Run) dropValue(name string) {
 }
 
 // split are the secrets requests of due: each model key, a credential with a format,
-// in a request that names it alone, then the others in one. The server returns 409
-// with no value to a whole request that has a name it cannot seal, so a model key it
-// refuses fails no other renewal.
+// in a request with it alone, then the others in one. The server returns 409 with no
+// value to a whole request that has a name it cannot seal, so a model key the server
+// cannot seal fails no other renewal.
 func (w *renewer) split(due []string) [][]string {
 	var out [][]string
 	var rest []string
@@ -369,10 +373,24 @@ func (w *renewer) renew(names []string, now time.Time) {
 			continue
 		}
 		at, _ := values.ExpiresAt(name)
+		var prev []credential.StoredApply
+		narrowed := false
 		if w.valueless(name) {
-			r.firstApply(name, values)
+			prev, narrowed = r.firstApply(name, values)
 		}
 		taken = r.replaceValue(name, values) || taken
+		if narrowed {
+			// The proxy sets the key where its entry's items say until its credentials are
+			// built again. When that fails, the key stays out of use with no value, and
+			// the next try RetryWait later builds them again.
+			if err := w.rebuilt(); err != nil {
+				r.setApply(name, prev)
+				r.dropValue(name)
+				w.report(fmt.Sprintf("Start another run to use the model key %s: its first value sets it on fewer paths than its entry, and setting the run's credentials on the proxy again failed: %v",
+					accesskey.ShownName(name, true), err))
+				continue
+			}
+		}
 		w.renewedAt(name, at)
 		if slices.Contains(unauthorized, name) {
 			g.Renewed(name)
@@ -544,17 +562,56 @@ func (r *Run) applyOf(name string) []credential.StoredApply {
 }
 
 // firstApply sets where the value of the model key name is set to the apply of its
-// first value, in values: a key with no value at the start had its entry's items.
-// The proxy's credentials take it at the run's next resolve ([Run.hold]).
-func (r *Run) firstApply(name string, values sealed.Values) {
+// first value, in values: a key with no value at the start had its entry's items. It
+// returns the apply before, and whether the apply changed, so the proxy's credentials
+// must be built again ([renewer.rebuilt]).
+func (r *Run) firstApply(name string, values sealed.Values) ([]credential.StoredApply, bool) {
 	i := slices.IndexFunc(r.stored, func(c server.RunCredential) bool { return c.Name == name })
 	if i < 0 {
-		return
+		return nil, false
 	}
 	a := effectiveApply(r.stored[i], values)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	prev := r.applies[name]
+	if reflect.DeepEqual(a, prev) {
+		return prev, false
+	}
 	r.applies[name] = a
+	return prev, true
+}
+
+// setApply sets where the value of name is set back to a, after a failed
+// [renewer.rebuilt].
+func (r *Run) setApply(name string, a []credential.StoredApply) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.applies[name] = a
+}
+
+// rebuilt puts the run's credentials, built again, on its proxy, with the step
+// [Run.SetRebuild] set.
+func (w *renewer) rebuilt() error {
+	w.mu.Lock()
+	f := w.rebuild
+	w.mu.Unlock()
+	if f == nil {
+		return errors.New("the run has no step that sets its credentials on the proxy")
+	}
+	return f()
+}
+
+// SetRebuild sets f, the gateway's step that puts the run's credentials on its proxy
+// again ([Run.Rebuild]): a model key with no value at a reopen whose first value
+// narrows where it is set needs it before the key is back in use. The gateway calls it
+// once, beside [Run.SetKeyGroup].
+func (r *Run) SetRebuild(f func() error) {
+	if r.renew == nil {
+		return
+	}
+	r.renew.mu.Lock()
+	defer r.renew.mu.Unlock()
+	r.renew.rebuild = f
 }
 
 // effectiveApply is where the value of c is set: the answer's apply, or c's items when

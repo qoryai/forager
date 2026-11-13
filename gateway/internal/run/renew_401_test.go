@@ -1,6 +1,7 @@
 package run_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/modelkey"
 	"github.com/qoryai/forager/gateway/internal/run"
+	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 )
@@ -394,19 +396,23 @@ func TestAReopenWithEveryKeyLeftOutSendsNoRequest(t *testing.T) {
 	}
 }
 
-// TestAPendingKeysFirstApplyIsTaken pins the apply of a model key with no value
-// at the reopen: its first value may set an apply within its entry other than the
-// entry's items, and the key goes back in the group; the next renewal, with the same
-// apply, puts its value in place. A first value whose apply is outside the entry
-// takes the key out.
+// TestAPendingKeysFirstApplyIsTaken pins the apply of a model key with no value at the
+// reopen. Its first value may set it on fewer paths within its entry: the run's
+// credentials are built again and set on the proxy ([run.Run.SetRebuild]) before the
+// key goes back in the group, so a path outside the value's apply gets no value; the
+// next renewal, with the same apply, puts its value in place. When that step fails,
+// the key stays out of use with no value, and the next renewal tries again. A first
+// value whose apply is outside the entry takes the key out.
 func TestAPendingKeysFirstApplyIsTaken(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		host  string
+		fail  bool
 		value string
 	}{
-		{"within", "api.model.example", "model-2"},
-		{"outside", "other.example", "(none)"},
+		{"within", "api.model.example", false, "model-2"},
+		{"rebuild fails", "api.model.example", true, "(none)"},
+		{"outside", "other.example", false, "(none)"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			clock := &fakeClock{now: start}
@@ -419,10 +425,31 @@ func TestAPendingKeysFirstApplyIsTaken(t *testing.T) {
 			}}
 			f := document(t, twoKeysDoc, digest('1'))
 			f.Document.Computed = digest('c')
-			r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: f, Secrets: s.fetch, Clock: clock, Report: (&reports{}).report, Log: (&reports{}).report, Pending: []string{"model"}})
+			report := &reports{}
+			r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: f, Secrets: s.fetch, Clock: clock, Report: report.report, Log: (&reports{}).report, Pending: []string{"model"}})
 			g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", clock.Now)
 			r.SetKeyGroup(g)
 			g.Restore([]modelkey.Unauthorized{{Credential: "model", At: start}})
+			var rebuilt []string
+			r.SetRebuild(func() error {
+				if !g.Pending("model") {
+					t.Error("model is back in the group before the proxy has its credentials")
+				}
+				if c.fail {
+					return errors.New("a fake failure")
+				}
+				d, err := r.Rebuild(context.Background())
+				if err != nil {
+					return err
+				}
+				r.Commit(d)
+				for _, u := range r.Uses() {
+					if u.Name == "model" {
+						rebuilt = append(rebuilt, strings.Join(u.Paths, ","))
+					}
+				}
+				return nil
+			})
 			renew := func() {
 				t.Helper()
 				n := clock.count()
@@ -432,17 +459,51 @@ func TestAPendingKeysFirstApplyIsTaken(t *testing.T) {
 				clock.idle(t, n)
 			}
 			renew()
+			if c.name == "within" {
+				if !slices.Equal(rebuilt, []string{"/anthropic/*"}) {
+					t.Errorf("model's paths on the proxy %v; want /anthropic/* once", rebuilt)
+				}
+				if sets(r, "model", "/other/path") || !sets(r, "model", "/anthropic/v1/messages") {
+					t.Error("the proxy sets model outside /anthropic/*, or not within it")
+				}
+			}
 			clock.advance(credential.RetryWait)
 			g.Reject("model", true)
 			renew()
 			if got := value(r, "model"); got != c.value {
 				t.Errorf("model's value %s; want %s", got, c.value)
 			}
-			if u := g.Unauthorized(); (c.value == "(none)") != (len(u) == 1 && u[0].Out) {
-				t.Errorf("the keys after a 401 %+v", u)
+			u := g.Unauthorized()
+			switch {
+			case c.name == "within" && u != nil:
+				t.Errorf("the keys after a 401 %+v; want none", u)
+			case c.fail && (len(u) != 1 || u[0].Out):
+				t.Errorf("the keys after a 401 %+v; want model pending", u)
+			case c.name == "outside" && (len(u) != 1 || !u[0].Out):
+				t.Errorf("the keys after a 401 %+v; want model out", u)
+			}
+			if c.fail && !report.reported("Start another run to use the model key") {
+				t.Errorf("the reports %q; want the failed step", report.lines())
 			}
 		})
 	}
+}
+
+// sets reports whether the run's proxy sets the credential name on a request to path
+// of its host, by the paths of its uses.
+func sets(r *run.Run, name, path string) bool {
+	for _, u := range r.Uses() {
+		if u.Name != name {
+			continue
+		}
+		if u.Paths == nil {
+			return true
+		}
+		if _, ok := policy.MatchPath(u.Paths, path); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // TestEachModelKeyIsRenewedAlone pins a renewal round with no 401: the two model keys
@@ -484,7 +545,7 @@ func TestEachModelKeyIsRenewedAlone(t *testing.T) {
 			}
 			for i, w := range [][]string{{"model"}, {"model-2"}, {"forge"}} {
 				if !slices.Equal(calls[i+1][1:], w) || unauth[i+1] != nil {
-					t.Errorf("request %d names %v, unauthorized %v; want %v, none", i+1, calls[i+1][1:], unauth[i+1], w)
+					t.Errorf("request %d has %v, unauthorized %v; want %v, none", i+1, calls[i+1][1:], unauth[i+1], w)
 				}
 			}
 			for name, want := range c.want {

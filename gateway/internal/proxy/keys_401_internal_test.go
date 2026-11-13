@@ -172,10 +172,10 @@ func TestA401OnAnotherPathKeepsTheKey(t *testing.T) {
 	}
 }
 
-// TestA401OnAnotherPathAfterAResendRenewsTheLastKey pins the key whose value a 401 on
-// another path than the model API's requests again: a request that model's 429 sent
-// again with model-2 gets model-2's 401, and model-2's value is requested again, not
-// model's.
+// TestA401OnAnotherPathAfterAResendRenewsTheLastKey pins the key whose value the proxy
+// requests again after a 401 on another path than the model API's: a request that the
+// proxy sent again with model-2 after model's 429 gets model-2's 401, and the proxy
+// requests model-2's value again, not model's.
 func TestA401OnAnotherPathAfterAResendRenewsTheLastKey(t *testing.T) {
 	r := &renewals{}
 	f := newKeyFixtureWith(t, modelkey.FormatAnthropicMessages, "/v1/messages", r.rejected)

@@ -183,6 +183,9 @@ type Run struct {
 	// secrets request, every credential being left out ([Run.leftOut]): the first
 	// value a renewal brings becomes values ([Run.replaceValue]).
 	unopened bool
+	// closed is true once [Run.Close] took the run's credentials: a decision committed
+	// after it is closed, not put in force.
+	closed bool
 	// stack are the stack_hosts of the run configuration the run started with, nil
 	// when it has none, fixed for the run; stacks are those of each run configuration
 	// Read read that a reload has not decided yet.
@@ -367,7 +370,7 @@ func Open(ctx context.Context, cfg Config) (*Run, error) {
 func (r *Run) Close() {
 	r.mu.Lock()
 	held := r.held
-	r.held = nil
+	r.held, r.closed = nil, true
 	r.mu.Unlock()
 	if held != nil {
 		held.Close()
@@ -1101,6 +1104,22 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 	}, nil
 }
 
+// Rebuild is the decision of a reload to the policy in force, [Run.Reload] without its
+// checks of what a run configuration may change: the run's credentials built again from
+// where each value is set now. The caller sets its Uses on the proxy and commits it
+// ([Run.Commit]) under the lock it takes for a reload.
+func (r *Run) Rebuild(ctx context.Context) (*Decision, error) {
+	r.mu.Lock()
+	pol, guard := r.pol, r.guard
+	r.mu.Unlock()
+	d, err := r.decide(ctx, pol, r.named)
+	if err != nil {
+		return nil, err
+	}
+	d.Guard = guard
+	return d, nil
+}
+
 // imageMoved refuses a reload whose run configuration names the image named, or none,
 // when the start's named another, or none: the image a run starts in is fixed.
 func (r *Run) imageMoved(named string) error {
@@ -1123,6 +1142,12 @@ func (r *Run) Commit(d *Decision) {
 		return
 	}
 	r.mu.Lock()
+	if r.closed {
+		// A rebuild after a renewal ([Run.Rebuild]) may end after the run's Close.
+		r.mu.Unlock()
+		d.held.Close()
+		return
+	}
 	old := r.held
 	r.pol, r.held, r.runDigest, r.guard = d.Policy, d.held, d.Policy.RunConfiguration, d.Guard
 	if d.computed != "" {
