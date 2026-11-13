@@ -5490,7 +5490,15 @@ under it, or a key it is under, which replaces the whole table:
 `model_providers.qory.name.x` and `model_providers.qory` both set
 `model_providers.qory.name`. Arguments after `--` are not read. For every runtime
 with `config`, the session refuses `config.flag` with such a pair, as
-`--config k=v` and `--config=k=v`.
+`--config k=v` and `--config=k=v`. For Codex 0.167.2, it refuses too:
+
+- `-c` with such a pair, as `-c k=v`, `-ck=v` and `-c=k=v`;
+- `--enable` and `--disable` of a feature whose `features.<name>` is a key of `fixed`,
+  `plugins` or `apps`, as `--enable x` and `--enable=x`;
+- `--oss` and `--local-provider`, which select a local model provider;
+- `--profile` and `-p`, which layer `$CODEX_HOME/<name>.config.toml` over the
+  settings, as `--profile x`, `--profile=x`, `-p x`, `-px` and `-p=x`;
+- `--search`, which sets `web_search`.
 
 **Fixed**, optional: variables the session sets for the runtime in every launch, by
 name, walled or not, `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`: 1 to 64 names,

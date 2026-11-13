@@ -582,6 +582,45 @@ func codexTurnFailed(t *testing.T, o keysOutcome) {
 	}
 }
 
+// TestDockerCodexRefusesAnArgumentThatSetsASessionSetting starts Codex behind the wall
+// with launch arguments that set a setting the session passes: model_provider through
+// --config, the endpoint's setting through -c, and the provider through --profile. The
+// join returns an error that starts with the fix and names the flag, Codex does not
+// start, and the stub gets no request. The error contains no value of the arguments.
+func TestDockerCodexRefusesAnArgumentThatSetsASessionSetting(t *testing.T) {
+	k := newCodexWall(t)
+	const value = "e2e-value-not-shown"
+	for _, c := range []struct {
+		name, flag string
+		args       []string
+	}{
+		{"--config", "--config", []string{"--config", "model_provider=" + value}},
+		{"-c", "-c", []string{"-c", "model_providers.qory.base_url=" + value}},
+		{"--profile", "--profile", []string{"--profile=" + value}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			before := len(k.log(t, 0))
+			ctl := startKeysControl(t)
+			endpoint := "https://" + k.host + ":" + recorderTLS + "/v1"
+			runID := event.NewRunID()
+			ctl.configure(t, runID, k.host, []map[string]any{codexCredential("model", endpoint, false)}, []string{codexKey(codexServe)}, nil)
+			s := keysSession{runID: runID, server: ctl.server, allow: []string{k.host}, prompt: "Say hi in one word.", args: c.args,
+				dir: t.TempDir(), walled: &k.keysWall, timeout: 4 * time.Minute, codex: k.folder, joinFails: true}
+			o := s.run(t)
+			if o.joined == nil || !strings.HasPrefix(o.joined.Error(), "remove ") || !strings.Contains(o.joined.Error(), c.flag) ||
+				strings.Contains(o.joined.Error(), value) {
+				t.Errorf("the join returned %v; want an error that starts with remove, names %s and contains no value", o.joined, c.flag)
+			}
+			if strings.Contains(o.out+o.errs, value) {
+				t.Errorf("the output contains the argument's value:\n%s\n%s", o.out, o.errs)
+			}
+			if log := k.log(t, before); len(log) > 0 {
+				t.Errorf("the stub got:%s\nwant no request", codexEntries(log))
+			}
+		})
+	}
+}
+
 // codexExited checks that the session's dev.qory.session.exited and the run's one
 // dev.qory.run.exited have state and reason, and that the close succeeded.
 func codexExited(t *testing.T, o keysOutcome, state, reason string) {

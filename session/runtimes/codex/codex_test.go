@@ -10,6 +10,7 @@ import (
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/session/internal/parents"
 	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/claude"
 	"github.com/qoryai/forager/session/runtimes/codex"
 	"github.com/qoryai/forager/session/runtimes/runtimetest"
 )
@@ -195,4 +196,62 @@ func roundTrip(t *testing.T, v any) any {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// TestCodexRefusesArgumentsThatChangeItsSettings pins the check of Codex's launch
+// arguments: each form of --config and -c that sets a fixed key or the endpoint's
+// setting, --enable and --disable of a fixed feature, and every form of --oss,
+// --search, --local-provider, --profile and -p is refused with an error that starts
+// with the fix, names the flag and contains no value. Ordinary arguments, a flag after
+// --, and Claude Code with the same arguments pass.
+func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
+	rt, err := codex.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := rt.(runtimes.ArgsChecker)
+	const v = "value-not-shown"
+	for _, r := range []struct {
+		flag string
+		args []string
+	}{
+		{"--config", []string{"--config", "model_provider=" + v}},
+		{"--config", []string{"--config=web_search=" + v}},
+		{"--config", []string{"--config", "model_providers.qory.base_url=" + v}},
+		{"--config", []string{"--config", "model_providers.qory={base_url=\"" + v + "\"}"}},
+		{"-c", []string{"-c", "model_provider=" + v}},
+		{"-c", []string{"-cmodel_providers.qory.env_key=" + v}},
+		{"-c", []string{"-c=analytics.enabled=" + v}},
+		{"-c", []string{"-c", " otel.metrics_exporter = " + v}},
+		{"--enable", []string{"--enable", "plugins"}},
+		{"--enable", []string{"--enable=apps"}},
+		{"--disable", []string{"--disable", "plugins"}},
+		{"--oss", []string{"--oss"}},
+		{"--search", []string{"--search"}},
+		{"--local-provider", []string{"--local-provider", v}},
+		{"--local-provider", []string{"--local-provider=" + v}},
+		{"--profile", []string{"--profile", v}},
+		{"--profile", []string{"--profile=" + v}},
+		{"-p", []string{"-p", v}},
+		{"-p", []string{"-p" + v}},
+		{"-p", []string{"-p=" + v}},
+	} {
+		args := slices.Concat([]string{"exec", "--json"}, r.args, []string{"Say hi"})
+		err := c.CheckArgs(args)
+		if err == nil || !strings.HasPrefix(err.Error(), "remove ") || !strings.Contains(err.Error(), r.flag) || strings.Contains(err.Error(), v) {
+			t.Errorf("%q: %v; want a refusal that starts with the fix, names %s and contains no value", args, err, r.flag)
+		}
+	}
+	ordinary := []string{"exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-x",
+		"--config", "model_reasoning_effort=\"high\"", "-c", "model=\"gpt-x\"", "--enable", "undo", "--", "--oss", "-p", "x"}
+	if err := c.CheckArgs(ordinary); err != nil {
+		t.Errorf("%q: %v; want no refusal", ordinary, err)
+	}
+	cl, err := claude.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.(runtimes.ArgsChecker).CheckArgs([]string{"-p", "Say hi", "--config", "model_provider=x", "--profile", "x"}); err != nil {
+		t.Errorf("Claude Code: %v; want no refusal", err)
+	}
 }

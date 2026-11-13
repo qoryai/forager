@@ -527,6 +527,9 @@ type keysSession struct {
 	// file and --.
 	qory string
 	link []string
+	// joinFails, when set, expects the join to return an error: run returns it in
+	// keysOutcome.joined in place of failing the test.
+	joinFails bool
 	// codex, when set, is a folder that [codexFolder] makes: the launch starts Codex
 	// 0.167.2 through its codex-run script, as codex exec --json with the prompt last,
 	// in place of Claude Code, with CODEX_HOME at [codexHome] as a fixed value of the
@@ -627,8 +630,11 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 	_, o.closed = r.Close(ctx, outcome)
 	closeGateway()
 	o.out, o.errs, o.lines = out.String(), errs.String(), lines.String()
-	if o.joined != nil {
-		t.Fatalf("the join: %v\nstdout:\n%s\nstderr:\n%s", o.joined, o.out, o.errs)
+	if o.joined != nil && s.joinFails {
+		return o
+	}
+	if o.joined != nil || s.joinFails {
+		t.Fatalf("the join: %v, want an error %v\nstdout:\n%s\nstderr:\n%s", o.joined, s.joinFails, o.out, o.errs)
 	}
 	f, err := os.Open(filepath.Join(o.res.Dir, "events.jsonl"))
 	if err != nil {
