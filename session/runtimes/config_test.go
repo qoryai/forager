@@ -96,3 +96,57 @@ func TestADescriptorSaysHowItTakesSettingsThroughTheOptionalInterface(t *testing
 		t.Error("a change to the returned config reached the descriptor")
 	}
 }
+
+// TestALaunchMayNotSetASettingTheSessionPasses pins the check of config.flag: an
+// argument pair that sets a fixed key or the endpoint's setting, as "flag k=v" or
+// "flag=k=v", with spaces around the key, under a key, or over one, is refused with an
+// error that starts with the fix and contains no value; other pairs, a flag after --,
+// and a runtime without config pass.
+func TestALaunchMayNotSetASettingTheSessionPasses(t *testing.T) {
+	const value = "value-not-shown"
+	doc := "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n" +
+		"model:\n  formats: [openai-responses]\n  model: {flag: --model}\n  endpoint: {setting: providers.qory.base_url}\n" +
+		"  keys: [{format: openai-responses, auth: {scheme: bearer}, variable: AMP_KEY}]\n" +
+		"config: {flag: --set, fixed: {provider: qory, providers.qory.name: qory, search: off}}\n"
+	rt, err := runtimes.Described("amp.yaml", []byte(doc), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok := rt.(runtimes.ArgsChecker)
+	if !ok {
+		t.Fatal("a described runtime is no ArgsChecker")
+	}
+	for _, args := range [][]string{
+		{"run", "--set", "provider=" + value},
+		{"run", "--set=provider=" + value},
+		{"--set", " search =" + value},
+		{"--set", "providers.qory.base_url=" + value},
+		{"--set", "providers.qory.name.x=" + value},
+		{"--set", "providers.qory={name=\"" + value + "\"}"},
+		{"--set", "providers=" + value},
+	} {
+		err := c.CheckArgs(args)
+		if err == nil || !strings.HasPrefix(err.Error(), "remove the --set pair") || strings.Contains(err.Error(), value) {
+			t.Errorf("%q: %v; want a refusal that starts with the fix and contains no value", args, err)
+		}
+	}
+	for _, args := range [][]string{
+		nil,
+		{"run", "--set", "model=x", "--set=effort=high", "--model", "provider"},
+		{"run", "--set", "provider_extra=x", "--set", "providers.other.name=x"},
+		{"run", "--", "--set", "provider=x"},
+		{"run", "--set"},
+	} {
+		if err := c.CheckArgs(args); err != nil {
+			t.Errorf("%q: %v; want no refusal", args, err)
+		}
+	}
+	plain, err := runtimes.Described("other-agent.yaml", []byte(other), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.(runtimes.ArgsChecker).CheckArgs([]string{"--config", "model_provider=x", "--set", "provider=x"}); err != nil {
+		t.Errorf("a runtime without config: %v; want no refusal", err)
+	}
+}

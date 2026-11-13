@@ -344,11 +344,18 @@ func (bare) Headless([]string) bool { return false }
 // the contract's schema. installers are the ones the descriptor may name; one it names
 // that is not among them is an error.
 func Described(name string, document []byte, installers map[string]Installer) (Runtime, error) {
+	return DescribedWithArgs(name, document, installers, nil)
+}
+
+// DescribedWithArgs is [Described] with check, a refusal of launch arguments that
+// override a setting the session passes through flags only this runtime has, which
+// CheckArgs runs after the check of the descriptor's config.flag; nil for none.
+func DescribedWithArgs(name string, document []byte, installers map[string]Installer, check ArgsCheck) (Runtime, error) {
 	d, err := descriptor.Parse(name, document)
 	if err != nil {
 		return nil, err
 	}
-	r := &described{d: d}
+	r := &described{d: d, check: check}
 	if h := d.Sources.Hooks; h != nil {
 		r.install = installers[h.Install]
 		if r.install == nil {
@@ -377,6 +384,7 @@ type described struct {
 	install  Installer
 	stop     Stop
 	headless []string
+	check    ArgsCheck
 }
 
 // Name is the descriptor's runtime.

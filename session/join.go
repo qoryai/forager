@@ -637,7 +637,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	// A runtime that reads its settings as TOML gets its descriptor's config.fixed and,
 	// for an endpoint that is a setting, the start key's endpoint, before the launch's
-	// arguments.
+	// arguments. A later argument that sets one of them would win, so the session
+	// refuses such a launch first.
+	if c, ok := rt.(runtimes.ArgsChecker); ok {
+		if err := c.CheckArgs(prepared.Args); err != nil {
+			return fail(err)
+		}
+	}
 	if prepared.Args, err = configArgs(rt, key, prepared.Args); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
