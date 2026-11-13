@@ -10,6 +10,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Read `model.endpoint` of a runtime in `runtimes.json` as one of `variable` and
+  `setting`: a descriptor's endpoint may be a setting, such as
+  `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a
+  runtime, `{prefix, path}`, where `path` may have `*`, which matches inside one path
+  name; it is absent for a runtime with no resume.
 - Deploy the gateway first, then Qory Apiary. A gateway built before this change fails
   a run with `run_configuration_invalid` when the run configuration's API credential has
   `resets_at`, `schedule_resets_at` or `pause_for_s`, and ignores the run
@@ -252,6 +257,26 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The contract for model keys of OpenAI, schemas and fixtures only; on 2026-11-13 the
+  gateway and the session act on none of it (README §Credentials, Paths and an account
+  header of a model key, and Keys out after a 401, each with a table of today and after):
+  - An API credential's `paths`, 1 to 32 paths of its endpoint's host in a host
+    credential's grammar, `credential_paths` of `run-configuration.schema.json`.
+  - `account_header` and `account_claim` in `auth.schema.json`, both or neither and only
+    with `oauth`: the header the proxy is to set beside an OAuth token, such as
+    `chatgpt-account-id`, and the JSON pointer (RFC 6901) of its value in the token's
+    JWT payload, such as `/https:~1~1api.openai.com~1auth/chatgpt_account_id`.
+  - `unauthorized` in the secrets request, 1 to 6 names of model keys whose renewal
+    follows a model provider's `401`, and in the model keys report, 1 to 6
+    `{credential, at}`, the keys out of the run after such a `401`.
+  - The reasons `model_key_switch`, `paused`, and `model_key_unauthorized`, `failed`, in
+    `link-batch-answer.schema.json`'s `stop`, `dev.qory.session.exited` and
+    `dev.qory.run.exited`, with the pairing rules `model_key_limit` has with `paused`.
+  - In the runtime descriptor: `model.endpoint` as `variable` or `setting`; `config`,
+    `{flag, fixed}`, for a runtime that reads its settings as TOML from a flag such as
+    `--config`; `resume.path_from` optional; `*` in `resume.path`, which matches inside
+    one path name; and `resume.after`, the argument `resume.args` follow.
+  - `resume`, `{prefix, path}`, for each runtime of `runtimes.json` with a resume.
 - Several model keys per run. When the start key is an API credential, the key group is
   the start key and every API credential with its `format`, `auth` and `endpoint`, in the
   order of `credentials`. The keys of the group share the start key's placeholder, and
