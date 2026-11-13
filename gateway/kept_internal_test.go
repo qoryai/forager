@@ -16,45 +16,6 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// TestWithoutUserInfo pins the rule for the user information of an image reference:
-// with a trailing digest set aside, everything up to and with the last @ goes, a
-// scheme too, and the digest comes back; a port, a digest and a reference with no user
-// information stay. A second pass changes nothing.
-func TestWithoutUserInfo(t *testing.T) {
-	const digest = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-	sha512 := "@sha512:" + strings.Repeat("0", 128)
-	blake3 := "@blake3:" + strings.Repeat("0", 64)
-	for ref, want := range map[string]string{
-		"user:password@registry.example/agents/base" + digest: "registry.example/agents/base" + digest,
-		"token@registry.example:5000/base" + digest:           "registry.example:5000/base" + digest,
-		"user:password@registry.example/base:1":               "registry.example/base:1",
-		"user:pa/ss@registry.example/base" + digest:           "registry.example/base" + digest,
-		"user:p@ss@registry.example/base" + digest:            "registry.example/base" + digest,
-		"me@example.com:pw@registry.example/base:1":           "registry.example/base:1",
-		"docker://u:p@registry.example/x" + digest:            "registry.example/x" + digest,
-		"https://u:p@registry.example/x":                      "registry.example/x",
-		"u:p@base:latest":                                     "base:latest",
-		"u:p@base" + digest:                                   "base" + digest,
-		"user:pass@registry.example/img" + sha512:             "registry.example/img" + sha512,
-		"user:pass@registry.example/img" + blake3:             "registry.example/img" + blake3,
-		"@registry.example/base":                              "registry.example/base",
-		"registry.example:5000/base" + digest:                 "registry.example:5000/base" + digest,
-		"registry.example/agents/base" + digest:               "registry.example/agents/base" + digest,
-		"base" + digest:                                       "base" + digest,
-		"registry.example/base:1":                             "registry.example/base:1",
-		"ubuntu:24.04":                                        "ubuntu:24.04",
-		"":                                                    "",
-	} {
-		got := withoutUserInfo(ref)
-		if got != want {
-			t.Errorf("withoutUserInfo(%q) = %q; want %q", ref, got, want)
-		}
-		if again := withoutUserInfo(got); again != got {
-			t.Errorf("withoutUserInfo(%q) = %q; a second pass gives %q", ref, got, again)
-		}
-	}
-}
-
 // TestTheReportOfKeptFilesNotRemovedStartsWithTheFix pins the report of a removal of
 // the kept files that failed: the files to remove by hand and where come first.
 func TestTheReportOfKeptFilesNotRemovedStartsWithTheFix(t *testing.T) {

@@ -150,6 +150,7 @@ func (g *Group) change(name string, f func(i int) bool) {
 		g.mu.Unlock()
 		return
 	}
+	g.changes++
 	list, hook, changed := g.unauthorized(), g.onUnauthorized, g.changed
 	g.mu.Unlock()
 	if hook != nil {

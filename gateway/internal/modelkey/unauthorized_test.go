@@ -60,7 +60,8 @@ func TestA401TakesTheKeyOutOfUse(t *testing.T) {
 }
 
 // TestUnauthorizedHooksComeInOrder pins OnUnauthorized and OnChange: one call of each
-// per change, with the list after it, and none for a call that changes nothing.
+// per change, with the list after it, and none for a call that changes nothing. Changes
+// counts each change, so the reporter sends a report for it.
 func TestUnauthorizedHooksComeInOrder(t *testing.T) {
 	g, _ := group(t)
 	var lists [][]modelkey.Unauthorized
@@ -72,8 +73,8 @@ func TestUnauthorizedHooksComeInOrder(t *testing.T) {
 	g.Renewed("model-2")
 	g.Revoked("model")
 	g.Revoked("model")
-	if len(lists) != 2 || changes != 2 {
-		t.Fatalf("%d lists and %d changes; want 2 of each", len(lists), changes)
+	if len(lists) != 2 || changes != 2 || g.Changes() != 2 {
+		t.Fatalf("%d lists, %d changes and a count of %d; want 2 of each", len(lists), changes, g.Changes())
 	}
 	if lists[0][0].Out || !lists[1][0].Out {
 		t.Errorf("the lists %+v; want model waiting, then out", lists)

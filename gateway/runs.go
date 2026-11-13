@@ -1293,7 +1293,7 @@ func (lr *linkRun) compute() refreshed {
 	// none, so the answer's bytes, and its digest, stay the same across a restart.
 	img := lr.image()
 	if img != nil {
-		img.Ref = withoutUserInfo(img.Ref)
+		img.Ref = policy.ImageWithoutUserInfo(img.Ref)
 	}
 	body, _ := json.Marshal(reloadAnswerDoc{
 		Version: 1, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),

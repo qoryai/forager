@@ -47,6 +47,11 @@ type RunAPIRefusal struct {
 	Findings []string
 }
 
+// ErrRunAPIHold is the error a check of [Run.SetRunAPICheck] returns to hold a verdict:
+// a POST to /verdict that goes no further than the check. The forwarder tests a check's
+// error with [errors.Is], so an error that wraps ErrRunAPIHold is a hold too.
+var ErrRunAPIHold = errors.New("hold the run API POST")
+
 // SetRunAPICheck sets check, which checks each POST to the run API that a program behind
 // the wall sends, the agent's or a setup command's, before anything of it reaches the
 // gateway: a POST to run-api.qory.invalid under /v1/runs/<run id>/, such as a push of
@@ -58,13 +63,20 @@ type RunAPIRefusal struct {
 // check. When it returns nil, nil, the forwarder sends the POST on, the bytes check got
 // with Connection: close added to the head, and the gateway's route checks it as any
 // other. A [RunAPIRefusal] goes to the program instead, with its Status, and nothing
-// reaches the gateway. An error, a panic, which is a Report line, a refusal with no
-// Code, a Status of 407 or outside 400 to 499, or a call that outlasts its context gets
-// a 503, {"error":"push_check_unavailable",...}, and nothing reaches the gateway either.
-// The context ends after 90 seconds or when the run closes. Return when ctx ends: the
-// forwarder reads and checks one POST of the run at a time and takes the next one once
-// the context ends, so a check that ignores ctx may still run beside the next POST's
-// check. A POST that waits 90 seconds for its turn gets the 503 too.
+// reaches the gateway. When check returns [ErrRunAPIHold], or an error that wraps it,
+// a POST to /verdict is held: the program gets a 202 with the body of Qory Apiary's 201
+// for a stored verdict, with null for the artifact's version, and nothing reaches the
+// gateway. Any other error, a hold of another path, a panic, which is a Report line, a
+// refusal with no Code, a Status of 407 or outside 400 to 499, or a call that outlasts
+// its context gets a 503, {"error":"push_check_unavailable",...}, and nothing reaches
+// the gateway either. A pass or a hold that check returns after its context ended is a
+// call that outlasted it. The context ends after 90 seconds or when the run closes.
+// Return when ctx ends: the forwarder reads and checks one POST of the run at a time
+// and takes the next one once the context ends, so a check that ignores ctx may still
+// run beside the next POST's check. A POST that waits 90 seconds for its turn gets the
+// 503 too. The forwarder checks one POST of a run at a time, so the check gets the
+// verdicts of a program that sends each after the reply to the one before in the order
+// sent.
 //
 // With the check set, the forwarder passes one request per connection through the
 // wall, with no plain-HTTP keep-alive or pipelining: a CONNECT and its tunnel, or one
@@ -453,6 +465,9 @@ func (k *runAPICheck) pass(ctx context.Context, c net.Conn, head []byte, from *b
 		err = checkRefusal(refusal)
 	}
 	switch {
+	case errors.Is(err, ErrRunAPIHold) && p.path == "/verdict":
+		writeRunAPIReply(c, from, maxProxyHead, http.StatusAccepted, []byte(runAPIHeldVerdict))
+		return nil
 	case err != nil:
 		replyRunAPI(c, from, maxProxyHead, http.StatusServiceUnavailable, &RunAPIRefusal{Code: "push_check_unavailable", Message: runAPICheckUnavailable})
 		return nil
@@ -526,9 +541,9 @@ func (k *runAPICheck) call(ctx context.Context, req RunAPIRequest) (*RunAPIRefus
 	}()
 	select {
 	case r := <-got:
-		if r.err == nil && ctx.Err() != nil {
-			// A check that let the POST pass after its context ended fails as one that
-			// outlasted it.
+		if (r.err == nil || errors.Is(r.err, ErrRunAPIHold)) && ctx.Err() != nil {
+			// A check that let the POST pass, or held it, after its context ended fails as
+			// one that outlasted it.
 			return nil, ctx.Err()
 		}
 		return r.refusal, r.err
@@ -557,6 +572,21 @@ func replyRunAPI(c net.Conn, from io.Reader, unread int64, status int, refusal *
 		Message  string   `json:"message"`
 		Findings []string `json:"findings,omitempty"`
 	}{refusal.Code, refusal.Message, refusal.Findings})
+	writeRunAPIReply(c, from, unread, status, b)
+}
+
+// runAPIHeldVerdict is the body of the 202 for a held verdict: the body of Qory Apiary's
+// 201 for a stored verdict, in version 1 of the run API's JSON, with null for the
+// verdict artifact's version, as Qory Apiary writes a version that does not exist. A held
+// verdict has no stored version, so the body has no id or number that a program could
+// read as one. The top-level version stays 1: it is the version of the JSON, which a
+// client of the run API reads before the rest.
+const runAPIHeldVerdict = `{"version":1,"artifact":{"type":"verdict","name":"main","version":null}}`
+
+// writeRunAPIReply writes the program a reply of status with the JSON body b and
+// Connection: close, then ends the connection's writing half and drains it as
+// [replyRunAPI] does.
+func writeRunAPIReply(c net.Conn, from io.Reader, unread int64, status int, b []byte) {
 	text := http.StatusText(status)
 	if text == "" {
 		text = "status code " + strconv.Itoa(status)

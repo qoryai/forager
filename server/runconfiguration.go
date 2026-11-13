@@ -28,13 +28,13 @@ const MaxVariableValue = 4096
 // readRunConfiguration reads a run configuration document: through encoding/json/v2
 // first, which refuses a member name that appears twice and invalid UTF-8, then its
 // image ([CheckConfigurationImage]), then against the schema, then against the limits
-// the schema cannot state: a variable's size, and a credential's name twice or its
-// header one [ReservedHeader] reports. It sets [RunConfiguration.Computed] to the
-// digest of body. Every refusal is a refusal with
-// [refusal.RunConfigurationInvalid] whose message contains where in the document it is
-// and which rule refused it, and never a value but the image's: a variable's value may
-// be anything the server holds, and no decoder's message is wrapped, since those quote
-// what they refuse.
+// the schema cannot state: a variable's size, a credential's name twice or its header
+// one [ReservedHeader] reports, and a resume whose runs end in another run than its
+// run_id. It sets [RunConfiguration.Computed] to the digest of body. Every refusal is a
+// refusal with [refusal.RunConfigurationInvalid] whose message contains where in the
+// document it is and which rule refused it, and never a value but the image's: a
+// variable's value may be anything the server holds, and no decoder's message is
+// wrapped, since those quote what they refuse.
 func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 	invalid := func(format string, a ...any) error {
 		return refusal.New(refusal.RunConfigurationInvalid, nil, "the document is refused: "+format, a...)
@@ -80,6 +80,10 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 	}
 	if err := CheckCredentials(rc.Credentials, rc.ModelCredential); err != nil {
 		return nil, err
+	}
+	if r := rc.Resume; r != nil && len(r.Runs) > 0 && r.Runs[len(r.Runs)-1] != r.RunID {
+		return nil, refusal.New(refusal.RunConfigurationInvalid, nil,
+			"set the last item of /resume/runs to /resume/run_id, the paused run this run continues: the last item of /resume/runs is another run")
 	}
 	sum := sha256.Sum256(body)
 	rc.Computed = "sha256=" + hex.EncodeToString(sum[:])
@@ -239,17 +243,20 @@ func UnclearPath(path string) bool {
 // pinned by digest, NAME@sha256: and 64 lower-case hexadecimal digits, with
 // run_configuration_invalid: a reference with a tag or without a digest, one in upper
 // case, and the machine's name for an image, which a run configuration never names.
-// The refusal names the image, as printable ASCII when it is, quoted otherwise.
+// The refusal shows the image without its user information
+// ([policy.ImageWithoutUserInfo]), as printable ASCII when it is, quoted otherwise: the
+// gateway's log and the session's report may print the refusal, and a registry's
+// credentials may be in that user information.
 func CheckConfigurationImage(image string) error {
 	if policy.ImageReference(image) {
 		return nil
 	}
-	shown := image
+	shown := policy.ImageWithoutUserInfo(image)
 	switch {
-	case accesskey.ContainsSecret(image):
-		shown = accesskey.ShownName(image, false)
-	case strings.ContainsFunc(image, func(r rune) bool { return r <= ' ' || r > '~' }) || image == "":
-		shown = strconv.Quote(image)
+	case accesskey.ContainsSecret(shown):
+		shown = accesskey.ShownName(shown, false)
+	case strings.ContainsFunc(shown, func(r rune) bool { return r <= ' ' || r > '~' }) || shown == "":
+		shown = strconv.Quote(shown)
 	}
 	return refusal.New(refusal.RunConfigurationInvalid, nil, "the image %s is not a reference pinned by digest", shown)
 }

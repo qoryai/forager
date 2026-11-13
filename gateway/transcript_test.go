@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -15,8 +16,9 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// resumeDoc is a run configuration that continues a paused run.
-const resumeDoc = `{"version":1,"resume":{"run_id":"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d","session_id":"3f1b2c4d-0000-4000-8000-000000000001","path":"~/.claude/projects/-workspace/3f1b2c4d-0000-4000-8000-000000000001.jsonl"}}`
+// resumeDoc is a run configuration that continues a paused run, the second of a chain
+// of two paused runs.
+const resumeDoc = `{"version":1,"resume":{"run_id":"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d","session_id":"3f1b2c4d-0000-4000-8000-000000000001","path":"~/.claude/projects/-workspace/3f1b2c4d-0000-4000-8000-000000000001.jsonl","runs":["0192f0a7-1c2d-7e3f-8a4b-5c6d7e8f9a0b","0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d"]}}`
 
 // transcriptControl is a control that serves doc and GET
 // <run.url>/<run_id>/resume/transcript with answer, and counts those requests.
@@ -78,7 +80,8 @@ func getTranscript(t *testing.T, h *harness, runID string) (int, string, []byte,
 
 // wantResume is resumeDoc's resume.
 var wantResume = server.LinkResume{RunID: "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", SessionID: "3f1b2c4d-0000-4000-8000-000000000001",
-	Path: "~/.claude/projects/-workspace/3f1b2c4d-0000-4000-8000-000000000001.jsonl"}
+	Path: "~/.claude/projects/-workspace/3f1b2c4d-0000-4000-8000-000000000001.jsonl",
+	Runs: []string{"0192f0a7-1c2d-7e3f-8a4b-5c6d7e8f9a0b", "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d"}}
 
 // TestATranscriptRequestReadsThePausedRunsTranscript pins the link's transcript request
 // on the local link, of a run whose run answer has the run configuration's resume: the gateway reads GET <run.url>/<run_id>/resume/transcript with
@@ -93,7 +96,7 @@ func TestATranscriptRequestReadsThePausedRunsTranscript(t *testing.T) {
 	transcriptControl(t, c, resumeDoc, &answer, &count)
 	h := start(t, gateway.Config{Server: c.server()})
 	a := h.open(server.LinkRunRequest{})
-	if a.Resume == nil || *a.Resume != wantResume {
+	if a.Resume == nil || !reflect.DeepEqual(*a.Resume, wantResume) {
 		t.Errorf("the run answer's resume %+v; want %+v", a.Resume, wantResume)
 	}
 	content := bytes.Repeat([]byte(`{"type":"assistant"}`+"\n"), 2000)
@@ -147,7 +150,7 @@ func TestATranscriptRequestBehindASeparateGateway(t *testing.T) {
 	answer = transcriptFile(c, content, "")
 	r := startRemote(t, c, gateway.Config{})
 	e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
-	if e.a.Resume == nil || *e.a.Resume != wantResume {
+	if e.a.Resume == nil || !reflect.DeepEqual(*e.a.Resume, wantResume) {
 		t.Errorf("the run answer's resume %+v; want %+v", e.a.Resume, wantResume)
 	}
 	got := r.do(t, e.key, http.MethodGet, "/qory-link/run-configuration/"+e.a.RunID+"/transcript", nil)

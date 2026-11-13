@@ -271,6 +271,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `policy.ImageWithoutUserInfo` returns an image reference without the user
+  information it may start with: everything up to and with the last `@` before a
+  trailing `@sha256:`, `@sha512:` or `@blake3:` digest, a scheme in front of it too.
+  The gateway uses it for `request.json`, the reload answer and the reload's refusal of
+  another image; the server package for a run answer that `fmt` or `encoding/json`
+  prints and for the refusal of a run configuration's image that is not pinned; the
+  session for `dev.qory.session.started`, the image step's name and the manifest
+  check; and the wall for its errors and refusals.
 - The contract for model keys of OpenAI. The gateway acts on `paths` and the account
   header (Gateway, Added); on 2026-11-13 the gateway and the session act on none of the
   rest (README §Credentials, Paths and an account header of a model key, and Keys out
@@ -356,6 +364,12 @@ release may change what an existing document does, and says so under Upgrading.
   /resume/transcript` of the run API. A program behind the wall, or on `QORY_RUN_API`,
   gets `404` for that path. When the read or the write fails, the session starts the
   runtime without a resume.
+- `resume.runs` in the run configuration, `server.LinkResume.Runs`: optional, the paused
+  runs the run continues, oldest first, at most the newest 256, each a lower-case UUID
+  once; the last is `resume.run_id`. A document whose `runs` ends in another run is
+  `run_configuration_invalid`. The gateway copies `runs` to the run answer's `resume`.
+  Fixtures: `fixtures/run-configuration/resume-runs.json` and five in
+  `fixtures/invalid/`.
 - The contract stays at revision 1. Fixtures: `fixtures/run-configuration/model-keys.json`
   and `resume.json`, `fixtures/model-keys-report/`, `fixtures/model-keys-answer/`,
   `fixtures/link/link-batch-answer-stop.json`,
@@ -1008,6 +1022,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- `fmt` and `encoding/json` print `server.LinkRunAnswer` with the image's `ref` and
+  `relay_image` without their user information. Before, a log of the run answer printed
+  a registry's credentials in either.
+- The refusal of `server.CheckConfigurationImage` shows a run configuration's image
+  that is not pinned without its user information: `user:pw@registry.example/agent:1` is
+  `registry.example/agent:1` in the refusal. The gateway's log of a failed reopen and
+  the session's report of a failed reload print that refusal. Before, they printed the
+  registry's credentials.
 - The server package printed a value as written in these messages, and now prints `(a
   value that contains an access key secret)` or `(a value that contains a run key)` in
   place of a value that contains `qak_` or `qrk_` in any case: a server document's name
@@ -1507,6 +1529,24 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- The CA key sweep removed the files kept to reopen a run whose open was in flight,
+  `ca.key` among them, when its record had not changed for 15 minutes. The sweep now
+  skips a run from the arrival of its run request until its run answer, as it skips a
+  run the gateway holds or reopens. A run request that comes while the sweep removes
+  the files of a record of its run id gets a `503` with no body, as the run's other
+  requests do. A run request that gives up its run id removes only the mark it set,
+  not the mark of a later request of the same run id. A removal that panics clears
+  the sweep's mark of the run, so the run's requests get no `503` from then on.
+- The model keys reporter sent a report again after a report that succeeded, with
+  nothing changed since. A change that came during the 1-second gap after a report, or
+  during a backoff, woke the reporter once more after the next report already had it,
+  so a burst of changes made two reports, and the run's end made a third. The reporter
+  now sends one report per burst of changes: a wake for changes that the last report,
+  sent or dropped, already contains sends nothing.
+- A reload's refusal of another image than the run started in printed the start image
+  whole, with a registry's credentials in its user information, for a run that started
+  in the machine's default given as a reference. It now prints the reference without
+  its user information.
 - The gateway refused a batch with a session's `dev.qory.run.exited` whose reason is
   `workflow_not_in_harness` or `image_user_root`, so a run that qory closed with one of
   them ended `batch_refused`. The gateway now accepts both as it accepts
@@ -1836,6 +1876,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- The Docker wall's errors and refusals print an image's reference without its user
+  information: the error of a reference that is not an image reference, a failed
+  `docker pull` with its command and the engine's output, a failed `image inspect`
+  with the engine's output, an image the engine does not hold by its digest at its
+  first container, an image the engine does not have under `NeverPull`, and the names
+  and detail of `image_missing` and `image_user_root`. The output of any docker command
+  in an error has the run's image and relay image without their user information too.
+  Before, a failed pull printed the reference whole, with a registry's credentials in
+  it, and the session wrote that error to the record as a `dev.qory.run.log` line. The
+  pull still uses the reference whole.
 - `wall.Docker`, the engine check, the nest and the relay printed a value as written in
   their errors, and now print a phrase in place of one that contains `qak_` or `qrk_` in
   any case: the name's phrase for a run id, an image, a container runtime, a user, a
@@ -1939,6 +1989,14 @@ release may change what an existing document does, and says so under Upgrading.
   `Content-Length` values or a head that net/http could read another way gets a `400`.
   Without a call of `SetRunAPICheck`, the forwarder passes what the wall's relay sends
   as it is, byte for byte.
+- `session.ErrRunAPIHold`: return it, or an error that wraps it, from the check of
+  `SetRunAPICheck` for a `POST /verdict` to hold the verdict. The program gets a `202`
+  with `{"version":1,"artifact":{"type":"verdict","name":"main","version":null}}`, the body
+  of Qory Apiary's `201` for a stored verdict with `null` for the artifact's version,
+  and nothing reaches the gateway. A hold of another path, or one returned after the
+  check's context ended, gets the `503` `push_check_unavailable`. The check gets the
+  verdicts of a program that sends each after the reply to the one before in the order
+  sent.
 - The helper's exec, `session.Exec`, measures the enclosure when the runtime exits. It
   reads `/sys/fs/cgroup/memory.peak` and the `usage_usec` line of
   `/sys/fs/cgroup/cpu.stat`, only when `/sys/fs/cgroup/memory.max` exists, and sends
@@ -2244,6 +2302,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- `dev.qory.session.started` and the image step's `dev.qory.run.step_started` have the
+  image's reference without its user information, as `request.json` has it:
+  `user:pw@registry.example/agent@sha256:…` is recorded as
+  `registry.example/agent@sha256:…`. The manifest check reads that reference too, so its
+  errors and its `image_missing`, `image_access_denied`, `image_rate_limited` and
+  `image_registry_unreachable` refusals have no user information, and it sends its
+  request to the registry in the reference. Before, the record had the reference whole, with the
+  registry's credentials in it, and the check read the user information as a Docker Hub
+  repository and sent it in the path of a request to `registry-1.docker.io`. The wall
+  still pulls the reference whole.
 - `approve-key.sh` writes to the file Claude Code 2.1.316 reads. With an empty `.config.json`
   beside a `.claude.json`, it writes the approval to `.claude.json`, and with an empty
   `.config.json` that has no write bit, it writes to `.claude.json` too. Before, the script

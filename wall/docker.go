@@ -24,6 +24,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/program"
 	"github.com/qoryai/forager/refusal"
 )
@@ -285,10 +286,10 @@ func (d *Docker) checked(req Request) (system, string, error) {
 		return nil, "", fmt.Errorf("wall docker: the run id %s cannot name a container", accesskey.ShownName(req.RunID, true))
 	}
 	if !imageShape.MatchString(req.Image) {
-		return nil, "", fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(req.Image, true))
+		return nil, "", fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(policy.ImageWithoutUserInfo(req.Image), true))
 	}
 	if req.RelayImage != "" && !imageShape.MatchString(req.RelayImage) {
-		return nil, "", fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(req.RelayImage, true))
+		return nil, "", fmt.Errorf("wall docker: %s is not an image reference", accesskey.ShownName(policy.ImageWithoutUserInfo(req.RelayImage), true))
 	}
 	if req.Pull && req.Docker {
 		return nil, "", errors.New("wall docker: an image a run names by its reference never gets nested Docker")
@@ -470,14 +471,34 @@ func (e *dockerEnclosure) image() string   { return e.base + "-image" }
 func (e *dockerEnclosure) setup() string   { return e.base + "-setup" }
 func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunID }
 
-// docker runs one docker command; a failure carries what the command printed.
+// docker runs one docker command; a failure contains what the command printed. The
+// failure's command and output have the run's image references without their user
+// information ([dockerEnclosure.withoutLogins]): docker pull's argument is one.
 func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, error) {
 	argv := append([]string{e.command()}, args...)
 	out, err := e.sys.run(ctx, argv, e.env)
 	if err != nil {
-		return out, fmt.Errorf("wall docker: %s: %w: %s", accesskey.ShownValue(strings.Join(argv[:min(3, len(argv))], " "), false), accesskey.ShownError(err), accesskey.ShownValue(string(bytes.TrimSpace(out)), false))
+		shown := e.withoutLogins(strings.Join(argv[:min(3, len(argv))], " "))
+		return out, fmt.Errorf("wall docker: %s: %w: %s", accesskey.ShownValue(shown, false), accesskey.ShownError(err), accesskey.ShownValue(e.withoutLogins(string(bytes.TrimSpace(out))), false))
 	}
 	return out, nil
+}
+
+// withoutLogins is s with the user information of the run's image and relay image
+// left out ([policy.ImageWithoutUserInfo]): each reference as a whole, then its user
+// information wherever else it is, such as in an engine's message that quotes part of
+// the reference. A registry's credentials may be in that user information.
+func (e *dockerEnclosure) withoutLogins(s string) string {
+	for _, ref := range []string{e.req.Image, e.req.RelayImage} {
+		bare := policy.ImageWithoutUserInfo(ref)
+		if bare == ref {
+			continue
+		}
+		// The user information is the part of ref before bare.
+		s = strings.ReplaceAll(s, ref, bare)
+		s = strings.ReplaceAll(s, ref[:len(ref)-len(bare)], "")
+	}
+	return s
 }
 
 func (e *dockerEnclosure) command() string { return e.d.command() }
@@ -532,7 +553,7 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 		user = config.User
 	}
 	name, _, _ := strings.Cut(strings.TrimSpace(user), ":")
-	image := accesskey.ShownName(e.req.Image, false)
+	image := accesskey.ShownName(policy.ImageWithoutUserInfo(e.req.Image), false)
 	root := func() error {
 		return refusal.New(refusal.ImageUserRoot, []string{image}, "the image %s runs as root; a run's image runs as the wall's user", image)
 	}
@@ -574,7 +595,7 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 func (e *dockerEnclosure) fetch(ctx context.Context) error {
 	out, err := e.docker(ctx, "pull", e.req.Image)
 	if err != nil && imageMissing(out) {
-		image := accesskey.ShownName(e.req.Image, false)
+		image := accesskey.ShownName(policy.ImageWithoutUserInfo(e.req.Image), false)
 		return refusal.New(refusal.ImageMissing, []string{image}, "the image %s is not in its registry", image)
 	}
 	return err
@@ -803,17 +824,18 @@ func (e *dockerEnclosure) held(ctx context.Context) (bool, error) {
 		if errors.As(err, &exit) {
 			said = string(bytes.TrimSpace(exit.Stderr))
 		}
+		said = e.withoutLogins(said)
 		if noSuchImage(said) {
 			return false, nil
 		}
 		if exit != nil {
-			return false, fmt.Errorf("wall docker: image inspect %s: %w: %s", accesskey.ShownName(e.req.Image, false), accesskey.ShownError(err), accesskey.ShownValue(said, false))
+			return false, fmt.Errorf("wall docker: image inspect %s: %w: %s", accesskey.ShownName(policy.ImageWithoutUserInfo(e.req.Image), false), accesskey.ShownError(err), accesskey.ShownValue(said, false))
 		}
-		return false, fmt.Errorf("wall docker: image inspect %s: %w", accesskey.ShownName(e.req.Image, false), accesskey.ShownError(err))
+		return false, fmt.Errorf("wall docker: image inspect %s: %w", accesskey.ShownName(policy.ImageWithoutUserInfo(e.req.Image), false), accesskey.ShownError(err))
 	}
 	var digests []string
 	if err := json.Unmarshal(bytes.TrimSpace(out), &digests); err != nil {
-		return false, fmt.Errorf("wall docker: the repository digests of %s: %w", accesskey.ShownName(e.req.Image, false), err)
+		return false, fmt.Errorf("wall docker: the repository digests of %s: %w", accesskey.ShownName(policy.ImageWithoutUserInfo(e.req.Image), false), err)
 	}
 	want := fullReference(e.req.Image)
 	return slices.ContainsFunc(digests, func(d string) bool { return fullReference(d) == want }), nil
@@ -997,7 +1019,7 @@ func (e *dockerEnclosure) unpulled(image string, out []byte, err error) error {
 	if !e.req.NeverPull || !noSuchImage(string(out)) {
 		return err
 	}
-	return fmt.Errorf("Pull the image on this machine before you set the engine proxy: the engine has no image %s, and under an engine proxy the wall pulls only in a run's image step.", accesskey.ShownName(image, false))
+	return fmt.Errorf("Pull the image on this machine before you set the engine proxy: the engine has no image %s, and under an engine proxy the wall pulls only in a run's image step.", accesskey.ShownName(policy.ImageWithoutUserInfo(image), false))
 }
 
 // relayImage is the image the relay starts from: the machine's default, or the run's
@@ -1090,7 +1112,7 @@ func (e *dockerEnclosure) firstUse(ctx context.Context, ca []byte) (string, erro
 	if e.req.Pull {
 		held, err := e.held(ctx)
 		if err == nil && !held {
-			err = fmt.Errorf("wall docker: fetch %s with Pull before its first container starts: the engine does not hold it by its digest", accesskey.ShownName(e.req.Image, false))
+			err = fmt.Errorf("wall docker: fetch %s with Pull before its first container starts: the engine does not hold it by its digest", accesskey.ShownName(policy.ImageWithoutUserInfo(e.req.Image), false))
 		}
 		if err != nil {
 			return "", err

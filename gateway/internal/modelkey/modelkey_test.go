@@ -306,6 +306,12 @@ func TestAChangeCallsOnChangeOnce(t *testing.T) {
 	if n.Load() != 3 {
 		t.Errorf("after a refusal: %d calls; want 3", n.Load())
 	}
+	// The change count follows the calls, and a merge of an answer is no change.
+	g.Merge([]modelkey.Window{{Credential: "model-2", Window: "five_hour", Status: modelkey.StatusAllowed, Source: modelkey.SourceProvider, ObservedAt: start.Add(time.Minute)}})
+	ws, changes := g.Snapshot()
+	if changes != 3 || g.Changes() != 3 || n.Load() != 3 || len(ws) != 3 {
+		t.Errorf("after a merge: count %d, %d calls, windows %+v; want 3, 3 and the merged window", changes, n.Load(), ws)
+	}
 }
 
 // TestMergeTakesNewerEntriesAndTheirCooldowns pins the answer's merge: an entry later
