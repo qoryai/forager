@@ -21,6 +21,8 @@ import (
 // information stay. A second pass changes nothing.
 func TestWithoutUserInfo(t *testing.T) {
 	const digest = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	sha512 := "@sha512:" + strings.Repeat("0", 128)
+	blake3 := "@blake3:" + strings.Repeat("0", 64)
 	for ref, want := range map[string]string{
 		"user:password@registry.example/agents/base" + digest: "registry.example/agents/base" + digest,
 		"token@registry.example:5000/base" + digest:           "registry.example:5000/base" + digest,
@@ -32,6 +34,8 @@ func TestWithoutUserInfo(t *testing.T) {
 		"https://u:p@registry.example/x":                      "registry.example/x",
 		"u:p@base:latest":                                     "base:latest",
 		"u:p@base" + digest:                                   "base" + digest,
+		"user:pass@registry.example/img" + sha512:             "registry.example/img" + sha512,
+		"user:pass@registry.example/img" + blake3:             "registry.example/img" + blake3,
 		"@registry.example/base":                              "registry.example/base",
 		"registry.example:5000/base" + digest:                 "registry.example:5000/base" + digest,
 		"registry.example/agents/base" + digest:               "registry.example/agents/base" + digest,

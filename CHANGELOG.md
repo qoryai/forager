@@ -1284,7 +1284,7 @@ release may change what an existing document does, and says so under Upgrading.
   run the gateway keeps `request.json`, `ca.pem`, `ca.key`, `given.jsonl`,
   `joins.jsonl`, `model-key-limit` and `held.jsonl` in its record, each mode `0600`.
   `request.json` contains each image reference without its user information: everything
-  up to and with the last `@` before a trailing `@sha256:` digest, a scheme in front of
+  up to and with the last `@` before a trailing `@sha256:`, `@sha512:` or `@blake3:` digest, a scheme in front of
   it too, so no registry's credentials reach the disk. The reload answer's `image.ref`
   leaves that part out too, at every open: before, it was the run answer's reference
   whole. All seven go together: at the run's end, when its open or a reopen fails for

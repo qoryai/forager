@@ -4086,8 +4086,8 @@ and `about` are the starter's registration's, and the run request carries neithe
   references a policy may name. A reference is not secret, but it may contain a
   registry's credentials in its user information: the gateway never logs or reports
   one. The user information of a reference, with a scheme in front of it, is everything
-  up to and with the last `@` before the reference's trailing digest, `@sha256:` and 64
-  lower-case hexadecimal digits, or before its end when it has no digest:
+  up to and with the last `@` before the reference's trailing digest, `@sha256:` or `@blake3:`
+  and 64 lower-case hexadecimal digits or `@sha512:` and 128, or before its end when it has no digest:
   `docker://me@example.com:pa/ss@registry.example/base@sha256:…` has
   `docker://me@example.com:pa/ss@`, `u:p@base:latest` has `u:p@`, while
   `registry.example:5000/base@sha256:…` and `base@sha256:…` have none. A reload answer

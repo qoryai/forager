@@ -60,9 +60,11 @@ type keptRequest struct {
 	Images    *server.LinkImages    `json:"images,omitempty"`
 }
 
-// digestSuffix is a reference's trailing digest, @sha256: and 64 lower-case
-// hexadecimal digits.
-var digestSuffix = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
+// digestSuffix is a reference's trailing digest of an algorithm the OCI image
+// specification registers: @sha256: or @blake3: and 64 lower-case hexadecimal digits,
+// or @sha512: and 128. The OCI grammar of any algorithm would also match a tag after
+// user information, such as @base:latest, and keep the user information whole.
+var digestSuffix = regexp.MustCompile(`@(?:sha256:[0-9a-f]{64}|blake3:[0-9a-f]{64}|sha512:[0-9a-f]{128})$`)
 
 // withoutUserInfo is the image reference ref without the user information it may start
 // with, which may contain a registry's credentials: its trailing digest is set aside,
