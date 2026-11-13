@@ -46,6 +46,7 @@ func TestDockerConforms(t *testing.T) {
 	t.Run("the relay takes a connection from the inside network alone", relayTakesInsideAlone)
 	t.Run("a read-only file over a writable target stays", readOnlyFileOverWritableTarget)
 	t.Run("a target through a link in the image is refused", targetThroughImageLink)
+	t.Run("a read-only target below a sticky directory of the image is bound", readOnlyTargetBelowSticky)
 }
 
 // TestDockerNestedConforms runs the suite against an image with a Docker of the agent's
@@ -754,6 +755,26 @@ cat hooks.json`
 	}
 	if _, err := os.Stat(filepath.Join(home, "other.json")); err != nil {
 		t.Errorf("the writable directory on this machine: %v", err)
+	}
+}
+
+// readOnlyTargetBelowSticky binds a read-only file at /tmp/a/conf in busybox, whose /tmp
+// is root's with mode 1777 and has no a, and requires that the agent reads it: the
+// headers docker cp writes carry the sticky bit and the owner, so the check of the
+// directories above the mount passes /tmp.
+func readOnlyTargetBelowSticky(t *testing.T) {
+	command, helper := relayEngine(t)
+	conf := filepath.Join(t.TempDir(), "conf")
+	if err := os.WriteFile(conf, []byte("read-only\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	r := startEnclosureWith(t, command, helper, wall.Request{Image: busybox}, dir,
+		[]wall.Mount{{Path: dir}, {Path: conf, ReadOnly: true, Target: "/tmp/a/conf"}}, "-c", "cat /tmp/a/conf")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if out := r.start(ctx, t)(); !strings.HasSuffix(out, "read-only\n") {
+		t.Errorf("the agent printed %q; want it to end with the file", out)
 	}
 }
 

@@ -6034,14 +6034,20 @@ up in its parent, so two binds of one root are allowed:
   symbolic link in the image, such as `/lib64` in an image where it links to `lib`,
   fails the session: the engine follows it, so the bind could land over another mount or
   over `/qory`. A name inside another mount's place inside is not read from the image.
-  For a read-only mount with a target, a directory of the image above the outermost
-  mount whose place inside contains the target, other than `/`, that the agent's uid or
-  gid may write fails the session, such as `/x` owned by uid 1000 above a read-only
-  `/x/y/conf`: the agent could rename `/x/y`, and the bind moves with it. A directory
-  with the sticky bit passes unless the agent owns the next name on the way. Under a
-  wall's user that is a name, or a uid other than the session's, a directory that a
-  user other than root owns and may write, or that its group or the others may write,
-  counts as one the agent writes. A mount with a target is always bound, never reached
+  For a read-only mount with a target, a directory of the image on the way to the
+  outermost mount whose place inside contains the target, in which the agent can rename
+  the next name, fails the session, such as `/x` owned by uid 1000 above a read-only
+  `/x/y/conf`: the agent could rename `/x/y`, and the bind moves with it. The agent can
+  in a directory it owns, whatever the mode, since the owner may change the mode, and
+  in one its group or the others may write, unless the directory has the sticky bit and
+  the agent does not own the next name. For a wall's user that is a uid with no group,
+  the engine adds the groups the image's `/etc/group` gives it, so a directory any group
+  may write counts. Under a wall's user that is a name, or a uid other than the
+  session's, a directory that a user other than root owns, or that its group or the
+  others may write, counts. A directory the wall makes for the transcript directory,
+  such as `~/.claude`, is the agent's, mode `0700`. The parent of the outermost place is
+  not checked: its entry for the place is a mount point, which no rename moves. An image
+  whose `/` the agent's user can write is not checked. A mount with a target is always bound, never reached
   through another bind, and its path on the machine is, contains and lies inside no
   other place's: `mount_mode_conflict` for the other mode, otherwise
   `mount_target_conflict`. So the agent cannot change a read-only file through a

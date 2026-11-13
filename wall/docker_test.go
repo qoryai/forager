@@ -1059,46 +1059,77 @@ func TestATargetThroughALinkInTheImageIsRefused(t *testing.T) {
 }
 
 // TestADirectoryTheAgentWritesAboveAReadOnlyTargetIsRefused pins the check of the
-// directories of the image above the outermost mount whose place inside contains a
-// read-only mount's Target: one the agent's user or group may write fails the wrap
-// before the agent's container is made, since the agent could rename the directory
-// below it and the bind would move; a sticky one passes unless the agent owns the next
-// name on the way; a name the image does not have, and the names below it, pass; and a
+// directories of the image on the way to the outermost mount whose place inside
+// contains a read-only mount's Target, the parent of that place left out: one in which
+// the agent can rename the next name fails the wrap before the agent's container is
+// made, since the bind would move. The agent can in a directory it owns, whatever the
+// mode, and in one its group or the others may write, unless it has the sticky bit and
+// the agent does not own the next name. Any group counts for a wall's user that is a uid
+// with no group. A name the image does not have, and the names below it, pass; and a
 // launch with no read-only mount with a Target reads nothing for it.
 func TestADirectoryTheAgentWritesAboveAReadOnlyTargetIsRefused(t *testing.T) {
 	root := tar.Header{Typeflag: tar.TypeDir, Mode: 0o755}
+	dir := func(mode int64, uid, gid int) tar.Header {
+		return tar.Header{Typeflag: tar.TypeDir, Mode: mode, Uid: uid, Gid: gid}
+	}
 	conf := []Mount{{Path: "/runs/r1/conf", ReadOnly: true, Target: "/x/y/conf"}}
-	refused := `wall docker: Make "/x" writable by root alone in the image, or show the mount "/runs/r1/conf" at a place ` +
-		`outside it: "/x" has mode %04o and owner %d:%d in the image, so the agent, 1000:1000, can rename the directory in ` +
-		`it on the way to the read-only mount at "/x/y/conf", and the bind moves with it`
+	refused := `wall docker: Make "/x" in the image owned by root and writable by root alone, or show the mount ` +
+		`"/runs/r1/conf" at a place outside it: "/x" has mode %04o and owner %d:%d in the image, so the agent, 1000:1000, ` +
+		`can rename "/x/y" on the way to the read-only mount at "/x/y/conf", and the bind moves with it`
 	for name, c := range map[string]struct {
+		user   string
 		heads  map[string]tar.Header
 		mounts []Mount
 		want   string
 	}{
-		"owned by the agent": {map[string]tar.Header{"/x": {Typeflag: tar.TypeDir, Mode: 0o755, Uid: 1000, Gid: 1000}}, conf,
+		"owned by the agent": {"1000:1000", map[string]tar.Header{"/x": dir(0o755, 1000, 1000)}, conf,
 			fmt.Sprintf(refused, 0o755, 1000, 1000)},
-		"the agent's group may write it": {map[string]tar.Header{"/x": {Typeflag: tar.TypeDir, Mode: 0o775, Gid: 1000}}, conf,
+		"owned by the agent, read-only": {"1000:1000", map[string]tar.Header{"/x": dir(0o555, 1000, 1000)}, conf,
+			fmt.Sprintf(refused, 0o555, 1000, 1000)},
+		"owned by the agent, sticky": {"1000:1000", map[string]tar.Header{"/x": dir(0o1755, 1000, 1000), "/x/y": root}, conf,
+			fmt.Sprintf(refused, 0o1755, 1000, 1000)},
+		"the agent's group may write it": {"1000:1000", map[string]tar.Header{"/x": dir(0o775, 0, 1000)}, conf,
 			fmt.Sprintf(refused, 0o775, 0, 1000)},
-		"anyone may write it": {map[string]tar.Header{"/x": {Typeflag: tar.TypeDir, Mode: 0o777}}, conf,
+		"another group may write it": {"1000:1000", map[string]tar.Header{"/x": dir(0o775, 0, 50)}, conf, ""},
+		"a group may write it, no group given": {"1000", map[string]tar.Header{"/x": dir(0o775, 0, 50)}, conf,
+			`wall docker: Make "/x" in the image owned by root and writable by root alone`},
+		"anyone may write it": {"1000:1000", map[string]tar.Header{"/x": dir(0o777, 0, 0)}, conf,
 			fmt.Sprintf(refused, 0o777, 0, 0)},
-		"a deeper one": {map[string]tar.Header{"/x": root, "/x/y": {Typeflag: tar.TypeDir, Mode: 0o700, Uid: 1000}},
+		"a deeper one": {"1000:1000", map[string]tar.Header{"/x": root, "/x/y": dir(0o700, 1000, 0)},
 			[]Mount{{Path: "/runs/r1/conf", ReadOnly: true, Target: "/x/y/z/conf"}},
-			`wall docker: Make "/x/y" writable by root alone in the image`},
-		"sticky, the next name the agent's": {map[string]tar.Header{"/x": {Typeflag: tar.TypeDir, Mode: 0o1777},
-			"/x/y": {Typeflag: tar.TypeDir, Mode: 0o755, Uid: 1000}}, conf, fmt.Sprintf(refused, 0o1777, 0, 0)},
-		"sticky, the next name root's":  {map[string]tar.Header{"/x": {Typeflag: tar.TypeDir, Mode: 0o1777}, "/x/y": root}, conf, ""},
-		"sticky, the next name missing": {map[string]tar.Header{"/x": {Typeflag: tar.TypeDir, Mode: 0o1777}}, conf, ""},
-		"root's alone":                  {map[string]tar.Header{"/x": root, "/x/y": root}, conf, ""},
-		"missing":                       {nil, conf, ""},
-		"above the outermost mount": {map[string]tar.Header{"/x": root, "/x/y": {Typeflag: tar.TypeDir, Mode: 0o777}},
+			`wall docker: Make "/x/y" in the image owned by root and writable by root alone, or show the mount ` +
+				`"/runs/r1/conf" at a place outside it: "/x/y" has mode 0700 and owner 1000:0 in the image, so the agent, ` +
+				`1000:1000, can rename "/x/y/z" on the way`},
+		"sticky, the next name the agent's": {"1000:1000", map[string]tar.Header{"/x": dir(0o1777, 0, 0),
+			"/x/y": dir(0o755, 1000, 0)}, conf, fmt.Sprintf(refused, 0o1777, 0, 0)},
+		"sticky, the next name root's":  {"1000:1000", map[string]tar.Header{"/x": dir(0o1777, 0, 0), "/x/y": root}, conf, ""},
+		"sticky, the next name missing": {"1000:1000", map[string]tar.Header{"/x": dir(0o1777, 0, 0)}, conf, ""},
+		"the parent of the place": {"1000:1000", map[string]tar.Header{"/x": dir(0o755, 1000, 1000)},
+			[]Mount{{Path: "/runs/r1/conf", ReadOnly: true, Target: "/x/conf"}}, ""},
+		"root's alone": {"1000:1000", map[string]tar.Header{"/x": root, "/x/y": root}, conf, ""},
+		"missing":      {"1000:1000", nil, conf, ""},
+		"above the outermost mount": {"1000:1000", map[string]tar.Header{"/x": root, "/x/y": dir(0o777, 0, 0)},
 			[]Mount{{Path: "/runs/r1/home", Target: "/x/y"}, {Path: "/runs/r1/conf", ReadOnly: true, Target: "/x/y/conf"}}, ""},
-		"a writable target": {map[string]tar.Header{"/x": {Typeflag: tar.TypeDir, Mode: 0o777}},
+		"a writable target": {"1000:1000", map[string]tar.Header{"/x": dir(0o777, 0, 0)},
 			[]Mount{{Path: "/runs/r1/conf", Target: "/x/y/conf"}}, ""},
+		// A wall's user that is a name has ids the check does not know.
+		"a name's, a user other than root's": {"agent", map[string]tar.Header{"/x": dir(0o555, 1000, 1000)}, conf,
+			`wall docker: Make "/x" in the image owned by root and writable by root alone, or show the mount "/runs/r1/conf" ` +
+				`at a place outside it: the agent runs as "agent", whose ids are not checked, and "/x" has mode 0555 and owner ` +
+				`1000:1000 in the image, owned by a user other than root, so the agent can rename "/x/y" on the way to the ` +
+				`read-only mount at "/x/y/conf", and the bind moves with it`},
+		"a name's, a group may write it": {"agent", map[string]tar.Header{"/x": dir(0o775, 0, 50)}, conf,
+			`wall docker: Make "/x" in the image owned by root and writable by root alone, or show the mount "/runs/r1/conf" ` +
+				`at a place outside it: the agent runs as "agent", whose ids are not checked, and "/x" has mode 0775 and owner ` +
+				`0:50 in the image, writable by its group or the others, so the agent can rename "/x/y"`},
+		"a name's, sticky, the next name root's": {"agent", map[string]tar.Header{"/x": dir(0o1777, 0, 0), "/x/y": root}, conf, ""},
+		"a name's, sticky, the next name another's": {"agent", map[string]tar.Header{"/x": dir(0o1777, 0, 0),
+			"/x/y": dir(0o755, 1000, 0)}, conf, `wall docker: Make "/x" in the image owned by root and writable by root alone`},
+		"a name's, root's alone": {"agent", map[string]tar.Header{"/x": root, "/x/y": root}, conf, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, heads: c.heads}
-			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, User: "1000:1000", sys: rec}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, User: c.user, sys: rec}
 			e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
 			if err != nil {
 				t.Fatal(err)
@@ -1117,28 +1148,34 @@ func TestADirectoryTheAgentWritesAboveAReadOnlyTargetIsRefused(t *testing.T) {
 			}
 		})
 	}
+}
 
-	// A wall's user that is a name has ids the check does not know: a directory a user
-	// other than root owns and may write counts as one the agent writes.
-	for owner, want := range map[int]string{
-		1000: `wall docker: Make "/x" writable by root alone in the image, or show the mount "/runs/r1/conf" at a place ` +
-			`outside it: "/x" has mode 0755 and owner 1000:1000 in the image, so the agent, "agent", can rename`,
-		0: "",
-	} {
-		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000,
-			heads: map[string]tar.Header{"/x": {Typeflag: tar.TypeDir, Mode: 0o755, Uid: owner, Gid: owner}}}
-		d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, User: "agent", sys: rec}
-		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		l := launch()
-		l.Socket, l.Mounts = "", append([]Mount{{Path: "/work"}}, conf...)
-		_, err = e.Wrap(context.Background(), l)
-		if (want == "" && err != nil) || (want != "" && (err == nil || !strings.HasPrefix(err.Error(), want))) {
-			t.Errorf("a name's agent, /x owned by %d: %v; want %q", owner, err, want)
-		}
-		e.Close(context.Background())
+// TestADirectoryMadeForTheTranscriptAboveAReadOnlyTargetIsRefused pins a directory the
+// wall makes for the transcript bind, owned by the agent with mode 0700: the rename
+// check takes it as the agent's, where the image has no such name, and refuses a
+// read-only mount with a Target below it.
+func TestADirectoryMadeForTheTranscriptAboveAReadOnlyTargetIsRefused(t *testing.T) {
+	heads := map[string]tar.Header{"/home": {Typeflag: tar.TypeDir, Mode: 0o755}, "/home/agent": {Typeflag: tar.TypeDir, Mode: 0o755}}
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, heads: heads}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, User: "1000:1000", sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	l := transcriptLaunch("HOME=/home/agent")
+	l.Socket = ""
+	l.Mounts = append(l.Mounts, Mount{Path: "/runs/r1/skill.md", ReadOnly: true, Target: "/home/agent/.claude/skills/x/SKILL.md"})
+	_, err = e.Wrap(context.Background(), l)
+	want := `wall docker: Show the mount "/runs/r1/skill.md" at a place outside "/home/agent/.claude": the wall makes ` +
+		`"/home/agent/.claude" for the transcript directory, mode 0700 and owned by the agent, 1000:1000, so the agent can ` +
+		`rename "/home/agent/.claude/skills" on the way to the read-only mount at "/home/agent/.claude/skills/x/SKILL.md", ` +
+		`and the bind moves with it`
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("the wrap: %v; want an error that starts with %q", err, want)
+	}
+	if agentCreate(rec) != "" {
+		t.Errorf("the agent's container was made: %q", agentCreate(rec))
 	}
 }
 

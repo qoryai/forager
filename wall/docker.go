@@ -1129,7 +1129,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if err != nil {
 		return Launch{}, err
 	}
-	if err := e.targetLinks(ctx, l.Mounts); err != nil {
+	if err := e.targetLinks(ctx, l); err != nil {
 		return Launch{}, err
 	}
 	helper, err := mount(e.d.Helper, HelperPath, true)
@@ -1575,15 +1575,17 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 // and the session checks it; the walk down to a Target stops there, and at the first
 // name the image does not have, which the engine makes.
 //
-// It also fails a launch with a read-only mount with a Target when a directory of the
-// image above the outermost mount whose place inside contains that Target lets the
-// agent's user or group write it ([agentWrites]): the agent could rename the directory
-// below it on the way to the mount, and the bind would move with it. A directory with
-// the sticky bit lets the agent rename only what it owns, so it passes when the next
-// name on the way is not the agent's. The walk stops at the first name the image does
-// not have: the engine makes it and those below it, owned by root and mode 0755. / is
-// not read.
-func (e *dockerEnclosure) targetLinks(ctx context.Context, mounts []Mount) error {
+// It also fails a launch with a read-only mount with a Target when the agent can rename
+// a directory of the image on the way to the outermost mount whose place inside
+// contains that Target ([renames]): the bind would move with it. Renaming a name needs
+// write on the directory that holds it, so the directories checked are those above the
+// outermost place's parent: that parent's entry for the place is a mount point, which
+// no rename moves. The walk stops at the first name the image does not have: the
+// engine makes it and those below it, owned by root and mode 0755. A directory
+// [dockerEnclosure.copyDirs] makes for the transcript bind is the agent's, mode 0700,
+// and the walk goes on past it. / is not read.
+func (e *dockerEnclosure) targetLinks(ctx context.Context, l Launch) error {
+	mounts := l.Mounts
 	placeOf := func(m Mount) string {
 		if m.Target != "" {
 			return filepath.Clean(m.Target)
@@ -1636,8 +1638,7 @@ func (e *dockerEnclosure) targetLinks(ctx context.Context, mounts []Mount) error
 			}
 		}
 	}
-	idsRead := false
-	uid, gid := -1, -1
+	var who *renamer
 	for _, m := range mounts {
 		if m.Target == "" || !m.ReadOnly {
 			continue
@@ -1648,18 +1649,18 @@ func (e *dockerEnclosure) targetLinks(ctx context.Context, mounts []Mount) error
 				outer = at
 			}
 		}
-		if !idsRead {
-			u, g, unbound, err := e.agentIDs(ctx)
+		if who == nil {
+			ids, err := e.newRenamer(ctx, l)
 			if err != nil {
 				return err
 			}
-			if unbound == nil {
-				uid, gid = u, g
+			who = ids
+			for _, d := range ids.made {
+				heads[d] = &tar.Header{Typeflag: tar.TypeDir, Mode: 0o700, Uid: ids.uid, Gid: ids.gid}
 			}
-			idsRead = true
 		}
 		names := append(above(outer), outer)
-		for k, q := range names[:len(names)-1] {
+		for k, q := range names[:max(len(names)-2, 0)] {
 			h, err := head(q)
 			if err != nil {
 				return err
@@ -1667,60 +1668,99 @@ func (e *dockerEnclosure) targetLinks(ctx context.Context, mounts []Mount) error
 			if h == nil {
 				break
 			}
-			if !agentWrites(h, uid, gid) {
+			next, err := head(names[k+1])
+			if err != nil {
+				return err
+			}
+			found := who.renames(h, next)
+			if found == "" {
 				continue
 			}
-			if h.Mode&0o1000 != 0 {
-				next, err := head(names[k+1])
-				if err != nil {
-					return err
-				}
-				if next == nil || !ownedByAgent(next, uid) {
-					continue
-				}
-			}
-			agent := accesskey.ShownName(e.user, true)
-			if uid >= 0 {
-				agent = fmt.Sprintf("%d:%d", uid, gid)
-			}
 			shown := accesskey.ShownValue(q, true)
-			return fmt.Errorf("wall docker: Make %s writable by root alone in the image, or show the mount %s at a place "+
-				"outside it: %s has mode %04o and owner %d:%d in the image, so the agent, %s, can rename the directory "+
-				"in it on the way to the read-only mount at %s, and the bind moves with it", shown,
-				accesskey.ShownValue(m.Path, true), shown, h.Mode&0o7777, h.Uid, h.Gid, agent, accesskey.ShownValue(m.Target, true))
+			fix := fmt.Sprintf("wall docker: Make %s in the image owned by root and writable by root alone, or show the "+
+				"mount %s at a place outside it", shown, accesskey.ShownValue(m.Path, true))
+			rest := fmt.Sprintf("can rename %s on the way to the read-only mount at %s, and the bind moves with it",
+				accesskey.ShownValue(names[k+1], true), accesskey.ShownValue(m.Target, true))
+			if slices.Contains(who.made, q) {
+				return fmt.Errorf("wall docker: Show the mount %s at a place outside %s: the wall makes %s for the "+
+					"transcript directory, mode 0700 and owned by the agent, %d:%d, so the agent %s",
+					accesskey.ShownValue(m.Path, true), shown, shown, who.uid, who.gid, rest)
+			}
+			if who.uid < 0 {
+				return fmt.Errorf("%s: the agent runs as %s, whose ids are not checked, and %s has mode %04o and owner "+
+					"%d:%d in the image, %s, so the agent %s", fix, accesskey.ShownName(e.user, true), shown,
+					h.Mode&0o7777, h.Uid, h.Gid, found, rest)
+			}
+			return fmt.Errorf("%s: %s has mode %04o and owner %d:%d in the image, so the agent, %d:%d, %s", fix, shown,
+				h.Mode&0o7777, h.Uid, h.Gid, who.uid, who.gid, rest)
 		}
 	}
 	return nil
 }
 
-// agentWrites reports whether the agent, uid and gid inside, can write the directory of
-// the image whose first tar header is h: the owner's bit counts for the owner, the
-// group's for the group and the others' for the rest. A uid below 0 is an agent whose
-// ids are not known, the wall's user being a name or a uid other than the session's: a
-// directory that the group or the others may write, or that a user other than root owns
-// and may write, counts as one it writes.
-func agentWrites(h *tar.Header, uid, gid int) bool {
-	if uid < 0 {
-		return h.Mode&0o022 != 0 || (h.Uid != 0 && h.Mode&0o200 != 0)
-	}
-	bit := int64(0o002)
-	switch {
-	case h.Uid == uid:
-		bit = 0o200
-	case h.Gid == gid:
-		bit = 0o020
-	}
-	return h.Mode&bit != 0
+// renamer is the agent inside as the rename check of [dockerEnclosure.targetLinks]
+// takes it: its uid and gid, below 0 when they are not known, the wall's user being a
+// name or a uid other than the session's; anyGroup when the wall's user is a uid with no
+// group, so the engine adds the groups the image's /etc/group gives it, and a directory
+// any group may write counts as one the agent writes; and made, the directories
+// [dockerEnclosure.copyDirs] makes for the launch's transcript bind.
+type renamer struct {
+	uid, gid int
+	anyGroup bool
+	made     []string
 }
 
-// ownedByAgent reports whether the agent, uid inside, owns the name of the image whose
-// first tar header is h; for an agent whose uid is not known, whether a user other than
-// root owns it.
-func ownedByAgent(h *tar.Header, uid int) bool {
-	if uid < 0 {
-		return h.Uid != 0
+// newRenamer is the renamer for the launch l, with the place of its transcript
+// directory, [dockerEnclosure.transcriptPlace], for its made directories.
+func (e *dockerEnclosure) newRenamer(ctx context.Context, l Launch) (*renamer, error) {
+	ids := &renamer{uid: -1, gid: -1, anyGroup: !strings.Contains(e.user, ":")}
+	uid, gid, unbound, err := e.agentIDs(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return h.Uid == uid
+	if unbound == nil {
+		ids.uid, ids.gid = uid, gid
+	}
+	if l.Transcript.Path != "" {
+		p, err := e.transcriptPlace(ctx, l.Env, l.Transcript)
+		if err != nil {
+			return nil, err
+		}
+		if p.unbound == nil {
+			ids.made = p.mk
+		}
+	}
+	return ids, nil
+}
+
+// renames is what lets the agent rename next, the entry of the image's directory whose
+// first tar header is h on the way to a read-only mount, nil for a name the image does
+// not have, which the engine makes owned by root; empty when nothing does. The owner of
+// a directory may change its mode with no capability, and may rename any entry of it
+// with the sticky bit set, so a directory the agent owns does whatever its mode. A
+// directory the agent's group or the others may write does too, unless it has the
+// sticky bit and the agent does not own next. With ids not known, a user other than
+// root may be the agent: such an owner does, and so does a group's or the others' write
+// unless sticky and next is root's.
+func (a *renamer) renames(h, next *tar.Header) string {
+	if a.uid < 0 {
+		switch {
+		case h.Uid != 0:
+			return "owned by a user other than root"
+		case h.Mode&0o022 == 0, h.Mode&0o1000 != 0 && (next == nil || next.Uid == 0):
+			return ""
+		}
+		return "writable by its group or the others"
+	}
+	if h.Uid == a.uid {
+		return "owned by the agent"
+	}
+	writes := h.Mode&0o002 != 0 || (h.Mode&0o020 != 0 && (a.anyGroup || h.Gid == a.gid))
+	switch {
+	case !writes, h.Mode&0o1000 != 0 && (next == nil || next.Uid != a.uid):
+		return ""
+	}
+	return "writable by its group or the others"
 }
 
 // transcriptMount is the --mount of the launch's transcript directory, empty for a
