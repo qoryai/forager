@@ -3425,9 +3425,11 @@ The gateway sends a report when a window's `status`, `resets_at` or `cooldown_un
 changes, or its `utilization` changes by a whole percent. Each report has every window
 the gateway has of the run's keys, so it replaces the report before. A run has at most
 one report in flight and one a second; the changes in between go into the next report.
-When the run ends while a change waits for its report, or a report waits for its next
-try, the gateway sends the newest state once more, within 10 seconds, and takes nothing
-of the answer.
+A burst of changes therefore makes one report, and once a report is accepted or dropped,
+no report goes until a window changes again: a change that a sent report already
+contains makes no second report. When the run ends while a change waits for its report,
+or a report waits for its next try, the gateway sends the newest state once more,
+within 10 seconds, and takes nothing of the answer.
 An API key's windows are per minute, so its `utilization` can change by a whole percent
 up to 100 times a minute.
 

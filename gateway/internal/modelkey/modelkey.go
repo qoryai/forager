@@ -93,8 +93,10 @@ type Group struct {
 	// [Group.Resume], the proxy sends no request with the placeholder and the gateway's
 	// answer to each batch has stop.
 	passed bool
-	// changed, when set, is called after a change a report sends.
+	// changed, when set, is called after a change a report sends, and changes counts
+	// those changes.
 	changed func()
+	changes uint64
 	// onPassed, when set, is called with the value of passed after each change of it.
 	onPassed func(bool)
 	// passing is held from a change of passed to the end of the call of onPassed for
@@ -380,6 +382,9 @@ func (g *Group) record(name string, h http.Header, limit, served bool, code stri
 		}
 		*w = next
 	}
+	if changed {
+		g.changes++
+	}
 	f := g.changed
 	g.mu.Unlock()
 	if changed && f != nil {
@@ -480,8 +485,28 @@ func utilization(w Window, now time.Time) (int, bool) {
 // Windows are every window the group has, by the order of the keys and then of each
 // key's windows, each utilization left out once its reset has passed.
 func (g *Group) Windows() []Window {
+	ws, _ := g.Snapshot()
+	return ws
+}
+
+// Snapshot is [Group.Windows] and the count of the changes [Group.OnChange] calls its
+// function for, both read under one lock: a report of the windows covers every change
+// up to that count.
+func (g *Group) Snapshot() ([]Window, uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.windowsNow(), g.changes
+}
+
+// Changes is the count of the changes [Group.OnChange] calls its function for.
+func (g *Group) Changes() uint64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.changes
+}
+
+// windowsNow is [Group.Windows], called with g.mu held.
+func (g *Group) windowsNow() []Window {
 	now := g.now()
 	var out []Window
 	for i := range g.keys {

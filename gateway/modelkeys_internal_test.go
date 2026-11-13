@@ -72,6 +72,44 @@ func TestABurstOfChangesSendsOneReportAGap(t *testing.T) {
 	}
 }
 
+// TestAReportedBurstIsNotSentAgain pins one report per burst of changes: changes that
+// come during the gap after a report go in the next report alone, and after that
+// report succeeds no report goes, at a later wake or at the run's end, while nothing
+// changes.
+func TestAReportedBurstIsNotSentAgain(t *testing.T) {
+	f := &fakeControl{}
+	k, g := reporterOf(f, 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { k.run(ctx); close(done) }()
+	change := func(percent string) {
+		g.Answered("model", http.StatusOK, http.Header{"Anthropic-Ratelimit-Unified-5h-Status": {"allowed"}, "Anthropic-Ratelimit-Unified-5h-Utilization": {percent}})
+	}
+	reports := func(n int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for times, _ := f.sent(); len(times) < n; times, _ = f.sent() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d reports; want %d", len(times), n)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	change("0.10")
+	reports(1)
+	// Two changes within the gap after the first report: one report covers both.
+	change("0.20")
+	change("0.30")
+	reports(2)
+	// Two gaps on, nothing changed since the second report.
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+	<-done
+	if times, _ := f.sent(); len(times) != 2 {
+		t.Errorf("%d reports; want 2, none after the burst's report", len(times))
+	}
+}
+
 // TestTheRunsEndSendsAWaitingReportOnce pins the last report: a report in a backoff
 // when the run ends goes once more, with a context that has not ended; with no change
 // waiting, the end sends nothing.
