@@ -39,10 +39,12 @@ func chatToken(id string) string {
 }
 
 // seenRequest is what the fake provider received of one request: its path, its
-// Authorization, and every value of each spelling of the account header.
+// Authorization, every value of each spelling of the account header, and the names of
+// its trailer.
 type seenRequest struct {
 	path, auth string
 	account    []string
+	trailer    []string
 }
 
 // accountFixture is a proxy that terminates chatHost with subscription keys and a host
@@ -75,10 +77,17 @@ func newAccountFixture(t *testing.T, paths map[string][]string, g *modelkey.Grou
 	f := &accountFixture{status: map[string]int{}}
 	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s := seenRequest{path: r.URL.Path, auth: r.Header.Get("Authorization")}
-		for name, values := range r.Header {
-			if strings.EqualFold(strings.ReplaceAll(name, "_", "-"), "chatgpt-account-id") {
-				s.account = append(s.account, values...)
+		// The trailer is filled once the body is read.
+		io.Copy(io.Discard, r.Body)
+		for _, h := range []http.Header{r.Header, r.Trailer} {
+			for name, values := range h {
+				if strings.EqualFold(strings.ReplaceAll(name, "_", "-"), "chatgpt-account-id") {
+					s.account = append(s.account, values...)
+				}
 			}
+		}
+		for name := range r.Trailer {
+			s.trailer = append(s.trailer, name)
 		}
 		f.mu.Lock()
 		f.seen = append(f.seen, s)
@@ -212,5 +221,36 @@ func TestAResendSetsTheNextKeysAccount(t *testing.T) {
 	status, seen := f.send(t, http.MethodPost, "/backend-api/codex/responses", true)
 	if status != http.StatusOK || len(seen) != 2 || seen[1].auth != "Bearer "+two || strings.Join(seen[1].account, ",") != "acct-fake-0002" {
 		t.Errorf("%d, %+v; want the second key with its account id", status, seen)
+	}
+}
+
+// TestNoTrailerReachesAHostWithACredential pins the request's trailer on a host that
+// gets a credential: a chunked request whose trailer has the account header, and
+// another trailer, reaches the provider with the key and the account id of its value
+// in the headers alone, and with no trailer.
+func TestNoTrailerReachesAHostWithACredential(t *testing.T) {
+	token := chatToken("acct-fake-0001")
+	f := newAccountFixture(t, nil, nil, subscriptionKey("subscription", token))
+	pr, pw := io.Pipe()
+	req, _ := http.NewRequest(http.MethodPost, "https://"+chatHost+"/backend-api/codex/responses", pr)
+	req.Header.Set("Authorization", "Bearer "+link.KeyPlaceholder("subscription"))
+	req.Trailer = http.Header{"Chatgpt-Account-Id": nil, "X-Checksum": nil}
+	go func() {
+		io.WriteString(pw, "{}")
+		req.Trailer.Set("Chatgpt-Account-Id", "acct-of-the-agent")
+		req.Trailer.Set("X-Checksum", "the-sum")
+		pw.Close()
+	}()
+	resp, err := f.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if resp.StatusCode != http.StatusOK || len(f.seen) != 1 || f.seen[0].auth != "Bearer "+token ||
+		strings.Join(f.seen[0].account, ",") != "acct-fake-0001" || len(f.seen[0].trailer) != 0 {
+		t.Errorf("%d, %+v; want the key, its account id alone and no trailer", resp.StatusCode, f.seen)
 	}
 }

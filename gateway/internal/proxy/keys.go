@@ -287,6 +287,12 @@ func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Resp
 		again.Body, _ = rs.again()
 		again.ContentLength = int64(len(rs.body))
 		again.GetBody = rs.again
+		// The key before this one set the account header to its account id. The keys
+		// of a group share the header's name, case ignored, so it goes first, and the
+		// next key sets it to the next key's account id.
+		if rs.first.AccountHeader != "" {
+			dropHeader(again.Header, rs.first.AccountHeader)
+		}
 		again.Header.Set(name, value)
 		if c.AccountHeader != "" {
 			again.Header.Set(c.AccountHeader, account)

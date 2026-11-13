@@ -425,8 +425,9 @@ func TestRequireServesOnlyConnectionsThatOpenWithTheToken(t *testing.T) {
 
 // TestTerminateSetsTheCredentialAndHoldsThePaths pins termination: to a host a
 // credential is for, the proxy answers with the run's authority, sets the credential
-// on a path it covers and nowhere else, denies the rest under enforce, records every
-// request, and leaves every other host a tunnel the proxy passes through as bytes.
+// on a path it covers and nowhere else, denies the rest under enforce, sends a chunked
+// body with no trailer, records every request, and leaves every other host a tunnel the
+// proxy passes through as bytes.
 func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 	var mu sync.Mutex
 	got := map[string]string{}
@@ -501,7 +502,8 @@ func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 		t.Errorf("a request naming another Host: %d", code)
 	}
 	get("/acme/shop/expired")
-	// A body of unknown length goes chunked, and its trailer reaches the host.
+	// A body of unknown length goes chunked, and its trailer does not reach the host:
+	// a host that gets a credential gets no trailer.
 	pr, pw := io.Pipe()
 	put, _ := http.NewRequest("PUT", "https://"+net.JoinHostPort(host, port)+"/acme/shop/upload", pr)
 	put.Trailer = http.Header{"X-Checksum": nil}
@@ -517,8 +519,8 @@ func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if got["trailer/acme/shop/upload"] != "the-sum" {
-		t.Errorf("the host got the trailer %q", got["trailer/acme/shop/upload"])
+	if trailer, ok := got["trailer/acme/shop/upload"]; !ok || trailer != "" {
+		t.Errorf("the upload reached the host %v, with the trailer %q; want it with none", ok, trailer)
 	}
 	if got["/acme/shop/pulls"] != want+"|"+net.JoinHostPort(host, port) {
 		t.Errorf("the origin saw %q on a covered path", got["/acme/shop/pulls"])

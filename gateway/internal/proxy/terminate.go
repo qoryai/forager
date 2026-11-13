@@ -432,10 +432,14 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			r.Out.URL.Scheme = "https"
 			r.Out.URL.Host = strings.TrimSuffix(authority, ":443")
 			r.Out.Host = ""
-			// The request's own trailer, which the server fills once the body is read:
-			// a copy made before that would carry none.
+			// The request's trailer, which the server fills once the body is read: a
+			// copy made before that would carry none. To a host that gets a credential
+			// it sends none: the server merges every trailer it reads, declared or
+			// not, and a trailer could carry a header the proxy sets, such as a model
+			// key's account header, beside the proxy's value.
 			r.Out.Trailer = r.In.Trailer
 			if masked(r.In) != nil {
+				r.Out.Trailer = nil
 				// The value is replaced in the answer only where it can be read: in
 				// an uncompressed body, whole, and on a connection that stays HTTP. A
 				// range of the body could hold part of the value.
