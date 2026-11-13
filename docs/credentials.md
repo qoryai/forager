@@ -271,7 +271,7 @@ a `429`.
 
 When no key is left out of cooldown, the session gets the `429`, and the proxy sends no
 more requests with the placeholder until the session's join ends: each gets a `429` from
-the gateway that starts `qory: the run pauses:`. The
+the gateway that starts `The gateway sends no more model requests in this session:`. The
 gateway's answer to the session's next batch has `stop`, `model_key_limit`, so the
 session stops the runtime and the run pauses. The next join gets the active key again.
 
@@ -283,7 +283,7 @@ arrives: until then, up to about a second after the other run's refusal and long
 while a report waits for a retry, the run can still send a request with that key and
 get the refusal itself. The contract's
 [§The server, The model keys](../contracts/forager/v1/README.md#the-server) lists the
-report and its answers. The gateway writes one log line for each limit answer, with the
+report and its answers. The gateway writes one log line for each limit response, with the
 status, the names of the limit headers and the error's type, and no value.
 
 ## From Qory Apiary

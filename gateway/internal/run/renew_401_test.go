@@ -112,7 +112,7 @@ func TestA409TakesTheKeyOut(t *testing.T) {
 			for len(k.log.lines()) == 0 && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
 			}
-			if l := k.log.lines(); len(l) != 1 || !strings.HasPrefix(l[0], `Store in the control plane a value of the model key "model" that its provider accepts; the run sets the key no more: the provider returned 401 for it, and its renewal was refused: `) {
+			if l := k.log.lines(); len(l) != 1 || !strings.HasPrefix(l[0], `Store in the control plane a value of the model key "model" that its provider accepts; the run sets the key no more: the provider returned 401 for it, and its renewal brought no value the run can set: `) {
 				t.Errorf("the record %q", l)
 			}
 			calls := len(k.s.called())

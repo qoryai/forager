@@ -989,7 +989,7 @@ func TestDockerClaudeCodeHooksReachTheSessionBehindTheWall(t *testing.T) {
 // B. The proxy passes nothing of the refusal on: it puts model in cooldown and sends the
 // same body again with B. The session ends succeeded; the stub got the request with A,
 // then the same bytes with B; Claude Code printed no retry and no API error; the record
-// lists one request to the stub, with model-b and 200; the gateway's log of limit answers
+// lists one request to the stub, with model-b and 200; the gateway's log of limit responses
 // has model's 429; and no file of the run and no output contains a key's value.
 func TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain(t *testing.T) {
 	k := newKeysWall(t)
@@ -1010,8 +1010,8 @@ func TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain(t *testing.T) {
 	if got := o.egress(host); !slices.Equal(got, []string{"model-b 200"}) {
 		t.Errorf("the record lists %q to the stub; want one request with model-b and 200", got)
 	}
-	if !strings.Contains(o.lines, `model key "model": limit answer, status 429`) {
-		t.Errorf("the gateway's log has no limit answer of model:\n%s", o.lines)
+	if !strings.Contains(o.lines, `model key "model": limit response, status 429`) {
+		t.Errorf("the gateway's log has no limit response of model:\n%s", o.lines)
 	}
 	noKeyValue(t, o, s.dir)
 }
@@ -1121,8 +1121,8 @@ func TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun(t *testing.T) {
 	if got := o.egress(host); len(got) < 2 || got[0] != "model 200" || got[1] != "model-b 200" {
 		t.Errorf("the record lists %q to the stub; want a request with model and 200, then one with model-b and 200", got)
 	}
-	if strings.Contains(o.lines, "limit answer, status 429") {
-		t.Errorf("the gateway's log has a limit answer of the provider:\n%s", o.lines)
+	if strings.Contains(o.lines, "limit response, status 429") {
+		t.Errorf("the gateway's log has a limit response of the provider:\n%s", o.lines)
 	}
 	noKeyValue(t, o, s.dir)
 }

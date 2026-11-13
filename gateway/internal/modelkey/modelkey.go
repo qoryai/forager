@@ -678,7 +678,7 @@ func (g *Group) Merge(entries []Window) {
 	}
 }
 
-// Shown is the line of the gateway's log of one limit answer of key name: its status,
+// Shown is the line of the gateway's log of one limit response of key name: its status,
 // the names of its headers, its error type and, when it has one, its error code, never
 // a value, and the limit headers of the group's format of no window the gateway reads.
 func (g *Group) Shown(name string, status int, h http.Header, kind, code string) string {
@@ -690,7 +690,7 @@ func (g *Group) Shown(name string, status int, h http.Header, kind, code string)
 	if kind == "" {
 		kind = "none"
 	}
-	line := "model key " + name + ": limit answer, status " + strconv.Itoa(status) + ", error type " + kind
+	line := "model key " + name + ": limit response, status " + strconv.Itoa(status) + ", error type " + kind
 	if code != "" {
 		line += ", error code " + code
 	}

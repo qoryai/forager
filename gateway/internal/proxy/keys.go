@@ -21,7 +21,7 @@ import (
 const maxErrorBody = 64 << 10
 
 // keyGroup is the run's key group as the proxy sets it, the format and the stream path
-// of its model API, and where it writes its log of limit answers.
+// of its model API, and where it writes its log of limit responses.
 type keyGroup struct {
 	g *modelkey.Group
 	// format is the API format of the group's keys; empty counts as a format whose
@@ -43,7 +43,7 @@ type keyGroup struct {
 // format, and stream the clean path of the model API's request whose streamed answers
 // the proxy reads, [modelkey.StreamPath]: the proxy reads the streamed 200 of a POST to
 // it with the placeholder for a limit event ([modelkey.StreamLimit]), and no other
-// answer. log gets one line of each limit answer: its status, its header names, its
+// answer. log gets one line of each limit response: its status, its header names, its
 // error type and code, never a value. The gateway calls it once, after [New] and
 // before the run's first connection.
 func (p *Proxy) SetKeyGroup(g *modelkey.Group, format, stream string, log func(string)) {
@@ -72,7 +72,7 @@ func (p *Proxy) limitPassed(w http.ResponseWriter, d Decision) {
 	p.observe(d)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusTooManyRequests)
-	fmt.Fprint(w, "qory: the gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 of its provider, or the gateway could not send a refused request again with the next key (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n")
+	fmt.Fprint(w, "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n")
 }
 
 // resendKey marks the context of a request with a key of the group, with its [resend].

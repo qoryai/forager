@@ -66,7 +66,7 @@ func TestTheCodexHeadersGiveEachWindow(t *testing.T) {
 }
 
 // TestACodexWindowOfOtherMinutesIsLeftOut pins a window of another length: no window,
-// and the limit answer's log line contains its -window-minutes header; a window of 0
+// and the limit response's log line contains its -window-minutes header; a window of 0
 // minutes, a plan with no such window, is none and is not in the line.
 func TestACodexWindowOfOtherMinutesIsLeftOut(t *testing.T) {
 	g, _ := openaiGroup(t)
@@ -419,12 +419,12 @@ func TestStreamLimitReadsEachFormatsEvent(t *testing.T) {
 	}
 }
 
-// TestShownHasTheErrorCode pins the log line of a limit answer with an error code: the
+// TestShownHasTheErrorCode pins the log line of a limit response with an error code: the
 // code after the type.
 func TestShownHasTheErrorCode(t *testing.T) {
 	g, _ := openaiGroup(t)
 	line := g.Shown("model", 429, headers("x-ratelimit-remaining-tokens", "0"), "tokens", "rate_limit_exceeded")
-	if want := "model key model: limit answer, status 429, error type tokens, error code rate_limit_exceeded, headers x-ratelimit-remaining-tokens"; line != want {
+	if want := "model key model: limit response, status 429, error type tokens, error code rate_limit_exceeded, headers x-ratelimit-remaining-tokens"; line != want {
 		t.Errorf("Shown:\n%s\nwant\n%s", line, want)
 	}
 }

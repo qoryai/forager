@@ -404,7 +404,7 @@ func (w *renewer) revoke(name string, err error) {
 		return
 	default:
 	}
-	w.takeOut(name, fmt.Sprintf("Store in the control plane a value of the model key %s that its provider accepts; the run sets the key no more: the provider returned 401 for it, and its renewal was refused: %v",
+	w.takeOut(name, fmt.Sprintf("Store in the control plane a value of the model key %s that its provider accepts; the run sets the key no more: the provider returned 401 for it, and its renewal brought no value the run can set: %v",
 		accesskey.ShownName(name, true), accesskey.ShownError(err)))
 }
 

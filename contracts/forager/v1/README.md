@@ -3735,7 +3735,7 @@ Each entry of `keys` is one key and one limit window:
   is `key`. These 11 are the windows. The gateway writes a header with any other infix,
   a `-representative-claim` header with any other value, an `x-codex-*` window of any
   other length but 0 minutes, which is no window, and an `x-ratelimit-*` header of any
-  other family, to its log of limit answers, and reports no window for it. Qory Apiary
+  other family, to its log of limit responses, and reports no window for it. Qory Apiary
   stores only the 11 windows, and ignores an entry of any other.
 - `status`: `allowed`, `allowed_warning` or `rejected`, from the provider's response;
   `rejected` for every limit refusal.

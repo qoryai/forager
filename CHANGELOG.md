@@ -1195,7 +1195,7 @@ release may change what an existing document does, and says so under Upgrading.
     `-window-minutes` 300 is `five_hour` and 10080 is `seven_day`, `-used-percent` is
     the utilization, and the reset is `-reset-at` when it is after the answer's
     arrival, else the arrival plus `-reset-after-seconds`. Another length is written
-    to the log of limit answers and is no window. A `429` rejects the windows at 100
+    to the log of limit responses and is no window. A `429` rejects the windows at 100
     percent or more.
   - An OpenAI API key's `x-ratelimit-{limit,remaining,reset}-{requests,tokens}`, the
     windows `requests` and `tokens`, with a reset after a duration such as `6m0s`.
@@ -1203,7 +1203,8 @@ release may change what an existing document does, and says so under Upgrading.
     `credit_balance_exhausted`, `organization_spend_limit_exceeded`,
     `project_spend_limit_exceeded` and `organization_usage_limit_exceeded`, and the
     type `insufficient_quota` with no code, are the window `spend_limit`. The log line
-    of a limit answer has the error code after the error type, when there is one.
+    of a limit response has the error code after the error type, when there is one,
+    and starts `model key <name>: limit response`, which was `limit answer`.
   - In the streamed `200` of a `POST` to the endpoint's path and `/responses`, a
     `response.failed` event with the code `rate_limit_exceeded`, `slow_down` or a quota
     code puts the key in cooldown. Each line and each event's data of the stream may be
@@ -1274,12 +1275,12 @@ release may change what an existing document does, and says so under Upgrading.
   cooldown, sends the request again with the next key, and passes the refusal only when
   no key is left; the gateway's answer to the session's next batch then has `stop`,
   `model_key_limit`. From then until the session's join ends, each request with the
-  placeholder gets the proxy's `429`, `qory: the run pauses: every model key of the
-  run's key group is at its provider's limit or at its Use up to percentage, or the
-  gateway could not send a refused request again with the next key (a request over 8
+  placeholder gets the proxy's `429`, `The gateway sends no more model requests in this
+  session: every model key of the run's key group is at its provider's limit, at its
+  Use up to percentage, or out of use after a 401 of its provider, or the gateway could
+  not send a request again with the next key after a limit response (a request over 8
   MiB, a key whose credential does not cover the path, or an openai-responses request,
-  whose session keeps one key), and the gateway sends no more model requests in this
-  session.` The gateway
+  whose session keeps one key).` The gateway
   reports each key's limit windows to the control plane with a signed `POST
   <run.url>/<run_id>/model-keys`, and skips a key the answer has in cooldown. The
   gateway leaves out an answer's entry observed more than 300 seconds after the

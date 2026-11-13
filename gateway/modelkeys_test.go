@@ -286,8 +286,8 @@ func TestAKeyGroupResendsReportsAndStops(t *testing.T) {
 	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "paused", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_limit"})); status != http.StatusAccepted {
 		t.Errorf("the close: %d %q", status, body)
 	}
-	if lines := g.h.reportsWith("limit answer, status 429"); len(lines) != 3 {
-		t.Errorf("the log of limit answers: %q; want 3 lines", lines)
+	if lines := g.h.reportsWith("limit response, status 429"); len(lines) != 3 {
+		t.Errorf("the log of limit responses: %q; want 3 lines", lines)
 	}
 }
 
@@ -326,8 +326,8 @@ func TestAnOpenAIKeyGroupStopsAtTheFirstRefusal(t *testing.T) {
 	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "paused", "exit_code": -1, "signal": "SIGINT", "reason": "model_key_limit"})); status != http.StatusAccepted {
 		t.Errorf("the close: %d %q", status, body)
 	}
-	if lines := g.h.reportsWith("limit answer, status 429, error type usage_limit_reached"); len(lines) != 1 {
-		t.Errorf("the log of limit answers: %q; want 1 line", lines)
+	if lines := g.h.reportsWith("limit response, status 429, error type usage_limit_reached"); len(lines) != 1 {
+		t.Errorf("the log of limit responses: %q; want 1 line", lines)
 	}
 }
 

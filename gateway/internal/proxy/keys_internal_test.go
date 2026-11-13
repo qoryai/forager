@@ -193,7 +193,7 @@ func keysOf(calls []upstreamCall) []string {
 // active key never reaches the session, the same body goes again with the next key,
 // and the session gets that answer, with the value replaced by the start key's
 // placeholder. The next request goes with the next key, the record has it, and the log
-// of limit answers has names alone.
+// of limit responses has names alone.
 func TestALimitRefusalIsSentAgainWithTheNextKey(t *testing.T) {
 	f := newKeyFixture(t)
 	f.up.answers["model"] = limited
@@ -218,9 +218,9 @@ func TestALimitRefusalIsSentAgainWithTheNextKey(t *testing.T) {
 	f.mu.Lock()
 	logged := strings.Join(f.logged, "\n")
 	f.mu.Unlock()
-	if !strings.HasPrefix(logged, `model key "model": limit answer, status 429, error type rate_limit_error, headers anthropic-ratelimit-unified-5h-reset`) ||
+	if !strings.HasPrefix(logged, `model key "model": limit response, status 429, error type rate_limit_error, headers anthropic-ratelimit-unified-5h-reset`) ||
 		strings.Contains(logged, "rejected") || strings.Contains(logged, "five_hour") {
-		t.Errorf("the log of limit answers: %q", logged)
+		t.Errorf("the log of limit responses: %q", logged)
 	}
 	if w := f.g.Windows(); len(w) == 0 || w[0].Credential != "model" || w[0].Status != modelkey.StatusRejected {
 		t.Errorf("windows %+v; want model's five_hour rejected first", w)
@@ -247,7 +247,7 @@ func TestNoKeyLeftPassesTheRefusalAndHoldsTheRest(t *testing.T) {
 		t.Error("the group is not stopped")
 	}
 	status, body = f.post(t, "{}")
-	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: the gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit") || len(f.up.taken()) != 0 {
+	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit") || len(f.up.taken()) != 0 {
 		t.Errorf("after the stop: %d %q; want the gateway's 429 and no call", status, body)
 	}
 	if d := f.seen.at(-1); d.Outcome != Refused || d.Credential != "" || d.Status != 0 {
@@ -426,7 +426,7 @@ func TestEveryKeyCoolingGetsTheProxys429(t *testing.T) {
 	}
 	f.g.Merge(entries)
 	status, body := f.post(t, "{}")
-	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: the gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit") {
+	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit") {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {
@@ -462,7 +462,7 @@ func TestKeysAtTheirUseUpToPercentGetTheProxys429(t *testing.T) {
 		}
 	}
 	status, body := f.post(t, "{}")
-	if want := "qory: the gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 of its provider, or the gateway could not send a refused request again with the next key (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n"; status != http.StatusTooManyRequests || body != want {
+	if want := "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n"; status != http.StatusTooManyRequests || body != want {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {

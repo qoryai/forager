@@ -90,8 +90,8 @@ func TestAnOpenAIRefusalReachesTheSessionAndHoldsTheRest(t *testing.T) {
 	f.mu.Lock()
 	logged := strings.Join(f.logged, "\n")
 	f.mu.Unlock()
-	if !strings.HasPrefix(logged, `model key "model": limit answer, status 429, error type usage_limit_reached, headers `) || strings.Contains(logged, "rate_limit_reached") {
-		t.Errorf("the log of limit answers: %q", logged)
+	if !strings.HasPrefix(logged, `model key "model": limit response, status 429, error type usage_limit_reached, headers `) || strings.Contains(logged, "rate_limit_reached") {
+		t.Errorf("the log of limit responses: %q", logged)
 	}
 	for _, path := range []string{responsesPath, "/v1/models"} {
 		req, _ := http.NewRequest(http.MethodPost, "https://"+keyHost+path, strings.NewReader("{}"))
@@ -102,7 +102,7 @@ func TestAnOpenAIRefusalReachesTheSessionAndHoldsTheRest(t *testing.T) {
 		}
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "" || !strings.HasPrefix(string(b), "qory: the gateway sends no more model requests in this session:") {
+		if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "" || !strings.HasPrefix(string(b), "The gateway sends no more model requests in this session:") {
 			t.Errorf("%s after the stop: %d, Retry-After %q, %q; want the gateway's 429 with no Retry-After", path, resp.StatusCode, resp.Header.Get("Retry-After"), b)
 		}
 	}
@@ -188,8 +188,8 @@ func TestAnOpenAIStreamLimitStopsTheGroup(t *testing.T) {
 	f.mu.Lock()
 	logged := strings.Join(f.logged, "\n")
 	f.mu.Unlock()
-	if !strings.HasPrefix(logged, `model key "model": limit answer, status 200, error type none, error code rate_limit_exceeded, headers `) {
-		t.Errorf("the log of limit answers: %q", logged)
+	if !strings.HasPrefix(logged, `model key "model": limit response, status 200, error type none, error code rate_limit_exceeded, headers `) {
+		t.Errorf("the log of limit responses: %q", logged)
 	}
 }
 
