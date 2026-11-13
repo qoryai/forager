@@ -72,6 +72,8 @@ func mediaType(r *http.Request, want string) bool {
 // whose attach the server refused so, of a run it holds nothing of ([expired]); 409 run_id_used for a run id that already names a run here; the run's
 // refusal when it does not open; else the run answer, on the one address once the run's
 // record is marked answered, and a 500 internal of a run let go of when it cannot be.
+// On the one address, once the run id is the request's, its connection counts no
+// longer against the bounds of its source and its /48 ([connLimit.release]).
 func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	deadline := g.openDeadline()
 	if !mediaType(r, server.LinkContentType) {
@@ -139,6 +141,13 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.used[req.RunID] = true
 	g.mu.Unlock()
+	if s.remote {
+		// The run key passed and the run id is this request's alone: the connection no
+		// longer counts against the bounds of its source and its /48 while the run waits
+		// for Qory Apiary, so the live runs of an address keep connecting while runs
+		// from that address wait during a Qory Apiary restart.
+		releaseSource(r.Context())
+	}
 	lr, recorded, err := g.open(req, how)
 	if g.cfg.afterOpen != nil {
 		g.cfg.afterOpen()

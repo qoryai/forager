@@ -3793,7 +3793,12 @@ of a live run, it counts against three bounds: at most 4096 such connections at 
 one source, an IPv4 address or an IPv6 /64, and 256 of one IPv6 /48. One more closes the
 oldest such connection whose run key has not verified, of its source when that is full,
 else of its /48, else of all, and is taken; when none can be closed, it is closed as it
-is accepted, unanswered. An admitted connection counts against none of them. On a bound connection a
+is accepted, unanswered. An admitted connection counts against none of them. A run
+request whose run key passes counts against the bound of 4096 alone once its open
+starts, after its body is read: its run may wait 140 seconds for Qory Apiary
+(`server.OpenWait`), and the live runs of an address keep connecting while 64 runs
+from that address, such as a NAT's, wait during a Qory Apiary restart. A run request
+whose run key fails counts against all three until its connection closes. On a bound connection a
 request of the link arrives whole, its body included, within 60 seconds, and its
 request line and fields within 16 KiB, the 4 KiB net/http allows past that aside: a
 longer head is net/http's `431`, unsigned. The run request is

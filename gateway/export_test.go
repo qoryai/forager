@@ -6,8 +6,10 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"reflect"
 	"time"
 
@@ -245,6 +247,17 @@ func PendingConns(g *Gateway) int {
 	g.svc.conns.mu.Lock()
 	defer g.svc.conns.mu.Unlock()
 	return g.svc.conns.total
+}
+
+// SourceConns counts the connections g's one address holds whose run key it has not
+// admitted, of the source of addr, host:port, against that source's bound: a run
+// request's whose open started is not among them.
+func SourceConns(g *Gateway, addr string) int {
+	a := netip.MustParseAddrPort(addr).Addr()
+	s := sourceOf(&net.TCPAddr{IP: net.IP(a.AsSlice()), Zone: a.Zone()})
+	g.svc.conns.mu.Lock()
+	defer g.svc.conns.mu.Unlock()
+	return g.svc.conns.by[s.key]
 }
 
 // WaitingConns counts the connections g's one address holds whose run key it has not

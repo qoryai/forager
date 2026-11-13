@@ -1268,6 +1268,15 @@ release may change what an existing document does, and says so under Upgrading.
   minutes. A join request that repeats the last join the gateway accepted gets the same
   answer, across a restart too. Before, a run open at a gateway that stopped was over,
   and `qory run resend` ended it with `gateway_lost`.
+- A run request behind a separate gateway counts against the bounds of 64 connections
+  of one source and 256 of one IPv6 /48 only until its open starts, once its run key
+  passes and its body is read. It counts against the bound of 4096 connections until
+  its run answer, `2xx`, or until its connection closes. Before, it counted against all
+  three until its run answer, which may take 140 seconds while Qory Apiary restarts: 64
+  runs that opened behind one address, such as a NAT's, then made the gateway close
+  every new connection from that address, the batch and proxy connections of its live
+  runs among them. A run request whose run key fails counts against all three, as
+  before.
 - An adapter's output that fails `credential.schema.json` is refused with `Fix the
   output of the adapter <PATH> to match credential.schema.json: <LOCATIONS>`, where
   `<LOCATIONS>` lists each failing location and keyword, such as `/apply/0/header fails
