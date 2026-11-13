@@ -2436,9 +2436,15 @@ A restart). The local link writes none of them.
   request has them. An image reference may contain a registry's credentials, as the
   run request does.
 - `ca.pem` and `ca.key`: the certificate and the private key of the run's certificate
-  authority, for a run with one, written as the run opens. The gateway removes both at
-  the run's end, when the run's open fails, when a reopen fails for good, and by the
-  sweep below.
+  authority, for a run with one, written as the run opens. A reopen reads them only
+  when the certificate's common name is `qory run <run id>` and the gateway's user owns
+  `ca.key`.
+
+The gateway removes `request.json`, `ca.pem` and `ca.key` together: at the run's end,
+when the run's open fails, when a reopen fails for good, and by the sweep below. `qory
+run resend` removes them too once it writes the run's `dev.qory.run.exited`. A record
+without `request.json` is not reopened, and its requests get a `410` `run_closed`.
+
 - `given.jsonl`: the members of each `dev.qory.run.policy_applied` the gateway decided,
   one JSON object per line, as the event's data has them: shown names and values, never
   a credential's value.
@@ -2452,14 +2458,16 @@ A restart). The local link writes none of them.
   `dev.qory.run.started` when the gateway stopped, one per line. The reopen reads it
   back and removes it.
 
-These files stay with the record until the record is removed, the CA files excepted.
-**The sweep.** A separate gateway whose records are under its directory removes
-`ca.pem` and `ca.key` of each record whose run it neither holds nor reopens and whose
-`events.jsonl` has not changed for 15 minutes, at its start and every 10 minutes. A
-live run's session sends a heartbeat at least every 300 seconds, so a live run's record
-changes within those 15 minutes. The sweep and a reopen of the same run never run at
-once: the sweep skips a run that is reopening, and the reopen of a run with a
-certificate authority that comes after the sweep finds no CA files and fails for good.
+The other files stay with the record until the record is removed.
+**The sweep.** A separate gateway removes `request.json`, `ca.pem` and `ca.key` of each
+record whose run it neither holds nor reopens and whose `events.jsonl` has not changed
+for 15 minutes, at its start and every 10 minutes. It reads the records under its
+directory, or, with `RunDir`, those in the directory `RunDir` makes each record in as
+`<directory>/<run id>`. A live run's session sends a heartbeat at least every 300
+seconds, so a live run's record changes within those 15 minutes. The sweep and a
+reopen of the same run never run at once: the sweep skips a run that is reopening, a
+request that comes while the sweep removes a record's files gets a `503` with no body,
+and a request after the sweep gets a `410` `run_closed`.
 
 **A hidden harness.** In a run whose harness is hidden, `[harness text: <path>]`
 replaces the text of each file in a session's harness home, after the forwarders'
@@ -3883,17 +3891,26 @@ of the run waits for it. The reopen reads the record back, attaches the run agai
 the run key of that request, with the tries of an open (Tries as a run opens, below),
 sends again what the server has not accepted, decides the run again from `request.json`
 and the run configuration in the attach's answer, with the run's certificate authority from
-`ca.pem` and `ca.key`, and goes on numbering the record after its last `sequence`. A
-connection that waits on a reopen counts against none of the one address's bounds of
-connections once its run key verifies. The reopen's answers to the requests that wait:
+`ca.pem` and `ca.key`, and goes on numbering the record after its last `sequence`. The
+reopen reads the certificate authority before the attach, so a record whose CA files
+do not read back ends the run with no attach. It sends again what the server has not
+accepted within the attach's window of 120 seconds. A connection that waits on a
+reopen, once its run key verifies, counts against the bound of 4096 connections and
+against neither the bound of its source nor that of its IPv6 /48, and is never closed
+for a newer connection. The reopen's answers to the requests that wait:
 
 - the run is open: each request is served as for a live run;
-- a failure that may pass, no answer from the server, a `5xx` or a `429`
-  `rate_limited`, or a `Close` that stops the reopen's tries: a `503` with no body, and
-  the session's next request starts the reopen again;
-- a final failure, such as another refusal of the attach, a run configuration that
-  fails Forager's checks, or a record the gateway cannot read: a `410` `run_closed`, and
-  the run is over. Only tries that `Close` stopped count as a stop by `Close`: a final
+- a failure that may pass: no answer from the server, a `5xx`, an answer that is not
+  signed, a `429` `rate_limited`, events the server does not take within the attach's
+  window, or a `Close` that stops the reopen's tries. Each request gets a `503` with no
+  body, and the session's next request starts the reopen again;
+- a final failure: a `410` `run_closed`, and the run is over. The attach's failures
+  that are final at once are a signed `410`, a signed refusal `run_attached`,
+  `wrong_gateway` or `workspace_not_served`, and a run configuration that fails
+  Forager's checks; a record the gateway cannot read, one with the run's final event,
+  and one the server stopped are final too. Any other signed `4xx` of the attach, a
+  `401` among them, is tried again within the 120 seconds, and is final when the
+  window ends on it. Only tries that `Close` stopped count as a stop by `Close`: a final
   refusal that came first keeps its `410`.
 
 A connection to the run's proxy that waited on a reopen that did not open the run is
@@ -4361,8 +4378,8 @@ out) and after a `503` with no code: a separate gateway may be restarting. It tr
 up to 120 seconds, with waits of 1, 2, 4 and 8 seconds, then 8 seconds each. Before
 each try after the first it flushes its batches, so the previous session's
 `dev.qory.session.exited` reaches the gateway before the join. Every other answer, a
-`400`, `403` or `410` among them, it takes as the answer to the join. A join with no
-answer after 120 seconds fails as after one try.
+`400`, `403` or `410` among them, ends its tries, and the join has that answer. A join
+with no answer after 120 seconds fails as after one try.
 
 Behind a separate gateway, a join request that repeats the last join the gateway
 accepted gets that join's `200` again, with the same session number and model key, and
