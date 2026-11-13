@@ -15,6 +15,12 @@ release may change what an existing document does, and says so under Upgrading.
   `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a
   runtime, `{prefix, path}`, where `path` may have `*`, which matches inside one path
   name; it is absent for a runtime with no resume.
+- Write each path of an API credential's `paths` without a `.` or `..` segment, such as
+  `/a/../b`: `server.CheckCredentials` refuses such a path with
+  `run_configuration_invalid`, since the proxy denies every request path with one. It
+  also refuses an `account_header` that `server.ReservedHeader` reports, or
+  `Authorization`, in a run configuration not read from bytes, which the schema
+  refuses in one that is.
 - Expect `model_key_switch` and `model_key_unauthorized` to be reserved codes of
   `dev.qory.run.exited`. A run's starter's outcome reason that is either code is
   dropped, its outcome kept, as for every reserved code, and `(*session.Run).Close`
@@ -261,9 +267,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
-- The contract for model keys of OpenAI, schemas and fixtures only; on 2026-11-13 the
-  gateway and the session act on none of it (README §Credentials, Paths and an account
-  header of a model key, and Keys out after a 401, each with a table of today and after):
+- The contract for model keys of OpenAI. The gateway acts on `paths` and the account
+  header (Gateway, Added); on 2026-11-13 the gateway and the session act on none of the
+  rest (README §Credentials, Paths and an account header of a model key, and Keys out
+  after a 401, with a table of today and after):
   - An API credential's `paths`, 1 to 32 paths of its endpoint's host in a host
     credential's grammar, `credential_paths` of `run-configuration.schema.json`.
   - `account_header` and `account_claim` in `auth.schema.json`, both or neither and only
@@ -1099,6 +1106,24 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- A model key from the control plane with `paths` is set on those paths alone (README
+  §Credentials, Paths and an account header of a model key). Another path of its host
+  gets `403` under `enforce`, unless the run policy's `egress.paths` match it; the
+  request then goes with no key. Such a key may share its host with a host credential
+  whose paths overlap none of the key's: a subscription login limited to
+  `/backend-api/codex/*` can be the run's model key beside a host credential on other
+  paths of its host. Before, the run was refused, `a credential without paths is alone
+  on its hosts`.
+- A model key whose `auth` has `account_header` and `account_claim` gets the header
+  beside its token, set to the string at `account_claim` in the token's JWT payload,
+  with no check of the signature and at most 8 KiB of payload decoded. The header the
+  session sends under that name, in any letter case and with `_` for `-`, is taken off
+  every request to the key's host. A key whose value has no such string when the run
+  opens leaves the key group: the proxy never sets it, and the run's record has one
+  line that starts with the fix and contains neither the value nor the claim. With no
+  key of the group left, the run is refused, `run_configuration_invalid`. A renewed
+  value without the string is a renewal refused for its form, and the run keeps the
+  value it had.
 - Several model keys of one provider per run, a key group (docs/credentials.md, Several
   keys of one provider). On a provider's `429` the proxy puts the active key in
   cooldown, sends the request again with the next key, and passes the refusal only when
