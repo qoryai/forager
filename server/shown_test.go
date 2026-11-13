@@ -223,6 +223,41 @@ func TestAServerErrorPrintsAPhraseForASecret(t *testing.T) {
 	}
 }
 
+// TestARefusedConfigurationImageHasNoUserInformation pins the refusal of a run
+// configuration's image that is not pinned: it shows the image without the registry's
+// credentials of its user information.
+func TestARefusedConfigurationImageHasNoUserInformation(t *testing.T) {
+	err := server.CheckConfigurationImage("user:pw@registry.example/agent:1")
+	if err == nil || !strings.HasPrefix(err.Error(), "the image registry.example/agent:1 is not a reference pinned by digest") || strings.Contains(err.Error(), "pw") {
+		t.Errorf("the refusal: %v", err)
+	}
+}
+
+// TestALinkRunAnswerPrintsImagesWithoutUserInformation pins a run answer's relay
+// image as fmt prints it, and its image and relay image as encoding/json writes them:
+// each reference without the registry's credentials of its user information.
+func TestALinkRunAnswerPrintsImagesWithoutUserInformation(t *testing.T) {
+	const digest = "@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	a := server.LinkRunAnswer{Version: 1, RunID: gatewayRunID, Image: &server.LinkImage{Name: "base", Ref: "user:pw@registry.example/agent" + digest},
+		RelayImage: "relay:secret@registry.example/relay:1"}
+	b, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for verb, out := range map[string]string{"%v": fmt.Sprintf("%v", a), "%+v": fmt.Sprintf("%+v", a), "%#v": fmt.Sprintf("%#v", a), "json": string(b)} {
+		if strings.Contains(out, "pw@") || strings.Contains(out, "secret@") || !strings.Contains(out, "registry.example/relay:1") {
+			t.Errorf("%s prints %s", verb, out)
+		}
+	}
+	// fmt prints the image's pointer; encoding/json writes the image.
+	if !strings.Contains(string(b), `"ref":"registry.example/agent`+digest+`"`) {
+		t.Errorf("json writes %s", b)
+	}
+	if a.Image.Ref != "user:pw@registry.example/agent"+digest {
+		t.Errorf("printing changed the answer's reference to %q", a.Image.Ref)
+	}
+}
+
 // TestALinkRunAnswerPrintsAPhraseForASecret pins a run answer as fmt and log/slog
 // print it and encoding/json writes it: no name or value of it that contains qak_ or
 // qrk_ in any case prints, credential_hosts included, and a credential's empty

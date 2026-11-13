@@ -83,6 +83,9 @@ const (
 	// modeWrite is the probe in a container the agent started that writes a file into
 	// the workspace bound read-only.
 	modeWrite = "write-file"
+	// modeAfterJoin is the program of a session with no runtime that joins after the
+	// last session.
+	modeAfterJoin = "after-join"
 )
 
 // HoldArgs are the arguments that make the helper keep the setup container running.
@@ -233,6 +236,8 @@ func Main() {
 		os.Exit(terminalProbe())
 	case modeReach:
 		os.Exit(reach(os.Args[2:]))
+	case modeAfterJoin:
+		os.Exit(afterJoin())
 	case modeService:
 		err := http.ListenAndServe(":"+setupServicePort, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			io.WriteString(w, setupServiceLine)
@@ -607,6 +612,7 @@ func Run(t *testing.T, o Options) {
 	readOnlyWorkspace(t, o, origin, outside)
 	setupRemoved(t, o, origin, outside)
 	setupRemovedAfterSession(t, o, origin, outside)
+	afterJoinFreshHome(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
 	transcriptSent(t, o, origin, outside)
 	transcriptPlanted(t, o, origin, outside)

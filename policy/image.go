@@ -35,6 +35,29 @@ func ImageReference(s string) bool {
 	return ok && len(name) <= maxImageName && imageReference.MatchString(s)
 }
 
+// digestSuffix is a reference's trailing digest of an algorithm the OCI image
+// specification registers: @sha256: or @blake3: and 64 lower-case hexadecimal digits,
+// or @sha512: and 128. The OCI grammar of any algorithm would also match a tag after
+// user information, such as @base:latest, and keep the user information whole.
+var digestSuffix = regexp.MustCompile(`@(?:sha256:[0-9a-f]{64}|blake3:[0-9a-f]{64}|sha512:[0-9a-f]{128})$`)
+
+// ImageWithoutUserInfo is the image reference ref without the user information it may
+// start with, which may contain a registry's credentials: its trailing digest is set
+// aside, everything up to and with the last @ of the rest is left out, a scheme in
+// front of the user information too, and the digest is put back. A password may
+// contain / and @, and a user may be an email address. A reference with no @ before its
+// digest is returned as it is, and so is a result of ImageWithoutUserInfo.
+func ImageWithoutUserInfo(ref string) string {
+	rest, digest := ref, ""
+	if loc := digestSuffix.FindStringIndex(ref); loc != nil {
+		rest, digest = ref[:loc[0]], ref[loc[0]:]
+	}
+	if at := strings.LastIndexByte(rest, '@'); at >= 0 {
+		rest = rest[at+1:]
+	}
+	return rest + digest
+}
+
 // referenceShaped reports whether s is written as a reference rather than a name: it
 // holds a slash, an at sign or a colon, none of which a name holds.
 func referenceShaped(s string) bool { return strings.ContainsAny(s, "/@:") }

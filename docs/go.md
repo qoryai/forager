@@ -675,7 +675,8 @@ other hosts and CONNECTs pass unchecked.
 |---|---|---|
 | `nil, nil` | the gateway's reply | the POST as the program sent it, with `Connection: close` added to the head |
 | a `RunAPIRefusal` with a `Code` and a `Status` from 400 to 499 other than 407 | `Status` and `{"error":Code,"message":Message,"findings":Findings}`, without `findings` when it is empty | nothing |
-| an error, a panic, a refusal with no `Code`, a `Status` of 407 or outside 400 to 499, or no return within 90 seconds or before the run closes | `503` and `{"error":"push_check_unavailable","message":"Run the push again: the check before the push did not finish."}` | nothing |
+| `nil, session.ErrRunAPIHold`, or an error that wraps it, for a POST to `/verdict` | `202` and `{"version":1,"artifact":{"type":"verdict","name":"main","version":null}}` | nothing |
+| any other error, `session.ErrRunAPIHold` for another path, a panic, a refusal with no `Code`, a `Status` of 407 or outside 400 to 499, or no return within 90 seconds or before the run closes | `503` and `{"error":"push_check_unavailable","message":"Run the push again: the check before the push did not finish."}` | nothing |
 
 A panic is a line to `OpenSpec.Report`. The check's context ends after 90 seconds or when
 the run closes. Return from the check when its context ends. The forwarder reads and
@@ -683,6 +684,23 @@ checks one POST of the run at a time, as the gateway's route has one in flight, 
 the next POST once the context ends, so a check that ignores its context may still run
 beside the next POST's check. A POST that waits 90 seconds for its turn gets the `503`
 too.
+
+Hold a verdict when a check after the agent's last session sets the run's end: keep
+`req.Body` of a POST to `/verdict` and return `nil, session.ErrRunAPIHold`. The program
+gets a `202` with the body of Qory Apiary's `201` for a stored verdict, with `null` for
+the artifact's version, since a held verdict has no stored version. The forwarder checks
+one POST of a run at a time, so the check gets the verdicts of a program that sends each
+after the reply to the one before in the order sent. A hold returned after the check's context ended gets the `503`.
+
+```go
+err := run.SetRunAPICheck(func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error) {
+	if req.Path == "/verdict" {
+		held = append(held, req.Body)
+		return nil, session.ErrRunAPIHold
+	}
+	return nil, nil
+})
+```
 
 With the check set in a run with a control plane, the forwarder passes one request per
 connection through the wall, as it does for an unwalled agent: a CONNECT and its tunnel,

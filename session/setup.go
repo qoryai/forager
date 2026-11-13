@@ -345,7 +345,7 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 		return err
 	}
 	if pulls {
-		begin(event.StepImage, r.img.Ref)
+		begin(event.StepImage, r.imageShown())
 		if err := r.pullImage(ctx, puller); err != nil {
 			return fail(err)
 		}

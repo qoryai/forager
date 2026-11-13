@@ -139,7 +139,15 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway, gatewayText(refusal.RunIDUsed))
 		return
 	}
+	if g.sweeping[req.RunID] {
+		// The CA key sweep removes the files of a record of the run id now: the run
+		// request that comes again opens it, or is refused as for any record there.
+		g.mu.Unlock()
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
 	g.used[req.RunID] = true
+	defer g.markOpening(req.RunID, r)()
 	g.mu.Unlock()
 	if s.remote {
 		// The run key passed and the run id is this request's alone: the connection no
@@ -334,6 +342,19 @@ func refuseOpen(w http.ResponseWriter, err error) {
 		status = http.StatusBadGateway
 	}
 	refuse(w, status, ref.Code, accesskey.ShownNames(ref.Names), from, err.Error())
+}
+
+// markOpening marks the run id as opening for the run request r, which the CA key sweep
+// skips, and returns what removes the mark when it is still r's. Called with g.mu held.
+func (g *Gateway) markOpening(runID string, r *http.Request) func() {
+	g.opening[runID] = r
+	return func() {
+		g.mu.Lock()
+		if g.opening[runID] == r {
+			delete(g.opening, runID)
+		}
+		g.mu.Unlock()
+	}
 }
 
 // shownWallNames are a [refusal.NeedsWall]'s names as the link sends them: the image of

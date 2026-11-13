@@ -210,8 +210,9 @@ a time, apart from a join during a `copy` step:
   the first join, between joins, or after the last join and before the close. These
   `wall` steps lie outside every session.
 - Behind a wall, after `dev.qory.session.started`, the join writes an `image` step,
-  with the image's reference as its name, when the policy's image is a reference that
-  no step fetched yet, and a `wall` step, `start the wall`, up to the launch's start.
+  with the image's reference without its user information as its name, when the
+  policy's image is a reference that no step fetched yet, and a `wall` step, `start
+  the wall`, up to the launch's start.
 - With setup commands inside the wall, `SessionSpec.Setup`, each command is a `setup`
   step after the `wall` step, with the command's name, such as `install`, its output as
   the step's lines and its exit status. The runtime runs in no step. The command of

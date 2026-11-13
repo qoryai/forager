@@ -72,11 +72,20 @@ func (r *Run) checkManifest(ctx context.Context) error {
 	if manifestHook != nil {
 		return manifestHook(ctx, r.img.Ref)
 	}
-	c := manifestCheck{client: r.manifestClient(), image: accesskey.ShownName(r.img.Ref, false), ended: ctx.Err}
-	c.host, c.repository, c.digest = wall.RegistryManifest(r.img.Ref)
+	// The check reads the reference without its user information: a registry's
+	// credentials there go into no request, error or refusal of the check.
+	ref := r.imageShown()
+	c := manifestCheck{client: r.manifestClient(), image: accesskey.ShownName(ref, false), ended: ctx.Err}
+	c.host, c.repository, c.digest = wall.RegistryManifest(ref)
 	c.held = r.realmCredentials
 	return c.check(ctx)
 }
+
+// imageShown is the run's image reference without its user information
+// ([policy.ImageWithoutUserInfo]), which may contain a registry's credentials: the
+// form the record, the image step's name, the manifest check and its errors use. The
+// wall's pull alone gets the reference whole.
+func (r *Run) imageShown() string { return policy.ImageWithoutUserInfo(r.img.Ref) }
 
 // check runs the check under [manifestWait]. A check that runs out of that time is
 // image_registry_unreachable, unless its error is a [proxyConnError] or a dial of the

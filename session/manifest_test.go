@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -546,5 +547,62 @@ func TestTheManifestIsAtTheRegistrysAPIHost(t *testing.T) {
 		if got := host + " " + repository; got != want || "@"+d != digest {
 			t.Errorf("%s: %s %s, want %s", ref, got, d, want)
 		}
+	}
+}
+
+// TestTheImageStepAndTheCheckHaveTheImageWithoutUserInformation pins the image of a
+// reference with a registry's credentials in its user information in the record of a
+// join: the image step's name, and the image_access_denied refusal of the check and its
+// detail, have the reference without them, and the check sends its request to the
+// registry in the reference. The record contains no part of the credentials.
+func TestTheImageStepAndTheCheckHaveTheImageWithoutUserInformation(t *testing.T) {
+	reg := startRegistry(&scripted{status: http.StatusForbidden})
+	defer reg.Close()
+	defer session.SetManifestRoots(session.SetManifestRoots(reg.ca))
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	var connected []string
+	var mu sync.Mutex
+	g.OnConnect(func(target string) string {
+		mu.Lock()
+		connected = append(connected, target)
+		mu.Unlock()
+		return reg.addr()
+	})
+	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+		a := linktest.RunAnswer(req)
+		a["image"] = map[string]any{"ref": "user:pw@" + pinned, "reference": true}
+		a["relay_image"] = "example.com/agent:1"
+		a["applied"].(map[string]any)["image"] = pinned
+		return linktest.Reply{Status: 200, Body: a}
+	})
+	sp.Wall, sp.Image, sp.ImagesAllow, sp.RunID = &targetWall{}, "example.com/agent:1", []string{"registry.example/"}, event.NewRunID()
+	_, err := run(context.Background(), sp)
+	var ref *session.Refusal
+	if !errors.As(err, &ref) || ref.Code != refusals.ImageAccessDenied || !slices.Equal(ref.Names, []string{pinned}) ||
+		strings.Contains(ref.Detail, "pw") || !strings.Contains(ref.Detail, pinned) || !strings.Contains(ref.Detail, "/v2/agents/app/manifests/ on registry.example") {
+		t.Errorf("the run: %v, want image_access_denied of %s with no login", err, pinned)
+	}
+	mu.Lock()
+	if len(connected) == 0 || !strings.HasPrefix(connected[0], "registry.example:") {
+		t.Errorf("the check connected to %v, want registry.example", connected)
+	}
+	mu.Unlock()
+	dir := filepath.Join(sp.RunsDir, sp.RunID)
+	evs := events(t, &session.Result{Dir: dir})
+	var names []any
+	for _, e := range ofType(evs, "dev.qory.run.step_started") {
+		if data(e)["kind"] == "image" {
+			names = append(names, data(e)["name"])
+		}
+	}
+	if len(names) != 1 || names[0] != pinned {
+		t.Errorf("the image steps' names %v, want %s", names, pinned)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "user:pw") {
+		t.Errorf("the record contains the registry's credentials:\n%s", b)
 	}
 }

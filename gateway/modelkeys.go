@@ -63,21 +63,28 @@ func (k *keyReporter) poke() {
 // lastWait is how long the last report of a run, sent once after the run ends, may take.
 const lastWait = 10 * time.Second
 
-// run sends reports until ctx ends, or the control plane returns 410 or 404. When ctx
-// ends while a change waits for its report, in the gap, in a backoff or in flight, the
-// newest state goes once more ([keyReporter.last]).
+// run sends reports until ctx ends, or the control plane returns 410 or 404: one
+// report per burst of changes. A report covers every change up to the group's change
+// count it was made at ([modelkey.Group.Snapshot]). A wake for changes that the last
+// report sent or dropped covers sends nothing: a change that came during the gap or a
+// backoff before that report goes in no second report. When ctx ends while a change
+// waits for its report, in the gap, in a backoff or in flight, the newest state goes
+// once more ([keyReporter.last]).
 func (k *keyReporter) run(ctx context.Context) {
 	var last time.Time
+	// sent is the change count the last report sent or dropped covers.
+	var sent uint64
 	for {
 		select {
 		case <-ctx.Done():
-			select {
-			case <-k.wake:
+			if k.g.Changes() != sent {
 				k.last(ctx)
-			default:
 			}
 			return
 		case <-k.wake:
+		}
+		if k.g.Changes() == sent {
+			continue
 		}
 		if !sleep(ctx, k.gap-time.Since(last)) {
 			k.last(ctx)
@@ -85,9 +92,12 @@ func (k *keyReporter) run(ctx context.Context) {
 		}
 		for try := 0; ; try++ {
 			last = time.Now()
-			keys, err := k.send(ctx, k.report())
+			rep, covers := k.report()
+			keys, err := k.send(ctx, rep)
 			if ctx.Err() != nil {
-				k.last(ctx)
+				if err != nil || k.g.Changes() != covers {
+					k.last(ctx)
+				}
 				return
 			}
 			var ae *server.ModelKeysAnswerError
@@ -95,6 +105,7 @@ func (k *keyReporter) run(ctx context.Context) {
 			switch {
 			case err == nil:
 				k.g.Merge(windows(keys))
+				sent = covers
 			case ae != nil && ae.Status == http.StatusNotFound:
 				k.logLine(fmt.Sprintf("Upgrade the control plane to share model key cooldowns between runs: %s returned 404 for model-keys", accesskey.ShownValue(k.runURL, false)))
 				return
@@ -103,6 +114,7 @@ func (k *keyReporter) run(ctx context.Context) {
 			case ae != nil && (ae.Status == http.StatusUnauthorized || ae.Signed && (ae.Status == http.StatusBadRequest || ae.Status == http.StatusRequestEntityTooLarge)),
 				ae == nil && !retried(err):
 				k.reported(fmt.Sprintf("run %s: If this repeats, check the control plane: the model keys report was dropped: %v", k.runID, accesskey.ShownError(err)))
+				sent = covers
 			default:
 				// A 429, a 5xx, another answer that did not verify, or none: the newest
 				// state goes again.
@@ -117,9 +129,11 @@ func (k *keyReporter) run(ctx context.Context) {
 	}
 }
 
-// report is a report of the group's newest state, at the clock's time.
-func (k *keyReporter) report() server.ModelKeysReport {
-	return server.ModelKeysReport{Time: server.RegistrationTime(time.Now()), Keys: k.entries()}
+// report is a report of the group's newest state, at the clock's time, and the
+// group's change count it covers.
+func (k *keyReporter) report() (server.ModelKeysReport, uint64) {
+	ws, covers := k.g.Snapshot()
+	return server.ModelKeysReport{Time: server.RegistrationTime(time.Now()), Keys: entries(ws)}, covers
 }
 
 // last sends the newest state once after the run's end, within [lastWait], so the
@@ -128,7 +142,8 @@ func (k *keyReporter) report() server.ModelKeysReport {
 func (k *keyReporter) last(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lastWait)
 	defer cancel()
-	k.send(ctx, k.report())
+	rep, _ := k.report()
+	k.send(ctx, rep)
 }
 
 // retried reports whether err, a failure with no answer the table lists, is one a new
@@ -153,10 +168,9 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// entries are the group's windows as a report's keys: at most [maxReportKeys], and as
+// entries are the windows ws as a report's keys: at most [maxReportKeys], and as
 // many as fit [server.MaxModelKeysReport] with the report's other members.
-func (k *keyReporter) entries() []server.ModelKeyState {
-	ws := k.g.Windows()
+func entries(ws []modelkey.Window) []server.ModelKeyState {
 	out := make([]server.ModelKeyState, 0, len(ws))
 	for _, w := range ws {
 		out = append(out, state(w))

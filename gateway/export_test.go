@@ -300,6 +300,39 @@ func SweepCA(g *Gateway, now time.Time) {
 	g.sweep(now, age)
 }
 
+// Sweeping marks the run id as one whose record the CA key sweep removes files from
+// now, as [Gateway.sweep] does, and returns what ends the mark.
+func Sweeping(g *Gateway, runID string) func() {
+	g.mu.Lock()
+	g.sweeping[runID] = true
+	g.mu.Unlock()
+	return func() {
+		g.mu.Lock()
+		delete(g.sweeping, runID)
+		g.mu.Unlock()
+	}
+}
+
+// MarkOpening marks the run id as opening for the run request r, as a run request
+// does, and returns what removes the mark when it is still r's.
+func MarkOpening(g *Gateway, runID string, r *http.Request) func() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.markOpening(runID, r)
+}
+
+// SetSweptRemove makes remove remove a record's kept files for the CA key sweep in
+// place of stream.RemoveKept.
+func SetSweptRemove(c *Config, remove func(dir string) error) { c.sweptRemove = remove }
+
+// Swept reports whether the CA key sweep marks the run id as one whose record it
+// removes files from now.
+func Swept(g *Gateway, runID string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.sweeping[runID]
+}
+
 // SetSweepTicker makes the CA key sweep's ticker with tick in place of time.NewTicker:
 // tick gets the sweep's interval and returns the ticker's channel.
 func SetSweepTicker(c *Config, tick func(every time.Duration) <-chan time.Time) {

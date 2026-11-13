@@ -865,8 +865,9 @@ if err := run.FetchImage(ctx); err != nil { // the image step: the engine pulls 
 }
 ```
 
-`FetchImage` writes the `image` step, named after the reference. During the step alone,
-a forwarder listens at `127.0.0.1:3129` and passes on only a request with the password.
+`FetchImage` writes the `image` step, named after the reference without its user
+information. During the step alone, a forwarder listens at `127.0.0.1:3129` and
+passes on only a request with the password.
 For a run with a certificate authority, the Docker wall writes the run's certificate as
 `qory-run-<id>.crt` in the directory of the image's registry host and of each host of
 the run's credentials, and removes the files when the step ends, also when the pull
