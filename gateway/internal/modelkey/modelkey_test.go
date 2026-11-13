@@ -346,6 +346,7 @@ func TestPassHoldsUntilResume(t *testing.T) {
 		t.Error("Passed is true after Resume")
 	}
 	var none *modelkey.Group
+	none.Pass()
 	if none.Passed() || none.Has("model") {
 		t.Error("a nil group passed a refusal or has a key")
 	}
