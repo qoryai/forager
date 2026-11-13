@@ -10,9 +10,9 @@ import (
 	"github.com/qoryai/forager/wall"
 )
 
-// describedResume is a runtime written as data, with the resume entry given, or none
-// when resume is empty.
-func describedResume(t *testing.T, resume string) runtimes.Runtime {
+// describedResume is the resume of a runtime written as data, with the resume entry
+// given, as a session with an empty environment resolves it; nil when resume is empty.
+func describedResume(t *testing.T, resume string) *sessionResume {
 	t.Helper()
 	d := "version: 1\nruntime: r\nruntime_version: \"1\"\nsources:\n  output: {format: jsonl}\n" + resume +
 		"rules:\n  - source: output\n    match: {type: start}\n    type: dev.qory.runtime.started\n    data: {session_id: session_id}\n"
@@ -20,7 +20,7 @@ func describedResume(t *testing.T, resume string) runtimes.Runtime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return rt
+	return resumeOf(rt, nil)
 }
 
 // TestTheTranscriptDirectoryComesFromResume pins guard 2: a runtime with resume gets

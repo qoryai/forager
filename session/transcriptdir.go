@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/qoryai/forager/accesskey"
-	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -38,7 +37,8 @@ type transcriptRoot struct {
 	// mount, which the enclosure shows already.
 	bind string
 	// unbound, when set, is why the session reads no transcript and the runtime starts
-	// without a resume: an absolute resume.prefix inside a read-only mount.
+	// without a resume: an absolute resume.prefix inside a read-only mount, or a
+	// resume.home_var with no usable value.
 	unbound *wall.Unbound
 }
 
@@ -50,10 +50,13 @@ func (t transcriptRoot) wallTranscript() wall.Transcript {
 	return wall.Transcript{Path: t.dir, Under: t.bind}
 }
 
-// makeTranscriptDir is where walled session n reads the transcript of its runtime rt,
-// with the binds the enclosure shows, mounts, each at its place inside. A runtime
-// without resume, whose resume.prefix is the home itself, or whose resume.path has an
-// empty, . or .. name below resume.prefix, gets none.
+// makeTranscriptDir is where walled session n reads the transcript of its runtime,
+// whose resume is rs, nil for none, with the binds the enclosure shows, mounts, each at
+// its place inside. A runtime without resume, whose resume.prefix is the home itself,
+// or whose resume.path has an empty, . or .. name below resume.prefix, gets none. A
+// resume whose home_var has no usable value, rs.unset, gets unbound, and no directory.
+// An absolute resume.prefix includes one whose home_var the session resolved
+// ([resumeOf]).
 //
 // An absolute resume.prefix inside the place of a writable mount, the innermost one, is
 // read there: dir is the mount's path on this machine, and the wall binds nothing. One
@@ -64,14 +67,15 @@ func (t transcriptRoot) wallTranscript() wall.Transcript {
 // below the home or absolute. The directory must lie in the run directory and outside
 // workspace and every one of binds, the places the enclosure binds, as
 // [checkTranscriptDir] checks; otherwise the join fails.
-func makeTranscriptDir(rt runtimes.Runtime, runDir string, n int, workspace string, binds []bindSource, mounts []wall.Mount) (transcriptRoot, error) {
-	resumes, ok := rt.(runtimes.Resumes)
-	if !ok {
+func makeTranscriptDir(rs *sessionResume, runDir string, n int, workspace string, binds []bindSource, mounts []wall.Mount) (transcriptRoot, error) {
+	if rs == nil {
 		return transcriptRoot{}, nil
 	}
-	rs, ok := resumes.Resume()
+	if rs.unset != nil {
+		return transcriptRoot{unbound: rs.unset}, nil
+	}
 	below, isBelow := strings.CutPrefix(rs.Path, rs.Prefix)
-	if !ok || !isBelow || below == "" || dotted(below) {
+	if !isBelow || below == "" || dotted(below) {
 		return transcriptRoot{}, nil
 	}
 	var bind string

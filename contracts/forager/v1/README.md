@@ -2301,7 +2301,22 @@ directory with every character other than an ASCII letter or digit replaced by `
 `/workspace` becomes `-workspace`. A `resume.prefix` that starts with `~/` lies under the
 runtime's home, and an absolute one, such as `/var/lib/qory-codex-home/sessions/`, is
 that path whatever the home; `path` in `dev.qory.session.transcript` starts the same
-way. The session reads no path outside `resume.prefix` or
+way. A `resume.prefix` that starts with `${<home_var>}/` lies below the value of the
+descriptor's `resume.home_var` in the launch's environment, the one the runtime gets,
+such as `CODEX_HOME`, which qory sets as a fixed value of the launch:
+`${CODEX_HOME}/sessions/` with `CODEX_HOME=/var/lib/qory-codex-home` is
+`/var/lib/qory-codex-home/sessions/`. From there on the session reads it as that
+absolute prefix, with a wall or without one, and `path` in
+`dev.qory.session.transcript` is the absolute path the runtime writes. A value that is
+not set, is empty, is no absolute path in its shortest form, has a `.` or `..` name, or
+has a space, a character that is not printable, `*`, `$`, `{` or `}`, gives no
+transcript: the session starts the runtime without the descriptor's `resume.args`,
+sends no transcript and writes one line, `Set CODEX_HOME to an absolute path in the
+launch's environment, with no . or .. name and no space, *, $, { or }. A continuation
+of this run starts the runtime without a resume: CODEX_HOME is not set, so the session
+cannot find resume.prefix ${CODEX_HOME}/sessions/`, or `CODEX_HOME is empty`, or
+`CODEX_HOME is "<value>"` with at most the value's first 256 bytes; with a restored
+transcript, a line before it reports that the restore failed. The session reads no path outside `resume.prefix` or
 with a `..` segment, and no file over 67108864 bytes (64 MiB), with a wall or without
 one. Without a wall it reaches `resume.prefix`, under the runtime's home or at its
 absolute path, through any symbolic link, such as a `~/.claude/projects` that is a
@@ -2363,8 +2378,9 @@ once it exists; one that still does not exist when the runtime exits writes `Che
 the runtime writes its transcript at <path>. A continuation of this run starts the
 runtime without a resume: the file does not exist, so the session sent no transcript`.
 
-An absolute `resume.prefix` inside the place inside of a writable mount, its `Target`
-or else its path (§The wall), gets no transcript directory and no bind: the session
+An absolute `resume.prefix`, a resolved `${<home_var>}/` one among them, inside the
+place inside of a writable mount, its `Target` or else its path (§The wall), gets no
+transcript directory and no bind: the session
 reads the transcript, and writes a restored one, at the matching path in the innermost
 such mount on the machine, under the same rules as in the transcript directory. A
 restored transcript is created for the session's uid, so a runtime that runs as another
@@ -5214,7 +5230,16 @@ with no symbolic link among its names. The resumed runtime appends to that file,
 the paused run's slug, so the session sends it as the session's transcript, with
 `resume.path` as `path` and `resume.session_id` as `session_id`, from offset 0: the
 restored lines first, then the new ones, whatever the slug of the working directory, with
-a wall or without one, and with the same checks. A hook input whose
+a wall or without one, and with the same checks. For a descriptor with
+`resume.home_var`, `resume.path` is absolute, below the paused run's value of the
+variable, which may differ from this run's: the session writes the bytes at the same
+names below this run's resolved `resume.prefix`, as many names as the descriptor's
+`resume.path` has below `resume.prefix`, and sends the file under that path.
+`/home/a/.codex/sessions/2026/11/13/rollout-<time>-<id>.jsonl` from a run with no wall
+is written at `/var/lib/qory-codex-home/sessions/2026/11/13/rollout-<time>-<id>.jsonl`
+behind a wall. A `resume.path` that is not absolute, has an empty, `.` or `..` name, or
+whose names above those are not the names of `resume.prefix` after `${<home_var>}/`,
+`sessions` for Codex, is a failed resume. A hook input whose
 `resume.path_from` is the path of a file other than `<session id>.jsonl`, under any slug, writes
 one line, `Check that the runtime resumes
 from <path>. The session reads the restored transcript there, and <path_from> of the

@@ -530,17 +530,19 @@ func readUnlinked(base, rel string, offset int64) ([]byte, int64, error) {
 	return b, fi.Size(), err
 }
 
-// sessionTranscript is the transcript of session n's runtime rt, nil for a runtime
-// without resume. A run with no wall reads it under the runtime's home, HOME of env,
-// the launch's environment, or the home of the user the session runs as when env has
-// none, and the runtime's working directory dir; an absolute resume.prefix is read at
-// its path, whatever the home. Behind a wall, root is where the session reads the
+// sessionTranscript is the transcript of session n's runtime, whose resume is rs, nil
+// for a runtime without resume. A run with no wall reads it under the runtime's home,
+// HOME of env, the launch's environment, or the home of the user the session runs as
+// when env has none, and the runtime's working directory dir; an absolute
+// resume.prefix, a resolved resume.home_var's among them, is read at its path, whatever
+// the home. A run with no wall whose home_var has no usable value, rs.unset, sends none
+// and writes one line. Behind a wall, root is where the session reads the
 // transcript ([transcriptRoot]), and dir the working directory inside. A walled session
 // with no transcript directory, root's dir empty, sends none. For the session that
 // restored a paused run's transcript, restore, it reads the restored file
 // ([transcript.restore]).
-func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, root transcriptRoot, env []string, dir string, masker *mask.Masker, hidden *mask.Harness, restore *restored) *transcript {
-	tr := r.newSessionTranscript(rt, n, walled, root, env, dir, masker, hidden)
+func (r *Run) sessionTranscript(rs *sessionResume, n int, walled bool, root transcriptRoot, env []string, dir string, masker *mask.Masker, hidden *mask.Harness, restore *restored) *transcript {
+	tr := r.newSessionTranscript(rs, n, walled, root, env, dir, masker, hidden)
 	if tr != nil && restore != nil {
 		tr.restore(restore.sessionID, restore.rel)
 	}
@@ -548,15 +550,11 @@ func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, root tr
 }
 
 // newSessionTranscript is the transcript of [Run.sessionTranscript] before a restore.
-func (r *Run) newSessionTranscript(rt runtimes.Runtime, n int, walled bool, root transcriptRoot, env []string, dir string, masker *mask.Masker, hidden *mask.Harness) *transcript {
-	resumes, ok := rt.(runtimes.Resumes)
-	if !ok {
+func (r *Run) newSessionTranscript(s *sessionResume, n int, walled bool, root transcriptRoot, env []string, dir string, masker *mask.Masker, hidden *mask.Harness) *transcript {
+	if s == nil {
 		return nil
 	}
-	rs, ok := resumes.Resume()
-	if !ok {
-		return nil
-	}
+	rs := s.Resume
 	line := func(l string) { r.writeLog("stderr", n, 0, []byte(l+"\n")) }
 	mask := func(l string) string { return hidden.Replace(masker.Replace(l)) }
 	send := func(data map[string]any) {
@@ -568,6 +566,10 @@ func (r *Run) newSessionTranscript(rt runtimes.Runtime, n int, walled bool, root
 			return nil
 		}
 		return newWalledTranscript(rs, root.dir, root.under, dir, mask, send, line)
+	}
+	if u := s.unset; u != nil {
+		line(noResume(u.Fix, u.Cause))
+		return nil
 	}
 	if leadOf(rs.Prefix) == "/" {
 		return newTranscript(rs, "/", dir, mask, send, line)

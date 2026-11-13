@@ -596,18 +596,6 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			r.open.Report("closing the session's output.log: " + accesskey.ShownError(err).Error())
 		}
 	}()
-	// Behind a wall, a runtime with resume gets the session's transcript directory,
-	// transcripts/<n>/ in the run directory, which the wall binds writable at
-	// resume.prefix inside: the session reads the transcript, and writes a restored one,
-	// there. It lies outside every place the enclosure binds. An absolute resume.prefix
-	// inside a writable mount's place is read in that mount, with no bind, and one inside
-	// a read-only mount's gets no transcript.
-	var transcriptAt transcriptRoot
-	if spec.Wall != nil {
-		if transcriptAt, err = makeTranscriptDir(rt, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds), shown.Mounts); err != nil {
-			return fail(err)
-		}
-	}
 	// The runtime prepares the launch before the variables are resolved, because what it
 	// sets is Forager's and wins over a server's variable of the same name. Behind a wall
 	// the session's directory goes in read-only, apart from every place the session
@@ -649,21 +637,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if prepared.Args, err = configArgs(rt, key, prepared.Args); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
-	// The run's first session whose runtime has resume continues the runtime session of
-	// the paused run in the run answer's resume: the launch writes its transcript under
-	// the runtime's home and resumes it. A failure starts the runtime without a resume,
-	// with resumeLine on stderr once the session started.
-	prepared, resumeLine, restore := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptAt, inside, prepared)
-	// The session's setup commands run inside, after the runtime's preparation, and then
-	// start the launch as the runtime prepared it.
-	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
-		return fail(err)
-	}
-	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
-	if r.remote != nil {
-		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside)
-		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside)
-	}
+	// The variables are resolved before the resume, whose resume.home_var is read from
+	// the launch's environment. The variables read only the preparation's values, which
+	// neither the resume nor the setup commands change.
+	prepared.Env = insideValues(prepared.Env, inside)
 	// A value the runtime's preparation sets for one of key.Others is left out, walled
 	// or not; behind a wall the name is then unset inside.
 	prepared.Env = withoutNames(prepared.Env, key.Others)
@@ -693,6 +670,38 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	if key.Endpoint != "" {
 		ownEnv = append(ownEnv, key.Endpoint)
+	}
+	// The environment the enclosure's launch gets. The launch adds only Forager's names
+	// to it, so the runtime's resume.home_var has its value here ([resumeOf]).
+	wrapEnv := environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key))
+	resume := resumeOf(rt, wrapEnv)
+	// Behind a wall, a runtime with resume gets the session's transcript directory,
+	// transcripts/<n>/ in the run directory, which the wall binds writable at
+	// resume.prefix inside: the session reads the transcript, and writes a restored one,
+	// there. It lies outside every place the enclosure binds. An absolute resume.prefix
+	// inside a writable mount's place is read in that mount, with no bind, and one inside
+	// a read-only mount's gets no transcript, nor does a resume.home_var with no usable
+	// value.
+	var transcriptAt transcriptRoot
+	if spec.Wall != nil {
+		if transcriptAt, err = makeTranscriptDir(resume, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds), shown.Mounts); err != nil {
+			return fail(err)
+		}
+	}
+	// The run's first session whose runtime has resume continues the runtime session of
+	// the paused run in the run answer's resume: the launch writes its transcript under
+	// the runtime's home and resumes it. A failure starts the runtime without a resume,
+	// with resumeLine on stderr once the session started.
+	prepared, resumeLine, restore := r.resumeLaunch(runCtx, resume, sessionDir, spec.Wall != nil, transcriptAt, inside, prepared)
+	// The session's setup commands run inside, after the runtime's preparation, and then
+	// start the launch as the runtime prepared it.
+	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
+		return fail(err)
+	}
+	prepared.Command, prepared.Args = inside(prepared.Command), insideAll(prepared.Args, inside)
+	if r.remote != nil {
+		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside)
+		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside)
 	}
 	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared, placeholderNames); err != nil {
 		return fail(err)
@@ -880,8 +889,6 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	defer closeSocket()
 	defer mapper.Close()
 
-	// The environment the enclosure's launch gets, below.
-	wrapEnv := environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key))
 	// Behind a wall the enclosure works out, once the image is there, whether it binds
 	// the session's transcript directory where the agent's user can write it. When it
 	// does not, the session binds no directory, takes off the resume arguments it added,
@@ -990,7 +997,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if spec.Wall != nil {
 		trDir = shown.Dir
 	}
-	tr = r.sessionTranscript(rt, n, spec.Wall != nil, transcriptAt, launch.Env, trDir, masker, hidden, restore)
+	tr = r.sessionTranscript(resume, n, spec.Wall != nil, transcriptAt, launch.Env, trDir, masker, hidden, restore)
 	// The transcript's reads end before the join returns, on every path: the end of
 	// the runtime below, and a panic in between.
 	endTranscript := func() {}

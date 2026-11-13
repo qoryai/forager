@@ -57,28 +57,37 @@ const resumeWait = 10 * time.Minute
 // {cwd_slug} any slug, is a failed resume. A resume.prefix that starts with ~/ is
 // below the runtime's home, and an absolute one is that path.
 //
+// rs is the runtime's resume, nil for none, with resume.home_var resolved ([resumeOf]).
+// For a descriptor with home_var, resume.path is the paused run's absolute path, below
+// that run's value of the variable: the session restores the file at the same names
+// below this session's resolved resume.prefix ([sessionResume.moved]), and a
+// resume.path that has no such names is a failed resume. A home_var with no usable
+// value, rs.unset, is a failed resume, with its fix and cause.
+//
 // A restore also returns the [restored] transcript: the session reads the transcript
 // the resumed runtime appends to at resume.path, under the paused run's slug, and the
 // session takes the arguments off again when the enclosure binds no transcript
 // directory ([wall.TranscriptChecker]).
-func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir string, walled bool, root transcriptRoot, inside func(string) string, launch runtimes.Launch) (runtimes.Launch, string, *restored) {
-	want := r.answer.Resume
-	if want == nil || r.resumeTried {
+func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir string, walled bool, root transcriptRoot, inside func(string) string, launch runtimes.Launch) (runtimes.Launch, string, *restored) {
+	if r.answer.Resume == nil || r.resumeTried || rs == nil {
 		return launch, "", nil
 	}
+	// want is a copy: a resume.path below another run's home_var moves below this
+	// session's, and the run answer stays as the gateway sent it.
+	want := *r.answer.Resume
 	failed := func(fix, cause string) (runtimes.Launch, string, *restored) {
 		return launch, resumeFailed(want.RunID, fix, cause), nil
 	}
-	resumes, ok := rt.(runtimes.Resumes)
-	if !ok {
-		return launch, "", nil
-	}
-	rs, ok := resumes.Resume()
-	if !ok {
-		return launch, "", nil
-	}
 	r.resumeTried = true
+	if u := rs.unset; u != nil {
+		return failed(u.Fix, u.Cause)
+	}
 	checkPath := "Check resume.path in the run configuration"
+	moved, ok := rs.moved(want.Path)
+	if !ok {
+		return failed(checkPath, fmt.Sprintf("its path %s lies outside %s, with an absolute path in place of ${%s}", want.Path, rs.prefix, rs.HomeVar))
+	}
+	want.Path = moved
 	rel, ok := strings.CutPrefix(want.Path, leadOf(rs.Prefix))
 	if !ok || !strings.HasPrefix(want.Path, rs.Prefix) || len(want.Path) == len(rs.Prefix) || dotted(rel) {
 		return failed(checkPath, fmt.Sprintf("its path %s lies outside %s", want.Path, rs.Prefix))
@@ -101,7 +110,7 @@ func (r *Run) resumeLaunch(ctx context.Context, rt runtimes.Runtime, sessionDir 
 		}
 	}
 	if pattern := newPathPattern(strings.TrimPrefix(rs.Path, rs.Prefix), want.SessionID, "", true); !pattern.matches(below) {
-		return failed(checkPath, fmt.Sprintf("its path %s does not match %s%s, with {cwd_slug} a slug", want.Path, rs.Prefix, pattern.shown))
+		return failed(checkPath, fmt.Sprintf("its path %s does not match %s%s, with {cwd_slug} a slug", r.answer.Resume.Path, rs.prefix, pattern.shown))
 	}
 	if walled {
 		b, err := r.fetchTranscript(ctx)
