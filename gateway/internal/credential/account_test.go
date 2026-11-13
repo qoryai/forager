@@ -112,3 +112,32 @@ func TestAnAccountHeaderSplitsTheKeyGroup(t *testing.T) {
 		t.Errorf("KeyGroup %v; want one and two", got)
 	}
 }
+
+// TestAccountClaimReadsTheWayAlone pins that the payload's members off the pointer's
+// way do not count: a number out of range, invalid UTF-8 and spaces around values
+// elsewhere leave the claim readable. On the way, a member name twice is refused, and
+// a claim that is not UTF-8 is no header value.
+func TestAccountClaimReadsTheWayAlone(t *testing.T) {
+	for name, payload := range map[string]string{
+		"a number out of range":    `{"big":1e400,"https://auth.model.example/auth":{"account_id":"acct-fake-0001"}}`,
+		"invalid UTF-8":            "{\"name\":\"bad-\xff-name\",\"https://auth.model.example/auth\":{\"account_id\":\"acct-fake-0001\"}}",
+		"spaces":                   ` { "https://auth.model.example/auth" : { "account_id" : "acct-fake-0001" } } `,
+		"a name twice off the way": `{"other":{"a":1,"a":2},"https://auth.model.example/auth":{"account_id":"acct-fake-0001"}}`,
+	} {
+		if got, err := AccountClaim([]byte(fakeJWT(payload)), accountPointer); err != nil || got != "acct-fake-0001" {
+			t.Errorf("%s: %q, %v; want acct-fake-0001", name, got, err)
+		}
+	}
+	list := `{"https://auth.model.example/auth":[{"x":1} , {"account_id":"acct-fake-0001"}]}`
+	if got, err := AccountClaim([]byte(fakeJWT(list)), "/https:~1~1auth.model.example~1auth/1/account_id"); err != nil || got != "acct-fake-0001" {
+		t.Errorf("a list on the way: %q, %v", got, err)
+	}
+	twice := `{"https://auth.model.example/auth":{"account_id":"acct-fake-0001","account_id":"acct-fake-0002"}}`
+	if got, err := AccountClaim([]byte(fakeJWT(twice)), accountPointer); err == nil || !strings.Contains(err.Error(), "an object with a member name twice on the way to account_claim") {
+		t.Errorf("a member twice on the way: %q, %v", got, err)
+	}
+	bad := "{\"https://auth.model.example/auth\":{\"account_id\":\"acct-\xff\"}}"
+	if got, err := AccountClaim([]byte(fakeJWT(bad)), accountPointer); err == nil || !strings.Contains(err.Error(), "is not UTF-8") {
+		t.Errorf("a claim that is not UTF-8: %q, %v", got, err)
+	}
+}

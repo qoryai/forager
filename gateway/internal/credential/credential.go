@@ -21,9 +21,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -561,13 +563,17 @@ const MaxClaimPayload = 8 << 10
 // of value: the value of a model key's account header. The payload is the second of
 // the value's three parts separated by dots, base64url with or without padding.
 // AccountClaim checks no signature: the value comes from the control plane, and the
-// model provider checks the token. Its error contains neither the value nor the claim:
-// a value that is not three parts, a payload over [MaxClaimPayload] bytes once decoded,
-// one that is no base64url or no JSON object with each member name once, a pointer
-// that reaches no string, and a string that is empty, starts or ends with a space or a
+// model provider checks the token. It reads the syntax of the whole payload, and
+// decodes the member names of each object and the elements of each list on the
+// pointer's way alone, each object with each member name once: a number out of range,
+// invalid UTF-8 or a member name twice elsewhere in the payload does not count. Its
+// error contains neither the value nor the claim: a value that is not three parts, a
+// payload over [MaxClaimPayload] bytes once decoded, one that is no base64url or no JSON
+// object, an object on the way with a member name twice, a pointer that reaches no
+// string, and a string that is empty, is not UTF-8, starts or ends with a space or a
 // tab, or has a control character, which a header value cannot have.
 func AccountClaim(value []byte, pointer string) (string, error) {
-	parts := bytes.Split(value, []byte("."))
+	parts := bytes.SplitN(value, []byte("."), 4)
 	if len(parts) != 3 {
 		return "", errors.New("the value is no JWT: it is not three parts separated by dots")
 	}
@@ -581,44 +587,113 @@ func AccountClaim(value []byte, pointer string) (string, error) {
 	if err != nil {
 		return "", errors.New("its JWT payload is not base64url")
 	}
-	var doc map[string]any
-	if err := jsonv2.Unmarshal(payload[:n], &doc); err != nil || doc == nil {
-		return "", errors.New("its JWT payload is not one JSON object with each member name once")
-	}
 	shown := accesskey.ShownValue(pointer, true)
-	missing := fmt.Errorf("its JWT payload has no string at account_claim %s", shown)
 	if !strings.HasPrefix(pointer, "/") {
 		return "", fmt.Errorf("account_claim %s is no JSON pointer", shown)
 	}
-	var at any = doc
+	at := jsontext.Value(payload[:n])
+	if _, ok := members(at, "", true); !ok {
+		return "", errors.New("its JWT payload is not one JSON object with each member name once")
+	}
+	missing := fmt.Errorf("its JWT payload has no string at account_claim %s", shown)
 	for _, token := range strings.Split(pointer[1:], "/") {
 		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
-		switch v := at.(type) {
-		case map[string]any:
-			next, ok := v[token]
+		switch at.Kind() {
+		case '{':
+			next, ok := members(at, token, false)
 			if !ok {
+				return "", fmt.Errorf("its JWT payload has an object with a member name twice on the way to account_claim %s", shown)
+			}
+			if next == nil {
 				return "", missing
 			}
 			at = next
-		case []any:
-			i, ok := arrayIndex(token)
-			if !ok || i >= len(v) {
+		case '[':
+			j, ok := arrayIndex(token)
+			if !ok {
 				return "", missing
 			}
-			at = v[i]
+			if at = element(at, j); at == nil {
+				return "", missing
+			}
 		default:
 			return "", missing
 		}
 	}
-	claim, ok := at.(string)
-	if !ok {
+	if at.Kind() != '"' {
 		return "", missing
 	}
-	if claim == "" || strings.HasPrefix(claim, " ") || strings.HasPrefix(claim, "\t") || strings.HasSuffix(claim, " ") || strings.HasSuffix(claim, "\t") ||
+	var claim string
+	if err := jsonv2.Unmarshal(at, &claim); err != nil || claim == "" ||
+		strings.HasPrefix(claim, " ") || strings.HasPrefix(claim, "\t") || strings.HasSuffix(claim, " ") || strings.HasSuffix(claim, "\t") ||
 		strings.ContainsFunc(claim, func(r rune) bool { return r != '\t' && (r < 0x20 || (r >= 0x7f && r <= 0x9f)) }) {
-		return "", fmt.Errorf("the string at account_claim %s in its JWT payload is empty, starts or ends with a space or a tab, or has a control character, which a header value cannot have", shown)
+		return "", fmt.Errorf("the string at account_claim %s in its JWT payload is empty, is not UTF-8, starts or ends with a space or a tab, or has a control character, which a header value cannot have", shown)
 	}
 	return claim, nil
+}
+
+// members reads the JSON object v, whose syntax is checked, its member names each once,
+// and returns the value of its member name, nil when it has none, a slice of v. The
+// values of the other members are read for their syntax alone, with invalid UTF-8 and
+// a member name twice inside them taken. ok is false for v that is no object, has a
+// member name twice, or, with whole, has anything after the object.
+func members(v jsontext.Value, name string, whole bool) (jsontext.Value, bool) {
+	d := jsontext.NewDecoder(bytes.NewReader(v), jsontext.AllowInvalidUTF8(true), jsontext.AllowDuplicateNames(true))
+	if t, err := d.ReadToken(); err != nil || t.Kind() != '{' {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	var found jsontext.Value
+	for d.PeekKind() == '"' {
+		t, err := d.ReadToken()
+		if err != nil {
+			return nil, false
+		}
+		// The token is valid until the next read.
+		member := t.String()
+		if seen[member] {
+			return nil, false
+		}
+		seen[member] = true
+		value, err := d.ReadValue()
+		if err != nil {
+			return nil, false
+		}
+		if member == name {
+			end := int(d.InputOffset())
+			found = v[end-len(value) : end]
+		}
+	}
+	if t, err := d.ReadToken(); err != nil || t.Kind() != '}' {
+		return nil, false
+	}
+	if whole {
+		if _, err := d.ReadToken(); err != io.EOF {
+			return nil, false
+		}
+		return v, true
+	}
+	return found, true
+}
+
+// element is the element i of the JSON list v, a slice of v; nil when v has fewer
+// elements or does not read as a list.
+func element(v jsontext.Value, i int) jsontext.Value {
+	d := jsontext.NewDecoder(bytes.NewReader(v), jsontext.AllowInvalidUTF8(true), jsontext.AllowDuplicateNames(true))
+	if t, err := d.ReadToken(); err != nil || t.Kind() != '[' {
+		return nil
+	}
+	for j := 0; d.PeekKind() != ']' && d.PeekKind() != 0; j++ {
+		value, err := d.ReadValue()
+		if err != nil {
+			return nil
+		}
+		if j == i {
+			end := int(d.InputOffset())
+			return v[end-len(value) : end]
+		}
+	}
+	return nil
 }
 
 // arrayIndex is a JSON pointer's token read as an index of an array, RFC 6901: 0, or

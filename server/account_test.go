@@ -70,25 +70,54 @@ func TestAReservedAccountHeaderIsRefused(t *testing.T) {
 	}
 }
 
-// TestAModelKeyPathWithADotSegmentIsRefused pins that a path of an API credential with
-// a . or .. segment, which the schema's grammar takes, is run_configuration_invalid,
-// since the proxy denies every request path with one; a dot inside a name, or after the
-// last slash of a path that ends in *, is no segment.
-func TestAModelKeyPathWithADotSegmentIsRefused(t *testing.T) {
-	for _, p := range []string{"/a/../b", "/a/./b", "/..", "/.", "/a/..", "/a/../*", "/a/./*", "/./*"} {
+// TestAnUnclearModelKeyPathIsRefused pins that a path of an API credential that the
+// schema's grammar takes but that has a part policy.CleanPath refuses in a request's
+// path, a dot segment, an empty segment, a backslash or an encoded slash, backslash, dot
+// or percent sign, is run_configuration_invalid, since the proxy denies every request
+// path with one; a dot inside a name, or after the last slash of a path that ends in *,
+// is no segment.
+func TestAnUnclearModelKeyPathIsRefused(t *testing.T) {
+	for _, p := range []string{"/a/../b", "/a/./b", "/..", "/.", "/a/..", "/a/../*", "/a/./*", "/./*", "/a//b", "//*",
+		"/a/%2e%2e/b", "/a%2Fb", "/a%5cb", "/a%25b", `/a\b`, "/a/%2e*"} {
 		c := subscription()
 		c.Paths = []string{"/backend-api/codex/*", p}
 		err := server.CheckCredentials([]server.RunCredential{c}, "")
 		var r *accesskey.Refusal
-		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), "without a . or .. segment") {
+		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), "the proxy denies every request whose path has one") {
 			t.Errorf("path %s: %v", p, err)
 		}
 	}
-	for _, p := range []string{"/a/.well-known", "/a/.*", "/a/..*", "/a/..b", "/a.b/c", "/backend-api/codex/*"} {
+	for _, p := range []string{"/a/.well-known", "/a/.*", "/a/..*", "/a/..b", "/a.b/c", "/backend-api/codex/*", "/a/", "/*"} {
 		c := subscription()
 		c.Paths = []string{p}
 		if err := server.CheckCredentials([]server.RunCredential{c}, ""); err != nil {
 			t.Errorf("path %s: %v", p, err)
 		}
+	}
+}
+
+// TestAnAccountHeaderComesWithItsClaimAndOAuth pins CheckCredentials for a document not
+// read from bytes: account_header without account_claim, account_claim without
+// account_header, and both without oauth are run_configuration_invalid, as the schema
+// has them.
+func TestAnAccountHeaderComesWithItsClaimAndOAuth(t *testing.T) {
+	for name, change := range map[string]func(*server.Auth){
+		"no claim":  func(a *server.Auth) { a.AccountClaim = "" },
+		"no header": func(a *server.Auth) { a.AccountHeader = "" },
+		"no oauth":  func(a *server.Auth) { a.OAuth = false },
+	} {
+		c := subscription()
+		change(&c.Auth)
+		err := server.CheckCredentials([]server.RunCredential{c}, "")
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !slices.Equal(r.Names, []string{"subscription"}) ||
+			!strings.Contains(err.Error(), "give the credential \"subscription\" both account_header and account_claim, with oauth, or neither") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	c := subscription()
+	c.Auth.AccountHeader, c.Auth.AccountClaim, c.Auth.OAuth = "", "", false
+	if err := server.CheckCredentials([]server.RunCredential{c}, ""); err != nil {
+		t.Errorf("neither: %v", err)
 	}
 }
