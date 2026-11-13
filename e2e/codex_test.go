@@ -591,7 +591,7 @@ func codexTurnFailed(t *testing.T, o keysOutcome) {
 // TestDockerCodexRefusesAnArgumentThatSetsASessionSetting starts Codex behind the wall
 // with launch arguments that set a setting the session passes: model_provider through
 // --config, the endpoint's setting through -c, and the provider through --profile. The
-// join returns an error that starts with the fix and names the flag, Codex does not
+// join returns an error that starts with the fix and contains the flag, Codex does not
 // start, and the stub gets no request. The error contains no value of the arguments.
 func TestDockerCodexRefusesAnArgumentThatSetsASessionSetting(t *testing.T) {
 	k := newCodexWall(t)
@@ -615,7 +615,7 @@ func TestDockerCodexRefusesAnArgumentThatSetsASessionSetting(t *testing.T) {
 			o := s.run(t)
 			if o.joined == nil || !strings.HasPrefix(o.joined.Error(), "remove ") || !strings.Contains(o.joined.Error(), c.flag) ||
 				strings.Contains(o.joined.Error(), value) {
-				t.Errorf("the join returned %v; want an error that starts with remove, names %s and contains no value", o.joined, c.flag)
+				t.Errorf("the join returned %v; want an error that starts with remove, contains %s and contains no value", o.joined, c.flag)
 			}
 			if strings.Contains(o.out+o.errs, value) {
 				t.Errorf("the output contains the argument's value:\n%s\n%s", o.out, o.errs)

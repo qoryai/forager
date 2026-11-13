@@ -5481,16 +5481,16 @@ endpoint's setting. The pairs come before the resume's `args` are inserted and b
 the session's setup wraps the launch, and the session's record of the launch lists
 them.
 
-The session refuses a launch whose arguments set a setting it passes, before the
-runtime starts, because a later pair would win over the session's. The join returns
-an error that starts with the fix and names the flag, and contains no value of the
+A launch whose arguments set a setting the session passes is refused before the
+runtime starts, because a later pair would win over the session's. The join fails
+with an error that starts with the fix and contains the flag, and no value of the
 arguments. The settings are the keys of `fixed` and the endpoint's setting. An
 argument sets one when its key, with the spaces around it removed, is that key, a key
 under it, or a key it is under, which replaces the whole table:
 `model_providers.qory.name.x` and `model_providers.qory` both set
 `model_providers.qory.name`. Arguments after `--` are not read. For every runtime
-with `config`, the session refuses `config.flag` with such a pair, as
-`--config k=v` and `--config=k=v`. For Codex 0.167.2, it refuses too:
+with `config`, the join fails on `config.flag` with such a pair, as `--config k=v`
+and `--config=k=v`. For Codex 0.167.2, it fails on these too:
 
 - `--config` and `-c` with a pair that sets a key of `fixed`, the endpoint's setting,
   or one of these, which change where and how Codex sends its requests or put a

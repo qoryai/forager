@@ -85,17 +85,18 @@ func TOMLValue(v any) (string, error) {
 	return "", fmt.Errorf("its value is a %T, not a string, a bool or an integer", v)
 }
 
-// ArgsChecker is implemented by a runtime that refuses launch arguments that override
-// a setting the session passes. It is optional and checked by type assertion.
+// ArgsChecker is implemented by a runtime whose launch arguments are checked for one
+// that overrides a setting the session passes. It is optional and checked by type
+// assertion.
 type ArgsChecker interface {
 	// CheckArgs returns an error, whose message starts with the fix and contains no
 	// value of args, when args set a setting the session passes.
 	CheckArgs(args []string) error
 }
 
-// ArgsCheck refuses the arguments of a launch that set one of keys, the settings the
-// session passes, through a flag of the runtime's that config.flag does not cover. Its
-// error starts with the fix and contains no value of args.
+// ArgsCheck returns an error for the arguments of a launch that set one of keys, the
+// settings the session passes, through a flag of the runtime's that config.flag does
+// not cover. Its error starts with the fix and contains no value of args.
 type ArgsCheck func(args, keys []string) error
 
 // SessionKey is the key of keys that a setting of key changes, and true: key itself,
@@ -132,9 +133,9 @@ func (r *described) sessionKeys() []string {
 	return keys
 }
 
-// CheckArgs refuses args that set a setting the session passes through config.flag,
-// as "flag key=value" or "flag=key=value", up to an argument --, and then runs the
-// runtime's ArgsCheck. A runtime without config passes every argument.
+// CheckArgs returns an error when args set a setting the session passes through
+// config.flag, as "flag key=value" or "flag=key=value", up to an argument --, and then
+// runs the runtime's ArgsCheck. A runtime without config passes every argument.
 func (r *described) CheckArgs(args []string) error {
 	keys := r.sessionKeys()
 	if len(keys) == 0 {
