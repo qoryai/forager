@@ -544,7 +544,11 @@ included: on a host that ignores case this denies a spelling the host accepts,
 never the reverse, so whoever writes a path writes it as the host does. A path
 that could be read two ways is denied in either mode, with the rule
 `wall:ambiguous-path`: an encoded slash, backslash, dot or percent sign, a backslash, an
-empty segment, a dot segment. On a host that gets a credential, a `TRACE` or `TRACK`
+empty segment, a dot segment. A segment counts by its part before its first `;` or
+`%3B`, since a server such as Tomcat drops a segment's parameters from the `;` on and
+reads `/allowed/..;/secret` as `/secret`: `..;`, `.;`, `..;x` and `..%3B` are dot
+segments, and `;x` an empty one. A `;` after a name, such as `/a/b;jsessionid=1/c`,
+starts a parameter of a normal segment, and the path passes. On a host that gets a credential, a `TRACE` or `TRACK`
 through `CONNECT` is denied in either mode with a `405`, with the rule
 `wall:echo-method` (§Credentials, The answer). Under `observe` a path no entry matches is recorded as
 allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
@@ -879,7 +883,9 @@ request (§The server, Secrets).
   the form `policy.Host` returns: the schema does not check which run of zero groups
   `::` replaces.
 - An item's `paths`, 1 to 32, are in the policy's path grammar, absent meaning every
-  path.
+  path. A path with a part the proxy denies in a request's path, such as the `..;`
+  segment of `/a/..;/b`, is `run_configuration_invalid`, as for an API credential's
+  `paths` (Paths and an account header of a model key, below).
 - `placeholders` are variables for the enclosure to get with the placeholder value.
 
 Forager checks a run configuration's `credentials` against the schema, then refuses a
@@ -1184,9 +1190,12 @@ subscription above; a key without `paths` is still alone on its host beside a ho
 credential. A path with a part the proxy denies in a request's path, a `.` or `..`
 segment, an empty segment, a backslash, or an encoded slash, backslash, dot or percent
 sign, such as `/a/../b`, is `run_configuration_invalid`: the proxy denies every
-request path with one (`wall:ambiguous-path`), so the path would match none. In a path
-that ends in `*`, the text after the last slash is the start of a segment, so
-`/a/.*` is taken.
+request path with one (`wall:ambiguous-path`), so the path would match none. A segment
+counts by its part before its first `;` or `%3B` (§The policy, Matching a path), so
+`/a/..;/b` and `/a/;x/b` are refused, and `/a/b;jsessionid=1/c` is taken. The same
+holds for each path of a host credential's `apply` items. In a path that ends in `*`,
+the text after the last slash is the start of a segment, so `/a/.*` is taken, and
+`/a/..;*` is refused.
 
 With `account_header`, the proxy sets the header, on each request it sets the key on,
 to the string `account_claim` points at in the key's value: the payload of a JWT, the

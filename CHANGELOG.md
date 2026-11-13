@@ -15,11 +15,13 @@ release may change what an existing document does, and says so under Upgrading.
   `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a
   runtime, `{prefix, path}`, where `path` may have `*`, which matches inside one path
   name; it is absent for a runtime with no resume.
-- Write each path of an API credential's `paths` without a part the proxy denies in a
-  request's path: a `.` or `..` segment, such as `/a/../b`, an empty segment, a
-  backslash, or an encoded slash, backslash, dot or percent sign.
-  `server.CheckCredentials` refuses such a path with `run_configuration_invalid`, since
-  the proxy denies every request path with one. In a run configuration not read from
+- Write each path of an API credential's `paths`, and of a host credential's `apply`
+  items, without a part the proxy denies in a request's path: a `.` or `..` segment,
+  such as `/a/../b`, an empty segment, a backslash, or an encoded slash, backslash, dot
+  or percent sign. A segment counts by its part before its first `;` or `%3B`, so
+  `/a/..;/b` and `/a/;x/b` are refused. `server.CheckCredentials` refuses such a path
+  with `run_configuration_invalid`, and `server.UnclearPath` reports it, since the
+  proxy denies every request path with one. In a run configuration not read from
   bytes, it also refuses what the schema refuses in one that is: an `account_header`
   without `account_claim`, the reverse, either without `oauth`, and an
   `account_header` that `server.ReservedHeader` reports or that is `Authorization`.
@@ -1676,6 +1678,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Security
 
+- The proxy denies a request whose path has a segment that is `.`, `..` or empty
+  before its first `;` or `%3B`, such as `/allowed/..;/secret`, with
+  `wall:ambiguous-path` and a `403`, in either mode, and sets no credential on it. A
+  server such as Tomcat drops a segment's parameters from the `;` on, so it read that
+  path as `/secret` while the proxy matched `/allowed/*` and set the credential. A `;`
+  after a name, such as `;jsessionid=`, passes as before.
 - Build Forager with Go 1.27.3 or above: go.mod requires `go 1.27.3`. Go 1.27.3 has
   security fixes to `crypto/x509`, which the gateway's proxy uses to check the
   certificates of upstream hosts.
