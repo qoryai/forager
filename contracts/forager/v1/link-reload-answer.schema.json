@@ -24,7 +24,7 @@
     "placeholders": {"$ref": "link-run-answer.schema.json#/properties/placeholders"},
     "reserved": {"$ref": "link-run-answer.schema.json#/properties/reserved"},
     "image": {
-      "description": "The image the run has, when it has a wall: the one of the run answer, since the image is fixed when the run starts.",
+      "description": "The image the run has, when it has a wall: the one of the run answer, since the image is fixed when the run starts, with the user information of its ref left out (README §The gateway's link, the run request's images).",
       "$ref": "link-run-request.schema.json#/$defs/image"
     },
     "applied": {"$ref": "link-run-answer.schema.json#/properties/applied"},

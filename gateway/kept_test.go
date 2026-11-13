@@ -272,6 +272,45 @@ func TestARefusedJoinSentAgainGetsItsRefusalAgain(t *testing.T) {
 	}
 }
 
+// TestTheReloadAnswerIsTheSameAfterAReopen pins an image reference with user
+// information: the run answer gives it whole, the reload answer and request.json
+// without it, and the reload answer of the reopened run has the same bytes and the same
+// digest as before the restart, so the session reloads nothing and records no
+// policy_applied more.
+func TestTheReloadAnswerIsTheSameAfterAReopen(t *testing.T) {
+	const digest = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	const bare = "registry.example/agents/base" + digest
+	c := gatewayControl(t)
+	cfg := gateway.Config{Dir: t.TempDir()}
+	before := startRemote(t, c, cfg)
+	runID := event.NewRunID()
+	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: "user:password@" + bare, Runtime: "sysbox-runc"}}}
+	e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true, Images: images})
+	if e.a.Image == nil || e.a.Image.Ref != "user:password@"+bare {
+		t.Errorf("the run answer's image: %+v", e.a.Image)
+	}
+	first := e.reload(t)
+	var reloaded server.LinkReloadAnswer
+	if err := json.Unmarshal(first.body, &reloaded); first.status != http.StatusOK || err != nil || reloaded.Image == nil || reloaded.Image.Ref != bare {
+		t.Fatalf("the reload: %d %s", first.status, first.body)
+	}
+	if b, err := os.ReadFile(filepath.Join(cfg.Dir, "runs", runID, "request.json")); err != nil || strings.Contains(string(b), "password") {
+		t.Errorf("request.json: %s, %v", b, err)
+	}
+	held := strings.Trim(first.header.Get("ETag"), `"`)
+	if got := first.header.Get(server.HeaderRunConfiguration); got != held {
+		t.Errorf("the reload's run configuration %q; want its ETag's %q", got, held)
+	}
+	e.r = before.restart(t, cfg)
+	if got := e.post(t, heartbeat(runID)); got.status != http.StatusAccepted || got.header.Get(server.HeaderRunConfiguration) != held {
+		t.Errorf("the first batch after the restart: %d, run configuration %q; want %q", got.status, got.header.Get(server.HeaderRunConfiguration), held)
+	}
+	again := e.reload(t)
+	if again.status != http.StatusOK || string(again.body) != string(first.body) || again.header.Get("ETag") != first.header.Get("ETag") {
+		t.Errorf("the reload after the reopen: %d %s, ETag %q; want %s, ETag %q", again.status, again.body, again.header.Get("ETag"), first.body, first.header.Get("ETag"))
+	}
+}
+
 // TestACAIsKeptUntilTheRunsFinalEnd pins the CA files of a run on the one address:
 // Close keeps them, which ends the run with no final event; the run's final end
 // removes them with every other file kept to reopen the run: the session's run.exited,

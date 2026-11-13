@@ -2433,8 +2433,8 @@ A restart). The local link writes none of them.
 
 - `request.json`: the members of the run request that set the run's wall, narrowing
   and images, written as the run opens: `version`, `wall`, and the session's
-  `narrowing` and `images` when the request has them. An image reference may contain a
-  registry's credentials, as the run request does.
+  `narrowing` and `images` when the request has them, each image reference without its
+  user information (§The gateway's link, the run request's `images`).
 - `ca.pem` and `ca.key`: the certificate and the private key of the run's certificate
   authority, for a run with one, written as the run opens. A reopen reads them only
   when the certificate's common name is `qory run <run id>` and the gateway's user owns
@@ -4077,8 +4077,13 @@ and `about` are the starter's registration's, and the run request carries neithe
   or a reference; and `definitions`, the images the machine defines, each with `name`,
   `ref`, its reference, `runtime` when the definition sets one, and `docker: true` for
   nested Docker; and `allow`, the machine's `images.allow`, the prefixes of the
-  references a policy may name. A reference is not secret, but it may carry a registry's credentials in
-  its user information: the gateway never logs or reports one. Absent means none.
+  references a policy may name. A reference is not secret, but it may carry a registry's
+  credentials in its user information: the gateway never logs or reports one. The user
+  information of a reference is its part up to and with its first `@`, when that `@`
+  comes before the reference's first `/` and is not followed by a digest, `sha256:`:
+  `user:password@registry.example/base@sha256:…` has `user:password@`, while
+  `registry.example:5000/base@sha256:…` and `base@sha256:…` have none. A reload answer
+  and the record's `request.json` contain each reference without it. Absent means none.
 - `narrowing`, behind a separate gateway alone: the session's narrowing of the policy,
   `egress` with `allow`, `deny` or both, each in the grammar of the policy's
   `egress.allow`, and no other member. It only narrows: it can only remove what the
@@ -4695,8 +4700,10 @@ again and applies it, and the same digest means the policy in force is unchanged
 answer is a `200`, `application/json`, with `X-Qory-Run-Configuration` and `ETag`, whose
 body is a `link-reload-answer.schema.json` document: `version`, the policy in force with
 its `digest`, `variables`, `placeholders`, `reserved`, `image` and `applied`, required,
-as the run answer has them. It never contains `proxy_secret` or `certificate_authority`, which the run answer
-alone gives, once. The gateway decides a reload with the run request's `images` and the
+as the run answer has them, but `image`'s `ref` without its user information (the run
+request's `images`, above), so a reopened run's reload answer has the same bytes and
+digest as before its gateway's restart. It never contains `proxy_secret` or
+`certificate_authority`, which the run answer alone gives, once. The gateway decides a reload with the run request's `images` and the
 union of the `passes` of the open joins (Joining a session, above), as the session
 decides one today and in the same order, before it sets anything. A run configuration it
 refuses fails the reload, and the policy in force stays: one it cannot read,

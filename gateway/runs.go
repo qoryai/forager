@@ -1258,9 +1258,16 @@ func (lr *linkRun) compute() refreshed {
 	}
 	given = append(given, applied)
 	doc, digest := policyDocument(pol)
+	// The reload answer's image reference has no user information, at an open and at a
+	// reopen alike: a reopen decides the run by request.json, whose references have
+	// none, so the answer's bytes, and its digest, stay the same across a restart.
+	img := lr.image()
+	if img != nil {
+		img.Ref = withoutUserInfo(img.Ref)
+	}
 	body, _ := json.Marshal(reloadAnswerDoc{
 		Version: 1, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
-		Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(), Image: lr.image(), Applied: applied,
+		Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(), Image: img, Applied: applied,
 	})
 	sum := sha256.Sum256(body)
 	return refreshed{given: given, body: body, digest: "sha256=" + hex.EncodeToString(sum[:])}

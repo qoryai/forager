@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,13 +50,44 @@ const (
 )
 
 // keptRequest is request.json: what [run.Decide] reads of the run request, so a
-// gateway that starts again decides the run as its open did. Images may contain a
-// registry's credentials in a reference's user information, as the run request does.
+// gateway that starts again decides the run as its open did. Its image references have
+// no user information ([withoutUserInfo]): a registry's credentials stay off the disk.
 type keptRequest struct {
 	Version   int                   `json:"version"`
 	Wall      bool                  `json:"wall"`
 	Narrowing *server.LinkNarrowing `json:"narrowing,omitempty"`
 	Images    *server.LinkImages    `json:"images,omitempty"`
+}
+
+// withoutUserInfo is the image reference ref without the user information it may start
+// with, user@ or user:password@, which may contain a registry's credentials: when the
+// first @ of ref comes before its first /, and what follows that @ is not a digest,
+// sha256:, the part up to and with that @ is left out. Any other reference is returned
+// as it is: one whose first @ comes after its first /, as in host/name@sha256:…, one
+// with no / at all, as in name@sha256:…, and one with no @. A port, host:5000/name, is
+// no user information.
+func withoutUserInfo(ref string) string {
+	at, slash := strings.IndexByte(ref, '@'), strings.IndexByte(ref, '/')
+	if at <= 0 || slash < 0 || at > slash || strings.HasPrefix(ref[at+1:], "sha256:") {
+		return ref
+	}
+	return ref[at+1:]
+}
+
+// imagesWithoutUserInfo is a copy of the session's images with each reference, the
+// default's when it is one and each definition's, without its user information
+// ([withoutUserInfo]); nil for nil. The allowed prefixes, which name no user
+// information ([policy.CheckImagePrefix]), stay as they are.
+func imagesWithoutUserInfo(li *server.LinkImages) *server.LinkImages {
+	if li == nil {
+		return nil
+	}
+	out := &server.LinkImages{Default: withoutUserInfo(li.Default), Allow: slices.Clone(li.Allow)}
+	for _, d := range li.Definitions {
+		d.Ref = withoutUserInfo(d.Ref)
+		out.Definitions = append(out.Definitions, d)
+	}
+	return out
 }
 
 // narrowingOf is the session's narrowing of the run request as [run.Config] takes it,
@@ -67,9 +99,10 @@ func narrowingOf(n *server.LinkNarrowing) *run.Narrowing {
 	return &run.Narrowing{Allow: n.Egress.Allow, Deny: n.Egress.Deny}
 }
 
-// writeRequest writes request.json of the run request req to dir.
+// writeRequest writes request.json of the run request req to dir, each image reference
+// without its user information.
 func writeRequest(dir string, req *server.LinkRunRequest) error {
-	b, err := json.Marshal(keptRequest{Version: 1, Wall: req.Wall, Narrowing: req.Narrowing, Images: req.Images})
+	b, err := json.Marshal(keptRequest{Version: 1, Wall: req.Wall, Narrowing: req.Narrowing, Images: imagesWithoutUserInfo(req.Images)})
 	if err != nil {
 		return err
 	}
