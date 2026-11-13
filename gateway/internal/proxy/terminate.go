@@ -457,9 +457,14 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 				t.p.observe(d)
 			}
 			name, ok := resp.Request.Context().Value(keyedKey{}).(string)
-			// A key of the run's key group asked for its value again at the 401
-			// ([resend.reject]).
-			if ok && resendOf(resp.Request) == nil && resp.StatusCode == http.StatusUnauthorized {
+			rs := resendOf(resp.Request)
+			if rs != nil {
+				// The key the request went with last, after a resend another than the first.
+				name = rs.name
+			}
+			// A 401 on the model API's path requested the key's value again in the
+			// resend ([resend.reject]); a 401 on another path does it here.
+			if ok && (rs == nil || !rs.model) && resp.StatusCode == http.StatusUnauthorized {
 				// The credential the proxy set on the request, of those of the host.
 				if i := slices.IndexFunc(creds, func(c *Credential) bool { return c.Name == name }); i >= 0 && creds[i].Rejected != nil {
 					creds[i].Rejected()

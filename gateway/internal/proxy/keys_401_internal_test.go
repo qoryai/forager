@@ -139,3 +139,35 @@ func TestEveryKey401PassesTheLast(t *testing.T) {
 		})
 	}
 }
+
+// TestA401OnAnotherPathKeepsTheKey pins the path of a 401 that rejects a key: a 401 to
+// a request to another path than the model API's, of either format, reaches the
+// session as it came, with no resend, the key stays in use and the group goes on with
+// no stop, and a key whose value renews has it requested again as any credential has.
+func TestA401OnAnotherPathKeepsTheKey(t *testing.T) {
+	for _, c := range []struct{ format, path string }{
+		{modelkey.FormatAnthropicMessages, "/v1/messages"},
+		{modelkey.FormatOpenAIResponses, responsesPath},
+	} {
+		t.Run(c.format, func(t *testing.T) {
+			r := &renewals{}
+			f := newKeyFixtureWith(t, c.format, c.path, r.rejected)
+			f.up.answers["model"] = unauthorizedAnswer
+			if status, _ := f.postTo(t, http.MethodGet, "/v1/accounts/check", ""); status != http.StatusUnauthorized {
+				t.Errorf("the session got %d; want the provider's 401", status)
+			}
+			if got := strings.Join(keysOf(f.up.taken()), ","); got != "model" {
+				t.Errorf("the provider got %s; want model alone", got)
+			}
+			if got := f.g.Unauthorized(); got != nil || f.g.Active() != "model" {
+				t.Errorf("unauthorized %+v, active %s; want none and model", got, f.g.Active())
+			}
+			if _, ok := f.g.Stop(); ok {
+				t.Error("a stop after a 401 on another path")
+			}
+			if got := r.taken(); !slices.Equal(got, []string{"model"}) {
+				t.Errorf("the renewals asked for %v; want model once", got)
+			}
+		})
+	}
+}

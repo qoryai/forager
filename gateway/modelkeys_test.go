@@ -174,7 +174,14 @@ func startGroupRunOf(t *testing.T, format string) *groupRun {
 // and the keys the provider received since the last send.
 func (g *groupRun) send(t *testing.T) (int, []string) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, g.url+"/messages", strings.NewReader(`{"model":"m"}`))
+	return g.sendTo(t, "/messages")
+}
+
+// sendTo is send to path under the endpoint, for anthropic-messages; openai-responses
+// sends to /responses.
+func (g *groupRun) sendTo(t *testing.T, path string) (int, []string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, g.url+path, strings.NewReader(`{"model":"m"}`))
 	req.Header.Set("X-Api-Key", link.KeyPlaceholder("model"))
 	if g.format == "openai-responses" {
 		req, _ = http.NewRequest(http.MethodPost, g.url+"/responses", strings.NewReader(`{"model":"m"}`))
@@ -485,8 +492,14 @@ func (g *groupRun) reject(names ...string) {
 	}
 }
 
+// modelPath is the model API's path under the endpoint of anthropic-messages, the
+// endpoint's path, /v1, then /v1/messages.
+const modelPath = "/v1/messages"
+
 // TestAnAnthropicGroupEndsWhenEveryKeyGets401 pins the 401 of an anthropic-messages
-// group, whose keys have no expires_at: model's 401 sends the request again with
+// group, whose keys have no expires_at: a 401 to a request to another path than the
+// model API's reaches the session and keeps the key; model's 401 on the model API's
+// path sends the request again with
 // model-2, and the session gets its 200 with no stop; the reports list model in
 // unauthorized, and the schema takes them. Once model-2 and model-3 get a 401 too, the
 // session gets the last 401, the next batch's answer has stop, model_key_unauthorized,
@@ -498,7 +511,10 @@ func TestAnAnthropicGroupEndsWhenEveryKeyGets401(t *testing.T) {
 	}
 	g.h.post(sessionStarted(g.runID, 1))
 	g.reject("model")
-	if status, calls := g.send(t); status != http.StatusOK || strings.Join(calls, ",") != "model,model-2" {
+	if status, calls := g.send(t); status != http.StatusUnauthorized || strings.Join(calls, ",") != "model" {
+		t.Fatalf("a request to another path: %d, %v; want the provider's 401 for model alone", status, calls)
+	}
+	if status, calls := g.sendTo(t, modelPath); status != http.StatusOK || strings.Join(calls, ",") != "model,model-2" {
 		t.Fatalf("the first request: %d, %v; want 200 after model and model-2", status, calls)
 	}
 	if status, body := g.batch(t, heartbeat(g.runID)); status != http.StatusAccepted || body != "" {
@@ -527,10 +543,10 @@ func TestAnAnthropicGroupEndsWhenEveryKeyGets401(t *testing.T) {
 	}
 	g.mu.Unlock()
 	g.reject("model-2", "model-3")
-	if status, calls := g.send(t); status != http.StatusUnauthorized || strings.Join(calls, ",") != "model-2,model-3" {
+	if status, calls := g.sendTo(t, modelPath); status != http.StatusUnauthorized || strings.Join(calls, ",") != "model-2,model-3" {
 		t.Fatalf("with no key left: %d, %v; want the 401 after model-2 and model-3", status, calls)
 	}
-	if status, calls := g.send(t); status != http.StatusTooManyRequests || len(calls) != 0 {
+	if status, calls := g.sendTo(t, modelPath); status != http.StatusTooManyRequests || len(calls) != 0 {
 		t.Errorf("after the stop: %d, %v; want the gateway's 429 and no call", status, calls)
 	}
 	const stop = `{"stop":{"reason":"model_key_unauthorized"}}`

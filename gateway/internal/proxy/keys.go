@@ -29,8 +29,9 @@ type keyGroup struct {
 	// read.
 	format string
 	// messages is the clean path of the request of the model API under the endpoint
-	// whose streamed answers the proxy reads for a limit event, [modelkey.StreamPath];
-	// empty for a format with none.
+	// whose streamed answers the proxy reads for a limit event, [modelkey.StreamPath],
+	// and on which a provider's 401 takes the key out of use; empty for a format with
+	// none.
 	messages string
 	log      func(string)
 }
@@ -96,6 +97,10 @@ type resend struct {
 	// scan is true for a POST to the stream path of the model API: the proxy reads its
 	// streamed 200 for a limit event.
 	scan bool
+	// model is true for a request, of any method, to that path: only there does a
+	// provider's 401 take the key out of use ([resend.reject]). A 401 on another path,
+	// such as an account check, may refuse the path and not the key.
+	model bool
 	// pending is the request's decision, whose credential follows the key.
 	pending *pending
 
@@ -243,16 +248,18 @@ func (rs *resend) drop() {
 	rs.mu.Unlock()
 }
 
-// roundTrip sends out by rt, and, while the provider returns a limit refusal or a 401
-// for it and a key of the group is usable, sends it again from the copy of its body
-// with the next key. Every answer's headers go to the group, and the copy is dropped
-// once an answer's status arrives that the proxy passes on. A limit refusal puts the
-// key in cooldown; a 401 takes it out of use ([modelkey.Group.Reject]) and asks for its
-// value again when it renews ([Credential.Rejected]). The refusal or the 401 reaches the
-// caller when no key is usable, with no copy, when the next key's credential does not
-// cover the request ([resend.cred]), or for a format whose requests the proxy does not
-// send again ([modelkey.Resends]), whose first refusal or 401 goes to the caller; the
-// group is then stopped ([modelkey.Group.Pass], [modelkey.Group.PassRejected]).
+// roundTrip sends out by rt, and, while the provider returns a limit refusal for it, or
+// a 401 on the model API's path, and a key of the group is usable, sends it again from
+// the copy of its body with the next key. Every answer's headers go to the group, and
+// the copy is dropped once an answer's status arrives that the proxy passes on. A limit
+// refusal puts the key in cooldown; a 401 to a request to the model API's path takes it
+// out of use ([modelkey.Group.Reject]) and requests its value again when it renews
+// ([Credential.Rejected]). A 401 on another path is an answer like any other, and the
+// proxy requests the value again as for any credential. The refusal or the 401 reaches
+// the caller when no key is usable, with no copy, when the next key's credential does
+// not cover the request ([resend.cred]), or for a format whose requests the proxy does
+// not send again ([modelkey.Resends]), whose first refusal or 401 goes to the caller;
+// the group is then stopped ([modelkey.Group.Pass], [modelkey.Group.PassRejected]).
 func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Response, error) {
 	g := rs.k.g
 	for tries := 0; ; tries++ {
@@ -261,7 +268,7 @@ func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Resp
 			rs.drop()
 			return nil, err
 		}
-		unauthorized := resp.StatusCode == http.StatusUnauthorized
+		unauthorized := rs.model && resp.StatusCode == http.StatusUnauthorized
 		if resp.StatusCode != http.StatusTooManyRequests && !unauthorized {
 			rs.drop()
 			g.Answered(rs.name, resp.StatusCode, resp.Header)
@@ -335,7 +342,7 @@ func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Resp
 }
 
 // reject records the provider's 401 to the request with rs's key: the key goes out of
-// use, and a key whose value renews asks for it again ([Credential.Rejected]), with
+// use, and a key whose value renews requests it again ([Credential.Rejected]), with
 // the key as unauthorized. It returns the active key and whether it is usable, as
 // [modelkey.Group.Pick] does, which a resend needs.
 func (rs *resend) reject(h http.Header) (string, bool) {
@@ -484,7 +491,7 @@ func (s *streamWatch) dispatch() {
 // credentials, clean is the request's clean path, and scan is true for a POST to the
 // model API's stream path.
 func (p *Proxy) withResend(ctx context.Context, r *http.Request, k *keyGroup, c *Credential, creds []*Credential, clean string, scan bool) context.Context {
-	rs := &resend{k: k, first: c, name: c.Name, clean: clean, scan: scan}
+	rs := &resend{k: k, first: c, name: c.Name, clean: clean, scan: scan, model: k.messages != "" && clean == k.messages}
 	for _, h := range creds {
 		if k.g.Has(h.Name) {
 			rs.creds = append(rs.creds, h)
