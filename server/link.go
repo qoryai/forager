@@ -265,13 +265,16 @@ type LinkRunAnswer struct {
 }
 
 // LinkResume is the paused run a run continues, run-configuration.schema.json's resume:
-// RunID, the paused run's id; SessionID, the runtime's session id in that run; and
-// Path, the path of the runtime's transcript under its home, such as
-// ~/.claude/projects/-workspace/<session id>.jsonl.
+// RunID, the paused run's id; SessionID, the runtime's session id in that run; Path,
+// the path of the runtime's transcript under its home, such as
+// ~/.claude/projects/-workspace/<session id>.jsonl; and Runs, the paused runs the run
+// continues, oldest first, at most the newest 256, whose last is RunID, nil when the
+// document has no runs.
 type LinkResume struct {
-	RunID     string `json:"run_id"`
-	SessionID string `json:"session_id"`
-	Path      string `json:"path"`
+	RunID     string   `json:"run_id"`
+	SessionID string   `json:"session_id"`
+	Path      string   `json:"path"`
+	Runs      []string `json:"runs,omitempty"`
 }
 
 // Values are the answer's variables as values by name; nil when it has none.

@@ -363,7 +363,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // and use_up_to_windows, an API credential with a use_up_to_percent of 0 or 100,
 // without use_up_to_windows, or with use_up_to_windows alone, empty, of 12 windows,
 // with a window twice or a window in upper case, or a resume without its
-// session id or with a run id in upper case, a model keys report whose entry has a
+// session id, with a run id in upper case, or with runs empty, with a run twice, with
+// 257 runs or with a run in upper case, a model keys report whose entry has a
 // utilization over 100, a status, a source or a window outside the grammar, rejected
 // without cooldown_until or cooldown_until with another status, or no observed_at, or
 // whose time has a fraction, a model keys answer without version, a link batch answer

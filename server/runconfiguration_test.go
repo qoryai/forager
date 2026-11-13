@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -201,6 +202,56 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		}
 		if err != nil && strings.Contains(err.Error(), value) {
 			t.Errorf("%s: the error quotes the value: %v", name, err)
+		}
+	}
+}
+
+// TestARunConfigurationsResumeRunsAreChecked pins resume.runs: a document with a resume
+// is read with runs, whose last item is run_id, and without them; one whose runs end in
+// another run, list a run twice, list 257 runs or list a run id in upper case is
+// run_configuration_invalid at runs.
+func TestARunConfigurationsResumeRunsAreChecked(t *testing.T) {
+	const (
+		paused  = "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d"
+		earlier = "0192f0a7-1c2d-7e3f-8a4b-5c6d7e8f9a0b"
+	)
+	doc := func(runs ...string) string {
+		d := `{"version":1,"resume":{"run_id":"` + paused + `","session_id":"s-1","path":"~/.claude/projects/-workspace/s-1.jsonl"`
+		if runs != nil {
+			d += `,"runs":["` + strings.Join(runs, `","`) + `"]`
+		}
+		return d + `}}`
+	}
+	for name, c := range map[string]struct {
+		doc  string
+		want []string
+	}{
+		"with runs":    {doc(earlier, paused), []string{earlier, paused}},
+		"without runs": {doc(), nil},
+	} {
+		v := newVerified(t)
+		v.runDoc = c.doc
+		rc, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
+		if err != nil || rc.Resume == nil || rc.Resume.RunID != paused || !slices.Equal(rc.Resume.Runs, c.want) {
+			t.Errorf("%s: read %+v, %v; want runs %q", name, rc, err, c.want)
+		}
+	}
+	many := make([]string, 256)
+	for i := range many {
+		many[i] = fmt.Sprintf("0192f0c1-7d4e-7a2b-8c3d-%012x", i)
+	}
+	for name, c := range map[string]struct{ doc, where string }{
+		"another run last": {doc(paused, earlier), "set the last item of /resume/runs to /resume/run_id"},
+		"a run twice":      {doc(earlier, earlier, paused), "/resume/runs (uniqueItems)"},
+		"257 runs":         {doc(append(many, paused)...), "/resume/runs (maxItems)"},
+		"a run upper case": {doc(strings.ToUpper(earlier), paused), "/resume/runs/0 (pattern)"},
+	} {
+		v := newVerified(t)
+		v.runDoc = c.doc
+		_, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t))
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), c.where) {
+			t.Errorf("%s: %v; want run_configuration_invalid with %q", name, err, c.where)
 		}
 	}
 }
