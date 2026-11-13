@@ -19,7 +19,7 @@
       "maxLength": 128
     },
     "path": {
-      "description": "The file's path under the descriptor's resume.prefix: under the runtime's home, such as ~/.claude/projects/-workspace/<session_id>.jsonl, or absolute, such as /var/lib/qory-codex-home/sessions/2026/11/13/rollout-<time>-<session_id>.jsonl.",
+      "description": "The file's path under the descriptor's resume.prefix: under the runtime's home, such as ~/.claude/projects/-workspace/<session_id>.jsonl, or absolute. For a descriptor with resume.home_var, it is absolute, below the run's value of that variable, such as /var/lib/codex-home/sessions/2026/11/13/rollout-<time>-<session_id>.jsonl for CODEX_HOME=/var/lib/codex-home.",
       "type": "string",
       "minLength": 1,
       "maxLength": 1024
