@@ -166,6 +166,11 @@ func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) 
 		return nil
 	}
 	if lr == nil && g.reopenable(runID) {
+		// The run key verified: the connection counts against the one address's bounds
+		// no longer while it waits on the reopen, up to 120 seconds.
+		if admit, _ := r.Context().Value(admitKey{}).(func()); admit != nil {
+			admit()
+		}
 		p, _ := runKeyOf(r.Context())
 		lr, final := g.reopenRun(r.Context(), runID, p)
 		switch {
@@ -182,9 +187,9 @@ func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) 
 
 // relayRun hands a bound connection that opened with the relay's preamble and a run
 // key to the proxy of that run, live at the gateway, as the shared proxy does a local
-// connection with a run's proxy secret, admit called first; with stack, one that
-// opened with [link.StackPreamble] to that run's stack proxy, until the run's first
-// join request. The run a gateway with Listen suspended at its stop is reopened first
+// connection with a run's proxy secret, admit called once the run key verifies; with
+// stack, one that opened with [link.StackPreamble] to that run's stack proxy, until the
+// run's first join request. The run a gateway with Listen suspended at its stop is reopened first
 // ([Gateway.reopenRun]), with c's deadline cleared, until the reopen ends or the
 // gateway closes. A run key [Gateway.admitRunKey] refuses, one of no live run here, or,
 // with stack, one of a run whose stack proxy is closed, closes the connection
@@ -194,6 +199,10 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func
 	if ref != nil {
 		return false
 	}
+	// The run key verified: the connection counts against the one address's bounds no
+	// longer, so a wait on a reopen, up to 120 seconds, closes no connection for a newer
+	// one, and none is closed as it is accepted (the user's "547 (a)").
+	admit()
 	g.mu.Lock()
 	lr := g.runs[k.RunID]
 	g.mu.Unlock()
@@ -214,7 +223,6 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func
 		}
 	}
 	c.SetDeadline(time.Time{})
-	admit()
 	px.ServeConn(&linkConn{Conn: c, r: r})
 	return true
 }

@@ -2313,6 +2313,86 @@ func TestAReopenWhoseAttachFails(t *testing.T) {
 	})
 }
 
+// TestConnectionsThatWaitOnAReopenAreNotBounded pins the bound of 64 connections of one
+// source whose run key has not been admitted, for connections that wait on a reopen:
+// a connection counts against the bound only until its run key verifies (the user's
+// "547 (a)"). With the attach answered 503, 40 relay connections and 30 reloads from
+// one address wait on the reopen of one run; none of them is closed, the one address
+// counts none of them, and each gets its answer once the attach is answered.
+func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
+	const relays, reloads = 40, 30
+	if relays+reloads <= gateway.MaxSourceConns {
+		t.Fatalf("%d connections do not pass the bound of %d", relays+reloads, gateway.MaxSourceConns)
+	}
+	c := gatewayControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
+	cfg := gateway.Config{Dir: t.TempDir()}
+	gateway.SetOpenTries(&cfg, []time.Duration{50 * time.Millisecond}, time.Minute)
+	before := startRemote(t, c, cfg)
+	runID := event.NewRunID()
+	e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+	c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusServiceUnavailable, Code: "unavailable"})
+	after := before.restart(t, cfg)
+	attaches := len(c.attached())
+
+	results := make(chan string, relays+reloads)
+	relay := func() {
+		client := after.relay(t, e.key)
+		client.Timeout = time.Minute
+		resp, err := client.Get("http://denied.example/")
+		if err != nil {
+			results <- "a relay: " + err.Error()
+			return
+		}
+		resp.Body.Close()
+		results <- fmt.Sprintf("a relay: %d", resp.StatusCode)
+	}
+	reload := func() {
+		b, err := after.bind(t, gatewayKeys())
+		if err != nil {
+			results <- "a reload: " + err.Error()
+			return
+		}
+		defer b.Close()
+		results <- fmt.Sprintf("a reload: %d", b.do(t, e.key, http.MethodGet, "/qory-link/run-configuration/"+runID, nil).status)
+	}
+	// Ten at a time, so the connections that bind at once stay within the bound; the
+	// next ten start once the one address counts none of those before.
+	for n := 0; n < relays+reloads; n += 10 {
+		for i := n; i < min(n+10, relays+reloads); i++ {
+			if i < relays {
+				go relay()
+			} else {
+				go reload()
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+		eventually(t, "the connections' admission", func() bool { return gateway.PendingConns(after.g) == 0 })
+	}
+	// Every connection is bound and waits on the reopen, whose attach is tried again and
+	// again; the one address counts none of them.
+	eventually(t, "the reopen's tries", func() bool { return len(c.attached()) > attaches+5 })
+	time.Sleep(500 * time.Millisecond)
+	if n := gateway.PendingConns(after.g); n != 0 {
+		t.Errorf("%d connections counted against the bounds while they wait on the reopen", n)
+	}
+	if len(results) > 0 {
+		t.Fatalf("an answer before the reopen: %s", <-results)
+	}
+	c.attachRefusal.Store(nil)
+	want := map[string]bool{fmt.Sprintf("a relay: %d", http.StatusForbidden): true, fmt.Sprintf("a reload: %d", http.StatusOK): true}
+	for range relays + reloads {
+		select {
+		case got := <-results:
+			if !want[got] {
+				t.Errorf("%s; want a relay's 403 and a reload's 200", got)
+			}
+		case <-time.After(time.Minute):
+			t.Fatal("a connection got no answer")
+		}
+	}
+}
+
 // TestARecordFromBeforeIsNotReopened pins a run record with no request.json, as a
 // gateway that did not keep its runs left it: its batch is a 410 run_closed, and no
 // attach is made.
