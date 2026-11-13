@@ -185,7 +185,7 @@ func afterJoinFreshHome(t *testing.T, o Options, h hosts, outside string) {
 			t.Errorf("%s on this machine: %q, %v", afterFile, b, err)
 		}
 		if a.Allowed != 200 {
-			t.Errorf("the origin through the run's proxy answered %d (%s); want 200", a.Allowed, a.AllowedErr)
+			t.Errorf("a request to the origin through the run's proxy returned %d (%s); want 200", a.Allowed, a.AllowedErr)
 		}
 		// The sessions, and every host step: the session with no runtime joins outside
 		// every step.
