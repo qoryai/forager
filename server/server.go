@@ -77,7 +77,8 @@ const Revision = contracts.Revision
 // WellKnown is the path of the configuration document under the server's URL.
 const WellKnown = "/.well-known/qory-configuration"
 
-// Timeout is how long a server has to answer one request.
+// Timeout is how long a server has to answer one request, a secrets request aside
+// ([SecretsTimeout]).
 const Timeout = 10 * time.Second
 
 // OpenWait is how long a session waits for the answer to its run request, on the local
@@ -466,8 +467,9 @@ type Client struct {
 	InstanceID, InstanceName string
 	// UserAgent is sent as User-Agent: qory-forager/<version>.
 	UserAgent string
-	// HTTP is the client used; nil means one with Timeout. Its redirect policy is
-	// not used: the client follows no redirect.
+	// HTTP is the client used; nil means one with Timeout, or SecretsTimeout for a
+	// secrets request. A client with no Timeout of its own gets the same. Its redirect
+	// policy is not used: the client follows no redirect.
 	HTTP *http.Client
 }
 
@@ -508,15 +510,18 @@ func (c *Client) Check() error {
 }
 
 // http is the client every request goes through: the caller's, copied, or one with
-// Timeout, and in either case one that follows no redirect and keeps no cookie. Go
+// timeout, which also replaces a copied client's Timeout of zero; and in either case one that follows no redirect and keeps no cookie. Go
 // copies a request's headers to wherever a redirect points, so a followed 3xx would
 // hand the access key id, the signature and the timestamp to another host and take the
 // answer from it. A 3xx is a status like any other. With Via set, its transport is the
 // caller's, or Go's default, with Via's trust in place of its TLS ([Via.Transport]).
-func (c *Client) http() (*http.Client, error) {
-	hc := &http.Client{Timeout: Timeout}
+func (c *Client) http(timeout time.Duration) (*http.Client, error) {
+	hc := &http.Client{Timeout: timeout}
 	if c.HTTP != nil {
 		cp := *c.HTTP
+		if cp.Timeout == 0 {
+			cp.Timeout = timeout
+		}
 		hc = &cp
 	}
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -550,7 +555,12 @@ type answer struct {
 // unsigned. An error is a transport failure: no answer. With Via set, the request goes
 // to Via's origin with its target, and so its signature, unchanged.
 func (c *Client) send(ctx context.Context, method, u string, body []byte, max int, set func(http.Header)) (*answer, error) {
-	hc, req, sig, err := c.signed(ctx, method, u, body, set)
+	return c.sendWithin(ctx, Timeout, method, u, body, max, set)
+}
+
+// sendWithin is [Client.send] with timeout for the server's answer.
+func (c *Client) sendWithin(ctx context.Context, timeout time.Duration, method, u string, body []byte, max int, set func(http.Header)) (*answer, error) {
+	hc, req, sig, err := c.signedWithin(ctx, timeout, method, u, body, set)
 	if err != nil {
 		return nil, err
 	}
@@ -587,13 +597,18 @@ func (c *Client) read(resp *http.Response, sig string, max int) (*answer, error)
 // its signature. With Via set, the request goes to Via's origin with its target
 // unchanged.
 func (c *Client) signed(ctx context.Context, method, u string, body []byte, set func(http.Header)) (*http.Client, *http.Request, string, error) {
+	return c.signedWithin(ctx, Timeout, method, u, body, set)
+}
+
+// signedWithin is [Client.signed] with a client whose timeout is timeout.
+func (c *Client) signedWithin(ctx context.Context, timeout time.Duration, method, u string, body []byte, set func(http.Header)) (*http.Client, *http.Request, string, error) {
 	if v := c.Config.Via; v != nil {
 		var err error
 		if u, err = v.rebase(u); err != nil {
 			return nil, nil, "", accesskey.ShownError(err)
 		}
 	}
-	hc, err := c.http()
+	hc, err := c.http(timeout)
 	if err != nil {
 		return nil, nil, "", accesskey.ShownError(err)
 	}
