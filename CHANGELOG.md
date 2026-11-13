@@ -29,10 +29,16 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.exited`. A run's starter's outcome reason that is either code is
   dropped, its outcome kept, as for every reserved code, and `(*session.Run).Close`
   with either code returns an error until the close rules for the two codes land.
-- Deploy the gateway first, then Qory Apiary. A gateway built before this change fails
-  a run with `run_configuration_invalid` when the run configuration's API credential has
-  `resets_at`, `schedule_resets_at` or `pause_for_s`, and ignores the run
-  configuration's `resume`. It also ends a run `batch_refused` for a batch with
+- Deploy in this order:
+  1. the gateway;
+  2. a Qory Apiary that folds `dev.qory.run.target_write` and sends `use_up_to_percent`
+     and `use_up_to_windows`.
+
+  A Qory Apiary built before the type stores each `dev.qory.run.target_write`, and its
+  fold skips it.
+- A gateway built before this change fails a run with `run_configuration_invalid` when
+  the run configuration's API credential has `resets_at`, `schedule_resets_at` or
+  `pause_for_s`, and ignores the run configuration's `resume`. It also ends a run `batch_refused` for a batch with
   `dev.qory.session.transcript`, or with `model_key_limit` as the reason of
   `dev.qory.session.exited` or `dev.qory.run.exited`. With a control plane that sends
   no `pause_for_s`, each key has the default cooldown in the next entry.
@@ -41,10 +47,9 @@ release may change what an existing document does, and says so under Upgrading.
   3600 seconds for a subscription, a key whose `auth` has `oauth`. A `pause_for_s` of 0
   fails the run with `run_configuration_invalid`. A run configuration has at most 6 API
   credentials.
-- Deploy the gateway first, then a Qory Apiary that sends `use_up_to_percent` and
-  `use_up_to_windows` on an API credential. A gateway built before this change fails
-  such a run with `run_configuration_invalid`, because the API credential has
-  `additionalProperties: false`. Send both or neither: a `use_up_to_percent` outside 1
+- A gateway built before this change fails a run whose API credential has
+  `use_up_to_percent` and `use_up_to_windows` with `run_configuration_invalid`, because
+  the API credential has `additionalProperties: false`. Send both or neither: a `use_up_to_percent` outside 1
   to 99, or one of the two without the other, is `run_configuration_invalid` too. Send
   the windows of the provider's catalogue entry, and `cooldown_until`, the window's
   reset, for a key whose stored use is at or above its percentage at the claim.
@@ -300,6 +305,12 @@ release may change what an existing document does, and says so under Upgrading.
     `--config`; `resume.path_from` optional; `*` in `resume.path`, which matches inside
     one path name; and `resume.after`, the argument `resume.args` follow.
   - `resume`, `{prefix, path}`, for each runtime of `runtimes.json` with a resume.
+- `dev.qory.run.target_write`, with `system`, `path`, `state` and `request_id`: one
+  write the run sent to a place in another system, and whether it took effect. The
+  gateway writes `started` when the write begins and `changed`, `refused` or `cut` when
+  it ends, before `dev.qory.run.exited`. `request_id` is that of the request's
+  `dev.qory.run.egress`. A link batch with the type is refused, as one with
+  `dev.qory.run.egress` is. README §The events, Writes to a target.
 - Several model keys per run. When the start key is an API credential, the key group is
   the start key and every API credential with its `format`, `auth` and `endpoint`, in the
   order of `credentials`. The keys of the group share the start key's placeholder, and
@@ -1182,6 +1193,15 @@ release may change what an existing document does, and says so under Upgrading.
   key of the group left, the run is refused, `run_configuration_invalid`. A renewed
   value without the string is a renewal refused for its form, and the run keeps the
   value it had.
+- The gateway writes `dev.qory.run.target_write` for each git push over HTTP that the
+  run's proxy reads, on a host it terminates or in a plain request: `started` as the
+  push goes to the host, then `changed`, `refused` or `cut`. It reads the report status
+  in a copy of git's answer, side-band and side-band-64k included, up to 4 MiB, and
+  passes every byte on to the session unchanged. At least one ref `ok` is `changed`;
+  an unpack error, every ref `ng` or a `4xx` is `refused`; a `5xx`, a fatal error, an
+  answer it cannot read, a transport failure or the run's end is `cut`. A write still
+  open when the run ends is `cut` before `dev.qory.run.exited`, whether the gateway
+  ends the run or the session closes it. README §The events, Writes to a target.
 - Several model keys of one provider per run, a key group (docs/credentials.md, Several
   keys of one provider). On a provider's `429` the proxy puts the active key in
   cooldown, sends the request again with the next key, and passes the refusal only when

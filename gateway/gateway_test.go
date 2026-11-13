@@ -421,6 +421,9 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 		"an egress": func(id string, _ *server.LinkRunAnswer) []map[string]any {
 			return []map[string]any{ev(id, event.RunEgress, map[string]any{"host": "a.example", "port": 443, "method": "CONNECT", "decision": "allowed", "mode": "observe", "rule": "", "outcome": "connected"})}
 		},
+		"a target write": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{ev(id, event.RunTargetWrite, map[string]any{"system": "git.example", "path": "example-org/app", "state": event.WriteChanged})}
+		},
 		"a run.started the gateway opened": func(id string, _ *server.LinkRunAnswer) []map[string]any {
 			s := started(id, labels)
 			s["data"].(map[string]any)["opened_by"] = "gateway"

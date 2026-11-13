@@ -467,6 +467,8 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			if d, ok := settle(resp.Request, resp, nil); ok {
 				t.p.observe(d)
 			}
+			// After the request's record, before the answer is changed or withheld.
+			writeOf(resp.Request).answer(resp)
 			name, ok := resp.Request.Context().Value(keyedKey{}).(string)
 			rs := resendOf(resp.Request)
 			if rs != nil {
@@ -604,6 +606,11 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		// The request is recorded once its outcome is known: when the response's
 		// headers arrive, or when the transport fails.
 		ctx := context.WithValue(t.p.dialContext(r.Context(), req), pendingKey{}, &pending{d: req, mask: mask})
+		// A git push is recorded as it starts, and as cut unless its answer ends it: a
+		// transport failure has no answer.
+		push := t.p.beginWrite(r, d.Host, req.RequestID)
+		defer push.cut()
+		ctx = withWrite(ctx, push)
 		if keyed {
 			// In the context, since the session's Connection header can take any header
 			// off the request before it reaches the transport, the mark among them.

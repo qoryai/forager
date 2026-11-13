@@ -50,6 +50,9 @@ const (
 	// the image by its digest, its size, the commit it was built from and the
 	// environment it is for.
 	RunBuilt = "dev.qory.run.built"
+	// RunTargetWrite is one state of one write the run sent through the gateway's
+	// proxy to a place in another system, such as a git push; the gateway writes it.
+	RunTargetWrite = "dev.qory.run.target_write"
 )
 
 // The kinds of a step, the kind of dev.qory.run.step_started: a fetch of a source, a
@@ -68,6 +71,16 @@ const (
 	StepPush    = "push"
 	StepMachine = "machine"
 	StepCopy    = "copy"
+)
+
+// The states of a write, the state of dev.qory.run.target_write: it began, the system
+// reported it done, the system reported it not done, or it ended with no report the
+// gateway could read.
+const (
+	WriteStarted = "started"
+	WriteChanged = "changed"
+	WriteRefused = "refused"
+	WriteCut     = "cut"
 )
 
 // OpenedByRun is the opened_by of dev.qory.run.started that the contract accepts:

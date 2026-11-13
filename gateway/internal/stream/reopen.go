@@ -224,7 +224,8 @@ func (s *Stream) reopen(runID, dir string, wants func(string) bool) (*Reopened, 
 	return re, nil
 }
 
-// readHeld reads the run.egress a suspend left in held.jsonl, in order; no file is
+// readHeld reads the run.egress and run.target_write a suspend left in held.jsonl, in
+// order; no file is
 // none. A line that holds no whole event, a write the gateway did not finish, is
 // skipped and reported.
 func (s *Stream) readHeld(runID, dir string) ([]*event.Event, error) {

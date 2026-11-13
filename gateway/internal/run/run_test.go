@@ -797,6 +797,37 @@ func TestTheEgressEventOfADecision(t *testing.T) {
 	}
 }
 
+// TestTheTargetWriteEventOfAWrite pins run.TargetWrite: system, path, state and
+// request_id, the request id absent when the write has none, and a system or a path
+// that contains qak_ or QECD_ is accesskey.ShownValue's phrase in its place.
+func TestTheTargetWriteEventOfAWrite(t *testing.T) {
+	got := run.TargetWrite(proxy.Write{System: "git.example", Path: "example-org/app", RequestID: "r1", State: "changed"})
+	want := map[string]any{"system": "git.example", "path": "example-org/app", "state": "changed", "request_id": "r1"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("%v, want %v", got, want)
+	}
+	if got := run.TargetWrite(proxy.Write{System: "git.example", Path: "example-org/app", State: "cut"}); len(got) != 3 {
+		t.Errorf("a write with no request id: %v", got)
+	}
+	for _, c := range []struct{ system, path, shown string }{
+		{"git.example", "example-org/qak_FAKEFAKE", "(a value that contains an access key secret)"},
+		{"git.example", "example-org/QECD_FAKEFAKE", "(a value that contains an enrolment code)"},
+		{"qak_FAKE.example", "example-org/app", "(a value that contains an access key secret)"},
+	} {
+		got := run.TargetWrite(proxy.Write{System: c.system, Path: c.path, State: "started"})
+		shown, kept := got["path"], got["system"]
+		if strings.HasPrefix(c.system, "qak_") {
+			shown, kept = got["system"], got["path"]
+		}
+		if shown != c.shown || kept == shown {
+			t.Errorf("%s %s: %v; want the phrase %q in its place", c.system, c.path, got, c.shown)
+		}
+		if low := strings.ToLower(fmt.Sprint(got)); strings.Contains(low, "qak_") || strings.Contains(low, "qecd_") {
+			t.Errorf("%s %s: %v contains the value", c.system, c.path, got)
+		}
+	}
+}
+
 // TestASessionsNarrowingOnlyNarrows pins the narrowing a session sends behind a
 // separate gateway: under enforce when it lists allow, so a host it does not cover is
 // removed, and under observe otherwise; its deny added; an observe policy put under

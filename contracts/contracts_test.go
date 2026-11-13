@@ -349,7 +349,7 @@ const beyondLinkSchema = "-beyond-schema-"
 // or whose credential_hosts entry has a member it does not define, no hosts, no
 // placeholders, a format without an endpoint or an endpoint without a format, a link reload answer with the proxy secret, the stack proxy secret or the
 // certificate authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
-// run.registered or a run.egress, a run.started opened by a gateway or a session, a run.exited with one of Forager's reasons
+// run.registered, a run.egress or a run.target_write, a run.started opened by a gateway or a session, a run.exited with one of Forager's reasons
 // other than timeout, interrupted and no_session, its old names among them, or with timeout and a state other than cancelled
 // or an exit code other than 124, a session.exited cancelled with no reason, succeeded with exit status 1, with stopped,
 // succeeded with no exit status or cancelled with a refusal's code, or a run.refused with a gateway's code,
@@ -376,10 +376,11 @@ const beyondLinkSchema = "-beyond-schema-"
 // failed or cancelled with model_key_limit, a session.exited paused with no reason or
 // with stopped and exit code -1, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
 // without its session id or over 32 KiB, a descriptor whose resume has no args, a
-// prefix outside the home or a path without {session_id}, and a descriptor rule whose
-// set sets session or a field to an object, whose from_started lists agent_id or is on
-// a hook rule or a rule of runtime.started, or with none of data, set and
-// from_started. For model keys of another
+// prefix outside the home or a path without {session_id}, a descriptor rule whose set
+// sets session or a field to an object, whose from_started lists agent_id or is on a
+// hook rule or a rule of runtime.started, or with none of data, set and from_started,
+// and a run.target_write with a state outside the four, without its path, with an empty
+// system, with a ref or with a request id in upper case. For model keys of another
 // format: a run configuration whose API credential has account_header or account_claim
 // alone, both without oauth, with oauth false or beside a header scheme, an
 // account_claim that is no JSON pointer, / alone, with a control character or with an

@@ -209,7 +209,8 @@ type Run struct {
 	seen map[string]bool
 	// started says run.started is numbered; ended that the final event is.
 	started, ended bool
-	// held are the gateway's run.egress events made before run.started, in order.
+	// held are the gateway's run.egress and run.target_write events made before
+	// run.started, in order.
 	held []*event.Event
 	// release says run.started was just numbered and the held events follow it: after
 	// a run.policy_applied numbered next, else before whatever is.
@@ -356,8 +357,9 @@ func (r *Run) Emit(typ string, data any) error {
 }
 
 // Hold is a group of the gateway's run.egress that waits for an event of the session's:
-// from [Run.Hold] on, every run.egress the gateway emits joins the newest group, until
-// [Run.Await] says which event releases it. A Hold belongs to its run.
+// from [Run.Hold] on, every run.egress and run.target_write the gateway emits joins the
+// newest group, until [Run.Await] says which event releases it. A Hold belongs to its
+// run.
 type Hold struct {
 	// match is the event that releases the group, nil until Await names it: until then
 	// none does.
@@ -413,29 +415,36 @@ func (r *Run) Await(h *Hold, match func(*event.Event) bool, typ string, first ..
 	return nil
 }
 
-// put numbers one of the gateway's own events in its place: a run.egress joins the
-// newest group that waits, or waits for run.started; anything else is numbered at once.
-// Called with the lock held.
+// put numbers one of the events the gateway writes in its place: a run.egress or a
+// run.target_write joins the newest group that waits, or waits for run.started, so
+// a write's events keep their order with its request's run.egress; anything else is
+// numbered at once. Called with the lock held.
 func (r *Run) put(ev *event.Event) {
 	switch {
-	case ev.Type == event.RunEgress && len(r.waiting) > 0:
+	case proxied(ev) && len(r.waiting) > 0:
 		w := r.waiting[len(r.waiting)-1]
 		w.evs = append(w.evs, ev)
-	case ev.Type == event.RunEgress && !r.started:
+	case proxied(ev) && !r.started:
 		r.held = append(r.held, ev)
 	default:
 		r.number(ev)
 	}
 }
 
+// proxied reports whether ev is one the gateway writes for what the run's proxy saw:
+// a run.egress or a run.target_write.
+func proxied(ev *event.Event) bool {
+	return ev.Type == event.RunEgress || ev.Type == event.RunTargetWrite
+}
+
 // releaseWaiting numbers the first n groups of waiting events, in order: a run.egress
-// before run.started is held for it. Called with the lock held.
+// or a run.target_write before run.started is held for it. Called with the lock held.
 func (r *Run) releaseWaiting(n int) {
 	done := r.waiting[:n:n]
 	r.waiting = r.waiting[n:]
 	for _, w := range done {
 		for _, ev := range w.evs {
-			if ev.Type == event.RunEgress && !r.started {
+			if proxied(ev) && !r.started {
 				r.held = append(r.held, ev)
 				continue
 			}
