@@ -208,6 +208,17 @@ func (g *Group) JoinKey() string {
 	return name
 }
 
+// JoinChoice is the key [Group.JoinKey] returns, with no key made active: the caller
+// makes it active with [Group.SetActive] once the join is accepted for good.
+func (g *Group) JoinChoice() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	active := g.active
+	name, _ := g.pick(true)
+	g.active = active
+	return name
+}
+
 // SetActive makes the key name active, whether or not it is in cooldown or out, for a
 // gateway that reopens a run whose session joined with name: the session goes on with
 // the key it has. A key in cooldown or out then gets no request, as [Group.Pick]

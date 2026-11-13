@@ -393,12 +393,20 @@ func (s *streamWatch) read(line string) {
 	case "event":
 		s.event = value
 	case "data":
-		if len(s.data) > 0 {
-			s.data = append(s.data, '\n')
+		if s.over {
+			// The event is passed on unread: its data grows no more.
+			return
 		}
-		if len(s.data)+len(value) > s.limit() {
+		sep := 0
+		if len(s.data) > 0 {
+			sep = 1
+		}
+		if len(s.data)+sep+len(value) > s.limit() {
 			s.over = true
 			return
+		}
+		if sep == 1 {
+			s.data = append(s.data, '\n')
 		}
 		s.data = append(s.data, value...)
 	}

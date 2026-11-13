@@ -1108,47 +1108,46 @@ request with the placeholder to the provider and returns a `429` to each, with n
 `model_key_limit`: the session stops the runtime, and the run pauses (§The gateway's
 link, A stop in a batch's answer).
 
-A group of the format `openai-responses` keeps one key for each session: Codex sends
-its reasoning encrypted for one account, so a request with another key could fail. The
-proxy keeps no copy of such a request's body and sends no such request again. The
-provider's first limit refusal puts the key in cooldown, as in step 1, and the proxy
-passes the refusal to the session; the proxy's `429` and the `stop` then follow, as for
-any refusal it passes. The key stays the active key until the next join the gateway
-accepts, which makes another key active as in step 2. A join that is refused, or sent
-again for its answer, makes no other key active. A gateway that starts again while a
-session is open sets that session's key, in cooldown or not. A key that goes into
-cooldown during a session with no refusal, from the answer to a model keys report or at
-its Use up to percentage, stops the group the same way: the proxy sets no other key,
-and returns its `429`. So no request of the session goes with another key. Codex 0.167.2 ends its turn on a refusal
-of a usage limit or a quota, and retries another `429` only after a `Retry-After`, so
-the proxy's `429` ends its retries.
+A group of the format `openai-responses` keeps one key for each session: Codex sends its
+reasoning encrypted for one account, so a request with another key could fail. The proxy
+keeps no copy of such a request's body and sends no such request again. The provider's
+first limit refusal puts the key in cooldown, as in step 1, and the proxy passes the
+refusal to the session; the proxy's `429` and the `stop` then follow, as for any refusal
+it passes. The key stays the active key until the next join the gateway accepts, which
+makes another key active as in step 2. A join that is refused, or sent again for its
+answer, makes no other key active. A gateway that starts again while a session is open
+sets that session's key, in cooldown or not. A key that goes into cooldown during a
+session with no refusal, from the answer to a model keys report or at its Use up to
+percentage, stops the group the same way: the proxy sets no other key, and returns its
+`429`. So no request of the session goes with another key. Codex 0.167.2 ends its turn
+on a refusal of a usage limit or a quota, and retries another `429` only after a
+`Retry-After`, so the proxy's `429` ends its retries.
 
-A provider may also end a streaming `200` with a limit event. The proxy reads the
-stream of one request alone: a `POST` with the group's placeholder to the stream path of
-the model API under the endpoint, with any query. For `anthropic-messages` the path is
-the endpoint's path and `/v1/messages`, such as `/anthropic/v1/messages` for
+A provider may also end a streaming `200` with a limit event. The proxy reads the stream
+of one request alone: a `POST` with the group's placeholder to the stream path of the
+model API under the endpoint, with any query. For `anthropic-messages` the path is the
+endpoint's path and `/v1/messages`, such as `/anthropic/v1/messages` for
 `https://api.deepseek.com/anthropic`, and the limit event is an event whose `event`
 field is `error` and whose `data` is an error of the type `rate_limit_error`,
 `{"type":"error","error":{"type":"rate_limit_error"}}`. For `openai-responses` the path
-is the endpoint's path and `/responses`, such as `/backend-api/codex/responses`, and
-the limit event is one whose `event` field is `response.failed` or absent, and whose
-`data` has the type `response.failed` and an error code that Codex reads as a limit:
+is the endpoint's path and `/responses`, such as `/backend-api/codex/responses`, and the
+limit event is one whose `event` field is `response.failed` or absent, and whose `data`
+has the type `response.failed` and an error code that Codex reads as a limit:
 `rate_limit_exceeded` or `slow_down`, or one of the quota codes below, which are
 `spend_limit`, such as
 `{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded"}}}`. The
 same words in any other event, such as a text delta, and in an answer to any other
 request do not count. The proxy reads an event whose lines and `data` are each at most
 4096 bytes for `anthropic-messages`, and at most 1 MiB (1,048,576 bytes) for
-`openai-responses`: a `response.failed` event can repeat the request's instructions
-and tools, and its `data` line can come before its `event` field. A longer event is
-passed on unread. The proxy then puts the key
-in cooldown and passes the stream on as it came. For `anthropic-messages` the next key
-becomes the active key, as in step 2, and the run does not pause: Claude Code 2.1.316
-sends the same request again without streaming about 20 ms later, and that request gets
-the next key. For `openai-responses` the key stays active and the gateway stops the
-group as after a refusal it passed: Codex retries a stream's rate limit, and each retry
-gets the proxy's `429`. A runtime that does not send the
-request again ends its session as it ends one after any failed request.
+`openai-responses`: a `response.failed` event can repeat the request's instructions and
+tools, and its `data` line can come before its `event` field. A longer event is passed
+on unread. The proxy then puts the key in cooldown and passes the stream on as it came.
+For `anthropic-messages` the next key becomes the active key, as in step 2, and the run
+does not pause: Claude Code 2.1.316 sends the same request again without streaming about
+20 ms later, and that request gets the next key. For `openai-responses` the key stays
+active and the gateway stops the group as after a refusal it passed: Codex retries a
+stream's rate limit, and each retry gets the proxy's `429`. A runtime that does not send
+the request again ends its session as it ends one after any failed request.
 
 The active key stays active across the run's sessions and joins. A key in cooldown in the
 answer to a model keys report is not set either (§The server, The model keys). When

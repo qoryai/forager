@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -202,5 +204,38 @@ func TestAReplayedJoinKeepsItsKey(t *testing.T) {
 	o.posted(t, sessionExited(o.runID(), 1))
 	if status, calls := o.send(t); status != http.StatusTooManyRequests || len(calls) != 0 {
 		t.Errorf("a request after session 1: %d %v; want the gateway's 429 and no call", status, calls)
+	}
+}
+
+// TestAJoinWhoseRecordFailsKeepsTheActiveKey pins a join whose line cannot be written to
+// joins.jsonl, a directory here: the join is a 500 and the active key does not move, so
+// a request gets the gateway's 429 for model, still in cooldown, and the provider gets
+// no request with model-2. The next join, written, gets model-2.
+func TestAJoinWhoseRecordFailsKeepsTheActiveKey(t *testing.T) {
+	o := startOpenAIRemote(t)
+	o.coolFirstKey(t)
+	o.posted(t, sessionStarted(o.runID(), 1))
+	o.posted(t, sessionExited(o.runID(), 1))
+	joins := filepath.Join(o.cfg.Dir, "runs", o.runID(), "joins.jsonl")
+	if err := os.Rename(joins, joins+".kept"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(joins, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := o.join(t); status != http.StatusInternalServerError {
+		t.Fatalf("a join whose line cannot be written: %d; want 500", status)
+	}
+	if status, calls := o.send(t); status != http.StatusTooManyRequests || len(calls) != 0 {
+		t.Errorf("a request after the failed join: %d %v; want the gateway's 429 and no call", status, calls)
+	}
+	if err := os.Remove(joins); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(joins+".kept", joins); err != nil {
+		t.Fatal(err)
+	}
+	if status, key := o.join(t); status != http.StatusOK || key != "model-2" {
+		t.Errorf("the join after: %d %s; want 200 with model-2", status, key)
 	}
 }

@@ -211,10 +211,12 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	}
 	if grouped {
 		// After the replay and the join while another is open: neither moves the
-		// group's active key. A refused join records the key a request would get,
-		// [modelkey.Group.Active], which keeps an openai-responses key in cooldown.
+		// group's active key. The key the join gets becomes active only once its record
+		// is written and the run is still live. A refused join records the key a
+		// request would get, [modelkey.Group.Active], which keeps an openai-responses
+		// key in cooldown.
 		if conflict == nil {
-			model = lr.keys.JoinKey()
+			model = lr.keys.JoinChoice()
 		} else {
 			model = lr.keys.Active()
 		}
@@ -237,6 +239,9 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	lr.joins = append(lr.joins, j)
+	if grouped && conflict == nil {
+		lr.keys.SetActive(model)
+	}
 	digest := lr.reloadDigest
 	lr.mu.Unlock()
 	if conflict != nil {

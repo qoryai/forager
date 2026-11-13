@@ -234,6 +234,22 @@ func failedEvent(size int) string {
 	return "event: response.failed\ndata: " + head + strings.Repeat("a", size-len(head)-len(tail)) + tail + "\n\n"
 }
 
+// TestAnEventsDataStaysWithinItsLimit pins the cap of an event's data: an event of one
+// data line near the limit, then many data lines with no empty line, keeps at most
+// maxFailedData bytes of data, for empty data lines and for data lines of one byte.
+func TestAnEventsDataStaysWithinItsLimit(t *testing.T) {
+	for _, more := range []string{"data:\n", "data: a\n"} {
+		stream := "data: " + strings.Repeat("a", maxFailedData-len("data: ")-10) + "\n" + strings.Repeat(more, 1000)
+		s := &streamWatch{ReadCloser: io.NopCloser(strings.NewReader(stream)), format: modelkey.FormatOpenAIResponses}
+		if _, err := io.Copy(io.Discard, s); err != nil {
+			t.Fatal(err)
+		}
+		if len(s.data) > maxFailedData || !s.over {
+			t.Errorf("%q lines: %d bytes of data, over %v; want at most %d, over", more, len(s.data), s.over, maxFailedData)
+		}
+	}
+}
+
 // TestAResponseFailedEventHasALargerLimit pins the limit of an event's data in an
 // openai-responses stream, maxFailedData: a response.failed event just over 4096 bytes
 // counts, with its event field first, after its data line or with none, and one over
