@@ -115,6 +115,63 @@ func TestResendWritesGatewayLost(t *testing.T) {
 	}
 }
 
+// TestResendRemovesTheKeptSecrets pins a record a gateway kept for a reopen: once
+// Resend writes its run.exited, the run request and the CA files go, and the other kept
+// files stay.
+func TestResendRemovesTheKeptSecrets(t *testing.T) {
+	dir := lostRun(t)
+	for _, name := range keptFiles {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := Resend(context.Background(), ResendConfig{Dir: dir})
+	if err != nil || !res.Closed {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	for _, name := range keptFiles {
+		_, err := os.Lstat(filepath.Join(dir, name))
+		if gone := errors.Is(err, os.ErrNotExist); gone != slices.Contains(secretFiles, name) {
+			t.Errorf("%s gone %v", name, gone)
+		}
+	}
+}
+
+// TestRemoveKeptRemovesTheSecrets pins RemoveKept: the run request and both CA files
+// go, the other files stay, and a file or a directory that is not there is no error.
+func TestRemoveKeptRemovesTheSecrets(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range append([]string{sink.EventsFile}, keptFiles...) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RemoveKept(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range append([]string{sink.EventsFile}, keptFiles...) {
+		_, err := os.Lstat(filepath.Join(dir, name))
+		if gone := errors.Is(err, os.ErrNotExist); gone != slices.Contains(secretFiles, name) {
+			t.Errorf("%s gone %v", name, gone)
+		}
+	}
+	if err := RemoveKept(dir); err != nil {
+		t.Errorf("RemoveKept with no file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ca.key"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveKept(dir); err != nil {
+		t.Errorf("RemoveKept with ca.key alone: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "ca.key")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("ca.key: %v", err)
+	}
+	if err := RemoveKept(filepath.Join(dir, "missing")); err != nil {
+		t.Errorf("RemoveKept of a missing directory: %v", err)
+	}
+}
+
 // TestResendEndsAnOpenSessionFirst pins the completion of a record whose session 2
 // has a dev.qory.session.started and no dev.qory.session.exited: that session's
 // dev.qory.session.exited comes first, failed, -1, gateway_lost, with the duration from

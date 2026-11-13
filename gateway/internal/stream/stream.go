@@ -201,7 +201,8 @@ type Run struct {
 	unlock func()
 	server Sink
 	// registered is the sequence of dev.qory.run.registered, when there is one, and
-	// marked says delivered.log marks it already: a run reopened after a sink did.
+	// marked is true when delivered.log marks it already: a run reopened after a sink
+	// did.
 	registered string
 	marked     bool
 	// seen are the ids numbered so far.
@@ -627,6 +628,33 @@ func syncDirs(dirs ...string) error {
 // [Run.Discard] and [Stream.Reclaim] remove them by name.
 var keptFiles = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", heldFile}
 
+// secretFiles are the kept files whose contents may act for the run: the run request,
+// whose image references may contain a registry's credentials, and the run's CA
+// certificate and key.
+var secretFiles = []string{"ca.key", "ca.pem", "request.json"}
+
+// RemoveKept removes the run request and the CA files ([secretFiles]) from the run
+// record directory dir, then syncs dir when it removed one: a run that ended for good,
+// which no gateway reopens. A file that does not exist is no error, nor is a dir that
+// does not exist.
+func RemoveKept(dir string) error {
+	removed := false
+	var errs []error
+	for _, name := range secretFiles {
+		err := os.Remove(filepath.Join(dir, name))
+		switch {
+		case err == nil:
+			removed = true
+		case !errors.Is(err, os.ErrNotExist):
+			errs = append(errs, accesskey.ShownError(err))
+		}
+	}
+	if removed {
+		errs = append(errs, syncDirs(dir))
+	}
+	return errors.Join(errs...)
+}
+
 // Discard closes the run's stream as [Run.Close] does, then removes what the stream
 // wrote under the run's record directory, events.jsonl, the delivery state, the mark
 // that it was answered, the files the gateway keeps to reopen the run ([keptFiles]) and
@@ -638,8 +666,14 @@ func (r *Run) Discard(ctx context.Context) error {
 	for _, name := range slices.Concat([]string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir, answeredFile}, keptFiles, []string{lockFile}) {
 		errs = append(errs, accesskey.ShownError(os.RemoveAll(filepath.Join(r.dir, name))))
 	}
-	// Left in place when it holds anything else, a session's own files on one machine.
-	os.Remove(r.dir)
+	// Left in place when it holds anything else, the session's files on one machine.
+	// The directory that lost the entries is synced, so the removal of the CA key and
+	// the run request lasts after a crash.
+	synced := r.dir
+	if os.Remove(r.dir) == nil {
+		synced = filepath.Dir(r.dir)
+	}
+	errs = append(errs, syncDirs(synced))
 	return errors.Join(errs...)
 }
 
@@ -701,6 +735,7 @@ func (s *Stream) Reclaim(runID string) (bool, error) {
 	for _, name := range slices.Concat([]string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir}, keptFiles) {
 		errs = append(errs, accesskey.ShownError(os.RemoveAll(filepath.Join(dir, name))))
 	}
+	errs = append(errs, syncDirs(dir))
 	return true, errors.Join(errs...)
 }
 
