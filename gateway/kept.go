@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -21,6 +20,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
+	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/sink"
 )
@@ -52,7 +52,8 @@ const (
 
 // keptRequest is request.json: what [run.Decide] reads of the run request, so a
 // gateway that starts again decides the run as its open did. Its image references have
-// no user information ([withoutUserInfo]): a registry's credentials stay off the disk.
+// no user information ([policy.ImageWithoutUserInfo]): a registry's credentials stay
+// off the disk.
 type keptRequest struct {
 	Version   int                   `json:"version"`
 	Wall      bool                  `json:"wall"`
@@ -60,40 +61,17 @@ type keptRequest struct {
 	Images    *server.LinkImages    `json:"images,omitempty"`
 }
 
-// digestSuffix is a reference's trailing digest of an algorithm the OCI image
-// specification registers: @sha256: or @blake3: and 64 lower-case hexadecimal digits,
-// or @sha512: and 128. The OCI grammar of any algorithm would also match a tag after
-// user information, such as @base:latest, and keep the user information whole.
-var digestSuffix = regexp.MustCompile(`@(?:sha256:[0-9a-f]{64}|blake3:[0-9a-f]{64}|sha512:[0-9a-f]{128})$`)
-
-// withoutUserInfo is the image reference ref without the user information it may start
-// with, which may contain a registry's credentials: its trailing digest is set aside,
-// everything up to and with the last @ of the rest is left out, a scheme in front of
-// the user information too, and the digest is put back. A password may contain / and @,
-// and a user may be an email address. A reference with no @ before its digest is
-// returned as it is, and so is a result of withoutUserInfo.
-func withoutUserInfo(ref string) string {
-	rest, digest := ref, ""
-	if loc := digestSuffix.FindStringIndex(ref); loc != nil {
-		rest, digest = ref[:loc[0]], ref[loc[0]:]
-	}
-	if at := strings.LastIndexByte(rest, '@'); at >= 0 {
-		rest = rest[at+1:]
-	}
-	return rest + digest
-}
-
 // imagesWithoutUserInfo is a copy of the session's images with each reference, the
 // default's when it is one and each definition's, without its user information
-// ([withoutUserInfo]); nil for nil. The allowed prefixes, which contain no user
-// information ([policy.CheckImagePrefix]), stay as they are.
+// ([policy.ImageWithoutUserInfo]); nil for nil. The allowed prefixes, which contain no
+// user information ([policy.CheckImagePrefix]), stay as they are.
 func imagesWithoutUserInfo(li *server.LinkImages) *server.LinkImages {
 	if li == nil {
 		return nil
 	}
-	out := &server.LinkImages{Default: withoutUserInfo(li.Default), Allow: slices.Clone(li.Allow)}
+	out := &server.LinkImages{Default: policy.ImageWithoutUserInfo(li.Default), Allow: slices.Clone(li.Allow)}
 	for _, d := range li.Definitions {
-		d.Ref = withoutUserInfo(d.Ref)
+		d.Ref = policy.ImageWithoutUserInfo(d.Ref)
 		out.Definitions = append(out.Definitions, d)
 	}
 	return out
@@ -422,15 +400,16 @@ func (g *Gateway) stopSweep() {
 
 // sweep removes the files kept to reopen a run ([stream.RemoveKept]) from each
 // record under [Gateway.sweptDir] that meets all of these: it is the record directory
-// of its name's run, the gateway does not hold its run, and its events.jsonl has not
-// changed for more than age as of now. A record without events.jsonl counts the time
-// of those files in place of it.
+// of its name's run, the gateway neither holds nor opens its run, and its events.jsonl
+// has not changed for more than age as of now. A record without events.jsonl counts
+// the time of those files in place of it.
 //
-// The sweep and a reopen do not race: with g.mu held, the sweep checks that the run is
-// neither in g.runs nor in g.reopening and adds it to g.sweeping, and a reopen checks
-// that the run is not in g.sweeping and adds itself to g.reopening. The sweep removes
-// the files with g.mu free, then takes the run from g.sweeping. A request that comes
-// meanwhile gets a 503, and the next one a 410, as for any record past its age.
+// The sweep, an open and a reopen do not race: with g.mu held, the sweep checks that
+// the run is in none of g.runs, g.opening and g.reopening and adds it to g.sweeping,
+// and a run request or a reopen checks that the run is not in g.sweeping and adds
+// itself to g.opening or g.reopening. The sweep removes the files with g.mu free, then
+// takes the run from g.sweeping. A request that comes meanwhile gets a 503; the next
+// reopen gets a 410, as for any record past its age.
 func (g *Gateway) sweep(now time.Time, age time.Duration) {
 	root := g.sweptDir()
 	entries, err := os.ReadDir(root)
@@ -463,7 +442,7 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 			continue
 		}
 		g.mu.Lock()
-		held := g.runs[id] != nil || g.reopening[id] != nil
+		held := g.runs[id] != nil || g.opening[id] != nil || g.reopening[id] != nil
 		if !held {
 			g.sweeping[id] = true
 		}
@@ -471,16 +450,28 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 		if held {
 			continue
 		}
-		err = stream.RemoveKept(dir)
-		g.mu.Lock()
-		delete(g.sweeping, id)
-		g.mu.Unlock()
-		if err != nil {
+		if err := g.removeSwept(id, dir); err != nil {
 			g.report(keptNotRemoved(id, dir, err))
 			continue
 		}
 		g.report(fmt.Sprintf("run %s: removed the files kept to reopen it: its record has not changed for %s", accesskey.ShownValue(id, false), age))
 	}
+}
+
+// removeSwept removes the kept files of the record dir of the run id, which the sweep
+// added to g.sweeping, and takes the run from g.sweeping, also when the removal panics,
+// so the run's requests do not get a 503 from then on.
+func (g *Gateway) removeSwept(id, dir string) error {
+	defer func() {
+		g.mu.Lock()
+		delete(g.sweeping, id)
+		g.mu.Unlock()
+	}()
+	remove := stream.RemoveKept
+	if g.cfg.sweptRemove != nil {
+		remove = g.cfg.sweptRemove
+	}
+	return remove(dir)
 }
 
 // newestOf is the most recent modification time of the files of dir named in names,

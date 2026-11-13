@@ -1923,7 +1923,8 @@ lines. Each join writes its steps:
    join the gateway refuses, or that fails the session's checks, ends it `failed` with
    `-1`; then the session writes the join's `dev.qory.session.exited`, with the
    refusal's code when the failure has one. A session does not lie inside a join step.
-2. **The image step**, `image`, with the image's reference as its name, behind a wall
+2. **The image step**, `image`, with the image's reference without its user information
+   (§The gateway's link, the run request's `images`) as its name, behind a wall
    when the policy's image is a reference and no step fetched it before the join. It
    comes after `dev.qory.session.started` and the session's
    `dev.qory.run.policy_applied`. The session writes that
@@ -2460,14 +2461,17 @@ the record until the record is removed. A record without `request.json` is not r
 and its requests get a `410` `run_closed`.
 
 **The sweep.** A separate gateway removes the files of a reopen of each record whose run
-it neither holds nor reopens and whose `events.jsonl` has not changed for 15 minutes, at
-its start and every 10 minutes. It reads the records under its directory, or, with
+it neither holds, opens nor reopens and whose `events.jsonl` has not changed for 15
+minutes, at its start and every 10 minutes. A run opens from the arrival of its run
+request until its run answer. It reads the records under its directory, or, with
 `RunDir`, those in the directory `RunDir` makes each record in as
 `<directory>/<run id>`. A live run's session sends a heartbeat at least every 300
 seconds, so a live run's record changes within those 15 minutes. The sweep and a reopen
-of the same run never run at once: the sweep skips a run that is reopening, a request
-that comes while the sweep removes a record's files gets a `503` with no body, and a
-request after the sweep gets a `410` `run_closed`.
+of the same run never run at once, and neither do the sweep and an open: the sweep skips
+a run that is opening or reopening, and a request, a run request among them, that comes
+while the sweep removes a record's files gets a `503` with no body. After the sweep, a
+request of the run gets the `410` `run_closed` of a run that does not reopen, and a run
+request of its run id gets the `409` `run_attached` of any record there.
 
 **A hidden harness.** In a run whose harness is hidden, `[harness text: <path>]`
 replaces the text of each file in a session's harness home, after the forwarders'
@@ -3423,9 +3427,11 @@ The gateway sends a report when a window's `status`, `resets_at` or `cooldown_un
 changes, or its `utilization` changes by a whole percent. Each report has every window
 the gateway has of the run's keys, so it replaces the report before. A run has at most
 one report in flight and one a second; the changes in between go into the next report.
-When the run ends while a change waits for its report, or a report waits for its next
-try, the gateway sends the newest state once more, within 10 seconds, and takes nothing
-of the answer.
+A burst of changes therefore makes one report, and once a report is accepted or dropped,
+no report goes until a window changes again: a change that a sent report already
+contains makes no second report. When the run ends while a change waits for its report,
+or a report waits for its next try, the gateway sends the newest state once more,
+within 10 seconds, and takes nothing of the answer.
 An API key's windows are per minute, so its `utilization` can change by a whole percent
 up to 100 times a minute.
 
@@ -4090,8 +4096,15 @@ and `about` are the starter's registration's, and the run request carries neithe
   and 64 lower-case hexadecimal digits or `@sha512:` and 128, or before its end when it has no digest:
   `docker://me@example.com:pa/ss@registry.example/base@sha256:…` has
   `docker://me@example.com:pa/ss@`, `u:p@base:latest` has `u:p@`, while
-  `registry.example:5000/base@sha256:…` and `base@sha256:…` have none. A reload answer
-  and the record's `request.json` contain each reference without it. Absent means none.
+  `registry.example:5000/base@sha256:…` and `base@sha256:…` have none. These contain
+  each reference without it: a reload answer; the record's `request.json`;
+  `dev.qory.session.started`'s `image` and the image step's name; the manifest check's
+  request, errors and refusals; the wall's errors and refusals, the docker command's
+  output in them included; a reload's refusal of another image; the refusal of a run
+  configuration's image that is not pinned; and a run answer as Go's
+  `server.LinkRunAnswer` prints it. The run answer and the wall's pull use the reference
+  whole.
+  Absent means none.
 - `narrowing`, behind a separate gateway alone: the session's narrowing of the policy,
   `egress` with `allow`, `deny` or both, each in the grammar of the policy's
   `egress.allow`, and no other member. It only narrows: it can only remove what the
@@ -5537,7 +5550,8 @@ it at `/qory/seed`, and `qory` copies it into the workspace; Forager copies none
 reports from inside, which such an image can change or forge (§Images). Every other run
 sees its workspace at the same path as on the machine.
 
-**The record.** `dev.qory.session.started` contains `image`, the reference, and when the
+**The record.** `dev.qory.session.started` contains `image`, the reference without its
+user information (§The gateway's link, the run request's `images`), and when the
 image is one the machine defines `image_name`, `container_runtime` when the definition
 sets one, and `docker: true` when the enclosure has nested Docker. For an image by
 reference, the run's image step spans the check of the image's manifest, its fetch and
@@ -5547,7 +5561,8 @@ the check of its user; its
 selects or names one.
 
 **An image pulled through the gateway.** `(*session.Run).FetchImage` fetches the image
-by reference as a host step of kind `image`, named after the reference, before the first
+by reference as a host step of kind `image`, named after the reference without its user
+information, before the first
 join or between joins. The step first checks the image at its registry: the session
 sends `HEAD /v2/<repository>/manifests/<digest>` through the run's proxy, with or
 without an engine proxy, so the gateway sets the run's credentials on it. The host is

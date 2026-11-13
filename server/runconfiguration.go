@@ -204,17 +204,20 @@ func ReservedHeader(name string) bool {
 // pinned by digest, NAME@sha256: and 64 lower-case hexadecimal digits, with
 // run_configuration_invalid: a reference with a tag or without a digest, one in upper
 // case, and the machine's name for an image, which a run configuration never names.
-// The refusal names the image, as printable ASCII when it is, quoted otherwise.
+// The refusal shows the image without its user information
+// ([policy.ImageWithoutUserInfo]), as printable ASCII when it is, quoted otherwise: the
+// gateway's log and the session's report may print the refusal, and a registry's
+// credentials may be in that user information.
 func CheckConfigurationImage(image string) error {
 	if policy.ImageReference(image) {
 		return nil
 	}
-	shown := image
+	shown := policy.ImageWithoutUserInfo(image)
 	switch {
-	case accesskey.ContainsSecret(image):
-		shown = accesskey.ShownName(image, false)
-	case strings.ContainsFunc(image, func(r rune) bool { return r <= ' ' || r > '~' }) || image == "":
-		shown = strconv.Quote(image)
+	case accesskey.ContainsSecret(shown):
+		shown = accesskey.ShownName(shown, false)
+	case strings.ContainsFunc(shown, func(r rune) bool { return r <= ' ' || r > '~' }) || shown == "":
+		shown = strconv.Quote(shown)
 	}
 	return refusal.New(refusal.RunConfigurationInvalid, nil, "the image %s is not a reference pinned by digest", shown)
 }

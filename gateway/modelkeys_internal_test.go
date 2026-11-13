@@ -72,6 +72,97 @@ func TestABurstOfChangesSendsOneReportAGap(t *testing.T) {
 	}
 }
 
+// TestAReportedBurstIsNotSentAgain pins one report per burst of changes: changes that
+// come during the gap after a report go in the next report alone, and after that
+// report succeeds no report goes, at a later wake or at the run's end, while nothing
+// changes.
+func TestAReportedBurstIsNotSentAgain(t *testing.T) {
+	f := &fakeControl{}
+	k, g := reporterOf(f, 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { k.run(ctx); close(done) }()
+	change := func(percent string) {
+		g.Answered("model", http.StatusOK, http.Header{"Anthropic-Ratelimit-Unified-5h-Status": {"allowed"}, "Anthropic-Ratelimit-Unified-5h-Utilization": {percent}})
+	}
+	reports := func(n int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for times, _ := f.sent(); len(times) < n; times, _ = f.sent() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d reports; want %d", len(times), n)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	change("0.10")
+	reports(1)
+	// Two changes within the gap after the first report: one report covers both.
+	change("0.20")
+	change("0.30")
+	reports(2)
+	// Two gaps on, nothing changed since the second report.
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+	<-done
+	if times, _ := f.sent(); len(times) != 2 {
+		t.Errorf("%d reports; want 2, none after the burst's report", len(times))
+	}
+}
+
+// TestAChangeDuringASendGoesInTheNextReport pins a change that comes while a report is
+// in flight: it goes in one more report after the gap, and none follows that one.
+func TestAChangeDuringASendGoesInTheNextReport(t *testing.T) {
+	inFlight, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var reports []server.ModelKeysReport
+	send := func(_ context.Context, rep server.ModelKeysReport) ([]server.ModelKeyState, error) {
+		mu.Lock()
+		reports = append(reports, rep)
+		n := len(reports)
+		mu.Unlock()
+		if n == 1 {
+			close(inFlight)
+			<-release
+		}
+		return nil, nil
+	}
+	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil)
+	k := newKeyReporter("run", "https://control.example/v1/runs", g, send, func(string) {}, func(string) {})
+	k.gap = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { k.run(ctx); close(done) }()
+	change := func(percent string) {
+		g.Answered("model", http.StatusOK, http.Header{"Anthropic-Ratelimit-Unified-5h-Status": {"allowed"}, "Anthropic-Ratelimit-Unified-5h-Utilization": {percent}})
+	}
+	change("0.10")
+	<-inFlight
+	change("0.20")
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(reports)
+		mu.Unlock()
+		if n >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reports) != 2 {
+		t.Fatalf("%d reports; want 2", len(reports))
+	}
+	if keys := reports[1].Keys; len(keys) != 1 || keys[0].Utilization == nil || *keys[0].Utilization != 20 {
+		t.Errorf("the second report's keys %+v; want the utilization 20", keys)
+	}
+}
+
 // TestTheRunsEndSendsAWaitingReportOnce pins the last report: a report in a backoff
 // when the run ends goes once more, with a context that has not ended; with no change
 // waiting, the end sends nothing.
