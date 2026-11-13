@@ -468,7 +468,7 @@ func TestRuntimesJSONHasModelOnlyWhenDescribed(t *testing.T) {
 }
 
 // TestRuntimesJSONListsTheConfigKeys pins config in runtimes.json: the Codex entry has
-// the flag --config and the 11 keys of its config.fixed in the descriptor's order,
+// the flag --config and the 13 keys of its config.fixed in the descriptor's order,
 // without their values, and Claude Code's entry, whose descriptor has no config, has
 // no config member. A descriptor's key order reaches the file whether it is YAML or
 // JSON.
@@ -486,7 +486,7 @@ func TestRuntimesJSONListsTheConfigKeys(t *testing.T) {
 	want := map[string]any{"flag": "--config", "fixed": []any{
 		"model_provider", "model_providers.qory.name", "model_providers.qory.wire_api", "model_providers.qory.env_key",
 		"features.plugins", "features.apps", "analytics.enabled", "feedback.enabled", "check_for_update_on_startup",
-		"otel.metrics_exporter", "web_search",
+		"otel.exporter", "otel.trace_exporter", "otel.metrics_exporter", "web_search",
 	}}
 	seen := 0
 	for _, rt := range f.Runtimes {

@@ -22,7 +22,8 @@ stop:
   signal: SIGINT
 # Codex reads its model key from the variable of model.keys, below. The denied variables
 # move where requests go (OPENAI_BASE_URL, the *_BASE_URL and *_URL_OVERRIDE variables,
-# CODEX_OSS_PORT, and CODEX_EXEC_SERVER_URL, which moves where commands run), add a
+# CODEX_OSS_PORT, and CODEX_EXEC_SERVER_URL and the CODEX_EXEC_SERVER_NOISE_* variables,
+# which move where commands run, exec-server/src/environment.rs), add a
 # header (CODEX_INTERNAL_ORIGINATOR_OVERRIDE), set another key for Codex (CODEX_API_KEY,
 # CODEX_ACCESS_TOKEN), change the trust of TLS connections (CODEX_CA_CERTIFICATE), or
 # move its home and state (CODEX_HOME, CODEX_SQLITE_HOME). Each is in the 0.167.2 binary.
@@ -33,7 +34,10 @@ secrets:
            CODEX_AGENT_IDENTITY_JWKS_BASE_URL, CODEX_APP_SERVER_CHATGPT_BASE_URL,
            CODEX_CLOUD_TASKS_BASE_URL, CODEX_OSS_BASE_URL, CODEX_OSS_PORT,
            CODEX_REFRESH_TOKEN_URL_OVERRIDE, CODEX_REVOKE_TOKEN_URL_OVERRIDE,
-           CODEX_EXEC_SERVER_URL, CODEX_INTERNAL_ORIGINATOR_OVERRIDE, CODEX_API_KEY,
+           CODEX_EXEC_SERVER_URL, CODEX_EXEC_SERVER_NOISE_REGISTRY_URL,
+           CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID, CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN,
+           CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID, CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
+           CODEX_API_KEY,
            CODEX_ACCESS_TOKEN, CODEX_CA_CERTIFICATE, CODEX_HOME, CODEX_SQLITE_HOME]
 # Codex sends OpenAI's Responses format through the provider qory of config.fixed,
 # below, for an API key and for a subscription login's token alike: the provider reads
@@ -54,8 +58,9 @@ model:
 # The provider qory sends every request to the start key's endpoint with the key from
 # OPENAI_API_KEY; Codex's built-in provider would send the key to paths outside the
 # model API and open WebSockets. The other settings turn off what reaches hosts other
-# than the endpoint: plugins, apps, analytics, feedback, the update check, metrics and
-# web search.
+# than the endpoint: plugins, apps, analytics, feedback, the update check, the
+# OpenTelemetry logs, traces and metrics, and web search. features.connectors, the
+# legacy name of apps, is not set: Codex 0.167.2 prints a deprecation error for it.
 config:
   flag: --config
   fixed:
@@ -68,6 +73,8 @@ config:
     analytics.enabled: false
     feedback.enabled: false
     check_for_update_on_startup: false
+    otel.exporter: none
+    otel.trace_exporter: none
     otel.metrics_exporter: none
     web_search: disabled
 rules:

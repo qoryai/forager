@@ -66,15 +66,15 @@ func TestConfigPairsGoBeforeTheLaunchsArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := len(got) - len(launch)
-	if n != 24 || !slices.Equal(got[n:], launch) || got[0] != "--config" {
-		t.Fatalf("args %q; want 12 --config pairs, then %q", got, launch)
+	if n != 28 || !slices.Equal(got[n:], launch) || got[0] != "--config" {
+		t.Fatalf("args %q; want 14 --config pairs, then %q", got, launch)
 	}
 	if !slices.Contains(got[:n], `model_providers.qory.base_url="https://api.model.example/v1"`) || !slices.Contains(got[:n], `model_provider="qory"`) {
 		t.Errorf("args %q have no endpoint or no provider", got)
 	}
 	got, err = configArgs(cx, keyed{}, launch)
-	if err != nil || len(got) != 22+len(launch) || slices.ContainsFunc(got, func(a string) bool { return a == `model_providers.qory.base_url="https://api.model.example/v1"` }) {
-		t.Errorf("without a start key: %q, %v; want the 11 fixed pairs alone", got, err)
+	if err != nil || len(got) != 26+len(launch) || slices.ContainsFunc(got, func(a string) bool { return a == `model_providers.qory.base_url="https://api.model.example/v1"` }) {
+		t.Errorf("without a start key: %q, %v; want the 13 fixed pairs alone", got, err)
 	}
 	cl, err := claude.New()
 	if err != nil {

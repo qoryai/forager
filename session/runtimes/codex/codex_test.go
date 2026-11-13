@@ -73,7 +73,9 @@ func TestCodexDeniesTheVariablesThatMoveItsRequests(t *testing.T) {
 	}
 	denies := rt.(runtimes.Secrets).Secrets().Denies
 	for _, name := range []string{"OPENAI_BASE_URL", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_CA_CERTIFICATE", "CODEX_HOME",
-		"CODEX_SQLITE_HOME", "CODEX_REFRESH_TOKEN_URL_OVERRIDE", "CODEX_EXEC_SERVER_URL", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"} {
+		"CODEX_SQLITE_HOME", "CODEX_REFRESH_TOKEN_URL_OVERRIDE", "CODEX_EXEC_SERVER_URL", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+		"CODEX_EXEC_SERVER_NOISE_REGISTRY_URL", "CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID", "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
+		"CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID"} {
 		if !slices.Contains(denies, name) {
 			t.Errorf("denies %v has no %s", denies, name)
 		}
@@ -125,7 +127,9 @@ func TestCodexPassesTheProviderQoryAsConfigPairs(t *testing.T) {
 		`model_providers.qory.env_key="OPENAI_API_KEY"`,
 		`model_providers.qory.name="qory"`,
 		`model_providers.qory.wire_api="responses"`,
+		`otel.exporter="none"`,
 		`otel.metrics_exporter="none"`,
+		`otel.trace_exporter="none"`,
 		`web_search="disabled"`,
 	}
 	if !slices.Equal(pairs, want) {
@@ -199,11 +203,14 @@ func roundTrip(t *testing.T, v any) any {
 }
 
 // TestCodexRefusesArgumentsThatChangeItsSettings pins the check of Codex's launch
-// arguments: each form of --config and -c that sets a fixed key or the endpoint's
-// setting, --enable and --disable of a fixed feature, and every form of --oss,
-// --search, --local-provider, --profile and -p is refused with an error that starts
-// with the fix, names the flag and contains no value. Ordinary arguments, a flag after
-// --, and Claude Code with the same arguments pass.
+// arguments. These are refused with an error that starts with the fix, contains the
+// flag and contains no value: each form of --config and -c that sets a fixed key, the
+// endpoint's setting, any setting at, under or above model_providers, profile or
+// profiles, or one of the addresses of OpenAI and ChatGPT; features.connectors, the
+// legacy name of apps, in a pair and in --enable or --disable; --enable and --disable
+// of a fixed feature; and every form of --oss, --search, --local-provider, --profile
+// and -p. Ordinary arguments, a flag after --, and Claude Code with the same arguments
+// pass.
 func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 	rt, err := codex.New()
 	if err != nil {
@@ -219,6 +226,23 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 		{"--config", []string{"--config=web_search=" + v}},
 		{"--config", []string{"--config", "model_providers.qory.base_url=" + v}},
 		{"--config", []string{"--config", "model_providers.qory={base_url=\"" + v + "\"}"}},
+		{"--config", []string{"--config", "model_providers.qory.supports_websockets=true"}},
+		{"-c", []string{"-c", "model_providers.qory.http_headers.x=\"" + v + "\""}},
+		{"--config", []string{"--config=model_providers.other.base_url=" + v}},
+		{"-c", []string{"-c", "model_providers={}"}},
+		{"--config", []string{"--config", "otel.exporter={otlp-http={endpoint=\"" + v + "\"}}"}},
+		{"-c", []string{"-c", "otel.trace_exporter=statsig"}},
+		{"-c", []string{"-c", "features.connectors=true"}},
+		{"--config", []string{"--config=features.connectors=true"}},
+		{"--enable", []string{"--enable", "connectors"}},
+		{"--enable", []string{"--enable=connectors"}},
+		{"--disable", []string{"--disable", "connectors"}},
+		{"-c", []string{"-c", "openai_base_url=" + v}},
+		{"--config", []string{"--config", "chatgpt_base_url=" + v}},
+		{"-c", []string{"-cexperimental_realtime_ws_base_url=" + v}},
+		{"--config", []string{"--config", "experimental_realtime_webrtc_call_base_url=" + v}},
+		{"-c", []string{"-c", "profile=" + v}},
+		{"--config", []string{"--config", "profiles." + v + ".model_provider=\"openai\""}},
 		{"-c", []string{"-c", "model_provider=" + v}},
 		{"-c", []string{"-cmodel_providers.qory.env_key=" + v}},
 		{"-c", []string{"-c=analytics.enabled=" + v}},
@@ -243,7 +267,8 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 		}
 	}
 	ordinary := []string{"exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-x",
-		"--config", "model_reasoning_effort=\"high\"", "-c", "model=\"gpt-x\"", "--enable", "undo", "--", "--oss", "-p", "x"}
+		"--config", "model_reasoning_effort=\"high\"", "-c", "model=\"gpt-x\"", "--enable", "undo", "-c", "model_provider_note=x",
+		"--config", "experimental_realtime_base_url=x", "-c", "features.connectors_extra=true", "--", "--oss", "-p", "x"}
 	if err := c.CheckArgs(ordinary); err != nil {
 		t.Errorf("%q: %v; want no refusal", ordinary, err)
 	}

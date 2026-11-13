@@ -497,6 +497,12 @@ func TestDockerCodexThroughTheWall(t *testing.T) {
 					t.Errorf("the launch's arguments %q have no --config %s before exec", args, pair)
 				}
 			}
+			// Codex prints a deprecation as an error item on standard output, such as the
+			// one for features.connectors, and a warning on standard error; the session's
+			// pairs, otel.exporter and otel.trace_exporter among them, give neither.
+			if strings.Contains(strings.ToLower(o.out), "deprecated") || strings.Contains(strings.ToLower(o.errs), "warning") {
+				t.Errorf("Codex warned about its settings\nstdout:\n%s\nstderr:\n%s", tail(o.out, 4000), tail(o.errs, 4000))
+			}
 			if hosts := otherHosts(o, k.host); len(hosts) > 0 {
 				t.Errorf("the run reached hosts other than the stub: %q", hosts)
 			}

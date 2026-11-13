@@ -5492,9 +5492,17 @@ under it, or a key it is under, which replaces the whole table:
 with `config`, the session refuses `config.flag` with such a pair, as
 `--config k=v` and `--config=k=v`. For Codex 0.167.2, it refuses too:
 
-- `-c` with such a pair, as `-c k=v`, `-ck=v` and `-c=k=v`;
+- `--config` and `-c` with a pair that sets a key of `fixed`, the endpoint's setting,
+  or one of these, which change where and how Codex sends its requests or put a
+  profile over the session's settings: every setting at, under or above
+  `model_providers`, such as `model_providers.qory.supports_websockets`; `profile`
+  and `profiles`; `openai_base_url`, `chatgpt_base_url` and
+  `experimental_realtime_*_base_url`, where `*` is one part of the key, such as
+  `ws` or `webrtc_call`. The forms are `--config k=v`, `--config=k=v`, `-c k=v`,
+  `-ck=v` and `-c=k=v`. `features.connectors`, the legacy name of `features.apps`,
+  which Codex applies after `apps`, counts as `features.apps`;
 - `--enable` and `--disable` of a feature whose `features.<name>` is a key of `fixed`,
-  `plugins` or `apps`, as `--enable x` and `--enable=x`;
+  `plugins` or `apps`, or `connectors`, as `--enable x` and `--enable=x`;
 - `--oss` and `--local-provider`, which select a local model provider;
 - `--profile` and `-p`, which layer `$CODEX_HOME/<name>.config.toml` over the
   settings, as `--profile x`, `--profile=x`, `-p x`, `-px` and `-p=x`;
