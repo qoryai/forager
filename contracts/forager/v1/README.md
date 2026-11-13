@@ -1583,9 +1583,10 @@ configuration, not as a variable: the run leaves out the value that the server p
 forager.yaml: the run leaves out the value that <SOURCE> passes, since
 denied-variables.json lists it as a forge token.` (or `a model key`) for the node's
 sources; a placeholder of the run has no line. `model_keys` has every variable a runtime
-descriptor's `model.keys` lists. It holds every row of the table but the rows that
-depend on the node and the run: the names the wall sets for the run's bundle,
-and the runtime's `denies` and `overrides`, which `runtimes.json` lists.
+descriptor's `model.keys` lists, and `CODEX_API_KEY`, which Codex reads a key from
+beside `OPENAI_API_KEY` and which its descriptor denies. It holds every row of the
+table but the rows that depend on the node and the run: the names the wall sets for
+the run's bundle, and the runtime's `denies` and `overrides`, which `runtimes.json` lists.
 
 | Name | Why |
 |---|---|
@@ -5395,9 +5396,9 @@ of `{variable}`, the variable the runtime reads it from, `{variable: ANTHROPIC_B
 and `{setting}`, a dotted key of the runtime's settings, written as a place's setting,
 `{setting: model_providers.qory.base_url}`; with `config`, the session passes the URL
 as a TOML string. A flag is no place of the endpoint. Until 2026-11-13 the endpoint
-was always a variable. On 2026-11-13 the schema accepts a setting; the session sets
-the start key's endpoint in an endpoint variable, and for an endpoint in a setting it
-sets no variable and writes no setting. `keys` lists 1 to 32 variables the
+was always a variable. The session sets the start key's endpoint in an endpoint
+variable; for an endpoint in a setting it sets no variable, and with `config` passes the
+endpoint as that setting's pair (Config, below). `keys` lists 1 to 32 variables the
 runtime reads a model key from, each `{format, auth, variable}`: the API format the key
 is for, how the runtime sends it, `auth.schema.json` with `oauth` for an OAuth token,
 and the variable. The session gives the start key's placeholder to the variable of the
@@ -5447,9 +5448,21 @@ model section`. Nor does one with a fixed key that is a dotted prefix of another
 key or of a model setting, or the reverse, or with two model settings that are equal
 or one inside the other, such as `a` and `a.b`, since a TOML key has a value or a table
 of keys, not both. Absent, a `setting` goes in
-the JSON settings file the launch passes. On 2026-11-13 the session reads `config` and
-passes none of it: the launch of a runtime with `config` comes with the Codex
-descriptor.
+the JSON settings file the launch passes; the session writes none there.
+
+With `config`, the session puts the pairs right after the launch's command, before
+every argument of the launch: `config.flag` and `key=value` for each key of `fixed`
+and, in a run with a start key whose `endpoint` is a setting, the start key's endpoint
+in that setting, sorted by key. A string is a TOML basic string in quotes, in which a
+quote, a backslash and every control character are escaped, so the pair is one line; a
+boolean is `true` or `false`; an integer is written in decimal. For Codex,
+`codex exec --json -m gpt-x "Fix the test"` starts as `codex --config
+analytics.enabled=false ... --config model_providers.qory.base_url="https://api.openai.com/v1"
+... --config web_search="disabled" exec --json -m gpt-x "Fix the test"`. Codex 0.167.2
+reads pairs before its subcommand for every subcommand, and a pair of the same key
+later in the launch's arguments overrides one of them. The pairs come before the
+resume's `args` are inserted and before the session's setup wraps the launch, and the
+session's record of the launch lists them.
 
 **Fixed**, optional: variables the session sets for the runtime in every launch, by
 name, walled or not, `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`: 1 to 64 names,

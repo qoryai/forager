@@ -14,8 +14,9 @@ import (
 )
 
 // TestLookupIsTheMachinesDescriptorThenTheContractsThenBare pins where a runtime comes
-// from by its name, and that a name is a lower-case letter and then up to 63 lower-case
-// letters, digits and dashes.
+// from by its name, the contract's claude and codex among them, a machine's descriptor
+// of codex in place of the contract's, and that a name is a lower-case letter and then
+// up to 63 lower-case letters, digits and dashes.
 func TestLookupIsTheMachinesDescriptorThenTheContractsThenBare(t *testing.T) {
 	rt, err := catalog.Lookup("claude", "")
 	if err != nil || rt.Version() == "" || !rt.ReadsOutput() {
@@ -23,8 +24,14 @@ func TestLookupIsTheMachinesDescriptorThenTheContractsThenBare(t *testing.T) {
 	}
 	runtimetest.Conforms(t, rt)
 
-	rt, err = catalog.Lookup("codex", t.TempDir())
-	if err != nil || rt.Name() != "codex" || rt.ReadsOutput() {
+	rt, err = catalog.Lookup("codex", "")
+	if err != nil || rt.Version() == "" || !rt.ReadsOutput() || rt.Stop().Signal != "SIGINT" {
+		t.Fatalf("the contract's codex: %+v %v", rt, err)
+	}
+	runtimetest.Conforms(t, rt)
+
+	rt, err = catalog.Lookup("amp", t.TempDir())
+	if err != nil || rt.Name() != "amp" || rt.ReadsOutput() {
 		t.Fatalf("a name nothing describes: %+v %v", rt, err)
 	}
 
