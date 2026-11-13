@@ -91,7 +91,8 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 // name that contains a secret as its phrase ([refusal.Shown]): a name twice, a header
 // [ReservedHeader] reports, a placeholder [DeniedPlaceholder] reports, an API
 // credential's endpoint from which [policy.EndpointHost] reads no host, an API
-// credential's path whose fixed part [policy.CleanPath] refuses ([UnclearPath]), and,
+// credential's path or a host credential's apply path whose fixed part
+// [policy.CleanPath] refuses ([UnclearPath]), and,
 // as the schema does for a document read from bytes, an API credential's
 // account_header without account_claim, the reverse, either without oauth, and an
 // account_header that [ReservedHeader] reports or that is Authorization. Of model, the
@@ -117,11 +118,11 @@ func CheckCredentials(creds []RunCredential, model string) error {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 				"the document is refused: set account_header of the credential %s to another header than %s; that header frames the request, carries the token, or the proxy sets it", name, accesskey.ShownName(h, true))
 		}
-		if c.Format != "" {
-			for _, p := range c.Paths {
+		for _, a := range c.Applies() {
+			for _, p := range a.Paths {
 				if UnclearPath(p) {
 					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-						"the document is refused: write the path %s of the credential %s without a . or .. segment, an empty segment, a backslash or an encoded slash, backslash, dot or percent sign; the proxy denies every request whose path has one, so the path would match none", accesskey.ShownValue(p, true), name)
+						"the document is refused: write the path %s of the credential %s without a . or .. segment or an empty segment, each read up to its first ; or %%3B, a backslash, or an encoded slash, backslash, dot or percent sign; the proxy denies every request whose path has one, so the path would match none", accesskey.ShownValue(p, true), name)
 				}
 			}
 		}
@@ -221,11 +222,11 @@ func ReservedHeader(name string) bool {
 }
 
 // UnclearPath reports whether a path of a credential's paths has a part
-// [policy.CleanPath] refuses in a request's path, such as /a/../b, // or %2e: a request
-// path with one is denied before any credential's paths are read, so the path matches
-// none. A path that ends in * is read as the request paths it matches: the text after
-// its last slash is the start of a segment, so /a/.* and /a/..* match /a/.x and /a/..x,
-// and /a/../* matches none.
+// [policy.CleanPath] refuses in a request's path, such as /a/../b, /a/..;/b, // or %2e:
+// a request path with one is denied before any credential's paths are read, so the
+// path matches none. A path that ends in * is read as the request paths it matches: the
+// text after its last slash is the start of a segment, so /a/.* and /a/..* match /a/.x
+// and /a/..x, and /a/../* and /a/..;* match none.
 func UnclearPath(path string) bool {
 	if prefix, ok := strings.CutSuffix(path, "*"); ok {
 		path = prefix + "x"
