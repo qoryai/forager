@@ -648,7 +648,7 @@ func TestAWalledAbsolutePrefixInAReadOnlyMountGetsNoTranscript(t *testing.T) {
 	}
 	evs := events(t, res)
 	out := runLogText(t, evs)
-	fix := "Make the mount " + home + " writable"
+	fix := "Show resume.prefix in a writable mount, or use a descriptor whose resume.prefix lies outside read-only mounts"
 	cause := "resume.prefix " + prefix + " lies inside it, at " + homeInside + ", read-only, so the runtime cannot write its transcript there"
 	failed := fix + ". The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: " + cause + "\n"
 	none := fix + ". A continuation of this run starts the runtime without a resume: " + cause + "\n"
@@ -691,7 +691,7 @@ func TestAWalledAbsolutePrefixOutsideEveryMountIsBound(t *testing.T) {
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: inner, Target: homeInside + "/sessions/2026"}}
 	err = runErr(sp)
-	if want := "Show the mount " + inner + " outside resume.prefix " + prefix + ", or at a place that holds it"; err == nil || !strings.Contains(err.Error(), want) {
+	if want := "Show the mount " + inner + " outside resume.prefix " + prefix + ", or at a place that contains it"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("a mount inside the prefix: %v; want %q", err, want)
 	}
 	if w.wrapped {

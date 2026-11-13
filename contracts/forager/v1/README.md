@@ -2340,7 +2340,8 @@ without a resume: "/root" has mode 0700 and owner 0:0 in the image, so the agent
 restored transcript a second line reports that the restore failed (§The run API, The
 transcript of a paused run). The wall makes each directory between the home and the
 bind's place that the image does not have, such as `~/.claude`, mode `0700` and owned by
-the agent's uid and gid, before the agent's container starts. The session reads one path
+the agent's uid and gid, before the agent's container starts, except for an absolute
+prefix, whose missing parents the engine makes owned by root. The session reads one path
 in the directory, `<slug>/<session id>.jsonl`, with `<slug>` from the working directory
 inside, and ignores `resume.path_from`. It takes the session id from the first hook input
 or `dev.qory.runtime.started` with `session_id`, and reads only under an id that is a
@@ -2360,14 +2361,17 @@ runtime without a resume: the file does not exist, so the session sent no transc
 An absolute `resume.prefix` inside the place inside of a writable mount, its `Target`
 or else its path (§The wall), gets no transcript directory and no bind: the session
 reads the transcript, and writes a restored one, at the matching path in the innermost
-such mount on the machine, under the same rules as in the transcript directory. When the
-innermost mount whose place holds it is read-only, the session starts the runtime
-without the descriptor's `resume.args`, sends no transcript and writes one line, such as
-`Make the mount /srv/runs/r1/codex-home writable. A continuation of this run starts the
-runtime without a resume: resume.prefix /var/lib/qory-codex-home/sessions/ lies inside
-it, at /var/lib/qory-codex-home, read-only, so the runtime cannot write its transcript
-there`; with a restored transcript, a line before it reports that the restore failed. A
-mount whose place inside lies inside an absolute `resume.prefix` fails the session.
+such mount on the machine, under the same rules as in the transcript directory. A
+restored transcript is created for the session's uid, so a runtime that runs as another
+uid cannot append to it. When the innermost mount whose place contains it is read-only,
+the session starts the runtime without the descriptor's `resume.args`, sends no
+transcript and writes one line, such as `Show resume.prefix in a writable mount, or use
+a descriptor whose resume.prefix lies outside read-only mounts. A continuation of this
+run starts the runtime without a resume: resume.prefix
+/var/lib/qory-codex-home/sessions/ lies inside it, at /var/lib/qory-codex-home,
+read-only, so the runtime cannot write its transcript there`; with a restored
+transcript, a line before it reports that the restore failed. A mount whose place
+inside lies inside an absolute `resume.prefix` fails the session.
 
 The session reads the bytes the runtime appends, once a second, and sends whole lines;
 the part of a line after the last newline waits for the rest of the line. It reads the
@@ -5185,7 +5189,7 @@ order. The session writes the bytes at `resume.path`, under the runtime's home o
 its absolute path, then starts the runtime with the descriptor's `resume.args` added, `{session_id}` replaced by
 `resume.session_id`: `claude --resume <session id>` for Claude Code (§The descriptor,
 Resume). Behind a wall, the session writes them in the session's transcript directory,
-or in the writable mount whose place inside holds an absolute `resume.prefix` (§The
+or in the writable mount whose place inside contains an absolute `resume.prefix` (§The
 events, A session's transcript), before the agent's container starts: it makes
 the slug directory, mode `0700`, and creates the file, mode `0600`, where none exists,
 with no symbolic link among its names. The resumed runtime appends to that file, under
@@ -6022,22 +6026,35 @@ up in its parent, so two binds of one root are allowed:
   bind is one the agent replaces, and a writable part of a read-only one writes what the
   run shows read-only;
 - a mount may set `Target`, its place inside: an absolute, clean path, apart from
-  `/qory`, with no comma, double quote or newline. Empty, the place inside is its path. A
-  target that breaks this fails the join, with no code. A mount with a target is always
+  `/qory`, `/var/lib/docker`, `/proc`, `/sys` and `/dev`, with no comma, double quote or
+  newline. Empty, the place inside is its path. A target that breaks this fails the join,
+  with no code. A name from `/` down to a target that is a symbolic link in the image,
+  such as `/lib64` in an image where it links to `lib`, fails the session: the engine
+  follows it, so the bind could land over another mount. A name inside another mount's
+  place inside is not read from the image. A mount with a target is always
   bound, never reached through another bind, and its path on the machine is, contains and
   lies inside no other place's: `mount_mode_conflict` for the other mode, otherwise
   `mount_target_conflict`. So the agent cannot change a read-only file through a
   writable directory of the machine.
   Inside, places are nested by their places inside, when one of them has a target: a
-  read-only place may lie inside a writable one, such as a read-only
-  `/var/lib/agent-home/hooks.json` in a writable `/var/lib/agent-home`, and a writable
-  place inside a read-only one is `mount_mode_conflict`. Two places at one place inside,
+  read-only place may lie one name inside a writable one, such as a read-only
+  `/var/lib/agent-home/hooks.json` in a writable `/var/lib/agent-home`, or deeper when
+  each directory between them is a read-only place; otherwise it is
+  `mount_mode_conflict`, since the agent can rename a directory of the writable place
+  and the bind moves with it. A writable place inside a read-only one is
+  `mount_mode_conflict`. Under nested Docker this is unverified: the enclosure's root,
+  which the agent reaches through the inner Docker daemon, may remount a read-only place
+  writable (Nested Docker, below). A symbolic link on the machine among the names from a
+  writable place's path down to a place inside it, such as a link at
+  `/srv/runs/r1/codex-home/hooks.json` that an agent of an earlier session made, is
+  `mount_target_conflict`, at the join and again before the wall step: the engine
+  follows it. Two places at one place inside,
   and a target that is, contains or lies inside the workspace inside, or the session's
   directory, are `mount_target_conflict`, with the inner place and the outer one as its
-  names, in that order, the session's directory last. For a run whose policy names its
+  names, in that order, the session's directory last. For a run whose policy gives its
   image by reference the workspace inside is `/workspace`. The session lists the binds
   in the order of their places inside, fewer names first, so a bind comes after the
-  one whose place holds it;
+  one whose place inside contains it;
 - a session with `SessionSpec.WorkspaceReadOnly` binds the workspace read-only for its
   container alone, so a write into the workspace inside fails with `Read-only file
   system`. Under nested Docker this is unverified: the enclosure's root, which the agent

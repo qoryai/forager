@@ -441,7 +441,7 @@ func TestATargetAtTheWorkspaceInsideOfAnImageByReferenceIsNoRun(t *testing.T) {
 			continue
 		}
 		r := refusalOf(t, "mount_target_conflict", err)
-		want := "the mount " + home + " at " + target + " overlaps /workspace, where a run whose image its policy names by " +
+		want := "the mount " + home + " at " + target + " overlaps /workspace, where a run whose policy gives its image by " +
 			"reference sees the workspace " + sp.Dir + ": a mount's target can't overlap the workspace inside"
 		if !slices.Equal(r.Names, []string{home, sp.Dir}) || r.Detail != want {
 			t.Errorf("the target %s: names %q, detail %q", target, r.Names, r.Detail)

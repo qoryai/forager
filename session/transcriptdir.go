@@ -124,7 +124,7 @@ func inMount(prefix, place string, mounts []wall.Mount) (*transcriptRoot, error)
 		at := placeInside(m)
 		switch {
 		case at != place && under(place, at):
-			return nil, fmt.Errorf("Show the mount %s outside resume.prefix %s, or at a place that holds it: "+
+			return nil, fmt.Errorf("Show the mount %s outside resume.prefix %s, or at a place that contains it: "+
 				"the session reads the runtime's transcript below resume.prefix, and the mount is shown at %s, "+
 				"inside it", pathShown(m.Path), pathShown(prefix), pathShown(at))
 		case under(at, place) && (holder == nil || len(parts(at)) > len(parts(placeInside(*holder)))):
@@ -137,7 +137,7 @@ func inMount(prefix, place string, mounts []wall.Mount) (*transcriptRoot, error)
 	at := placeInside(*holder)
 	if holder.ReadOnly {
 		return &transcriptRoot{unbound: &wall.Unbound{
-			Fix: "Make the mount " + pathShown(holder.Path) + " writable",
+			Fix: "Show resume.prefix in a writable mount, or use a descriptor whose resume.prefix lies outside read-only mounts",
 			Cause: fmt.Sprintf("resume.prefix %s lies inside it, at %s, read-only, so the runtime cannot write its "+
 				"transcript there", pathShown(prefix), pathShown(at)),
 		}}, nil

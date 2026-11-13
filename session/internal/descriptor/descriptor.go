@@ -441,7 +441,7 @@ func (r *Resume) check() error {
 	}
 	for _, p := range []string{r.Prefix, r.Path} {
 		if slices.Contains(strings.Split(p, "/"), "..") {
-			return fmt.Errorf("resume: remove the .. segment from %s: the transcript lies under prefix", accesskey.ShownValue(p, true))
+			return fmt.Errorf("resume: remove the .. segment from %s: the transcript lies under resume.prefix", accesskey.ShownValue(p, true))
 		}
 	}
 	if !strings.HasPrefix(r.Path, r.Prefix) {

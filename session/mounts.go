@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
@@ -533,13 +534,13 @@ func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 			return mountPlan{}, nil, &Refusal{
 				Code:  refusal.MountTargetConflict,
 				Names: pathsShown(m.Path, p.workspace),
-				Detail: fmt.Sprintf("the mount %s at %s overlaps %s, where a run whose image its policy names by "+
+				Detail: fmt.Sprintf("the mount %s at %s overlaps %s, where a run whose policy gives its image by "+
 					"reference sees the workspace %s: a mount's target can't overlap the workspace inside",
 					pathShown(m.Path), pathShown(m.Target), workspaceInside, pathShown(p.workspace)),
 			}
 		}
 		return mountPlan{}, nil, fmt.Errorf("%s is shown at the same path inside, which overlaps %s, where a run "+
-			"whose image its policy names by reference sees its workspace", pathShown(m.Path), workspaceInside)
+			"whose policy gives its image by reference sees its workspace", pathShown(m.Path), workspaceInside)
 	}
 	inside := func(s string) string { return translate(s, p.root, workspaceInside) }
 	out.Dir = inside(p.Dir)
@@ -671,14 +672,17 @@ func replacePaths(s string, pairs []pathPair, rule pathRule) string {
 //   - mount_mode_conflict: a place inside another one, or the same, of the other mode,
 //     by their paths on this machine: a read-only part of a writable bind is one the
 //     agent replaces, and a writable part of a read-only one writes what the run shows
-//     read-only. By their places inside, a writable place inside a read-only one, when
-//     one of them has a Target. Its names are the inner place and the outer one, in
-//     that order.
+//     read-only. By their places inside, when one of them has a Target, a writable place
+//     inside a read-only one, and a read-only place more than one name inside a
+//     writable one with a directory between them that is no read-only place. Its names
+//     are the inner place and the outer one, in that order.
 //   - mount_target_conflict: a mount with a Target whose path on this machine is,
 //     contains or lies inside another place's path of the same mode; two places at one
 //     place inside, one of them with a Target; and a Target that is, contains or lies
-//     inside the workspace or the session's directory. Its names are the inner place and
-//     the outer one, in that order, the session's directory last.
+//     inside the workspace or the session's directory; and a symbolic link on this
+//     machine among the names from a writable place's path down to a place inside it,
+//     one of them with a Target. Its names are the inner place and the outer one, in
+//     that order, the session's directory last.
 //   - mount_through_link: a place, of either mode, whose path goes through a link
 //     inside a writable place, or inside a place of SessionSpec.Written, and does not resolve
 //     into it: the agent that writes the link chooses what is bound. Its names are the
@@ -690,7 +694,8 @@ func replacePaths(s string, pairs []pathPair, rule pathRule) string {
 // place lets the agent write. A mount with a Target is always bound, shown at its
 // Target, and its path on this machine overlaps no other place's, so the agent cannot
 // change a read-only one through a writable directory of this machine. Inside, a
-// read-only place may lie inside a writable one: the binds are listed by their places
+// read-only place may lie one name inside a writable one, or deeper below read-only
+// places alone: the binds are listed by their places
 // inside, fewer names first, so a bind comes after the one whose place holds it. The
 // workspace gets the checks of a writable place, and is the working directory inside,
 // in one of the binds. Its mode is writable, or read-only with
@@ -936,8 +941,19 @@ func placeInside(m wall.Mount) string {
 // its helper is: no mount's Target is, contains or lies inside it.
 var qoryInside = filepath.Dir(wall.HelperPath)
 
+// wallPlaces are the places inside that a mount's Target is, contains or lies inside of
+// none of, each with why: the wall's /qory, the store of nested Docker, and the file
+// systems the engine mounts in every container.
+var wallPlaces = []struct{ place, why string }{
+	{qoryInside, "the wall shows its helper there"},
+	{"/var/lib/docker", "the wall keeps the store of nested Docker there"},
+	{"/proc", "the engine mounts a kernel file system there"},
+	{"/sys", "the engine mounts a kernel file system there"},
+	{"/dev", "the engine mounts the container's devices there"},
+}
+
 // checkMountTarget fails a mount whose Target is set and is not absolute and clean, is,
-// contains or lies inside [qoryInside], or contains a comma, a double quote or a
+// contains or lies inside one of [wallPlaces], or contains a comma, a double quote or a
 // newline, which the wall's bind cannot carry. A mount with no Target passes.
 func checkMountTarget(m wall.Mount) error {
 	t := m.Target
@@ -950,9 +966,12 @@ func checkMountTarget(m wall.Mount) error {
 	case !filepath.IsAbs(t) || filepath.Clean(t) != t:
 		return fmt.Errorf("Set the target of the mount %s to an absolute, clean path: %s is not one",
 			pathShown(m.Path), accesskey.ShownValue(t, true))
-	case under(qoryInside, t) || under(t, qoryInside):
-		return fmt.Errorf("Set the target of the mount %s to a place apart from %s: %s overlaps it, and the wall "+
-			"shows its helper there", pathShown(m.Path), qoryInside, accesskey.ShownValue(t, true))
+	}
+	for _, w := range wallPlaces {
+		if under(w.place, t) || under(t, w.place) {
+			return fmt.Errorf("Set the target of the mount %s to a place apart from %s: %s overlaps it, and %s",
+				pathShown(m.Path), w.place, accesskey.ShownValue(t, true), w.why)
+		}
 	}
 	return nil
 }
@@ -960,7 +979,11 @@ func checkMountTarget(m wall.Mount) error {
 // checkPlaces checks the places inside of places, each pair of which one has a Target:
 // two at one place, or one that is, contains or lies inside the workspace, is
 // mount_target_conflict, and a writable place inside a read-only one is
-// mount_mode_conflict. A read-only place inside a writable one passes. A Target that is,
+// mount_mode_conflict. A read-only place inside a writable one passes when it lies one
+// name below it, or when each directory between them is a read-only place: the agent
+// can rename any other directory of the writable place, and the bind moves with it. A
+// symbolic link on this machine among the names from a writable place's path down to
+// the place inside it is mount_target_conflict ([linkBelow]). A Target that is,
 // contains or lies inside sessionDir, the session's directory, is mount_target_conflict
 // too. Places neither of which has a Target are checked by their paths on this machine
 // alone.
@@ -985,6 +1008,23 @@ func checkPlaces(places []shown, sessionDir string) error {
 			if in.bindsWritable() && !out.bindsWritable() {
 				return modeConflict(in, out, false)
 			}
+			if !out.bindsWritable() {
+				continue
+			}
+			if !in.bindsWritable() {
+				if dir, ok := movable(places, out.place, in.place); ok {
+					return &Refusal{
+						Code:  refusal.MountModeConflict,
+						Names: pathsShown(in.path, out.path),
+						Detail: fmt.Sprintf("%s (read-only) lies inside %s (writable), below %s, which the agent can "+
+							"rename: a read-only place lies one name below a writable one, or below read-only places alone",
+							in.shownAs(), out.shownAs(), pathShown(dir)),
+					}
+				}
+			}
+			if err := linkBelow(in, out); err != nil {
+				return err
+			}
 		}
 	}
 	if sessionDir == "" {
@@ -997,6 +1037,53 @@ func checkPlaces(places []shown, sessionDir string) error {
 				Names: pathsShown(p.path, sessionDir),
 				Detail: fmt.Sprintf("%s overlaps the session's directory %s, which the enclosure shows at its path: "+
 					"a mount's target can't overlap the session's directory", p.shownAs(), pathShown(sessionDir)),
+			}
+		}
+	}
+	return nil
+}
+
+// movable returns the first directory strictly between outer and inner, places inside,
+// that is no read-only place of places, and false when there is none.
+func movable(places []shown, outer, inner string) (string, bool) {
+	names := parts(inner)[len(parts(outer)):]
+	for k := 1; k < len(names); k++ {
+		dir := filepath.Join(append([]string{outer}, names[:k]...)...)
+		if !slices.ContainsFunc(places, func(p shown) bool { return p.place == dir && !p.bindsWritable() }) {
+			return dir, true
+		}
+	}
+	return "", false
+}
+
+// linkBelow fails the place in, whose place inside lies inside the writable place out's,
+// when a name from out's path on this machine down to in's place inside is a symbolic
+// link on this machine: the engine follows it to bind in, so an agent of an earlier
+// session that wrote the link chooses where in is bound. The check stops at the first
+// name that does not exist, which the engine makes.
+func linkBelow(in, out shown) error {
+	rel, err := filepath.Rel(out.place, in.place)
+	if err != nil {
+		return err
+	}
+	// at is the name as it resolves, which is checked, and shown the name below out's
+	// path as passed, which a refusal words.
+	at, shown := out.at.String(), out.path
+	for _, name := range parts(rel) {
+		at, shown = filepath.Join(at, name), filepath.Join(shown, name)
+		fi, err := os.Lstat(at)
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("cannot check %s on the way to %s: %w", pathShown(shown), in.shownAs(), accesskey.ShownError(err))
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			return &Refusal{
+				Code:  refusal.MountTargetConflict,
+				Names: pathsShown(in.path, out.path),
+				Detail: fmt.Sprintf("Remove the symbolic link %s from %s: the engine binds %s through it and follows "+
+					"the link, so the bind could land outside the mount", pathShown(shown), out.shownAs(), in.shownAs()),
 			}
 		}
 	}
@@ -1027,10 +1114,10 @@ func hostConflict(in, out shown, same bool) *Refusal {
 	if same {
 		how = "is"
 	}
-	code, why := refusal.MountTargetConflict, "a mount with a target can't share a path on this machine with another place"
+	code, why := refusal.MountTargetConflict, "a mount with a target can't share a path with another place"
 	if in.bindsWritable() != out.bindsWritable() {
 		code = refusal.MountModeConflict
-		why = "a mount with a target can't share a path on this machine with a place of the other mode"
+		why = "a mount with a target can't share a path with a place of the other mode"
 	}
 	return &Refusal{
 		Code:  code,

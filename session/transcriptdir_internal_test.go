@@ -132,7 +132,9 @@ func TestAnAbsolutePrefixIsReadInTheMountThatHoldsIt(t *testing.T) {
 		resume string
 		mounts []wall.Mount
 		want   transcriptRoot
-		fix    string
+		// at is the place inside of the read-only mount the cause gives, empty for a
+		// writable one.
+		at string
 	}{
 		"in a writable mount": {absolute, []wall.Mount{{Path: hostHome, Target: home}},
 			transcriptRoot{dir: hostHome, under: "sessions"}, ""},
@@ -144,10 +146,10 @@ func TestAnAbsolutePrefixIsReadInTheMountThatHoldsIt(t *testing.T) {
 		"in a writable mount shown at its path": {absolute, []wall.Mount{{Path: "/var/lib"}},
 			transcriptRoot{dir: "/var/lib", under: "agent-home/sessions"}, ""},
 		"in a read-only mount": {absolute, []wall.Mount{{Path: hostHome, ReadOnly: true, Target: home}},
-			transcriptRoot{}, "Make the mount " + hostHome + " writable"},
+			transcriptRoot{}, home},
 		"in a read-only mount inside a writable one": {absolute,
 			[]wall.Mount{{Path: hostHome, Target: home}, {Path: hostSessions, ReadOnly: true, Target: home + "/sessions"}},
-			transcriptRoot{}, "Make the mount " + hostSessions + " writable"},
+			transcriptRoot{}, home + "/sessions"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			runDir := t.TempDir()
@@ -155,9 +157,11 @@ func TestAnAbsolutePrefixIsReadInTheMountThatHoldsIt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c.fix != "" {
-				if got.unbound == nil || got.unbound.Fix != c.fix || got.dir != "" || got.bind != "" {
-					t.Errorf("%+v; want unbound with the fix %q", got, c.fix)
+			if c.at != "" {
+				const fix = "Show resume.prefix in a writable mount, or use a descriptor whose resume.prefix lies outside read-only mounts"
+				if got.unbound == nil || got.unbound.Fix != fix || !strings.Contains(got.unbound.Cause, ", at "+c.at+", read-only") ||
+					got.dir != "" || got.bind != "" {
+					t.Errorf("%+v; want unbound with the fix %q and the place %s", got, fix, c.at)
 				}
 				return
 			}
@@ -180,7 +184,7 @@ func TestAnAbsolutePrefixIsReadInTheMountThatHoldsIt(t *testing.T) {
 
 	_, err = makeTranscriptDir(describedResume(t, absolute), t.TempDir(), 1, t.TempDir(), nil,
 		[]wall.Mount{{Path: hostHome, Target: home}, {Path: hostHooks, ReadOnly: true, Target: home + "/sessions/2026"}})
-	if want := "Show the mount " + hostHooks + " outside resume.prefix " + home + "/sessions/, or at a place that holds it"; err == nil || !strings.HasPrefix(err.Error(), want) {
+	if want := "Show the mount " + hostHooks + " outside resume.prefix " + home + "/sessions/, or at a place that contains it"; err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Errorf("a mount inside the prefix: %v; want an error that starts with %q", err, want)
 	}
 
