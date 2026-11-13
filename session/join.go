@@ -850,14 +850,18 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	summaries, _ := rt.(runtimes.Summaries)
 	// tr sends the runtime's transcript, for a runtime with resume; nil otherwise.
 	var tr *transcript
-	// resumed is true once the launch keeps the resume arguments the session added; the
-	// runtime's first dev.qory.runtime.started then has source resume where its rule
-	// gives startup, as Codex's thread.started does whether codex exec started or
-	// resumed the session. firstSeen is true once that first event was seen.
-	var resumed, firstSeen atomic.Bool
+	// resumedID is the restored session id, a string, once the launch keeps the resume
+	// arguments the session added. The runtime's first dev.qory.runtime.started then
+	// has source resume where its rule gives startup, as Codex's thread.started does
+	// whether codex exec started or resumed the session, when its session_id is that
+	// id: a runtime that started a session of another id did not resume. firstSeen is
+	// true once that first event was seen.
+	var resumedID atomic.Value
+	var firstSeen atomic.Bool
 	mapper := parents.New(rt, func(e runtimes.Event) {
 		if e.Type == "dev.qory.runtime.started" {
-			if !firstSeen.Swap(true) && resumed.Load() && e.Data["source"] == "startup" {
+			id, _ := resumedID.Load().(string)
+			if !firstSeen.Swap(true) && id != "" && e.Data["source"] == "startup" && e.Data["session_id"] == id {
 				e.Data = maps.Clone(e.Data)
 				e.Data["source"] = "resume"
 			}
@@ -923,7 +927,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			r.writeLog("stderr", n, 0, []byte(neutral(noResume(unbound.Fix, unbound.Cause))+"\n"))
 		}
 	}
-	resumed.Store(restore != nil)
+	if restore != nil {
+		resumedID.Store(restore.sessionID)
+	}
 	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
 	// starts it inside, which sets the proxy and socket variables by the addresses the

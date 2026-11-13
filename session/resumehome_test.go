@@ -176,6 +176,45 @@ func TestTheHomeVariableIsReadFromTheRuntimesEnvironment(t *testing.T) {
 	})
 }
 
+// TestOnlyTheResumedStartHasSourceResume pins the source of an unwalled homer's starts
+// when the run answer has a resume. The homer prints two starts, each with the session
+// id of the paused run when its arguments have resume, and with another id when they
+// do not. After a restore, the first start has source resume and the second startup.
+// When the copy of the transcript fails, the runtime starts without the resume
+// arguments, under another session id, and both starts have source startup.
+func TestOnlyTheResumedStartHasSourceResume(t *testing.T) {
+	const twice = `case " $* " in *" resume "*) id=` + rolloutID + `;; *) id=5d0c6a51-3b2e-4f7a-9c1d-8e6f4a2b0c37;; esac
+echo "args: $*"
+echo '{"type":"start","session_id":"'$id'","source":"exec"}'
+echo '{"type":"start","session_id":"'$id'","source":"exec"}'
+`
+	const paused = "/srv/another-home/sessions/2025/01/02/rollout-p-" + rolloutID + ".jsonl"
+	sources := func(t *testing.T, homeVar string) []any {
+		t.Helper()
+		sp := homerSpec(t, homeVar, paused)
+		sp.Args = []string{"-c", twice, "sh", "exec", "--json"}
+		res, err := run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []any
+		for _, e := range ofType(events(t, res), "dev.qory.runtime.started") {
+			got = append(got, data(e)["source"])
+		}
+		return got
+	}
+	if got := sources(t, t.TempDir()); fmt.Sprint(got) != "[resume startup]" {
+		t.Errorf("after a restore, the starts have sources %v; want [resume startup]", got)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := sources(t, file); fmt.Sprint(got) != "[startup startup]" {
+		t.Errorf("after a failed copy, the starts have sources %v; want [startup startup]", got)
+	}
+}
+
 // startedFrom checks that evs have one dev.qory.runtime.started, with source.
 func startedFrom(t *testing.T, evs []map[string]any, source string) {
 	t.Helper()
