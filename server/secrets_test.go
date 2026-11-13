@@ -6,10 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
@@ -161,6 +164,19 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists a credential twice"},
 		"before 1970": {func(r *server.SecretsRequest) { r.Timestamp = -1 },
 			"the secrets request: set this machine's clock to the right time; the timestamp is before 1970"},
+		"seven unauthorized": {func(r *server.SecretsRequest) {
+			r.Credentials = []string{"a", "b", "c", "d", "e", "f", "g"}
+			r.Unauthorized = r.Credentials
+		}, "report this bug in the gateway's secrets request to the Forager maintainers; the request lists 7 unauthorized keys, and a request lists at most 6"},
+		"an unauthorized key not in credentials": {func(r *server.SecretsRequest) { r.Unauthorized = []string{"other"} }, unauthorizedBug},
+		"an unauthorized key twice": {func(r *server.SecretsRequest) {
+			r.Credentials = []string{"model", "model-2"}
+			r.Unauthorized = []string{"model", "model"}
+		}, unauthorizedBug},
+		"unauthorized keys out of order": {func(r *server.SecretsRequest) {
+			r.Credentials = []string{"model", "model-2"}
+			r.Unauthorized = []string{"model-2", "model"}
+		}, unauthorizedBug},
 	} {
 		r := ok
 		c.change(&r)
@@ -170,6 +186,79 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 	}
 	if _, err := ok.Body(); err != nil {
 		t.Error(err)
+	}
+	// The unauthorized keys go in the body, in the order of credentials, and a request
+	// after no 401 has none; the schema takes both.
+	schema, err := contracts.Compile("secrets-request.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	with := ok
+	with.Credentials, with.Unauthorized = []string{"model", "forge", "model-2"}, []string{"model", "model-2"}
+	for _, r := range []server.SecretsRequest{ok, with} {
+		b, err := r.Body()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "unauthorized") != (r.Unauthorized != nil) {
+			t.Errorf("the body %s", b)
+		}
+		doc, _ := contracts.Decode("r.json", b)
+		if err := schema.Validate(doc); err != nil {
+			t.Errorf("the schema refuses %s: %v", b, err)
+		}
+	}
+}
+
+// unauthorizedBug is Body's error for an unauthorized list out of its form.
+const unauthorizedBug = "report this bug in the gateway's secrets request to the Forager maintainers; an unauthorized key is not in credentials, is listed twice, or is out of the order of credentials"
+
+// deadlines records the deadline of each request's context, and answers 503.
+type deadlines struct {
+	mu  sync.Mutex
+	got []time.Duration
+}
+
+func (d *deadlines) RoundTrip(r *http.Request) (*http.Response, error) {
+	at, ok := r.Context().Deadline()
+	d.mu.Lock()
+	if ok {
+		d.got = append(d.got, time.Until(at))
+	} else {
+		d.got = append(d.got, 0)
+	}
+	d.mu.Unlock()
+	return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: http.NoBody, Header: http.Header{}, Request: r}, nil
+}
+
+// TestTheSecretsRequestWaits30Seconds pins the timeouts: a secrets request's answer
+// may take SecretsTimeout, 30 seconds, and every other request's Timeout, 10 seconds;
+// a client given with a Timeout that is not zero keeps it for both.
+func TestTheSecretsRequestWaits30Seconds(t *testing.T) {
+	if server.SecretsTimeout != 30*time.Second || server.Timeout != 10*time.Second {
+		t.Fatalf("SecretsTimeout %v, Timeout %v", server.SecretsTimeout, server.Timeout)
+	}
+	v := newVerified(t)
+	body, err := server.SecretsRequest{Version: 1, RunID: runID, RunConfiguration: "sha256=" + strings.Repeat("a", 64), Credentials: []string{"model"}, Timestamp: 1}.Body()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		timeout       time.Duration
+		secrets, rest time.Duration
+	}{{0, server.SecretsTimeout, server.Timeout}, {time.Minute, time.Minute, time.Minute}} {
+		d := &deadlines{}
+		cl := v.client()
+		cl.HTTP = &http.Client{Transport: d, Timeout: c.timeout}
+		cl.Secrets(context.Background(), v.srv.URL+"/v1/secrets", body)
+		cl.RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
+		d.mu.Lock()
+		got := slices.Clone(d.got)
+		d.mu.Unlock()
+		near := func(have, want time.Duration) bool { return have <= want && have > want-5*time.Second }
+		if len(got) != 2 || !near(got[0], c.secrets) || !near(got[1], c.rest) {
+			t.Errorf("a client with Timeout %v: deadlines %v; want %v, then %v", c.timeout, got, c.secrets, c.rest)
+		}
 	}
 }
 

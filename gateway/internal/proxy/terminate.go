@@ -457,11 +457,15 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 				t.p.observe(d)
 			}
 			name, ok := resp.Request.Context().Value(keyedKey{}).(string)
-			if rs := resendOf(resp.Request); rs != nil {
-				// The key the request went with last, after a resend another than the first.
+			rs := resendOf(resp.Request)
+			if rs != nil {
+				// A resend may have sent the request with another key: name is the key
+				// of the response.
 				name = rs.name
 			}
-			if ok && resp.StatusCode == http.StatusUnauthorized {
+			// For a 401 on the model API's path, [resend.reject] has requested the
+			// key's value again; for a 401 on another path, this code requests it.
+			if ok && (rs == nil || !rs.model) && resp.StatusCode == http.StatusUnauthorized {
 				// The credential the proxy set on the request, of those of the host.
 				if i := slices.IndexFunc(creds, func(c *Credential) bool { return c.Name == name }); i >= 0 && creds[i].Rejected != nil {
 					creds[i].Rejected()
@@ -538,9 +542,9 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			group = t.p.group(c.Name)
 		}
 		if group != nil && (group.g.Passed() || !keys.ready) {
-			// The proxy passed a limit refusal to the session, or every key of the group is
-			// in cooldown, which stops the session as a passed refusal does: until its join
-			// ends, no request with the placeholder reaches the provider.
+			// The proxy passed a limit refusal or a 401 to the session, or no key of the
+			// group is usable, which stops the session as a passed refusal does: until its
+			// join ends, no request with the placeholder reaches the provider.
 			group.g.Pass()
 			t.p.limitPassed(w, req)
 			return

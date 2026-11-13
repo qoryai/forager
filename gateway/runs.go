@@ -585,6 +585,9 @@ type decision struct {
 	images    *server.LinkImages
 	fetched   *run.Fetched
 	labels    map[string]string
+	// revoked and pending are the model keys a reopened run's record has out, and with
+	// their renewal pending, after a 401 ([run.Config.Revoked]); nil for an open.
+	revoked, pending []string
 }
 
 // holdError is a failure of [run.Run.Hold] that may pass: a fetch of the run's values
@@ -610,7 +613,7 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 		// The gateway's selection is for a run that attached with a run key alone.
 		selects = g.cfg.Selects
 	}
-	var secrets func(context.Context, string, []string) (sealed.Values, error)
+	var secrets func(context.Context, string, []string, []string) (sealed.Values, error)
 	if g.client != nil {
 		secrets = g.secrets(lr.id)
 	}
@@ -618,6 +621,7 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 		RunID: lr.id, Node: g.cfg.Policy, Server: g.client != nil, Fetched: d.fetched, Labels: d.labels, Wall: d.wall,
 		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(d.images), Passes: lr.passing, Report: g.report,
 		Narrowing: narrowingOf(d.narrowing), Secrets: secrets, Log: lr.logLine, Clock: g.cfg.renewClock, StackHosts: g.cfg.StackHosts,
+		Revoked: d.revoked, Pending: d.pending,
 	})
 	if err != nil {
 		return nil, err
@@ -696,14 +700,28 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 		}
 		format, stream := r.ModelAPI()
 		lr.keys.SetFormat(format)
+		// A key the model provider returns 401 for is renewed as unauthorized.
+		r.SetKeyGroup(lr.keys)
 		if lr.remote {
-			// The mark that the proxy passed a limit refusal to the session, for a
-			// gateway that starts again. Called on the proxy's request path: a write
-			// that fails is reported, and the request goes on.
+			// The mark that the proxy passed a limit refusal or a 401 to the session,
+			// with the stop's reason once an answer has it, and the keys out of use
+			// after a 401, for a gateway that starts again. Called on the proxy's
+			// request path, the batch's and the renewal's: a write that fails is
+			// reported, and the request goes on.
 			dir, runID := lr.st.Dir(), lr.id
 			lr.keys.OnPassed(func(passed bool) {
 				if err := markLimit(dir, passed); err != nil {
 					g.report(fmt.Sprintf("run %s: writing its model key mark: %v", runID, err))
+				}
+			})
+			lr.keys.OnStop(func(reason string) {
+				if err := markStop(dir, reason); err != nil {
+					g.report(fmt.Sprintf("run %s: writing its model key mark: %v", runID, err))
+				}
+			})
+			lr.keys.OnUnauthorized(func(keys []modelkey.Unauthorized) {
+				if err := writeUnauthorized(dir, keys); err != nil {
+					g.report(fmt.Sprintf("run %s: check the run's record directory: writing its model keys after a 401 failed: %v", runID, err))
 				}
 			})
 		}

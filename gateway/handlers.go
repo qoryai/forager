@@ -523,12 +523,12 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	digest := lr.reloadDigest
 	lr.mu.Unlock()
 	g.answerHeaders(s, w, r, digest)
-	if lr.keys.Passed() {
-		// The proxy passed a model provider's limit refusal to the session: the session
-		// stops the runtime, and the run pauses.
+	if reason, ok := lr.keys.Stop(); ok {
+		// The proxy passed a model provider's limit refusal or 401 to the session: the
+		// session stops the runtime, and the run pauses, or fails when no key is left.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		w.Write(stopModelKeyLimit)
+		w.Write(stopBody(reason))
 	} else {
 		w.WriteHeader(http.StatusAccepted)
 	}
@@ -538,9 +538,20 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// stopModelKeyLimit is the body of the answer to a batch after the proxy passed a
-// limit refusal to the session, link-batch-answer.schema.json.
-var stopModelKeyLimit = []byte(`{"stop":{"reason":"` + event.ReasonModelKeyLimit + `"}}`)
+// stopBody is the body of the answer to a batch after the proxy passed a limit refusal
+// or a 401 to the session, link-batch-answer.schema.json, with the stop's reason, one
+// of [modelkey.Group.Stop]'s.
+func stopBody(reason string) []byte {
+	return []byte(`{"stop":{"reason":"` + reason + `"}}`)
+}
+
+// keyStops are the reasons of a stop in a batch's answer, each with the state of the
+// dev.qory.session.exited and dev.qory.run.exited that have it.
+var keyStops = map[string]string{
+	event.ReasonModelKeyLimit:        event.StatePaused,
+	event.ReasonModelKeySwitch:       event.StatePaused,
+	event.ReasonModelKeyUnauthorized: event.StateFailed,
+}
 
 // closeRule is why the link refuses a session's dev.qory.run.exited, its data, empty
 // when it accepts it: the close's, with no reason or with timeout, interrupted,
@@ -558,7 +569,9 @@ var stopModelKeyLimit = []byte(`{"stop":{"reason":"` + event.ReasonModelKeyLimit
 // to run inside the agent's container, read_needs_no_nested_docker the close of a read
 // run whose image runs nested Docker, and read_needs_setup_removed the close of a read
 // run whose setup container could not be removed. It accepts model_key_limit, the pause
-// after a limit refusal, paused, only for a run with a join whose last
+// after a limit refusal, and model_key_switch, the pause after a 401 with another key
+// usable, each paused, and model_key_unauthorized, the end once a 401 took the last key
+// out, failed ([keyStops]), each only for a run with a join whose last
 // dev.qory.session.exited has that reason. The gateway writes the event of every other
 // end itself. joined is true when the gateway numbered a join of the run, and last is
 // the reason of the last dev.qory.session.exited the run's stream numbered, empty for
@@ -568,14 +581,14 @@ func closeRule(data map[string]any, joined bool, last string) string {
 	why, _ := given.(string)
 	switch {
 	case !hasReason, why == event.ReasonTimeout, why == event.ReasonInterrupted:
-	case why == event.ReasonModelKeyLimit:
+	case keyStops[why] != "":
 		switch {
-		case data["state"] != event.StatePaused:
-			return "a run.exited model_key_limit that is not paused"
+		case data["state"] != keyStops[why]:
+			return "a run.exited " + why + " that is not " + keyStops[why]
 		case !joined:
-			return "a run.exited model_key_limit of a run with no join"
-		case last != event.ReasonModelKeyLimit:
-			return "a run.exited model_key_limit after a last session.exited with another reason"
+			return "a run.exited " + why + " of a run with no join"
+		case last != why:
+			return "a run.exited " + why + " after a last session.exited with another reason"
 		}
 	case why == event.ReasonNoSession:
 		if joined {

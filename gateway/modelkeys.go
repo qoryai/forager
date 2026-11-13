@@ -117,9 +117,14 @@ func (k *keyReporter) run(ctx context.Context) {
 	}
 }
 
-// report is a report of the group's newest state, at the clock's time.
+// report is a report of the group's newest state, at the clock's time: its windows and
+// the keys out of use after a 401 ([modelkey.Group.Unauthorized]).
 func (k *keyReporter) report() server.ModelKeysReport {
-	return server.ModelKeysReport{Time: server.RegistrationTime(time.Now()), Keys: k.entries()}
+	var out []server.UnauthorizedKey
+	for _, u := range k.g.Unauthorized() {
+		out = append(out, server.UnauthorizedKey{Credential: u.Credential, At: rfc3339(u.At)})
+	}
+	return server.ModelKeysReport{Time: server.RegistrationTime(time.Now()), Keys: k.entries(), Unauthorized: out}
 }
 
 // last sends the newest state once after the run's end, within [lastWait], so the
@@ -154,7 +159,8 @@ func sleep(ctx context.Context, d time.Duration) bool {
 }
 
 // entries are the group's windows as a report's keys: at most [maxReportKeys], and as
-// many as fit [server.MaxModelKeysReport] with the report's other members.
+// many as fit [server.MaxModelKeysReport] with the report's other members, its
+// unauthorized among them.
 func (k *keyReporter) entries() []server.ModelKeyState {
 	ws := k.g.Windows()
 	out := make([]server.ModelKeyState, 0, len(ws))
@@ -164,10 +170,11 @@ func (k *keyReporter) entries() []server.ModelKeyState {
 	if len(out) > maxReportKeys {
 		out = out[:maxReportKeys]
 	}
-	// The run id, the time and the members around them take less than 200 bytes.
+	// The run id, the time and the members around them take 99 bytes, and
+	// unauthorized 677: 6 entries of a name of 64 characters and a time.
 	for len(out) > 0 {
 		b, _ := json.Marshal(out)
-		if len(b)+200 <= server.MaxModelKeysReport {
+		if len(b)+800 <= server.MaxModelKeysReport {
 			break
 		}
 		out = out[:len(out)-1]

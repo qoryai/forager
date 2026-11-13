@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,23 +21,27 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 )
 
 // openaiRemote is a run on the one address whose key group has two keys of the format
 // openai-responses, model and model-2, as bearers, on a fake provider that returns a
-// ChatGPT subscription's 429 for model and a 200 for model-2. The 429's shape follows
-// the openai/codex source at 17a0e6f63f (to confirm with probe burst-429).
+// 401 for each key in unauthorized, a ChatGPT subscription's 429 for model and a 200
+// for model-2. The 429's shape follows the openai/codex source at 17a0e6f63f (to
+// confirm with probe burst-429).
 type openaiRemote struct {
 	r   *remote
+	c   *control
 	cfg gateway.Config
 	e   *edgeRun
 	key string
 	url string
 	ca  *x509.CertPool
 
-	mu    sync.Mutex
-	calls []string
+	mu           sync.Mutex
+	calls        []string
+	unauthorized map[string]bool
 }
 
 // startOpenAIRemote opens the run on a separate gateway with a directory, so it can
@@ -60,7 +65,13 @@ func startOpenAIRemote(t *testing.T) *openaiRemote {
 		}
 		o.mu.Lock()
 		o.calls = append(o.calls, key)
+		rejected := o.unauthorized[key]
 		o.mu.Unlock()
+		if rejected {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"code":"invalid_api_key"}}`)
+			return
+		}
 		if key == "model" {
 			w.Header().Set("X-Codex-Primary-Used-Percent", "100")
 			w.Header().Set("X-Codex-Primary-Window-Minutes", "300")
@@ -81,6 +92,7 @@ func startOpenAIRemote(t *testing.T) *openaiRemote {
 		return `{"name":"` + name + `","format":"openai-responses","endpoint":"` + o.url + `","auth":{"scheme":"bearer"},"pause_for_s":3600}`
 	}
 	c := gatewayControl(t)
+	o.c = c
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = values
@@ -238,4 +250,126 @@ func TestAJoinWhoseRecordFailsKeepsTheActiveKey(t *testing.T) {
 	if status, key := o.join(t); status != http.StatusOK || key != "model-2" {
 		t.Errorf("the join after: %d %s; want 200 with model-2", status, key)
 	}
+}
+
+// TestAReopenKeepsTheStopsReasonAndTheKeysOut pins a 401 of the provider to an
+// openai-responses session across a restart: the session gets the 401, the answer to
+// its next batch has stop, model_key_switch, and the record has the reason and the key
+// out. The reopened run requests the values of the other keys alone, answers the next
+// batch with the same stop, the session ends paused with model_key_switch, and the next
+// join gets model-2, never model.
+func TestAReopenKeepsTheStopsReasonAndTheKeysOut(t *testing.T) {
+	o := startOpenAIRemote(t)
+	o.mu.Lock()
+	o.unauthorized = map[string]bool{"model": true}
+	o.mu.Unlock()
+	if status, key := o.join(t); status != http.StatusOK || key != "model" {
+		t.Fatalf("join 1: %d %s; want 200 with model", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 1))
+	if status, calls := o.send(t); status != http.StatusUnauthorized || strings.Join(calls, ",") != "model" {
+		t.Fatalf("the first request: %d %v; want the provider's 401 for model", status, calls)
+	}
+	if status, calls := o.send(t); status != http.StatusTooManyRequests || len(calls) != 0 {
+		t.Errorf("after the 401: %d %v; want the gateway's 429 and no call", status, calls)
+	}
+	const stop = `{"stop":{"reason":"model_key_switch"}}`
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || string(got.body) != stop {
+		t.Fatalf("the batch after the 401: %d %q", got.status, got.body)
+	}
+	dir := filepath.Join(o.cfg.Dir, "runs", o.runID())
+	if b, err := os.ReadFile(filepath.Join(dir, "model-key-limit")); err != nil || string(b) != "model_key_switch\n" {
+		t.Errorf("the mark: %q, %v", b, err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "model-keys-unauthorized.json"))
+	if err != nil || !strings.Contains(string(b), `"credential":"model"`) || !strings.Contains(string(b), `"out":true`) {
+		t.Errorf("the keys out: %s, %v", b, err)
+	}
+	o.r = o.r.restart(t, o.cfg)
+	o.e.r = o.r
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || string(got.body) != stop {
+		t.Errorf("the reopened run's first batch: %d %q", got.status, got.body)
+	}
+	// The reopen's secrets request leaves model, out for the run, out.
+	if reqs := o.c.requests(t); len(reqs) == 0 || !slices.Equal(reqs[len(reqs)-1].Credentials, []string{"model-2"}) {
+		t.Errorf("the secrets requests %+v; want the reopen's with model-2 alone", reqs)
+	}
+	o.posted(t, ev(o.runID(), event.SessionExited, map[string]any{"session": 1, "state": "paused", "exit_code": 1, "reason": "model_key_switch", "duration_ms": 5}))
+	if status, key := o.join(t); status != http.StatusOK || key != "model-2" {
+		t.Fatalf("join 2: %d %s; want 200 with model-2", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 2))
+	if status, calls := o.send(t); status != http.StatusOK || strings.Join(calls, ",") != "model-2" {
+		t.Errorf("a request of session 2: %d %v; want 200 from model-2", status, calls)
+	}
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || len(got.body) != 0 {
+		t.Errorf("a batch of session 2: %d %q; want no stop", got.status, got.body)
+	}
+}
+
+// TestAReopenRenewsAKeyWaitingForItsRenewal pins a record whose key waits for its
+// renewal after a 401: the reopen's secrets request leaves model out, then model is
+// renewed in a request that names it alone, with model as unauthorized. A value with
+// no expires_at, as here, cannot be set, so model leaves the group, and the next join
+// gets model-2.
+func TestAReopenRenewsAKeyWaitingForItsRenewal(t *testing.T) {
+	o := startOpenAIRemote(t)
+	reopenPending(t, o)
+	if status, key := o.join(t); status != http.StatusOK || key != "model-2" {
+		t.Fatalf("the join after the reopen: %d %s; want 200 with model-2", status, key)
+	}
+	keyOut(t, o)
+}
+
+// TestAReopenSurvivesA409ToAPendingKey pins a record whose key waits for its renewal
+// after a 401, and a control plane that cannot seal the key: the reopen's secrets
+// request leaves model out and the run reopens; model's renewal alone gets a signed
+// 409, so model ends out, and the next join gets model-2.
+func TestAReopenSurvivesA409ToAPendingKey(t *testing.T) {
+	o := startOpenAIRemote(t)
+	o.c.mu.Lock()
+	o.c.secretsAnswer = func(req server.SecretsRequest, _ string) (int, []byte) {
+		if slices.Contains(req.Credentials, "model") && !slices.Equal(req.Credentials, []string{"model", "model-2"}) {
+			return http.StatusConflict, []byte(`{"error":"credential_revoked"}`)
+		}
+		return http.StatusOK, o.c.seal(req, map[string]string{"model": "model-value", "model-2": "model-2-value"}, sealed.Expiry(time.Now()))
+	}
+	o.c.mu.Unlock()
+	reopenPending(t, o)
+	keyOut(t, o)
+	if status, key := o.join(t); status != http.StatusOK || key != "model-2" {
+		t.Errorf("the join after the reopen: %d %s; want 200 with model-2", status, key)
+	}
+}
+
+// reopenPending restarts o's gateway with model's renewal after a 401 pending in the
+// run's record, and checks the secrets requests: the reopen's names model-2 alone, and
+// model's renewal names model alone, with model as unauthorized.
+func reopenPending(t *testing.T, o *openaiRemote) {
+	t.Helper()
+	kept := `{"version":1,"keys":[{"credential":"model","at":"2026-11-13T12:00:04Z","out":false}]}` + "\n"
+	if err := os.WriteFile(filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-keys-unauthorized.json"), []byte(kept), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := len(o.c.requests(t))
+	o.r = o.r.restart(t, o.cfg)
+	o.e.r = o.r
+	o.posted(t, heartbeat(o.runID()))
+	eventually(t, "the reopen's request and model's renewal", func() bool { return len(o.c.requests(t)) >= before+2 })
+	reqs := o.c.requests(t)[before:]
+	if !slices.Equal(reqs[0].Credentials, []string{"model-2"}) || reqs[0].Unauthorized != nil {
+		t.Errorf("the reopen's request names %v, unauthorized %v; want model-2 alone", reqs[0].Credentials, reqs[0].Unauthorized)
+	}
+	if !slices.Equal(reqs[1].Credentials, []string{"model"}) || !slices.Equal(reqs[1].Unauthorized, []string{"model"}) {
+		t.Errorf("the renewal names %v, unauthorized %v; want model in both", reqs[1].Credentials, reqs[1].Unauthorized)
+	}
+}
+
+// keyOut waits until o's record has model out after a 401.
+func keyOut(t *testing.T, o *openaiRemote) {
+	t.Helper()
+	eventually(t, "model out in the record", func() bool {
+		b, err := os.ReadFile(filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-keys-unauthorized.json"))
+		return err == nil && strings.Contains(string(b), `"out":true`)
+	})
 }

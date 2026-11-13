@@ -190,13 +190,17 @@ func (v Values) Apply(credential string) ([]Apply, bool) {
 // Replace puts the value of a credential that from has, with its expires_at and apply,
 // in place of the one v has: the old bytes are overwritten with zeros, and from no
 // longer has the value, so clearing from leaves v's. It reports whether from had a value
-// for the credential; without one, v is as it was.
+// for the credential; without one, v is as it was. When from is v, the value is in
+// place already, and Replace changes nothing.
 func (v Values) Replace(credential string, from Values) bool {
 	b, ok := from.Value(credential)
 	if !ok || v.m == nil {
 		return false
 	}
 	src, dst := from.m(), v.m()
+	if src == dst {
+		return true
+	}
 	if old, ok := dst.values[credential]; ok {
 		clear(old)
 	}

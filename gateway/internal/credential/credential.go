@@ -97,7 +97,7 @@ type Use struct {
 	// entry, whose value Qory Apiary sealed to the access key.
 	Stored bool
 	// Renewed is true when the server's value is fetched again before it expires and
-	// after a host refuses it: a value with expires_at, whose rejected asks for it again.
+	// after a host refuses it: a value the run renews, whose rejected requests it again.
 	Renewed bool
 	// Format, Endpoint and OAuth are a model key's, from the server or the machine;
 	// empty for every other credential. AccountHeader and AccountClaim, of a model key
@@ -132,12 +132,10 @@ type Stored struct {
 	// Value returns a copy of the opened value's bytes, which the caller clears once it
 	// has set them; empty once the run has ended, and once the value expired.
 	Value func() []byte
-	// ExpiresAt is when the value stops working, zero when it does not expire. Rejected,
-	// for a value with ExpiresAt, is called when a host answers 401 to a request the
-	// value was set on: the caller fetches the value again. A value without ExpiresAt is never
-	// fetched again, so Rejected is not called for it.
-	ExpiresAt time.Time
-	Rejected  func()
+	// Rejected, for a value that is fetched again, such as one with expires_at, is
+	// called when a host returns 401 for a request the value was set on: the caller
+	// fetches the value again. Nil for a value that is never fetched again.
+	Rejected func()
 }
 
 // StoredApply is one way a [Stored] value is set: the hosts, the scheme with its
@@ -362,7 +360,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 	}
 	for _, s := range stored {
 		h := &held{def: Definition{Name: s.Name}, value: s.Value, done: make(chan struct{})}
-		renewed := !s.ExpiresAt.IsZero() && s.Rejected != nil
+		renewed := s.Rejected != nil
 		if renewed {
 			h.onRejected = s.Rejected
 		}

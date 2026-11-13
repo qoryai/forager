@@ -90,13 +90,29 @@ type Group struct {
 	// claim is each key's cooldown_until of the run configuration, by the key's place,
 	// zero once a later state of the key allows it.
 	claim []time.Time
-	// out is true for each key, by the key's place, that left the group ([Group.Out]).
-	out    []bool
+	// out is true for each key, by the key's place, that left the group ([Group.Out],
+	// [Group.Revoked]).
+	out []bool
+	// unauth is, for each key by its place, when the provider's 401 to a request with
+	// it arrived ([Group.Reject]), zero for none: such a key is set no more until a
+	// renewal brings it back ([Group.Renewed]).
+	unauth []time.Time
 	active int
-	// passed is true once the proxy passed a limit refusal to the session: until
-	// [Group.Resume], the proxy sends no request with the placeholder and the gateway's
-	// answer to each batch has stop.
+	// passed is true once the proxy passed a limit refusal or a 401 to the session:
+	// until [Group.Resume], the proxy sends no request with the placeholder and the
+	// gateway's answer to each batch has stop.
 	passed bool
+	// rejected is true when a 401 is the cause of the pass ([Group.Reject],
+	// [Group.PassRejected]) since the last [Group.Resume].
+	rejected bool
+	// reason is the stop's reason, fixed by the first [Group.Stop] after the pass;
+	// empty before it.
+	reason string
+	// onStop, when set, is called with the reason once [Group.Stop] fixes it.
+	onStop func(string)
+	// onUnauthorized, when set, is called with [Group.Unauthorized] after each change
+	// of it.
+	onUnauthorized func([]Unauthorized)
 	// changed, when set, is called after a change a report sends.
 	changed func()
 	// onPassed, when set, is called with the value of passed after each change of it.
@@ -104,6 +120,9 @@ type Group struct {
 	// passing is held from a change of passed to the end of the call of onPassed for
 	// it, so the calls come in the order of the changes. mu is not held during the call.
 	passing sync.Mutex
+	// noting is held from a change of unauth or out by [Group.change] to the end of
+	// the calls of its hooks, so the calls come in the order of the changes.
+	noting sync.Mutex
 }
 
 // New makes the group of keys, in their order, with the key start active, the first
@@ -112,7 +131,7 @@ func New(keys []Key, start string, now func() time.Time) *Group {
 	if now == nil {
 		now = time.Now
 	}
-	g := &Group{keys: slices.Clone(keys), now: now, made: now(), windows: make([][]*Window, len(keys)), claim: make([]time.Time, len(keys)), out: make([]bool, len(keys))}
+	g := &Group{keys: slices.Clone(keys), now: now, made: now(), windows: make([][]*Window, len(keys)), claim: make([]time.Time, len(keys)), out: make([]bool, len(keys)), unauth: make([]time.Time, len(keys))}
 	for i, k := range keys {
 		g.claim[i] = k.CooldownUntil
 	}
@@ -187,11 +206,12 @@ func (g *Group) Active() string {
 }
 
 // Pick returns the active key's name, and false when every key of the group is in
-// cooldown or out ([Group.Out]). When the active key is in cooldown or out, the first
-// key of [Group.next] becomes active first; when no key is left, the active key stays,
-// and the proxy sets no key. For a format whose requests the proxy does not send again
-// ([Resends]), the active key stays while it is in cooldown or out, and Pick reports
-// false: only [Group.JoinKey] makes another key active.
+// cooldown, out ([Group.Out]) or unauthorized ([Group.Reject]). When the active key
+// is in cooldown or out, the first key of [Group.next] becomes active first; when no
+// key is left, the active key stays, and the proxy sets no key. For a format whose
+// requests the proxy does not send again ([Resends]), the active key stays while it
+// is in cooldown or out, and Pick reports false: only [Group.JoinKey] makes another
+// key active.
 func (g *Group) Pick() (string, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -235,7 +255,7 @@ func (g *Group) SetActive(name string) {
 // with g.mu held.
 func (g *Group) pick(move bool) (string, bool) {
 	now := g.now()
-	if g.out[g.active] || g.coolingUntil(g.active, now).After(now) {
+	if !g.usable(g.active, now) {
 		if !move {
 			return g.keys[g.active].Name, false
 		}
@@ -248,15 +268,15 @@ func (g *Group) pick(move bool) (string, bool) {
 	return g.keys[g.active].Name, true
 }
 
-// next is the key a switch makes active, among the keys neither out nor in cooldown at
-// now: the chosen key first; then the keys with no known reset, or one that has
-// passed, by the order; then the key with the closest reset, keys whose resets fall in
-// the same minute by the order. It reports false when every key is out or in cooldown.
-// Called with g.mu held.
+// next is the key a switch makes active, among the keys usable at now
+// ([Group.usable]): the chosen key first; then the keys with no known reset, or one
+// that has passed, by the order; then the key with the closest reset, keys whose
+// resets fall in the same minute by the order. It reports false when every key is out
+// or in cooldown. Called with g.mu held.
 func (g *Group) next(now time.Time) (int, bool) {
 	best, bestReset := -1, time.Time{}
 	for i, k := range g.keys {
-		if g.out[i] || g.coolingUntil(i, now).After(now) {
+		if !g.usable(i, now) {
 			continue
 		}
 		if k.Chosen {
@@ -273,6 +293,12 @@ func (g *Group) next(now time.Time) (int, bool) {
 		best, bestReset = i, reset
 	}
 	return best, best >= 0
+}
+
+// usable reports whether key i may be set at now: neither out, nor unauthorized, nor in
+// cooldown. Called with g.mu held.
+func (g *Group) usable(i int, now time.Time) bool {
+	return !g.out[i] && g.unauth[i].IsZero() && !g.coolingUntil(i, now).After(now)
 }
 
 // knownReset is key i's closest reset after now, the earliest of: the resets_at of its
@@ -367,7 +393,7 @@ func (g *Group) Pass() {
 	if g == nil {
 		return
 	}
-	g.setPassed(true)
+	g.setPassed(true, nil)
 }
 
 // Passed reports whether the proxy passed a limit refusal to the session since the
@@ -381,22 +407,29 @@ func (g *Group) Passed() bool {
 	return g.passed
 }
 
-// Resume clears [Group.Pass]: the gateway calls it when a join opens and when its
-// session ends.
+// Resume clears [Group.Pass] and [Group.PassRejected], and the reason [Group.Stop]
+// fixed: the gateway calls it when a join opens and when its session ends.
 func (g *Group) Resume() {
 	if g == nil {
 		return
 	}
-	g.setPassed(false)
+	g.setPassed(false, nil)
 }
 
-// setPassed sets passed to v, and calls onPassed with v when passed changed.
-func (g *Group) setPassed(v bool) {
+// setPassed sets passed to v, and calls onPassed with v when passed changed. then, when
+// set, runs with g.mu held after the change, with the value passed had before it.
+func (g *Group) setPassed(v bool, then func(was bool)) {
 	g.passing.Lock()
 	defer g.passing.Unlock()
 	g.mu.Lock()
 	was := g.passed
 	g.passed = v
+	if !v {
+		g.rejected, g.reason = false, ""
+	}
+	if then != nil {
+		then(was)
+	}
 	f := g.onPassed
 	g.mu.Unlock()
 	if was != v && f != nil {

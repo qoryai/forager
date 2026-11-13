@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/policy"
@@ -301,16 +300,15 @@ func TestTwoModelKeysMayShareAHost(t *testing.T) {
 }
 
 // TestAValueThatExpiresIsRenewedOnA401 pins a credential from the server with
-// ExpiresAt and Rejected: one use per apply item, each Renewed, whose Rejected calls
-// the Stored's; one without ExpiresAt is not Renewed, and its Rejected calls nothing.
+// Rejected: one use per apply item, each Renewed, whose Rejected calls the Stored's;
+// one without Rejected is not Renewed, and its Rejected calls nothing.
 func TestAValueThatExpiresIsRenewedOnA401(t *testing.T) {
 	calls := 0
 	forge := Stored{Name: "forge", Apply: []StoredApply{
 		{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token", Paths: []string{"/example-org/app.git/*"}},
 		{Hosts: []string{"api.git.example"}, Scheme: "bearer"},
-	}, Value: func() []byte { return []byte("forge-value") }, ExpiresAt: time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC), Rejected: func() { calls++ }}
+	}, Value: func() []byte { return []byte("forge-value") }, Rejected: func() { calls++ }}
 	model := storedModel("model-value")
-	model.Rejected = func() { t.Error("Rejected of a value without expires_at was called") }
 	held, err := ResolveWith(context.Background(), nil, nil, []Stored{forge, model}, "", policy.Observe, nil, func(l string) { t.Log(l) })
 	if err != nil {
 		t.Fatal(err)
