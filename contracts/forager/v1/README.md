@@ -2433,8 +2433,8 @@ A restart). The local link writes none of them.
 
 - `request.json`: the members of the run request that set the run's wall, narrowing
   and images, written as the run opens: `version`, `wall`, and the session's
-  `narrowing` and `images` when the request has them. An image reference may contain a
-  registry's credentials, as the run request does.
+  `narrowing` and `images` when the request has them, each image reference without its
+  user information (§The gateway's link, the run request's `images`).
 - `ca.pem` and `ca.key`: the certificate and the private key of the run's certificate
   authority, for a run with one, written as the run opens. A reopen reads them only
   when the certificate's common name is `qory run <run id>` and the gateway's user owns
@@ -2452,20 +2452,22 @@ A restart). The local link writes none of them.
   `dev.qory.run.started` when the gateway stopped, one per line. The reopen reads it
   back and removes it.
 
-The gateway removes `request.json`, `ca.pem` and `ca.key` together: at the run's end,
-when the run's open fails, when a reopen fails for good, and by the sweep below. `qory
-run resend` removes them too once it writes the run's `dev.qory.run.exited`. A record
-without `request.json` is not reopened, and its requests get a `410` `run_closed`.
-The other files stay with the record until the record is removed.
-**The sweep.** A separate gateway removes `request.json`, `ca.pem` and `ca.key` of each
-record whose run it neither holds nor reopens and whose `events.jsonl` has not changed
-for 15 minutes, at its start and every 10 minutes. It reads the records under its
-directory, or, with `RunDir`, those in the directory `RunDir` makes each record in as
+The gateway removes every one of these files together: at the run's end, when the run's
+open fails, when a reopen fails for good, and by the sweep below. `qory run resend`
+removes them too once it writes the run's `dev.qory.run.exited`. `events.jsonl`,
+`delivered.log`, `undelivered/` and the gateway's lock file, `gateway.lock`, stay with
+the record until the record is removed. A record without `request.json` is not reopened,
+and its requests get a `410` `run_closed`.
+
+**The sweep.** A separate gateway removes the files of a reopen of each record whose run
+it neither holds nor reopens and whose `events.jsonl` has not changed for 15 minutes, at
+its start and every 10 minutes. It reads the records under its directory, or, with
+`RunDir`, those in the directory `RunDir` makes each record in as
 `<directory>/<run id>`. A live run's session sends a heartbeat at least every 300
-seconds, so a live run's record changes within those 15 minutes. The sweep and a
-reopen of the same run never run at once: the sweep skips a run that is reopening, a
-request that comes while the sweep removes a record's files gets a `503` with no body,
-and a request after the sweep gets a `410` `run_closed`.
+seconds, so a live run's record changes within those 15 minutes. The sweep and a reopen
+of the same run never run at once: the sweep skips a run that is reopening, a request
+that comes while the sweep removes a record's files gets a `503` with no body, and a
+request after the sweep gets a `410` `run_closed`.
 
 **A hidden harness.** In a run whose harness is hidden, `[harness text: <path>]`
 replaces the text of each file in a session's harness home, after the forwarders'
@@ -3874,42 +3876,57 @@ refusal or no answer, leaves nothing of the run at the gateway: the run request 
 comes again, with the same run key, asks for the attach again.
 
 **A restart.** A separate gateway's `Close` keeps its runs for the gateway that starts
-again on the same directory. From the start of `Close`, a run request and every request
-that would reopen a run get a `503` with no body. A run whose attach is still being
-tried stops its tries and does not open, its run request a `503`; a run past its tries
-opens. Then the one address closes, and each live run is suspended: the gateway lets go
-of the run's proxy, tools and credentials, flushes the run's events toward the server
-as at a run's end, writes no `dev.qory.session.exited` and no `dev.qory.run.exited`, and
-keeps the run's record with the files of a reopen (The record files).
+again on the same directory. From the start of `Close`, every request of a run, every
+request that waits for a reopen and every connection to a run's proxy or stack proxy
+gets a `503` with no body or is closed. A run that is opening stops at any step before
+its run answer, and its run request gets a `503` (Tries as a run opens); a reopen stops
+the same way, a failure that may pass, and the run keeps its record. At the same time
+every live run is suspended, all in parallel: the gateway lets go of the run's proxy,
+tools and credentials, flushes the run's events toward the server as at a run's end,
+writes no `dev.qory.session.exited` and no `dev.qory.run.exited`, and keeps the run's
+record with the files of a reopen (The record files). A run whose open or reopen was
+past those steps is suspended as soon as it opens. Once the opens and the reopens
+ended, the one address closes. With tools that stop at `SIGTERM` and a server that takes
+the last events, a `Close` with runs live and opening takes a few seconds. The bounds in
+code are 5 seconds from a tool's `SIGTERM` to its `SIGKILL` and 5 more for it to exit, 1
+second for the one address and for each proxy, and 15 seconds for each run's flush, so
+a `Close` takes 27 seconds at most for a live run's two proxies, tools and flush, while
+a stopped reopen's tools and flush, and then the one address, take 26 seconds beside it.
+A credential adapter whose child holds its output open, and a server that never
+answers a flush's last try, are not within these bounds.
 
 The gateway that starts again reopens a suspended run at the first request of it whose
 run key verifies: a batch, a reload, a join, a transcript request, or a connection to
-the run's proxy or stack proxy. One reopen of a run runs at a time, and every request of
-the run waits for it. The reopen reads the record back, attaches the run again under the
-run key of that request, with the tries of an open (Tries as a run opens, below), sets
-the run up again from `request.json` and the run configuration in the attach's answer,
-with the run's certificate authority from `ca.pem` and `ca.key`, and goes on numbering
-the record after its last `sequence`. The reopen reads the certificate authority before
-the attach, so a record whose CA files do not read back ends the run with no attach. It
-sends again what the server has not accepted within the attach's window of 120 seconds.
-A connection that waits on a reopen, once its run key verifies, counts against the bound
-of 4096 connections and against neither the bound of its source nor that of its IPv6
-/48, and is never closed for a newer connection. The reopen's answers to the requests
-that wait:
+the run's proxy or stack proxy. One reopen of a run runs at a time. Every request of the
+run waits for that reopen while its connection stays open; a request whose connection
+closes first, such as one of a session whose client stopped waiting after 10 seconds,
+gets no answer, and the reopen goes on. The reopen reads the record back, attaches the
+run again under the run key of that request, with the tries of an open (Tries as a run
+opens, below), sets the run up again from `request.json` and the run configuration in
+the attach's answer, with the run's certificate authority from `ca.pem` and `ca.key`,
+and goes on numbering the record after its last `sequence`. The reopen reads the
+certificate authority before the attach, so a record whose CA files do not read back
+ends the run with no attach. It sends again what the server has not accepted within the
+attach's window of 120 seconds. A connection that waits on a reopen, once its run key
+verifies, counts against the bound of 4096 connections and against neither the bound of
+its source nor that of its IPv6 /48, and is never closed for a newer connection. The
+reopen's answers to the requests that wait:
 
 - the run is open: each request is served as for a live run;
 - a failure that may pass: no answer from the server, a `5xx`, an answer that is not
   signed, a `429` `rate_limited`, events the server does not take within the attach's
-  window, or a `Close` that stops the reopen's tries. Each request gets a `503` with no
-  body, and the session's next request starts the reopen again;
+  window, a fetch of the run's secrets that gets no answer, a `5xx` or a `429`
+  `rate_limited`, or a `Close` that stops the reopen. Each request that waits gets a
+  `503` with no body, and the session's next request starts the reopen again;
 - a final failure: a `410` `run_closed`, and the run is over. The attach's failures that
   are final at once are a signed `410`, a signed refusal `run_attached`, `wrong_gateway`
   or `workspace_not_served`, and a run configuration that fails Forager's checks; a
-  record the gateway cannot read, one with the run's final event, and one the server
-  stopped are final too. Any other signed `4xx` of the attach, a `401`, signed or not,
-  among them, is tried again within the 120 seconds, and is final when the window ends
-  on it. Only tries that `Close` stopped count as a stop by `Close`: a final refusal
-  that came first keeps its `410`.
+  record the gateway cannot read, one with the run's final event, one the server
+  stopped, and a fetch of the run's secrets refused with a `4xx` other than a `429`
+  `rate_limited` are final too. Any other signed `4xx` of the attach, a `401`, signed or
+  not, among them, is tried again within the 120 seconds, and is final when the window
+  ends on it. Only a reopen that `Close` stopped counts as a stop by `Close`: a final
+  refusal of the attach that came first keeps its `410`.
 
 A connection to the run's proxy that waited on a reopen that did not open the run is
 closed unanswered. The run request of a reopened run stays `409` `run_attached`. A
@@ -3917,6 +3934,20 @@ record without `request.json`, of a gateway that did not keep its runs, is not
 reopened: its reloads and batches get a `410` `run_closed`, its run request a `409`
 `run_attached`, and `qory run resend` writes its `dev.qory.run.exited` with
 `gateway_lost` (§The server).
+
+To deploy a separate gateway so its runs go on across the restart:
+
+- Keep the gateway's state directory on a volume that outlives the gateway's
+  container. It contains the instance id the gateway signs with, `X-Qory-Instance-Id`,
+  and the run records under `Dir`. A gateway that starts with another instance id gets
+  its attach refused, and the run ends; one without the run records answers every
+  request of a run with a `410` `run_closed`.
+- Do not run `qory run resend` on a record of a gateway during a deploy: it writes the
+  run's `dev.qory.run.exited` with `gateway_lost`, and the run ends.
+- The first deploy onto a gateway that keeps its runs still ends the runs that are open:
+  the gateway it replaces ends them as it stops.
+- A rollback to a gateway that does not keep its runs ends each suspended run: that
+  gateway answers its requests with a `410` `run_closed`.
 
 **No local sessions.** A separate gateway serves other machines alone: with `Listen`
 it makes no local link, in memory or on a socket, and no proxy listener on loopback,
@@ -4052,8 +4083,13 @@ and `about` are the starter's registration's, and the run request carries neithe
   or a reference; and `definitions`, the images the machine defines, each with `name`,
   `ref`, its reference, `runtime` when the definition sets one, and `docker: true` for
   nested Docker; and `allow`, the machine's `images.allow`, the prefixes of the
-  references a policy may name. A reference is not secret, but it may carry a registry's credentials in
-  its user information: the gateway never logs or reports one. Absent means none.
+  references a policy may name. A reference is not secret, but it may carry a registry's
+  credentials in its user information: the gateway never logs or reports one. The user
+  information of a reference is its part up to and with its first `@`, when that `@`
+  comes before the reference's first `/` and is not followed by a digest, `sha256:`:
+  `user:password@registry.example/base@sha256:…` has `user:password@`, while
+  `registry.example:5000/base@sha256:…` and `base@sha256:…` have none. A reload answer
+  and the record's `request.json` contain each reference without it. Absent means none.
 - `narrowing`, behind a separate gateway alone: the session's narrowing of the policy,
   `egress` with `allow`, `deny` or both, each in the grammar of the policy's
   `egress.allow`, and no other member. It only narrows: it can only remove what the
@@ -4096,13 +4132,16 @@ A run request whose session stops waiting opens no run: once its connection goes
 gateway sends the server no further request for it, the registration among them, opens
 no run, and removes what it recorded of the run, so the same `run_id` sent again opens
 as a first run request would, not `run_id_used` at the gateway. A registration the
-server accepted before then stays the server's. A gateway that closes while a run's
-registration or attach is still being tried stops its tries at once: the run does not
-open, and its run request gets a `503` without a body, as one that comes while the
-gateway closes. A run past its tries opens and gets its `200`. On the local link the
-closing gateway then ends it with `run_closed`, as any live run; a separate gateway
-suspends it, as any live run, for the gateway that starts again (§The gateway's link,
-A restart).
+server accepted before then stays the server's. A gateway that closes while a run
+opens stops the open at once, at any step before the run answer: the tries of its
+registration or attach, the request for its secrets, and the wait for its tools to
+listen. The run does not open, the gateway removes what it recorded of the run, and the
+run request gets a `503` without a body, as one that comes while the gateway closes.
+The same `run_id` sent again, to the gateway that starts again, opens as a first run
+request would; behind a separate gateway its attach is sent again. A run whose open
+ended before the gateway closed gets its `200`. On the local link the closing gateway
+then ends it with `run_closed`, as any live run; a separate gateway suspends it, as any
+live run, for the gateway that starts again (§The gateway's link, A restart).
 
 The gateway keeps the bytes it built for a `run_id` for 150 seconds of their `time`, by
 the wall clock, half the server's window: when the same `run_id` comes again within
@@ -4667,8 +4706,10 @@ again and applies it, and the same digest means the policy in force is unchanged
 answer is a `200`, `application/json`, with `X-Qory-Run-Configuration` and `ETag`, whose
 body is a `link-reload-answer.schema.json` document: `version`, the policy in force with
 its `digest`, `variables`, `placeholders`, `reserved`, `image` and `applied`, required,
-as the run answer has them. It never contains `proxy_secret` or `certificate_authority`, which the run answer
-alone gives, once. The gateway decides a reload with the run request's `images` and the
+as the run answer has them, but `image`'s `ref` without its user information (the run
+request's `images`, above), so a reopened run's reload answer has the same bytes and
+digest as before its gateway's restart. It never contains `proxy_secret` or
+`certificate_authority`, which the run answer alone gives, once. The gateway decides a reload with the run request's `images` and the
 union of the `passes` of the open joins (Joining a session, above), as the session
 decides one today and in the same order, before it sets anything. A run configuration it
 refuses fails the reload, and the policy in force stays: one it cannot read,

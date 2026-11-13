@@ -41,7 +41,7 @@ func (g *Gateway) reopenable(runID string) bool {
 // run once it is open; else final is true when the reopen failed for good or the run
 // is spent, both read with g.mu held, and false when the reopen is still going, failed
 // in a way that may pass, the sweep removes the record's files now, or the gateway is
-// closing.
+// closing: the start of Close ends the wait at once, whatever ctx allows.
 func (g *Gateway) reopenRun(ctx context.Context, runID string, p presented) (lr *linkRun, final bool) {
 	g.mu.Lock()
 	if lr := g.runs[runID]; lr != nil {
@@ -75,17 +75,25 @@ func (g *Gateway) reopenRun(ctx context.Context, runID string, p presented) (lr 
 		return c.lr, c.final
 	case <-ctx.Done():
 		return nil, false
+	case <-g.openCtx.Done():
+		return nil, false
 	}
 }
 
 // reopen runs the reopen c of runID and ends it: the run goes into the gateway's runs
-// and is armed; a reopen that failed for good leaves the run spent, so its later
-// requests are a 410 run_closed with no reopen, for [keepEnded]. Either way c leaves
-// the reopens in flight, then its waiters are woken.
+// and is armed, or, once Close started, suspended at once; a reopen that failed for
+// good leaves the run spent, so its later requests are a 410 run_closed with no reopen,
+// for [keepEnded]. Either way c leaves the reopens in flight, then its waiters are
+// woken.
 func (g *Gateway) reopen(c *reopenCall, runID string, p presented) {
 	var lr *linkRun
 	final := false
 	defer func() {
+		if lr != nil {
+			lr.mu.Lock()
+			lr.answering = true
+			lr.mu.Unlock()
+		}
 		g.mu.Lock()
 		delete(g.reopening, runID)
 		if lr != nil {
@@ -97,7 +105,7 @@ func (g *Gateway) reopen(c *reopenCall, runID string, p presented) {
 		}
 		g.mu.Unlock()
 		if lr != nil {
-			lr.arm()
+			g.settle(lr)
 		}
 		c.lr, c.final = lr, final
 		close(c.done)
@@ -139,7 +147,7 @@ func (g *Gateway) reopen(c *reopenCall, runID string, p presented) {
 // final is true for a failure that does not pass with time ([reopenFinal] for the
 // attach): a record that cannot be reopened, a run configuration Forager does not
 // accept, or an attach that ends the run. A failure that may pass leaves the record as
-// Suspend leaves it; one that does not removes its run request and CA files too
+// Suspend leaves it; one that does not removes every file kept to reopen it too
 // ([stream.RemoveKept]). After a panic past step 1, the run's stream, tools, proxy
 // and key reporter are let go of, as for a failure that may pass, and the panic goes
 // on.
@@ -241,13 +249,18 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		}
 	}
 
-	ca, err = lr.decide(ctx, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: &run.Fetched{URL: conf.Run.URL, Digest: digest, Document: rc}, labels: labels},
+	// The steps past the attach end when Close starts too, with ask: a reopen Close cuts
+	// fails in a way that may pass, and the record stays for the next gateway.
+	ca, err = lr.decide(ctx, ask, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: &run.Fetched{URL: conf.Run.URL, Digest: digest, Document: rc}, labels: labels},
 		func(*run.Run) (*proxy.CA, error) {
 			if ca == nil {
 				return nil, fmt.Errorf("start a new run: this run needs its certificate authority, and its record has no %s or %s", proxy.CACertFile, proxy.CAKeyFile)
 			}
 			return ca, nil
 		})
+	if g.openCtx.Err() != nil {
+		return fail(false, closing(err))
+	}
 	if err != nil {
 		var mayPass holdError
 		return fail(!errors.As(err, &mayPass), err)
@@ -297,12 +310,12 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 	return lr, false, nil
 }
 
-// dropKept removes the run request and the CA files from the record dir of the run
+// dropKept removes the files kept to reopen a run from the record dir of the run
 // runID, whose reopen failed for good ([stream.RemoveKept]), reports a removal that
 // fails, and returns err.
 func (g *Gateway) dropKept(runID, dir string, err error) error {
 	if rerr := stream.RemoveKept(dir); rerr != nil {
-		g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", runID, rerr))
+		g.report(fmt.Sprintf("run %s: removing the files kept to reopen it: %v", runID, rerr))
 	}
 	return err
 }

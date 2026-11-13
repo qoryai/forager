@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,8 +14,33 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
+// TestWithoutUserInfo pins the rule for the user information of an image reference:
+// the part up to and with a first @ that comes before the first /, unless a digest
+// follows that @; a port, a digest and a reference with no user information stay.
+func TestWithoutUserInfo(t *testing.T) {
+	const digest = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	for ref, want := range map[string]string{
+		"user:password@registry.example/agents/base" + digest: "registry.example/agents/base" + digest,
+		"token@registry.example:5000/base" + digest:           "registry.example:5000/base" + digest,
+		"user:password@registry.example/base:1":               "registry.example/base:1",
+		"registry.example:5000/base" + digest:                 "registry.example:5000/base" + digest,
+		"registry.example/agents/base" + digest:               "registry.example/agents/base" + digest,
+		"base" + digest:                                       "base" + digest,
+		"base" + digest + "/x":                                "base" + digest + "/x",
+		"registry.example/base:1":                             "registry.example/base:1",
+		"@registry.example/base":                              "@registry.example/base",
+		"ubuntu:24.04":                                        "ubuntu:24.04",
+		"":                                                    "",
+	} {
+		if got := withoutUserInfo(ref); got != want {
+			t.Errorf("withoutUserInfo(%q) = %q; want %q", ref, got, want)
+		}
+	}
+}
+
 // TestTheKeptFilesReadBack pins the readers of the files a separate gateway keeps:
-// request.json reads back as written, and decides with the same images and narrowing;
+// request.json reads back as written, its image references without user information,
+// and decides with those images and the same narrowing;
 // joins.jsonl and given.jsonl read back in order, a line the gateway did not finish
 // skipped and counted; the mark reads back as made and removed; and no file is none.
 func TestTheKeptFilesReadBack(t *testing.T) {
@@ -30,7 +56,7 @@ func TestTheKeptFilesReadBack(t *testing.T) {
 	}
 
 	req := &server.LinkRunRequest{Wall: true, Narrowing: &server.LinkNarrowing{Egress: server.LinkNarrowingEgress{Allow: []string{"api.example"}, Deny: []string{"bad.example"}}},
-		Images: &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: "registry.example/base:1", Runtime: "runsc"}}, Allow: []string{"registry.example/"}}}
+		Images: &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: "user:password@registry.example/base:1", Runtime: "runsc"}}, Allow: []string{"registry.example/"}}}
 	if err := writeRequest(dir, req); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +64,10 @@ func TestTheKeptFilesReadBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !k.Wall || !reflect.DeepEqual(images(k.Images), images(req.Images)) || !reflect.DeepEqual(narrowingOf(k.Narrowing), narrowingOf(req.Narrowing)) {
+	if b, _ := os.ReadFile(filepath.Join(dir, requestFile)); strings.Contains(string(b), "@") {
+		t.Errorf("request.json: %s", b)
+	}
+	if !k.Wall || !reflect.DeepEqual(images(k.Images), images(imagesWithoutUserInfo(req.Images))) || k.Images.Definitions[0].Ref != "registry.example/base:1" || !reflect.DeepEqual(narrowingOf(k.Narrowing), narrowingOf(req.Narrowing)) {
 		t.Errorf("request.json read back as %+v", k)
 	}
 

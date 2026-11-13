@@ -60,6 +60,13 @@ func SetCloseWait(d time.Duration) time.Duration {
 	return old
 }
 
+// finalWaitAtStart is finalWait as the package starts, before any test sets it.
+var finalWaitAtStart = finalWait
+
+// DefaultFinalWait is how long the sinks get to flush at the close of a run behind a
+// separate gateway, as the package starts, before any test sets it.
+func DefaultFinalWait() time.Duration { return finalWaitAtStart }
+
 // SetFinalWait sets how long the sinks get to flush at the close of a run behind a
 // separate gateway, and returns the wait it replaced.
 func SetFinalWait(d time.Duration) time.Duration {

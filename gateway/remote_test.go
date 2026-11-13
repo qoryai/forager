@@ -1233,6 +1233,132 @@ func TestCloseStopsTheTriesOfARunThatOpens(t *testing.T) {
 	}
 }
 
+// serveToolAndKeys makes c serve a run configuration whose policy selects the tool svc,
+// for svc.example, with the key group of [serveKeyGroup], whose values each open and
+// reopen fetches with a secrets request.
+func serveToolAndKeys(c *control) {
+	entry := func(name string) string {
+		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+	}
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost","svc.example"]},"tools":[{"name":"svc"}]},`+
+		`"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+	c.mu.Lock()
+	c.secrets = map[string]string{"model": "fake-group-value-0001", "model-2": "fake-group-value-0002"}
+	c.mu.Unlock()
+}
+
+// blockSecrets makes c's secrets endpoint hold every request until the test ends, and
+// returns a channel that gets a value at each request.
+func blockSecrets(t *testing.T, c *control) <-chan struct{} {
+	t.Helper()
+	release, asked := make(chan struct{}), make(chan struct{}, 8)
+	t.Cleanup(func() { close(release) })
+	c.mu.Lock()
+	c.secretsAnswer = func(server.SecretsRequest, string) (int, []byte) {
+		asked <- struct{}{}
+		<-release
+		return http.StatusServiceUnavailable, nil
+	}
+	c.mu.Unlock()
+	return asked
+}
+
+// TestCloseStopsEveryOpenWithinTheStopGrace pins Close on a gateway with Listen while
+// runs open and runs live: one open waits on the fetch of its run's secrets, one waits
+// for its tool to listen, and two runs are live, each tool ignoring SIGTERM. Close
+// returns within 40 seconds, the stop grace of the gateway's container. It relies on
+// these bounds, all values in code: the opens stop at once, and an open whose tool was
+// started stops it within two of the tool package's stopGrace, 10 seconds; the one
+// address closes within 1 second; the live runs are suspended in parallel, each closing
+// its proxy within 1 second, stopping its tools within 10 seconds and flushing within
+// stream.CloseWait, 15 seconds. Each open Close stopped gets a 503 with no body and
+// leaves no record, so its run request sent again to the gateway that starts next opens
+// the run; each live run keeps its record for a reopen.
+func TestCloseStopsEveryOpenWithinTheStopGrace(t *testing.T) {
+	tools := t.TempDir()
+	t.Setenv(envTool, "serve")
+	t.Setenv(envToolDir, tools)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := gatewayControl(t)
+	serveToolAndKeys(c)
+	cfg := gateway.Config{Dir: t.TempDir(), Tools: []gateway.Tool{{Name: "svc", Command: []string{exe}, Serves: []string{"svc.example"}}}}
+	r := startRemote(t, c, cfg)
+	live := []string{event.NewRunID(), event.NewRunID()}
+	for _, runID := range live {
+		r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
+	}
+	opening := func(runID string) <-chan answer {
+		got := make(chan answer, 1)
+		go func() { got <- r.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true}) }()
+		return got
+	}
+
+	// An open whose tool never listens.
+	if err := os.WriteFile(filepath.Join(tools, "hold"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listening := event.NewRunID()
+	toolWait := opening(listening)
+	eventually(t, "the tool that does not listen", func() bool {
+		entries, _ := os.ReadDir(tools)
+		return len(entries) > 1
+	})
+
+	// An open whose secrets request gets no answer.
+	asked := blockSecrets(t, c)
+	fetching := event.NewRunID()
+	secretsWait := opening(fetching)
+	select {
+	case <-asked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no secrets request")
+	}
+
+	begin := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if _, err := r.g.Close(ctx); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	took := time.Since(begin)
+	t.Logf("Close took %s", took)
+	if took > 40*time.Second {
+		t.Errorf("Close took %s; want it within 40s", took)
+	}
+	for name, got := range map[string]<-chan answer{"waiting for its tool": toolWait, "fetching its secrets": secretsWait} {
+		if a := <-got; a.status != http.StatusServiceUnavailable || len(a.body) != 0 {
+			t.Errorf("the run request %s: %d %s; want a 503 without a body", name, a.status, a.body)
+		}
+	}
+	for _, runID := range []string{listening, fetching} {
+		if _, err := os.Stat(filepath.Join(cfg.Dir, "runs", runID)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the record of a run Close stopped as it opened: %v", err)
+		}
+	}
+	for _, runID := range live {
+		if left := secretsLeft(cfg.Dir, runID); len(left) != len(secretNames) {
+			t.Errorf("a live run's record keeps only %v", left)
+		}
+	}
+
+	// The gateway that starts next opens each run Close stopped, attached again.
+	if err := os.Remove(filepath.Join(tools, "hold")); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	c.secretsAnswer = nil
+	c.mu.Unlock()
+	next := startRemote(t, c, cfg)
+	for _, runID := range []string{listening, fetching} {
+		if a := next.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true}); a.status != http.StatusOK {
+			t.Errorf("the run request sent again: %d %s", a.status, a.body)
+		}
+	}
+}
+
 // TestAnAttachedRunWhoseConfigurationIsRefusedKeepsItsRecord pins an attach the server
 // accepted whose run configuration Forager refuses: the run does not open, a 403
 // run_configuration_invalid from the gateway, but its record is kept, its first line

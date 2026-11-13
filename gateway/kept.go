@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,26 +37,57 @@ const (
 	limitMark   = "model-key-limit"
 )
 
-// The CA key sweep (the user's "545 (a)", 2026-11-13): a gateway removes the CA files
-// and the run request of a run record it does not hold whose events.jsonl has not
-// changed for more than caSweepAge, at Start and every caSweepEvery. A live run's
-// session sends a heartbeat at least every server.MaxInterval, 300 s, so its record
-// changes at least 3 times within caSweepAge; a record that does not is of a run that
-// no session reopens, and its key goes from the disk. A record with a final event is
-// never reopened, so its key goes too.
+// The CA key sweep (the user's "545 (a)", 2026-11-13): a gateway removes the files kept
+// to reopen a run, the CA files and the run request among them, of a run record it does
+// not hold whose events.jsonl has not changed for more than caSweepAge, at Start and
+// every caSweepEvery. A live run's session sends a heartbeat at least every
+// server.MaxInterval, 300 s, so its record changes at least 3 times within caSweepAge;
+// a record that does not is of a run that no session reopens, and its key goes from the
+// disk. A record with a final event is never reopened, so its key goes too.
 const (
 	caSweepEvery = 10 * time.Minute
 	caSweepAge   = 15 * time.Minute
 )
 
 // keptRequest is request.json: what [run.Decide] reads of the run request, so a
-// gateway that starts again decides the run as its open did. Images may contain a
-// registry's credentials in a reference's user information, as the run request does.
+// gateway that starts again decides the run as its open did. Its image references have
+// no user information ([withoutUserInfo]): a registry's credentials stay off the disk.
 type keptRequest struct {
 	Version   int                   `json:"version"`
 	Wall      bool                  `json:"wall"`
 	Narrowing *server.LinkNarrowing `json:"narrowing,omitempty"`
 	Images    *server.LinkImages    `json:"images,omitempty"`
+}
+
+// withoutUserInfo is the image reference ref without the user information it may start
+// with, user@ or user:password@, which may contain a registry's credentials: when the
+// first @ of ref comes before its first /, and what follows that @ is not a digest,
+// sha256:, the part up to and with that @ is left out. Any other reference is returned
+// as it is: one whose first @ comes after its first /, as in host/name@sha256:…, one
+// with no / at all, as in name@sha256:…, and one with no @. A port, host:5000/name, is
+// no user information.
+func withoutUserInfo(ref string) string {
+	at, slash := strings.IndexByte(ref, '@'), strings.IndexByte(ref, '/')
+	if at <= 0 || slash < 0 || at > slash || strings.HasPrefix(ref[at+1:], "sha256:") {
+		return ref
+	}
+	return ref[at+1:]
+}
+
+// imagesWithoutUserInfo is a copy of the session's images with each reference, the
+// default's when it is one and each definition's, without its user information
+// ([withoutUserInfo]); nil for nil. The allowed prefixes, which name no user
+// information ([policy.CheckImagePrefix]), stay as they are.
+func imagesWithoutUserInfo(li *server.LinkImages) *server.LinkImages {
+	if li == nil {
+		return nil
+	}
+	out := &server.LinkImages{Default: withoutUserInfo(li.Default), Allow: slices.Clone(li.Allow)}
+	for _, d := range li.Definitions {
+		d.Ref = withoutUserInfo(d.Ref)
+		out.Definitions = append(out.Definitions, d)
+	}
+	return out
 }
 
 // narrowingOf is the session's narrowing of the run request as [run.Config] takes it,
@@ -67,9 +99,10 @@ func narrowingOf(n *server.LinkNarrowing) *run.Narrowing {
 	return &run.Narrowing{Allow: n.Egress.Allow, Deny: n.Egress.Deny}
 }
 
-// writeRequest writes request.json of the run request req to dir.
+// writeRequest writes request.json of the run request req to dir, each image reference
+// without its user information.
 func writeRequest(dir string, req *server.LinkRunRequest) error {
-	b, err := json.Marshal(keptRequest{Version: 1, Wall: req.Wall, Narrowing: req.Narrowing, Images: req.Images})
+	b, err := json.Marshal(keptRequest{Version: 1, Wall: req.Wall, Narrowing: req.Narrowing, Images: imagesWithoutUserInfo(req.Images)})
 	if err != nil {
 		return err
 	}
@@ -301,29 +334,46 @@ func (g *Gateway) sweepCA() {
 	if g.sweptDir() == "" {
 		return
 	}
-	every, age := caSweepEvery, caSweepAge
+	every, age := g.sweepTimes()
+	tick, stopTick := g.sweepTick(every)
+	stop, done := make(chan struct{}), make(chan struct{})
+	g.sweepStop, g.sweepDone = stop, done
+	report := g.report
+	routine.Go(report, func() {
+		defer close(done)
+		defer stopTick()
+		for {
+			routine.Do(report, func() { g.sweep(time.Now(), age) })
+			select {
+			case <-stop:
+				return
+			case <-tick:
+			}
+		}
+	})
+}
+
+// sweepTimes are how often the CA key sweep runs and how long a record it sweeps has
+// not changed: caSweepEvery and caSweepAge, or the Config's when a test sets them.
+func (g *Gateway) sweepTimes() (every, age time.Duration) {
+	every, age = caSweepEvery, caSweepAge
 	if g.cfg.caSweepEvery != 0 {
 		every = g.cfg.caSweepEvery
 	}
 	if g.cfg.caSweepAge != 0 {
 		age = g.cfg.caSweepAge
 	}
-	stop, done := make(chan struct{}), make(chan struct{})
-	g.sweepStop, g.sweepDone = stop, done
-	report := g.report
-	routine.Go(report, func() {
-		defer close(done)
-		t := time.NewTicker(every)
-		defer t.Stop()
-		for {
-			routine.Do(report, func() { g.sweep(time.Now(), age) })
-			select {
-			case <-stop:
-				return
-			case <-t.C:
-			}
-		}
-	})
+	return every, age
+}
+
+// sweepTick is the CA key sweep's ticker of interval every: its channel and what stops
+// it.
+func (g *Gateway) sweepTick(every time.Duration) (<-chan time.Time, func()) {
+	if g.cfg.sweepTicker != nil {
+		return g.cfg.sweepTicker(every)
+	}
+	t := time.NewTicker(every)
+	return t.C, t.Stop
 }
 
 // sweptDir is the directory whose entries are the run record directories the sweep
@@ -353,7 +403,7 @@ func (g *Gateway) stopSweep() {
 	g.sweepStop = nil
 }
 
-// sweep removes the run request and the CA files ([stream.RemoveKept]) from each
+// sweep removes the files kept to reopen a run ([stream.RemoveKept]) from each
 // record under [Gateway.sweptDir] that meets all of these: it is the record directory
 // of its name's run, the gateway does not hold its run, and its events.jsonl has not
 // changed for more than age as of now. A record without events.jsonl counts the time
@@ -409,10 +459,10 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 		delete(g.sweeping, id)
 		g.mu.Unlock()
 		if err != nil {
-			g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", accesskey.ShownValue(id, false), err))
+			g.report(fmt.Sprintf("run %s: removing the files kept to reopen it: %v", accesskey.ShownValue(id, false), err))
 			continue
 		}
-		g.report(fmt.Sprintf("run %s: removed its CA files and run request: its record has not changed for %s", accesskey.ShownValue(id, false), age))
+		g.report(fmt.Sprintf("run %s: removed the files kept to reopen it: its record has not changed for %s", accesskey.ShownValue(id, false), age))
 	}
 }
 

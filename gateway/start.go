@@ -568,9 +568,11 @@ func (g *Gateway) reserved() []string {
 	return out
 }
 
-// Close stops taking runs and ends the gateway. A run whose registration or attach is
-// still being tried stops its tries of Qory Apiary and does not open, its run request
-// a 503, while a run past its tries opens and then ends or is suspended as a live one.
+// Close stops taking runs and ends the gateway. Every run that is opening stops: its
+// tries of Qory Apiary, the fetch of its values and the wait for its tools to listen
+// end, and the run does not open, its run request a 503 and its record removed, so the
+// run request that comes again opens it. A run whose open was past those steps opens,
+// and then ends or is suspended as a live one.
 //
 // On the local link Close is called once the session is over, so it waits for no
 // session: a run still live ends at once, without an exit, which a resend of its
@@ -580,12 +582,25 @@ func (g *Gateway) reserved() []string {
 // pass on; then the link's directory is removed and the proxy stops.
 //
 // A gateway with Listen keeps its runs instead, for a gateway that starts again on the
-// same directory: a run request or a reopen gets a 503 from now on, the tries of the
-// reopens end as those of the opens do, and Close waits for those opens and reopens to
-// end. Then the one address closes, and each run is suspended ([linkRun.suspend]): it
-// lets go of what it holds, and its stream is flushed as above and kept
-// ([stream.Run.Suspend]), with no session.exited or run.exited, and with its CA files
-// and every file a reopen reads ([Gateway.reopen]).
+// same directory. From the start of Close every request of a run, and every request
+// that waits for a reopen, gets a 503 with no body, the session's sign to send it again
+// later; the reopens in flight stop as the opens do, their records kept. At the same
+// time every live run is suspended ([linkRun.suspend]): it lets go of what it holds,
+// and its stream is flushed as above and kept ([stream.Run.Suspend]), with no
+// session.exited or run.exited, and with its CA files and every file a reopen reads
+// ([Gateway.reopen]). A run whose open or reopen ends while Close goes on, past the
+// steps Close stops, is suspended as soon as it is armed ([Gateway.settle]). Once the
+// opens and the reopens ended, so each run request has its answer, the one address
+// closes, and Close waits for every run's suspend.
+//
+// What bounds Close with Listen, with values in code, the three running side by side:
+// a live run closes its two proxies within 1 second each, stops its tools within one
+// grace pair of the tool package's stopGrace, 10 seconds, and flushes within
+// stream.CloseWait, 15 seconds, 27 seconds in all; a reopen that Close stops stops its
+// tools within 10 seconds and flushes its record within stream.CloseWait, 25 seconds,
+// and the one address then closes within 1 second, 26; an open that Close stops stops
+// its tools within 10 seconds. A credential adapter whose child holds its output open,
+// and a server that never answers a flush's last try, are not bounded here.
 //
 // The Delivery is what the runs came to: their undelivered events, and who closed a
 // run that ended at the gateway, and how it ended. Close again waits for the first.
@@ -599,32 +614,34 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.closing = true
 	g.mu.Unlock()
 	g.stopSweep()
-	// A run whose registration, attach or reopen is still being tried stops its tries of
-	// Qory Apiary, and its run request gets a 503, as one that comes while the gateway
-	// closes.
+	// Every run that is opening or reopening stops: its tries of Qory Apiary, the fetch
+	// of its values and the wait for its tools; its request gets a 503, as one that comes
+	// while the gateway closes.
 	g.stopOpens()
 	keep := g.svc != nil
+	if keep {
+		// Every live run is suspended now, side by side with the opens and the reopens
+		// that wind down; a run that Close finds not yet armed is suspended by
+		// [Gateway.settle].
+		for _, lr := range g.liveRuns() {
+			lr.suspend()
+		}
+	}
 	g.opens.Wait()
 	g.reopens.Wait()
 	var errs []error
 	if keep {
-		// The one address first: no request reaches a run once it is suspended.
+		// Each run request has its answer: the one address closes.
 		shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		errs = append(errs, g.svc.close(shut))
 		cancel()
 	}
-	g.mu.Lock()
-	runs := make([]*linkRun, 0, len(g.runs))
-	for _, lr := range g.runs {
-		runs = append(runs, lr)
-	}
-	g.mu.Unlock()
-	for _, lr := range runs {
-		if keep {
-			lr.suspend()
-			continue
+	// The runs now: the live ones and those an open or a reopen added since.
+	runs := g.liveRuns()
+	if !keep {
+		for _, lr := range runs {
+			lr.end(gatewayClosed)
 		}
-		lr.end(gatewayClosed)
 	}
 	for _, lr := range runs {
 		<-lr.done
@@ -653,6 +670,17 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.closeErr = errors.Join(errs...)
 	close(g.closed)
 	return g.delivery, g.closeErr
+}
+
+// liveRuns is the gateway's runs as they stand.
+func (g *Gateway) liveRuns() []*linkRun {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	runs := make([]*linkRun, 0, len(g.runs))
+	for _, lr := range g.runs {
+		runs = append(runs, lr)
+	}
+	return runs
 }
 
 // Wait returns once Close is done.

@@ -169,8 +169,8 @@ func resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 		return nil, err
 	}
 	if res.Closed {
-		// The run ended for good: no gateway reopens it, and its CA key and run request
-		// go from the disk.
+		// The run ended for good: no gateway reopens it, and the files kept to reopen
+		// it, its CA key and run request among them, go from the disk.
 		if err := RemoveKept(cfg.Dir); err != nil {
 			return nil, err
 		}

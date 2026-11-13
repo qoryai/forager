@@ -113,6 +113,9 @@ type Config struct {
 	// how often the CA key sweep runs and how long a record it sweeps has not changed.
 	// Tests set them.
 	caSweepEvery, caSweepAge time.Duration
+	// sweepTicker, when not nil, makes the CA key sweep's ticker of interval every in
+	// place of time.NewTicker: its channel and what stops it. Tests set it.
+	sweepTicker func(every time.Duration) (<-chan time.Time, func())
 	// opened, when not nil, is called once a run on the one address opened. Tests set
 	// it.
 	opened func()
