@@ -301,29 +301,46 @@ func (g *Gateway) sweepCA() {
 	if g.sweptDir() == "" {
 		return
 	}
-	every, age := caSweepEvery, caSweepAge
+	every, age := g.sweepTimes()
+	tick, stopTick := g.sweepTick(every)
+	stop, done := make(chan struct{}), make(chan struct{})
+	g.sweepStop, g.sweepDone = stop, done
+	report := g.report
+	routine.Go(report, func() {
+		defer close(done)
+		defer stopTick()
+		for {
+			routine.Do(report, func() { g.sweep(time.Now(), age) })
+			select {
+			case <-stop:
+				return
+			case <-tick:
+			}
+		}
+	})
+}
+
+// sweepTimes are how often the CA key sweep runs and how long a record it sweeps has
+// not changed: caSweepEvery and caSweepAge, or the Config's when a test sets them.
+func (g *Gateway) sweepTimes() (every, age time.Duration) {
+	every, age = caSweepEvery, caSweepAge
 	if g.cfg.caSweepEvery != 0 {
 		every = g.cfg.caSweepEvery
 	}
 	if g.cfg.caSweepAge != 0 {
 		age = g.cfg.caSweepAge
 	}
-	stop, done := make(chan struct{}), make(chan struct{})
-	g.sweepStop, g.sweepDone = stop, done
-	report := g.report
-	routine.Go(report, func() {
-		defer close(done)
-		t := time.NewTicker(every)
-		defer t.Stop()
-		for {
-			routine.Do(report, func() { g.sweep(time.Now(), age) })
-			select {
-			case <-stop:
-				return
-			case <-t.C:
-			}
-		}
-	})
+	return every, age
+}
+
+// sweepTick is the CA key sweep's ticker of interval every: its channel and what stops
+// it.
+func (g *Gateway) sweepTick(every time.Duration) (<-chan time.Time, func()) {
+	if g.cfg.sweepTicker != nil {
+		return g.cfg.sweepTicker(every)
+	}
+	t := time.NewTicker(every)
+	return t.C, t.Stop
 }
 
 // sweptDir is the directory whose entries are the run record directories the sweep

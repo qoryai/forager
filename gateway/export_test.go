@@ -296,9 +296,12 @@ func SetCASweep(c *Config, every, age time.Duration) { c.caSweepEvery, c.caSweep
 
 // SweepCA runs one pass of g's CA key sweep as of now, with the age g has.
 func SweepCA(g *Gateway, now time.Time) {
-	age := caSweepAge
-	if g.cfg.caSweepAge != 0 {
-		age = g.cfg.caSweepAge
-	}
+	_, age := g.sweepTimes()
 	g.sweep(now, age)
+}
+
+// SetSweepTicker makes the CA key sweep's ticker with tick in place of time.NewTicker:
+// tick gets the sweep's interval and returns the ticker's channel.
+func SetSweepTicker(c *Config, tick func(every time.Duration) <-chan time.Time) {
+	c.sweepTicker = func(every time.Duration) (<-chan time.Time, func()) { return tick(every), func() {} }
 }

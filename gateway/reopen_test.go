@@ -220,6 +220,63 @@ func TestAReopenWhoseAttachIsRefused(t *testing.T) {
 	})
 }
 
+// TestAReopenWhoseSecretsFail pins a reopen that fails in its decide step, at the fetch
+// of the run's secrets: a 5xx is a failure that may pass, a 503 with no body, the
+// record kept, and the session's next batch reopens the run once the secrets are
+// answered; any other 4xx, such as a 409 secrets_not_allowed, is final, a 410
+// run_closed, and every file kept to reopen the run goes.
+func TestAReopenWhoseSecretsFail(t *testing.T) {
+	for name, c := range map[string]struct {
+		status int
+		body   string
+	}{
+		"5xx": {http.StatusServiceUnavailable, ""},
+		"4xx": {http.StatusConflict, `{"error":"secrets_not_allowed"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctl := gatewayControl(t)
+			serveKeyGroup(ctl)
+			node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
+			cfg := gateway.Config{Dir: t.TempDir(), Policy: node}
+			before := startRemote(t, ctl, cfg)
+			runID := event.NewRunID()
+			e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
+			ctl.mu.Lock()
+			ctl.secretsAnswer = func(server.SecretsRequest, string) (int, []byte) { return c.status, []byte(c.body) }
+			asked := len(ctl.secretsRequests)
+			ctl.mu.Unlock()
+			e.r = before.restart(t, cfg)
+			got := e.post(t, heartbeat(runID))
+			ctl.mu.Lock()
+			if len(ctl.secretsRequests) == asked {
+				t.Error("the reopen sent no secrets request")
+			}
+			ctl.mu.Unlock()
+			if c.status >= 500 {
+				if got.status != http.StatusServiceUnavailable || len(got.body) != 0 {
+					t.Errorf("a batch whose reopen's secrets got a %d: %d %s", c.status, got.status, got.body)
+				}
+				if left := secretsLeft(cfg.Dir, runID); len(left) != len(secretNames) {
+					t.Errorf("the record keeps only %v", left)
+				}
+				ctl.mu.Lock()
+				ctl.secretsAnswer = nil
+				ctl.mu.Unlock()
+				if got := e.post(t, heartbeat(runID)); got.status != http.StatusAccepted {
+					t.Errorf("the next batch, the secrets answered: %d %s", got.status, got.body)
+				}
+				return
+			}
+			if got.status != http.StatusGone || got.refusal()["error"] != "run_closed" {
+				t.Errorf("a batch whose reopen's secrets got a %d: %d %s", c.status, got.status, got.body)
+			}
+			if left := keptLeft(cfg.Dir, runID); len(left) > 0 {
+				t.Errorf("the record keeps %v", left)
+			}
+		})
+	}
+}
+
 // TestAReopenWhoseOwedEventsWait pins the resend of the events Qory Apiary did not
 // accept before the stop, more than the run's sink queues: while the server takes none
 // of them, the resend waits for room in the queue until the tries' window ends, and the

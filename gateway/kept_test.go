@@ -394,6 +394,37 @@ func TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn(t *testing.T) {
 	}
 }
 
+// TestTheSweepRunsEvery10MinutesOnRecordsOlderThan15 pins the CA key sweep's values,
+// the user's "545 (a)": the sweep's ticker has an interval of 10 minutes, and a pass
+// removes the kept files of a record whose events.jsonl has not changed for more than
+// 15 minutes, not those of one unchanged for 14 minutes.
+func TestTheSweepRunsEvery10MinutesOnRecordsOlderThan15(t *testing.T) {
+	dir := t.TempDir()
+	older := fakeRecord(t, dir, time.Now().Add(-16*time.Minute), event.RunRegistered)
+	younger := fakeRecord(t, dir, time.Now().Add(-14*time.Minute), event.RunRegistered)
+	ticks, every := make(chan time.Time), make(chan time.Duration, 1)
+	cfg := gateway.Config{Dir: dir}
+	gateway.SetSweepTicker(&cfg, func(d time.Duration) <-chan time.Time {
+		every <- d
+		return ticks
+	})
+	startRemote(t, nil, cfg)
+	if got := <-every; got != 10*time.Minute {
+		t.Errorf("the sweep's interval is %s, want 10m0s", got)
+	}
+	eventually(t, "the sweep at Start", func() bool { return len(keptLeft(dir, older)) == 0 })
+	if left := keptLeft(dir, younger); len(left) != len(finalNames) {
+		t.Errorf("the record unchanged for 14 minutes keeps only %v", left)
+	}
+	// The younger record ages past 15 minutes; the next tick removes its files.
+	past := time.Now().Add(-16 * time.Minute)
+	if err := os.Chtimes(filepath.Join(dir, "runs", younger, "events.jsonl"), past, past); err != nil {
+		t.Fatal(err)
+	}
+	ticks <- time.Now()
+	eventually(t, "the sweep at a tick", func() bool { return len(keptLeft(dir, younger)) == 0 })
+}
+
 // TestTheSweepTicks pins the sweep's ticker: a record that ages after Start loses its
 // CA files at a later tick, and Close stops the ticker.
 func TestTheSweepTicks(t *testing.T) {
