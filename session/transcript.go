@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -400,19 +401,20 @@ func (t *transcript) poll(final bool) {
 }
 
 // find searches for the file of the pattern, the part of resume.path below
-// resume.prefix: behind a wall below the transcript directory, listing at most
-// [maxFindEntries] entries, without one below resume.prefix under the home, listing
-// every entry. One file that matches sets the path, and more than one
-// writes one line and ends the transcript. A search that fails, or finds none, is tried
-// again at the next read. Call it with mu locked.
+// resume.prefix: behind a wall below the transcript directory, with no symbolic link
+// as its name, listing at most [maxFindEntries] entries; without one below
+// resume.prefix under the home, reached through any symbolic link, listing every
+// entry. One file that matches sets the path, and more than one writes one line and
+// ends the transcript. A search that fails, or finds none, is tried again at the next
+// read. Call it with mu locked.
 func (t *transcript) find() {
 	prefix := strings.TrimPrefix(t.resume.Prefix, "~/")
-	base, start, limit := t.home, prefix, 0
+	base, start, limit, follow := t.home, prefix, 0, true
 	if t.root != "" {
-		base, start, limit = t.root, "", maxFindEntries
+		base, start, limit, follow = t.root, "", maxFindEntries, false
 	}
 	shown := t.resume.Prefix + t.pattern.shown
-	found, err := findMatches(base, start, t.pattern, limit)
+	found, err := findMatches(base, start, t.pattern, limit, follow)
 	switch {
 	case errors.Is(err, errTooManyEntries):
 		t.ended = true
@@ -648,19 +650,43 @@ var errTooManyEntries = fmt.Errorf("the search listed more than %d entries", max
 
 // findMatches returns the paths below start, relative to start, whose names match p,
 // at most two, in the order the directories list them. start is a path below base,
-// empty for base itself. It opens base and each directory with a descriptor, with
-// O_NOFOLLOW, O_DIRECTORY and O_NONBLOCK ([openDirAt]): neither base's last name nor
-// any name of start, nor a directory it follows, is a symbolic link, and a FIFO swapped
-// in for a directory fails the open at once instead of waiting for a writer. A directory a * matches is followed only
-// when its entry is a directory, and skipped when its open fails because it is gone,
-// is no directory any more or cannot be read; the last name matches an entry of any
-// type, which the read of the file then checks. A start that does not exist matches
-// nothing. With limit above 0, more than limit entries listed is [errTooManyEntries];
-// with 0, the search lists every entry.
-func findMatches(base, start string, p *pathPattern, limit int) ([]string, error) {
+// empty for base itself. With follow, base and start open as one path through any
+// symbolic link, as a run with no wall reads under the home; without it, base and each
+// name of start open with O_NOFOLLOW ([openDirAt]), so neither base's last name nor a
+// name of start is a symbolic link. Each directory below them opens with a
+// descriptor, with O_NOFOLLOW, O_DIRECTORY and O_NONBLOCK ([openDirAt]): no directory
+// the search follows is a symbolic link, and a FIFO swapped in for a directory fails
+// the open at once instead of waiting for a writer. A directory a * matches is
+// followed only when its entry is a directory, and skipped when its open fails because
+// it is gone, is no directory any more or cannot be read; the last name matches an
+// entry of any type, which the read of the file then checks. A start that does not
+// exist matches nothing. With limit above 0, more than limit entries listed is
+// [errTooManyEntries]; with 0, the search lists every entry.
+func findMatches(base, start string, p *pathPattern, limit int, follow bool) ([]string, error) {
+	var fd int
+	var err error
+	if follow {
+		fd, err = openDirFollowing(filepath.Join(base, start))
+	} else {
+		fd, err = openUnlinked(base, start)
+	}
+	switch {
+	case errors.Is(err, unix.ENOENT):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	s := &search{pattern: p, limit: limit}
+	err = s.below(fd, "", 0)
+	return s.found, err
+}
+
+// openUnlinked opens start below base, base's last name and each name of start with
+// [openDirAt]: a symbolic link or no directory among them is [errLinked].
+func openUnlinked(base, start string) (int, error) {
 	fd, err := openDirAt(unix.AT_FDCWD, base)
 	if err != nil {
-		return nil, err
+		return -1, err
 	}
 	for s := range strings.SplitSeq(start, "/") {
 		if s == "" {
@@ -669,18 +695,29 @@ func findMatches(base, start string, p *pathPattern, limit int) ([]string, error
 		next, err := openDirAt(fd, s)
 		unix.Close(fd)
 		switch {
-		case errors.Is(err, unix.ENOENT):
-			return nil, nil
 		case errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
-			return nil, errLinked
+			return -1, errLinked
 		case err != nil:
-			return nil, err
+			return -1, err
 		}
 		fd = next
 	}
-	s := &search{pattern: p, limit: limit}
-	err = s.below(fd, "", 0)
-	return s.found, err
+	return fd, nil
+}
+
+// openDirFollowing opens the directory at dir through any symbolic link, with
+// O_DIRECTORY and O_NONBLOCK, so that a FIFO fails at once, then makes the descriptor
+// blocking again for its reads.
+func openDirFollowing(dir string) (int, error) {
+	fd, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, err
+	}
+	if err := unix.SetNonblock(fd, false); err != nil {
+		unix.Close(fd)
+		return -1, err
+	}
+	return fd, nil
 }
 
 // openDirAt opens the directory name below the directory dirFD, or the path name

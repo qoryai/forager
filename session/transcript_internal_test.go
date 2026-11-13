@@ -446,26 +446,26 @@ func TestAPathPatternMatchesInsideOneName(t *testing.T) {
 func TestFindMatchesFollowsNoLink(t *testing.T) {
 	p := newPathPattern("*/*/*/rollout-*-{session_id}.jsonl", walledID, "", false)
 	base := t.TempDir()
-	if got, err := findMatches(base, "none/", p, 0); err != nil || len(got) != 0 {
+	if got, err := findMatches(base, "none/", p, 0, false); err != nil || len(got) != 0 {
 		t.Errorf("a start that does not exist: %v %v", got, err)
 	}
 	appendTo(t, base, "s/"+rolloutRel, []byte("{}\n"))
 	appendTo(t, base, "s/2026/11/13/rollout-x-other.jsonl", []byte("{}\n"))
-	if got, err := findMatches(base, "s/", p, 0); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+	if got, err := findMatches(base, "s/", p, 0, false); err != nil || !slices.Equal(got, []string{rolloutRel}) {
 		t.Errorf("one file: %v %v", got, err)
 	}
 	outside := t.TempDir()
 	appendTo(t, outside, "11/13/rollout-y-"+walledID+".jsonl", []byte("{}\n"))
 	symlink(t, outside, filepath.Join(base, "s", "2025"))
-	if got, err := findMatches(base, "s/", p, 0); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+	if got, err := findMatches(base, "s/", p, 0, false); err != nil || !slices.Equal(got, []string{rolloutRel}) {
 		t.Errorf("through a linked directory: %v %v", got, err)
 	}
 	symlink(t, outside, filepath.Join(base, "linked"))
-	if got, err := findMatches(base, "linked/", p, 0); err == nil || len(got) != 0 {
+	if got, err := findMatches(base, "linked/", p, 0, false); err == nil || len(got) != 0 {
 		t.Errorf("a start below a link: %v %v", got, err)
 	}
 	symlink(t, filepath.Join(outside, "11/13/rollout-y-"+walledID+".jsonl"), filepath.Join(base, "s/2026/11/13/rollout-z-"+walledID+".jsonl"))
-	got, err := findMatches(base, "s/", p, 0)
+	got, err := findMatches(base, "s/", p, 0, false)
 	slices.Sort(got)
 	if want := []string{rolloutRel, "2026/11/13/rollout-z-" + walledID + ".jsonl"}; err != nil || !slices.Equal(got, want) {
 		t.Errorf("a link as the file: %v %v; want %v", got, err, want)
@@ -473,7 +473,7 @@ func TestFindMatchesFollowsNoLink(t *testing.T) {
 	for i := range 3 {
 		appendTo(t, base, fmt.Sprintf("s/2027/01/0%d/rollout-a-%s.jsonl", i, walledID), []byte("{}\n"))
 	}
-	if got, err := findMatches(base, "s/", p, 0); err != nil || len(got) != 2 {
+	if got, err := findMatches(base, "s/", p, 0, false); err != nil || len(got) != 2 {
 		t.Errorf("five files: %v %v; want two", got, err)
 	}
 }
@@ -668,7 +668,7 @@ func TestTheSearchOpensNoFIFO(t *testing.T) {
 	p := newPathPattern("*/x.jsonl", walledID, "", false)
 	for _, start := range []string{"fifo/", "linked/"} {
 		within("the search from "+start, func() {
-			if got, err := findMatches(dir, start, p, 0); err == nil || len(got) != 0 {
+			if got, err := findMatches(dir, start, p, 0, false); err == nil || len(got) != 0 {
 				t.Errorf("%s: %v %v", start, got, err)
 			}
 		})
@@ -871,5 +871,56 @@ func TestASearchSkipsADirectoryItCannotRead(t *testing.T) {
 	tr.finish()
 	if got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel); !ok || string(got) != "{\"a\":1}\n" || len(s.lines) != 0 {
 		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+	}
+}
+
+// TestAnUnwalledSearchStartsThroughLinks pins the base of a search with no wall: a
+// home, or a resume.prefix below it, that is a symbolic link is followed, and the file
+// below is found; behind a wall, a transcript directory that is a link finds nothing.
+// The file under a linked home is sent. The file under a linked prefix is not: the
+// read refuses a symbolic link among the names below the home ([readUnlinked]), as it
+// does for Claude Code's fixed path, so the session sends nothing and writes no line.
+func TestAnUnwalledSearchStartsThroughLinks(t *testing.T) {
+	p := newPathPattern("*/*/*/rollout-*-{session_id}.jsonl", walledID, "", false)
+	real := t.TempDir()
+	appendTo(t, real, ".rollouts/sessions/"+rolloutRel, []byte("{\"a\":1}\n"))
+	linkedHome := filepath.Join(t.TempDir(), "home")
+	symlink(t, real, linkedHome)
+	if got, err := findMatches(linkedHome, ".rollouts/sessions/", p, 0, true); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+		t.Errorf("a linked home: %v %v", got, err)
+	}
+	home := t.TempDir()
+	makeDir(t, filepath.Join(home, ".rollouts"))
+	symlink(t, filepath.Join(real, ".rollouts/sessions"), filepath.Join(home, ".rollouts/sessions"))
+	if got, err := findMatches(home, ".rollouts/sessions/", p, 0, true); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+		t.Errorf("a linked prefix: %v %v", got, err)
+	}
+	if got, err := findMatches(home, ".rollouts/sessions/", p, 0, false); err == nil || len(got) != 0 {
+		t.Errorf("a linked prefix with no link followed: %v %v", got, err)
+	}
+	if got, err := findMatches(filepath.Join(real, ".rollouts/sessions"), "", p, maxFindEntries, false); err != nil || len(got) != 1 {
+		t.Errorf("a transcript directory: %v %v", got, err)
+	}
+	walledLink := filepath.Join(t.TempDir(), "transcripts")
+	symlink(t, filepath.Join(real, ".rollouts/sessions"), walledLink)
+	if got, err := findMatches(walledLink, "", p, maxFindEntries, false); err == nil || len(got) != 0 {
+		t.Errorf("a linked transcript directory: %v %v", got, err)
+	}
+	for name, c := range map[string]struct {
+		home string
+		sent string
+	}{
+		"a linked home":   {linkedHome, "{\"a\":1}\n"},
+		"a linked prefix": {home, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &sentTranscript{}
+			tr := newTranscript(rolloutResume, c.home, "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+			tr.started(walledID)
+			tr.finish()
+			if got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel); !ok || string(got) != c.sent || len(s.lines) != 0 {
+				t.Errorf("sent %q %v, lines %q; want %q", got, ok, s.lines, c.sent)
+			}
+		})
 	}
 }
