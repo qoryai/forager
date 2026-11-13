@@ -1197,7 +1197,33 @@ type reloadAnswerDoc struct {
 // dev.qory.run.policy_applied the gateway decides to those it gave the run, and returns
 // the members it added, for [linkRun.keep] once lr.mu is free. Called with lr.mu held.
 func (lr *linkRun) refresh() []map[string]any {
-	n := len(lr.given)
+	f := lr.compute()
+	lr.publish(f)
+	return f.given
+}
+
+// refreshed is what [linkRun.compute] makes of the policy in force: the members of its
+// dev.qory.run.policy_applied the gateway decides, one or two, and the body and digest
+// of the reload answer.
+type refreshed struct {
+	given  []map[string]any
+	body   []byte
+	digest string
+}
+
+// publish adds f's members to those the gateway gave the run and puts f's reload
+// answer in force, which a request's answer headers then contain. Called with lr.mu
+// held.
+func (lr *linkRun) publish(f refreshed) {
+	lr.given = append(lr.given, f.given...)
+	lr.reloadBody, lr.reloadDigest = f.body, f.digest
+}
+
+// compute makes the reload answer of the policy in force and the members of its
+// dev.qory.run.policy_applied the gateway decides, and changes nothing of lr. Called
+// with lr.mu held.
+func (lr *linkRun) compute() refreshed {
+	var given []map[string]any
 	pol := lr.r.Policy()
 	applied := appliedOf(pol, lr.r.Beside(), lr.r.Held(), lr.r.Chosen(), lr.px.Terminated())
 	if hosts := lr.r.StackHosts(); !lr.opened && len(hosts) > 0 {
@@ -1212,21 +1238,20 @@ func (lr *linkRun) refresh() []map[string]any {
 	if harness := harnessApplied(lr.r.StackUses(), lr.r.HarnessHidden()); !lr.opened && len(harness) > 0 {
 		// A join's record lists no harness credential, whose value is gone by then: the
 		// members without them come first, and the open's, with them, last.
-		lr.given = append(lr.given, applied)
+		given = append(given, applied)
 		withHarness := maps.Clone(applied)
 		listed, _ := applied["credentials"].([]any)
 		withHarness["credentials"] = append(slices.Clone(listed), harness...)
 		applied = withHarness
 	}
-	lr.given = append(lr.given, applied)
+	given = append(given, applied)
 	doc, digest := policyDocument(pol)
-	lr.reloadBody, _ = json.Marshal(reloadAnswerDoc{
+	body, _ := json.Marshal(reloadAnswerDoc{
 		Version: 1, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
 		Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(), Image: lr.image(), Applied: applied,
 	})
-	sum := sha256.Sum256(lr.reloadBody)
-	lr.reloadDigest = "sha256=" + hex.EncodeToString(sum[:])
-	return slices.Clone(lr.given[n:])
+	sum := sha256.Sum256(body)
+	return refreshed{given: given, body: body, digest: "sha256=" + hex.EncodeToString(sum[:])}
 }
 
 // keep adds each of given, the members [linkRun.refresh] added, to the record's
@@ -1520,7 +1545,18 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	lr.r.Commit(d)
 	lr.posts.SetRunDigest(d.Policy.RunConfiguration)
 	lr.mu.Lock()
-	given := lr.refresh()
+	f := lr.compute()
+	lr.mu.Unlock()
+	// The record has the members before the session can see the new digest, so a
+	// gateway that stops after the session's reload finds them when it starts again,
+	// and holds no run.egress for a policy_applied the session already wrote.
+	if err := lr.keep(f.given); err != nil {
+		// The policy is in force: the run goes on, and a gateway that starts again
+		// misses these members.
+		lr.g.report(fmt.Sprintf("run %s: writing its policy members to its record: %v", lr.id, err))
+	}
+	lr.mu.Lock()
+	lr.publish(f)
 	// Before the session can see the new digest, so its policy_applied finds the hold
 	// waiting for it; the tunnels the policy closed go first.
 	data := make([]any, len(refused))
@@ -1529,11 +1565,6 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	}
 	lr.st.Await(hold, appliedIs(lr.given[len(lr.given)-1]), event.RunEgress, data...)
 	lr.mu.Unlock()
-	if err := lr.keep(given); err != nil {
-		// The policy is in force: the run goes on, and a gateway that starts again
-		// misses these members.
-		lr.g.report(fmt.Sprintf("run %s: writing its policy members to its record: %v", lr.id, err))
-	}
 	return nil
 }
 
